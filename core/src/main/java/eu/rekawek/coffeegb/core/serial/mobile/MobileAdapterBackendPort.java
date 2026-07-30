@@ -5,9 +5,11 @@ import java.util.Objects;
 /**
  * Nonblocking request/result ownership seam between the deterministic engine and a backend.
  *
- * <p>Phase #351 provides only a no-op port and a deterministic in-memory fake. Later controller
- * code may enqueue host work behind this interface, but no implementation may block the emulator
- * thread and no port object is part of captured engine state.
+ * <p>Controller code may enqueue host work behind this interface, but no implementation may block
+ * the emulator thread and no port object is part of captured engine state. Every request and
+ * completion belongs to one identity-only generation. Expected-generation polling makes removing
+ * a completion atomic with respect to cancellation; the generation carried by the returned value
+ * lets the engine reject ownership that became stale before it was applied.
  */
 public interface MobileAdapterBackendPort {
 
@@ -32,14 +34,16 @@ public interface MobileAdapterBackendPort {
 
         @Override
         public CompletionResult complete(BackendGeneration generation, long requestId,
-                                         byte[] response) {
+                                         BackendStatus status, byte[] response) {
             Objects.requireNonNull(generation, "generation");
+            Objects.requireNonNull(status, "status");
             Objects.requireNonNull(response, "response");
             return CompletionResult.UNAVAILABLE;
         }
 
         @Override
-        public BackendCompletion poll() {
+        public BackendCompletion poll(BackendGeneration expectedGeneration) {
+            Objects.requireNonNull(expectedGeneration, "expectedGeneration");
             return null;
         }
 
@@ -63,10 +67,25 @@ public interface MobileAdapterBackendPort {
 
     OfferResult offer(BackendGeneration generation, BackendRequest request);
 
-    CompletionResult complete(BackendGeneration generation, long requestId, byte[] response);
+    CompletionResult complete(BackendGeneration generation, long requestId, BackendStatus status,
+                              byte[] response);
 
-    /** Returns and releases the oldest completion, or {@code null} when none is ready. */
-    BackendCompletion poll();
+    /** Source-compatible success shortcut for Phase-1 callers and simple fake backends. */
+    default CompletionResult complete(BackendGeneration generation, long requestId,
+                                      byte[] response) {
+        return complete(generation, requestId, BackendStatus.SUCCESS, response);
+    }
+
+    /**
+     * Returns and releases the oldest completion only while {@code expectedGeneration} still owns
+     * the backend, or {@code null} when none is ready or cancellation replaced that generation.
+     */
+    BackendCompletion poll(BackendGeneration expectedGeneration);
+
+    /** Source-compatible atomic poll using the generation visible at method entry. */
+    default BackendCompletion poll() {
+        return poll(generation());
+    }
 
     /** Idempotently cancels and releases all queued requests and results. */
     void cancelAll();
@@ -90,6 +109,22 @@ public interface MobileAdapterBackendPort {
         UNKNOWN_ID,
         BYTE_LIMIT,
         STALE_GENERATION
+    }
+
+    /**
+     * Sanitized controller-to-core result categories. Detailed host exceptions, addresses and
+     * payload descriptions never cross this boundary. The deterministic engine maps these coarse
+     * categories into command-specific Mobile Adapter response codes.
+     */
+    enum BackendStatus {
+        SUCCESS,
+        CONNECTION_LIMIT,
+        INVALID_CONNECTION,
+        LOOKUP_FAILED,
+        CONNECTION_FAILED,
+        COMMUNICATION_FAILED,
+        REMOTE_CLOSED,
+        CANCELLED
     }
 
     /**
@@ -128,16 +163,29 @@ public interface MobileAdapterBackendPort {
         }
     }
 
-    /** Immutable completion returned only after a corresponding request occupied one slot. */
-    record BackendCompletion(long requestId, byte[] payload) {
+    /** Immutable typed completion returned only while its generation still owns one request. */
+    record BackendCompletion(BackendGeneration generation, long requestId, BackendStatus status,
+                             byte[] payload) {
 
         public BackendCompletion {
+            Objects.requireNonNull(generation, "generation");
             if (requestId < 0) throw new IllegalArgumentException("Request ID must not be negative");
+            Objects.requireNonNull(status, "status");
             Objects.requireNonNull(payload, "payload");
             if (payload.length > MAX_BUFFERED_BYTES) {
                 throw new IllegalArgumentException("Backend completion payload exceeds 65,536 bytes");
             }
             payload = payload.clone();
+        }
+
+        /** Source-compatible detached success value used by Phase-1 boundary tests. */
+        public BackendCompletion(long requestId, byte[] payload) {
+            this(DISCONNECTED_GENERATION, requestId, BackendStatus.SUCCESS, payload);
+        }
+
+        /** Convenience success value for generation-aware fake workers. */
+        public BackendCompletion(BackendGeneration generation, long requestId, byte[] payload) {
+            this(generation, requestId, BackendStatus.SUCCESS, payload);
         }
 
         @Override

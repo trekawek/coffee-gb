@@ -31,6 +31,30 @@ internal data class SerialPeripheralUiSnapshot(
   }
 }
 
+/** Latest generation-correlated, presentation-safe Mobile Adapter backend status. */
+internal data class MobileAdapterNetworkUiSnapshot(
+    val attachmentId: Long,
+    val policyRevision: Long,
+    val phase: Controller.MobileAdapterNetworkPhase,
+    val slot: Int?,
+    val activeConnections: Int,
+    val error: Controller.MobileAdapterNetworkError?,
+    val disconnectReason: Controller.MobileAdapterDisconnectReason?,
+) {
+  companion object {
+    fun from(event: Controller.MobileAdapterNetworkStatusEvent): MobileAdapterNetworkUiSnapshot =
+        MobileAdapterNetworkUiSnapshot(
+            event.attachmentId,
+            event.policyRevision,
+            event.phase,
+            event.slot,
+            event.activeConnections,
+            event.error,
+            event.disconnectReason,
+        )
+  }
+}
+
 /** Closed set of lifecycle-only prerequisites allowed before a standalone port selection. */
 internal enum class SerialPeripheralTransitionPrerequisite {
   STOP_SERVER,
@@ -90,6 +114,8 @@ internal class SerialPeripheralMenuBinding(
           statusSelection = initialSelection,
           status = SerialPeripheralStatus.DETACHED,
       )
+
+  @Volatile private var mobileNetwork: MobileAdapterNetworkUiSnapshot? = null
 
   init {
     val group = ButtonGroup()
@@ -152,6 +178,9 @@ internal class SerialPeripheralMenuBinding(
     eventBus.register<Controller.SerialPeripheralSelectionChangedEvent> { event ->
       dispatchSwingMutation {
         val previous = current
+        if (event.selection != SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
+          mobileNetwork = null
+        }
         current =
             SerialPeripheralUiSnapshot(
                 selection = event.selection,
@@ -179,6 +208,21 @@ internal class SerialPeripheralMenuBinding(
         render(current)
       }
     }
+    eventBus.register<Controller.MobileAdapterNetworkStatusEvent> { event ->
+      val detached = MobileAdapterNetworkUiSnapshot.from(event)
+      dispatchSwingMutation {
+        val previous = mobileNetwork
+        // Attachment IDs are process-monotonic. A worker from a detached endpoint may finish
+        // after Swing has already queued the new endpoint's READY status; never let that stale
+        // status replace the new owner.
+        if (previous == null || detached.attachmentId >= previous.attachmentId) {
+          mobileNetwork = detached
+          if (current.statusSelection == SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
+            render(current)
+          }
+        }
+      }
+    }
     eventBus.register<ControllerOwnershipCommittedEvent> {
       dispatchSwingMutation {
         // A replacement controller starts with the deterministic standalone peer owner. With no
@@ -189,8 +233,9 @@ internal class SerialPeripheralMenuBinding(
             SerialPeripheralUiSnapshot(
                 selection = SerialPeripheralSelection.PEER_TO_PEER,
                 statusSelection = SerialPeripheralSelection.PEER_TO_PEER,
-                status = SerialPeripheralStatus.DETACHED,
+              status = SerialPeripheralStatus.DETACHED,
             )
+        mobileNetwork = null
         items.getValue(SerialPeripheralSelection.PEER_TO_PEER).isSelected = true
         render(current)
       }
@@ -232,10 +277,10 @@ internal class SerialPeripheralMenuBinding(
     check(SwingUtilities.isEventDispatchThread()) {
       "Serial peripheral menu rendering must run on the Event Dispatch Thread"
     }
-    statusItem.text = statusText(snapshot)
+    statusItem.text = statusText(snapshot, mobileNetwork)
     statusItem.toolTipText =
         if (snapshot.statusSelection == SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
-          "Offline protocol emulation only; real DNS, TCP, and UDP are unavailable in this phase."
+          mobileNetworkTooltip(mobileNetwork)
         } else {
           null
         }
@@ -260,23 +305,29 @@ internal class SerialPeripheralMenuBinding(
           SerialPeripheralSelection.PRINTER -> "Game Boy Printer"
           SerialPeripheralSelection.BARCODE_BOY -> "Barcode Boy"
           SerialPeripheralSelection.GPS_RECEIVER -> "GPS Receiver (GPS Boy)"
-          SerialPeripheralSelection.MOBILE_ADAPTER_GB -> "Mobile Adapter GB (offline)"
+          SerialPeripheralSelection.MOBILE_ADAPTER_GB -> "Mobile Adapter GB"
         }
 
     private fun description(selection: SerialPeripheralSelection): String =
         if (selection == SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
-          "Attach the deterministic offline Mobile Adapter protocol engine; no real network action is available"
+          "Attach the deterministic Mobile Adapter protocol engine; custom-server networking remains separately consent-gated"
         } else {
           "Make ${label(selection)} the exclusive owner of the Game Boy serial port"
         }
 
-    internal fun statusText(snapshot: SerialPeripheralUiSnapshot): String {
+    internal fun statusText(snapshot: SerialPeripheralUiSnapshot): String =
+        statusText(snapshot, null)
+
+    internal fun statusText(
+        snapshot: SerialPeripheralUiSnapshot,
+        network: MobileAdapterNetworkUiSnapshot?,
+    ): String {
       val owner = label(snapshot.statusSelection)
       return when (snapshot.status) {
         SerialPeripheralStatus.DETACHED -> "Status: $owner — detached"
         SerialPeripheralStatus.ATTACHED ->
             if (snapshot.statusSelection == SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
-              "Status: $owner — attached; network disabled"
+              "Status: $owner — attached; ${mobileNetworkStatusText(network)}"
             } else {
               "Status: $owner — attached"
             }
@@ -286,5 +337,42 @@ internal class SerialPeripheralMenuBinding(
         }
       }
     }
+
+    private fun mobileNetworkStatusText(network: MobileAdapterNetworkUiSnapshot?): String =
+        when (network?.phase) {
+          null, Controller.MobileAdapterNetworkPhase.OFFLINE -> "network offline"
+          Controller.MobileAdapterNetworkPhase.READY -> "custom network ready"
+          Controller.MobileAdapterNetworkPhase.RESOLVING -> "custom DNS resolving"
+          Controller.MobileAdapterNetworkPhase.CONNECTING -> "custom server connecting"
+          Controller.MobileAdapterNetworkPhase.CONNECTED ->
+              network.slot?.let { "custom server connected (slot $it)" }
+                  ?: "custom server connected (${network.activeConnections}/2)"
+          Controller.MobileAdapterNetworkPhase.TRANSFERRING ->
+              network.slot?.let { "custom transfer active (slot $it)" }
+                  ?: "custom transfer active"
+          Controller.MobileAdapterNetworkPhase.CANCELLING -> "custom network cancelling"
+          Controller.MobileAdapterNetworkPhase.DISCONNECTED ->
+              "custom network disconnected (${checkNotNull(network.disconnectReason).name})"
+          Controller.MobileAdapterNetworkPhase.FAILED -> {
+            val error = checkNotNull(network.error)
+            if (error == Controller.MobileAdapterNetworkError.REMOTE_CLOSED &&
+                network.slot != null) {
+              "slot ${network.slot} closed; ${network.activeConnections}/2 connections remain — " +
+                  "${error.code}: ${error.userMessage}"
+            } else {
+              "${error.code}: ${error.userMessage}"
+            }
+          }
+        }
+
+    private fun mobileNetworkTooltip(network: MobileAdapterNetworkUiSnapshot?): String =
+        when (network?.phase) {
+          null, Controller.MobileAdapterNetworkPhase.OFFLINE ->
+              "Custom-server networking is disabled until explicit session consent is granted."
+          Controller.MobileAdapterNetworkPhase.FAILED ->
+              checkNotNull(network.error).userMessage
+          else ->
+              "Only the explicitly configured custom-server policy is available; Nintendo production services are never contacted."
+        }
   }
 }

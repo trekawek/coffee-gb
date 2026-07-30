@@ -69,7 +69,11 @@ Payload section schema 1 and the original 91 numeric record IDs are byte-for-byt
 Xploder mapper state is appended as ID 92, the VF001 Zook mapper state as ID 93, and the VF001
 General mapper state as ID 94. The Mobile Adapter engine and serial-endpoint records are appended
 as IDs 95 and 96 respectively; session serial-peripheral ID 8 selects that host-free endpoint
-graph. In v2, the
+graph. Their released shapes remain unchanged. Mobile Adapter captures that own a pending backend
+request or open connection instead use the additive network engine and endpoint records at IDs 97
+and 98. ID 97 appends `externalIoAtCapture`; a true marker carries the deterministic
+external-I/O-disconnected outcome, no host response bytes or handle, and restores with backend
+ownership cleared. Captures without external ownership continue using IDs 95/96. In v2, the
 MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
 
 | Identity | Valid phase | Live increment per machine tick |

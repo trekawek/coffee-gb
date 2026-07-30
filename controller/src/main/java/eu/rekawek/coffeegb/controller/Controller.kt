@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.SystemProperties
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -248,10 +249,162 @@ interface Controller : AutoCloseable {
     }
   }
 
+  /**
+   * Rebuilds an attached Mobile Adapter from the latest private configuration snapshot.
+   *
+   * Only the monotonic revision crosses the application event tree. Resolver addresses, custom
+   * names, port mappings, private configuration bytes, and runtime consent remain inside the
+   * controller-owned provider.
+   */
+  data class RefreshMobileAdapterConfigurationEvent(val revision: Long) : Event {
+    init {
+      require(revision >= 0) { "Mobile Adapter configuration revision must not be negative" }
+    }
+  }
+
+  /** Cancels current Mobile Adapter host work without detaching its serial endpoint. */
+  data object CancelMobileAdapterNetworkEvent : Event
+
+  /** Presentation-safe controller phases for explicitly consented custom-server I/O. */
+  enum class MobileAdapterNetworkPhase {
+    OFFLINE,
+    READY,
+    RESOLVING,
+    CONNECTING,
+    CONNECTED,
+    TRANSFERRING,
+    CANCELLING,
+    DISCONNECTED,
+    FAILED,
+  }
+
+  /**
+   * Stable custom-network failures. These values deliberately contain no remote text, host,
+   * address, path, payload, account, credential, or exception message.
+   */
+  enum class MobileAdapterNetworkError(
+      val code: String,
+      val userMessage: String,
+  ) {
+    CONSENT_REQUIRED(
+        "CONSENT_REQUIRED",
+        "Outbound Mobile Adapter networking requires explicit consent for this session.",
+    ),
+    PRIVATE_LOCAL_GATE_REQUIRED(
+        "PRIVATE_LOCAL_GATE_REQUIRED",
+        "This destination requires the separate development-only private/LAN permission.",
+    ),
+    DESTINATION_DENIED(
+        "DESTINATION_DENIED",
+        "The requested destination is not allowed by the custom-server policy.",
+    ),
+    INVALID_REQUEST(
+        "INVALID_REQUEST",
+        "The Mobile Adapter custom-server request was malformed.",
+    ),
+    INVALID_CONNECTION(
+        "INVALID_CONNECTION",
+        "The Mobile Adapter connection slot is not open for this operation.",
+    ),
+    DNS_INVALID("DNS_INVALID", "The custom DNS response was malformed or outside its limits."),
+    DNS_FAILED("DNS_FAILED", "The custom DNS lookup failed."),
+    TIMEOUT("TIMEOUT", "The custom-server operation timed out."),
+    CONNECTION_REFUSED("CONNECTION_REFUSED", "The custom server refused the connection."),
+    DESTINATION_UNREACHABLE(
+        "DESTINATION_UNREACHABLE",
+        "The configured custom-server destination is unreachable.",
+    ),
+    CONNECTION_LIMIT(
+        "CONNECTION_LIMIT",
+        "Both bounded Mobile Adapter connection slots are occupied.",
+    ),
+    REMOTE_CLOSED("REMOTE_CLOSED", "The custom server closed the connection."),
+    TRANSFER_LIMIT("TRANSFER_LIMIT", "The custom-server transfer exceeded a bounded limit."),
+    QUEUE_EXHAUSTED("QUEUE_EXHAUSTED", "The bounded Mobile Adapter work queue is full."),
+    CANCELLED("CANCELLED", "The custom-server operation was cancelled."),
+    IO_FAILED("IO_FAILED", "The custom-server operation failed."),
+  }
+
+  enum class MobileAdapterDisconnectReason {
+    USER_CANCELLED,
+    POLICY_CHANGED,
+    PROTOCOL_RESET,
+    STATE_LOAD,
+    REWIND,
+    DETACHED,
+    SESSION_STOPPED,
+    SHUTDOWN,
+  }
+
+  /**
+   * Immutable sanitized status drained from one bounded backend at a controller safe point.
+   * [attachmentId] prevents late worker results from replacing a newer endpoint's presentation.
+   */
+  data class MobileAdapterNetworkStatusEvent(
+      val attachmentId: Long,
+      val policyRevision: Long,
+      val phase: MobileAdapterNetworkPhase,
+      val slot: Int? = null,
+      val activeConnections: Int = 0,
+      val error: MobileAdapterNetworkError? = null,
+      val disconnectReason: MobileAdapterDisconnectReason? = null,
+  ) : Event {
+    init {
+      require(attachmentId >= 0) { "Mobile Adapter attachment ID must not be negative" }
+      require(policyRevision >= 0) { "Mobile Adapter policy revision must not be negative" }
+      require(slot == null || slot in 0..1) { "Mobile Adapter slot must be 0 or 1" }
+      require(activeConnections in 0..2) {
+        "Mobile Adapter active connection count must be in 0..2"
+      }
+      require(phase != MobileAdapterNetworkPhase.DISCONNECTED || activeConnections == 0) {
+        "A disconnected Mobile Adapter cannot retain a logical connection"
+      }
+      require(phase != MobileAdapterNetworkPhase.DISCONNECTED || slot == null) {
+        "A disconnected Mobile Adapter cannot identify a live connection slot"
+      }
+      require((phase == MobileAdapterNetworkPhase.FAILED) == (error != null)) {
+        "A failed Mobile Adapter network status must carry exactly one typed error"
+      }
+      require(error != MobileAdapterNetworkError.REMOTE_CLOSED || slot != null) {
+        "A remote-close status must identify the affected connection slot"
+      }
+      require(
+          (phase == MobileAdapterNetworkPhase.DISCONNECTED) == (disconnectReason != null)
+      ) {
+        "A disconnected Mobile Adapter status must carry exactly one typed reason"
+      }
+    }
+  }
+
+  enum class MobileAdapterStateBoundary {
+    SAVE,
+    LOAD,
+    REWIND,
+    RESET,
+  }
+
+  enum class MobileAdapterStateBoundaryImpact {
+    /** Saving is observational, but restoring that capture will start disconnected. */
+    SAVED_WITH_NON_RESTORABLE_IO,
+
+    /** Live host work was cancelled and no state operation recreated it. */
+    DISCONNECTED_NOT_RESTORED,
+  }
+
+  /** Typed privacy-safe notice used by desktop state/load/rewind presentation. */
+  data class MobileAdapterStateBoundaryEvent(
+      val boundary: MobileAdapterStateBoundary,
+      val impact: MobileAdapterStateBoundaryImpact,
+  ) : Event
+
   /** Immutable, defensively copied configuration supplied to an offline Mobile Adapter. */
   class MobileAdapterConfiguration(
       val deviceId: Int,
       configuration: ByteArray,
+      val policyRevision: Long = 0,
+      val networkBackend: MobileAdapterNetworkBackend? = null,
+      val runtimeNetworkConsent: Boolean = false,
+      val runtimePrivateLocalDevelopment: Boolean = false,
   ) {
     private val configuration = configuration.clone()
 
@@ -259,6 +412,13 @@ interface Controller : AutoCloseable {
       require(deviceId in 0..0x7f) { "Mobile Adapter device ID must fit in seven bits" }
       require(this.configuration.size == MOBILE_ADAPTER_CONFIGURATION_BYTES) {
         "Mobile Adapter configuration must contain $MOBILE_ADAPTER_CONFIGURATION_BYTES bytes"
+      }
+      require(policyRevision >= 0) { "Mobile Adapter policy revision must not be negative" }
+      require(networkBackend != null || !runtimeNetworkConsent) {
+        "An offline Mobile Adapter cannot carry runtime network consent"
+      }
+      require(networkBackend != null || !runtimePrivateLocalDevelopment) {
+        "An offline Mobile Adapter cannot carry private/local development consent"
       }
     }
 

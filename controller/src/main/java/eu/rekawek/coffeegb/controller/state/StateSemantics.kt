@@ -764,12 +764,31 @@ internal object StateSemantics {
       put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState",
           clockConstrained(
               "Mobile Adapter parser, configuration, output, outcome, slots, and emulated idle timer are validated together.",
-              ::validateMobileAdapterEngine,
+              { fields -> validateMobileAdapterEngine(fields, false) },
               ::validateMobileAdapterClock,
           ))
       put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState",
           constrained("Mobile Adapter endpoint bit/byte latches and nested pure engine state are bounded.") {
             it.recordType("engineState", MOBILE_ADAPTER_ENGINE_STATE)
+            it.range("sb", 0, 0xff)
+            it.range("sendBitIndex", 0, 7)
+          })
+      put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState",
+          clockConstrained(
+              "Additive Mobile Adapter network capture state validates the legacy parser fields plus its disconnected external-I/O marker.",
+              { fields ->
+                val externalIoAtCapture = fields.boolean("externalIoAtCapture")
+                fields.require(
+                    externalIoAtCapture,
+                    "uses the additive network record without captured external I/O",
+                )
+                validateMobileAdapterEngine(fields, externalIoAtCapture)
+              },
+              ::validateMobileAdapterClock,
+          ))
+      put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState",
+          constrained("Additive Mobile Adapter endpoint state bounds its latches and nested network capture state.") {
+            it.recordType("engineState", MOBILE_ADAPTER_NETWORK_ENGINE_STATE)
             it.range("sb", 0, 0xff)
             it.range("sendBitIndex", 0, 7)
           })
@@ -810,14 +829,17 @@ internal object StateSemantics {
     }
   }
 
-  private fun validateMobileAdapterEngine(fields: RecordFields) {
+  private fun validateMobileAdapterEngine(
+      fields: RecordFields,
+      externalIoAtCapture: Boolean,
+  ) {
     fields.oneOf("phaseId", MOBILE_PHASE_SLEEP, MOBILE_PHASE_SESSION)
-    fields.range("outcomeId", MOBILE_OUTCOME_NEED_MORE, MOBILE_OUTCOME_PENDING_LIMIT)
+    fields.range("outcomeId", MOBILE_OUTCOME_NEED_MORE, MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED)
     fields.require(
         fields.int("outcomeId") != MOBILE_OUTCOME_TIME_REGRESSION,
         "contains a transient time-regression outcome",
     )
-    fields.range("errorId", MOBILE_ERROR_NONE, MOBILE_ERROR_PENDING_LIMIT)
+    fields.range("errorId", MOBILE_ERROR_NONE, MOBILE_ERROR_EXTERNAL_IO_DISCONNECTED)
     fields.range("deviceId", 0, 0x7f)
 
     val packet = fields.byteArray("packetBuffer")
@@ -882,7 +904,16 @@ internal object StateSemantics {
         "retains parser bytes without serial input ownership",
     )
     fields.range("pendingPacketSlots", 0, MOBILE_PENDING_PACKET_SLOTS)
-    validateMobileOutcome(fields, response, acknowledgement)
+    if (externalIoAtCapture) {
+      fields.require(
+          fields.int("outcomeId") == MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED &&
+              fields.int("errorId") == MOBILE_ERROR_EXTERNAL_IO_DISCONNECTED &&
+              response.isEmpty() &&
+              acknowledgement.isEmpty(),
+          "does not normalize captured external I/O to the disconnected marker",
+      )
+    }
+    validateMobileOutcome(fields, response, acknowledgement, externalIoAtCapture)
   }
 
   private fun validateMobileAdapterClock(fields: RecordFields, clock: ClockSpec) {
@@ -904,8 +935,13 @@ internal object StateSemantics {
       fields: RecordFields,
       response: ByteArray,
       acknowledgement: ByteArray,
+      externalIoAtCapture: Boolean,
   ) {
     val outcome = fields.int("outcomeId")
+    fields.require(
+        outcome != MOBILE_OUTCOME_BACKEND_PENDING,
+        "contains live Mobile Adapter backend ownership",
+    )
     val expectedError =
         when (outcome) {
           MOBILE_OUTCOME_CHECKSUM_ERROR -> MOBILE_ERROR_CHECKSUM
@@ -915,9 +951,17 @@ internal object StateSemantics {
           MOBILE_OUTCOME_LENGTH_LIMIT -> MOBILE_ERROR_LENGTH_LIMIT
           MOBILE_OUTCOME_BUFFER_LIMIT -> MOBILE_ERROR_BUFFER_LIMIT
           MOBILE_OUTCOME_PENDING_LIMIT -> MOBILE_ERROR_PENDING_LIMIT
+          MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED -> MOBILE_ERROR_EXTERNAL_IO_DISCONNECTED
           else -> MOBILE_ERROR_NONE
         }
-    fields.require(fields.int("errorId") == expectedError, "has inconsistent outcome/error IDs")
+    val backendError =
+        outcome == MOBILE_OUTCOME_BACKEND_ERROR &&
+            fields.int("errorId") in
+                MOBILE_ERROR_BACKEND_BUSY..MOBILE_ERROR_BACKEND_RESPONSE_INVALID
+    fields.require(
+        backendError || fields.int("errorId") == expectedError,
+        "has inconsistent outcome/error IDs",
+    )
 
     val expectedAck =
         when (outcome) {
@@ -925,15 +969,24 @@ internal object StateSemantics {
           MOBILE_OUTCOME_SESSION_ENDED -> 0x91
           MOBILE_OUTCOME_SESSION_RESET -> 0x96
           MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY -> 0x99
+          MOBILE_OUTCOME_CONFIG_WRITE -> 0x9a
           MOBILE_OUTCOME_CHECKSUM_ERROR -> 0xf1
           MOBILE_OUTCOME_UNSUPPORTED_COMMAND -> 0xf0
           else -> -1
         }
-    fields.require(
-        (expectedAck == -1) == acknowledgement.isEmpty(),
-        "has inconsistent outcome/acknowledgement presence",
-    )
-    if (expectedAck != -1) {
+    val internalErrorAck =
+        (outcome == MOBILE_OUTCOME_BACKEND_ERROR ||
+            outcome == MOBILE_OUTCOME_PENDING_LIMIT) &&
+            response.isEmpty() &&
+            acknowledgement.size == 2 &&
+            (acknowledgement[1].toInt() and 0xff) == 0xf2
+    if (!internalErrorAck) {
+      fields.require(
+          (expectedAck == -1) == acknowledgement.isEmpty(),
+          "has inconsistent outcome/acknowledgement presence",
+      )
+    }
+    if (!internalErrorAck && expectedAck != -1) {
       fields.require(
           (acknowledgement[1].toInt() and 0xff) == expectedAck,
           "has an acknowledgement inconsistent with its outcome",
@@ -945,16 +998,22 @@ internal object StateSemantics {
             outcome == MOBILE_OUTCOME_SESSION_ENDED ||
             outcome == MOBILE_OUTCOME_SESSION_RESET ||
             outcome == MOBILE_OUTCOME_CONFIG_READ ||
-            outcome == MOBILE_OUTCOME_CONFIG_READ_BOUNDARY
+            outcome == MOBILE_OUTCOME_CONFIG_READ_BOUNDARY ||
+            outcome == MOBILE_OUTCOME_CONFIG_WRITE ||
+            outcome == MOBILE_OUTCOME_BACKEND_RESPONSE ||
+            outcome == MOBILE_OUTCOME_BACKEND_ERROR ||
+            outcome == MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED
     fields.require(
-        expectsResponse == response.isNotEmpty(),
+        (expectsResponse && !internalErrorAck) == response.isNotEmpty(),
         "has inconsistent outcome/response presence",
     )
-    if (expectsResponse) {
-      fields.require(
-          (response[2].toInt() and 0xff) == expectedAck,
-          "has a response command inconsistent with its outcome",
-      )
+    if (expectsResponse && !internalErrorAck) {
+      if (expectedAck != -1) {
+        fields.require(
+            (response[2].toInt() and 0xff) == expectedAck,
+            "has a response command inconsistent with its outcome",
+        )
+      }
       val data = response.copyOfRange(6, response.size - 2)
       when (outcome) {
         MOBILE_OUTCOME_SESSION_STARTED ->
@@ -966,6 +1025,16 @@ internal object StateSemantics {
             fields.require(data.isEmpty(), "has data in an empty response")
         MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY ->
             validateMobileConfigurationResponse(fields, outcome, data)
+        MOBILE_OUTCOME_CONFIG_WRITE ->
+            fields.require(data.size == 1, "has an invalid configuration-write response")
+        MOBILE_OUTCOME_BACKEND_RESPONSE ->
+            validateMobileBackendResponse(fields, response[2].toInt() and 0xff, data)
+        MOBILE_OUTCOME_BACKEND_ERROR -> validateMobileBackendError(fields, data)
+        MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED ->
+            fields.require(
+                (response[2].toInt() and 0xff) == 0x9f && data.isEmpty(),
+                "has an invalid remote-close response",
+            )
       }
     }
 
@@ -1006,9 +1075,46 @@ internal object StateSemantics {
     }
     if (outcome != MOBILE_OUTCOME_NEED_MORE &&
         outcome != MOBILE_OUTCOME_IDLE_BOUNDARY_WAIT &&
-        outcome != MOBILE_OUTCOME_PENDING_LIMIT) {
+        outcome != MOBILE_OUTCOME_PENDING_LIMIT &&
+        !(outcome == MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED &&
+            externalIoAtCapture)) {
       fields.require(fields.int("packetCount") == 0, "completed result retained parser bytes")
     }
+    if (externalIoAtCapture) {
+      fields.require(phase == MOBILE_PHASE_SESSION, "captured external I/O while asleep")
+    }
+  }
+
+  private fun validateMobileBackendResponse(
+      fields: RecordFields,
+      command: Int,
+      data: ByteArray,
+  ) {
+    when (command) {
+      0xa4, 0xa6 ->
+          fields.require(
+              data.size == 1 && (data[0].toInt() and 0xff) < 2,
+              "has an invalid close completion",
+          )
+      0xa8 -> fields.require(data.size == 4, "has an invalid DNS completion")
+      else -> fields.require(false, "retains a completion that requires a live connection")
+    }
+  }
+
+  private fun validateMobileBackendError(fields: RecordFields, data: ByteArray) {
+    fields.require(data.size == 2, "has an invalid backend error response")
+    if (data.size != 2) return
+    val command = data[0].toInt() and 0xff
+    val error = data[1].toInt() and 0xff
+    val valid =
+        when (command) {
+          0x15 -> error == 0x00 || error == 0x01
+          0x23, 0x25 -> error == 0x00 || error == 0x01 || error == 0x03
+          0x24, 0x26 -> error <= 0x02
+          0x28 -> error == 0x01 || error == 0x02
+          else -> false
+        }
+    fields.require(valid, "has an invalid backend error code")
   }
 
   private fun validateMobileOutputPacket(fields: RecordFields, response: ByteArray) {
@@ -1245,6 +1351,12 @@ internal object StateSemantics {
   private const val MOBILE_OUTCOME_TIME_REGRESSION = 15
   private const val MOBILE_OUTCOME_CANCELLED = 16
   private const val MOBILE_OUTCOME_PENDING_LIMIT = 17
+  private const val MOBILE_OUTCOME_CONFIG_WRITE = 18
+  private const val MOBILE_OUTCOME_BACKEND_PENDING = 19
+  private const val MOBILE_OUTCOME_BACKEND_RESPONSE = 20
+  private const val MOBILE_OUTCOME_BACKEND_ERROR = 21
+  private const val MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED = 22
+  private const val MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED = 23
   private const val MOBILE_ERROR_NONE = 0
   private const val MOBILE_ERROR_INVALID_MAGIC = 1
   private const val MOBILE_ERROR_RESERVED_VALUE = 2
@@ -1253,6 +1365,9 @@ internal object StateSemantics {
   private const val MOBILE_ERROR_UNSUPPORTED_COMMAND = 5
   private const val MOBILE_ERROR_BUFFER_LIMIT = 6
   private const val MOBILE_ERROR_PENDING_LIMIT = 8
+  private const val MOBILE_ERROR_BACKEND_BUSY = 9
+  private const val MOBILE_ERROR_BACKEND_RESPONSE_INVALID = 11
+  private const val MOBILE_ERROR_EXTERNAL_IO_DISCONNECTED = 12
   private const val CPU_VISIBLE_PPU_REGISTERS = 12
   private const val DISPLAY_STATE = "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState"
   private const val PIXEL_TRANSFER_STATE =
@@ -1275,6 +1390,8 @@ internal object StateSemantics {
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
   private const val MOBILE_ADAPTER_ENGINE_STATE =
       "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState"
+  private const val MOBILE_ADAPTER_NETWORK_ENGINE_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState"
   private val MOBILE_BEGIN_SESSION_DATA =
       byteArrayOf(0x4e, 0x49, 0x4e, 0x54, 0x45, 0x4e, 0x44, 0x4f)
   private val REGISTERED_PATCH_TYPES =

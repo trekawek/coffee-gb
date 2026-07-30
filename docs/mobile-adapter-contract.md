@@ -1,33 +1,58 @@
 # Mobile Adapter GB clean-room contract
 
 Phase #346 froze only evidence-backed Game Boy Color serial framing and the Coffee GB ownership
-boundary. Phase #351 now implements that conservative subset as a deterministic offline engine;
+boundary. Phase #351 implemented that conservative subset as a deterministic offline engine.
+Phase #352 adds bounded custom-server DNS/TCP/UDP ownership and a direct core response channel;
 it still does not emulate Nintendo services. Architecture and licensing are normative in
 [ADR 0002](adr/0002-mobile-adapter-clean-room.md); machine-readable evidence and transcripts live
 under `core/src/test/resources/mobile-adapter/`.
 
-## Implemented Phase-1 boundary
+## Implemented deterministic boundary
 
 `MobileAdapterEngine` incrementally consumes one unsigned serial byte at a time and exposes
 immutable response-packet and acknowledgement results as separate channels. The engine owns no
 host resource. `MobileAdapterSerialEndpoint` feeds complete Game Boy bytes into it and returns an
 idle-high input bit because the pinned evidence does not define how those two result channels are
-interleaved with later polling transfers. This deliberate limitation keeps transcript conformance
-testable without guessing an on-wire schedule or claiming commercial-game compatibility.
+interleaved with later polling transfers. Phase #352 does not change that link behavior: response
+packet scheduling remains explicitly deferred to evidence-driven issue #353. This limitation keeps
+transcript conformance testable without guessing an on-wire schedule or claiming commercial-game
+compatibility.
 
 The core also defines a nonblocking backend ownership port with eight request/result slots and a
-65,536-byte aggregate buffer. Phase 1 wires only a disconnected implementation and a deterministic
-in-memory fake used by lifecycle and limit tests. No supported command submits backend work.
-Reset, end, idle timeout, detach, replacement, and state restore cancel the port and discard late
-ownership; they cannot open a host resource.
+65,536-byte aggregate buffer. The engine admits at most one direct custom-server request at a time,
+reserving one of its two deterministic packet slots until completion. Commands `15`, `23` through
+`26`, and `28` may submit work only after `10` begins a session and only when the controller has
+installed an enabled custom-server backend. No offer, poll, or completion callback waits. Reset,
+end, idle timeout, detach, replacement, and state restore cancel the port and discard late
+ownership. The disconnected port performs no host work and returns a coarse `6e` invalid-use
+response for a valid direct command.
 
 Every backend offer and completion carries the port's current opaque, identity-only generation
-token. Cancellation replaces that token before numeric request IDs may be reused, so a late
-completion from an older generation is rejected instead of completing a newer request with the
-same ID. The token owns no host data and is never serialized.
+token. Completions additionally carry one sanitized status category. Cancellation replaces the
+token before numeric request IDs may be reused, and expected-generation polling atomically refuses
+to remove a result after that replacement. The engine checks the returned generation and request
+ID again before applying it, so a late completion cannot complete a newer request with the same
+numeric ID. The token owns no host data and is never serialized.
 The deterministic fake linearizes this bounded ownership with an immutable snapshot and one
 lock-free atomic reference. It creates no worker, task, future, executor, callback, or blocking
-wait; future host jobs remain controller-owned and publish only at controller safe points.
+wait; host jobs remain controller-owned and publish only at controller safe points.
+
+The direct channel is deliberately narrower than historical adapter service flow. Custom-server
+mode is an out-of-band controller prerequisite; it does not synthesize dial command `12`, ISP login
+`21`, ISP logout `22`, a Nintendo account, or a historical endpoint. A TCP/UDP open request is
+exactly four IPv4 bytes and a nonzero big-endian port. A close request is exactly one live ID of the
+matching transport. Transfer contains one live ID plus `0..253` bytes. DNS accepts a `1..254` byte
+packet, truncates at the first NUL, and passes only a nonempty ASCII name of at most 253 bytes to the
+backend. A successful backend result is accepted only when it has the exact command-specific
+shape: a free connection ID `0..1`, the same close/transfer ID, at most 253 transfer data bytes, or
+exactly four DNS result bytes.
+
+Only evidence-backed coarse errors cross back into the packet engine. Invalid/disconnected use is
+code `01`; connection-slot exhaustion is open code `00`; other open failures are code `03`; DNS
+lookup/content failure is code `02`; and transfer/close failure is code `00`. A full engine/backend
+queue or byte bound produces acknowledgement `f2` without admission. A typed remote TCP close
+drops that logical ID and produces empty response command `9f`. Cancelled, stale-generation, and
+state-restored ownership produces the stable external-I/O-disconnected state with no stale packet.
 
 The controller replaces the former independent runtime booleans with one
 `SerialPeripheralSelection`: none, printer, Barcode Boy, GPS receiver, Mobile Adapter GB, or the
@@ -39,12 +64,11 @@ runtime booleans, so there are no historical disk keys to guess or reinterpret. 
 startup migration is the prior peer endpoint, and queued legacy conflicts resolve in event order.
 
 Swing presents the same enum as one radio group plus immutable attachment status and stable typed
-errors. The read-only Mobile Adapter details action shows the cached configuration source, device
-ID, recovery status, and any typed redacted diagnostic while replacing all 256 private bytes with
-an explicit hidden marker. It also shows the offline command/privacy boundary; it contains no host,
-address, credential, dial string, or real-network action. Raw configuration editing and service
-fields belong to the approved Phase #352 follow-up. Controller callbacks are copied and rendered
-on the Swing event-dispatch thread.
+errors. Phase 1's read-only details action shows the cached configuration source, device ID,
+recovery status, and any typed redacted diagnostic while replacing all 256 private bytes with an
+explicit hidden marker. Phase 2 adds the separately consented custom-server controls without
+exposing raw configuration, dial strings, credentials, or backend exception text. Controller
+callbacks are copied and rendered on the Swing event-dispatch thread.
 
 ## Pinned evidence and disagreement
 
@@ -96,20 +120,32 @@ Acknowledgement is a separate two-byte exchange. A valid receiver reply uses its
 unsupported is `f0`; bounded internal failure is `f2`. The transcripts model packet and acknowledgement channels separately rather than
 guessing undocumented per-clock garbage/wait bytes.
 
-The Phase #351 minimum supported command set is deliberately conservative:
+The Phase #351 minimum remains frozen. Phase #352 adds only the pure configuration write and the
+controller-gated direct response channel:
 
-| Command | Status | Request/response contract |
+| Command | Phase #352 status | Request/response contract |
 |---:|---|---|
 | `10` | supported minimum | exactly 8 ASCII `NINTENDO`; echo exactly those 8 bytes |
-| `11` | supported minimum | empty end-session request/response; enter sleep and clear slots/parser |
+| `11` | supported minimum | empty end-session request/response; enter sleep and clear slots/parser/backend |
+| `15` | custom backend, direct channel | live ID plus `0..253` bytes; reply same ID plus `0..253` bytes, or empty `9f` remote-close |
 | `16` | supported minimum | empty reset request/response; cancels jobs/connections |
 | `19` | supported minimum | 2-byte offset/length, length `0..128`, checked within 256; response offset+bytes |
-| `1a` | specified, later opt-in | offset plus `0..128` bytes, checked within 256; atomic write, response offset |
+| `1a` | supported pure operation | offset plus `0..128` bytes, checked within 256; atomic in-memory write, response offset |
+| `23`, `25` | custom backend, direct channel | exactly IPv4(4)+nonzero port(2); reply one free ID in `0..1` |
+| `24`, `26` | custom backend, direct channel | exactly one matching live ID; reply the same ID |
+| `28` | custom backend, direct channel | packet `1..254`; first-NUL-truncated ASCII name `1..253`; reply exactly IPv4(4) |
+| `6e` | adapter response only | original failed command plus evidence-backed coarse error code |
+| `12`, `21`, `22` | unsupported | no dial-up, login/logout, credential, or Nintendo service emulation |
 | all others | unknown/unsupported | consume bounded packet, return `f0`, no state/backend mutation |
 
-Recognizing framing is not evidence for implementing telephone, DNS, TCP/UDP, ISP, firmware, or
-service semantics. Later commands require a reviewed evidence update and tests. Production must
-never connect to historical Nintendo endpoints or ship endpoint presets/data.
+Recognizing framing is not evidence for implementing telephone, ISP, firmware, or Nintendo service
+semantics. The direct backend commands are usable only behind the reviewed Phase #352 custom-server
+policy; they do not claim the later serial scheduling or commercial compatibility owned by #353.
+Coffee GB ships and automatically selects no Nintendo endpoint, preset, account, or service data.
+The destination policy validates an exact configured alias/address, transport, port, address class,
+and freshly resolved answer; it cannot infer who operates an otherwise eligible public IPv4
+address. The user must therefore configure only an intended non-Nintendo custom service. Phase #352
+tests use in-process endpoints and generate no Nintendo production traffic.
 
 ## Deterministic core and controller bounds
 
@@ -123,21 +159,84 @@ The core engine validates before allocating or indexing:
 | one configuration read/write | 128 bytes |
 | deterministic parser input/output buffers | 262 bytes each |
 | deterministic pending packet slots | 2 |
+| direct backend requests outstanding in the engine | 1 |
 | asynchronous controller request slots | 8 |
 | complete backend buffered bytes per peripheral | 65,536 bytes |
 | emulated idle reset | 3,000 ms since last serial byte |
-| future connection identifiers | 2, only after a later evidence-backed command phase |
+| runtime logical connection identifiers | 2 (`0` and `1`), never serialized |
+| transfer packet | 1-byte ID plus `0..253` data bytes |
+| DNS packet/effective ASCII name | 254 / 253 bytes |
 
-Protocol connection identifiers require the service commands and disconnected-state semantics
-owned by Phase #352, so Phase #351 deliberately does not invent mutable connection IDs. This
-phase enforces the independently evidenced two pending packet slots and the eight-slot backend
-ownership ceiling; #352 must add at most two logical connection identifiers before opting any
-network command into the supported table.
+The controller backend is one daemon owner loop with no per-request task creation. Its public
+offer, cancellation, status, and completion calls are nonblocking; only the owner loop opens or
+waits on NIO channels. The remaining host-side limits are:
+
+| Controller resource | Exact limit |
+|---|---:|
+| physical TCP/UDP connections | 2 total |
+| prepared/terminating backend owner loops | 2 total |
+| backend command payload | 254 bytes |
+| status snapshots | 16, oldest replaced on overflow |
+| raw DNS datagram | 512 bytes |
+| DNS answer/authority/additional records | 32 total |
+| DNS compression pointer jumps / CNAME hops | 16 per decoded name / 4 per selected chain |
+| distinct IPv4 answers | 8 in the terminal selected result set |
+| DNS / TCP connect timeout | 2,000 / 3,000 ms |
+| socket write / read timeout | 1,000 / 1,000 ms |
+| previously returned DNS capability | 10,000 ms, then discarded |
+| selector cancellation polling interval | at most 100 ms |
+| retries | 0 |
+
+Cancel and refresh delivery uses one coherent constant-space controller lane: one latest cancel
+order and one latest accepted policy revision/order. Bursts cannot grow the general event queue,
+and relative order determines whether cancellation applies to the old or replacement endpoint.
+
+Configuration persistence has one daemon writer. At most one write may execute and one additional
+write may wait in its bounded queue; another request is rejected without enqueueing as
+`CONFIGURATION_BUSY`. Coordinator shutdown uses one 2,000 ms deadline shared by that writer and all
+prepared network backends. The writer receives at most 1,000 ms to stop gracefully, then an
+interrupt request and only the time still remaining; backend termination checks consume that same
+remaining deadline rather than receiving a fresh timeout each. If a shutdown attempt times out, a
+later close retry re-snapshots the still-tracked backends and waits under a new shared 2,000 ms
+deadline; it never re-enables authority or starts a replacement worker.
+
+DNS is a bounded raw UDP A query sent only to the configured literal IPv4 resolver; the JVM system
+resolver is never called. A guest name is only an exact alias into the saved mapping table. A named
+target is freshly resolved immediately before every open, every returned address is reclassified,
+and the exact address requested by the guest must still be present. A changed or newly denied
+answer fails closed. TCP and UDP are outbound and connected to the selected peer; there is no
+listener, bind service, relay, proxy, discovery, unsolicited receive, or ambient DNS path.
+
+The two logical IDs are a runtime validation view of controller-owned TCP/UDP resources. They are
+created only by a validated successful open completion, cleared only by matching close, remote
+close, or a cancellation boundary, and never captured as emulator state. The engine's one-request
+ceiling is stricter than the eight-slot port ceiling so packet state and response ordering remain
+unambiguous. The wider port bound still protects controller publication and deterministic fake
+tests independently.
 
 Length and `offset + length` use checked arithmetic. Invalid magic/reserved/length/checksum,
-boundary+1, timeout, unsupported command, and full queues produce stable core status without
-partial configuration mutation or backend admission. A complete valid packet is committed only
-after checksum and command-specific validation.
+boundary+1, timeout, unsupported command, malformed backend result, and full queues produce stable
+core status without partial configuration mutation or unintended backend admission. A complete
+valid packet is committed only after checksum and command-specific validation.
+
+Timeouts and transfer limits preserve transport framing:
+
+- DNS and TCP-connect timeout fail that request without creating a connection slot.
+- TCP write or read timeout closes the affected slot. UDP read timeout also closes its slot. The
+  backend reports typed `TIMEOUT`, while the direct core channel consumes the close as an empty
+  remote-close response `9f` so the logical ID cannot remain usable.
+- UDP write timeout reports typed `TIMEOUT` but retains the connected slot. A datagram is never
+  split and Coffee GB performs no automatic retry, so the caller must decide whether to issue a
+  later transfer.
+- A request above its byte bound is rejected before host I/O with `TRANSFER_LIMIT`. An inbound TCP
+  stream response above 253 bytes closes that slot because the extra stream bytes cannot be safely
+  assigned to a later packet. An oversized UDP datagram reports `TRANSFER_LIMIT` while preserving
+  the slot because the datagram boundary was consumed atomically.
+- TCP EOF before data produces `REMOTE_CLOSED` immediately. If data and EOF arrive together, the
+  final bounded bytes are returned once and the physical connection is closed; the following use
+  of that logical ID produces `REMOTE_CLOSED` and releases its tombstone. A slot-scoped failure
+  carries the affected ID and the remaining `0..2` active-connection count, so closing one slot is
+  not presented as a whole-adapter disconnect.
 
 ## Timing, fragmentation, and lifecycle
 
@@ -170,40 +269,65 @@ generation, and expose no stale completion to a following packet.
 
 Reset command `16`, peripheral replacement, ROM/session replacement, state load/restore, rewind,
 stop, and controller cancellation disconnect every live backend operation. State capture/save is
-observational and does not cancel or disconnect backend work; it owns only the bounded
-deterministic fields listed in ADR 0002. Loading deterministic state never reconnects host
-resources. Backend completion is queued and applied at a controller safe point; late completion
-from a cancelled generation is discarded. Configuration writes validate a detached copy and
-commit atomically.
+observational and does not cancel the running backend. When external work or a logical connection
+exists, however, the captured image removes the backend-reserved packet slot and host-dependent
+output, records `externalIoAtCapture`, and substitutes the stable disconnected outcome/error. On
+load, current backend ownership is cancelled before that deterministic disconnected image is
+installed; no socket or request is restored. Backend completion is queued and at most one result is
+applied at a controller safe point; late completion from a cancelled generation is discarded.
+Configuration writes validate a detached copy and commit atomically in core memory. Filesystem
+persistence, if requested, is a separate controller operation and cannot run on the emulator
+thread. Rewind history is cleared as soon as external ownership is observed, including while the
+machine is paused, so later host-free captures cannot bridge an unrepresentable DNS/socket
+interval after that ownership ends. The desktop reports an informational notice when a capture
+receives the marker. Loading a marked capture reports the disconnected warning even if the
+currently attached endpoint is idle; loading any state while current host work is live reports the
+same non-restoration boundary.
 
 The stable engine IDs serialized by Phase 1 are append-only:
 
 | Kind | Stable IDs |
 |---|---|
 | phase | `SLEEP=1`, `SESSION=2` |
-| outcome | `NEED_MORE=1`, `SESSION_STARTED=2`, `SESSION_ENDED=3`, `SESSION_RESET=4`, `CHECKSUM_ERROR=5`, `IDLE_TIMEOUT_RESET=6`, `IDLE_BOUNDARY_WAIT=7`, `CONFIG_READ=8`, `CONFIG_READ_BOUNDARY=9`, `UNSUPPORTED_COMMAND=10`, `MAGIC_ERROR=11`, `RESERVED_ERROR=12`, `LENGTH_LIMIT=13`, `BUFFER_LIMIT=14`, `TIME_REGRESSION=15` (transient), `CANCELLED=16`, `PENDING_LIMIT=17` |
-| error | `NONE=0`, `INVALID_MAGIC=1`, `RESERVED_VALUE=2`, `LENGTH_LIMIT=3`, `CHECKSUM=4`, `UNSUPPORTED_COMMAND=5`, `BUFFER_LIMIT=6`, `TIME_REGRESSION=7` (transient), `PENDING_LIMIT=8` |
+| outcome | `NEED_MORE=1`, `SESSION_STARTED=2`, `SESSION_ENDED=3`, `SESSION_RESET=4`, `CHECKSUM_ERROR=5`, `IDLE_TIMEOUT_RESET=6`, `IDLE_BOUNDARY_WAIT=7`, `CONFIG_READ=8`, `CONFIG_READ_BOUNDARY=9`, `UNSUPPORTED_COMMAND=10`, `MAGIC_ERROR=11`, `RESERVED_ERROR=12`, `LENGTH_LIMIT=13`, `BUFFER_LIMIT=14`, `TIME_REGRESSION=15` (transient), `CANCELLED=16`, `PENDING_LIMIT=17`, `CONFIG_WRITE=18`, `BACKEND_PENDING=19` (never captured), `BACKEND_RESPONSE=20`, `BACKEND_ERROR=21`, `BACKEND_REMOTE_CLOSED=22`, `EXTERNAL_IO_DISCONNECTED=23` |
+| error | `NONE=0`, `INVALID_MAGIC=1`, `RESERVED_VALUE=2`, `LENGTH_LIMIT=3`, `CHECKSUM=4`, `UNSUPPORTED_COMMAND=5`, `BUFFER_LIMIT=6`, `TIME_REGRESSION=7` (transient), `PENDING_LIMIT=8`, `BACKEND_BUSY=9`, `BACKEND_UNAVAILABLE=10`, `BACKEND_RESPONSE_INVALID=11`, `EXTERNAL_IO_DISCONNECTED=12` |
 
-The engine memento contains phase/outcome/error/device IDs; the fixed 262-byte parser and retained
-count/expected length; the 256-byte configuration; bounded response and acknowledgement arrays;
-exact emulated idle phase; serial-input ownership; and the two-slot count. The endpoint memento
-adds the current serial byte and bit index. Both records defensively copy arrays. Restore validates
-the complete graph before mutation, cancels the injected backend, and never captures that backend.
+The released 13-component `MobileAdapterEngineState` remains unchanged and represents captures
+without external ownership. The additive `MobileAdapterEngineNetworkState` contains those same
+fields—phase/outcome/error/device IDs; fixed parser and lengths; configuration; bounded output;
+idle/input ownership; and deterministic slot count—plus the final external-I/O-at-capture marker.
+Runtime connection kinds, backend request IDs, generations, and host ownership are absent. The
+released endpoint state likewise remains unchanged; an additive endpoint-network state pairs the
+new engine record with the current serial byte and bit index. All records defensively copy arrays.
+Restore accepts both generations, validates the complete graph before mutation, cancels the
+injected backend, and never captures that backend.
 
 ## Atomic private configuration
 
 Desktop startup loads configuration on the launcher thread, before entering Swing, and supplies a
 cached immutable value to the controller. The emulator and EDT therefore perform no filesystem
-work. The dedicated file is separate from general preferences and has one exact 300-byte format:
+work. The dedicated file is separate from general preferences. Current variable-length version 2
+is `307..640` bytes:
 
 | Offset | Width | Field |
 |---:|---:|---|
 | 0 | 8 | ASCII magic `CGBMACFG` |
-| 8 | 1 | format version `1` |
+| 8 | 1 | format version `2` |
 | 9 | 1 | device ID `0..127` |
-| 10 | 2 | big-endian configuration length, exactly `256` |
-| 12 | 256 | private configuration bytes |
-| 268 | 32 | SHA-256 of bytes `0..267` |
+| 10 | 256 | private configuration bytes |
+| 266 | 1 | known flags; bit 0 means custom-server policy |
+| 267 | 4 | literal resolver IPv4 bytes; zero only in offline mode |
+| 271 | 2 | big-endian resolver port; zero only in offline mode |
+| 273 | 1 | ASCII DNS query-name length `0..253` |
+| 274 | n | canonical DNS query name; empty only in offline mode |
+| 274+n | 1 | mapping count `0..16` |
+| 275+n | 5m | mappings: transport ID, guest port, target port |
+| final 32 | 32 | SHA-256 of every preceding byte |
+
+The exact 300-byte version-1 record remains readable and migrates to an offline policy; it retains
+its original two-byte configuration-length field and digest layout. Every new save uses version 2.
+Runtime network consent and the separate private/local development gate are deliberately absent
+from both formats and reset on every application start and every policy edit.
 
 The controller validates exact size, magic, version, bounds, and integrity before publishing a
 detached value. It rejects symbolic links and non-regular targets, uses `AtomicFileWriter` for
@@ -222,16 +346,71 @@ after this store instance accepted it, preserves the last-good value when availa
 uses the synthetic fallback) and returns a typed, redacted diagnostic. Payloads and full paths
 never enter status text or logs.
 
-The Phase-1 configuration UI is intentionally read-only. It reports whether the launcher selected
-a validated record, recovered backup, last-good value, or synthetic fallback, plus the safe device
-ID and stable diagnostic. It never receives the private byte array. Import/edit/reset controls and
-online service fields are deferred to #352, alongside the command semantics that could use them.
+The configuration view reports whether the launcher selected a validated record, recovered backup,
+last-good value, or synthetic fallback, plus the safe device ID, network mode, mapping count, and
+stable diagnostic. Its summary never receives the private byte array or renders resolver/name/port
+values. The editor may show the user's own owner-only policy while it is open. It supports offline
+or custom-server mode, one literal resolver, one canonical DNS name, and exact TCP/UDP guest-to-
+target port mappings.
 
-## Troubleshooting the offline phase
+Runtime authorization is fail-closed and independent of event delivery. Every gate or policy edit
+holds the coordinator authority lock and directly revokes every prepared backend before publishing
+replacement runtime state. A backend's first revocation sets its monotonic flag and rotates its
+generation; an already-revoked backend stays unavailable. New offers then fail immediately, port
+ownership is cleared, and the owner loop discards DNS capabilities and live sockets. Controller
+cancel/refresh events request endpoint handoff and UI presentation, but a failing event subscriber
+cannot preserve the old authority.
 
-- Select **Peripherals → Link-port device → Mobile Adapter GB (offline)**. Status changes to
+Saving first retains the previous durable policy with both runtime gates disabled and requests an
+immediate endpoint refresh; the owner-only filesystem write then runs on the bounded writer away
+from the emulator and EDT. Success makes the candidate policy current, while failure reconciles to
+the last durable policy, still with both gates disabled. Every serialized result is reconciled, so
+overlapping saves cannot make runtime state lag behind the last successful commit. One write may
+run and one may wait; a further request returns `CONFIGURATION_BUSY`. The rejected request also
+leaves runtime authority revoked. Both authorization and saving are bound to the revision displayed
+when the dialog opened. A stale dialog returns `CONFIGURATION_STALE` without changing authority,
+runtime state, durable storage, or controller events. Close first revokes and closes all prepared
+backends, then uses the single shared 2,000 ms shutdown deadline described above. Its graceful-then-
+interrupt sequence does not extend that attempt's deadline. A later desktop close retry re-awaits
+any writer/backend that is still terminating under a fresh bounded deadline. A deadline/interruption
+is surfaced as a stable shutdown failure rather than exception detail in Mobile Adapter status.
+
+Outbound networking requires an explicit session-only confirmation. Loopback and RFC1918 targets
+also require a second, separately labeled development confirmation; link-local, multicast,
+unspecified, documentation, benchmarking, carrier-grade NAT, and other special ranges remain hard
+denied even with both confirmations. The UI exposes typed phases, bounded connection counts, cancel,
+and stable errors only. Remote names, literal addresses, ports, payloads, exception text, paths,
+credentials, dial strings, and tokens do not enter statuses, dialogs, diagnostics, or logs.
+
+## Privacy and endpoint responsibility
+
+Custom-server networking is plaintext outbound I/O, not an anonymity or encryption feature. The
+configured DNS resolver receives the configured query name plus the user's source address/port and
+timing. The selected custom service receives the user's source address/port, timing, mapped target
+port, and the Game Boy transfer payload. Network operators on those paths can observe destination
+metadata and unencrypted DNS/TCP/UDP contents. Coffee GB neither adds TLS nor redacts bytes on the
+wire; payload redaction applies only to application logs, diagnostics, status events, and dialogs.
+Use only a service and network you trust, and do not put credentials, tokens, or other secrets in a
+custom-service flow.
+
+The owner-only configuration file necessarily contains the configured resolver, query name, port
+mappings, and the adapter's private 256-byte configuration region. Runtime consent flags are never
+stored. The configuration editor shows the values entered by its user, but summaries and runtime
+status expose only mode, counts, slot IDs, phases, and typed errors. The policy's special-range
+classification is not an ownership or brand database: consent for a public destination does not
+prove that it is a community server. Coffee GB supplies no Nintendo address and never chooses one
+automatically; responsibility for selecting the documented non-Nintendo custom service remains
+with the user.
+
+## Troubleshooting
+
+- Select **Peripherals → Link-port device → Mobile Adapter GB**. Status changes to
   attached only after the controller commits the endpoint; selecting another radio item detaches
   and clears it.
+- Open the Mobile Adapter configuration action to choose offline or custom-server policy. A saved
+  custom policy still performs no host I/O until session consent is granted; private/LAN targets
+  require the additional development confirmation. **Cancel active network work** rotates backend
+  ownership and closes current DNS/socket work without waiting on the EDT.
 - `CONFIGURATION_INVALID` means a bounded value failed validation. `STORAGE_FAILED` means the
   private record could not be loaded. Coffee GB uses a safe synthetic fallback at desktop startup
   and logs only the stable error code.
@@ -240,9 +419,29 @@ online service fields are deferred to #352, alongside the command semantics that
   later selection retries the retained linked-controller handoff even if the network toggle has
   already cleared.
 - A game that waits forever for acknowledgement/response polling has reached the known evidence
-  gap. Phase 1 intentionally returns idle-high rather than inventing those bytes.
-- There is no server/address field in this phase. Telephone, DNS, TCP, UDP, listener, relay, and
-  Nintendo service behavior remain Phase #352 or explicitly out of scope.
+  gap. The Phase 2 core still returns idle-high rather than inventing those bytes; #353 owns the
+  wire schedule and compatibility validation.
+- Custom-server mode does not enable telephone, ISP login/logout, listener, relay, Nintendo service,
+  or production-endpoint behavior. Those commands remain unsupported or explicitly out of scope.
+- `CONSENT_REQUIRED`, `PRIVATE_LOCAL_GATE_REQUIRED`, `DESTINATION_DENIED`, `DNS_FAILED`,
+  `DNS_INVALID`, `INVALID_REQUEST`, `INVALID_CONNECTION`, `TIMEOUT`, `CONNECTION_REFUSED`,
+  `DESTINATION_UNREACHABLE`, `CONNECTION_LIMIT`, `TRANSFER_LIMIT`, `QUEUE_EXHAUSTED`,
+  `REMOTE_CLOSED`, `CANCELLED`, and `IO_FAILED` are coarse privacy-safe categories. They never
+  contain the endpoint or backend exception. Connection/transfer phases and slot-scoped failures
+  identify only logical slot `0` or `1` and the bounded active count, never a remote endpoint.
+- `CONFIGURATION_BUSY` means one policy write is executing and the single pending-write slot is
+  already occupied. Wait for its result before saving again; the current durable policy remains
+  usable only after the user explicitly grants its runtime gates again.
+- `CONFIGURATION_STALE` means the policy changed after the configuration dialog opened. Nothing
+  from that stale edit was saved or applied; reopen the dialog to review the current policy.
+- Saving during external I/O records a non-restorable-I/O marker but does not interrupt the live
+  session. Loading that state, loading another state while I/O is live, rewind, reset, detach, and
+  shutdown cancel host ownership; no socket, DNS request, worker deadline, or connection ID is
+  serialized or recreated. The desktop reports the saved/disconnected boundary explicitly.
+- No commercial game or public service is claimed compatible in Phase 2. Only direct engine/backend
+  channels and deterministic in-process fixtures are verified. Issue #353 remains the manual gate:
+  it requires a user-supplied ROM and an explicitly non-Nintendo custom service before validating
+  compatibility or adding any evidence-backed wire scheduling.
 
 ## Transcript format and legal status
 

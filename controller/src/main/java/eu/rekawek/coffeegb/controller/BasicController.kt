@@ -1,6 +1,11 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.events.EventQueue
+import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkError as BackendNetworkError
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkPhase as BackendNetworkPhase
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkStatus
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
@@ -64,6 +69,7 @@ import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
 import java.util.concurrent.Callable
@@ -269,6 +275,9 @@ class BasicController private constructor(
 
   private val eventQueue = EventQueue(eventBus)
 
+  /** Two coherent constant-space control slots drained only by the controller frame owner. */
+  private val mobileAdapterControlLane = MobileAdapterControlLane()
+
   private val stateWorker = stateWorkerFactory.create(eventBus)
 
   private var session: Session? = null
@@ -286,6 +295,9 @@ class BasicController private constructor(
   private val latestStateRequests = mutableMapOf<StateOperation, Long>()
 
   private val latestSaveRequests = mutableMapOf<StateRef, Long>()
+
+  /** Successful manual saves whose captures intentionally normalized live host I/O. */
+  private val mobileAdapterExternalIoSaveRequests = mutableSetOf<Long>()
 
   private var pendingResume: PendingResume? = null
 
@@ -424,6 +436,14 @@ class BasicController private constructor(
     eventQueue.register<Controller.RewindEvent> {
       // Disabled rewind is a real no-work mode: the key cannot freeze forward emulation and
       // runFrame never reaches a machine capture.
+      if (rewindManager.enabled && it.active && !isRewinding && hasMobileAdapterExternalIo()) {
+        // Rewind history cannot bridge an interval whose host effects are deliberately absent
+        // from snapshots. This is also the last-resort boundary when external ownership appears
+        // between the frame owner's ordinary observations.
+        rewindManager.clear()
+        postMobileAdapterStateBoundary(Controller.MobileAdapterStateBoundary.REWIND)
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.REWIND)
+      }
       isRewinding = rewindManager.enabled && it.active
     }
     eventQueue.register<SgbDisplay.SetSgbBorder> {
@@ -438,6 +458,10 @@ class BasicController private constructor(
       }
     }
     eventQueue.register<Controller.ResetEmulationEvent> {
+      if (hasMobileAdapterExternalIo()) {
+        postMobileAdapterStateBoundary(Controller.MobileAdapterStateBoundary.RESET)
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.PROTOCOL_RESET)
+      }
       session?.config?.rom?.image?.let {
         requestLoad(properties, Controller.LoadRomEvent(it), clearPatches = false)
       }
@@ -447,6 +471,12 @@ class BasicController private constructor(
     }
     eventQueue.register<Controller.SetSerialPeripheralEvent> {
       selectSerialPeripheral(it.selection)
+    }
+    eventBus.register<Controller.RefreshMobileAdapterConfigurationEvent> { event ->
+      mobileAdapterControlLane.offerRefresh(event.revision)
+    }
+    eventBus.register<Controller.CancelMobileAdapterNetworkEvent> {
+      mobileAdapterControlLane.offerCancel()
     }
     eventQueue.register<Controller.SetBarcodeBoyEvent> {
       applyLegacySerialSelection(
@@ -489,6 +519,12 @@ class BasicController private constructor(
 
   private fun runFrame() {
     eventQueue.dispatch()
+    drainMobileAdapterControlLane()
+    pollMobileAdapterBackend()
+    // A live request or logical connection makes every earlier rewind entry discontinuous.
+    // Clear even while paused; after ownership ends, recording starts a fresh history instead of
+    // appending post-I/O captures to states from before the unrepresentable host interaction.
+    if (hasMobileAdapterExternalIo()) rewindManager.clear()
     finishPreparedLoad()
     finishReplacement()
     finishStop()
@@ -512,7 +548,30 @@ class BasicController private constructor(
       timingTicker.run(clockSpec)
     }
     if (emulated && !rewound) {
-      session?.let { rewindManager.record(it) }
+      if (hasMobileAdapterExternalIo()) {
+        // Guest execution can acquire backend ownership during the ticks above.
+        rewindManager.clear()
+      } else {
+        session?.let { rewindManager.record(it) }
+      }
+    }
+  }
+
+  /** Coalesces an arbitrary producer burst into one cancellation and the newest revision. */
+  private fun drainMobileAdapterControlLane() {
+    val controls = mobileAdapterControlLane.drain()
+    when {
+      controls.hasCancel && controls.hasRefresh && controls.cancelOrder < controls.refreshOrder -> {
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
+        refreshMobileAdapterConfiguration(controls.refreshRevision)
+      }
+      controls.hasCancel && controls.hasRefresh -> {
+        refreshMobileAdapterConfiguration(controls.refreshRevision)
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
+      }
+      controls.hasCancel ->
+          disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
+      controls.hasRefresh -> refreshMobileAdapterConfiguration(controls.refreshRevision)
     }
   }
 
@@ -528,8 +587,9 @@ class BasicController private constructor(
           config,
           sessionBus,
           console,
-          serialEndpoint,
+          serialEndpoint.endpoint,
           prebuiltGameboy = prebuiltGameboy,
+          serialEndpointDisconnect = serialEndpoint.disconnect,
       )
     } catch (failure: Controller.SerialPeripheralPreparationException) {
       postSerialPeripheralStatus(
@@ -573,7 +633,9 @@ class BasicController private constructor(
         ) ?: return
     val currentSession = session ?: return
     try {
+      val externalIoAtCapture = mobileAdapterEndpointHasExternalIo()
       val captured = capturePortableState(currentSession)
+      if (externalIoAtCapture) mobileAdapterExternalIoSaveRequests.add(event.requestId)
       latestSaveRequests[event.ref] = event.requestId
       stateWorker.save(
           context,
@@ -586,6 +648,7 @@ class BasicController private constructor(
           event.thumbnail,
       )
     } catch (failure: Throwable) {
+      mobileAdapterExternalIoSaveRequests.remove(event.requestId)
       postStateFailure(
           event.requestId,
           StateOperation.SAVE,
@@ -841,6 +904,10 @@ class BasicController private constructor(
     val context = stateContext
     if (context == null ||
         event.context.sessionId != context.sessionId) {
+      if (event.purpose == StateWorkerPurpose.MANUAL &&
+          event.operation == StateOperation.SAVE) {
+        mobileAdapterExternalIoSaveRequests.remove(event.requestId)
+      }
       return
     }
 
@@ -948,6 +1015,13 @@ class BasicController private constructor(
     val context = checkNotNull(stateContext)
     when (event.purpose) {
       StateWorkerPurpose.MANUAL -> {
+        val mobileExternalIo = mobileAdapterExternalIoSaveRequests.remove(event.requestId)
+        if (mobileExternalIo) {
+          // The state is already durable. Its non-restorable-I/O disclosure is a safety boundary,
+          // not ordinary request presentation: a newer same-ref request may suppress this save's
+          // success UI, but must not hide the boundary if that newer write subsequently fails.
+          postMobileAdapterSaveBoundary()
+        }
         if (latestSaveRequests[result.ref] != event.requestId) return
         val warnings =
             buildList {
@@ -1032,6 +1106,7 @@ class BasicController private constructor(
         }
       }
       StateWorkerPurpose.MANUAL -> {
+        mobileAdapterExternalIoSaveRequests.remove(event.requestId)
         val latest =
             if (event.operation == StateOperation.SAVE) {
               // A failed manual save result carries no ref. Request IDs are globally unique in
@@ -1110,6 +1185,8 @@ class BasicController private constructor(
   ) {
     val currentSession = session ?: return
     val context = stateContext ?: return
+    val mobileExternalIo = hasMobileAdapterExternalIo()
+    val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
       when (read.state.root) {
         is SessionStateRoot ->
@@ -1133,6 +1210,9 @@ class BasicController private constructor(
       // pause selected for this session.
       currentSession.gameboy.setCartridgeClockPaused(isPaused)
       rewindManager.clear()
+      if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
+        mobileAdapterStateLoadCompleted()
+      }
       eventBus.post(
           StateOperationCompletedEvent(
               requestId,
@@ -1148,6 +1228,9 @@ class BasicController private constructor(
               recoveryMessages = recoveryMessages(read.recovery),
           ))
     } catch (failure: Throwable) {
+      if (mobileExternalIo && mobileAdapterBackendOwnershipVersion() != mobileBackendOwnership) {
+        mobileAdapterStateLoadCompleted()
+      }
       postStateFailure(
           requestId,
           operation,
@@ -1201,12 +1284,17 @@ class BasicController private constructor(
       postMissingQuickSlot(requestId, slot)
       return
     }
+    val mobileExternalIo = hasMobileAdapterExternalIo()
+    val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
       manager.applySnapshotReadOnly(snapshot, currentSession)
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
       // effective pause chosen for the live desktop session.
       currentSession.gameboy.setCartridgeClockPaused(isPaused)
       rewindManager.clear()
+      if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
+        mobileAdapterStateLoadCompleted()
+      }
       eventBus.post(
           StateOperationCompletedEvent(
               requestId,
@@ -1216,6 +1304,9 @@ class BasicController private constructor(
               message = "Legacy state loaded from Slot ${slot.index}.",
           ))
     } catch (failure: Throwable) {
+      if (mobileExternalIo && mobileAdapterBackendOwnershipVersion() != mobileBackendOwnership) {
+        mobileAdapterStateLoadCompleted()
+      }
       LOG.warn("Unable to load legacy snapshot slot {} as managed fallback", slot.index, failure)
       postStateFailure(
           requestId,
@@ -1849,23 +1940,27 @@ class BasicController private constructor(
       selection: Controller.SerialPeripheralSelection,
       sessionBus: EventBus,
       clockSpec: ClockSpec,
-  ): SerialEndpoint =
+  ): PreparedSerialEndpoint =
       when (selection) {
-        Controller.SerialPeripheralSelection.NONE -> SerialEndpoint.NULL_ENDPOINT
+        Controller.SerialPeripheralSelection.NONE ->
+            PreparedSerialEndpoint(SerialEndpoint.NULL_ENDPOINT)
         Controller.SerialPeripheralSelection.PRINTER ->
-            GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
-              sessionBus.post(
-                  Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
-            }
-        Controller.SerialPeripheralSelection.BARCODE_BOY -> BarcodeBoySerialEndpoint()
+            PreparedSerialEndpoint(
+                GameboyPrinterSerialEndpoint { argb, width, height, top, bottom, exposure ->
+                  sessionBus.post(
+                      Controller.PrinterPrintEvent(argb, width, height, top, bottom, exposure))
+                })
+        Controller.SerialPeripheralSelection.BARCODE_BOY ->
+            PreparedSerialEndpoint(BarcodeBoySerialEndpoint())
         Controller.SerialPeripheralSelection.GPS_RECEIVER ->
-            GpsReceiverSerialEndpoint(clockSpec)
+            PreparedSerialEndpoint(GpsReceiverSerialEndpoint(clockSpec))
         Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB ->
             createMobileAdapterEndpoint(clockSpec)
-        Controller.SerialPeripheralSelection.PEER_TO_PEER -> Peer2PeerSerialEndpoint()
+        Controller.SerialPeripheralSelection.PEER_TO_PEER ->
+            PreparedSerialEndpoint(Peer2PeerSerialEndpoint())
       }
 
-  private fun createMobileAdapterEndpoint(clockSpec: ClockSpec): SerialEndpoint {
+  private fun createMobileAdapterEndpoint(clockSpec: ClockSpec): PreparedSerialEndpoint {
     val configuration =
         try {
           mobileAdapterConfigurationProvider.load()
@@ -1884,15 +1979,37 @@ class BasicController private constructor(
           throw Controller.SerialPeripheralPreparationException(
               Controller.SerialPeripheralError.STORAGE_FAILED)
         }
+    val lifecycle =
+        MobileAdapterEndpointLifecycle(
+            NEXT_MOBILE_ADAPTER_ATTACHMENT_ID.getAndIncrement(),
+            configuration.policyRevision,
+            configuration.networkBackend,
+            configuration.runtimeNetworkConsent,
+            configuration.runtimePrivateLocalDevelopment,
+        )
     return try {
-      MobileAdapterSerialEndpoint(
-          clockSpec,
-          configuration.deviceId,
-          configuration.copyBytes(),
-      )
+      val endpoint =
+          configuration.networkBackend?.let { backend ->
+            MobileAdapterSerialEndpoint(
+                clockSpec,
+                configuration.deviceId,
+                configuration.copyBytes(),
+                backend.port,
+            )
+          }
+              ?: MobileAdapterSerialEndpoint(
+                  clockSpec,
+                  configuration.deviceId,
+                  configuration.copyBytes(),
+              )
+      PreparedSerialEndpoint(endpoint, lifecycle)
     } catch (_: IllegalArgumentException) {
+      lifecycle.invoke()
       throw Controller.SerialPeripheralPreparationException(
           Controller.SerialPeripheralError.CONFIGURATION_INVALID)
+    } catch (failure: RuntimeException) {
+      lifecycle.invoke()
+      throw failure
     }
   }
 
@@ -1933,7 +2050,7 @@ class BasicController private constructor(
           return
         }
     try {
-      currentSession.setSerialEndpoint(endpoint)
+      currentSession.setSerialEndpoint(endpoint.endpoint, endpoint.disconnect)
     } catch (failure: RuntimeException) {
       LOG.warn(
           "Unable to attach serial peripheral {} after preparation",
@@ -1961,6 +2078,291 @@ class BasicController private constructor(
     postSerialPeripheralEventSafely(
         Controller.SerialPeripheralSelectionChangedEvent(selection))
     postSerialPeripheralStatus(selection, Controller.SerialPeripheralStatus.ATTACHED)
+    postInitialMobileAdapterNetworkStatus()
+  }
+
+  /** Re-prepares the same selected endpoint so a policy change is an atomic ownership handoff. */
+  private fun refreshMobileAdapterConfiguration(requestedRevision: Long) {
+    if (serialPeripheralSelection != Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB) return
+    val currentSession = session ?: return
+    val currentLifecycle = mobileAdapterLifecycle(currentSession)
+    if (currentLifecycle != null && requestedRevision <= currentLifecycle.policyRevision) return
+
+    // A newer policy request is an authority boundary, not merely a presentation refresh. Revoke
+    // the live host capability before provider/core preparation so every failure is fail-closed.
+    if (currentLifecycle?.backend != null) {
+      currentLifecycle.backend.revokeAuthorization()
+      if (currentLifecycle.disconnectReason == null) {
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.POLICY_CHANGED)
+      }
+    }
+
+    val replacement =
+        try {
+          createMobileAdapterEndpoint(currentSession.config.clockSpec)
+        } catch (failure: Controller.SerialPeripheralPreparationException) {
+          postSerialPeripheralStatus(
+              Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+              Controller.SerialPeripheralStatus.UNAVAILABLE,
+              failure.error,
+          )
+          return
+        }
+    val replacementLifecycle = replacement.disconnect as? MobileAdapterEndpointLifecycle
+    if (replacementLifecycle == null || replacementLifecycle.policyRevision < requestedRevision) {
+      replacement.disconnect()
+      postSerialPeripheralStatus(
+          Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          Controller.SerialPeripheralError.CONFIGURATION_INVALID,
+      )
+      return
+    }
+    try {
+      currentSession.setSerialEndpoint(replacement.endpoint, replacement.disconnect)
+    } catch (_: RuntimeException) {
+      postSerialPeripheralStatus(
+          Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          Controller.SerialPeripheralError.ENDPOINT_UNAVAILABLE,
+      )
+      return
+    }
+    rewindManager.clear()
+    postSerialPeripheralStatus(
+        Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+        Controller.SerialPeripheralStatus.ATTACHED,
+    )
+    postInitialMobileAdapterNetworkStatus()
+  }
+
+  private fun pollMobileAdapterBackend() {
+    val currentSession = session ?: return
+    val endpoint = currentSession.serialEndpoint as? MobileAdapterSerialEndpoint ?: return
+    val lifecycle = mobileAdapterLifecycle(currentSession) ?: return
+    endpoint.pollBackendCompletion()
+    val backend = lifecycle.backend ?: return
+    while (true) {
+      val status = backend.pollStatus() ?: break
+      postMobileAdapterBackendStatus(lifecycle, status)
+    }
+  }
+
+  private fun postInitialMobileAdapterNetworkStatus() {
+    val lifecycle = session?.let(::mobileAdapterLifecycle) ?: return
+    val event =
+        when {
+          lifecycle.backend == null ->
+              mobileAdapterStatus(lifecycle, Controller.MobileAdapterNetworkPhase.OFFLINE)
+          !lifecycle.runtimeNetworkConsent ->
+              mobileAdapterStatus(
+                  lifecycle,
+                  Controller.MobileAdapterNetworkPhase.FAILED,
+                  error = Controller.MobileAdapterNetworkError.CONSENT_REQUIRED,
+              )
+          else -> mobileAdapterStatus(lifecycle, Controller.MobileAdapterNetworkPhase.READY)
+        }
+    postSerialPeripheralEventSafely(event)
+  }
+
+  private fun postMobileAdapterBackendStatus(
+      lifecycle: MobileAdapterEndpointLifecycle,
+      status: MobileAdapterNetworkStatus,
+  ) {
+    if (status.ownershipVersion < lifecycle.backendOwnershipVersion) return
+    lifecycle.backendOwnershipVersion = status.ownershipVersion
+    // The controller already published the user-visible cancelling/disconnected pair at the
+    // cancellation boundary. Do not replay the backend's queued CANCELLING snapshot over that
+    // terminal presentation; its following IDLE snapshot will reaffirm DISCONNECTED.
+    if (lifecycle.disconnectReason != null &&
+        status.phase == BackendNetworkPhase.CANCELLING) return
+    val error = mapMobileAdapterNetworkError(status.error)
+    val event =
+        when {
+          status.phase == BackendNetworkPhase.CANCELLING ->
+              mobileAdapterStatus(
+                  lifecycle,
+                  Controller.MobileAdapterNetworkPhase.CANCELLING,
+                  activeConnections = status.activeConnections,
+              )
+          status.error == BackendNetworkError.REMOTE_CLOSED -> {
+            mobileAdapterStatus(
+                lifecycle,
+                Controller.MobileAdapterNetworkPhase.FAILED,
+                slot = status.slot,
+                activeConnections = status.activeConnections,
+                error = Controller.MobileAdapterNetworkError.REMOTE_CLOSED,
+            )
+          }
+          error != null ->
+              mobileAdapterStatus(
+                  lifecycle,
+                  Controller.MobileAdapterNetworkPhase.FAILED,
+                  slot = status.slot,
+                  activeConnections = status.activeConnections,
+                  error = error,
+              )
+          status.phase == BackendNetworkPhase.IDLE && lifecycle.disconnectReason != null ->
+              mobileAdapterStatus(
+                  lifecycle,
+                  Controller.MobileAdapterNetworkPhase.DISCONNECTED,
+                  activeConnections = status.activeConnections,
+                  disconnectReason = checkNotNull(lifecycle.disconnectReason),
+              )
+          status.phase == BackendNetworkPhase.IDLE && !lifecycle.runtimeNetworkConsent ->
+              mobileAdapterStatus(
+                  lifecycle,
+                  Controller.MobileAdapterNetworkPhase.FAILED,
+                  error = Controller.MobileAdapterNetworkError.CONSENT_REQUIRED,
+              )
+          else -> {
+            if (status.phase != BackendNetworkPhase.IDLE) lifecycle.disconnectReason = null
+            mobileAdapterStatus(
+                lifecycle,
+                when (status.phase) {
+                  BackendNetworkPhase.IDLE -> Controller.MobileAdapterNetworkPhase.READY
+                  BackendNetworkPhase.RESOLVING -> Controller.MobileAdapterNetworkPhase.RESOLVING
+                  BackendNetworkPhase.CONNECTING -> Controller.MobileAdapterNetworkPhase.CONNECTING
+                  BackendNetworkPhase.CONNECTED -> Controller.MobileAdapterNetworkPhase.CONNECTED
+                  BackendNetworkPhase.TRANSFERRING -> Controller.MobileAdapterNetworkPhase.TRANSFERRING
+                  BackendNetworkPhase.CANCELLING -> Controller.MobileAdapterNetworkPhase.CANCELLING
+                  BackendNetworkPhase.CLOSED -> Controller.MobileAdapterNetworkPhase.DISCONNECTED
+                },
+                slot = status.slot,
+                activeConnections = status.activeConnections,
+                disconnectReason =
+                    Controller.MobileAdapterDisconnectReason.DETACHED.takeIf {
+                      status.phase == BackendNetworkPhase.CLOSED
+                    },
+            )
+          }
+        }
+    postSerialPeripheralEventSafely(event)
+  }
+
+  private fun mapMobileAdapterNetworkError(
+      error: BackendNetworkError
+  ): Controller.MobileAdapterNetworkError? =
+      when (error) {
+        BackendNetworkError.NONE -> null
+        BackendNetworkError.NETWORK_CONSENT_REQUIRED ->
+            Controller.MobileAdapterNetworkError.CONSENT_REQUIRED
+        BackendNetworkError.PRIVATE_LOCAL_CONSENT_REQUIRED ->
+            Controller.MobileAdapterNetworkError.PRIVATE_LOCAL_GATE_REQUIRED
+        BackendNetworkError.DESTINATION_DENIED ->
+            Controller.MobileAdapterNetworkError.DESTINATION_DENIED
+        BackendNetworkError.INVALID_REQUEST ->
+            Controller.MobileAdapterNetworkError.INVALID_REQUEST
+        BackendNetworkError.TRANSFER_LIMIT ->
+            Controller.MobileAdapterNetworkError.TRANSFER_LIMIT
+        BackendNetworkError.DNS_TIMEOUT, BackendNetworkError.TIMEOUT ->
+            Controller.MobileAdapterNetworkError.TIMEOUT
+        BackendNetworkError.DNS_MALFORMED -> Controller.MobileAdapterNetworkError.DNS_INVALID
+        BackendNetworkError.DNS_LOOKUP_FAILED -> Controller.MobileAdapterNetworkError.DNS_FAILED
+        BackendNetworkError.DNS_UNREACHABLE -> Controller.MobileAdapterNetworkError.DNS_FAILED
+        BackendNetworkError.CONNECTION_LIMIT ->
+            Controller.MobileAdapterNetworkError.CONNECTION_LIMIT
+        BackendNetworkError.QUEUE_FULL -> Controller.MobileAdapterNetworkError.QUEUE_EXHAUSTED
+        BackendNetworkError.INVALID_CONNECTION ->
+            Controller.MobileAdapterNetworkError.INVALID_CONNECTION
+        BackendNetworkError.CONNECTION_REFUSED ->
+            Controller.MobileAdapterNetworkError.CONNECTION_REFUSED
+        BackendNetworkError.UNREACHABLE ->
+            Controller.MobileAdapterNetworkError.DESTINATION_UNREACHABLE
+        BackendNetworkError.REMOTE_CLOSED -> Controller.MobileAdapterNetworkError.REMOTE_CLOSED
+        BackendNetworkError.CANCELLED -> Controller.MobileAdapterNetworkError.CANCELLED
+        BackendNetworkError.IO_FAILURE -> Controller.MobileAdapterNetworkError.IO_FAILED
+      }
+
+  private fun mobileAdapterStatus(
+      lifecycle: MobileAdapterEndpointLifecycle,
+      phase: Controller.MobileAdapterNetworkPhase,
+      slot: Int? = null,
+      activeConnections: Int = 0,
+      error: Controller.MobileAdapterNetworkError? = null,
+      disconnectReason: Controller.MobileAdapterDisconnectReason? = null,
+  ) =
+      Controller.MobileAdapterNetworkStatusEvent(
+          attachmentId = lifecycle.attachmentId,
+          policyRevision = lifecycle.policyRevision,
+          phase = phase,
+          slot = slot,
+          activeConnections = activeConnections,
+          error = error,
+          disconnectReason = disconnectReason,
+      )
+
+  private fun disconnectMobileAdapter(reason: Controller.MobileAdapterDisconnectReason) {
+    val currentSession = session ?: return
+    val endpoint = currentSession.serialEndpoint as? MobileAdapterSerialEndpoint ?: return
+    val lifecycle = mobileAdapterLifecycle(currentSession) ?: return
+    lifecycle.disconnectReason = reason
+    postSerialPeripheralEventSafely(
+        mobileAdapterStatus(lifecycle, Controller.MobileAdapterNetworkPhase.CANCELLING))
+    endpoint.disconnect()
+    lifecycle.backendOwnershipVersion =
+        lifecycle.backend?.ownershipVersion() ?: lifecycle.backendOwnershipVersion
+    postSerialPeripheralEventSafely(
+        mobileAdapterStatus(
+            lifecycle,
+            Controller.MobileAdapterNetworkPhase.DISCONNECTED,
+            disconnectReason = reason,
+        ))
+  }
+
+  private fun hasMobileAdapterExternalIo(): Boolean {
+    val currentSession = session ?: return false
+    val endpoint = currentSession.serialEndpoint as? MobileAdapterSerialEndpoint ?: return false
+    val lifecycle = mobileAdapterLifecycle(currentSession)
+    return endpoint.hasExternalIo() || lifecycle?.backend?.hasExternalWork() == true
+  }
+
+  /** Exact predicate serialized by MobileAdapterSerialEndpoint capture normalization. */
+  private fun mobileAdapterEndpointHasExternalIo(): Boolean =
+      (session?.serialEndpoint as? MobileAdapterSerialEndpoint)?.hasExternalIo() == true
+
+  private fun mobileAdapterBackendOwnershipVersion(): Long? =
+      session?.let(::mobileAdapterLifecycle)?.backend?.ownershipVersion()
+
+  private fun hasMobileAdapterDisconnectedExternalIoMarker(): Boolean =
+      (session?.serialEndpoint as? MobileAdapterSerialEndpoint)?.snapshot()?.outcome() ==
+          MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED
+
+  private fun mobileAdapterLifecycle(session: Session): MobileAdapterEndpointLifecycle? =
+      session.serialEndpointDisconnectHandle() as? MobileAdapterEndpointLifecycle
+
+  private fun postMobileAdapterStateBoundary(boundary: Controller.MobileAdapterStateBoundary) {
+    postSerialPeripheralEventSafely(
+        Controller.MobileAdapterStateBoundaryEvent(
+            boundary,
+            Controller.MobileAdapterStateBoundaryImpact.DISCONNECTED_NOT_RESTORED,
+        ))
+  }
+
+  private fun postMobileAdapterSaveBoundary() {
+    postSerialPeripheralEventSafely(
+        Controller.MobileAdapterStateBoundaryEvent(
+            Controller.MobileAdapterStateBoundary.SAVE,
+            Controller.MobileAdapterStateBoundaryImpact.SAVED_WITH_NON_RESTORABLE_IO,
+        ))
+  }
+
+  private fun mobileAdapterStateLoadCompleted() {
+    val currentSession = session ?: return
+    val lifecycle = mobileAdapterLifecycle(currentSession) ?: return
+    lifecycle.disconnectReason = Controller.MobileAdapterDisconnectReason.STATE_LOAD
+    lifecycle.backendOwnershipVersion =
+        lifecycle.backend?.ownershipVersion() ?: lifecycle.backendOwnershipVersion
+    // Applying the portable state already rotates the backend generation. Do not call endpoint
+    // disconnect here: that would overwrite the restored deterministic
+    // EXTERNAL_IO_DISCONNECTED outcome with the generic detach/cancel outcome.
+    postMobileAdapterStateBoundary(Controller.MobileAdapterStateBoundary.LOAD)
+    postSerialPeripheralEventSafely(
+        mobileAdapterStatus(
+            lifecycle,
+            Controller.MobileAdapterNetworkPhase.DISCONNECTED,
+            disconnectReason = Controller.MobileAdapterDisconnectReason.STATE_LOAD,
+        ))
   }
 
   private fun postSerialPeripheralStatus(
@@ -2072,6 +2474,7 @@ class BasicController private constructor(
         serialPeripheralSelection,
         Controller.SerialPeripheralStatus.ATTACHED,
     )
+    postInitialMobileAdapterNetworkStatus()
   }
 
   private fun applySavesSettings(
@@ -2151,6 +2554,7 @@ class BasicController private constructor(
     pendingCloseRequestId = null
     latestStateRequests.clear()
     latestSaveRequests.clear()
+    mobileAdapterExternalIoSaveRequests.clear()
     postSessionEventSafely(
         currentSession,
         StateUxSessionEvent(
@@ -2212,18 +2616,25 @@ class BasicController private constructor(
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
     val manager = snapshotManager ?: return
+    val mobileExternalIo = mobileAdapterEndpointHasExternalIo()
     try {
       manager.saveSnapshot(slot, currentSession)
-      currentSession.eventBus.post(Controller.SnapshotSavedEvent(slot))
     } catch (e: Exception) {
       LOG.warn("Unable to save snapshot slot {}", slot, e)
-      currentSession.eventBus.post(
+      postSessionEventSafely(
+          currentSession,
           Controller.SnapshotSaveFailedEvent(
               slot,
               "Unable to save state slot $slot. Any previous state remains recoverable. " +
                   sanitizedPersistenceDetail(e),
           ))
+      return
     }
+    if (mobileExternalIo) postMobileAdapterSaveBoundary()
+    // Persistence has completed. Keep success presentation outside the persistence catch so a
+    // subscriber failure cannot recast a durable snapshot as a failed write or suppress the
+    // non-restorable-I/O disclosure above.
+    postSessionEventSafely(currentSession, Controller.SnapshotSavedEvent(slot))
   }
 
   private fun loadSnapshot(slot: Int) {
@@ -2237,12 +2648,20 @@ class BasicController private constructor(
       return
     }
     val manager = snapshotManager ?: return
+    val mobileExternalIo = hasMobileAdapterExternalIo()
+    val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
       if (manager.loadSnapshot(slot, currentSession)) {
         rewindManager.clear()
+        if (mobileExternalIo || hasMobileAdapterDisconnectedExternalIoMarker()) {
+          mobileAdapterStateLoadCompleted()
+        }
         currentSession.eventBus.post(Controller.SnapshotRestoredEvent(slot))
       }
     } catch (e: Exception) {
+      if (mobileExternalIo && mobileAdapterBackendOwnershipVersion() != mobileBackendOwnership) {
+        mobileAdapterStateLoadCompleted()
+      }
       LOG.warn("Unable to load snapshot slot {}", slot, e)
       currentSession.eventBus.post(
           Controller.SnapshotLoadFailedEvent(
@@ -2280,28 +2699,37 @@ class BasicController private constructor(
     pauseStateBeforeResume = null
     setPaused(true)
 
-    if (closeState == null) {
-      closeState =
-          session?.let {
-            Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
-          }
-    }
-    if (!closeAutosavePlayDurationCaptured) {
-      closeAutosavePlayDurationNanos = currentPlayDurationNanos()
-      closeAutosavePlayDurationCaptured = true
-    }
-    if (closeAutosaveCapture == null &&
-        stateContext != null &&
-        shouldPersistCloseAutosave()) {
-      try {
-        closeAutosaveCapture = session?.let(::capturePortableState)
-      } catch (failure: Throwable) {
-        throw closeBarrierFailure(
-            "Close autosave could not be captured. The session is retained.",
-            failure,
-            "autosave state",
-            autosaveWaivable = true,
-        )
+    try {
+      if (closeState == null) {
+        closeState =
+            session?.let {
+              Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
+            }
+      }
+      if (!closeAutosavePlayDurationCaptured) {
+        closeAutosavePlayDurationNanos = currentPlayDurationNanos()
+        closeAutosavePlayDurationCaptured = true
+      }
+      if (closeAutosaveCapture == null &&
+          stateContext != null &&
+          shouldPersistCloseAutosave()) {
+        try {
+          closeAutosaveCapture = session?.let(::capturePortableState)
+        } catch (failure: Throwable) {
+          throw closeBarrierFailure(
+              "Close autosave could not be captured. The session is retained.",
+              failure,
+              "autosave state",
+              autosaveWaivable = true,
+          )
+        }
+      }
+    } finally {
+      // Capture first so a successful close autosave records the deterministic
+      // non-restorable-I/O marker. Revocation is nevertheless guaranteed even when capture
+      // itself fails and the retryable close barrier retains the session.
+      if (hasMobileAdapterExternalIo()) {
+        disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.SHUTDOWN)
       }
     }
     if (closeCapture == null) {
@@ -2625,12 +3053,37 @@ class BasicController private constructor(
           ?: closeState?.rom?.origin?.displayName()
           ?: "battery save"
 
+  private data class PreparedSerialEndpoint(
+      val endpoint: SerialEndpoint,
+      val disconnect: () -> Unit = {},
+  )
+
+  /** Final backend owner; endpoint.disconnect() itself remains a reusable cancellation boundary. */
+  private class MobileAdapterEndpointLifecycle(
+      val attachmentId: Long,
+      val policyRevision: Long,
+      val backend: MobileAdapterNetworkBackend?,
+      val runtimeNetworkConsent: Boolean,
+      val runtimePrivateLocalDevelopment: Boolean,
+  ) : () -> Unit {
+    var disconnectReason: Controller.MobileAdapterDisconnectReason? = null
+    var backendOwnershipVersion: Long = backend?.ownershipVersion() ?: 0
+
+    override fun invoke() {
+      backend?.close()
+    }
+  }
+
   private companion object {
     val LOG: Logger = LoggerFactory.getLogger(BasicController::class.java)
 
     const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
 
     val STATE_SESSION_IDS = AtomicLong()
+
+    val NEXT_MOBILE_ADAPTER_ATTACHMENT_ID = AtomicLong(1)
+
+    const val NO_MOBILE_ADAPTER_CONFIGURATION_REVISION = -1L
 
     val SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION =
         Controller.MobileAdapterConfigurationProvider {
@@ -2799,6 +3252,57 @@ class BasicController private constructor(
       }
     }
   }
+}
+
+/** A coherent, constant-space handoff from arbitrary event producers to the frame owner. */
+internal class MobileAdapterControlLane {
+  data class Pending(
+      val cancelOrder: Long,
+      val refreshOrder: Long,
+      val refreshRevision: Long,
+  ) {
+    val hasCancel: Boolean
+      get() = cancelOrder >= 0
+
+    val hasRefresh: Boolean
+      get() = refreshOrder >= 0
+
+    companion object {
+      val EMPTY = Pending(-1, -1, -1)
+    }
+  }
+
+  private val lock = Any()
+  private var sequence = 0L
+  private var pending = Pending.EMPTY
+
+  fun offerCancel() {
+    synchronized(lock) {
+      sequence = Math.addExact(sequence, 1)
+      pending = pending.copy(cancelOrder = sequence)
+    }
+  }
+
+  fun offerRefresh(revision: Long) {
+    require(revision >= 0) { "Mobile Adapter configuration revision must not be negative" }
+    synchronized(lock) {
+      sequence = Math.addExact(sequence, 1)
+      if (revision >= pending.refreshRevision) {
+        pending =
+            pending.copy(
+                refreshOrder = sequence,
+                refreshRevision = revision,
+            )
+      }
+    }
+  }
+
+  fun drain(): Pending =
+      synchronized(lock) {
+        pending.also { pending = Pending.EMPTY }
+      }
+
+  internal fun snapshot(): Pending = synchronized(lock) { pending }
 }
 
 /**

@@ -97,12 +97,16 @@ attacker. See
 [normative v9 contract](docs/netplay-protocol-v9.md). The implemented foundation boundary is
 documented in [netplay-v9-foundation.md](docs/netplay-v9-foundation.md).
 
-Mobile Adapter GB support includes a deterministic **offline** Phase-1 engine and an exclusive
-link-port selector. The clean-room design treats it as a bounded serial peripheral, never a
-rollback link mode, and neither connects to historical Nintendo services nor bundles service
-data. DNS, TCP, UDP, dialling, and service commands remain disabled. The frozen evidence does not
-yet define the acknowledgement/response polling order, so Coffee GB exposes those channels to
-tests without inventing commercial-game compatibility. See
+Mobile Adapter GB support includes a deterministic engine, an exclusive link-port selector, and
+an optional bounded outbound DNS/TCP/UDP backend for explicitly configured custom services. Host
+networking is offline by default, requires session-only consent, and applies a separate development
+confirmation to loopback/private-LAN destinations. There is no listener, relay, dial-up, Nintendo
+production-service preset, automatic endpoint selection, or bundled service data. The public-IP
+policy cannot identify who operates an address, so users must configure only a trusted non-Nintendo
+custom service; DNS names, network metadata, and guest payloads are sent without TLS. The frozen
+evidence still does not define the acknowledgement/response polling order, so Coffee GB exposes
+direct engine/backend channels to tests without claiming commercial-game compatibility; a
+user-supplied ROM and custom-service validation remain a later phase. See
 [the Mobile Adapter contract](docs/mobile-adapter-contract.md).
 
 ### Hardware profiles and command-line selection

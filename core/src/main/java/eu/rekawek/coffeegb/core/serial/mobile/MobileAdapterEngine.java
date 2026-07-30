@@ -11,10 +11,11 @@ import java.util.Objects;
 /**
  * Deterministic, platform-neutral Mobile Adapter GB packet engine.
  *
- * <p>The engine implements only the clean-room subset frozen for issue #351. It accepts one
- * complete serial byte at a time, retains at most one 262-byte packet, and exposes response packet
- * and acknowledgement bytes as separate immutable channels. It deliberately does not prescribe
- * an on-wire ordering for those channels because the clean-room evidence does not define one.
+ * <p>The engine implements the clean-room packet subset frozen for issues #351 and #352. It
+ * accepts one complete serial byte at a time, retains at most one 262-byte packet, and exposes
+ * response packet and acknowledgement bytes as separate immutable channels. It deliberately does
+ * not prescribe an on-wire ordering for those channels because the clean-room evidence does not
+ * define one.
  */
 public final class MobileAdapterEngine implements StatefulComponent<MobileAdapterEngine> {
 
@@ -28,6 +29,14 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     public static final int MAX_PENDING_PACKET_SLOTS = 2;
 
+    /** One byte of every transfer packet is the logical connection identifier. */
+    public static final int MAX_TRANSFER_DATA_BYTES = MAX_PACKET_DATA_BYTES - 1;
+
+    /** RFC-compatible textual ceiling used before a name reaches the controller backend. */
+    public static final int MAX_DNS_NAME_BYTES = 253;
+
+    public static final int MAX_LOGICAL_CONNECTIONS = 2;
+
     public static final int IDLE_TIMEOUT_MILLIS = 3_000;
 
     private static final int MAGIC_1 = 0x99;
@@ -38,13 +47,39 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     private static final int COMMAND_END_SESSION = 0x11;
 
+    private static final int COMMAND_TRANSFER = 0x15;
+
     private static final int COMMAND_RESET = 0x16;
 
     private static final int COMMAND_CONFIG_READ = 0x19;
 
+    private static final int COMMAND_CONFIG_WRITE = 0x1a;
+
+    private static final int COMMAND_TCP_OPEN = 0x23;
+
+    private static final int COMMAND_TCP_CLOSE = 0x24;
+
+    private static final int COMMAND_UDP_OPEN = 0x25;
+
+    private static final int COMMAND_UDP_CLOSE = 0x26;
+
+    private static final int COMMAND_DNS_QUERY = 0x28;
+
+    private static final int COMMAND_REMOTE_CLOSED = 0x1f;
+
+    private static final int COMMAND_ERROR_STATUS = 0x6e;
+
     private static final int ACK_UNSUPPORTED = 0xf0;
 
     private static final int ACK_CHECKSUM_ERROR = 0xf1;
+
+    private static final int ACK_INTERNAL_ERROR = 0xf2;
+
+    private static final int CONNECTION_EMPTY = 0;
+
+    private static final int CONNECTION_TCP = 1;
+
+    private static final int CONNECTION_UDP = 2;
 
     private static final byte[] BEGIN_SESSION_DATA =
             "NINTENDO".getBytes(StandardCharsets.US_ASCII);
@@ -82,6 +117,24 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
     private boolean serialByteObserved;
 
     private int pendingPacketSlots;
+
+    /** Runtime-only logical view of controller-owned sockets; deliberately absent from mementos. */
+    private final int[] connectionKinds = new int[MAX_LOGICAL_CONNECTIONS];
+
+    /** Identity-only generation that owns every nonempty entry in {@link #connectionKinds}. */
+    private transient MobileAdapterBackendPort.BackendGeneration connectionBackendGeneration;
+
+    private long nextBackendRequestId;
+
+    private long pendingBackendRequestId = -1;
+
+    private int pendingBackendCommand = -1;
+
+    private byte[] pendingBackendPayload = EMPTY_BYTES;
+
+    private transient MobileAdapterBackendPort.BackendGeneration pendingBackendGeneration;
+
+    private boolean backendPacketSlotReserved;
 
     public MobileAdapterEngine(ClockSpec clockSpec, int deviceId, byte[] configuration) {
         this(clockSpec, deviceId, configuration, MobileAdapterBackendPort.DISCONNECTED);
@@ -196,7 +249,8 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     /** Releases one deterministic packet slot after its pure result has been consumed. */
     public void completePendingPacketSlot() {
-        if (pendingPacketSlots <= 0) {
+        int callerOwnedSlots = pendingPacketSlots - (backendPacketSlotReserved ? 1 : 0);
+        if (callerOwnedSlots <= 0) {
             throw new IllegalStateException("No pending Mobile Adapter packet slot");
         }
         pendingPacketSlots--;
@@ -207,8 +261,60 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
     }
 
     /**
+     * Atomically polls and applies at most one controller completion without waiting.
+     *
+     * <p>The completion's generation and request identity are checked again immediately before any
+     * deterministic state changes. A controller calls this at an emulator safe point; it is not a
+     * host-I/O callback and never blocks.
+     */
+    public EngineResult pollBackendCompletion() {
+        // A new guest packet owns the visible operation until it is complete. Applying an older
+        // asynchronous result (or its revoked generation) here would replace NEED_MORE while
+        // retaining parser bytes, producing an ordering ambiguity and a state that the persisted
+        // invariants correctly reject. Leave the bounded completion queued until this packet
+        // commits or a cancellation boundary clears it.
+        if (packetCount > 0) {
+            return snapshot();
+        }
+        if (hasOpenConnection() &&
+                (connectionBackendGeneration == null ||
+                        backendPort.generation() != connectionBackendGeneration)) {
+            externalIoDisconnected();
+            return snapshot();
+        }
+        if (pendingBackendRequestId < 0 || pendingBackendGeneration == null) {
+            return snapshot();
+        }
+        if (backendPort.generation() != pendingBackendGeneration) {
+            externalIoDisconnected();
+            return snapshot();
+        }
+        MobileAdapterBackendPort.BackendCompletion completion =
+                backendPort.poll(pendingBackendGeneration);
+        if (completion == null) {
+            if (backendPort.generation() != pendingBackendGeneration) {
+                externalIoDisconnected();
+            }
+            return snapshot();
+        }
+        if (completion.generation() != pendingBackendGeneration ||
+                backendPort.generation() != pendingBackendGeneration ||
+                completion.requestId() != pendingBackendRequestId) {
+            externalIoDisconnected();
+            return snapshot();
+        }
+        applyBackendCompletion(completion);
+        return snapshot();
+    }
+
+    /** True only for runtime ownership that capture deliberately converts to disconnected state. */
+    public boolean hasExternalIo() {
+        return pendingBackendRequestId >= 0 || hasOpenConnection();
+    }
+
+    /**
      * Replaces the complete configuration atomically in memory after validating a detached copy.
-     * This does not opt the unsupported on-wire CONFIG_WRITE command into Phase #351.
+     * Persistence remains a controller responsibility and never occurs in this core method.
      */
     public void replaceConfiguration(byte[] replacement) {
         byte[] validated = requireConfiguration(replacement);
@@ -227,7 +333,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         clearParser();
         clearOutput();
         pendingPacketSlots = 0;
-        backendPort.cancelAll();
+        cancelBackendOwnership();
         serialByteObserved = false;
         idlePhaseUnits = 0;
         return snapshot();
@@ -239,29 +345,47 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     @Override
     public ComponentState<MobileAdapterEngine> captureState() {
+        boolean externalIoAtCapture = hasExternalIo();
+        int capturedPendingSlots = pendingPacketSlots - (backendPacketSlotReserved ? 1 : 0);
+        if (externalIoAtCapture) {
+            return new MobileAdapterEngineNetworkState(
+                    phase.id,
+                    Outcome.EXTERNAL_IO_DISCONNECTED.id,
+                    ErrorCode.EXTERNAL_IO_DISCONNECTED.id,
+                    deviceId,
+                    packetBuffer,
+                    packetCount,
+                    expectedPacketBytes,
+                    configuration,
+                    EMPTY_BYTES,
+                    EMPTY_BYTES,
+                    idlePhaseUnits,
+                    serialByteObserved,
+                    capturedPendingSlots,
+                    true);
+        }
         return new MobileAdapterEngineState(
-                phase.id,
-                outcome.id,
-                error.id,
-                deviceId,
-                packetBuffer,
-                packetCount,
-                expectedPacketBytes,
-                configuration,
-                responsePacket,
-                acknowledgement,
-                idlePhaseUnits,
-                serialByteObserved,
-                pendingPacketSlots);
+                phase.id, outcome.id, error.id, deviceId, packetBuffer, packetCount,
+                expectedPacketBytes, configuration, responsePacket, acknowledgement,
+                idlePhaseUnits, serialByteObserved, capturedPendingSlots);
     }
 
     @Override
     public void restoreState(ComponentState<MobileAdapterEngine> state) {
-        if (!(state instanceof MobileAdapterEngineState restored)) {
+        MobileAdapterEngineNetworkState restored;
+        if (state instanceof MobileAdapterEngineNetworkState networkState) {
+            if (!networkState.externalIoAtCapture) {
+                throw new IllegalArgumentException(
+                        "Mobile Adapter network state requires captured external I/O");
+            }
+            restored = networkState;
+        } else if (state instanceof MobileAdapterEngineState legacyState) {
+            restored = networkState(legacyState);
+        } else {
             throw new IllegalArgumentException("Invalid Mobile Adapter engine state type");
         }
         validateState(restored);
-        backendPort.cancelAll();
+        cancelBackendOwnership();
 
         phase = Phase.fromId(restored.phaseId);
         outcome = Outcome.fromId(restored.outcomeId);
@@ -277,6 +401,30 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         idlePhaseUnits = restored.idlePhaseUnits;
         serialByteObserved = restored.serialByteObserved;
         pendingPacketSlots = restored.pendingPacketSlots;
+        if (restored.externalIoAtCapture) {
+            outcome = Outcome.EXTERNAL_IO_DISCONNECTED;
+            error = ErrorCode.EXTERNAL_IO_DISCONNECTED;
+            clearOutput();
+        }
+    }
+
+    private static MobileAdapterEngineNetworkState networkState(
+            MobileAdapterEngineState legacyState) {
+        return new MobileAdapterEngineNetworkState(
+                legacyState.phaseId,
+                legacyState.outcomeId,
+                legacyState.errorId,
+                legacyState.deviceId,
+                legacyState.packetBuffer,
+                legacyState.packetCount,
+                legacyState.expectedPacketBytes,
+                legacyState.configuration,
+                legacyState.responsePacket,
+                legacyState.acknowledgement,
+                legacyState.idlePhaseUnits,
+                legacyState.serialByteObserved,
+                legacyState.pendingPacketSlots,
+                false);
     }
 
     private void commitPacket() {
@@ -300,8 +448,17 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         switch (command) {
             case COMMAND_BEGIN_SESSION -> beginSession(data);
             case COMMAND_END_SESSION -> endSession(data);
+            case COMMAND_TRANSFER -> submitBackendCommand(command, validateTransfer(data));
             case COMMAND_RESET -> resetSession(data);
             case COMMAND_CONFIG_READ -> readConfiguration(data);
+            case COMMAND_CONFIG_WRITE -> writeConfiguration(data);
+            case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN ->
+                    submitBackendCommand(command, validateOpen(data));
+            case COMMAND_TCP_CLOSE ->
+                    submitBackendCommand(command, validateClose(data, CONNECTION_TCP));
+            case COMMAND_UDP_CLOSE ->
+                    submitBackendCommand(command, validateClose(data, CONNECTION_UDP));
+            case COMMAND_DNS_QUERY -> submitBackendCommand(command, validateDnsQuery(data));
             default -> unsupported();
         }
     }
@@ -324,7 +481,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         }
         phase = Phase.SLEEP;
         pendingPacketSlots = 0;
-        backendPort.cancelAll();
+        cancelBackendOwnership();
         outcome = Outcome.SESSION_ENDED;
         responsePacket = packet(COMMAND_END_SESSION | 0x80, EMPTY_BYTES);
         acknowledgement = acknowledgement(COMMAND_END_SESSION ^ 0x80);
@@ -337,7 +494,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         }
         phase = Phase.SESSION;
         pendingPacketSlots = 0;
-        backendPort.cancelAll();
+        cancelBackendOwnership();
         outcome = Outcome.SESSION_RESET;
         responsePacket = packet(COMMAND_RESET | 0x80, EMPTY_BYTES);
         acknowledgement = acknowledgement(COMMAND_RESET ^ 0x80);
@@ -365,6 +522,289 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         acknowledgement = acknowledgement(COMMAND_CONFIG_READ ^ 0x80);
     }
 
+    private void writeConfiguration(byte[] data) {
+        if (data.length < 1 || data.length > MAX_CONFIGURATION_OPERATION_BYTES + 1) {
+            unsupported();
+            return;
+        }
+        int offset = data[0] & 0xff;
+        int writeLength = data.length - 1;
+        int end = Math.addExact(offset, writeLength);
+        if (end > configuration.length) {
+            unsupported();
+            return;
+        }
+
+        byte[] replacement = configuration.clone();
+        System.arraycopy(data, 1, replacement, offset, writeLength);
+        configuration = replacement;
+        outcome = Outcome.CONFIG_WRITE;
+        responsePacket = packet(COMMAND_CONFIG_WRITE | 0x80, new byte[]{(byte) offset});
+        acknowledgement = acknowledgement(COMMAND_CONFIG_WRITE ^ 0x80);
+    }
+
+    private byte[] validateTransfer(byte[] data) {
+        if (data.length < 1 || data.length > MAX_TRANSFER_DATA_BYTES + 1) {
+            return null;
+        }
+        int connectionId = data[0] & 0xff;
+        if (!isOpenConnection(connectionId)) return null;
+        return data;
+    }
+
+    private byte[] validateOpen(byte[] data) {
+        if (data.length != 6) return null;
+        int port = unsigned16(data, 4);
+        return port == 0 ? null : data;
+    }
+
+    private byte[] validateClose(byte[] data, int expectedKind) {
+        if (data.length != 1) return null;
+        int connectionId = data[0] & 0xff;
+        return connectionId < connectionKinds.length &&
+                connectionKinds[connectionId] == expectedKind ? data : null;
+    }
+
+    private byte[] validateDnsQuery(byte[] data) {
+        if (data.length == 0) return null;
+        int effectiveLength = 0;
+        while (effectiveLength < data.length && data[effectiveLength] != 0) {
+            int value = data[effectiveLength] & 0xff;
+            if (value > 0x7f) return null;
+            effectiveLength++;
+        }
+        if (effectiveLength == 0 || effectiveLength > MAX_DNS_NAME_BYTES) return null;
+        return Arrays.copyOf(data, effectiveLength);
+    }
+
+    private void submitBackendCommand(int command, byte[] validatedPayload) {
+        if (validatedPayload == null) {
+            backendCommandError(command, protocolErrorCode(command,
+                    MobileAdapterBackendPort.BackendStatus.INVALID_CONNECTION),
+                    ErrorCode.BACKEND_RESPONSE_INVALID);
+            return;
+        }
+        if (phase != Phase.SESSION) {
+            backendCommandError(command, invalidUseErrorCode(command),
+                    ErrorCode.BACKEND_UNAVAILABLE);
+            return;
+        }
+        if (pendingBackendRequestId >= 0) {
+            clearOutput();
+            outcome = Outcome.BACKEND_ERROR;
+            error = ErrorCode.BACKEND_BUSY;
+            acknowledgement = acknowledgement(ACK_INTERNAL_ERROR);
+            return;
+        }
+        if (!reservePendingPacketSlot()) {
+            acknowledgement = acknowledgement(ACK_INTERNAL_ERROR);
+            return;
+        }
+        backendPacketSlotReserved = true;
+
+        long requestId = nextBackendRequestId;
+        nextBackendRequestId = requestId == Long.MAX_VALUE ? 0 : requestId + 1;
+        MobileAdapterBackendPort.BackendGeneration generation = backendPort.generation();
+        MobileAdapterBackendPort.OfferResult admission = backendPort.offer(
+                generation,
+                new MobileAdapterBackendPort.BackendRequest(requestId, command, validatedPayload));
+        if (admission != MobileAdapterBackendPort.OfferResult.ACCEPTED) {
+            releaseBackendPacketSlot();
+            if (admission == MobileAdapterBackendPort.OfferResult.UNAVAILABLE) {
+                backendCommandError(command, invalidUseErrorCode(command),
+                        ErrorCode.BACKEND_UNAVAILABLE);
+            } else if (admission == MobileAdapterBackendPort.OfferResult.STALE_GENERATION) {
+                externalIoDisconnected();
+            } else {
+                clearOutput();
+                outcome = Outcome.BACKEND_ERROR;
+                error = ErrorCode.BACKEND_UNAVAILABLE;
+                acknowledgement = acknowledgement(ACK_INTERNAL_ERROR);
+            }
+            return;
+        }
+
+        pendingBackendRequestId = requestId;
+        pendingBackendCommand = command;
+        pendingBackendPayload = validatedPayload.clone();
+        pendingBackendGeneration = generation;
+        clearOutput();
+        outcome = Outcome.BACKEND_PENDING;
+        error = ErrorCode.NONE;
+        acknowledgement = acknowledgement(command ^ 0x80);
+    }
+
+    private void applyBackendCompletion(MobileAdapterBackendPort.BackendCompletion completion) {
+        int command = pendingBackendCommand;
+        byte[] request = pendingBackendPayload;
+        clearPendingBackendRequest();
+        clearOutput();
+
+        MobileAdapterBackendPort.BackendStatus status = completion.status();
+        byte[] payload = completion.payload();
+        if (status == MobileAdapterBackendPort.BackendStatus.CANCELLED) {
+            externalIoDisconnected();
+            return;
+        }
+        if (status == MobileAdapterBackendPort.BackendStatus.REMOTE_CLOSED) {
+            if (command != COMMAND_TRANSFER || payload.length != 0 || request.length < 1) {
+                malformedBackendCompletion(command);
+                return;
+            }
+            int connectionId = request[0] & 0xff;
+            if (!isOpenConnection(connectionId)) {
+                malformedBackendCompletion(command);
+                return;
+            }
+            clearLogicalConnection(connectionId);
+            outcome = Outcome.BACKEND_REMOTE_CLOSED;
+            error = ErrorCode.NONE;
+            responsePacket = packet(COMMAND_REMOTE_CLOSED | 0x80, EMPTY_BYTES);
+            return;
+        }
+        if (status != MobileAdapterBackendPort.BackendStatus.SUCCESS) {
+            backendCommandError(command, protocolErrorCode(command, status),
+                    ErrorCode.BACKEND_UNAVAILABLE);
+            return;
+        }
+
+        if (!validateSuccessfulBackendPayload(command, request, payload)) {
+            malformedBackendCompletion(command);
+            return;
+        }
+        switch (command) {
+            case COMMAND_TCP_OPEN -> {
+                connectionKinds[payload[0] & 0xff] = CONNECTION_TCP;
+                connectionBackendGeneration = completion.generation();
+            }
+            case COMMAND_UDP_OPEN -> {
+                connectionKinds[payload[0] & 0xff] = CONNECTION_UDP;
+                connectionBackendGeneration = completion.generation();
+            }
+            case COMMAND_TCP_CLOSE, COMMAND_UDP_CLOSE ->
+                    clearLogicalConnection(payload[0] & 0xff);
+            default -> {
+            }
+        }
+        outcome = Outcome.BACKEND_RESPONSE;
+        error = ErrorCode.NONE;
+        responsePacket = packet(command | 0x80, payload);
+    }
+
+    private boolean validateSuccessfulBackendPayload(int command, byte[] request, byte[] payload) {
+        return switch (command) {
+            case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN ->
+                    payload.length == 1 && (payload[0] & 0xff) < connectionKinds.length &&
+                            connectionKinds[payload[0] & 0xff] == CONNECTION_EMPTY;
+            case COMMAND_TCP_CLOSE, COMMAND_UDP_CLOSE ->
+                    payload.length == 1 && request.length == 1 && payload[0] == request[0] &&
+                            (payload[0] & 0xff) < connectionKinds.length;
+            case COMMAND_TRANSFER ->
+                    payload.length >= 1 && payload.length <= MAX_PACKET_DATA_BYTES &&
+                            request.length >= 1 && payload[0] == request[0] &&
+                            isOpenConnection(payload[0] & 0xff);
+            case COMMAND_DNS_QUERY -> payload.length == 4;
+            default -> false;
+        };
+    }
+
+    private void malformedBackendCompletion(int command) {
+        // A successful backend operation may already have opened, consumed, or closed a host
+        // resource before its result crosses this boundary. Once that result has an impossible
+        // shape, the core and backend can no longer prove matching ownership; fail closed by
+        // rotating the complete generation before exposing the sanitized protocol error.
+        cancelBackendOwnership();
+        backendCommandError(command,
+                protocolErrorCode(command,
+                        MobileAdapterBackendPort.BackendStatus.COMMUNICATION_FAILED),
+                ErrorCode.BACKEND_RESPONSE_INVALID);
+    }
+
+    private void backendCommandError(int command, int commandError, ErrorCode engineError) {
+        clearOutput();
+        outcome = Outcome.BACKEND_ERROR;
+        error = engineError;
+        responsePacket = packet(COMMAND_ERROR_STATUS,
+                new byte[]{(byte) command, (byte) commandError});
+    }
+
+    private static int protocolErrorCode(int command,
+                                         MobileAdapterBackendPort.BackendStatus status) {
+        if ((command == COMMAND_TCP_OPEN || command == COMMAND_UDP_OPEN) &&
+                status == MobileAdapterBackendPort.BackendStatus.CONNECTION_LIMIT) {
+            return 0x00;
+        }
+        return switch (command) {
+            case COMMAND_TRANSFER, COMMAND_TCP_CLOSE, COMMAND_UDP_CLOSE -> 0x00;
+            case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN -> 0x03;
+            case COMMAND_DNS_QUERY -> 0x02;
+            default -> 0x00;
+        };
+    }
+
+    private static int invalidUseErrorCode(int command) {
+        return switch (command) {
+            case COMMAND_TRANSFER -> 0x01;
+            case COMMAND_TCP_OPEN, COMMAND_TCP_CLOSE, COMMAND_UDP_OPEN, COMMAND_UDP_CLOSE,
+                    COMMAND_DNS_QUERY -> 0x01;
+            default -> 0x00;
+        };
+    }
+
+    private void externalIoDisconnected() {
+        cancelBackendOwnership();
+        clearOutput();
+        outcome = Outcome.EXTERNAL_IO_DISCONNECTED;
+        error = ErrorCode.EXTERNAL_IO_DISCONNECTED;
+    }
+
+    private void cancelBackendOwnership() {
+        backendPort.cancelAll();
+        pendingBackendRequestId = -1;
+        pendingBackendCommand = -1;
+        pendingBackendPayload = EMPTY_BYTES;
+        pendingBackendGeneration = null;
+        nextBackendRequestId = 0;
+        if (backendPacketSlotReserved && pendingPacketSlots > 0) pendingPacketSlots--;
+        backendPacketSlotReserved = false;
+        Arrays.fill(connectionKinds, CONNECTION_EMPTY);
+        connectionBackendGeneration = null;
+    }
+
+    private void clearPendingBackendRequest() {
+        pendingBackendRequestId = -1;
+        pendingBackendCommand = -1;
+        pendingBackendPayload = EMPTY_BYTES;
+        pendingBackendGeneration = null;
+        releaseBackendPacketSlot();
+    }
+
+    private void releaseBackendPacketSlot() {
+        if (!backendPacketSlotReserved) return;
+        backendPacketSlotReserved = false;
+        if (pendingPacketSlots <= 0) {
+            throw new IllegalStateException("Mobile Adapter backend packet slot ownership is invalid");
+        }
+        pendingPacketSlots--;
+    }
+
+    private boolean isOpenConnection(int connectionId) {
+        return connectionId >= 0 && connectionId < connectionKinds.length &&
+                connectionKinds[connectionId] != CONNECTION_EMPTY;
+    }
+
+    private void clearLogicalConnection(int connectionId) {
+        connectionKinds[connectionId] = CONNECTION_EMPTY;
+        if (!hasOpenConnection()) connectionBackendGeneration = null;
+    }
+
+    private boolean hasOpenConnection() {
+        for (int kind : connectionKinds) {
+            if (kind != CONNECTION_EMPTY) return true;
+        }
+        return false;
+    }
+
     private void unsupported() {
         outcome = Outcome.UNSUPPORTED_COMMAND;
         error = ErrorCode.UNSUPPORTED_COMMAND;
@@ -385,7 +825,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         clearParser();
         clearOutput();
         pendingPacketSlots = 0;
-        backendPort.cancelAll();
+        cancelBackendOwnership();
         serialByteObserved = false;
         idlePhaseUnits = 0;
     }
@@ -443,7 +883,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 pendingPacketSlots);
     }
 
-    private void validateState(MobileAdapterEngineState state) {
+    private void validateState(MobileAdapterEngineNetworkState state) {
         Phase restoredPhase = Phase.fromId(state.phaseId);
         Outcome restoredOutcome = Outcome.fromId(state.outcomeId);
         ErrorCode restoredError = ErrorCode.fromId(state.errorId);
@@ -514,6 +954,13 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 state.pendingPacketSlots > MAX_PENDING_PACKET_SLOTS) {
             throw new IllegalArgumentException("Mobile Adapter pending packet count is invalid");
         }
+        if (state.externalIoAtCapture &&
+                (restoredOutcome != Outcome.EXTERNAL_IO_DISCONNECTED ||
+                        restoredError != ErrorCode.EXTERNAL_IO_DISCONNECTED ||
+                        restoredResponse.length != 0 || restoredAck.length != 0)) {
+            throw new IllegalArgumentException(
+                    "Captured Mobile Adapter external I/O is not deterministically disconnected");
+        }
         validateOutcomeState(
                 restoredPhase,
                 restoredOutcome,
@@ -523,7 +970,8 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 state.packetCount,
                 state.idlePhaseUnits,
                 state.serialByteObserved,
-                state.pendingPacketSlots);
+                state.pendingPacketSlots,
+                state.externalIoAtCapture);
     }
 
     private void validateOutcomeState(Phase restoredPhase, Outcome restoredOutcome,
@@ -531,7 +979,12 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                                       byte[] restoredAck, int restoredPacketCount,
                                       long restoredIdlePhaseUnits,
                                       boolean restoredSerialByteObserved,
-                                      int restoredPendingSlots) {
+                                      int restoredPendingSlots,
+                                      boolean externalIoAtCapture) {
+        if (restoredOutcome == Outcome.BACKEND_PENDING) {
+            throw new IllegalArgumentException(
+                    "Live Mobile Adapter backend ownership cannot be captured");
+        }
         ErrorCode expectedError = switch (restoredOutcome) {
             case CHECKSUM_ERROR -> ErrorCode.CHECKSUM;
             case UNSUPPORTED_COMMAND -> ErrorCode.UNSUPPORTED_COMMAND;
@@ -540,9 +993,14 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             case LENGTH_LIMIT -> ErrorCode.LENGTH_LIMIT;
             case BUFFER_LIMIT -> ErrorCode.BUFFER_LIMIT;
             case PENDING_LIMIT -> ErrorCode.PENDING_LIMIT;
+            case EXTERNAL_IO_DISCONNECTED -> ErrorCode.EXTERNAL_IO_DISCONNECTED;
             default -> ErrorCode.NONE;
         };
-        if (restoredError != expectedError) {
+        boolean backendError = restoredOutcome == Outcome.BACKEND_ERROR &&
+                (restoredError == ErrorCode.BACKEND_BUSY ||
+                        restoredError == ErrorCode.BACKEND_UNAVAILABLE ||
+                        restoredError == ErrorCode.BACKEND_RESPONSE_INVALID);
+        if (!backendError && restoredError != expectedError) {
             throw new IllegalArgumentException("Mobile Adapter outcome/error state is inconsistent");
         }
         if (restoredOutcome == Outcome.TIME_REGRESSION) {
@@ -554,24 +1012,34 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             case SESSION_ENDED -> COMMAND_END_SESSION ^ 0x80;
             case SESSION_RESET -> COMMAND_RESET ^ 0x80;
             case CONFIG_READ, CONFIG_READ_BOUNDARY -> COMMAND_CONFIG_READ ^ 0x80;
+            case CONFIG_WRITE -> COMMAND_CONFIG_WRITE ^ 0x80;
             case CHECKSUM_ERROR -> ACK_CHECKSUM_ERROR;
             case UNSUPPORTED_COMMAND -> ACK_UNSUPPORTED;
             default -> -1;
         };
-        if ((expectedAck == -1) != (restoredAck.length == 0) ||
-                expectedAck != -1 && (restoredAck[1] & 0xff) != expectedAck) {
+        boolean internalErrorAck =
+                (restoredOutcome == Outcome.BACKEND_ERROR ||
+                        restoredOutcome == Outcome.PENDING_LIMIT) &&
+                restoredResponse.length == 0 && restoredAck.length == 2 &&
+                (restoredAck[1] & 0xff) == ACK_INTERNAL_ERROR;
+        if (!internalErrorAck &&
+                ((expectedAck == -1) != (restoredAck.length == 0) ||
+                        expectedAck != -1 && (restoredAck[1] & 0xff) != expectedAck)) {
             throw new IllegalArgumentException("Mobile Adapter outcome/acknowledgement is inconsistent");
         }
 
         boolean expectsResponse = switch (restoredOutcome) {
             case SESSION_STARTED, SESSION_ENDED, SESSION_RESET,
-                    CONFIG_READ, CONFIG_READ_BOUNDARY -> true;
+                    CONFIG_READ, CONFIG_READ_BOUNDARY, CONFIG_WRITE,
+                    BACKEND_RESPONSE, BACKEND_ERROR, BACKEND_REMOTE_CLOSED -> true;
             default -> false;
         };
+        if (internalErrorAck) expectsResponse = false;
         if (expectsResponse == (restoredResponse.length == 0)) {
             throw new IllegalArgumentException("Mobile Adapter outcome/response is inconsistent");
         }
-        if (expectsResponse && (restoredResponse[2] & 0xff) != expectedAck) {
+        if (expectsResponse && expectedAck != -1 &&
+                (restoredResponse[2] & 0xff) != expectedAck) {
             throw new IllegalArgumentException("Mobile Adapter response command is inconsistent");
         }
         if (expectsResponse) {
@@ -590,6 +1058,28 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 }
                 case CONFIG_READ, CONFIG_READ_BOUNDARY ->
                         validateConfigurationResponse(restoredOutcome, responseData);
+                case CONFIG_WRITE -> {
+                    if (responseData.length != 1) {
+                        throw new IllegalArgumentException(
+                                "Mobile Adapter configuration-write response is invalid");
+                    }
+                }
+                case BACKEND_RESPONSE -> validateCapturedBackendResponse(restoredResponse[2] & 0xff,
+                        responseData);
+                case BACKEND_ERROR -> {
+                    if ((restoredResponse[2] & 0xff) != COMMAND_ERROR_STATUS) {
+                        throw new IllegalArgumentException(
+                                "Mobile Adapter backend error response command is invalid");
+                    }
+                    validateCapturedBackendError(responseData);
+                }
+                case BACKEND_REMOTE_CLOSED -> {
+                    if ((restoredResponse[2] & 0xff) != (COMMAND_REMOTE_CLOSED | 0x80) ||
+                            responseData.length != 0) {
+                        throw new IllegalArgumentException(
+                                "Mobile Adapter remote-close response is invalid");
+                    }
+                }
                 default -> throw new IllegalArgumentException("Unexpected Mobile Adapter response");
             }
         }
@@ -627,8 +1117,53 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         }
         if (restoredOutcome != Outcome.NEED_MORE &&
                 restoredOutcome != Outcome.IDLE_BOUNDARY_WAIT &&
-                restoredOutcome != Outcome.PENDING_LIMIT && restoredPacketCount != 0) {
+                restoredOutcome != Outcome.PENDING_LIMIT &&
+                !(externalIoAtCapture &&
+                        restoredOutcome == Outcome.EXTERNAL_IO_DISCONNECTED) &&
+                restoredPacketCount != 0) {
             throw new IllegalArgumentException("Completed Mobile Adapter result retained parser bytes");
+        }
+        if (externalIoAtCapture && restoredPhase != Phase.SESSION) {
+            throw new IllegalArgumentException(
+                    "Captured Mobile Adapter external I/O must belong to a session");
+        }
+    }
+
+    private static void validateCapturedBackendResponse(int responseCommand, byte[] responseData) {
+        switch (responseCommand) {
+            case COMMAND_TCP_CLOSE | 0x80, COMMAND_UDP_CLOSE | 0x80 -> {
+                if (responseData.length != 1 || (responseData[0] & 0xff) >= MAX_LOGICAL_CONNECTIONS) {
+                    throw new IllegalArgumentException(
+                            "Mobile Adapter close completion is invalid");
+                }
+            }
+            case COMMAND_DNS_QUERY | 0x80 -> {
+                if (responseData.length != 4) {
+                    throw new IllegalArgumentException(
+                            "Mobile Adapter DNS completion is invalid");
+                }
+            }
+            default -> throw new IllegalArgumentException(
+                    "Captured Mobile Adapter completion would require a live connection");
+        }
+    }
+
+    private static void validateCapturedBackendError(byte[] responseData) {
+        if (responseData.length != 2) {
+            throw new IllegalArgumentException("Mobile Adapter backend error response is invalid");
+        }
+        int command = responseData[0] & 0xff;
+        int error = responseData[1] & 0xff;
+        boolean valid = switch (command) {
+            case COMMAND_TRANSFER -> error == 0x00 || error == 0x01;
+            case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN ->
+                    error == 0x00 || error == 0x01 || error == 0x03;
+            case COMMAND_TCP_CLOSE, COMMAND_UDP_CLOSE -> error <= 0x02;
+            case COMMAND_DNS_QUERY -> error == 0x01 || error == 0x02;
+            default -> false;
+        };
+        if (!valid) {
+            throw new IllegalArgumentException("Mobile Adapter backend error code is invalid");
         }
     }
 
@@ -722,7 +1257,13 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         BUFFER_LIMIT(14),
         TIME_REGRESSION(15),
         CANCELLED(16),
-        PENDING_LIMIT(17);
+        PENDING_LIMIT(17),
+        CONFIG_WRITE(18),
+        BACKEND_PENDING(19),
+        BACKEND_RESPONSE(20),
+        BACKEND_ERROR(21),
+        BACKEND_REMOTE_CLOSED(22),
+        EXTERNAL_IO_DISCONNECTED(23);
 
         private final int id;
 
@@ -751,7 +1292,11 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         UNSUPPORTED_COMMAND(5),
         BUFFER_LIMIT(6),
         TIME_REGRESSION(7),
-        PENDING_LIMIT(8);
+        PENDING_LIMIT(8),
+        BACKEND_BUSY(9),
+        BACKEND_UNAVAILABLE(10),
+        BACKEND_RESPONSE_INVALID(11),
+        EXTERNAL_IO_DISCONNECTED(12);
 
         private final int id;
 
@@ -800,7 +1345,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         }
     }
 
-    /** Complete service-free state for deterministic continuation and portable session capture. */
+    /** Released Phase-1 state inventory; its thirteen record components are immutable. */
     public record MobileAdapterEngineState(
             int phaseId,
             int outcomeId,
@@ -817,6 +1362,51 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             int pendingPacketSlots) implements ComponentState<MobileAdapterEngine> {
 
         public MobileAdapterEngineState {
+            packetBuffer = packetBuffer.clone();
+            configuration = configuration.clone();
+            responsePacket = responsePacket.clone();
+            acknowledgement = acknowledgement.clone();
+        }
+
+        @Override
+        public byte[] packetBuffer() {
+            return packetBuffer.clone();
+        }
+
+        @Override
+        public byte[] configuration() {
+            return configuration.clone();
+        }
+
+        @Override
+        public byte[] responsePacket() {
+            return responsePacket.clone();
+        }
+
+        @Override
+        public byte[] acknowledgement() {
+            return acknowledgement.clone();
+        }
+    }
+
+    /** Additive Phase-2 state used only when capture observes external backend ownership. */
+    public record MobileAdapterEngineNetworkState(
+            int phaseId,
+            int outcomeId,
+            int errorId,
+            int deviceId,
+            byte[] packetBuffer,
+            int packetCount,
+            int expectedPacketBytes,
+            byte[] configuration,
+            byte[] responsePacket,
+            byte[] acknowledgement,
+            long idlePhaseUnits,
+            boolean serialByteObserved,
+            int pendingPacketSlots,
+            boolean externalIoAtCapture) implements ComponentState<MobileAdapterEngine> {
+
+        public MobileAdapterEngineNetworkState {
             packetBuffer = packetBuffer.clone();
             configuration = configuration.clone();
             responsePacket = responsePacket.clone();

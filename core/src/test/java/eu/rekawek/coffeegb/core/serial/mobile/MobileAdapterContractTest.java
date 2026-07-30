@@ -74,6 +74,22 @@ public class MobileAdapterContractTest {
                 "0x25", "0x28", "0x3f")) {
             assertEquals(networkCommand, "unsupported", statuses.get(networkCommand));
         }
+
+        Map<String, String> phase352Statuses = commands.stream().collect(Collectors.toMap(
+                r -> r.get("id"), r -> r.get("phase_352_status")));
+        for (String minimumCommand : List.of("0x10", "0x11", "0x16", "0x19")) {
+            assertEquals(minimumCommand, "supported", phase352Statuses.get(minimumCommand));
+        }
+        assertEquals("supported-pure", phase352Statuses.get("0x1a"));
+        for (String directBackendCommand : List.of(
+                "0x15", "0x23", "0x24", "0x25", "0x26", "0x28")) {
+            assertEquals(directBackendCommand, "custom-backend-direct-channel",
+                    phase352Statuses.get(directBackendCommand));
+        }
+        for (String excludedServiceCommand : List.of("0x12", "0x21", "0x22")) {
+            assertEquals(excludedServiceCommand, "unsupported",
+                    phase352Statuses.get(excludedServiceCommand));
+        }
         for (Map<String, String> row : commands) {
             assertFalse(row.get("evidence").isBlank());
             assertFalse(row.get("uncertainty").isBlank());
@@ -354,7 +370,10 @@ public class MobileAdapterContractTest {
                     sha256(Files.readAllBytes(root.resolve(entry.getKey()))));
             assertTrue(Set.of("evidence-registry", "conformance-vector", "documentation")
                     .contains(row.get("kind")));
-            assertEquals("coffee-gb-phase-346", row.get("provenance"));
+            String expectedProvenance = Set.of("README.md", "commands.tsv")
+                    .contains(entry.getKey()) ?
+                    "coffee-gb-phase-346+352" : "coffee-gb-phase-346";
+            assertEquals(expectedProvenance, row.get("provenance"));
             assertFalse(row.get("generator").isBlank());
         }
     }

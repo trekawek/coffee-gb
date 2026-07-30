@@ -42,6 +42,10 @@ class Session(
    */
   private var serialEndpointDisconnect: () -> Unit = serialEndpointDisconnect
 
+  /** Runtime-only owner metadata used by the controller for bounded status/state handling. */
+  @Synchronized
+  internal fun serialEndpointDisconnectHandle(): () -> Unit = serialEndpointDisconnect
+
   internal val infraredEndpoint: InfraredEndpoint = infraredEndpoint
 
   init {

@@ -101,6 +101,30 @@ public class DeterministicMobileAdapterBackendConcurrencyTest {
         assertEmpty(backend);
     }
 
+    @Test
+    public void expectedGenerationPollCannotConsumeAReplacementCompletion() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        BackendGeneration stale = backend.generation();
+        backend.cancelAll();
+        BackendGeneration current = backend.generation();
+        assertEquals(OfferResult.ACCEPTED,
+                backend.offer(current, new BackendRequest(7, 0x28, new byte[]{1})));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(current, 7,
+                        MobileAdapterBackendPort.BackendStatus.LOOKUP_FAILED,
+                        new byte[]{2}));
+
+        assertNull(backend.poll(stale));
+        assertEquals(1, backend.completedResults());
+        BackendCompletion completion = backend.poll(current);
+        assertNotNull(completion);
+        assertTrue(completion.generation() == current);
+        assertEquals(MobileAdapterBackendPort.BackendStatus.LOOKUP_FAILED,
+                completion.status());
+        assertArrayEquals(new byte[]{2}, completion.payload());
+        assertEmpty(backend);
+    }
+
     private static <T> T raceCancellation(ExecutorService executor, int round,
                                           Callable<T> operation,
                                           DeterministicMobileAdapterBackend backend)

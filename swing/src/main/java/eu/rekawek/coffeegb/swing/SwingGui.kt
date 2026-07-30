@@ -44,6 +44,7 @@ internal const val AUDIO_SHUTDOWN_BUDGET_MILLIS = 2_250L
 internal const val CAMERA_SHUTDOWN_BUDGET_MILLIS = 1_000L
 internal const val ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
 internal const val SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS = 5_000L
+internal const val MOBILE_ADAPTER_CONFIGURATION_SHUTDOWN_BUDGET_MILLIS = 2_000L
 internal const val DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS = 8_750L
 internal const val DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS =
     ROM_OPEN_QUIESCE_SHUTDOWN_BUDGET_MILLIS +
@@ -52,7 +53,8 @@ internal const val DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS =
         AUDIO_SHUTDOWN_BUDGET_MILLIS +
         CAMERA_SHUTDOWN_BUDGET_MILLIS +
         ROM_OPEN_CLOSE_SHUTDOWN_BUDGET_MILLIS +
-        SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS
+        SETTINGS_CLOSE_SHUTDOWN_BUDGET_MILLIS +
+        MOBILE_ADAPTER_CONFIGURATION_SHUTDOWN_BUDGET_MILLIS
 internal const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS =
     DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS + DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS
 
@@ -60,7 +62,7 @@ class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
     private val properties: EmulatorProperties,
-    private val mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
+    private val mobileAdapterConfiguration: MobileAdapterConfigurationCoordinator,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val desktopOpenFiles: DesktopOpenFilesBridge,
     private val jvmShutdown: DesktopJvmShutdownCoordinator,
@@ -123,6 +125,7 @@ class SwingGui private constructor(
               resumeWindowSize = { runDesktopEdtStep(windowSizeController::resume) },
               finishWindowSize = { runDesktopEdtStep(windowSizeController::close) },
           )
+          mobileAdapterConfiguration.close()
           jvmShutdown.markCompleted()
         },
         timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
@@ -140,7 +143,7 @@ class SwingGui private constructor(
             eventBus,
             console,
             properties,
-            mobileAdapterConfigurationProvider,
+            mobileAdapterConfiguration.provider,
         )
   }
 
@@ -206,6 +209,7 @@ class SwingGui private constructor(
           romOpen::close,
           { runDesktopEdtStep(windowSizeController::close) },
           properties::close,
+          mobileAdapterConfiguration::close,
       )
     }
     menu =
@@ -226,6 +230,14 @@ class SwingGui private constructor(
             ::requestClose,
             mobileAdapterConfigurationUiState,
             emulator::isLinkedControllerActive,
+            {
+              showMobileAdapterConfigurationDialog(
+                  mainWindow,
+                  mobileAdapterConfiguration,
+                  eventBus,
+                  mobileAdapterConfigurationUiState,
+              )
+            },
         )
     menu.addMenu()
     eventBus.register<RomLoadingEvent> { event ->
@@ -582,24 +594,25 @@ class SwingGui private constructor(
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
-      val mobileConfigurationResult =
-          MobileAdapterConfigurationStore(MobileAdapterConfigurationStore.defaultPath()).load()
+      val mobileConfigurationStore =
+          MobileAdapterConfigurationStore(MobileAdapterConfigurationStore.defaultPath())
+      val mobileConfigurationResult = mobileConfigurationStore.load()
       mobileConfigurationResult.error?.let { error ->
         LOG.warn("Mobile Adapter configuration load used a safe fallback ({})", error.code)
       }
-      val storedMobileConfiguration = mobileConfigurationResult.configuration
       val mobileAdapterConfigurationUiState =
           MobileAdapterConfigurationUiState.from(mobileConfigurationResult)
-      val mobileAdapterConfigurationProvider =
-          Controller.MobileAdapterConfigurationProvider {
-            Controller.MobileAdapterConfiguration(
-                storedMobileConfiguration.deviceId,
-                storedMobileConfiguration.configurationBytes(),
-            )
-          }
+      val mobileAdapterConfiguration =
+          MobileAdapterConfigurationCoordinator(
+              mobileConfigurationResult.configuration,
+              mobileConfigurationStore,
+          )
       val jvmShutdown =
           DesktopJvmShutdownCoordinator(
-              fallback = properties::close,
+              fallback = {
+                mobileAdapterConfiguration.close()
+                properties.close()
+              },
               timeoutMillis = DESKTOP_SHUTDOWN_TIMEOUT_MILLIS,
           ) { failure ->
             LOG.error("Unable to complete bounded desktop JVM shutdown", failure)
@@ -610,7 +623,7 @@ class SwingGui private constructor(
                 debug,
                 initialRom,
                 properties,
-                mobileAdapterConfigurationProvider,
+                mobileAdapterConfiguration,
                 mobileAdapterConfigurationUiState,
                 desktopOpenFiles,
                 jvmShutdown,
