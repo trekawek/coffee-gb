@@ -1,13 +1,13 @@
 # ADR 0002: clean-room Mobile Adapter architecture
 
-- Status: accepted; Phase 0 contract and Phase 1 deterministic offline engine implemented
-- Date: 2026-07-26
-- Issues: #399, #351, #346, #314, #318, #311
+- Status: accepted; Phase 0 contract, Phase 1 engine, and Phase 2 custom-backend boundary implemented
+- Date: 2026-07-30
+- Issues: #399, #352, #351, #346, #314, #318, #311
 
 ## Decision
 
 Mobile Adapter GB is an exclusive, platform-neutral **serial peripheral**. It is never a rollback
-`LinkMode`. Its future dependency direction is strictly:
+`LinkMode`. Its dependency direction is strictly:
 
 1. `core`: deterministic byte/bit engine, injected emulated clock, bounded parser/buffers, immutable
    capture state, and a nonblocking request/result port;
@@ -18,10 +18,13 @@ Mobile Adapter GB is an exclusive, platform-neutral **serial peripheral**. It is
 
 Core may not import or own sockets, DNS, files, threads, futures, executors, AWT/Swing, host wall
 clock, or blocking callbacks. Controller and desktop work may never block the emulator thread or
-EDT. Phase 1 realizes this dependency direction with `MobileAdapterEngine`, an idle-high
+EDT. Phase 1 realized this dependency direction with `MobileAdapterEngine`, an idle-high
 `MobileAdapterSerialEndpoint`, a bounded nonblocking backend port, and a deterministic in-memory
-fake. The engine's clock and timeout input is explicit and deterministic. All queues, payloads,
-connection slots, and configuration ranges have the limits in
+fake. Phase 2 adds generation-bearing typed completions and a one-outstanding-request direct
+response channel for the documented DNS/TCP/UDP commands. The serial endpoint remains idle-high;
+evidence-driven response scheduling belongs to #353. The engine's clock and timeout input is
+explicit and deterministic. All queues, payloads, connection slots, and configuration ranges have
+the limits in
 [mobile-adapter-contract.md](../mobile-adapter-contract.md).
 The in-memory fake uses one immutable snapshot and a lock-free atomic compare/exchange solely to
 linearize bounded generation cancellation. That primitive creates no thread, task, future,
@@ -33,17 +36,31 @@ Exactly one serial peripheral owns a Game Boy serial endpoint. Changing the conf
 prepares a candidate before the handoff and commits the core installation atomically at the
 emulator safe point. Only after that commit succeeds does the controller disconnect the previous
 endpoint and cancel its jobs. A failed installation disconnects the candidate and leaves the
-previous endpoint and its backend ownership usable. Phase 1 captured state may contain
-packet/parser phase, bounded request/response bytes, configuration bytes, deterministic timer
-counters, the bounded pending-packet count, and status codes. It contains no mutable connection
-identifiers; adding those belongs to the evidence-backed Phase #352 command work. Captured state
-must never contain a live socket, DNS resolver, file handle, callback, task, thread, executor, UI
-object, or host timestamp.
+previous endpoint and its backend ownership usable.
+
+Persisted custom-server policy is not runtime authority. Session consent and the private/local
+development gate are process-local. Editing either gate or the policy directly and monotonically
+revokes every prepared backend under the coordinator authority lock before requesting an endpoint
+refresh through event delivery. First revocation rotates the generation; an already-revoked backend
+stays unavailable, and the owner loop closes its DNS capabilities and sockets. The event bus is
+therefore presentation and handoff, not the fail-closed authorization boundary. Configuration
+persistence has one active write and one queued write; shutdown and a retry each use their own
+2,000 ms deadline shared across the writer and all still-tracked backends.
+
+Captured state may contain packet/parser phase, bounded request/response bytes, configuration
+bytes, deterministic timer counters, the bounded pending-packet count, status codes, and a boolean
+marker that external I/O existed at capture. Runtime connection identifiers, backend generations,
+and request IDs are deliberately excluded. Captured state must never contain a live socket, DNS
+resolver, file handle, callback, task, thread, executor, UI object, or host timestamp.
 
 Capture/save observes only deterministic engine state and does not disconnect live backend work.
-State load/restore and rewind disconnect/cancel every live backend operation before restoring that
-state. A restored request may be reported as disconnected/cancelled and explicitly retried by
-guest software; it may not resurrect a host connection. Failed restore/configuration leaves both
+If a request or logical connection is live, the captured image removes backend-reserved output and
+records the stable external-I/O-disconnected outcome plus marker. State load/restore and rewind
+disconnect/cancel every live backend operation before restoring that state. A restored request is
+therefore reported as disconnected and may be explicitly retried by guest software; it may not
+resurrect a host connection. Rolling rewind history is cleared whenever external ownership is
+observed and starts fresh only after that ownership ends, so it cannot join pre-I/O and post-I/O
+captures across omitted host effects. Failed restore/configuration leaves both
 the old endpoint and backend ownership unchanged when validation or preparation rejects the
 candidate before commit. Once a validated restore begins, backend cancellation is deliberately
 irreversible: an unexpected apply failure rolls deterministic machine/endpoint state back but
@@ -59,6 +76,13 @@ shape. Later contributors must not consult a source under an incompatible licens
 production code unless a separate legal review records a safe method.
 
 No Nintendo server endpoint, credential, configuration image, commercial ROM/save, proprietary
-trace, or firmware byte is committed. The future backend targets explicit user-configured local
-or test services only. This ADR does not implement inbound/relay operation, Nintendo-service
-impersonation, TLS, GBA/NDS serial modes, or general Internet exposure.
+trace, or firmware byte is committed. The Phase 2 backend targets explicit user-configured custom
+or in-process test services only and is guarded by controller destination policy; custom mode is an
+out-of-band prerequisite rather than an emulated dial/login shortcut. Coffee GB ships and
+automatically selects no Nintendo endpoint. Address-range policy cannot determine the operator of
+an arbitrary public IPv4 address, so the user remains responsible for selecting an intended custom
+service that is not a Nintendo production endpoint. Raw DNS exposes its query name and
+source/network metadata to the chosen resolver; TCP/UDP exposes source/network metadata and
+plaintext guest payload to the chosen service and intervening network. This ADR does not implement
+inbound/relay operation, Nintendo-service impersonation, TLS, GBA/NDS serial modes, or general
+Internet exposure.

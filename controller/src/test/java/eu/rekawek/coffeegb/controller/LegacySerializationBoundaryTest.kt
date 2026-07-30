@@ -104,7 +104,7 @@ class LegacySerializationBoundaryTest {
       )
     }
     assertEquals(87, compatibilityRecords)
-    assertEquals(96, StateTypeRegistry.recordClasses.size)
+    assertEquals(98, StateTypeRegistry.recordClasses.size)
     assertEquals(91, StateTypeRegistry.legacyRecordClasses.size)
     assertTrue(
         StateTypeRegistry.recordClasses.take(87).all(ComponentState::class.java::isAssignableFrom))

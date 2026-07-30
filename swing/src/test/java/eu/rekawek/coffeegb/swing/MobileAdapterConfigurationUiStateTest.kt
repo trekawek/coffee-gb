@@ -4,6 +4,9 @@ import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfiguration
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationLoadResult
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSource
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterNetworkPolicy
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterPortMapping
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterTransport
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -22,6 +25,7 @@ class MobileAdapterConfigurationUiStateTest {
             ))
 
     val text = state.detailsText()
+    val startupSummary = state.startupSummaryText()
     val differentPrivateBytes =
         MobileAdapterConfigurationUiState.from(
             MobileAdapterConfigurationLoadResult(
@@ -40,12 +44,48 @@ class MobileAdapterConfigurationUiStateTest {
     assertTrue(text.contains("last validated in-memory record"))
     assertTrue(text.contains("INTEGRITY_CHECK_FAILED"))
     assertTrue(text.contains(MobileAdapterConfigurationError.INTEGRITY_CHECK_FAILED.userMessage))
+    assertTrue(startupSummary.contains("last validated in-memory record"))
+    assertTrue(startupSummary.contains("INTEGRITY_CHECK_FAILED"))
+    assertTrue(
+        startupSummary.contains(
+            MobileAdapterConfigurationError.INTEGRITY_CHECK_FAILED.userMessage))
     assertTrue(text.contains("[256 bytes hidden]"))
-    assertTrue(text.contains("read-only"))
-    assertTrue(text.contains("network service fields are deferred"))
+    assertTrue(text.contains("explicit session consent"))
+    assertTrue(text.contains("Nintendo production services remain unsupported"))
     assertFalse(text.contains("5a5a"))
     assertFalse(text.contains('/'))
     assertFalse(text.contains('\\'))
+    assertFalse(startupSummary.contains("5a5a"))
+    assertFalse(startupSummary.contains('/'))
+    assertFalse(startupSummary.contains('\\'))
+  }
+
+  @Test
+  fun `custom policy presentation reveals only mode and mapping count`() {
+    val configuration =
+        MobileAdapterConfiguration(
+            0x08,
+            ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE),
+            MobileAdapterNetworkPolicy.CustomServer(
+                "private-service.example",
+                "192.168.10.20",
+                5353,
+                listOf(MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080)),
+            ),
+        )
+    val text =
+        MobileAdapterConfigurationUiState.from(
+                MobileAdapterConfigurationLoadResult(
+                    configuration,
+                    MobileAdapterConfigurationSource.PERSISTED,
+                ))
+            .detailsText()
+
+    assertTrue(text.contains("custom server"))
+    assertTrue(text.contains("Custom-server mappings: 1"))
+    assertFalse(text.contains("private-service"))
+    assertFalse(text.contains("192.168"))
+    assertFalse(text.contains("18080"))
   }
 
   @Test
@@ -59,10 +99,13 @@ class MobileAdapterConfigurationUiStateTest {
             ))
 
     val text = state.detailsText()
+    val startupSummary = state.startupSummaryText()
 
     assertTrue(text.contains("recovered private backup"))
     assertTrue(text.contains("a complete backup was restored"))
     assertTrue(text.contains("Diagnostic: none"))
+    assertTrue(startupSummary.contains("a complete backup was restored"))
+    assertTrue(startupSummary.contains("Startup diagnostic: none"))
   }
 
   @Test
@@ -76,8 +119,11 @@ class MobileAdapterConfigurationUiStateTest {
             ))
 
     val text = state.detailsText()
+    val startupSummary = state.startupSummaryText()
 
     assertTrue(text.contains("stale transaction artifacts were cleaned"))
     assertFalse(text.contains("backup was restored"))
+    assertTrue(startupSummary.contains("stale transaction artifacts were cleaned"))
+    assertFalse(startupSummary.contains("backup was restored"))
   }
 }

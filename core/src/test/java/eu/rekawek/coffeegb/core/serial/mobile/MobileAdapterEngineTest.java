@@ -141,6 +141,64 @@ public class MobileAdapterEngineTest {
     }
 
     @Test
+    public void pendingLimitRoundTripsForDirectReservationAndBackendSubmission() {
+        MobileAdapterEngine direct = engine(ClockSpec.LEGACY);
+        assertTrue(direct.reservePendingPacketSlot());
+        assertTrue(direct.reservePendingPacketSlot());
+        assertFalse(direct.reservePendingPacketSlot());
+        assertEquals(0, direct.snapshot().acknowledgement().length);
+        MobileAdapterEngine.MobileAdapterEngineState directState = state(direct);
+        MobileAdapterEngine directRestored = engine(ClockSpec.LEGACY);
+        directRestored.restoreState(directState);
+        assertEngineStatesEqual(directState, state(directRestored));
+
+        MobileAdapterEngine submitted = engine(ClockSpec.LEGACY);
+        feed(submitted, BEGIN);
+        assertTrue(submitted.reservePendingPacketSlot());
+        assertTrue(submitted.reservePendingPacketSlot());
+        MobileAdapterEngine.EngineResult rejected = feed(
+                submitted,
+                packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(MobileAdapterEngine.Outcome.PENDING_LIMIT, rejected.outcome());
+        assertEquals(MobileAdapterEngine.ErrorCode.PENDING_LIMIT, rejected.error());
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0xf2},
+                rejected.acknowledgement());
+        assertEquals(0, rejected.responsePacket().length);
+        assertEquals(2, rejected.pendingPacketSlots());
+
+        MobileAdapterEngine.MobileAdapterEngineState submittedState = state(submitted);
+        MobileAdapterEngine submittedRestored = engine(ClockSpec.LEGACY);
+        submittedRestored.restoreState(submittedState);
+        assertEngineStatesEqual(submittedState, state(submittedRestored));
+    }
+
+    @Test
+    public void additiveNetworkStateRejectsAFalseExternalIoMarker() {
+        MobileAdapterEngine source = engine(ClockSpec.LEGACY);
+        feed(source, BEGIN);
+        MobileAdapterEngine.MobileAdapterEngineState legacy = state(source);
+        MobileAdapterEngine.MobileAdapterEngineNetworkState nonCanonical =
+                new MobileAdapterEngine.MobileAdapterEngineNetworkState(
+                        legacy.phaseId(),
+                        legacy.outcomeId(),
+                        legacy.errorId(),
+                        legacy.deviceId(),
+                        legacy.packetBuffer(),
+                        legacy.packetCount(),
+                        legacy.expectedPacketBytes(),
+                        legacy.configuration(),
+                        legacy.responsePacket(),
+                        legacy.acknowledgement(),
+                        legacy.idlePhaseUnits(),
+                        legacy.serialByteObserved(),
+                        legacy.pendingPacketSlots(),
+                        false);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> engine(ClockSpec.LEGACY).restoreState(nonCanonical));
+    }
+
+    @Test
     public void everyPersistableOutcomeRoundTripsAndTransientRegressionDoesNot() {
         Set<MobileAdapterEngine.Outcome> restoredOutcomes =
                 EnumSet.noneOf(MobileAdapterEngine.Outcome.class);
@@ -191,6 +249,11 @@ public class MobileAdapterEngineTest {
         roundTripOutcome(configBoundary, MobileAdapterEngine.Outcome.CONFIG_READ_BOUNDARY,
                 restoredOutcomes);
 
+        MobileAdapterEngine configWrite = engine(ClockSpec.LEGACY);
+        feed(configWrite, packet(0x1a, new byte[]{0, 0x55}));
+        roundTripOutcome(configWrite, MobileAdapterEngine.Outcome.CONFIG_WRITE,
+                restoredOutcomes);
+
         MobileAdapterEngine unsupported = engine(ClockSpec.LEGACY);
         feed(unsupported, packet(0x7e, new byte[0]));
         roundTripOutcome(unsupported, MobileAdapterEngine.Outcome.UNSUPPORTED_COMMAND,
@@ -239,8 +302,62 @@ public class MobileAdapterEngineTest {
         roundTripOutcome(pendingLimit, MobileAdapterEngine.Outcome.PENDING_LIMIT,
                 restoredOutcomes);
 
+        MobileAdapterEngine unavailable = engine(ClockSpec.LEGACY);
+        feed(unavailable, BEGIN);
+        feed(unavailable, packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII)));
+        roundTripOutcome(unavailable, MobileAdapterEngine.Outcome.BACKEND_ERROR,
+                restoredOutcomes);
+
+        DeterministicMobileAdapterBackend networkBackend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine dns = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), networkBackend);
+        feed(dns, BEGIN);
+        feed(dns, packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(CompletionResult.COMPLETED,
+                networkBackend.complete(networkBackend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS,
+                        new byte[]{(byte) 192, 0, 2, 1}));
+        dns.pollBackendCompletion();
+        roundTripOutcome(dns, MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                restoredOutcomes);
+
+        DeterministicMobileAdapterBackend closedBackend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine remoteClosed = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), closedBackend);
+        feed(remoteClosed, BEGIN);
+        feed(remoteClosed, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        assertEquals(CompletionResult.COMPLETED,
+                closedBackend.complete(closedBackend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{0}));
+        remoteClosed.pollBackendCompletion();
+        feed(remoteClosed, packet(0x15, new byte[]{0}));
+        assertEquals(CompletionResult.COMPLETED,
+                closedBackend.complete(closedBackend.generation(), 1,
+                        MobileAdapterBackendPort.BackendStatus.REMOTE_CLOSED, new byte[0]));
+        remoteClosed.pollBackendCompletion();
+        roundTripOutcome(remoteClosed, MobileAdapterEngine.Outcome.BACKEND_REMOTE_CLOSED,
+                restoredOutcomes);
+
+        DeterministicMobileAdapterBackend liveBackend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine live = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), liveBackend);
+        feed(live, BEGIN);
+        feed(live, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        MobileAdapterEngine.MobileAdapterEngineNetworkState external = networkState(live);
+        assertTrue(external.externalIoAtCapture());
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED.id(),
+                external.outcomeId());
+        MobileAdapterEngine restoredExternal = engine(ClockSpec.LEGACY);
+        restoredExternal.restoreState(external);
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                restoredExternal.snapshot().outcome());
+        assertFalse(restoredExternal.hasExternalIo());
+        restoredOutcomes.add(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED);
+
         assertEquals(
-                EnumSet.complementOf(EnumSet.of(MobileAdapterEngine.Outcome.TIME_REGRESSION)),
+                EnumSet.complementOf(EnumSet.of(
+                        MobileAdapterEngine.Outcome.TIME_REGRESSION,
+                        MobileAdapterEngine.Outcome.BACKEND_PENDING)),
                 restoredOutcomes);
         MobileAdapterEngine.MobileAdapterEngineState partial = state(needMore);
         MobileAdapterEngine.MobileAdapterEngineState transientRegression =
@@ -308,6 +425,21 @@ public class MobileAdapterEngineTest {
         assertThrows(IllegalArgumentException.class, () -> live.restoreState(badResponse));
         assertEngineStatesEqual(baseline, state(live));
 
+        MobileAdapterEngine backendError = engine(ClockSpec.LEGACY);
+        feed(backendError, BEGIN);
+        assertBackendError(feed(backendError,
+                packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII))), 0x28, 0x01);
+        MobileAdapterEngine.MobileAdapterEngineState backendErrorState = state(backendError);
+        MobileAdapterEngine.MobileAdapterEngineState wrongBackendErrorCommand = copyState(
+                backendErrorState,
+                backendErrorState.packetBuffer(),
+                packet(0x7f, new byte[]{0x28, 0x01}),
+                backendErrorState.errorId());
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(wrongBackendErrorCommand));
+        assertEngineStatesEqual(baseline, state(live));
+        assertEquals(1, backend.occupiedRequestSlots());
+
         MobileAdapterEngine.MobileAdapterEngineState ownerlessResult = copyTimingState(
                 responseState, 0, false);
         assertThrows(IllegalArgumentException.class,
@@ -352,11 +484,31 @@ public class MobileAdapterEngineTest {
                 boundary.acknowledgement());
         assertPacketChecksum(boundary.responsePacket());
 
-        byte[] beforeWrite = engine.configurationCopy();
         MobileAdapterEngine.EngineResult write = feed(
                 engine, packet(0x1a, new byte[]{0, 1, 0x55}));
-        assertUnsupported(write);
-        assertArrayEquals(beforeWrite, engine.configurationCopy());
+        assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE, write.outcome());
+        assertEquals(1, engine.configurationCopy()[0]);
+        assertEquals(0x55, engine.configurationCopy()[1] & 0xff);
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x9a}, write.acknowledgement());
+        assertEquals(0x9a, write.responsePacket()[2] & 0xff);
+
+        byte[] maximumWrite = new byte[MobileAdapterEngine.MAX_CONFIGURATION_OPERATION_BYTES + 1];
+        maximumWrite[0] = (byte) 128;
+        Arrays.fill(maximumWrite, 1, maximumWrite.length, (byte) 0x6a);
+        assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE,
+                feed(engine, packet(0x1a, maximumWrite)).outcome());
+        for (int i = 128; i < 256; i++) {
+            assertEquals(0x6a, engine.configurationCopy()[i] & 0xff);
+        }
+        assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE,
+                feed(engine, packet(0x1a, new byte[]{(byte) 255})).outcome());
+
+        byte[] afterWrite = engine.configurationCopy();
+        assertUnsupported(feed(engine,
+                packet(0x1a, new byte[]{(byte) 255, 1, 2})));
+        byte[] oversizedWrite = new byte[MobileAdapterEngine.MAX_CONFIGURATION_OPERATION_BYTES + 2];
+        assertUnsupported(feed(engine, packet(0x1a, oversizedWrite)));
+        assertArrayEquals(afterWrite, engine.configurationCopy());
 
         assertUnsupported(feed(engine, packet(0x19, new byte[]{(byte) 200, 57})));
         assertUnsupported(feed(engine, packet(0x19, new byte[]{0, (byte) 129})));
@@ -458,9 +610,14 @@ public class MobileAdapterEngineTest {
                 backend.complete(cancelledGeneration, 55, new byte[]{3}));
         assertEquals(1, backend.pendingRequests());
         assertEquals(CompletionResult.COMPLETED,
-                backend.complete(currentGeneration, 55, new byte[]{4}));
-        assertNotNull(backend.poll());
+                backend.complete(currentGeneration, 55,
+                        MobileAdapterBackendPort.BackendStatus.LOOKUP_FAILED, new byte[]{4}));
+        MobileAdapterBackendPort.BackendCompletion typed = backend.poll(currentGeneration);
+        assertNotNull(typed);
+        assertSame(currentGeneration, typed.generation());
+        assertEquals(MobileAdapterBackendPort.BackendStatus.LOOKUP_FAILED, typed.status());
         backend.cancelAll();
+        assertNull(backend.poll(currentGeneration));
 
         byte[] source = new byte[MobileAdapterBackendPort.MAX_BUFFERED_BYTES];
         source[0] = 0x33;
@@ -481,6 +638,8 @@ public class MobileAdapterEngineTest {
         MobileAdapterBackendPort.BackendCompletion completion = backend.poll();
         assertNotNull(completion);
         assertEquals(100, completion.requestId());
+        assertSame(backend.generation(), completion.generation());
+        assertEquals(MobileAdapterBackendPort.BackendStatus.SUCCESS, completion.status());
         byte[] visible = completion.payload();
         visible[0] = 1;
         assertEquals(0, completion.payload()[0]);
@@ -495,6 +654,304 @@ public class MobileAdapterEngineTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new MobileAdapterBackendPort.BackendCompletion(102,
                         new byte[MobileAdapterBackendPort.MAX_BUFFERED_BYTES + 1]));
+    }
+
+    @Test
+    public void documentedCustomBackendCommandsUseOneBoundedNonblockingResponseChannel() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+
+        MobileAdapterEngine.EngineResult dnsPending = feed(
+                engine, packet(0x28, "fixture.test\0ignored".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING, dnsPending.outcome());
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0xa8},
+                dnsPending.acknowledgement());
+        assertEquals(1, dnsPending.pendingPacketSlots());
+        assertEquals(1, backend.pendingRequests());
+        assertThrows(IllegalStateException.class, engine::completePendingPacketSlot);
+        assertEquals(1, engine.snapshot().pendingPacketSlots());
+
+        MobileAdapterEngine.EngineResult busy = feed(
+                engine, packet(0x28, "second.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, busy.outcome());
+        assertEquals(MobileAdapterEngine.ErrorCode.BACKEND_BUSY, busy.error());
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0xf2}, busy.acknowledgement());
+        assertEquals(1, backend.pendingRequests());
+
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS,
+                        new byte[]{(byte) 192, 0, 2, 44}));
+        MobileAdapterEngine.EngineResult dns = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE, dns.outcome());
+        assertEquals(0xa8, dns.responsePacket()[2] & 0xff);
+        assertArrayEquals(new byte[]{(byte) 192, 0, 2, 44},
+                Arrays.copyOfRange(dns.responsePacket(), 6, 10));
+        assertEquals(0, dns.pendingPacketSlots());
+
+        MobileAdapterEngine.EngineResult openPending = feed(
+                engine, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING, openPending.outcome());
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 1,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{0}));
+        MobileAdapterEngine.EngineResult opened = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE, opened.outcome());
+        assertEquals(0xa3, opened.responsePacket()[2] & 0xff);
+        assertTrue(engine.hasExternalIo());
+
+        byte[] maximumTransfer = new byte[MobileAdapterEngine.MAX_PACKET_DATA_BYTES];
+        maximumTransfer[0] = 0;
+        Arrays.fill(maximumTransfer, 1, maximumTransfer.length, (byte) 0x5a);
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x15, maximumTransfer)).outcome());
+        byte[] maximumReply = maximumTransfer.clone();
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 2,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, maximumReply));
+        MobileAdapterEngine.EngineResult transfer = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE, transfer.outcome());
+        assertEquals(MobileAdapterEngine.MAX_PACKET_BYTES, transfer.responsePacket().length);
+        assertEquals(0x95, transfer.responsePacket()[2] & 0xff);
+
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x24, new byte[]{0})).outcome());
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 3,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{0}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                engine.pollBackendCompletion().outcome());
+        assertFalse(engine.hasExternalIo());
+
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x25, new byte[]{127, 0, 0, 1, 0, 53})).outcome());
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 4,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{1}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                engine.pollBackendCompletion().outcome());
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x26, new byte[]{1})).outcome());
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 5,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{1}));
+        engine.pollBackendCompletion();
+        assertFalse(engine.hasExternalIo());
+    }
+
+    @Test
+    public void customBackendRejectsMalformedRequestsAndMapsTypedFailuresToCoarseErrors() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+
+        assertBackendError(feed(engine, packet(0x15, new byte[0])), 0x15, 0x00);
+        assertBackendError(feed(engine, packet(0x23, new byte[]{127, 0, 0, 1, 0, 0})),
+                0x23, 0x03);
+        assertBackendError(feed(engine, packet(0x23, new byte[5])), 0x23, 0x03);
+        assertBackendError(feed(engine, packet(0x23, new byte[7])), 0x23, 0x03);
+        assertBackendError(feed(engine, packet(0x24, new byte[0])), 0x24, 0x00);
+        assertBackendError(feed(engine, packet(0x24, new byte[2])), 0x24, 0x00);
+        assertBackendError(feed(engine, packet(0x24, new byte[]{2})), 0x24, 0x00);
+        assertBackendError(feed(engine, packet(0x25, new byte[5])), 0x25, 0x03);
+        assertBackendError(feed(engine, packet(0x25, new byte[7])), 0x25, 0x03);
+        assertBackendError(feed(engine, packet(0x26, new byte[0])), 0x26, 0x00);
+        assertBackendError(feed(engine, packet(0x26, new byte[2])), 0x26, 0x00);
+        assertBackendError(feed(engine, packet(0x26, new byte[]{0})), 0x26, 0x00);
+        assertBackendError(feed(engine, packet(0x28, new byte[0])), 0x28, 0x02);
+        byte[] oversizedDnsName = new byte[MobileAdapterEngine.MAX_DNS_NAME_BYTES + 1];
+        Arrays.fill(oversizedDnsName, (byte) 'a');
+        assertBackendError(feed(engine, packet(0x28, oversizedDnsName)), 0x28, 0x02);
+        assertEquals(0, backend.occupiedRequestSlots());
+
+        byte[] maximumDnsName = new byte[MobileAdapterEngine.MAX_DNS_NAME_BYTES];
+        Arrays.fill(maximumDnsName, (byte) 'a');
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x28, maximumDnsName)).outcome());
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS,
+                        new byte[]{(byte) 192, 0, 2, 1}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                engine.pollBackendCompletion().outcome());
+
+        feed(engine, packet(0x28, "missing.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 1,
+                        MobileAdapterBackendPort.BackendStatus.LOOKUP_FAILED, new byte[0]));
+        assertBackendError(engine.pollBackendCompletion(), 0x28, 0x02);
+
+        feed(engine, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 2,
+                        MobileAdapterBackendPort.BackendStatus.CONNECTION_LIMIT, new byte[0]));
+        assertBackendError(engine.pollBackendCompletion(), 0x23, 0x00);
+
+        feed(engine, packet(0x28, "malformed.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 3,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[3]));
+        MobileAdapterEngine.EngineResult malformed = engine.pollBackendCompletion();
+        assertBackendError(malformed, 0x28, 0x02);
+        assertEquals(MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID, malformed.error());
+
+        feed(engine, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        MobileAdapterBackendPort.BackendGeneration malformedOpenGeneration = backend.generation();
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(malformedOpenGeneration, 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{2}));
+        MobileAdapterEngine.EngineResult malformedOpen = engine.pollBackendCompletion();
+        assertBackendError(malformedOpen, 0x23, 0x03);
+        assertEquals(MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID,
+                malformedOpen.error());
+        assertFalse(malformedOpenGeneration == backend.generation());
+        assertEquals(0, malformedOpen.pendingPacketSlots());
+        assertEquals(0, backend.occupiedRequestSlots());
+        assertFalse(engine.hasExternalIo());
+
+        assertUnsupported(feed(engine, packet(0x12, new byte[]{0, '1'})));
+        assertUnsupported(feed(engine, packet(0x21, new byte[10])));
+    }
+
+    @Test
+    public void cancellationGenerationAndCaptureDiscardExternalOwnershipDeterministically() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+        feed(engine, packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII)));
+        MobileAdapterBackendPort.BackendGeneration stale = backend.generation();
+
+        MobileAdapterEngine.MobileAdapterEngineNetworkState captured = networkState(engine);
+        assertTrue(captured.externalIoAtCapture());
+        assertEquals(0, captured.pendingPacketSlots());
+        assertEquals(0, captured.responsePacket().length);
+        assertEquals(0, captured.acknowledgement().length);
+
+        backend.cancelAll();
+        assertNull(backend.poll(stale));
+        MobileAdapterEngine.EngineResult disconnected = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                disconnected.outcome());
+        assertEquals(MobileAdapterEngine.ErrorCode.EXTERNAL_IO_DISCONNECTED,
+                disconnected.error());
+        assertFalse(engine.hasExternalIo());
+
+        MobileAdapterEngine restored = engine(ClockSpec.LEGACY);
+        restored.restoreState(captured);
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                restored.snapshot().outcome());
+        assertFalse(restored.hasExternalIo());
+        assertTrue(restored.captureState() instanceof
+                MobileAdapterEngine.MobileAdapterEngineState);
+    }
+
+    @Test
+    public void backendCompletionWaitsForAConcurrentPartialGuestPacketAndRemainsCapturable() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+        feed(engine, packet(0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS,
+                        new byte[]{(byte) 192, 0, 2, 9}));
+
+        byte[] nextPacket = packet(0x19, new byte[]{0, 0});
+        assertEquals(MobileAdapterEngine.Outcome.NEED_MORE,
+                engine.acceptByte(nextPacket[0] & 0xff).outcome());
+
+        MobileAdapterEngine.EngineResult waiting = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.NEED_MORE, waiting.outcome());
+        assertEquals(1, waiting.retainedBytes());
+        assertEquals(1, backend.completedResults());
+        MobileAdapterEngine.MobileAdapterEngineNetworkState captured = networkState(engine);
+        MobileAdapterEngine restoredPartial = engine(ClockSpec.LEGACY);
+        restoredPartial.restoreState(captured);
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                restoredPartial.snapshot().outcome());
+        assertEquals(1, restoredPartial.snapshot().retainedBytes());
+
+        MobileAdapterEngine.EngineResult pureResult = feed(
+                engine, Arrays.copyOfRange(nextPacket, 1, nextPacket.length));
+        assertEquals(MobileAdapterEngine.Outcome.CONFIG_READ, pureResult.outcome());
+        MobileAdapterEngine.EngineResult completion = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE, completion.outcome());
+        assertEquals(0, completion.retainedBytes());
+        assertEquals(0, backend.completedResults());
+
+        MobileAdapterEngine restoredCompletion = engine(ClockSpec.LEGACY);
+        restoredCompletion.restoreState(engine.captureState());
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                restoredCompletion.snapshot().outcome());
+    }
+
+    @Test
+    public void idleLogicalConnectionObservesExternalBackendGenerationCancellation() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+        feed(engine, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{0}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                engine.pollBackendCompletion().outcome());
+        assertTrue(engine.hasExternalIo());
+
+        backend.cancelAll();
+
+        MobileAdapterEngine.EngineResult disconnected = engine.pollBackendCompletion();
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                disconnected.outcome());
+        assertEquals(MobileAdapterEngine.ErrorCode.EXTERNAL_IO_DISCONNECTED,
+                disconnected.error());
+        assertEquals(0, disconnected.pendingPacketSlots());
+        assertFalse(engine.hasExternalIo());
+    }
+
+    @Test
+    public void externalIoCapturePreservesAConcurrentPartialGuestPacket() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine live = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(live, BEGIN);
+        feed(live, packet(0x23, new byte[]{127, 0, 0, 1, 0, 80}));
+        assertEquals(CompletionResult.COMPLETED,
+                backend.complete(backend.generation(), 0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS, new byte[]{0}));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                live.pollBackendCompletion().outcome());
+
+        byte[] dnsPacket = packet(
+                0x28, "fixture.test".getBytes(StandardCharsets.US_ASCII));
+        feed(live, Arrays.copyOf(dnsPacket, 6));
+        assertEquals(6, live.snapshot().retainedBytes());
+        assertTrue(live.hasExternalIo());
+
+        MobileAdapterEngine.MobileAdapterEngineNetworkState captured = networkState(live);
+        assertTrue(captured.externalIoAtCapture());
+        assertEquals(6, captured.packetCount());
+        assertEquals(dnsPacket.length, captured.expectedPacketBytes());
+        assertTrue(live.hasExternalIo());
+
+        MobileAdapterEngine restored = engine(ClockSpec.LEGACY);
+        restored.restoreState(captured);
+        assertEquals(MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+                restored.snapshot().outcome());
+        assertEquals(6, restored.snapshot().retainedBytes());
+        assertFalse(restored.hasExternalIo());
+
+        MobileAdapterEngine.EngineResult completed = feed(
+                restored, Arrays.copyOfRange(dnsPacket, 6, dnsPacket.length));
+        assertBackendError(completed, 0x28, 0x01);
+        assertEquals(0, completed.retainedBytes());
+        live.cancelOrReplace();
     }
 
     @Test
@@ -689,6 +1146,12 @@ public class MobileAdapterEngineTest {
         assertEquals(15, MobileAdapterEngine.Outcome.TIME_REGRESSION.id());
         assertEquals(16, MobileAdapterEngine.Outcome.CANCELLED.id());
         assertEquals(17, MobileAdapterEngine.Outcome.PENDING_LIMIT.id());
+        assertEquals(18, MobileAdapterEngine.Outcome.CONFIG_WRITE.id());
+        assertEquals(19, MobileAdapterEngine.Outcome.BACKEND_PENDING.id());
+        assertEquals(20, MobileAdapterEngine.Outcome.BACKEND_RESPONSE.id());
+        assertEquals(21, MobileAdapterEngine.Outcome.BACKEND_ERROR.id());
+        assertEquals(22, MobileAdapterEngine.Outcome.BACKEND_REMOTE_CLOSED.id());
+        assertEquals(23, MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED.id());
 
         assertEquals(0, MobileAdapterEngine.ErrorCode.NONE.id());
         assertEquals(1, MobileAdapterEngine.ErrorCode.INVALID_MAGIC.id());
@@ -699,6 +1162,10 @@ public class MobileAdapterEngineTest {
         assertEquals(6, MobileAdapterEngine.ErrorCode.BUFFER_LIMIT.id());
         assertEquals(7, MobileAdapterEngine.ErrorCode.TIME_REGRESSION.id());
         assertEquals(8, MobileAdapterEngine.ErrorCode.PENDING_LIMIT.id());
+        assertEquals(9, MobileAdapterEngine.ErrorCode.BACKEND_BUSY.id());
+        assertEquals(10, MobileAdapterEngine.ErrorCode.BACKEND_UNAVAILABLE.id());
+        assertEquals(11, MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID.id());
+        assertEquals(12, MobileAdapterEngine.ErrorCode.EXTERNAL_IO_DISCONNECTED.id());
 
         Set<Integer> phases = new HashSet<>();
         for (MobileAdapterEngine.Phase value : MobileAdapterEngine.Phase.values()) {
@@ -794,9 +1261,23 @@ public class MobileAdapterEngineTest {
         assertEquals(0, result.responsePacket().length);
     }
 
+    private static void assertBackendError(MobileAdapterEngine.EngineResult result,
+                                           int command, int error) {
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, result.outcome());
+        assertEquals(0x6e, result.responsePacket()[2] & 0xff);
+        assertArrayEquals(new byte[]{(byte) command, (byte) error},
+                Arrays.copyOfRange(result.responsePacket(), 6, 8));
+        assertPacketChecksum(result.responsePacket());
+    }
+
     private static MobileAdapterEngine.MobileAdapterEngineState state(
             MobileAdapterEngine engine) {
         return (MobileAdapterEngine.MobileAdapterEngineState) engine.captureState();
+    }
+
+    private static MobileAdapterEngine.MobileAdapterEngineNetworkState networkState(
+            MobileAdapterEngine engine) {
+        return (MobileAdapterEngine.MobileAdapterEngineNetworkState) engine.captureState();
     }
 
     private static void roundTripOutcome(

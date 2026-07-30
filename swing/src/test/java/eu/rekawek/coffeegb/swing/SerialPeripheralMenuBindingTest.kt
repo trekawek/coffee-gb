@@ -100,7 +100,7 @@ class SerialPeripheralMenuBindingTest {
       assertTrue(callbacksOnEdt.get())
       assertEquals(SerialPeripheralSelection.MOBILE_ADAPTER_GB, binding.snapshot().selection)
       assertEquals(SerialPeripheralStatus.ATTACHED, binding.snapshot().status)
-      assertTrue(binding.statusItem.text.contains("network disabled"))
+      assertTrue(binding.statusItem.text.contains("network offline"))
       assertTrue(rendered.size >= 3)
       assertNotSame(rendered[rendered.lastIndex - 1], rendered.last())
 
@@ -112,6 +112,76 @@ class SerialPeripheralMenuBindingTest {
       flushEdt()
       assertEquals(SerialPeripheralStatus.DETACHED, binding.snapshot().status)
       assertTrue(binding.statusItem.text.contains("detached"))
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `mobile network status rejects stale attachments and renders bounded connection count`() {
+    val eventBus = EventBusImpl()
+    try {
+      val binding = onEdtResult { SerialPeripheralMenuBinding(eventBus) }
+      eventBus.post(
+          Controller.SerialPeripheralSelectionChangedEvent(
+              SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      eventBus.post(
+          Controller.SerialPeripheralStatusEvent(
+              SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+              SerialPeripheralStatus.ATTACHED,
+          ))
+      eventBus.post(
+          Controller.MobileAdapterNetworkStatusEvent(
+              attachmentId = 20,
+              policyRevision = 4,
+              phase = Controller.MobileAdapterNetworkPhase.CONNECTED,
+              activeConnections = 2,
+          ))
+      eventBus.post(
+          Controller.MobileAdapterNetworkStatusEvent(
+              attachmentId = 19,
+              policyRevision = 3,
+              phase = Controller.MobileAdapterNetworkPhase.FAILED,
+              error = Controller.MobileAdapterNetworkError.IO_FAILED,
+          ))
+      flushEdt()
+
+      assertTrue(binding.statusItem.text.contains("connected (2/2)"))
+      assertFalse(binding.statusItem.text.contains("IO_FAILED"))
+      assertFalse(binding.statusItem.toolTipText.contains("host"))
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `remote close identifies one slot without hiding the surviving connection`() {
+    val eventBus = EventBusImpl()
+    try {
+      val binding = onEdtResult { SerialPeripheralMenuBinding(eventBus) }
+      eventBus.post(
+          Controller.SerialPeripheralSelectionChangedEvent(
+              SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      eventBus.post(
+          Controller.SerialPeripheralStatusEvent(
+              SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+              SerialPeripheralStatus.ATTACHED,
+          ))
+      eventBus.post(
+          Controller.MobileAdapterNetworkStatusEvent(
+              attachmentId = 21,
+              policyRevision = 5,
+              phase = Controller.MobileAdapterNetworkPhase.FAILED,
+              slot = 0,
+              activeConnections = 1,
+              error = Controller.MobileAdapterNetworkError.REMOTE_CLOSED,
+          ))
+      flushEdt()
+
+      assertTrue(binding.statusItem.text.contains("slot 0 closed"))
+      assertTrue(binding.statusItem.text.contains("1/2 connections remain"))
+      assertTrue(binding.statusItem.text.contains("REMOTE_CLOSED"))
+      assertFalse(binding.statusItem.text.contains("host"))
     } finally {
       eventBus.close()
     }

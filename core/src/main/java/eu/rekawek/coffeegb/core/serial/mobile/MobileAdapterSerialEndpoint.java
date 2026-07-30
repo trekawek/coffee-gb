@@ -69,6 +69,16 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
         return engine.snapshot();
     }
 
+    /** Applies at most one already-published backend result without performing host I/O or waiting. */
+    public MobileAdapterEngine.EngineResult pollBackendCompletion() {
+        return engine.pollBackendCompletion();
+    }
+
+    /** Runtime-only ownership hint for controller warnings; it is never captured as a host handle. */
+    public boolean hasExternalIo() {
+        return engine.hasExternalIo();
+    }
+
     public byte[] configurationCopy() {
         return engine.configurationCopy();
     }
@@ -87,26 +97,36 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
 
     @Override
     public ComponentState<SerialEndpoint> captureState() {
+        ComponentState<MobileAdapterEngine> engineState = engine.captureState();
+        if (engineState instanceof MobileAdapterEngine.MobileAdapterEngineNetworkState networkState) {
+            return new MobileAdapterSerialEndpointNetworkState(networkState, sb, sendBitIndex);
+        }
         return new MobileAdapterSerialEndpointState(
-                (MobileAdapterEngine.MobileAdapterEngineState) engine.captureState(),
-                sb,
-                sendBitIndex);
+                (MobileAdapterEngine.MobileAdapterEngineState) engineState, sb, sendBitIndex);
     }
 
     @Override
     public void restoreState(ComponentState<SerialEndpoint> state) {
-        if (!(state instanceof MobileAdapterSerialEndpointState restored)) {
+        if (state instanceof MobileAdapterSerialEndpointNetworkState networkState) {
+            restoreEndpointState(networkState.engineState, networkState.sb, networkState.sendBitIndex);
+        } else if (state instanceof MobileAdapterSerialEndpointState legacyState) {
+            restoreEndpointState(legacyState.engineState, legacyState.sb, legacyState.sendBitIndex);
+        } else {
             throw new IllegalArgumentException("Invalid Mobile Adapter serial endpoint state type");
         }
-        if (restored.sb < 0 || restored.sb > 0xff) {
+    }
+
+    private void restoreEndpointState(ComponentState<MobileAdapterEngine> restoredEngineState,
+                                      int restoredSb, int restoredSendBitIndex) {
+        if (restoredSb < 0 || restoredSb > 0xff) {
             throw new IllegalArgumentException("Mobile Adapter SB value must be in 0..255");
         }
-        if (restored.sendBitIndex < 0 || restored.sendBitIndex > 7) {
+        if (restoredSendBitIndex < 0 || restoredSendBitIndex > 7) {
             throw new IllegalArgumentException("Mobile Adapter send-bit index must be in 0..7");
         }
-        engine.restoreState(restored.engineState);
-        sb = restored.sb;
-        sendBitIndex = restored.sendBitIndex;
+        engine.restoreState(restoredEngineState);
+        sb = restoredSb;
+        sendBitIndex = restoredSendBitIndex;
     }
 
     /** Complete endpoint/engine state; both contained byte arrays and accessors are defensive. */
@@ -116,6 +136,19 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
             int sendBitIndex) implements ComponentState<SerialEndpoint> {
 
         public MobileAdapterSerialEndpointState {
+            if (engineState == null) {
+                throw new NullPointerException("engineState");
+            }
+        }
+    }
+
+    /** Additive Phase-2 endpoint state used only when its engine observed external I/O. */
+    public record MobileAdapterSerialEndpointNetworkState(
+            MobileAdapterEngine.MobileAdapterEngineNetworkState engineState,
+            int sb,
+            int sendBitIndex) implements ComponentState<SerialEndpoint> {
+
+        public MobileAdapterSerialEndpointNetworkState {
             if (engineState == null) {
                 throw new NullPointerException("engineState");
             }

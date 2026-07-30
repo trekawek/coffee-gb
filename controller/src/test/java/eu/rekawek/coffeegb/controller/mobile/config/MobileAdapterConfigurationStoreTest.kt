@@ -30,7 +30,7 @@ class MobileAdapterConfigurationStoreTest {
     assertEquals(configuration, MobileAdapterConfiguration(127, ByteArray(256) { it.toByte() }))
     assertEquals(configuration.hashCode(), MobileAdapterConfiguration(127, ByteArray(256) { it.toByte() }).hashCode())
     assertEquals(
-        "MobileAdapterConfiguration(deviceId=127, configuration=[redacted])",
+        "MobileAdapterConfiguration(deviceId=127, configuration=[redacted], networkPolicy=OFFLINE)",
         configuration.toString(),
     )
     assertFailsWith<IllegalArgumentException> { MobileAdapterConfiguration(-1, ByteArray(256)) }
@@ -40,18 +40,125 @@ class MobileAdapterConfigurationStoreTest {
   }
 
   @Test
-  fun `codec is deterministic fixed size and round trips the synthetic fixture`() {
+  fun `custom server policy canonicalizes bounded inputs and redacts diagnostics`() {
+    val suppliedMappings =
+        mutableListOf(
+            MobileAdapterPortMapping(MobileAdapterTransport.UDP, 443, 8443),
+            MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
+        )
+    val policy =
+        MobileAdapterNetworkPolicy.CustomServer(
+            dnsQueryName = "Api.Example-Test.Org",
+            resolverIpv4Address = "192.0.2.53",
+            resolverPort = 53,
+            portMappings = suppliedMappings,
+        )
+    val configuration = MobileAdapterConfiguration(8, ByteArray(256), policy)
+    suppliedMappings.clear()
+
+    assertEquals(MobileAdapterNetworkMode.CUSTOM_SERVER, policy.mode)
+    assertEquals("api.example-test.org", policy.dnsQueryName)
+    assertEquals("192.0.2.53", policy.resolverIpv4Address)
+    assertEquals(MobileAdapterTransport.TCP, policy.portMappings[0].transport)
+    assertEquals(MobileAdapterTransport.UDP, policy.portMappings[1].transport)
+    assertEquals(2, policy.portMappings.size)
+    assertEquals(
+        policy,
+        MobileAdapterNetworkPolicy.CustomServer(
+            "api.example-test.org",
+            "192.0.2.53",
+            53,
+            policy.portMappings.reversed(),
+        ),
+    )
+    assertEquals(policy.hashCode(), configuration.networkPolicy.hashCode())
+    assertFalse(policy.toString().contains("api.example-test.org"))
+    assertFalse(policy.toString().contains("192.0.2.53"))
+    assertFalse(policy.toString().contains("8080"))
+    assertFalse(configuration.toString().contains("example-test"))
+    assertEquals("MobileAdapterPortMapping([redacted])", policy.portMappings.single { it.guestPort == 80 }.toString())
+  }
+
+  @Test
+  fun `custom server policy rejects invalid DNS IPv4 ports and mapping bounds`() {
+    val invalidDnsNames =
+        listOf(
+            "",
+            "a".repeat(64) + ".test",
+            listOf("a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(62)).joinToString("."),
+            "-host.test",
+            "host-.test",
+            "host..test",
+            "host.test.",
+            "host_name.test",
+            "host name.test",
+            "host\ntest",
+            "bücher.test",
+            "127.0.0.1",
+            "999.999.999.999",
+        )
+    invalidDnsNames.forEach { dnsName ->
+      assertFailsWith<IllegalArgumentException>(dnsName) {
+        customPolicy(dnsQueryName = dnsName)
+      }
+    }
+
+    listOf("", "1.2.3", "1.2.3.4.5", "01.2.3.4", "256.2.3.4", "1.2.3.-1", "localhost")
+        .forEach { address ->
+          assertFailsWith<IllegalArgumentException>(address) {
+            customPolicy(resolverIpv4Address = address)
+          }
+        }
+    listOf(0, 65_536).forEach { port ->
+      assertFailsWith<IllegalArgumentException> { customPolicy(resolverPort = port) }
+      assertFailsWith<IllegalArgumentException> {
+        MobileAdapterPortMapping(MobileAdapterTransport.TCP, port, 1)
+      }
+      assertFailsWith<IllegalArgumentException> {
+        MobileAdapterPortMapping(MobileAdapterTransport.TCP, 1, port)
+      }
+    }
+    assertFailsWith<IllegalArgumentException> {
+      customPolicy(
+          portMappings =
+              (1..17).map {
+                MobileAdapterPortMapping(MobileAdapterTransport.TCP, it, it)
+              })
+    }
+    assertFailsWith<IllegalArgumentException> {
+      customPolicy(
+          portMappings =
+              listOf(
+                  MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
+                  MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8081),
+              ))
+    }
+    assertEquals(
+        2,
+        customPolicy(
+                portMappings =
+                    listOf(
+                        MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
+                        MobileAdapterPortMapping(MobileAdapterTransport.UDP, 80, 8080),
+                    ))
+            .portMappings
+            .size,
+    )
+  }
+
+  @Test
+  fun `codec deterministically writes bounded version two records`() {
     val fallback = MobileAdapterConfiguration.syntheticFallback()
     val first = MobileAdapterConfigurationCodec.encode(fallback)
     val second = MobileAdapterConfigurationCodec.encode(fallback)
 
-    assertEquals(MobileAdapterConfigurationCodec.ENCODED_SIZE, first.size)
+    assertEquals(307, first.size)
     assertContentEquals(first, second)
     assertContentEquals("CGBMACFG".toByteArray(StandardCharsets.US_ASCII), first.copyOfRange(0, 8))
     assertEquals(MobileAdapterConfigurationCodec.FORMAT_VERSION, first[8].toInt() and 0xff)
     assertEquals(0x08, first[9].toInt() and 0xff)
-    assertEquals(1, first[10].toInt() and 0xff)
-    assertEquals(0, first[11].toInt() and 0xff)
+    assertEquals(0x4d, first[10].toInt() and 0xff)
+    assertEquals(0, first[266].toInt() and 0xff)
     assertEquals(fallback, MobileAdapterConfigurationCodec.decode(first))
     assertEquals(0x4d, fallback.configurationBytes()[0].toInt() and 0xff)
     assertEquals(0x81, fallback.configurationBytes()[2].toInt() and 0xff)
@@ -59,40 +166,160 @@ class MobileAdapterConfigurationStoreTest {
   }
 
   @Test
-  fun `codec rejects size header bounds version and integrity violations`() {
-    val encoded =
-        MobileAdapterConfigurationCodec.encode(MobileAdapterConfiguration.syntheticFallback())
+  fun `codec decodes exact version one records as offline and migrates on save`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-config-v1")
+    val path = directory.resolve("adapter.bin")
+    val expected = configuration(31, 0x42)
+    val legacy = MobileAdapterConfigurationCodec.encodeVersion1(expected)
+
+    assertEquals(MobileAdapterConfigurationCodec.LEGACY_ENCODED_SIZE, legacy.size)
+    assertEquals(MobileAdapterConfigurationCodec.LEGACY_FORMAT_VERSION, legacy[8].toInt() and 0xff)
+    assertEquals(1, legacy[10].toInt() and 0xff)
+    assertEquals(0, legacy[11].toInt() and 0xff)
+    assertEquals(expected, MobileAdapterConfigurationCodec.decode(legacy))
+    Files.write(path, legacy)
+
+    val store = MobileAdapterConfigurationStore(path)
+    val loaded = store.load()
+    assertEquals(MobileAdapterConfigurationSource.PERSISTED, loaded.source)
+    assertEquals(MobileAdapterNetworkPolicy.Offline, loaded.configuration.networkPolicy)
+    assertTrue(store.save(loaded.configuration).saved)
+    assertEquals(MobileAdapterConfigurationCodec.FORMAT_VERSION, Files.readAllBytes(path)[8].toInt() and 0xff)
+    assertEquals(loaded.configuration, MobileAdapterConfigurationCodec.decode(Files.readAllBytes(path)))
+  }
+
+  @Test
+  fun `codec accepts maximum DNS and mapping boundaries`() {
+    val maximumDnsName =
+        listOf("a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61))
+            .joinToString(".")
+    val mappings =
+        (0 until MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS).map { index ->
+          MobileAdapterPortMapping(
+              MobileAdapterTransport.TCP,
+              if (index == 15) 65_535 else index + 1,
+              if (index == 0) 65_535 else index,
+          )
+        }
+    val expected =
+        configuration(
+            127,
+            0x7f,
+            customPolicy(
+                dnsQueryName = maximumDnsName,
+                resolverIpv4Address = "255.255.255.255",
+                resolverPort = 65_535,
+                portMappings = mappings,
+            ),
+        )
+
+    val encoded = MobileAdapterConfigurationCodec.encode(expected)
+
+    assertEquals(253, maximumDnsName.length)
+    assertEquals(MobileAdapterConfigurationCodec.MAX_ENCODED_SIZE, encoded.size)
+    assertEquals(expected, MobileAdapterConfigurationCodec.decode(encoded))
+  }
+
+  @Test
+  fun `codec rejects malformed bounded records and integrity violations`() {
+    val offline = MobileAdapterConfigurationCodec.encode(MobileAdapterConfiguration.syntheticFallback())
+    val custom =
+        MobileAdapterConfigurationCodec.encode(
+            configuration(
+                8,
+                0x22,
+                customPolicy(
+                    portMappings =
+                        listOf(
+                            MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
+                            MobileAdapterPortMapping(MobileAdapterTransport.UDP, 53, 5353),
+                        )),
+            ))
+    val queryNameLength = custom[273].toInt() and 0xff
+    val mappingCountOffset = 274 + queryNameLength
+    val mappingsOffset = mappingCountOffset + 1
 
     assertDecodeError(
-        encoded.copyOf(encoded.size - 1),
+        ByteArray(MobileAdapterConfigurationCodec.MIN_ENCODED_SIZE - 1),
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        encoded.copyOf(encoded.size + 1),
+        ByteArray(MobileAdapterConfigurationCodec.MAX_ENCODED_SIZE + 1),
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        encoded.clone().also { it[0] = 0 },
+        offline.clone().also { it[0] = 0 },
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        encoded.clone().also { it[8] = 2 },
+        offline.clone().also { it[8] = 3 },
         MobileAdapterConfigurationError.UNSUPPORTED_VERSION,
     )
     assertDecodeError(
-        encoded.clone().also { it[9] = 0x80.toByte() },
+        mutateAndResign(offline) { it[9] = 0x80.toByte() },
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        encoded.clone().also {
+        mutateAndResign(MobileAdapterConfigurationCodec.encodeVersion1(configuration(8, 1))) {
           it[10] = 0
           it[11] = 0
         },
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        encoded.clone().also { it[12] = (it[12].toInt() xor 1).toByte() },
+        offline.clone().also { it[10] = (it[10].toInt() xor 1).toByte() },
         MobileAdapterConfigurationError.INTEGRITY_CHECK_FAILED,
+    )
+    assertDecodeError(
+        mutateAndResign(offline) { it[266] = 0x02 },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(offline) { it[267] = 1 },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[274] = 0x80.toByte() },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[274] = '_'.code.toByte() },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) {
+          it[271] = 0
+          it[272] = 0
+        },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[mappingCountOffset] = 17 },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[mappingsOffset] = 3 },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) {
+          it[mappingsOffset + 1] = 0
+          it[mappingsOffset + 2] = 0
+        },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) {
+          val second = mappingsOffset + 5
+          it[second] = it[mappingsOffset]
+          it[second + 1] = it[mappingsOffset + 1]
+          it[second + 2] = it[mappingsOffset + 2]
+        },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom.copyOf(custom.size + 1)) {},
+        MobileAdapterConfigurationError.MALFORMED_FILE,
     )
   }
 
@@ -115,11 +342,20 @@ class MobileAdapterConfigurationStoreTest {
   fun `save and load round trip atomically with restrictive final permissions`() {
     val directory = Files.createTempDirectory("coffee-gb-mobile-config-roundtrip")
     val path = directory.resolve("adapter.bin")
-    val expected = configuration(42, 0x5a)
+    val expected =
+        configuration(
+            42,
+            0x5a,
+            customPolicy(
+                portMappings =
+                    listOf(
+                        MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
+                    )),
+        )
     val store = MobileAdapterConfigurationStore(path)
 
     assertEquals(MobileAdapterConfigurationSaveResult(saved = true), store.save(expected))
-    assertEquals(MobileAdapterConfigurationCodec.ENCODED_SIZE.toLong(), Files.size(path))
+    assertEquals(MobileAdapterConfigurationCodec.encode(expected).size.toLong(), Files.size(path))
     if (Files.getFileStore(path).supportsFileAttributeView("posix")) {
       assertEquals(
           setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
@@ -137,7 +373,7 @@ class MobileAdapterConfigurationStoreTest {
   fun `corrupt startup data falls back with typed redacted error`() {
     val directory = Files.createTempDirectory("coffee-gb-mobile-config-corrupt")
     val path = directory.resolve("private-account-adapter.bin")
-    val hostile = ByteArray(MobileAdapterConfigurationCodec.ENCODED_SIZE)
+    val hostile = ByteArray(MobileAdapterConfigurationCodec.LEGACY_ENCODED_SIZE)
     val secret = "phone=5551234 token=private /sensitive/account"
     secret.toByteArray(StandardCharsets.UTF_8).copyInto(hostile)
     Files.write(path, hostile)
@@ -157,7 +393,7 @@ class MobileAdapterConfigurationStoreTest {
   fun `malformed existing record is permission hardened before decode fails`() {
     val directory = Files.createTempDirectory("coffee-gb-mobile-config-private-corrupt")
     val path = directory.resolve("adapter.bin")
-    Files.write(path, ByteArray(MobileAdapterConfigurationCodec.ENCODED_SIZE))
+    Files.write(path, ByteArray(MobileAdapterConfigurationCodec.LEGACY_ENCODED_SIZE))
     if (!Files.getFileStore(path).supportsFileAttributeView("posix")) return
     Files.setPosixFilePermissions(
         path,
@@ -175,6 +411,24 @@ class MobileAdapterConfigurationStoreTest {
     assertEquals(
         setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
         Files.getPosixFilePermissions(path),
+    )
+  }
+
+  @Test
+  fun `store rejects records outside allocation bounds`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-config-size-bounds")
+    val tooSmall = directory.resolve("small.bin")
+    val tooLarge = directory.resolve("large.bin")
+    Files.write(tooSmall, ByteArray(MobileAdapterConfigurationCodec.MIN_ENCODED_SIZE - 1))
+    Files.write(tooLarge, ByteArray(MobileAdapterConfigurationCodec.MAX_ENCODED_SIZE + 1))
+
+    assertEquals(
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+        MobileAdapterConfigurationStore(tooSmall).load().error,
+    )
+    assertEquals(
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+        MobileAdapterConfigurationStore(tooLarge).load().error,
     )
   }
 
@@ -335,12 +589,45 @@ class MobileAdapterConfigurationStoreTest {
   }
 
   private fun configuration(deviceId: Int, seed: Int): MobileAdapterConfiguration =
+      configuration(deviceId, seed, MobileAdapterNetworkPolicy.Offline)
+
+  private fun configuration(
+      deviceId: Int,
+      seed: Int,
+      networkPolicy: MobileAdapterNetworkPolicy,
+  ): MobileAdapterConfiguration =
       MobileAdapterConfiguration(
           deviceId,
           ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { index ->
             (seed + index * 31).toByte()
           },
+          networkPolicy,
       )
+
+  private fun customPolicy(
+      dnsQueryName: String = "resolver.example.test",
+      resolverIpv4Address: String = "192.0.2.53",
+      resolverPort: Int = 53,
+      portMappings: Collection<MobileAdapterPortMapping> = emptyList(),
+  ): MobileAdapterNetworkPolicy.CustomServer =
+      MobileAdapterNetworkPolicy.CustomServer(
+          dnsQueryName,
+          resolverIpv4Address,
+          resolverPort,
+          portMappings,
+      )
+
+  private fun mutateAndResign(
+      original: ByteArray,
+      mutation: (ByteArray) -> Unit,
+  ): ByteArray {
+    val mutated = original.clone()
+    mutation(mutated)
+    val bodySize = mutated.size - SHA_256_BYTES
+    val digest = MessageDigest.getInstance("SHA-256").digest(mutated.copyOfRange(0, bodySize))
+    digest.copyInto(mutated, bodySize)
+    return mutated
+  }
 
   private fun backupPath(target: Path): Path {
     val digest =
@@ -373,5 +660,9 @@ class MobileAdapterConfigurationStoreTest {
       throw AtomicFileWriter.OwnerOnlyPermissionsException(
           "injected private permission preparation failure")
     }
+  }
+
+  companion object {
+    private const val SHA_256_BYTES = 32
   }
 }

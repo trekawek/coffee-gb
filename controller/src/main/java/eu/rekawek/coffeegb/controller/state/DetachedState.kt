@@ -582,7 +582,19 @@ internal object DetachedStateAdapter {
     if ((state.serialState === NullState) != (currentSerialState === NullState)) {
       throw StateApplyException("Detached serial state presence does not match the endpoint")
     }
-    StateGraph.validateCompatible(state.serialState, currentSerialState, "serial")
+    val candidateShape =
+        if (state.serialPeripheral == SerialPeripheralState.MOBILE_ADAPTER_GB) {
+          canonicalMobileAdapterSerialShape(state.serialState)
+        } else {
+          state.serialState
+        }
+    val currentShape =
+        if (state.serialPeripheral == SerialPeripheralState.MOBILE_ADAPTER_GB) {
+          canonicalMobileAdapterSerialShape(currentSerialState)
+        } else {
+          currentSerialState
+        }
+    StateGraph.validateCompatible(candidateShape, currentShape, "serial")
     validateSerialRuntime(session.serialEndpoint, state.serialRuntime)
     if (state.heldButtons.distinct().size != state.heldButtons.size) {
       throw StateApplyException("Detached held-button state contains duplicates")
@@ -693,6 +705,28 @@ internal object DetachedStateAdapter {
     }
   }
 
+  /**
+   * Compares the released offline and additive network state records through one structural shape.
+   * The detached value itself is never rewritten, so a decoded #351 StateFile still re-encodes
+   * byte-for-byte and restores through the endpoint's legacy record path.
+   */
+  private fun canonicalMobileAdapterSerialShape(value: StateValue): StateValue {
+    val endpoint = value as? RecordState ?: return value
+    if (endpoint.typeId != MOBILE_ADAPTER_ENDPOINT_STATE_ID) return value
+    val engineIndex = endpoint.fields.indexOfFirst { it.name == "engineState" }
+    if (engineIndex < 0) return value
+    val engine = endpoint.fields[engineIndex].value as? RecordState ?: return value
+    if (engine.typeId != MOBILE_ADAPTER_ENGINE_STATE_ID) return value
+    val canonicalEngine =
+        RecordState(
+            MOBILE_ADAPTER_NETWORK_ENGINE_STATE_ID,
+            engine.fields + StateField("externalIoAtCapture", BooleanState(false)),
+        )
+    val canonicalEndpointFields = endpoint.fields.toMutableList()
+    canonicalEndpointFields[engineIndex] = StateField("engineState", canonicalEngine)
+    return RecordState(MOBILE_ADAPTER_NETWORK_ENDPOINT_STATE_ID, canonicalEndpointFields)
+  }
+
   private val LEGACY_FIFO_RECORD_IDS by lazy {
     listOf(
             "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState",
@@ -706,8 +740,37 @@ internal object DetachedStateAdapter {
         .toSet()
   }
 
+  private val MOBILE_ADAPTER_ENGINE_STATE_ID by lazy {
+    requiredRecordId(MOBILE_ADAPTER_ENGINE_STATE)
+  }
+
+  private val MOBILE_ADAPTER_ENDPOINT_STATE_ID by lazy {
+    requiredRecordId(MOBILE_ADAPTER_ENDPOINT_STATE)
+  }
+
+  private val MOBILE_ADAPTER_NETWORK_ENGINE_STATE_ID by lazy {
+    requiredRecordId(MOBILE_ADAPTER_NETWORK_ENGINE_STATE)
+  }
+
+  private val MOBILE_ADAPTER_NETWORK_ENDPOINT_STATE_ID by lazy {
+    requiredRecordId(MOBILE_ADAPTER_NETWORK_ENDPOINT_STATE)
+  }
+
+  private fun requiredRecordId(className: String): Int =
+      StateTypeRegistry.recordClassNames.indexOf(className).plus(1).also { id ->
+        check(id > 0) { "State registry has no $className" }
+      }
+
   private const val GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyState"
   private const val LEGACY_GAMEBOY_ROOT = "eu.rekawek.coffeegb.core.Gameboy\$GameboyMemento"
+  private const val MOBILE_ADAPTER_ENGINE_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState"
+  private const val MOBILE_ADAPTER_ENDPOINT_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState"
+  private const val MOBILE_ADAPTER_NETWORK_ENGINE_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState"
+  private const val MOBILE_ADAPTER_NETWORK_ENDPOINT_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState"
 
   private fun Gameboy.RtcRuntimeState.toDetached(): CartridgeRtcRuntimeState =
       CartridgeRtcRuntimeState(primary.toDetached(), slot.toDetached())
@@ -1197,6 +1260,10 @@ internal object StateGraph {
           "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState" to
               "responsePacket",
           "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState" to
+              "acknowledgement",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState" to
+              "responsePacket",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState" to
               "acknowledgement",
           "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState" to "schedule",
           "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to

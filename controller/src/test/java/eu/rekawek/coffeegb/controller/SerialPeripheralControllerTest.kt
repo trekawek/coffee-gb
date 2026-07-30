@@ -8,6 +8,9 @@ import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralSelection
 import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralStatus
 import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralStatusEvent
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterDestinationPolicy
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterRuntimeAuthorization
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
@@ -24,6 +27,7 @@ import java.io.IOException
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertContentEquals
@@ -111,6 +115,229 @@ class SerialPeripheralControllerTest {
       controller.close()
       eventBus.close()
     }
+  }
+
+  @Test
+  fun mobileConfigurationRefreshRejectsOlderProviderStateAndCommitsOnlyNewestRevision() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val statuses = LinkedBlockingQueue<SerialPeripheralStatusEvent>()
+    val selections =
+        LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>()
+    val networkStatuses =
+        LinkedBlockingQueue<Controller.MobileAdapterNetworkStatusEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<SerialPeripheralStatusEvent>(statuses::add)
+    eventBus.register<Controller.SerialPeripheralSelectionChangedEvent>(selections::add)
+    eventBus.register<Controller.MobileAdapterNetworkStatusEvent>(networkStatuses::add)
+    val supplied = AtomicReference(mobileConfiguration(1))
+    val controller =
+        BasicController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            RomSessionPreparer(),
+            Controller.MobileAdapterConfigurationProvider { supplied.get() },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(ROM))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(
+          SerialPeripheralSelection.PEER_TO_PEER,
+          selections.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.selection,
+      )
+      assertStatus(statuses, SerialPeripheralSelection.PEER_TO_PEER, SerialPeripheralStatus.ATTACHED)
+
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertStatus(statuses, SerialPeripheralSelection.PEER_TO_PEER, SerialPeripheralStatus.DETACHED)
+      assertEquals(
+          SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          selections.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.selection,
+      )
+      assertStatus(
+          statuses,
+          SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          SerialPeripheralStatus.ATTACHED,
+      )
+      val initial = assertNotNull(networkStatuses.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(1, initial.policyRevision)
+      assertEquals(Controller.MobileAdapterNetworkPhase.OFFLINE, initial.phase)
+
+      // A refresh token cannot authorize a provider snapshot older than that token. The current
+      // endpoint remains attached and no replacement status is published.
+      supplied.set(mobileConfiguration(2))
+      eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(3))
+      val rejected = assertNotNull(statuses.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(SerialPeripheralStatus.UNAVAILABLE, rejected.status)
+      assertEquals(SerialPeripheralError.CONFIGURATION_INVALID, rejected.error)
+      assertNull(selections.poll(200, TimeUnit.MILLISECONDS))
+      assertNull(networkStatuses.poll(200, TimeUnit.MILLISECONDS))
+
+      supplied.set(mobileConfiguration(4))
+      eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(3))
+      assertStatus(
+          statuses,
+          SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          SerialPeripheralStatus.ATTACHED,
+      )
+      val replacement = assertNotNull(networkStatuses.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(4, replacement.policyRevision)
+      assertTrue(replacement.attachmentId > initial.attachmentId)
+
+      // A delayed refresh at or below the committed revision is a no-op.
+      eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(3))
+      assertNull(statuses.poll(200, TimeUnit.MILLISECONDS))
+      assertNull(networkStatuses.poll(200, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun newerRefreshRevokesAuthorizedBackendBeforeProviderFailure() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val statuses = LinkedBlockingQueue<SerialPeripheralStatusEvent>()
+    val networkStatuses =
+        LinkedBlockingQueue<Controller.MobileAdapterNetworkStatusEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<SerialPeripheralStatusEvent>(statuses::add)
+    eventBus.register<Controller.MobileAdapterNetworkStatusEvent>(networkStatuses::add)
+    val backend =
+        MobileAdapterNetworkBackend(
+            MobileAdapterDestinationPolicy.offline(1),
+            MobileAdapterRuntimeAuthorization(true, true),
+        )
+    val providerFails = AtomicBoolean()
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    val configuration =
+        MobileAdapterConfiguration(
+            offline.deviceId,
+            offline.copyBytes(),
+            policyRevision = 1,
+            networkBackend = backend,
+            runtimeNetworkConsent = true,
+            runtimePrivateLocalDevelopment = true,
+        )
+    val controller =
+        BasicController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            RomSessionPreparer(),
+            Controller.MobileAdapterConfigurationProvider {
+              if (providerFails.get()) throw IllegalArgumentException("injected provider failure")
+              configuration
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(ROM))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertStatus(statuses, SerialPeripheralSelection.PEER_TO_PEER, SerialPeripheralStatus.ATTACHED)
+      eventBus.post(
+          Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertStatus(statuses, SerialPeripheralSelection.PEER_TO_PEER, SerialPeripheralStatus.DETACHED)
+      assertStatus(
+          statuses,
+          SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          SerialPeripheralStatus.ATTACHED,
+      )
+      assertEquals(
+          Controller.MobileAdapterNetworkPhase.READY,
+          networkStatuses.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.phase,
+      )
+
+      val authorizedGeneration = backend.generation()
+      providerFails.set(true)
+      eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(2))
+      val failed = assertNotNull(statuses.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(SerialPeripheralStatus.UNAVAILABLE, failed.status)
+      assertEquals(SerialPeripheralError.CONFIGURATION_INVALID, failed.error)
+      assertEquals(
+          MobileAdapterBackendPort.OfferResult.UNAVAILABLE,
+          backend.offer(
+              authorizedGeneration,
+              MobileAdapterBackendPort.BackendRequest(1, 0x28, "guest.example".encodeToByteArray()),
+          ),
+      )
+      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+      val observed = mutableListOf<Controller.MobileAdapterNetworkStatusEvent>()
+      while (System.nanoTime() < deadline &&
+          observed.none {
+            it.phase == Controller.MobileAdapterNetworkPhase.DISCONNECTED &&
+                it.disconnectReason == Controller.MobileAdapterDisconnectReason.POLICY_CHANGED
+          }) {
+        networkStatuses.poll(20, TimeUnit.MILLISECONDS)?.let(observed::add)
+      }
+      assertTrue(
+          observed.any {
+            it.phase == Controller.MobileAdapterNetworkPhase.DISCONNECTED &&
+                it.disconnectReason == Controller.MobileAdapterDisconnectReason.POLICY_CHANGED
+          })
+    } finally {
+      controller.close()
+      assertTrue(backend.awaitTermination(2_000))
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun mobileNetworkControlBurstUsesTwoConstantSpaceLatestValueSlots() {
+    val eventBus = EventBusImpl()
+    val controller = BasicController(eventBus, EmulatorProperties(), null)
+    var started = false
+    try {
+      repeat(10_000) { index ->
+        eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(index.toLong()))
+        eventBus.post(Controller.CancelMobileAdapterNetworkEvent)
+      }
+
+      val lane = controllerField(controller, "mobileAdapterControlLane") as MobileAdapterControlLane
+      val queued = controllerField(controller, "eventQueue") as eu.rekawek.coffeegb.controller.events.EventQueue
+      assertEquals(MobileAdapterControlLane.Pending(20_000, 19_999, 9_999), lane.snapshot())
+      assertFalse(
+          queued.anyEvent {
+            it is Controller.RefreshMobileAdapterConfigurationEvent ||
+                it is Controller.CancelMobileAdapterNetworkEvent
+          })
+
+      controller.startController()
+      started = true
+      val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+      while (lane.snapshot() != MobileAdapterControlLane.Pending.EMPTY &&
+          System.nanoTime() < deadline) {
+        Thread.sleep(1)
+      }
+      assertEquals(MobileAdapterControlLane.Pending.EMPTY, lane.snapshot())
+    } finally {
+      if (!started) controller.startController()
+      controller.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun mobileNetworkControlLanePreservesCancelAndRefreshOrder() {
+    val lane = MobileAdapterControlLane()
+
+    lane.offerCancel()
+    lane.offerRefresh(7)
+    val cancelThenRefresh = lane.drain()
+    assertTrue(cancelThenRefresh.cancelOrder < cancelThenRefresh.refreshOrder)
+    assertEquals(7, cancelThenRefresh.refreshRevision)
+
+    lane.offerRefresh(8)
+    lane.offerCancel()
+    val refreshThenCancel = lane.drain()
+    assertTrue(refreshThenCancel.refreshOrder < refreshThenCancel.cancelOrder)
+    assertEquals(8, refreshThenCancel.refreshRevision)
+    assertEquals(MobileAdapterControlLane.Pending.EMPTY, lane.drain())
   }
 
   @Test
@@ -730,6 +957,15 @@ class SerialPeripheralControllerTest {
       Controller.createGameboyConfig(EmulatorProperties(), Rom(ROM))
           .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
 
+  private fun mobileConfiguration(revision: Long): MobileAdapterConfiguration {
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    return MobileAdapterConfiguration(
+        offline.deviceId,
+        offline.copyBytes(),
+        policyRevision = revision,
+    )
+  }
+
   private fun feedEndpoint(
       endpoint: MobileAdapterSerialEndpoint,
       bytes: ByteArray,
@@ -804,6 +1040,12 @@ class SerialPeripheralControllerTest {
     val field = BasicController::class.java.getDeclaredField("eventBus")
     field.isAccessible = true
     return field.get(controller) as EventBusImpl
+  }
+
+  private fun controllerField(controller: BasicController, fieldName: String): Any? {
+    val field = BasicController::class.java.getDeclaredField(fieldName)
+    field.isAccessible = true
+    return field.get(controller)
   }
 
   @Suppress("UNCHECKED_CAST")

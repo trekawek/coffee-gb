@@ -42,6 +42,14 @@ enum class MobileAdapterConfigurationError(
       "STORAGE_WRITE_FAILED",
       "The Mobile Adapter configuration could not be saved.",
   ),
+  CONFIGURATION_BUSY(
+      "CONFIGURATION_BUSY",
+      "Another Mobile Adapter configuration save is already pending.",
+  ),
+  CONFIGURATION_STALE(
+      "CONFIGURATION_STALE",
+      "The Mobile Adapter policy changed while this edit was open.",
+  ),
   PERMISSION_HARDENING_FAILED(
       "PERMISSION_HARDENING_FAILED",
       "Private permissions could not be applied to the Mobile Adapter configuration.",
@@ -106,8 +114,8 @@ class MobileAdapterConfigurationStore(
   fun current(): MobileAdapterConfiguration = operationLock.withLock { lastGood }
 
   /**
-   * Loads one exact-size record. Missing storage uses the deterministic synthetic configuration;
-   * invalid storage uses either the last accepted value or that same fallback.
+   * Loads one strictly bounded versioned record. Missing storage uses the deterministic synthetic
+   * configuration; invalid storage uses either the last accepted value or that same fallback.
    */
   fun load(): MobileAdapterConfigurationLoadResult =
       operationLock.withLock {
@@ -193,12 +201,15 @@ class MobileAdapterConfigurationStore(
     // unsupported record can still contain private dial-up/account material, so decode failure
     // must not leave broadly readable permissions behind.
     hardenPermissions(candidate)
-    val encoded = ByteArray(MobileAdapterConfigurationCodec.ENCODED_SIZE)
     FileChannel.open(candidate, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { channel ->
-      if (channel.size() != encoded.size.toLong()) {
+      val encodedSize = channel.size()
+      if (encodedSize !in
+          MobileAdapterConfigurationCodec.MIN_ENCODED_SIZE.toLong()..
+              MobileAdapterConfigurationCodec.MAX_ENCODED_SIZE.toLong()) {
         throw MobileAdapterConfigurationFormatException(
             MobileAdapterConfigurationError.MALFORMED_FILE)
       }
+      val encoded = ByteArray(encodedSize.toInt())
       val output = ByteBuffer.wrap(encoded)
       var zeroReads = 0
       while (output.hasRemaining()) {
@@ -220,8 +231,8 @@ class MobileAdapterConfigurationStore(
         throw MobileAdapterConfigurationFormatException(
             MobileAdapterConfigurationError.MALFORMED_FILE)
       }
+      return MobileAdapterConfigurationCodec.decode(encoded)
     }
-    return MobileAdapterConfigurationCodec.decode(encoded)
   }
 
   private fun refuseNonRegularTarget() {

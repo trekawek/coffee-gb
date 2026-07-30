@@ -33,23 +33,201 @@ class MobileAdapterPortableStateTest {
           listOf(MOBILE_ENGINE_STATE, MOBILE_ENDPOINT_STATE),
           recordNames(root.serialState).sorted(),
       )
+      val legacyEngine = checkNotNull(root.serialState.findRecord(MOBILE_ENGINE_STATE))
+      assertEquals(
+          listOf(
+              "phaseId",
+              "outcomeId",
+              "errorId",
+              "deviceId",
+              "packetBuffer",
+              "packetCount",
+              "expectedPacketBytes",
+              "configuration",
+              "responsePacket",
+              "acknowledgement",
+              "idlePhaseUnits",
+              "serialByteObserved",
+              "pendingPacketSlots",
+          ),
+          legacyEngine.fields.map(StateField::name),
+      )
       val encoded = StateCodec.encode(file)
       assertEquals(file, StateCodec.decode(encoded))
 
       feed(endpoint, begin.copyOfRange(6, begin.size))
       val expected = endpoint.snapshot()
-      assertEquals(
-          MobileAdapterBackendPort.OfferResult.ACCEPTED,
-          backend.offer(
-              backend.generation(),
-              MobileAdapterBackendPort.BackendRequest(7, 0x42, byteArrayOf(1, 2, 3))),
-      )
+      feed(endpoint, packet(0x23, byteArrayOf(127, 0, 0, 1, 0, 80)))
+      assertTrue(endpoint.hasExternalIo())
 
       StateCodec.decodeAndApply(encoded, session)
       assertEquals(1, backend.cancellations)
       assertEquals(0, backend.occupiedRequestSlots())
       feed(endpoint, begin.copyOfRange(6, begin.size))
       assertEngineResultEquals(expected, endpoint.snapshot())
+    }
+  }
+
+  @Test
+  fun pendingLimitRoundTripsForDirectReservationAndBackendSubmission() {
+    val endpoint = endpoint()
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      assertTrue(endpoint.reservePendingPacketSlot())
+      assertTrue(endpoint.reservePendingPacketSlot())
+      assertTrue(!endpoint.reservePendingPacketSlot())
+      val direct = endpoint.snapshot()
+      assertTrue(direct.acknowledgement().isEmpty())
+      StateCodec.decodeAndApply(StateCodec.encode(StateCodec.capture(session)), session)
+      assertEngineResultEquals(direct, endpoint.snapshot())
+
+      endpoint.completePendingPacketSlot()
+      endpoint.completePendingPacketSlot()
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      assertTrue(endpoint.reservePendingPacketSlot())
+      assertTrue(endpoint.reservePendingPacketSlot())
+      feed(endpoint, packet(0x28, "fixture.test".encodeToByteArray()))
+      val submitted = endpoint.snapshot()
+      assertEquals(MobileAdapterEngine.Outcome.PENDING_LIMIT, submitted.outcome())
+      assertEquals(MobileAdapterEngine.ErrorCode.PENDING_LIMIT, submitted.error())
+      assertContentEquals(byteArrayOf(0x88.toByte(), 0xf2.toByte()), submitted.acknowledgement())
+      assertTrue(submitted.responsePacket().isEmpty())
+      StateCodec.decodeAndApply(StateCodec.encode(StateCodec.capture(session)), session)
+      assertEngineResultEquals(submitted, endpoint.snapshot())
+    }
+  }
+
+  @Test
+  fun openExternalIoWithAPartialPacketCapturesAsAServiceFreeDisconnectedMarker() {
+    val backend = TrackingBackend()
+    val endpoint = endpoint(backend)
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feed(endpoint, packet(0x23, byteArrayOf(127, 0, 0, 1, 0, 80)))
+      assertEquals(
+          MobileAdapterBackendPort.CompletionResult.COMPLETED,
+          backend.complete(backend.generation(), 0, byteArrayOf(0)),
+      )
+      assertEquals(
+          MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+          endpoint.pollBackendCompletion().outcome(),
+      )
+      assertTrue(endpoint.hasExternalIo())
+      val transfer = packet(0x15, byteArrayOf(0, 1, 2))
+      feed(endpoint, transfer.copyOf(6))
+      assertEquals(6, endpoint.snapshot().retainedBytes())
+
+      val file = StateCodec.capture(session)
+      val capturedSession = (file.root as SessionStateRoot).session
+      val capturedEngine =
+          checkNotNull(
+              capturedSession.serialState.findRecord(MOBILE_NETWORK_ENGINE_STATE))
+      assertEquals(
+          listOf(MOBILE_NETWORK_ENGINE_STATE, MOBILE_NETWORK_ENDPOINT_STATE),
+          recordNames(capturedSession.serialState).sorted(),
+      )
+      assertEquals(Int32State(23), capturedEngine.field("outcomeId"))
+      assertEquals(Int32State(12), capturedEngine.field("errorId"))
+      assertEquals(BytesState(byteArrayOf()), capturedEngine.field("responsePacket"))
+      assertEquals(BytesState(byteArrayOf()), capturedEngine.field("acknowledgement"))
+      assertEquals(Int32State(6), capturedEngine.field("packetCount"))
+      assertEquals(Int32State(0), capturedEngine.field("pendingPacketSlots"))
+      assertEquals(BooleanState(true), capturedEngine.field("externalIoAtCapture"))
+
+      endpoint.disconnect()
+      StateCodec.decodeAndApply(StateCodec.encode(file), session)
+
+      assertEquals(2, backend.cancellations)
+      assertEquals(0, backend.occupiedRequestSlots())
+      assertEquals(
+          MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+          endpoint.snapshot().outcome(),
+      )
+      assertEquals(
+          MobileAdapterEngine.ErrorCode.EXTERNAL_IO_DISCONNECTED,
+          endpoint.snapshot().error(),
+      )
+      assertEquals(6, endpoint.snapshot().retainedBytes())
+      assertTrue(endpoint.snapshot().responsePacket().isEmpty())
+      assertTrue(endpoint.snapshot().acknowledgement().isEmpty())
+
+      feed(endpoint, transfer.copyOfRange(6, transfer.size))
+      assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, endpoint.snapshot().outcome())
+      assertEquals(
+          MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID,
+          endpoint.snapshot().error(),
+      )
+      assertEquals(0, backend.occupiedRequestSlots())
+    }
+  }
+
+  @Test
+  fun malformedExternalIoMarkerRejectsBeforeEndpointOrBackendMutation() {
+    val backend = TrackingBackend()
+    val endpoint = endpoint(backend)
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feed(endpoint, packet(0x23, byteArrayOf(127, 0, 0, 1, 0, 80)))
+      val file = StateCodec.capture(session)
+      val before = session.captureDetachedState()
+      val corruptions =
+          listOf(
+              "marker" to ("externalIoAtCapture" to BooleanState(false)),
+              "phase" to ("phaseId" to Int32State(1)),
+              "outcome" to ("outcomeId" to Int32State(1)),
+              "error" to ("errorId" to Int32State(0)),
+              "response" to
+                  ("responsePacket" to
+                      BytesState(packet(0x28 or 0x80, byteArrayOf(1, 2, 3, 4)))),
+          )
+
+      corruptions.forEach { (label, mutation) ->
+        val stages = mutableListOf<ApplyStage>()
+        val corrupted =
+            file.replaceMobileEngineField(
+                mutation.first,
+                mutation.second,
+                MOBILE_NETWORK_ENGINE_STATE,
+            )
+
+        val failure =
+            assertFailsWith<StateDecodeException>(label) {
+              StateCodec.decodeAndApply(StateCodec.encode(corrupted), session) { stages += it }
+            }
+
+        assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason, label)
+        assertTrue(stages.isEmpty(), label)
+        assertEquals(0, backend.cancellations, label)
+        assertEquals(1, backend.occupiedRequestSlots(), label)
+        assertEquals(before, session.captureDetachedState(), label)
+      }
+
+      val liveOwnership =
+          file
+              .replaceMobileEngineField(
+                  "externalIoAtCapture",
+                  BooleanState(false),
+                  MOBILE_NETWORK_ENGINE_STATE,
+              )
+              .replaceMobileEngineField(
+                  "outcomeId",
+                  Int32State(19),
+                  MOBILE_NETWORK_ENGINE_STATE,
+              )
+              .replaceMobileEngineField(
+                  "errorId",
+                  Int32State(0),
+                  MOBILE_NETWORK_ENGINE_STATE,
+              )
+      val stages = mutableListOf<ApplyStage>()
+      val failure =
+          assertFailsWith<StateDecodeException>("live backend ownership") {
+            StateCodec.decodeAndApply(StateCodec.encode(liveOwnership), session) { stages += it }
+          }
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason)
+      assertTrue(stages.isEmpty())
+      assertEquals(0, backend.cancellations)
+      assertEquals(1, backend.occupiedRequestSlots())
+      assertEquals(before, session.captureDetachedState())
     }
   }
 
@@ -184,6 +362,7 @@ class MobileAdapterPortableStateTest {
   private fun StateFile.replaceMobileEngineField(
       fieldName: String,
       replacement: StateValue,
+      ownerClass: String = MOBILE_ENGINE_STATE,
   ): StateFile {
     val session = (root as SessionStateRoot).session
     return StateFile(
@@ -193,7 +372,7 @@ class MobileAdapterPortableStateTest {
                 session.machine,
                 session.serialPeripheral,
                 session.serialState.replaceRecordField(
-                    MOBILE_ENGINE_STATE,
+                    ownerClass,
                     fieldName,
                     replacement,
                 ),
@@ -249,6 +428,22 @@ class MobileAdapterPortableStateTest {
         is Int32MapState -> value.entries.flatMap { recordNames(it.value) }
         else -> emptyList()
       }
+
+  private fun StateValue.findRecord(ownerClass: String): RecordState? =
+      when (this) {
+        is RecordState ->
+            if (StateTypeRegistry.recordClassNames[typeId - 1] == ownerClass) this
+            else fields.asSequence().mapNotNull { it.value.findRecord(ownerClass) }.firstOrNull()
+        is ObjectArrayState ->
+            values.asSequence().mapNotNull { it.findRecord(ownerClass) }.firstOrNull()
+        is ListState ->
+            values.asSequence().mapNotNull { it.findRecord(ownerClass) }.firstOrNull()
+        is Int32MapState ->
+            entries.asSequence().mapNotNull { it.value.findRecord(ownerClass) }.firstOrNull()
+        else -> null
+      }
+
+  private fun RecordState.field(name: String): StateValue = fields.single { it.name == name }.value
 
   private fun StateValue.replaceRecordField(
       ownerClass: String,
@@ -315,5 +510,9 @@ class MobileAdapterPortableStateTest {
         "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState"
     const val MOBILE_ENDPOINT_STATE =
         "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState"
+    const val MOBILE_NETWORK_ENGINE_STATE =
+        "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState"
+    const val MOBILE_NETWORK_ENDPOINT_STATE =
+        "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState"
   }
 }

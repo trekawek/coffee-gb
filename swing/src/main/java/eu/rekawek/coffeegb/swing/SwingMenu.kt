@@ -98,6 +98,18 @@ internal class ManagedStateMenuAvailabilityBinding(
   }
 }
 
+internal fun mobileAdapterStateBoundaryMessage(event: Controller.MobileAdapterStateBoundaryEvent): String =
+    when (event.boundary) {
+        Controller.MobileAdapterStateBoundary.SAVE ->
+            "State saved. The current custom-server connection remains active, but loading this state will restore the Mobile Adapter disconnected."
+        Controller.MobileAdapterStateBoundary.LOAD ->
+            "Live Mobile Adapter custom-server work was disconnected while loading state. Host connections are never restored from state."
+        Controller.MobileAdapterStateBoundary.REWIND ->
+            "Live Mobile Adapter custom-server work was disconnected while rewinding. Host connections are never restored from state."
+        Controller.MobileAdapterStateBoundary.RESET ->
+            "Live Mobile Adapter custom-server work was disconnected while resetting. Host connections are never restored from state."
+      }
+
 internal class SwingMenu(
     private val properties: EmulatorProperties,
     private val window: JFrame,
@@ -115,6 +127,14 @@ internal class SwingMenu(
     private val onQuit: () -> Unit,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val isLinkedControllerActive: () -> Boolean,
+    private val onMobileAdapterConfiguration: () -> Unit = {
+      JOptionPane.showMessageDialog(
+          window,
+          mobileAdapterConfigurationUiState.detailsText(),
+          "Mobile Adapter GB configuration",
+          JOptionPane.INFORMATION_MESSAGE,
+      )
+    },
 ) {
 
   @Volatile private var stateSlot = 0
@@ -201,6 +221,21 @@ internal class SwingMenu(
       dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
         currentRomFileName = null
         currentRomTitle = null
+      }
+    }
+    eventBus.register<Controller.MobileAdapterStateBoundaryEvent> { event ->
+      dispatchSwingMutation {
+        JOptionPane.showMessageDialog(
+            window,
+            mobileAdapterStateBoundaryMessage(event),
+            "Mobile Adapter GB connection",
+            if (event.impact ==
+                Controller.MobileAdapterStateBoundaryImpact.SAVED_WITH_NON_RESTORABLE_IO) {
+              JOptionPane.INFORMATION_MESSAGE
+            } else {
+              JOptionPane.WARNING_MESSAGE
+            },
+        )
       }
     }
   }
@@ -696,15 +731,8 @@ internal class SwingMenu(
 
     val mobileAdapterDetails = JMenuItem("Mobile Adapter GB configuration…")
     mobileAdapterDetails.accessibleContext.accessibleDescription =
-        "Show the deterministic offline Mobile Adapter configuration and network boundary"
-    mobileAdapterDetails.addActionListener {
-      JOptionPane.showMessageDialog(
-          window,
-          mobileAdapterConfigurationUiState.detailsText(),
-          "Mobile Adapter GB configuration",
-          JOptionPane.INFORMATION_MESSAGE,
-      )
-    }
+        "Edit the private custom-service policy and session-only network permissions"
+    mobileAdapterDetails.addActionListener { onMobileAdapterConfiguration() }
     peripheralsMenu.add(mobileAdapterDetails)
 
     val arMenu = JMenu("Action Replay")

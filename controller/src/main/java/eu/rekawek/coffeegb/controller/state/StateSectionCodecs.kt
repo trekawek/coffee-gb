@@ -576,28 +576,37 @@ internal object StatePayloadSectionCodec {
   ) {
     if (peripheral == SerialPeripheralState.NONE) return
     val record = state as? RecordState ?: malformed("Serial state root is not a record")
-    val expectedName =
+    val expectedNames =
         when (peripheral) {
           SerialPeripheralState.NONE -> return
           SerialPeripheralState.BYTE_RECEIVER ->
-              "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.ByteReceivingSerialEndpoint\$ByteReceivingSerialEndpointState")
           SerialPeripheralState.PEER_TO_PEER ->
-              "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint\$Peer2PeerSerialEndpointState")
           SerialPeripheralState.PRINTER ->
-              "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint\$PrinterState")
           SerialPeripheralState.GPS_RECEIVER ->
-              "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint\$GpsReceiverState")
           SerialPeripheralState.BARCODE_BOY ->
-              "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint\$BarcodeBoyState")
           SerialPeripheralState.FOUR_PLAYER_ADAPTER ->
-              "eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState"
+              listOf("eu.rekawek.coffeegb.core.serial.FourPlayerAdapter\$AdapterState")
           SerialPeripheralState.MOBILE_ADAPTER_GB ->
-              "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState"
+              listOf(
+                  "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState",
+                  "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState",
+              )
         }
-    val expected = StateTypeRegistry.recordClassNames.indexOf(expectedName) + 1
-    if (expected == 0 || record.typeId != expected) {
+    val expected =
+        expectedNames.map { StateTypeRegistry.recordClassNames.indexOf(it) + 1 }.filter { it > 0 }
+    if (record.typeId !in expected) {
       malformed(
-          "Serial state type ${record.typeId} does not match $peripheral ($expected)")
+          "Serial state type ${record.typeId} does not match $peripheral (${expected.joinToString()})")
     }
   }
 

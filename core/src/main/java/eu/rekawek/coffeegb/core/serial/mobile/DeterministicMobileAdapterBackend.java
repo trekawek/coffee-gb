@@ -42,8 +42,9 @@ public final class DeterministicMobileAdapterBackend implements MobileAdapterBac
 
     @Override
     public CompletionResult complete(BackendGeneration completedGeneration, long requestId,
-                                     byte[] response) {
+                                     BackendStatus status, byte[] response) {
         Objects.requireNonNull(completedGeneration, "generation");
+        Objects.requireNonNull(status, "status");
         Objects.requireNonNull(response, "response");
         while (true) {
             BackendState current = state.get();
@@ -61,7 +62,8 @@ public final class DeterministicMobileAdapterBackend implements MobileAdapterBac
             List<BackendRequest> requests = new ArrayList<>(current.requests());
             requests.remove(requestIndex);
             List<BackendCompletion> completions = new ArrayList<>(current.completions());
-            completions.add(new BackendCompletion(requestId, response));
+            completions.add(new BackendCompletion(
+                    current.generation(), requestId, status, response));
             BackendState updated = new BackendState(current.generation(), requests, completions,
                     retainedWithoutRequest + response.length);
             if (state.compareAndSet(current, updated)) return CompletionResult.COMPLETED;
@@ -69,9 +71,11 @@ public final class DeterministicMobileAdapterBackend implements MobileAdapterBac
     }
 
     @Override
-    public BackendCompletion poll() {
+    public BackendCompletion poll(BackendGeneration expectedGeneration) {
+        Objects.requireNonNull(expectedGeneration, "expectedGeneration");
         while (true) {
             BackendState current = state.get();
+            if (expectedGeneration != current.generation()) return null;
             if (current.completions().isEmpty()) return null;
             BackendCompletion completion = current.completions().get(0);
             List<BackendCompletion> completions = new ArrayList<>(current.completions());

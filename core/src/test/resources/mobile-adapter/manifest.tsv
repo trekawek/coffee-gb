@@ -1,5 +1,5 @@
 path	sha256	kind	provenance	generator
-README.md	71d77cbd5e0126ac454a0556e0d588ae21124e0f30159a63a32cb96d5ce736c2	documentation	coffee-gb-phase-346	authored-contract-resource-guide
-commands.tsv	eb024783f0dcc001b8adeda3001f43de37d279b39d8a4c5c6ae5a813a94ed44b	evidence-registry	coffee-gb-phase-346	clean-room-command-inventory-v1
+README.md	0af2c7e7f4ad5985ccfc599977cacf9bae977fa058e6cfccc96227efcf94493a	documentation	coffee-gb-phase-346+352	authored-contract-resource-guide-v2
+commands.tsv	ecda19ffecec75dd201a6d5519e51498425bdc4618966ca4a97866ea615f1660	evidence-registry	coffee-gb-phase-346+352	clean-room-command-inventory-v2
 sources.tsv	a9d68df475deda86b6b62acd8c3193b2df15fdf9ebc1c6d83073fcfb6c0c4aa8	evidence-registry	coffee-gb-phase-346	pinned-clean-room-source-inventory-v1
 transcripts.tsv	63dfe862547e5baab5ab50673a610d501aeeef8a83acac3e865f27cd0807648a	conformance-vector	coffee-gb-phase-346	MobileAdapterContractTest.packet-v1
