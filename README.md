@@ -353,6 +353,9 @@ and privacy/retention behavior are documented in
 Deterministic input recordings use the bounded, ROM-free `CGBR` container documented in
 [`docs/replay-format-v1.md`](docs/replay-format-v1.md); playback runs in a service-isolated session
 and reports the first mismatching subsystem checkpoint.
+The standalone, non-Swing [`coffee-gb-cli`](docs/headless-cli.md) turns those same safe-point APIs
+into strictly bounded `run` and `replay` commands with canonical JSON, PNG/WAV evidence, stable exit
+codes, and privacy-gated [diagnostic bundles](docs/diagnostic-bundle-v1.md).
 
 The working loop is deliberately evidence-based:
 

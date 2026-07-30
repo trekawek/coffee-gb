@@ -34,7 +34,7 @@ and any drift between the matrix and the production command registry.
 
 The model/clock decision inventory is
 [`controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv`](../controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv).
-Its 93 rows classify every matching production source file by stable symbol/context, current
+Its 104 rows classify every matching production source file by stable symbol/context, current
 consumer, model set, evidence, uncertainty, and the earliest owning #317 phase. The scanner covers
 `core`, `controller`, and `swing` production Java/Kotlin sources, ignores only package/import/comment
 lines, and compares the complete `(category, path, occurrence count)` map. A new match cannot be
@@ -45,22 +45,22 @@ part of the contract.
 
 | Category | Files | Normalized occurrences |
 | --- | ---: | ---: |
-| `HARDWARE_PROFILE` | 28 | 227 |
+| `HARDWARE_PROFILE` | 32 | 233 |
 | `GAMEBOY_TYPE` | 9 | 46 |
-| `CGB_FLAG` | 44 | 433 |
+| `CGB_FLAG` | 44 | 440 |
 | `SGB_FLAG` | 12 | 44 |
-| `CGB0` | 9 | 42 |
-| `BOOTSTRAP` | 17 | 121 |
-| `CLOCK` | 28 | 240 |
-| `SGB_BORDER` | 8 | 43 |
-| `MEALYBUG` | 10 | 48 |
-| `CODEBREAKER` | 9 | 56 |
+| `CGB0` | 10 | 44 |
+| `BOOTSTRAP` | 19 | 130 |
+| `CLOCK` | 34 | 268 |
+| `SGB_BORDER` | 9 | 44 |
+| `MEALYBUG` | 11 | 51 |
+| `CODEBREAKER` | 11 | 61 |
 | `ROM_MODEL` | 6 | 49 |
-| `PORTABLE_PROFILE` | 6 | 44 |
+| `PORTABLE_PROFILE` | 10 | 62 |
 
-The 93 files comprise 41 hardware-policy, 18 compatibility-adapter, 12 configuration, 10
-portable-state-adapter, 8 platform-adapter, and 4 legacy-importer rows. Sixty-four rows retain the
-completed profile foundation (#343), 22 consume the exact clock/timing contract established by
+The 104 files comprise 41 hardware-policy, 24 compatibility-adapter, 13 configuration, 13
+portable-state-adapter, 9 platform-adapter, and 4 legacy-importer rows. Sixty-nine rows retain the
+completed profile foundation (#343), 28 consume the exact clock/timing contract established by
 issue #344, four own MGB registry/portable/network identity decisions (#345), two SGB display or
 palette rows belong to command completion (#341), and Joypad multiplayer belongs to #342.
 

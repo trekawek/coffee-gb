@@ -24,6 +24,8 @@ page to that same owner-safe-point inspection.
 The Swing user interface built on this contract is documented separately in
 [desktop-debugger.md](desktop-debugger.md), including pane identity, keyboard controls, trace
 opt-in/loss reporting, persisted display preferences, and retained-state release.
+The non-Swing automation boundary is documented in [headless-cli.md](headless-cli.md); it uses the
+same owner-thread safe points and immutable inspection requests, never direct core access.
 
 ## Session publication and capabilities
 
@@ -818,4 +820,42 @@ TRACE3 [65414177,66026973,66206732,78676048,88771658,74038058,66899176]
 ALL1 [63413915,64196124,64467500,64003376,64319357,64128434,63824540]
 ALL2 [63481667,64172608,63428782,63038757,66162782,63948948,63092891]
 ALL3 [63794785,65321560,63531912,65126827,63834290,67567770,65774085]
+```
+
+### Phase 6 headless capture checked-in report
+
+Phase 6 adds one transient exact-sound-output observer for deterministic WAV capture. With no
+observer attached, `Sound.play()` executes one null branch and constructs no callback or sample
+object. The disabled benchmark above still reaches that branch on every tick even after it turns
+NR52 off, so it directly measures the new normal-run cost.
+
+The following adjacent baseline/candidate comparison was taken on 2026-07-30. The baseline is
+`5ae76d881106524a1483a987a3bacdad35da5e1c`; the candidate is the complete Phase 6 working tree on
+that commit before its final SHA existed. Both sides used Java 21.0.1 HotSpot, Maven 3.8.6, Linux
+7.0.0-28-generic, an Intel Core i7-1165G7, the `powersave` governor, and 8 available processors.
+
+| Field | Baseline | Candidate |
+|---|---:|---:|
+| Fresh-fork median ticks/s, run 1 | 16,551,162.613 | 16,572,071.075 |
+| Fresh-fork median ticks/s, run 2 | 16,671,198.843 | 16,508,682.700 |
+| Fresh-fork median ticks/s, run 3 | 16,470,507.751 | 16,439,523.037 |
+| Median of fresh-fork medians | 16,551,162.613 | 16,508,682.700 |
+| Allocated bytes in every fork | 1,200,128,600 | 1,200,128,600 |
+| Allocated bytes per million ticks | 26,669,524.444 | 26,669,524.444 |
+
+The median-of-medians throughput regression is **0.2567%**, passing the at-most-1% disabled-path
+budget. Every baseline and candidate fork reported the identical nine-sample allocation vector,
+so the observer branch adds zero allocation proportional to tick or instruction count. The
+focused `SoundOutputObserverTest` separately measures the isolated warmed `play()` branch and
+requires a zero-byte sample.
+
+Raw sample times in nanoseconds:
+
+```text
+BASE1 [306008601,306299119,302093582,301898490,303343167,298940624,299810727,299492907,303339843]
+BASE2 [296663825,298175036,299918443,307425906,303923970,300138547,300373551,299133296,299787213]
+BASE3 [299154148,307680942,310846054,303211458,303572912,301703448,298763295,305006732,310361514]
+CAND1 [292902628,294893470,305606117,301078595,301712440,311006412,305760553,302529926,300768294]
+CAND2 [298371504,304882509,300448513,303596417,300619384,303765044,305246746,302870925,302451490]
+CAND3 [319535447,314441654,296733445,298833935,301084559,304145077,299551448,305553592,307173116]
 ```
