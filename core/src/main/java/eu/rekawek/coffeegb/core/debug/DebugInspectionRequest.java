@@ -1,12 +1,20 @@
 package eu.rekawek.coffeegb.core.debug;
 
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
+
+import java.util.Collections;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
-/** Bounded set of register-relative and explicit ranges copied at one debugger safe point. */
+/** Bounded memory, peripheral, and trace views copied at one debugger safe point. */
 public record DebugInspectionRequest(
         List<DebugAnchoredMemoryRequest> anchoredRequests,
-        List<DebugMemoryRequest> memoryRequests) {
+        List<DebugMemoryRequest> memoryRequests,
+        Set<DebugInspectionSection> sections,
+        Optional<TraceReadRequest> traceRequest) {
 
     public static final int MAX_BLOCKS = 16;
 
@@ -15,8 +23,15 @@ public record DebugInspectionRequest(
     public DebugInspectionRequest {
         Objects.requireNonNull(anchoredRequests, "anchoredRequests");
         Objects.requireNonNull(memoryRequests, "memoryRequests");
+        Objects.requireNonNull(sections, "sections");
+        Objects.requireNonNull(traceRequest, "traceRequest");
         anchoredRequests = List.copyOf(anchoredRequests);
         memoryRequests = List.copyOf(memoryRequests);
+        EnumSet<DebugInspectionSection> sectionCopy = sections.isEmpty()
+                ? EnumSet.noneOf(DebugInspectionSection.class)
+                : EnumSet.copyOf(sections);
+        sections = Collections.unmodifiableSet(sectionCopy);
+        traceRequest.ifPresent(request -> Objects.requireNonNull(request, "trace request"));
         if (anchoredRequests.size() + memoryRequests.size() > MAX_BLOCKS) {
             throw new IllegalArgumentException("Inspection request exceeds the block limit");
         }
@@ -35,6 +50,21 @@ public record DebugInspectionRequest(
             throw new IllegalArgumentException(
                     "Inspection request exceeds the aggregate byte limit");
         }
+    }
+
+    /** Compatibility constructor for callers that only request snapshot-relative memory. */
+    public DebugInspectionRequest(
+            List<DebugAnchoredMemoryRequest> anchoredRequests,
+            List<DebugMemoryRequest> memoryRequests) {
+        this(anchoredRequests, memoryRequests, Set.of(), Optional.empty());
+    }
+
+    /** Convenience constructor for peripheral inspection without a trace cursor read. */
+    public DebugInspectionRequest(
+            List<DebugAnchoredMemoryRequest> anchoredRequests,
+            List<DebugMemoryRequest> memoryRequests,
+            Set<DebugInspectionSection> sections) {
+        this(anchoredRequests, memoryRequests, sections, Optional.empty());
     }
 
     public int blockCount() {

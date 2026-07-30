@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugRegisters
 import eu.rekawek.coffeegb.core.debug.DebugResult
@@ -22,6 +23,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
 import java.util.EnumSet
+import java.util.Optional
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -44,6 +46,11 @@ class AgentTest {
   @Test
   fun headlessInspectionBindsPcStackAndMemoryToOneSnapshot() {
     Agent(testRom(0x3e, 0x7b, 0x00)).use { agent ->
+      assertTrue(
+          awaitDebug(
+                  agent.debugPort.configureTrace(
+                      TraceConfiguration(8, EnumSet.of(TraceCategory.CPU))))
+              .isSuccess)
       val request =
           DebugInspectionRequest(
               listOf(
@@ -51,6 +58,8 @@ class AgentTest {
                   DebugAnchoredMemoryRequest(DebugInspectionAnchor.STACK_POINTER, -2, 2),
               ),
               listOf(DebugMemoryRequest(DebugAddressSpace.HIGH_RAM, 0xff80, 1)),
+              EnumSet.allOf(DebugInspectionSection::class.java),
+              Optional.of(TraceReadRequest.initial(8)),
           )
 
       val result = awaitDebug(agent.debugPort.inspect(request))
@@ -68,6 +77,9 @@ class AgentTest {
           inspection.anchoredBlocks()[1].startAddress(),
       )
       assertEquals(request, inspection.request())
+      assertTrue(inspection.graphics().isPresent)
+      assertTrue(inspection.audio().isPresent)
+      assertTrue(inspection.trace().isPresent)
     }
   }
 

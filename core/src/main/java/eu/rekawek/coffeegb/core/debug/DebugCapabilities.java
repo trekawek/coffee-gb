@@ -26,7 +26,9 @@ public record DebugCapabilities(
         Set<TraceCategory> traceCategories,
         int maxTraceCapacity,
         int maxTraceReadEntries,
-        DebugHistoryCapabilities history) {
+        DebugHistoryCapabilities history,
+        Set<DebugInspectionSection> inspectionSections,
+        int maxInspectionTraceEntries) {
 
     public DebugCapabilities {
         if (maxMemoryReadLength < 0 || maxMemoryReadLength > DebugMemoryRequest.MAX_LENGTH) {
@@ -71,6 +73,49 @@ public record DebugCapabilities(
                     "Trace categories and limits must agree");
         }
         Objects.requireNonNull(history, "history");
+
+        Objects.requireNonNull(inspectionSections, "inspectionSections");
+        EnumSet<DebugInspectionSection> inspectionCopy = inspectionSections.isEmpty()
+                ? EnumSet.noneOf(DebugInspectionSection.class)
+                : EnumSet.copyOf(inspectionSections);
+        inspectionSections = Collections.unmodifiableSet(inspectionCopy);
+        if (!inspectionSections.isEmpty() && (!snapshot || !memoryRead)) {
+            throw new IllegalArgumentException(
+                    "Peripheral inspection requires coherent inspection support");
+        }
+        if (maxInspectionTraceEntries < 0
+                || maxInspectionTraceEntries > maxTraceReadEntries) {
+            throw new IllegalArgumentException(
+                    "Invalid maximum coherent trace-read length: "
+                            + maxInspectionTraceEntries);
+        }
+        if (maxInspectionTraceEntries > 0
+                && (!snapshot || !memoryRead || traceCategories.isEmpty())) {
+            throw new IllegalArgumentException(
+                    "Coherent trace inspection requires snapshot and trace support");
+        }
+    }
+
+    /** Compatibility constructor for transports that predate peripheral inspection. */
+    public DebugCapabilities(
+            boolean pauseResume,
+            boolean snapshot,
+            boolean instructionStep,
+            boolean machineCycleStep,
+            boolean frameStep,
+            boolean memoryRead,
+            boolean buttonInput,
+            int maxMemoryReadLength,
+            Set<DebugBreakpointKind> breakpointKinds,
+            int maxBreakpoints,
+            Set<TraceCategory> traceCategories,
+            int maxTraceCapacity,
+            int maxTraceReadEntries,
+            DebugHistoryCapabilities history) {
+        this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
+                memoryRead, buttonInput, maxMemoryReadLength,
+                breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
+                maxTraceReadEntries, history, Set.of(), 0);
     }
 
     /** Compatibility constructor for transports that predate reverse history. */
@@ -91,7 +136,7 @@ public record DebugCapabilities(
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
                 memoryRead, buttonInput, maxMemoryReadLength,
                 breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
-                maxTraceReadEntries, DebugHistoryCapabilities.disabled());
+                maxTraceReadEntries, DebugHistoryCapabilities.disabled(), Set.of(), 0);
     }
 
     /** Compatibility constructor for transports that expose only the phase-one operations. */
@@ -106,7 +151,8 @@ public record DebugCapabilities(
             int maxMemoryReadLength) {
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
                 memoryRead, buttonInput, maxMemoryReadLength,
-                Set.of(), 0, Set.of(), 0, 0, DebugHistoryCapabilities.disabled());
+                Set.of(), 0, Set.of(), 0, 0, DebugHistoryCapabilities.disabled(),
+                Set.of(), 0);
     }
 
     public boolean supports(DebugStepKind kind) {
@@ -129,6 +175,14 @@ public record DebugCapabilities(
     public int maxInspectionBytes() {
         return coherentInspection()
                 ? Math.min(maxMemoryReadLength, DebugInspectionRequest.MAX_TOTAL_BYTES) : 0;
+    }
+
+    public boolean supportsInspection(DebugInspectionSection section) {
+        return inspectionSections.contains(Objects.requireNonNull(section, "section"));
+    }
+
+    public boolean coherentTraceInspection() {
+        return maxInspectionTraceEntries > 0;
     }
 
     public boolean breakpoints() {

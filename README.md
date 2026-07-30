@@ -347,6 +347,9 @@ fixed-capacity CPU/memory/interrupt traces with cursor-visible overwrite account
 inspection is deliberately limited to side-effect-free views, and the adapter exposes no live
 emulator objects or memory-write backdoor. The complete safe-point, breakpoint, trace, and
 performance contract is in [`docs/debug-port.md`](docs/debug-port.md).
+The modeless **Tools > Debugger** window, coherent panes, keyboard controls, bounded trace opt-in,
+and privacy/retention behavior are documented in
+[`docs/desktop-debugger.md`](docs/desktop-debugger.md).
 Deterministic input recordings use the bounded, ROM-free `CGBR` container documented in
 [`docs/replay-format-v1.md`](docs/replay-format-v1.md); playback runs in a service-isolated session
 and reports the first mismatching subsystem checkpoint.

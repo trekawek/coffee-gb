@@ -9,12 +9,18 @@ import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPosition;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryStatus;
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryTruncationReason;
 import eu.rekawek.coffeegb.core.debug.history.DebugReverseStepResult;
+import eu.rekawek.coffeegb.core.debug.trace.CpuInstructionTrace;
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
+import eu.rekawek.coffeegb.core.debug.trace.TraceEntry;
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
+import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
+import eu.rekawek.coffeegb.core.debug.trace.TraceSource;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -166,6 +172,135 @@ public class DebugApiModelTest {
     }
 
     @Test
+    public void peripheralInspectionPayloadsAreTypedOwnedAndBounded() {
+        byte[] source = new byte[DebugGraphicsInspection.VRAM_BANK_LENGTH];
+        source[0] = (byte) 0x91;
+        DebugByteData bank0 = new DebugByteData(source);
+        source[0] = 0;
+        assertEquals(0x91, bank0.unsignedByteAt(0));
+        assertThrows(IndexOutOfBoundsException.class,
+                () -> bank0.byteAt(DebugGraphicsInspection.VRAM_BANK_LENGTH));
+
+        DebugGraphicsInspection graphics = new DebugGraphicsInspection(
+                DebugGraphicsHardwareMode.CGB_NATIVE, 1,
+                0x91, 0xfc, 0xff, 0xff, 0x40, 0x40,
+                bank0,
+                new DebugByteData(new byte[DebugGraphicsInspection.VRAM_BANK_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.OAM_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.CGB_PALETTE_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.CGB_PALETTE_LENGTH]));
+        assertEquals(DebugGraphicsHardwareMode.CGB_NATIVE, graphics.hardwareMode());
+        assertEquals(1, graphics.selectedVramBank());
+        assertSame(bank0, graphics.vramBank0());
+
+        List<DebugAudioChannelInspection> channels = List.of(
+                audioChannel(1), audioChannel(2), audioChannel(3), audioChannel(4));
+        DebugAudioInspection audio = new DebugAudioInspection(
+                true, 3, 0x77, 0xf3, 0xf0, channels,
+                new DebugByteData(new byte[DebugAudioInspection.WAVE_RAM_LENGTH]));
+        assertEquals(channels, audio.channels());
+        assertThrows(UnsupportedOperationException.class, () -> audio.channels().clear());
+
+        assertThrows(IllegalArgumentException.class, () -> new DebugGraphicsInspection(
+                DebugGraphicsHardwareMode.DMG, 1,
+                0, 0, 0, 0, -1, -1,
+                bank0, new DebugByteData(new byte[0]),
+                new DebugByteData(new byte[DebugGraphicsInspection.OAM_LENGTH]),
+                new DebugByteData(new byte[0]), new DebugByteData(new byte[0])));
+        assertThrows(IllegalArgumentException.class, () -> new DebugGraphicsInspection(
+                DebugGraphicsHardwareMode.CGB_COMPATIBILITY, 1,
+                0, 0, 0, 0, 0, 0,
+                bank0,
+                new DebugByteData(new byte[DebugGraphicsInspection.VRAM_BANK_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.OAM_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.CGB_PALETTE_LENGTH]),
+                new DebugByteData(new byte[DebugGraphicsInspection.CGB_PALETTE_LENGTH])));
+        assertThrows(IllegalArgumentException.class, () -> new DebugAudioInspection(
+                true, 0, 0, 0, 0x80, channels, new DebugByteData(new byte[15])));
+    }
+
+    @Test
+    public void audioChannelInspectionUsesHardwareSpecificRegisterBounds() {
+        for (int channel : List.of(1, 2, 4)) {
+            assertEquals(64, audioChannel(channel, 64, 0).lengthCounter());
+            assertThrows(IllegalArgumentException.class,
+                    () -> audioChannel(channel, 65, 0));
+        }
+        assertEquals(256, audioChannel(3, 256, 0).lengthCounter());
+        assertThrows(IllegalArgumentException.class,
+                () -> audioChannel(3, 257, 0));
+
+        assertEquals(0x7f, audioChannel(1, 0, 0x7f).nr0());
+        assertEquals(0x80, audioChannel(3, 0, 0x80).nr0());
+        for (int channel : List.of(2, 4)) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> audioChannel(channel, 0, 1));
+        }
+    }
+
+    @Test
+    public void inspectionOptionalsMatchRequestedSectionsAndTracePage() {
+        EnumSet<DebugInspectionSection> sections =
+                EnumSet.allOf(DebugInspectionSection.class);
+        TraceReadRequest traceRequest = TraceReadRequest.initial(4);
+        DebugInspectionRequest request = new DebugInspectionRequest(
+                List.of(), List.of(), sections, Optional.of(traceRequest));
+        sections.clear();
+        assertEquals(EnumSet.allOf(DebugInspectionSection.class), request.sections());
+        assertEquals(0, request.blockCount());
+        assertEquals(0, request.totalBytes());
+        DebugInspectionRequest fullMemoryPlusFixedPayloads = new DebugInspectionRequest(
+                List.of(),
+                List.of(new DebugMemoryRequest(DebugAddressSpace.ROM, 0,
+                        DebugInspectionRequest.MAX_TOTAL_BYTES)),
+                EnumSet.allOf(DebugInspectionSection.class), Optional.of(traceRequest));
+        assertEquals(DebugInspectionRequest.MAX_TOTAL_BYTES,
+                fullMemoryPlusFixedPayloads.totalBytes());
+
+        DebugGraphicsInspection graphics = dmgGraphics();
+        DebugAudioInspection audio = audioInspection();
+        TraceReadResult trace = new TraceReadResult(List.of(), -1, 0, 0, 0, 0);
+        DebugInspectionResult result = new DebugInspectionResult(
+                snapshot(true), request, List.of(), List.of(),
+                Optional.of(graphics), Optional.of(audio), Optional.of(trace));
+        assertSame(graphics, result.graphics().orElseThrow());
+        assertSame(audio, result.audio().orElseThrow());
+        assertSame(trace, result.trace().orElseThrow());
+
+        assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
+                snapshot(true), request, List.of(), List.of(),
+                Optional.empty(), Optional.of(audio), Optional.of(trace)));
+    }
+
+    @Test
+    public void inspectionTracePageCannotReuseOrMoveBehindItsRequestCursor() {
+        TraceReadRequest traceRequest = new TraceReadRequest(5, 4);
+        DebugInspectionRequest request = new DebugInspectionRequest(
+                List.of(), List.of(), EnumSet.noneOf(DebugInspectionSection.class),
+                Optional.of(traceRequest));
+        TraceEntry staleEntry = new TraceEntry(
+                5, 10, TraceSource.CPU, new CpuInstructionTrace(0x100, 0, -1));
+        TraceReadResult stalePage = new TraceReadResult(
+                List.of(staleEntry), 5, 0, 0, 0, 6);
+        assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
+                snapshot(true), request, List.of(), List.of(),
+                Optional.empty(), Optional.empty(), Optional.of(stalePage)));
+
+        TraceReadResult backwardsEmptyPage = new TraceReadResult(
+                List.of(), 4, 0, 0, 0, 6);
+        assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
+                snapshot(true), request, List.of(), List.of(),
+                Optional.empty(), Optional.empty(), Optional.of(backwardsEmptyPage)));
+
+        TraceReadResult stationaryEmptyPage = new TraceReadResult(
+                List.of(), 5, 0, 0, 0, 6);
+        DebugInspectionResult result = new DebugInspectionResult(
+                snapshot(true), request, List.of(), List.of(),
+                Optional.empty(), Optional.empty(), Optional.of(stationaryEmptyPage));
+        assertSame(stationaryEmptyPage, result.trace().orElseThrow());
+    }
+
+    @Test
     public void snapshotIsCoherentDetachedValueData() {
         DebugSnapshot snapshot = snapshot(true);
         assertEquals(7, snapshot.sessionGeneration());
@@ -231,6 +366,8 @@ public class DebugApiModelTest {
         assertEquals(DebugInspectionRequest.MAX_BLOCKS, capabilities.maxInspectionBlocks());
         assertEquals(4096, capabilities.maxInspectionBytes());
         assertEquals(DebugHistoryCapabilities.disabled(), capabilities.history());
+        assertTrue(capabilities.inspectionSections().isEmpty());
+        assertFalse(capabilities.coherentTraceInspection());
 
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
@@ -459,6 +596,29 @@ public class DebugApiModelTest {
     }
 
     @Test
+    public void capabilitiesNegotiatePeripheralAndCoherentTraceInspection() {
+        EnumSet<DebugInspectionSection> sections =
+                EnumSet.allOf(DebugInspectionSection.class);
+        DebugCapabilities capabilities = new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.noneOf(DebugBreakpointKind.class), 0,
+                EnumSet.of(TraceCategory.CPU), 16, 8,
+                DebugHistoryCapabilities.disabled(), sections, 4);
+        sections.clear();
+
+        assertTrue(capabilities.supportsInspection(DebugInspectionSection.GRAPHICS));
+        assertTrue(capabilities.supportsInspection(DebugInspectionSection.AUDIO));
+        assertTrue(capabilities.coherentTraceInspection());
+        assertEquals(4, capabilities.maxInspectionTraceEntries());
+        assertThrows(IllegalArgumentException.class, () -> new DebugCapabilities(
+                true, true, true, false, true, true, true, 4096,
+                EnumSet.noneOf(DebugBreakpointKind.class), 0,
+                EnumSet.of(TraceCategory.CPU), 16, 8,
+                DebugHistoryCapabilities.disabled(),
+                EnumSet.of(DebugInspectionSection.GRAPHICS), 9));
+    }
+
+    @Test
     public void breakpointHitRequiresAPausedSnapshotAtOrAfterTheMatch() {
         DebugBreakpointId id = new DebugBreakpointId(5);
         DebugBreakpointHit hit = new DebugBreakpointHit(id, 1234, snapshot(true));
@@ -508,6 +668,36 @@ public class DebugApiModelTest {
     private static DebugRegisters registers() {
         return new DebugRegisters(0x12, 0xa0, 0x34, 0x56, 0x78, 0x9a,
                 0xbc, 0xde, 0xfffe, 0x100);
+    }
+
+    private static DebugGraphicsInspection dmgGraphics() {
+        return new DebugGraphicsInspection(
+                DebugGraphicsHardwareMode.DMG, 0,
+                0x91, 0xfc, 0xff, 0xff, -1, -1,
+                new DebugByteData(new byte[DebugGraphicsInspection.VRAM_BANK_LENGTH]),
+                new DebugByteData(new byte[0]),
+                new DebugByteData(new byte[DebugGraphicsInspection.OAM_LENGTH]),
+                new DebugByteData(new byte[0]),
+                new DebugByteData(new byte[0]));
+    }
+
+    private static DebugAudioInspection audioInspection() {
+        return new DebugAudioInspection(
+                true, 0, 0x77, 0, 0xf0,
+                List.of(audioChannel(1), audioChannel(2),
+                        audioChannel(3), audioChannel(4)),
+                new DebugByteData(new byte[DebugAudioInspection.WAVE_RAM_LENGTH]));
+    }
+
+    private static DebugAudioChannelInspection audioChannel(int channel) {
+        return audioChannel(channel, 0, 0);
+    }
+
+    private static DebugAudioChannelInspection audioChannel(
+            int channel, int lengthCounter, int nr0) {
+        return new DebugAudioChannelInspection(
+                channel, false, false, 0, lengthCounter, false,
+                nr0, 0, 0, 0, 0);
     }
 
     private static DebugInterruptState interrupts() {

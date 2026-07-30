@@ -23,6 +23,15 @@ public class SoundMode3 extends AbstractSoundMode {
 
     private final Ram waveRam = new Ram(0xff30, 0x10);
 
+    byte[] copyDebugWaveRam() {
+        int[] source = waveRam.getSpace();
+        byte[] result = new byte[source.length];
+        for (int i = 0; i < source.length; i++) {
+            result[i] = (byte) source[i];
+        }
+        return result;
+    }
+
     private final Timer timer;
 
     // counts 2 MHz APU cycles: the CH3 frequency counter is clocked by the 2 MHz APU

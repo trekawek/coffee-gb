@@ -51,6 +51,11 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
         return skipNextEdge || (step & 1) == 1;
     }
 
+    /** Owner-thread debugger view of the next sequencer step. */
+    int getDebugStep() {
+        return step;
+    }
+
     public void reset() {
         step = 0;
         skipNextEdge = false;

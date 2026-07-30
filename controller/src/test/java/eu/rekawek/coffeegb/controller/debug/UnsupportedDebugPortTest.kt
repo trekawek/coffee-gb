@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.debug
 
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
+import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
@@ -35,6 +36,9 @@ class UnsupportedDebugPortTest {
     assertTrue(port.capabilities().traceCategories().isEmpty())
     assertEquals(0, port.capabilities().maxTraceCapacity())
     assertEquals(0, port.capabilities().maxTraceReadEntries())
+    assertTrue(port.capabilities().inspectionSections().isEmpty())
+    assertEquals(0, port.capabilities().maxInspectionTraceEntries())
+    assertFalse(port.capabilities().coherentTraceInspection())
     assertFalse(port.capabilities().history().checkpointHistory())
     assertFalse(port.capabilities().history().reverseFrame())
     assertFalse(port.capabilities().history().reverseInstruction())
@@ -42,6 +46,10 @@ class UnsupportedDebugPortTest {
     assertEquals(0, port.capabilities().history().maxMemoryBudgetBytes())
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.pause())
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.snapshot())
+    assertError(
+        DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+        port.inspect(DebugInspectionRequest(emptyList(), emptyList())),
+    )
     assertError(DebugErrorCode.UNSUPPORTED_TOPOLOGY, port.step(DebugStepKind.INSTRUCTION))
     assertError(
         DebugErrorCode.UNSUPPORTED_TOPOLOGY,

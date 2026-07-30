@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState
 import eu.rekawek.coffeegb.core.debug.DebugMapperState
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
@@ -41,6 +42,7 @@ import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import java.util.Collections
 import java.util.EnumSet
+import java.util.Optional
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -81,6 +83,25 @@ class QueuedDebugPortTest {
           DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
       )
       assertFailure(bounded.inspect(request), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          port.inspect(
+              DebugInspectionRequest(
+                  emptyList(),
+                  emptyList(),
+                  EnumSet.of(DebugInspectionSection.GRAPHICS),
+              )),
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+      )
+      assertFailure(
+          port.inspect(
+              DebugInspectionRequest(
+                  emptyList(),
+                  emptyList(),
+                  emptySet(),
+                  Optional.of(TraceReadRequest.initial(1)),
+              )),
+          DebugErrorCode.TRACE_LIMIT,
+      )
       assertEquals(0, port.outstandingRequestCount())
 
       val stage = port.inspect(request)

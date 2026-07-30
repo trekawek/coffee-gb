@@ -24,6 +24,7 @@ import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
@@ -51,6 +52,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.EnumSet
+import java.util.Optional
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -690,6 +692,9 @@ class BasicControllerDebugPortTest {
       assertTrue(port.capabilities().coherentInspection())
       assertEquals(16, port.capabilities().maxInspectionBlocks())
       assertEquals(4096, port.capabilities().maxInspectionBytes())
+      assertTrue(port.capabilities().supportsInspection(DebugInspectionSection.GRAPHICS))
+      assertTrue(port.capabilities().supportsInspection(DebugInspectionSection.AUDIO))
+      assertEquals(1024, port.capabilities().maxInspectionTraceEntries())
 
       val coherentRequest =
           DebugInspectionRequest(
@@ -725,6 +730,25 @@ class BasicControllerDebugPortTest {
           inspection.anchoredBlocks()[1].startAddress(),
       )
       assertEquals(4, inspection.memoryBlocks().single().length())
+
+      assertTrue(
+          await(
+                  port.configureTrace(
+                      TraceConfiguration(8, EnumSet.of(TraceCategory.CPU))))
+              .isSuccess)
+      val peripheralRequest =
+          DebugInspectionRequest(
+              emptyList(),
+              emptyList(),
+              EnumSet.allOf(DebugInspectionSection::class.java),
+              Optional.of(TraceReadRequest.initial(8)),
+          )
+      val peripheralInspection = await(port.inspect(peripheralRequest)).value()
+      assertTrue(peripheralInspection.graphics().isPresent)
+      assertTrue(peripheralInspection.audio().isPresent)
+      assertTrue(peripheralInspection.trace().isPresent)
+      assertEquals(0x2000, peripheralInspection.graphics().orElseThrow().vramBank0().length())
+      assertEquals(4, peripheralInspection.audio().orElseThrow().channels().size)
 
       val unsafePcOffset = 0x8000 - inspection.snapshot().registers().pc()
       val unsafeInspection =
