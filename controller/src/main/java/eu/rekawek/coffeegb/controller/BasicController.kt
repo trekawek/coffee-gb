@@ -565,7 +565,11 @@ class BasicController private constructor(
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.PROTOCOL_RESET)
       }
       session?.config?.rom?.image?.let {
-        requestLoad(properties, Controller.LoadRomEvent(it), clearPatches = false)
+        requestLoad(
+            properties,
+            Controller.LoadRomEvent(it, allowAutosaveResume = false),
+            clearPatches = false,
+        )
       }
     }
     eventQueue.register<Controller.StopEmulationEvent> {
@@ -3029,7 +3033,7 @@ class BasicController private constructor(
 
     try {
       committedSession.activate()
-      start(job.event.openRequestId)
+      start(job.event.openRequestId, job.event.allowAutosaveResume)
       if (pauseStateBeforeResume != null) {
         // start() acquired the resume-scan pause for the new session. Carry the loading workflow's
         // desired user state underneath it without releasing either pause owner.
@@ -3640,7 +3644,10 @@ class BasicController private constructor(
     }
   }
 
-  private fun start(openRequestId: Long? = null) {
+  private fun start(
+      openRequestId: Long? = null,
+      allowAutosaveResume: Boolean = true,
+  ) {
     val session = session ?: return
 
     isPaused = false
@@ -3726,7 +3733,8 @@ class BasicController private constructor(
             context?.workspace?.activeGameDirectory(),
             stateUnavailableReason,
         ))
-    if (context != null &&
+    if (allowAutosaveResume &&
+        context != null &&
         properties.saves.resumePolicy !=
             eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER) {
       acquireResumePause()

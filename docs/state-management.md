@@ -127,6 +127,9 @@ On the next launch of the same ROM, resume policy can be:
 - **Ask** — offer to resume or start normally.
 - **Always** — load a valid autosave automatically.
 
+Choosing **Reset** is always a fresh boot of the current ROM; it neither loads nor offers its
+autosave.
+
 Only the active directory receives a new autosave. An existing autosave may be discovered in a
 fallback root, which makes a directory change reversible.
 
