@@ -921,7 +921,6 @@ internal class PreferencesPanel private constructor(
             savesEditor.rewindEnabled.isSelected,
             spinnerText(savesEditor.rewindSeconds),
             spinnerText(savesEditor.rewindMemory),
-            savesEditor.autosave.selectedItem,
             savesEditor.resume.selectedItem,
             systemEditor.dmgGamesProfile.selectedItem,
             systemEditor.cgbGamesProfile.selectedItem,

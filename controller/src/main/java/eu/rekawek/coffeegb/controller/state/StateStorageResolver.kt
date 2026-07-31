@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.memory.cart.Rom
 import java.nio.file.Path
 
 data class StateStoragePaths(
@@ -33,8 +34,30 @@ object StateStorageResolver {
         requireNotNull(configuration.rom.file) {
           "Desktop state storage requires a file-backed ROM"
         }
-    val romIdentity = identity.primaryRom.hex()
-    val defaultRoot = defaultRoot(romFile.toPath())
+    return resolve(saves, romFile.toPath(), identity.primaryRom.hex())
+  }
+
+  /**
+   * Resolves the managed workspace for an unopened recent ROM. This is intentionally separate
+   * from machine-state compatibility: Home only needs the hash-bound autosave preview.
+   */
+  fun resolve(
+      saves: ApplicationSettings.Saves,
+      rom: Rom,
+  ): StateStoragePaths {
+    val romFile =
+        requireNotNull(rom.file) {
+          "Desktop state storage requires a file-backed ROM"
+        }
+    return resolve(saves, romFile.toPath(), StateIdentity.hash(rom).hex())
+  }
+
+  private fun resolve(
+      saves: ApplicationSettings.Saves,
+      romPath: Path,
+      romIdentity: String,
+  ): StateStoragePaths {
+    val defaultRoot = defaultRoot(romPath)
     val activeRoot = normalizeRoot(saves.directory ?: defaultRoot)
     val layout = StateStorageLayout(gameDirectory(activeRoot, romIdentity))
     val fallbacks =

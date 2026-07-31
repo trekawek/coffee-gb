@@ -112,6 +112,35 @@ class StateWorkspaceTest {
   }
 
   @Test
+  fun `autosave thumbnail follows the authoritative active or fallback state`() {
+    val fixture = fixture()
+    val active = StateStorageLayout(Files.createTempDirectory("workspace-preview-active"))
+    val fallback = StateStorageLayout(Files.createTempDirectory("workspace-preview-fallback"))
+    val preview = StateImage(2, 1, intArrayOf(0x112233, 0xaabbcc)).thumbnail()
+    StateRepository(fallback)
+        .saveWithThumbnail(
+            StateRef.Autosave,
+            fixture.bytes,
+            StateSaveMetadata("fallback autosave", SAVE_TIME),
+            StatePngCodec.encode(preview),
+        )
+    val workspace =
+        StateWorkspace(
+            StateStoragePaths(active, active.screenshotsDirectory, listOf(fallback)))
+
+    assertEquals(preview, workspace.autosaveThumbnail())
+
+    StateRepository(active)
+        .save(
+            StateRef.Autosave,
+            fixture.bytes,
+            StateSaveMetadata("active autosave", SAVE_TIME.plusSeconds(1)),
+        )
+
+    assertNull(workspace.autosaveThumbnail())
+  }
+
+  @Test
   fun `thumbnail is hash-bound and a later thumbnail-free save removes the old asset`() {
     val fixture = fixture()
     val layout = StateStorageLayout(Files.createTempDirectory("workspace-thumbnail"))

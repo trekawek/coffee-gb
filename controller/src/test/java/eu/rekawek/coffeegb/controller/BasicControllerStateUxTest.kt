@@ -22,6 +22,7 @@ import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.StatePngCodec
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.RecordState
@@ -73,6 +74,73 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerStateUxTest {
+
+  @Test
+  fun unloadingGameAlwaysWritesItsAutosaveThumbnail() {
+    val directory = Files.createTempDirectory("controller-stop-autosave-preview")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        // Legacy settings cannot opt out of the now-mandatory lifecycle save.
+                        autosavePolicy = ApplicationSettings.AutosavePolicy.DISABLED,
+                        resumePolicy = ApplicationSettings.ResumePolicy.NEVER,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val stopped = LinkedBlockingQueue<Controller.EmulationStoppedEvent>()
+    val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.EmulationStoppedEvent>(stopped::add)
+    eventBus.register<StateUxSessionEvent>(sessions::add)
+    val preview = StateImage(2, 1, intArrayOf(0x112233, 0xaabbcc))
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            RomSessionPreparer(),
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory.DEFAULT,
+            StateOperationWorkerFactory.DEFAULT,
+            autosaveThumbnailProvider = { preview },
+        )
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val gameDirectory = assertNotNull(sessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).gameDirectory
+
+      eventBus.post(Controller.StopEmulationEvent())
+      assertNotNull(stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+      val repository = StateRepository(StateStorageLayout(assertNotNull(gameDirectory)))
+      val autosave = repository.read(StateRef.Autosave)
+      val thumbnail =
+          StatePngCodec.decode(
+              assertNotNull(
+                  repository
+                      .readThumbnail(
+                          StateRef.Autosave,
+                          autosave.stateSha256,
+                          assertNotNull(autosave.metadata?.thumbnailSha256),
+                      )
+                      .copyBytes()))
+      assertEquals(preview.thumbnail(), thumbnail)
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
 
   @Test
   fun managedSessionStateRestoresPartialMobileAndReleasedMachineRootsCancelOnlyOnSuccess() {

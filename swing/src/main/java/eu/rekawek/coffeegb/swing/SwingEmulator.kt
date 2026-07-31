@@ -111,6 +111,7 @@ class SwingEmulator(
                 console,
                 DesktopStateExternalActions(),
                 mobileAdapterConfigurationProvider,
+                ::captureDisplayImage,
             )
             .also { it.startController() }
 
@@ -147,6 +148,7 @@ class SwingEmulator(
                 console,
                 DesktopStateExternalActions(),
                 mobileAdapterConfigurationProvider,
+                ::captureDisplayImage,
             )
             .also { it.startController() }
     linkedControllerActive = false

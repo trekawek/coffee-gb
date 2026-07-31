@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.state.StateImage
 import java.awt.Component
 import java.awt.Container
 import java.awt.Dimension
@@ -139,6 +140,25 @@ class DesktopMainPanelTest {
             it.accessibleContext.accessibleName?.startsWith("Open recent ROM") == true
           },
       )
+    }
+  }
+
+  @Test
+  fun `home shows a saved autosave thumbnail on its recent-game card`() {
+    onEdt {
+      val panel = panel(actions())
+      panel.updateRecentGames(
+          listOf(
+              DesktopRecentGame(
+                  Path.of("/games/tetris.gb"),
+                  StateImage(1, 1, intArrayOf(0x112233)),
+              )))
+
+      val preview =
+          descendants(panel).filterIsInstance<JLabel>().single {
+            it.accessibleContext.accessibleName == "Saved preview for tetris.gb"
+          }
+      assertTrue(preview.icon != null)
     }
   }
 

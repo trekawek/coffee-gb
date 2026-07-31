@@ -6,8 +6,11 @@ import java.awt.Component
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.GridLayout
+import java.awt.Image
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.image.BufferedImage
 import java.nio.file.Path
 import javax.swing.Action
 import javax.swing.BorderFactory
@@ -16,6 +19,7 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JComponent
+import javax.swing.ImageIcon
 import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
@@ -149,8 +153,11 @@ internal class DesktopMainPanel(
             !(commands.exactWindowScaleOne && exactOneCommandBarSuppressed)
   }
 
-  fun updateRecentRoms(paths: List<Path>) {
-    home.updateRecentRoms(paths.take(MAXIMUM_HOME_RECENTS))
+  fun updateRecentRoms(paths: List<Path>) =
+      updateRecentGames(paths.map(::DesktopRecentGame))
+
+  fun updateRecentGames(games: List<DesktopRecentGame>) {
+    home.updateRecentGames(games.take(MAXIMUM_HOME_RECENTS))
   }
 
   fun current(): DesktopPresentation = presentation
@@ -248,9 +255,11 @@ internal class DesktopHomePanel(
   private val title = JLabel("Coffee GB", SwingConstants.CENTER)
   private val recentHeading = JLabel("Recent")
   private val recentList = JPanel()
+  private var tokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM)
+  private var recentGames: List<DesktopRecentGame> = emptyList()
 
   init {
-    preferredSize = Dimension(560, 420)
+    preferredSize = Dimension(640, 600)
     minimumSize = Dimension(320, 288)
     getAccessibleContext().accessibleName = "Coffee GB home"
 
@@ -280,26 +289,28 @@ internal class DesktopHomePanel(
 
     recentHeading.font = recentHeading.font.deriveFont(Font.BOLD)
     recentHeading.alignmentX = Component.LEFT_ALIGNMENT
-    recentList.layout = BoxLayout(recentList, BoxLayout.Y_AXIS)
+    recentList.layout = GridLayout(0, 2, 12, 12)
     recentList.alignmentX = Component.LEFT_ALIGNMENT
     content.add(recentHeading)
     content.add(Box.createVerticalStrut(8))
     content.add(recentList)
 
     add(content, BorderLayout.CENTER)
-    updateRecentRoms(emptyList())
+    updateRecentGames(emptyList())
   }
 
-  fun updateRecentRoms(paths: List<Path>) {
+  fun updateRecentGames(games: List<DesktopRecentGame>) {
+    recentGames = games.toList()
     recentList.removeAll()
-    paths.forEach { path -> recentList.add(createRecentRow(path)) }
-    recentHeading.isVisible = paths.isNotEmpty()
-    recentList.isVisible = paths.isNotEmpty()
+    recentGames.forEach { game -> recentList.add(createRecentCard(game)) }
+    recentHeading.isVisible = recentGames.isNotEmpty()
+    recentList.isVisible = recentGames.isNotEmpty()
     revalidate()
     repaint()
   }
 
   fun applyTheme(tokens: DesktopThemeTokens) {
+    this.tokens = tokens
     background = tokens.surface
     content.background = tokens.surface
     recentList.background = tokens.surface
@@ -308,32 +319,79 @@ internal class DesktopHomePanel(
       title.font = labelFont.deriveFont(Font.BOLD, labelFont.size2D * 2.0f)
       recentHeading.font = labelFont.deriveFont(Font.BOLD)
     }
+    updateRecentGames(recentGames)
   }
 
-  private fun createRecentRow(path: Path): JComponent {
-    val row = JPanel(BorderLayout(16, 0))
-    row.alignmentX = Component.LEFT_ALIGNMENT
-    row.maximumSize = Dimension(Int.MAX_VALUE, row.preferredSize.height.coerceAtLeast(36))
+  private fun createRecentCard(game: DesktopRecentGame): JComponent {
+    val path = game.path
+    val card = JPanel(BorderLayout(10, 0))
+    card.alignmentX = Component.LEFT_ALIGNMENT
+    card.border =
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(tokens.border),
+            BorderFactory.createEmptyBorder(6, 6, 6, 6),
+        )
+    card.background = tokens.elevatedSurface
     val name = path.fileName?.toString() ?: path.toString()
     val open = JButton(name)
     open.horizontalAlignment = SwingConstants.LEADING
     open.isContentAreaFilled = false
-    open.border = BorderFactory.createEmptyBorder(5, 4, 5, 4)
+    open.border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
     open.toolTipText = path.toString()
     open.accessibleContext.accessibleName = "Open recent ROM $name"
     open.accessibleContext.accessibleDescription = path.toString()
     open.addActionListener { onOpenRecent(path) }
+
+    val preview =
+        JLabel(
+            game.thumbnail?.let(::thumbnailIcon),
+            SwingConstants.CENTER,
+        ).apply {
+          preferredSize = RECENT_PREVIEW_SIZE
+          minimumSize = RECENT_PREVIEW_SIZE
+          background = tokens.surface
+          isOpaque = true
+          if (game.thumbnail == null) {
+            text = "No preview"
+            foreground = tokens.secondaryText
+            accessibleContext.accessibleName = "No saved preview for $name"
+          } else {
+            accessibleContext.accessibleName = "Saved preview for $name"
+          }
+        }
     val parent = JLabel(compactParent(path.parent))
-    parent.horizontalAlignment = SwingConstants.TRAILING
+    parent.foreground = tokens.secondaryText
     parent.toolTipText = path.parent?.toString()
-    row.add(open, BorderLayout.CENTER)
-    row.add(parent, BorderLayout.LINE_END)
-    return row
+    val details = JPanel().apply {
+      layout = BoxLayout(this, BoxLayout.Y_AXIS)
+      background = tokens.elevatedSurface
+      add(open)
+      add(Box.createVerticalStrut(4))
+      add(parent)
+    }
+    card.add(preview, BorderLayout.LINE_START)
+    card.add(details, BorderLayout.CENTER)
+    return card
+  }
+
+  private fun thumbnailIcon(image: eu.rekawek.coffeegb.controller.state.StateImage): ImageIcon {
+    val source = BufferedImage(image.width, image.height, BufferedImage.TYPE_INT_RGB)
+    source.setRGB(0, 0, image.width, image.height, image.copyRgb(), 0, image.width)
+    return ImageIcon(
+        source.getScaledInstance(
+            RECENT_PREVIEW_SIZE.width,
+            RECENT_PREVIEW_SIZE.height,
+            Image.SCALE_FAST,
+        ))
   }
 
   private fun compactParent(parent: Path?): String {
     val value = parent?.toString().orEmpty()
     return if (value.length <= 42) value else "…${value.takeLast(41)}"
+  }
+
+  private companion object {
+    val RECENT_PREVIEW_SIZE = Dimension(104, 94)
   }
 }
 

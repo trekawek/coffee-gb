@@ -175,7 +175,10 @@ object ApplicationSettingsCodec {
     known[REWIND_ENABLED_KEY] = settings.saves.rewindEnabled.toString()
     known[REWIND_SECONDS_KEY] = settings.saves.rewindSeconds.toString()
     known[REWIND_MEMORY_MIB_KEY] = settings.saves.rewindMemoryMiB.toString()
-    known[AUTOSAVE_POLICY_KEY] = settings.saves.autosavePolicy.name
+    // Autosaving on game unload and application exit is mandatory. Keep writing the legacy key
+    // for older releases, but normalize it to the only supported behavior.
+    known[AUTOSAVE_POLICY_KEY] =
+        ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH.name
     known[RESUME_POLICY_KEY] = settings.saves.resumePolicy.name
 
     encodeProfile(
@@ -403,7 +406,7 @@ object ApplicationSettingsCodec {
                         if (sourceVersion >= 5) {
                           parseAutosavePolicy(raw[AUTOSAVE_POLICY_KEY])
                         } else {
-                          ApplicationSettings.AutosavePolicy.DISABLED
+                          ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH
                         },
                     resumePolicy =
                         if (sourceVersion >= 5) {
@@ -587,9 +590,12 @@ object ApplicationSettingsCodec {
   }
 
   private fun parseAutosavePolicy(value: String?): ApplicationSettings.AutosavePolicy {
-    if (value == null) return ApplicationSettings.AutosavePolicy.DISABLED
+    if (value == null) return ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH
     return try {
+      // Validate known historical values while retiring the opt-out. This avoids turning a
+      // malformed current setting into a silently accepted value.
       ApplicationSettings.AutosavePolicy.valueOf(value)
+      ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH
     } catch (_: IllegalArgumentException) {
       throw IllegalArgumentException(
           "Invalid $AUTOSAVE_POLICY_KEY: $value " +

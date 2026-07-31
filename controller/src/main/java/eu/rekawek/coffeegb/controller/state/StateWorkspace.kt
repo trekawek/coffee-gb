@@ -111,6 +111,35 @@ class StateWorkspace(
     return null
   }
 
+  /**
+   * Returns the thumbnail attached to the first authoritative autosave, if it is available.
+   *
+   * Home uses this without a live machine, so state compatibility is intentionally not checked.
+   * An invalid active autosave remains authoritative and therefore prevents an older fallback
+   * thumbnail from being shown for a different save root.
+   */
+  fun autosaveThumbnail(): StateImage? {
+    repositories.forEach { repository ->
+      val autosave =
+          try {
+            repository.readIfPresent(StateRef.Autosave)
+          } catch (_: IOException) {
+            return null
+          } ?: return@forEach
+      val metadata = autosave.metadata ?: return null
+      val thumbnailSha = metadata.thumbnailSha256 ?: return null
+      return try {
+        repository
+            .readThumbnail(StateRef.Autosave, autosave.stateSha256, thumbnailSha)
+            .copyBytes()
+            ?.let(StatePngCodec::decode)
+      } catch (_: IOException) {
+        null
+      }
+    }
+    return null
+  }
+
   fun activeGameDirectory(): Path = paths.layout.gameDirectory
 
   internal fun sensitivePaths(): List<Path> =

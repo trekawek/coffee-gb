@@ -33,7 +33,7 @@ internal fun interface SaveDirectoryChooser {
   fun choose(parent: Component, initial: Path?): Path?
 }
 
-/** Draft-only editor for portable state, rewind, autosave, and resume preferences. */
+/** Draft-only editor for portable state, rewind, and resume preferences. */
 internal class SavesPreferencesEditor private constructor(
     private val initial: ApplicationSettings.Saves,
     private val defaults: ApplicationSettings.Saves,
@@ -69,10 +69,6 @@ internal class SavesPreferencesEditor private constructor(
               ApplicationSettings.MAX_REWIND_MEMORY_MIB,
               8,
           ))
-  internal val autosave =
-      JComboBox(AUTOSAVE_OPTIONS.toTypedArray()).apply {
-        selectedItem = AUTOSAVE_OPTIONS.first { it.policy == initial.autosavePolicy }
-      }
   internal val resume =
       JComboBox(RESUME_OPTIONS.toTypedArray()).apply {
         selectedItem = RESUME_OPTIONS.first { it.policy == initial.resumePolicy }
@@ -148,20 +144,14 @@ internal class SavesPreferencesEditor private constructor(
     rewindMemory.accessibleContext.accessibleName = "Rewind memory budget in MiB"
     addRow(constraints, 5, memoryLabel, rewindMemory)
 
-    val autosaveLabel = JLabel("Autosave:")
-    autosaveLabel.displayedMnemonic = KeyEvent.VK_U
-    autosaveLabel.labelFor = autosave
-    autosave.accessibleContext.accessibleName = "Autosave policy"
-    addRow(constraints, 6, autosaveLabel, autosave)
-
     val resumeLabel = JLabel("Resume autosave:")
     resumeLabel.displayedMnemonic = KeyEvent.VK_R
     resumeLabel.labelFor = resume
     resume.accessibleContext.accessibleName = "Resume autosave policy"
-    addRow(constraints, 7, resumeLabel, resume)
+    addRow(constraints, 6, resumeLabel, resume)
 
     constraints.gridx = 0
-    constraints.gridy = 8
+    constraints.gridy = 7
     constraints.gridwidth = 2
     constraints.weighty = 1.0
     constraints.fill = GridBagConstraints.BOTH
@@ -210,7 +200,8 @@ internal class SavesPreferencesEditor private constructor(
         batterySavesEnabled = batterySaves.isSelected,
         rewindEnabled = rewindEnabled.isSelected,
         rewindSeconds = seconds,
-        autosavePolicy = (autosave.selectedItem as AutosaveOption).policy,
+        autosavePolicy =
+            ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
         resumePolicy = (resume.selectedItem as ResumeOption).policy,
         rewindMemoryMiB = memory,
     )
@@ -223,7 +214,6 @@ internal class SavesPreferencesEditor private constructor(
     rewindEnabled.isSelected = defaults.rewindEnabled
     rewindSeconds.value = defaults.rewindSeconds
     rewindMemory.value = defaults.rewindMemoryMiB
-    autosave.selectedItem = AUTOSAVE_OPTIONS.first { it.policy == defaults.autosavePolicy }
     resume.selectedItem = RESUME_OPTIONS.first { it.policy == defaults.resumePolicy }
     directoryError.text = " "
     updateRewindAvailability()
@@ -304,13 +294,6 @@ internal class SavesPreferencesEditor private constructor(
     add(field, constraints)
   }
 
-  internal data class AutosaveOption(
-      val policy: ApplicationSettings.AutosavePolicy,
-      val label: String,
-  ) {
-    override fun toString(): String = label
-  }
-
   internal data class ResumeOption(
       val policy: ApplicationSettings.ResumePolicy,
       val label: String,
@@ -319,14 +302,6 @@ internal class SavesPreferencesEditor private constructor(
   }
 
   private companion object {
-    val AUTOSAVE_OPTIONS =
-        listOf(
-            AutosaveOption(ApplicationSettings.AutosavePolicy.DISABLED, "Disabled"),
-            AutosaveOption(
-                ApplicationSettings.AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
-                "On close and ROM switch",
-            ),
-        )
     val RESUME_OPTIONS =
         listOf(
             ResumeOption(ApplicationSettings.ResumePolicy.NEVER, "Never"),
