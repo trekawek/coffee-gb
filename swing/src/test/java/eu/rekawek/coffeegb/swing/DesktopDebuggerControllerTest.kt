@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import java.lang.reflect.Proxy
 import java.util.concurrent.FutureTask
 import java.util.concurrent.atomic.AtomicInteger
+import javax.swing.JMenu
 import javax.swing.JMenuItem
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
@@ -35,11 +36,11 @@ class DesktopDebuggerControllerTest {
         }
 
     onEdt {
-      controller.showDebugger()
-      controller.showDebugger()
+      controller.showTool(DebuggerWorkspaceTool.EXECUTION)
+      controller.applyLayout(DebuggerWorkspaceLayout.FULL)
     }
     assertEquals(1, factoryCalls.get())
-    assertEquals(listOf("show", "show"), view.calls)
+    assertEquals(listOf("tool:EXECUTION", "layout:FULL"), view.calls)
 
     // Events intentionally originate outside Swing. Acceptance happens only after each callback
     // reaches the EDT, where an older queued publication can no longer replace generation 2.
@@ -63,7 +64,8 @@ class DesktopDebuggerControllerTest {
     onEdt {
       controller.close()
       controller.close()
-      controller.showDebugger()
+      controller.showTool(DebuggerWorkspaceTool.MEMORY)
+      controller.applyLayout(DebuggerWorkspaceLayout.CPU)
     }
     assertEquals(1, view.closeCalls)
     assertEquals(0, portCloseCalls.get(), "the emulation session owns every DebugPort")
@@ -86,9 +88,9 @@ class DesktopDebuggerControllerTest {
     flushEdt()
     assertTrue(view.calls.isEmpty())
 
-    onEdt { controller.showDebugger() }
+    onEdt { controller.showTool(DebuggerWorkspaceTool.AUDIO) }
 
-    assertEquals(listOf("session:7:available", "show"), view.calls)
+    assertEquals(listOf("session:7:available", "tool:AUDIO"), view.calls)
     assertSame(port, view.sessions.single().debugPort)
     onEdt { controller.close() }
     rootEventBus.close()
@@ -103,7 +105,12 @@ class DesktopDebuggerControllerTest {
 
     val controller =
         onEdt { DesktopDebuggerController(rootEventBus) { RecordingDebuggerView() } }
-    assertFailsWith<IllegalStateException> { controller.showDebugger() }
+    assertFailsWith<IllegalStateException> {
+      controller.showTool(DebuggerWorkspaceTool.EXECUTION)
+    }
+    assertFailsWith<IllegalStateException> {
+      controller.applyLayout(DebuggerWorkspaceLayout.CPU)
+    }
     assertFailsWith<IllegalStateException> { controller.close() }
 
     onEdt { controller.close() }
@@ -111,21 +118,41 @@ class DesktopDebuggerControllerTest {
   }
 
   @Test
-  fun `tools menu always exposes the debugger action`() {
-    val actions = AtomicInteger()
-    val menu = onEdt { createToolsMenu { actions.incrementAndGet() } }
+  fun `debug menu exposes every window and a separate layout submenu`() {
+    val tools = mutableListOf<DebuggerWorkspaceTool>()
+    val layouts = mutableListOf<DebuggerWorkspaceLayout>()
+    val actions = DebuggerMenuActions(tools::add, layouts::add)
+    val menu = onEdt { createDebugMenu(actions) }
 
     onEdt {
-      assertEquals("Tools", menu.text)
+      assertEquals("Debug", menu.text)
       assertTrue(menu.isEnabled)
-      val item = menu.menuComponents.filterIsInstance<JMenuItem>().single()
-      assertEquals("Debug Workspace", item.text)
-      assertTrue(item.isEnabled)
-      assertFalse(item.accessibleContext.accessibleDescription.isNullOrBlank())
-      item.doClick()
+      assertEquals(DebuggerWorkspaceTool.entries.size + 2, menu.menuComponentCount)
+      val toolItems = menu.menuComponents.take(DebuggerWorkspaceTool.entries.size)
+      assertTrue(toolItems.all { it is JMenuItem && it !is JMenu })
+      assertEquals(
+          DebuggerWorkspaceTool.entries.map { it.title },
+          toolItems.map { (it as JMenuItem).text },
+      )
+      toolItems.map { it as JMenuItem }.forEach { item ->
+        assertTrue(item.isEnabled)
+        assertFalse(item.accessibleContext.accessibleDescription.isNullOrBlank())
+        item.doClick()
+      }
+
+      val layoutMenu = menu.menuComponents.filterIsInstance<JMenu>().single()
+      assertEquals("Layout", layoutMenu.text)
+      assertFalse(layoutMenu.accessibleContext.accessibleDescription.isNullOrBlank())
+      val layoutItems = layoutMenu.menuComponents.filterIsInstance<JMenuItem>()
+      assertEquals(DebuggerWorkspaceLayout.entries.map { it.title }, layoutItems.map { it.text })
+      layoutItems.forEach { item ->
+        assertFalse(item.accessibleContext.accessibleDescription.isNullOrBlank())
+        item.doClick()
+      }
     }
-    assertEquals(1, actions.get())
-    assertFailsWith<IllegalStateException> { createToolsMenu {} }
+    assertEquals(DebuggerWorkspaceTool.entries.toList(), tools)
+    assertEquals(DebuggerWorkspaceLayout.entries.toList(), layouts)
+    assertFailsWith<IllegalStateException> { createDebugMenu(actions) }
   }
 
   private class RecordingDebuggerView : DesktopDebuggerView {
@@ -140,9 +167,14 @@ class DesktopDebuggerControllerTest {
       calls += "session:${event.generation}:${if (event.debugPort == null) "revoked" else "available"}"
     }
 
-    override fun showWindow() {
+    override fun showTool(tool: DebuggerWorkspaceTool) {
       recordEdt()
-      calls += "show"
+      calls += "tool:${tool.name}"
+    }
+
+    override fun applyLayout(layout: DebuggerWorkspaceLayout) {
+      recordEdt()
+      calls += "layout:${layout.name}"
     }
 
     override fun close() {

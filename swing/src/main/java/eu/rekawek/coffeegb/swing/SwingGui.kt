@@ -232,7 +232,10 @@ class SwingGui private constructor(
             romOpen::open,
             ::acceptRomLifecycle,
             ::showPreferences,
-            debuggerController::showDebugger,
+            DebuggerMenuActions(
+                debuggerController::showTool,
+                debuggerController::applyLayout,
+            ),
             stateUxController::saveSlot,
             stateUxController::loadSlot,
             stateUxController::showBrowser,

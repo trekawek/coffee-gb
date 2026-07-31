@@ -1,9 +1,11 @@
 # Desktop debugger
 
-Open **Tools > Debugger** to show Coffee GB's modeless debugger window. The window can remain open
-while the game runs and never calls the emulator core directly: every command goes through the
-current session's `DebugPort` and is applied at an emulation safe point. A linked/rollback session
-may publish an inspection-only or unsupported port; the window reports the negotiated capabilities
+Open a specific modeless debugger window from **Debug > Execution**, **Memory**, **Breakpoints**,
+**Video**, **Hardware & I/O**, **Audio**, or **Timeline**. Built-in arrangements are under
+**Debug > Layout**. The debugger windows have no menu bars of their own and can remain open while
+the game runs. They never call the emulator core directly: every command goes through the current
+session's `DebugPort` and is applied at an emulation safe point. A linked/rollback session may
+publish an inspection-only or unsupported port; each window reports the negotiated capabilities
 instead of offering unsafe one-machine controls.
 
 ## Snapshot identity and panes
