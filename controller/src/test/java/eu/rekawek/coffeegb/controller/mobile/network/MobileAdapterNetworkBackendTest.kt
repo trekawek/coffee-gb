@@ -798,8 +798,10 @@ class MobileAdapterNetworkBackendTest {
 
   @Test
   fun `all allowed multi-address answers admit a non-first address after fresh validation`() {
-    val firstAddress = byteArrayOf(127, 0, 0, 1)
-    val secondAddress = byteArrayOf(127, 0, 0, 2)
+    // Keep the address that is actually opened on the universally bindable IPv4 loopback.
+    // The resolver sorts 10.0.0.1 first, so 127.0.0.1 still exercises a non-first answer.
+    val firstAddress = byteArrayOf(10, 0, 0, 1)
+    val secondAddress = byteArrayOf(127, 0, 0, 1)
     val secondLoopback = InetAddress.getByAddress(secondAddress)
     ServerSocket(0, 1, secondLoopback).use { server ->
       val accepted = CountDownLatch(1)
@@ -843,7 +845,7 @@ class MobileAdapterNetworkBackendTest {
               assertEquals(BackendStatus.SUCCESS, lookup.status())
               assertContentEquals(firstAddress, lookup.payload())
 
-              val opened = submit(backend, 2, TCP_OPEN, openPayload(127, 0, 0, 2, 80))
+              val opened = submit(backend, 2, TCP_OPEN, openPayload(127, 0, 0, 1, 80))
               assertEquals(BackendStatus.SUCCESS, opened.status())
               assertContentEquals(byteArrayOf(0), opened.payload())
               assertTrue(accepted.await(2, TimeUnit.SECONDS))

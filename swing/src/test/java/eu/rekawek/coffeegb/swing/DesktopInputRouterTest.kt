@@ -6,11 +6,17 @@ import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import javax.swing.JButton
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JList
+import javax.swing.JMenu
 import javax.swing.JPanel
+import javax.swing.JScrollBar
+import javax.swing.JSlider
 import javax.swing.JSpinner
+import javax.swing.JTabbedPane
 import javax.swing.JTable
 import javax.swing.JTextField
+import javax.swing.JTree
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -40,7 +46,7 @@ class DesktopInputRouterTest {
         Fixture(
             joypadKeys = setOf(KeyEvent.VK_Z),
             belongsToMainWindow = { it === game || it === text },
-            yieldsToComponent = { it === text },
+            yieldsToComponent = { component, _ -> component === text },
         )
     fixture.router.install()
 
@@ -109,7 +115,7 @@ class DesktopInputRouterTest {
   }
 
   @Test
-  fun `focusable desktop controls keep their navigation and activation keys`() {
+  fun `mapped gameplay keys win over ordinary focused controls`() {
     val controls =
         listOf(
             JButton("Pause"),
@@ -117,12 +123,55 @@ class DesktopInputRouterTest {
             JList(arrayOf("General", "Display")),
             JTable(2, 2),
             JSpinner(),
-            JTextField(),
+            JSlider(),
+            JScrollBar(),
+            JTabbedPane(),
+            JTree(),
         )
     val fixture =
         Fixture(
+            joypadKeys =
+                setOf(
+                    KeyEvent.VK_SPACE,
+                    KeyEvent.VK_UP,
+                    KeyEvent.VK_ENTER,
+                    KeyEvent.VK_ESCAPE,
+                ),
+            yieldsToComponent = ::componentOwnsDesktopKey,
+        )
+    fixture.router.install()
+
+    controls.forEach { control ->
+      assertTrue(fixture.dispatch(press(KeyEvent.VK_SPACE, component = control)))
+      assertTrue(fixture.dispatch(release(KeyEvent.VK_SPACE, component = control)))
+      assertTrue(fixture.dispatch(press(KeyEvent.VK_UP, component = control)))
+      assertTrue(fixture.dispatch(release(KeyEvent.VK_UP, component = control)))
+      assertFalse(fixture.dispatch(press(KeyEvent.VK_DOWN, component = control)))
+      assertFalse(fixture.dispatch(press(KeyEvent.VK_ENTER, component = control)))
+      assertFalse(fixture.dispatch(press(KeyEvent.VK_ESCAPE, component = control)))
+    }
+    assertEquals(controls.size * 4, fixture.events.size)
+    fixture.router.close()
+  }
+
+  @Test
+  fun `text menu open selector and explicit capture contexts keep mapped gameplay keys`() {
+    val captureOwner =
+        JPanel().apply {
+          putClientProperty(DesktopInputRouter.INPUT_CAPTURE_PROPERTY, true)
+        }
+    val captureChild = JButton("Capture")
+    captureOwner.add(captureChild)
+    val openSelector =
+        object : JComboBox<String>(arrayOf("Slot 0", "Slot 1")) {
+          override fun isPopupVisible(): Boolean = true
+        }
+    val controls: List<JComponent> =
+        listOf(JTextField(), JMenu("Game"), openSelector, captureChild)
+    val fixture =
+        Fixture(
             joypadKeys = setOf(KeyEvent.VK_SPACE, KeyEvent.VK_UP),
-            yieldsToComponent = ::componentOwnsDesktopKeys,
+            yieldsToComponent = ::componentOwnsDesktopKey,
         )
     fixture.router.install()
 
@@ -140,7 +189,7 @@ class DesktopInputRouterTest {
       val registry: RecordingRegistry = RecordingRegistry(),
       lifecycle: DesktopInputLifecycleRegistry = DesktopInputLifecycleRegistry.NOOP,
       belongsToMainWindow: (Component?) -> Boolean = { true },
-      yieldsToComponent: (Component?) -> Boolean = { false },
+      yieldsToComponent: (Component?, Int) -> Boolean = { _, _ -> false },
       isMenuActive: () -> Boolean = { false },
   ) {
     val events = mutableListOf<String>()
