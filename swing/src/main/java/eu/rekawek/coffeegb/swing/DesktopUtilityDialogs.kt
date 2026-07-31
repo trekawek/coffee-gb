@@ -179,6 +179,8 @@ internal class BarcodeBoyForm(
           gridx = 0
           gridy = 2
           gridwidth = 2
+          weightx = 1.0
+          fill = GridBagConstraints.HORIZONTAL
           anchor = GridBagConstraints.LINE_START
           insets = Insets(4, 0, 0, 0)
         },
@@ -208,6 +210,7 @@ internal class BarcodeBoyForm(
     selectDeviceButton.isVisible = !selected
     selectDeviceButton.isEnabled = !selected
     publishValidation()
+    revalidateAndRepackUtilityDialog(this)
   }
 
   internal fun spec(): DesktopFormSpec<DesktopUtilityFormResult> =
@@ -902,6 +905,14 @@ private fun literalUtilityButton(
       getAccessibleContext().accessibleName = text
       getAccessibleContext().accessibleDescription = accessibleDescription
     }
+
+private fun revalidateAndRepackUtilityDialog(component: Component) {
+  (component as? JComponent)?.revalidate()
+  component.repaint()
+  val dialog = SwingUtilities.getWindowAncestor(component) as? JDialog ?: return
+  dialog.pack()
+  constrainUtilityDialog(dialog)
+}
 
 private fun constrainUtilityDialog(dialog: JDialog) {
   val configuration = dialog.graphicsConfiguration ?: dialog.owner?.graphicsConfiguration ?: return
