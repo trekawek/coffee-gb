@@ -359,8 +359,11 @@ internal class DesktopCommandBar(
     slot.addActionListener {
       if (!synchronizingSlot) {
         val selected = slot.selectedIndex.coerceIn(0, 9)
-        actions.stateSlotActions[selected].actionPerformed(
-            java.awt.event.ActionEvent(slot, ActionEventId, "select-state-slot"))
+        val action = actions.stateSlotActions[selected]
+        if (slot.isEnabled && action.isEnabled) {
+          action.actionPerformed(
+              java.awt.event.ActionEvent(slot, ActionEventId, "select-state-slot"))
+        }
       }
     }
     primary.add(slot)
@@ -394,6 +397,8 @@ internal class DesktopCommandBar(
   }
 
   fun synchronizeStateSlot(stateSlot: Int) {
+    require(stateSlot in 0..9)
+    slot.isEnabled = actions.stateSlotActions[stateSlot].isEnabled
     if (slot.selectedIndex == stateSlot) return
     synchronizingSlot = true
     try {

@@ -7,7 +7,9 @@ import java.awt.event.ComponentEvent
 import java.nio.file.Path
 import java.util.concurrent.FutureTask
 import javax.swing.AbstractButton
+import javax.swing.JComboBox
 import javax.swing.JLabel
+import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
@@ -17,6 +19,75 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class DesktopMainPanelTest {
+
+  @Test
+  fun `dynamic pause command is a plain menu item that follows the shared action label`() {
+    onEdt {
+      val actions = actions()
+      val item = pauseResumeMenuItem(actions[DesktopCommand.PAUSE])
+
+      assertEquals(JMenuItem::class.java, item.javaClass)
+      assertEquals("Pause", item.text)
+
+      actions.update(
+          DesktopCommandPresentation(
+              gameLoaded = true,
+              pauseSupported = true,
+              paused = true,
+          ))
+
+      assertEquals("Resume", item.text)
+      assertTrue(item.isEnabled)
+    }
+  }
+
+  @Test
+  fun `state slot selector mirrors command availability and ignores disabled changes`() {
+    onEdt {
+      val selections = mutableListOf<Int>()
+      val actions = actions(selections::add)
+      val panel = panel(actions)
+      val selector =
+          descendants(panel).filterIsInstance<JComboBox<*>>().single {
+            it.accessibleContext.accessibleName == "Current state slot"
+          }
+
+      assertFalse(selector.isEnabled)
+      selector.selectedIndex = 3
+      assertTrue(selections.isEmpty())
+
+      panel.render(
+          DesktopPresentation(
+              gameTitle = "Tetris",
+              commands =
+                  DesktopCommandPresentation(
+                      gameLoaded = true,
+                      stateCommandsAvailable = true,
+                      stateSlot = 2,
+                  ),
+          ))
+      assertTrue(selector.isEnabled)
+      assertEquals(2, selector.selectedIndex)
+
+      selector.selectedIndex = 4
+      assertEquals(listOf(4), selections)
+
+      panel.render(
+          DesktopPresentation(
+              gameTitle = "Tetris",
+              commands =
+                  DesktopCommandPresentation(
+                      gameLoaded = true,
+                      sessionBusy = true,
+                      stateCommandsAvailable = true,
+                      stateSlot = 4,
+                  ),
+          ))
+      assertFalse(selector.isEnabled)
+      selector.selectedIndex = 5
+      assertEquals(listOf(4), selections)
+    }
+  }
 
   @Test
   fun `first open shows its cancellable task outside the home and game cards`() {
@@ -196,7 +267,9 @@ class DesktopMainPanelTest {
           initialTokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM),
       )
 
-  private fun actions(): DesktopActionRegistry =
+  private fun actions(
+      onSelectStateSlot: (Int) -> Unit = {},
+  ): DesktopActionRegistry =
       DesktopActionRegistry(
           DesktopCommandHandlers(
               openRom = {},
@@ -214,7 +287,7 @@ class DesktopMainPanelTest {
               setFullscreen = {},
               screenshot = {},
               setCommandBarVisible = {},
-              selectStateSlot = {},
+              selectStateSlot = onSelectStateSlot,
           ))
 
   private fun descendants(component: Component): List<Component> =

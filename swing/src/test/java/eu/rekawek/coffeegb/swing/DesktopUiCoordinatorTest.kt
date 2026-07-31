@@ -9,6 +9,22 @@ import org.junit.Test
 
 class DesktopUiCoordinatorTest {
   @Test
+  fun `pause support announced before start is staged until the game opens`() {
+    val coordinator =
+        DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
+
+    coordinator.pauseSupport(true)
+    assertFalse(coordinator.current().commands.pauseSupported)
+
+    coordinator.opened("Tetris")
+    assertTrue(coordinator.current().commands.pauseSupported)
+
+    coordinator.stopped()
+    coordinator.opened("Alleyway")
+    assertFalse(coordinator.current().commands.pauseSupported)
+  }
+
+  @Test
   fun `replacement activity preserves the committed game until a new game opens`() {
     val rendered = mutableListOf<DesktopPresentation>()
     val coordinator =
@@ -67,6 +83,7 @@ class DesktopUiCoordinatorTest {
         DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
     coordinator.opened("Alleyway")
     coordinator.stateAvailability(quick = true, browser = true)
+    coordinator.stateSlotLoadAvailability(3, true)
     coordinator.muted(true)
     coordinator.commandBarVisible(false)
     coordinator.stateSlot(9)
@@ -75,10 +92,28 @@ class DesktopUiCoordinatorTest {
     val state = coordinator.current()
     assertEquals("Alleyway", state.gameTitle)
     assertTrue(state.commands.stateCommandsAvailable)
+    assertEquals(setOf(3), state.commands.loadableStateSlots)
     assertTrue(state.commands.muted)
     assertFalse(state.commands.commandBarVisible)
     assertEquals(9, state.commands.stateSlot)
     assertEquals("Netplay: Hosting", state.netplaySummary)
+  }
+
+  @Test
+  fun `slot load availability is removed when state commands or the session stop`() {
+    val coordinator = DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
+    coordinator.opened("Tetris")
+    coordinator.stateAvailability(quick = true, browser = true)
+    coordinator.stateSlotLoadAvailability(2, true)
+    assertEquals(setOf(2), coordinator.current().commands.loadableStateSlots)
+
+    coordinator.stateAvailability(quick = false, browser = true)
+    assertTrue(coordinator.current().commands.loadableStateSlots.isEmpty())
+
+    coordinator.stateAvailability(quick = true, browser = true)
+    coordinator.stateSlotLoadAvailability(4, true)
+    coordinator.stopped()
+    assertTrue(coordinator.current().commands.loadableStateSlots.isEmpty())
   }
 
   @Test

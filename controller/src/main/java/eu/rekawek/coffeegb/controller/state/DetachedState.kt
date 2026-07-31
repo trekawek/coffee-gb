@@ -389,6 +389,14 @@ internal object DetachedStateAdapter {
           gameboy.captureDmgFifoRuntimeState().toDetached(),
       )
 
+  private fun captureWithoutTimeSource(gameboy: Gameboy): MachineState =
+      MachineState(
+          StateGraph.captureRoot(gameboy.captureStateWithoutTimeSource(), GAMEBOY_ROOT),
+          gameboy.captureRtcRuntimeStateWithoutTimeSource().toDetached(),
+          gameboy.hardwareProfile.toMachineHardware(),
+          gameboy.captureDmgFifoRuntimeState().toDetached(),
+      )
+
   /**
    * Imports a strict-reader legacy root through target-aware structural preflight and rollback.
    *
@@ -404,21 +412,8 @@ internal object DetachedStateAdapter {
       probeAfterLegacyMutation: (() -> Unit)? = null,
   ) {
     val current = capture(gameboy)
-    val legacyRoot =
-        normalizeLegacyFifoOccupancy(
-            StateGraph.captureLegacyRoot(legacyState, LEGACY_GAMEBOY_ROOT)) as RecordState
-    StateGraph.validateCompatible(legacyRoot, current.root, "legacy machine")
-    val normalized = StateGraph.restoreRoot(legacyRoot, GAMEBOY_ROOT)
-    StateSemantics.validateForClock(normalized, gameboy.clockSpec)
-    @Suppress("UNCHECKED_CAST")
-    val componentState = normalized as ComponentState<Gameboy>
+    val candidate = prepareLegacyState(gameboy, legacyState, current)
     val rollback = prepare(gameboy, current)
-    val candidate =
-        PreparedMachineState(
-            componentState,
-            current.rtcRuntime.toCore(),
-            current.dmgFifoRuntime.toCore(),
-        )
     val previousRumble = gameboy.isRumbleActive
     try {
       gameboy.restoreStateSilently(candidate.componentState)
@@ -434,6 +429,33 @@ internal object DetachedStateAdapter {
       throw StateApplyException("Legacy machine state could not be applied atomically", failure)
     }
     gameboy.synchronizeRumbleOutput(previousRumble)
+  }
+
+  /** Fully reconstructs and validates a legacy sidecar without mutating the live machine. */
+  internal fun prepareLegacyState(
+      gameboy: Gameboy,
+      legacyState: Memento<Gameboy>,
+  ): PreparedMachineState =
+      prepareLegacyState(gameboy, legacyState, captureWithoutTimeSource(gameboy))
+
+  private fun prepareLegacyState(
+      gameboy: Gameboy,
+      legacyState: Memento<Gameboy>,
+      current: MachineState,
+  ): PreparedMachineState {
+    val legacyRoot =
+        normalizeLegacyFifoOccupancy(
+            StateGraph.captureLegacyRoot(legacyState, LEGACY_GAMEBOY_ROOT)) as RecordState
+    StateGraph.validateCompatible(legacyRoot, current.root, "legacy machine")
+    val normalized = StateGraph.restoreRoot(legacyRoot, GAMEBOY_ROOT)
+    StateSemantics.validateForClock(normalized, gameboy.clockSpec)
+    @Suppress("UNCHECKED_CAST")
+    val componentState = normalized as ComponentState<Gameboy>
+    return PreparedMachineState(
+        componentState,
+        current.rtcRuntime.toCore(),
+        current.dmgFifoRuntime.toCore(),
+    )
   }
 
   /**
@@ -559,7 +581,7 @@ internal object DetachedStateAdapter {
       throw StateApplyException(
           "Detached ${state.hardware} state does not match ${gameboy.hardwareProfile.id()} profile")
     }
-    val current = StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT)
+    val current = StateGraph.captureRoot(gameboy.captureStateWithoutTimeSource(), GAMEBOY_ROOT)
     StateGraph.validateCompatible(state.root, current, "machine")
     try {
       gameboy.validateRtcRuntimeState(state.rtcRuntime.toCore())

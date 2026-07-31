@@ -321,6 +321,31 @@ object StateCodec {
     applyDecoded(file, configuration, gameboy, identity, null)
   }
 
+  /** Runs the complete target-dependent machine preflight without mutating the live machine. */
+  internal fun validateDecodedForApply(
+      file: StateFile,
+      configuration: Gameboy.GameboyConfiguration,
+      gameboy: Gameboy,
+      identity: MachineIdentity,
+  ) {
+    file.root as? MachineStateRoot
+        ?: targetMismatch("StateFile root ${file.root.kind} is not a machine")
+    validateTargetIdentities(
+        file.identities,
+        listOf(StateIdentityEntry(0, identity)),
+    )
+    val compatibleRoot = preparePortableRootForApply(file) as MachineStateRoot
+    try {
+      DetachedStateAdapter.prepare(gameboy, compatibleRoot.machine)
+    } catch (failure: StateApplyException) {
+      throw StateDecodeException(
+          StateDecodeReason.TARGET_STATE_MISMATCH,
+          "Portable machine state is incompatible with the target",
+          failure,
+      )
+    }
+  }
+
   internal fun applyDecoded(
       file: StateFile,
       configuration: Gameboy.GameboyConfiguration,
@@ -374,6 +399,30 @@ object StateCodec {
       identity: MachineIdentity,
   ) {
     applyDecoded(file, session, identity, null)
+  }
+
+  /** Runs the complete target-dependent session preflight without mutating the live session. */
+  internal fun validateDecodedForApply(
+      file: StateFile,
+      session: Session,
+      identity: MachineIdentity,
+  ) {
+    file.root as? SessionStateRoot
+        ?: targetMismatch("StateFile root ${file.root.kind} is not a session")
+    validateTargetIdentities(
+        file.identities,
+        listOf(StateIdentityEntry(0, identity)),
+    )
+    val compatibleRoot = preparePortableRootForApply(file) as SessionStateRoot
+    try {
+      DetachedStateAdapter.prepare(session, compatibleRoot.session)
+    } catch (failure: StateApplyException) {
+      throw StateDecodeException(
+          StateDecodeReason.TARGET_STATE_MISMATCH,
+          "Portable session state is incompatible with the target",
+          failure,
+      )
+    }
   }
 
   private fun applyDecoded(

@@ -105,7 +105,7 @@ class StateWorkspace(
           repository.catalog(targetIdentity).entries
               .firstOrNull { it.ref == StateRef.Autosave }
               ?: return@forEachIndexed
-      if (entry.status != StateCatalogStatus.AVAILABLE) return@forEachIndexed
+      if (entry.status != StateCatalogStatus.AVAILABLE) return null
       return StateEntryKey(StateRef.Autosave, source) to repository.read(StateRef.Autosave)
     }
     return null

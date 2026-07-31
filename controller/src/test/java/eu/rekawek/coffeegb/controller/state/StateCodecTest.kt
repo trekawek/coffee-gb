@@ -379,6 +379,17 @@ class StateCodecTest {
           StateCodec.encode(
               StateFile(file.identities, SessionStateRoot(invalidSession)),
           )
+      val beforePreflight = session.captureDetachedState()
+      val preflightFailure =
+          assertFailsWith<StateDecodeException> {
+            StateCodec.validateDecodedForApply(
+                StateCodec.decode(invalid),
+                session,
+                StateIdentity.from(session.config),
+            )
+          }
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, preflightFailure.reason)
+      assertEquals(beforePreflight, session.captureDetachedState())
       assertRejectedWithoutMutation(session, invalid, StateDecodeReason.TARGET_STATE_MISMATCH)
     }
   }

@@ -8,6 +8,7 @@ enum class StateOperation {
   CATALOG,
   SAVE,
   LOAD,
+  LOAD_AVAILABILITY,
   DELETE,
   EXPORT,
   SCREENSHOT,
@@ -104,6 +105,29 @@ data class StateLoadRefRequestEvent(
     requireSessionId(expectedSessionId)
   }
 }
+
+/**
+ * Asynchronously preflights the selected quick slot through the same managed-first, legacy
+ * compatibility path as [StateLoadRefRequestEvent], without mutating the active session.
+ */
+data class StateSlotLoadAvailabilityRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+    val ref: StateRef.Slot,
+) : Event {
+  init {
+    requireRequestId(requestId)
+    requireSessionId(expectedSessionId)
+  }
+}
+
+/** A current-session answer for one selected quick slot. */
+data class StateSlotLoadAvailabilityEvent(
+    val requestId: Long,
+    val sessionId: Long,
+    val ref: StateRef.Slot,
+    val available: Boolean,
+) : Event
 
 data class StateDeleteRequestEvent(
     val requestId: Long,

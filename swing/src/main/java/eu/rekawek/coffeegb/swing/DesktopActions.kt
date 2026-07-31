@@ -35,6 +35,7 @@ internal data class DesktopCommandPresentation(
     val stateCommandsAvailable: Boolean = false,
     val stateBrowserAvailable: Boolean = false,
     val stateSlot: Int = 0,
+    val loadableStateSlots: Set<Int> = emptySet(),
     val muted: Boolean = false,
     val fullscreen: Boolean = false,
     val commandBarVisible: Boolean = true,
@@ -42,6 +43,7 @@ internal data class DesktopCommandPresentation(
 ) {
   init {
     require(stateSlot in 0..9)
+    require(loadableStateSlots.all { it in 0..9 })
   }
 }
 
@@ -165,8 +167,11 @@ internal class DesktopActionRegistry(
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
         DesktopCommand.PAUSE ->
             state.gameLoaded && state.pauseSupported && !state.sessionBusy
-        DesktopCommand.SAVE_STATE,
-        DesktopCommand.LOAD_STATE -> state.stateCommandsAvailable && !state.sessionBusy
+        DesktopCommand.SAVE_STATE -> state.stateCommandsAvailable && !state.sessionBusy
+        DesktopCommand.LOAD_STATE ->
+            state.stateCommandsAvailable &&
+                state.stateSlot in state.loadableStateSlots &&
+                !state.sessionBusy
         DesktopCommand.MANAGE_STATES,
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy

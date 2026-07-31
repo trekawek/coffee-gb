@@ -365,6 +365,28 @@ class SnapshotManager private constructor(
     }
   }
 
+  /** Runs the compatibility sidecar's complete live-target preflight without applying it. */
+  internal fun validateSnapshotReadOnly(snapshot: CompatibilitySnapshot, session: Session) {
+    val target = StateIdentity.from(configuration)
+    when (snapshot) {
+      is CompatibilitySnapshot.Portable ->
+          when (snapshot.state.root) {
+            is SessionStateRoot ->
+                StateCodec.validateDecodedForApply(snapshot.state, session, target)
+            is MachineStateRoot ->
+                StateCodec.validateDecodedForApply(
+                    snapshot.state,
+                    configuration,
+                    session.gameboy,
+                    target,
+                )
+            else -> StateCodec.validateDecodedForApply(snapshot.state, session, target)
+          }
+      is CompatibilitySnapshot.Legacy ->
+          DetachedStateAdapter.prepareLegacyState(session.gameboy, snapshot.state)
+    }
+  }
+
   /** Applies a worker-decoded compatibility sidecar at the controller's frame boundary. */
   internal fun applySnapshotReadOnly(snapshot: CompatibilitySnapshot, gameboy: Gameboy) {
     val target = StateIdentity.from(configuration)

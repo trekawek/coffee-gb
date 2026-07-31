@@ -154,13 +154,18 @@ internal class StateOperationWorker(
       compatibilityFallback: () -> CompatibilitySnapshot? = { null },
   ) =
       submit(context, requestId, StateOperation.LOAD, StateWorkerPurpose.MANUAL) {
-        context.workspace
-            .readFirst(ref)
-            ?.let { (key, read) -> StateWorkerResult.Loaded(key, read) }
-            ?: compatibilityFallback()?.let {
-              StateWorkerResult.CompatibilityLoaded(ref, it)
-            }
-            ?: StateWorkerResult.Missing(ref)
+        resolveFirst(context, ref, compatibilityFallback)
+      }
+
+  /** Reads and decodes a quick slot without applying it, for selected-slot command enablement. */
+  fun probeLoadFirst(
+      context: StateWorkerContext,
+      requestId: Long,
+      ref: StateRef.Slot,
+      compatibilityFallback: () -> CompatibilitySnapshot? = { null },
+  ) =
+      submit(context, requestId, StateOperation.LOAD_AVAILABILITY, StateWorkerPurpose.MANUAL) {
+        resolveFirst(context, ref, compatibilityFallback)
       }
 
   fun delete(context: StateWorkerContext, requestId: Long, key: StateEntryKey) =
@@ -200,6 +205,19 @@ internal class StateOperationWorker(
       submit(context, requestId, StateOperation.RESUME, StateWorkerPurpose.RESUME_SCAN) {
         StateWorkerResult.Resume(context.workspace.firstAutosave(context.identity))
       }
+
+  private fun resolveFirst(
+      context: StateWorkerContext,
+      ref: StateRef,
+      compatibilityFallback: () -> CompatibilitySnapshot?,
+  ): StateWorkerResult =
+      context.workspace
+          .readFirst(ref)
+          ?.let { (key, read) -> StateWorkerResult.Loaded(key, read) }
+          ?: compatibilityFallback()?.let {
+            StateWorkerResult.CompatibilityLoaded(ref, it)
+          }
+          ?: StateWorkerResult.Missing(ref)
 
   private fun submit(
       context: StateWorkerContext,
@@ -286,6 +304,7 @@ internal class StateOperationWorker(
           StateOperation.CATALOG -> "State list could not be refreshed."
           StateOperation.SAVE, StateOperation.AUTOSAVE -> "State could not be saved."
           StateOperation.LOAD, StateOperation.RESUME -> "State could not be loaded."
+          StateOperation.LOAD_AVAILABILITY -> "State availability could not be checked."
           StateOperation.DELETE -> "State could not be deleted."
           StateOperation.EXPORT -> "State could not be exported."
           StateOperation.SCREENSHOT -> "Screenshot could not be saved."
@@ -316,6 +335,8 @@ internal class StateOperationWorker(
           StateOperation.LOAD, StateOperation.RESUME ->
             "Keep the running game open, inspect or export the state, and delete it only if it " +
                 "is no longer needed."
+          StateOperation.LOAD_AVAILABILITY ->
+            "Keep the game open and retry after selecting the slot again."
           StateOperation.DELETE, StateOperation.EXPORT ->
             "Check destination permissions and retry. No existing export was overwritten."
           StateOperation.CATALOG ->
@@ -366,7 +387,10 @@ private data class StateQueuedWork(
   val coalescingKey: Pair<Long, StateOperation>?
     get() =
         when (operation) {
-          StateOperation.CATALOG, StateOperation.SCREENSHOT, StateOperation.RESUME ->
+          StateOperation.CATALOG,
+          StateOperation.SCREENSHOT,
+          StateOperation.RESUME,
+          StateOperation.LOAD_AVAILABILITY ->
             context.sessionId to operation
           else -> null
         }

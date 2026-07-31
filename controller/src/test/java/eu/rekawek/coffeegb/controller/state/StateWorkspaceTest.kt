@@ -8,6 +8,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -62,6 +63,52 @@ class StateWorkspaceTest {
     workspace.delete(fallbackRow.key)
     assertFalse(Files.exists(fallback.stateFile(StateRef.Slot(3))))
     assertTrue(Files.exists(active.stateFile(StateRef.Slot(3))))
+  }
+
+  @Test
+  fun `autosave discovery uses a valid fallback when the active source is absent`() {
+    val fixture = fixture()
+    val active = StateStorageLayout(Files.createTempDirectory("workspace-autosave-active"))
+    val fallback = StateStorageLayout(Files.createTempDirectory("workspace-autosave-fallback"))
+    StateRepository(fallback)
+        .save(
+            StateRef.Autosave,
+            fixture.bytes,
+            StateSaveMetadata("fallback autosave", SAVE_TIME),
+        )
+    val workspace =
+        StateWorkspace(
+            StateStoragePaths(active, active.screenshotsDirectory, listOf(fallback)))
+
+    val located = assertNotNull(workspace.firstAutosave(fixture.identity))
+
+    assertEquals(1, located.first.sourceIndex)
+    assertEquals(fixture.file, located.second.state)
+  }
+
+  @Test
+  fun `autosave discovery does not bypass an invalid active source for a valid fallback`() {
+    val fixture = fixture()
+    val active = StateStorageLayout(Files.createTempDirectory("workspace-autosave-active-invalid"))
+    val fallback = StateStorageLayout(Files.createTempDirectory("workspace-autosave-fallback-valid"))
+    StateRepository(active)
+        .save(
+            StateRef.Autosave,
+            fixture.bytes,
+            StateSaveMetadata("active autosave", SAVE_TIME),
+        )
+    StateRepository(fallback)
+        .save(
+            StateRef.Autosave,
+            fixture.bytes,
+            StateSaveMetadata("fallback autosave", SAVE_TIME),
+        )
+    Files.write(active.stateFile(StateRef.Autosave), byteArrayOf(1, 2, 3, 4))
+    val workspace =
+        StateWorkspace(
+            StateStoragePaths(active, active.screenshotsDirectory, listOf(fallback)))
+
+    assertNull(workspace.firstAutosave(fixture.identity))
   }
 
   @Test
