@@ -824,22 +824,6 @@ internal fun createScreenMenu(
     displayController.update { it.copy(grayscale = grayscale.state) }
   }
 
-  val blending = JCheckBoxMenuItem("Blend adjacent frames", initial.blending)
-  screenMenu.add(blending)
-  blending.accessibleContext.accessibleDescription =
-      "Blend consecutive display frames to approximate LCD persistence"
-  blending.addActionListener {
-    displayController.update { it.copy(blending = blending.state) }
-  }
-
-  val colorCorrection = JCheckBoxMenuItem("CGB color correction", initial.colorCorrection)
-  screenMenu.add(colorCorrection)
-  colorCorrection.accessibleContext.accessibleDescription =
-      "Apply Game Boy Color display color correction"
-  colorCorrection.addActionListener {
-    displayController.update { it.copy(colorCorrection = colorCorrection.state) }
-  }
-
   val showSgbBorder = JCheckBoxMenuItem("Show SGB border", initial.showSgbBorder)
   screenMenu.add(showSgbBorder)
   showSgbBorder.addActionListener {
@@ -853,8 +837,6 @@ internal fun createScreenMenu(
     if (desktopActions == null) fullscreen.accelerator = fullscreenAccelerator()
     fullscreen.state = display.fullscreen
     grayscale.state = display.grayscale
-    blending.state = display.blending
-    colorCorrection.state = display.colorCorrection
     showSgbBorder.state = display.showSgbBorder
   }
   eventBus.register<DisplaySettingsChangedEvent> { event ->

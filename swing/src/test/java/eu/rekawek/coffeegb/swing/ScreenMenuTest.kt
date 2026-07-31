@@ -132,7 +132,7 @@ class ScreenMenuTest {
   }
 
   @Test
-  fun `off-EDT display event synchronizes every control without listener feedback`() {
+  fun `off-EDT display event synchronizes visible controls without listener feedback`() {
     Fixture(ApplicationSettings.Display()).use { fixture ->
       val synchronized =
           ApplicationSettings.Display(
@@ -161,9 +161,11 @@ class ScreenMenuTest {
         assertEquals(listOf("180°"), fixture.menu.submenu("Rotate").items().selectedLabels())
         assertTrue(fixture.menu.checkItem("Full Screen").state)
         assertTrue(fixture.menu.checkItem("DMG grayscale").state)
-        assertFalse(fixture.menu.checkItem("Blend adjacent frames").state)
-        assertFalse(fixture.menu.checkItem("CGB color correction").state)
         assertTrue(fixture.menu.checkItem("Show SGB border").state)
+        assertTrue(
+            fixture.menu.items().none {
+              it.text in setOf("Blend adjacent frames", "CGB color correction")
+            })
       }
       assertEquals(0, fixture.settings.replacements)
     }
