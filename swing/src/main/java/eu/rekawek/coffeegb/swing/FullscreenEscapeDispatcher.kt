@@ -87,12 +87,15 @@ internal class FullscreenEscapeDispatcher private constructor(
     var requestExit = false
     val consume =
         synchronized(lifecycleLock) {
-          if (event.keyCode !in FULLSCREEN_EXIT_KEYS) {
+          // The macOS AWT backend can report a function key through its extended code while the
+          // ordinary key code is undefined. Treat both representations as the same physical key.
+          val keyCode = fullscreenExitKeyCode(event) ?: return@synchronized false
+          if (keyCode !in FULLSCREEN_EXIT_KEYS) {
             return@synchronized false
           }
           if (!belongsToMainWindow(event.component)) {
             if (event.id == KeyEvent.KEY_RELEASED &&
-                fullscreenExitSequenceKeyCode == event.keyCode) {
+                fullscreenExitSequenceKeyCode == keyCode) {
               fullscreenExitSequenceKeyCode = null
             }
             return@synchronized false
@@ -103,7 +106,7 @@ internal class FullscreenEscapeDispatcher private constructor(
               if (fullscreenExitSequenceKeyCode != null) {
                 true
               } else if (isFullscreen()) {
-                fullscreenExitSequenceKeyCode = event.keyCode
+                fullscreenExitSequenceKeyCode = keyCode
                 requestExit = true
                 true
               } else {
@@ -111,7 +114,7 @@ internal class FullscreenEscapeDispatcher private constructor(
               }
             }
             KeyEvent.KEY_RELEASED -> {
-              val captured = fullscreenExitSequenceKeyCode == event.keyCode
+              val captured = fullscreenExitSequenceKeyCode == keyCode
               if (captured) {
                 fullscreenExitSequenceKeyCode = null
               }
@@ -125,6 +128,10 @@ internal class FullscreenEscapeDispatcher private constructor(
     }
     return consume
   }
+
+  private fun fullscreenExitKeyCode(event: KeyEvent): Int? =
+      event.keyCode.takeIf { it in FULLSCREEN_EXIT_KEYS }
+          ?: event.extendedKeyCode.takeIf { it in FULLSCREEN_EXIT_KEYS }
 
   private companion object {
     val FULLSCREEN_EXIT_KEYS = setOf(KeyEvent.VK_ESCAPE, KeyEvent.VK_F11)

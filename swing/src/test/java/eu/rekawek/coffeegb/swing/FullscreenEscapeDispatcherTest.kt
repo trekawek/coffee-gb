@@ -102,6 +102,38 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
+  fun `main-window fullscreen extended F11 exits when the ordinary code is undefined`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        var fullscreen = true
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = {
+                  exitCount++
+                  fullscreen = false
+                },
+            )
+        dispatcher.install()
+
+        assertTrue(
+            registry.dispatch(
+                extendedKey(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        assertEquals(1, exitCount)
+        assertTrue(
+            registry.dispatch(
+                extendedKey(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F11)))
+        assertFalse(
+            registry.dispatch(
+                extendedKey(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        dispatcher.close()
+      }
+
+  @Test
   fun `lost release during fullscreen peer transition cannot latch the next escape`() =
       onEdt {
         val registry = RecordingRegistry()
@@ -240,6 +272,22 @@ class FullscreenEscapeDispatcherTest {
           keyCode,
           KeyEvent.CHAR_UNDEFINED,
       )
+
+  private fun extendedKey(
+      component: JPanel,
+      id: Int,
+      extendedKeyCode: Int,
+  ): KeyEvent =
+      object : KeyEvent(
+          component,
+          id,
+          1L,
+          0,
+          KeyEvent.VK_UNDEFINED,
+          KeyEvent.CHAR_UNDEFINED,
+      ) {
+        override fun getExtendedKeyCode(): Int = extendedKeyCode
+      }
 
   private class RecordingRegistry : KeyEventDispatcherRegistry {
     val dispatchers = linkedSetOf<KeyEventDispatcher>()
