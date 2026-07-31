@@ -16,8 +16,11 @@ internal interface DesktopDebuggerView : AutoCloseable {
   /** Replaces or revokes the view's session-bound command port. */
   fun updateSession(event: Controller.SessionDebugPortEvent)
 
-  /** Shows, raises, or reopens the retained modeless tool windows. */
-  fun showWindow()
+  /** Shows or raises one retained modeless debugger window. */
+  fun showTool(tool: DebuggerWorkspaceTool)
+
+  /** Shows and arranges the windows belonging to one built-in layout. */
+  fun applyLayout(layout: DebuggerWorkspaceLayout)
 }
 
 /** Keeps the Swing owner explicit while allowing the lifecycle controller to be tested headlessly. */
@@ -28,8 +31,8 @@ internal fun interface DesktopDebuggerViewFactory {
 /**
  * EDT-owned bridge between session debug-port publication and the modeless desktop debugger.
  *
- * The controller retains at most one workspace. Closing its tool windows hides them, so the Tools
- * command can reopen the same workspace. Session generations are monotonic and a revocation is
+ * The controller retains at most one workspace. Closing a tool window hides it, so the main Debug
+ * menu can reopen the same window. Session generations are monotonic and a revocation is
  * terminal for its generation; delayed older publications therefore cannot resurrect a stopped or
  * replaced port.
  * The session owns [eu.rekawek.coffeegb.core.debug.DebugPort], so this class never closes one.
@@ -61,17 +64,24 @@ internal class DesktopDebuggerController(
     }
   }
 
-  fun showDebugger() {
-    requireDebuggerEdt("Desktop debugger opening")
+  fun showTool(tool: DebuggerWorkspaceTool) {
+    requireDebuggerEdt("Desktop debugger tool opening")
     if (closed) return
-    val target =
-        view
-            ?: createView().also { created ->
-              currentSession?.let(created::updateSession)
-              view = created
-            }
-    target.showWindow()
+    retainedView().showTool(tool)
   }
+
+  fun applyLayout(layout: DebuggerWorkspaceLayout) {
+    requireDebuggerEdt("Desktop debugger layout opening")
+    if (closed) return
+    retainedView().applyLayout(layout)
+  }
+
+  private fun retainedView(): DesktopDebuggerView =
+      view
+          ?: createView().also { created ->
+            currentSession?.let(created::updateSession)
+            view = created
+          }
 
   private fun acceptSessionEvent(event: Controller.SessionDebugPortEvent): Boolean {
     val generation = event.generation

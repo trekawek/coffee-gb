@@ -71,6 +71,11 @@ internal data class ManagedStateMenuAvailability(
     val localSessionActive: Boolean = false,
 )
 
+internal data class DebuggerMenuActions(
+    val showTool: (DebuggerWorkspaceTool) -> Unit,
+    val applyLayout: (DebuggerWorkspaceLayout) -> Unit,
+)
+
 /** Keeps modeless managed-state controls aligned across local/link ownership transitions. */
 internal class ManagedStateMenuAvailabilityBinding(
     eventBus: EventBus,
@@ -119,7 +124,7 @@ internal class SwingMenu(
     private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
     private val acceptRomLifecycle: (Long?) -> Boolean,
     private val onPreferences: () -> Unit,
-    private val onDebugger: () -> Unit,
+    private val debuggerActions: DebuggerMenuActions,
     private val onSaveState: (slot: Int) -> Unit,
     private val onLoadState: (slot: Int) -> Unit,
     private val onManageStates: () -> Unit,
@@ -250,7 +255,7 @@ internal class SwingMenu(
     menuBar.add(createAudioMenu())
     menuBar.add(createPeripheralsMenu())
     menuBar.add(createLinkMenu())
-    menuBar.add(createToolsMenu(onDebugger))
+    menuBar.add(createDebugMenu(debuggerActions))
     window.jMenuBar = menuBar
   }
 
@@ -1281,16 +1286,35 @@ internal fun createScreenMenu(
   return screenMenu
 }
 
-/** Builds the always-available desktop tooling entry without depending on an active ROM. */
-internal fun createToolsMenu(onDebugger: () -> Unit): JMenu {
+/** Builds the always-available debugger navigation without depending on an active ROM. */
+internal fun createDebugMenu(actions: DebuggerMenuActions): JMenu {
   check(SwingUtilities.isEventDispatchThread()) {
-    "The Tools menu must be created on the Event Dispatch Thread"
+    "The Debug menu must be created on the Event Dispatch Thread"
   }
-  val toolsMenu = JMenu("Tools")
-  val debugger = JMenuItem("Debug Workspace")
-  debugger.accessibleContext.accessibleDescription =
-      "Open the realtime modeless debugger workspace for the current emulation session"
-  debugger.addActionListener { onDebugger() }
-  toolsMenu.add(debugger)
-  return toolsMenu
+  return JMenu("Debug").apply {
+    mnemonic = KeyEvent.VK_D
+    DebuggerWorkspaceTool.entries.forEach { tool ->
+      add(
+          JMenuItem(tool.title).apply {
+            accessibleContext.accessibleDescription =
+                "Show or raise the ${tool.title} debugger window"
+            addActionListener { actions.showTool(tool) }
+          })
+    }
+    addSeparator()
+    add(
+        JMenu("Layout").apply {
+          mnemonic = KeyEvent.VK_L
+          accessibleContext.accessibleDescription =
+              "Show and arrange a built-in debugger window layout"
+          DebuggerWorkspaceLayout.entries.forEach { layout ->
+            add(
+                JMenuItem(layout.title).apply {
+                  accessibleContext.accessibleDescription =
+                      "Show and arrange the ${layout.title} layout"
+                  addActionListener { actions.applyLayout(layout) }
+                })
+          }
+        })
+  }
 }

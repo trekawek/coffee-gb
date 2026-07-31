@@ -16,18 +16,12 @@ import java.util.EnumMap
 import java.util.prefs.Preferences
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
-import javax.swing.ButtonGroup
 import javax.swing.JCheckBox
-import javax.swing.JCheckBoxMenuItem
 import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JLabel
-import javax.swing.JMenu
-import javax.swing.JMenuBar
-import javax.swing.JMenuItem
 import javax.swing.JPanel
-import javax.swing.JRadioButtonMenuItem
 import javax.swing.KeyStroke
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
@@ -56,7 +50,6 @@ internal enum class DebuggerWorkspaceLayout(val title: String) {
 
 internal data class DebuggerWorkspaceToolPreferences(
     val bounds: Rectangle? = null,
-    val visible: Boolean = false,
     val held: Boolean = false,
 )
 
@@ -68,7 +61,7 @@ internal data class DebuggerWorkspacePreferences(
       tools[tool] ?: DebuggerWorkspaceToolPreferences()
 }
 
-/** Only window placement, visibility, and update-hold presentation state are persisted. */
+/** Only window placement, update-hold state, and the last applied built-in layout are persisted. */
 internal class DebuggerWorkspacePreferencesStore(
     private val node: Preferences =
         Preferences.userNodeForPackage(DebuggerWindow::class.java).node("debugger-workspace-v2"),
@@ -90,7 +83,6 @@ internal class DebuggerWorkspacePreferencesStore(
                           .takeIf(::validBounds)
                   DebuggerWorkspaceToolPreferences(
                       bounds = bounds,
-                      visible = node.getBoolean("$prefix-visible", false),
                       held = node.getBoolean("$prefix-held", false),
                   )
                 }
@@ -113,7 +105,6 @@ internal class DebuggerWorkspacePreferencesStore(
           node.putInt("$prefix-width", bounds.width)
           node.putInt("$prefix-height", bounds.height)
         }
-        node.putBoolean("$prefix-visible", state.visible)
         node.putBoolean("$prefix-held", state.held)
       }
       node.put("layout", value.layout.name)
@@ -136,14 +127,8 @@ internal class DebuggerWorkspace(
 ) : AutoCloseable {
   private val loaded = preferencesStore.load()
   private val windows = EnumMap<DebuggerWorkspaceTool, ToolWindow>(DebuggerWorkspaceTool::class.java)
-  private val visibilityMenuItems =
-      DebuggerWorkspaceTool.entries.associateWith { mutableListOf<JCheckBoxMenuItem>() }
-  private val layoutMenuItems =
-      DebuggerWorkspaceLayout.entries.associateWith { mutableListOf<JRadioButtonMenuItem>() }
   private var currentLayout = loaded.layout
-  private var opened = false
   private var closed = false
-  private var changingLayout = false
 
   init {
     require(SwingUtilities.isEventDispatchThread()) { "Debugger workspace construction must run on EDT" }
@@ -151,27 +136,16 @@ internal class DebuggerWorkspace(
       val saved = loaded.state(tool)
       windows[tool] = ToolWindow(tool, panel.workspaceComponent(tool), saved)
     }
-    syncVisibilityMenus()
-    syncLayoutMenus()
     panel.setWorkspaceMode(true)
     updatePanelInterest()
   }
 
-  fun showWindow() {
-    check(SwingUtilities.isEventDispatchThread()) { "Debugger workspace opening must run on EDT" }
+  fun showTool(tool: DebuggerWorkspaceTool) {
+    check(SwingUtilities.isEventDispatchThread()) { "Debugger tool opening must run on EDT" }
     if (closed) return
-    if (!opened) {
-      opened = true
-      val requested = windows.filterValues { it.savedVisible }.keys
-      if (requested.isEmpty()) applyLayout(currentLayout) else requested.forEach(::showTool)
-    } else if (windows.values.none { it.dialog.isVisible }) {
-      applyLayout(currentLayout)
-    } else {
-      windows.values.filter { it.dialog.isVisible }.forEach { window ->
-        window.dialog.toFront()
-      }
-    }
+    revealTool(tool)
     updatePanelInterest()
+    savePreferences()
   }
 
   fun updateSession(event: eu.rekawek.coffeegb.controller.Controller.SessionDebugPortEvent) {
@@ -195,35 +169,22 @@ internal class DebuggerWorkspace(
   internal fun heldTools(): Set<DebuggerWorkspaceTool> =
       windows.filterValues { it.hold.isSelected }.keys.toSet()
 
-  private fun showTool(tool: DebuggerWorkspaceTool) {
+  private fun revealTool(tool: DebuggerWorkspaceTool) {
     val window = windows.getValue(tool)
     if (!window.positioned) positionWindow(tool, window)
     window.dialog.isVisible = true
     window.dialog.toFront()
   }
 
-  private fun setToolVisible(tool: DebuggerWorkspaceTool, visible: Boolean) {
-    if (visible) showTool(tool) else windows.getValue(tool).dialog.isVisible = false
-    if (!changingLayout) {
-      currentLayout = detectLayout() ?: currentLayout
-      updatePanelInterest()
-      savePreferences()
+  fun applyLayout(layout: DebuggerWorkspaceLayout) {
+    check(SwingUtilities.isEventDispatchThread()) { "Debugger layout opening must run on EDT" }
+    if (closed) return
+    currentLayout = layout
+    val visible = toolsFor(layout)
+    windows.forEach { (tool, window) ->
+      if (tool in visible) revealTool(tool) else window.dialog.isVisible = false
     }
-  }
-
-  private fun applyLayout(layout: DebuggerWorkspaceLayout) {
-    changingLayout = true
-    try {
-      currentLayout = layout
-      val visible = toolsFor(layout)
-      windows.forEach { (tool, window) ->
-        if (tool in visible) showTool(tool) else window.dialog.isVisible = false
-      }
-      tile(visible.toList())
-    } finally {
-      changingLayout = false
-    }
-    syncLayoutMenus()
+    tile(visible.toList())
     updatePanelInterest()
     savePreferences()
   }
@@ -250,11 +211,6 @@ internal class DebuggerWorkspace(
             )
         DebuggerWorkspaceLayout.FULL -> DebuggerWorkspaceTool.entries.toSet()
       }
-
-  private fun detectLayout(): DebuggerWorkspaceLayout? {
-    val visible = visibleTools()
-    return DebuggerWorkspaceLayout.entries.firstOrNull { toolsFor(it) == visible }
-  }
 
   private fun tile(tools: List<DebuggerWorkspaceTool>) {
     if (tools.isEmpty()) return
@@ -327,80 +283,11 @@ internal class DebuggerWorkspace(
         windows.mapValues { (_, window) ->
           DebuggerWorkspaceToolPreferences(
               bounds = window.dialog.bounds.takeIf { window.positioned },
-              visible = window.dialog.isVisible,
               held = window.hold.isSelected,
           )
         }
     preferencesStore.save(DebuggerWorkspacePreferences(states, currentLayout))
   }
-
-  private fun menuBar(activeTool: DebuggerWorkspaceTool): JMenuBar =
-      JMenuBar().apply {
-        add(
-            JMenu("Window").apply {
-              mnemonic = KeyEvent.VK_W
-              DebuggerWorkspaceTool.entries.forEach { tool ->
-                add(
-                    JCheckBoxMenuItem(tool.title).apply {
-                      isSelected = windows[tool]?.dialog?.isVisible == true || tool == activeTool
-                      addActionListener { setToolVisible(tool, isSelected) }
-                      visibilityMenuItems.getValue(tool).add(this)
-                    })
-              }
-              addSeparator()
-              add(
-                  JMenuItem("Bring All to Front").apply {
-                    addActionListener {
-                      windows.values.filter { it.dialog.isVisible }.forEach { it.dialog.toFront() }
-                    }
-                  })
-              add(
-                  JMenuItem("Tile Visible Windows").apply {
-                    addActionListener { tile(visibleTools().sortedBy { it.ordinal }) }
-                  })
-            })
-        add(
-            JMenu("Layout").apply {
-              mnemonic = KeyEvent.VK_L
-              val group = ButtonGroup()
-              DebuggerWorkspaceLayout.entries.forEach { layout ->
-                val item = JRadioButtonMenuItem(layout.title, layout == currentLayout)
-                group.add(item)
-                layoutMenuItems.getValue(layout).add(item)
-                item.addActionListener { applyLayout(layout) }
-                add(item)
-              }
-            })
-        add(
-            JMenu("View").apply {
-              mnemonic = KeyEvent.VK_V
-              add(
-                  JMenuItem("Copy ${activeTool.title}").apply {
-                    accelerator =
-                        KeyStroke.getKeyStroke(KeyEvent.VK_C, debuggerMenuShortcutMask())
-                    addActionListener { panel.copyWorkspaceTool(activeTool) }
-                  })
-              addSeparator()
-              add(
-                  JMenuItem("Increase Font Size").apply {
-                    accelerator =
-                        KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, debuggerMenuShortcutMask())
-                    addActionListener { panel.workspaceZoom(DebuggerUiPreferences.FONT_SCALE_STEP) }
-                  })
-              add(
-                  JMenuItem("Decrease Font Size").apply {
-                    accelerator =
-                        KeyStroke.getKeyStroke(KeyEvent.VK_MINUS, debuggerMenuShortcutMask())
-                    addActionListener { panel.workspaceZoom(-DebuggerUiPreferences.FONT_SCALE_STEP) }
-                  })
-              add(
-                  JMenuItem("Reset Font Size").apply {
-                    accelerator =
-                        KeyStroke.getKeyStroke(KeyEvent.VK_0, debuggerMenuShortcutMask())
-                    addActionListener { panel.workspaceResetZoom() }
-                  })
-            })
-      }
 
   private inner class ToolWindow(
       val tool: DebuggerWorkspaceTool,
@@ -411,7 +298,6 @@ internal class DebuggerWorkspace(
     val hold = JCheckBox("Hold updates", preferences.held)
     val live = JLabel("LIVE", SwingConstants.CENTER)
     val footer = JLabel("Waiting for a debugger session")
-    val savedVisible = preferences.visible
     val savedBounds = preferences.bounds
     var positioned = false
     private var heldFooterText: String? = null
@@ -441,13 +327,11 @@ internal class DebuggerWorkspace(
       dialog.preferredSize = tool.preferredSize
       dialog.contentPane = root
       dialog.accessibleContext.accessibleName = tool.accessibleName
-      dialog.jMenuBar = menuBar(tool)
       installWorkspaceBindings(root, tool)
       dialog.addWindowListener(
           object : WindowAdapter() {
             override fun windowClosing(event: WindowEvent) {
               SwingUtilities.invokeLater {
-                syncVisibilityMenus()
                 updatePanelInterest()
                 savePreferences()
               }
@@ -456,12 +340,10 @@ internal class DebuggerWorkspace(
       dialog.addComponentListener(
           object : ComponentAdapter() {
             override fun componentShown(event: ComponentEvent) {
-              syncVisibilityMenus()
               updatePanelInterest()
             }
 
             override fun componentHidden(event: ComponentEvent) {
-              syncVisibilityMenus()
               updatePanelInterest()
               savePreferences()
             }
@@ -504,18 +386,6 @@ internal class DebuggerWorkspace(
     fun sessionChanged() {
       heldFooterText = null
       updateStatus()
-    }
-  }
-
-  private fun syncVisibilityMenus() {
-    windows.forEach { (tool, window) ->
-      visibilityMenuItems.getValue(tool).forEach { item -> item.isSelected = window.dialog.isVisible }
-    }
-  }
-
-  private fun syncLayoutMenus() {
-    layoutMenuItems.forEach { (layout, items) ->
-      items.forEach { item -> item.isSelected = layout == currentLayout }
     }
   }
 
@@ -567,6 +437,24 @@ internal class DebuggerWorkspace(
         "workspace-copy",
     ) {
       panel.copyWorkspaceTool(tool)
+    }
+    bind(
+        KeyStroke.getKeyStroke(KeyEvent.VK_EQUALS, debuggerMenuShortcutMask()),
+        "workspace-zoom-in",
+    ) {
+      panel.workspaceZoom(DebuggerUiPreferences.FONT_SCALE_STEP)
+    }
+    bind(
+        KeyStroke.getKeyStroke(KeyEvent.VK_MINUS, debuggerMenuShortcutMask()),
+        "workspace-zoom-out",
+    ) {
+      panel.workspaceZoom(-DebuggerUiPreferences.FONT_SCALE_STEP)
+    }
+    bind(
+        KeyStroke.getKeyStroke(KeyEvent.VK_0, debuggerMenuShortcutMask()),
+        "workspace-zoom-reset",
+    ) {
+      panel.workspaceResetZoom()
     }
   }
 

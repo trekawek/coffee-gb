@@ -91,10 +91,16 @@ internal class DebuggerWindow(owner: JFrame) : DesktopDebuggerView {
     if (!closed) workspace.updateSession(event)
   }
 
-  override fun showWindow() {
-    requireDebuggerWindowEdt("Debugger window opening")
+  override fun showTool(tool: DebuggerWorkspaceTool) {
+    requireDebuggerWindowEdt("Debugger tool opening")
     if (closed) return
-    workspace.showWindow()
+    workspace.showTool(tool)
+  }
+
+  override fun applyLayout(layout: DebuggerWorkspaceLayout) {
+    requireDebuggerWindowEdt("Debugger layout opening")
+    if (closed) return
+    workspace.applyLayout(layout)
   }
 
   override fun close() {

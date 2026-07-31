@@ -23,9 +23,10 @@ CPU, Graphics, Timing, and Full; there is no custom-preset or **Save Layout As**
 
 Coffee GB now presents debugging as a **workspace of modeless Swing windows**, not one large dialog
 containing mutually exclusive tabs. The workspace has independent **Execution**, **Memory**,
-**Breakpoints**, **Video**, **Hardware & I/O**, **Audio**, and **Timeline** windows. Window menus
-open, hide, raise, and tile them; four built-in layouts provide CPU, graphics, timing, and full
-arrangements. Bounds, visibility, hold state, and the selected built-in layout are persisted.
+**Breakpoints**, **Video**, **Hardware & I/O**, **Audio**, and **Timeline** windows. The emulator's
+top-level **Debug** menu opens or raises each window; its **Layout** submenu provides CPU, graphics,
+timing, and full arrangements. Debugger windows deliberately have no menu bars of their own.
+Bounds, hold state, and the selected built-in layout are persisted.
 
 Every visible, non-held window updates automatically while the game runs. There is no Refresh
 action, and Pause is run control rather than an inspection prerequisite. A local **Hold updates**
@@ -41,7 +42,7 @@ precision, copying, and accessibility. Raster lanes and rolling audio waveforms 
 
 | Area | Implemented in July 2026 | Explicitly remaining |
 | --- | --- | --- |
-| Window model | One retained workspace owns seven independent modeless windows, built-in layouts, tiling, visibility, bounds, and per-window Hold | Custom named presets, layout-save UI, persisted inner split/column state, and detachable Video tabs |
+| Window model | One retained workspace owns seven independent modeless windows, top-level Debug navigation, built-in arranged layouts, bounds, and per-window Hold | Custom named presets, layout-save UI, persisted inner split/column state, and detachable Video tabs |
 | Updates | One 50 ms timer drives a single-flight 20 Hz scalar stream; run-control and interest changes request immediate samples; no workspace Refresh action | A measured frame-ready subscription, if future profiling justifies one |
 | CPU | Structured register cells, flag indicators, execution fields, one decoded instruction, and stack table | Bank-aware scrolling disassembly, symbols/source, watches, call stack, and step-over/out |
 | Memory | Live side-effect-free hex/ASCII table, address-space combo, bounded start/length spinners, PC/SP follow, and byte-change highlighting | Generic bank selection, Follow HL, editing, and side-effectful I/O/VRAM/OAM reads |
@@ -80,21 +81,19 @@ view, calm enough for long sessions, and predictable across Windows, macOS, and 
 
 ## Workspace and window model
 
-`Tools > Debug Workspace` opens the saved visible windows or, on first use, the CPU layout
-containing **Execution**, **Memory**, and **Breakpoints**. The emulator window remains independent.
-Normal debugging does not use modal debugger dialogs.
+The emulator's top-level menu contains **Debug > Execution**, **Memory**, **Breakpoints**,
+**Video**, **Hardware & I/O**, **Audio**, and **Timeline**. Selecting an entry shows or raises only
+that window while leaving other visible debugger windows alone. **Debug > Layout** contains the
+four built-in arrangements: **CPU debugging**, **Graphics debugging**, **Timing and I/O**, and
+**Full workspace**. Applying one replaces the visible set with that arrangement and positions its
+windows. There is no named custom-layout editor, **Save Layout As**, reset-layout action,
+**Bring All to Front**, or standalone **Tile Visible Windows** command.
 
-The **Window** menu contains:
+The child windows have no **Window**, **Layout**, or **View** menu and no menu bar. Copy, run-control,
+and font-zoom shortcuts remain installed directly on each window. Normal debugging does not use
+modal debugger dialogs.
 
-- checkable entries for every tool window;
-- **Bring All to Front**;
-- **Tile Visible Windows**.
-
-The separate **Layout** menu contains the four built-in layouts: **CPU**, **Graphics**,
-**Timing and I/O**, and **Full workspace**. There is no named custom-layout editor, **Save Layout
-As**, or reset-layout action.
-
-Window bounds, visibility, Hold state, and the selected built-in layout are persisted. Snapshot
+Window bounds, Hold state, and the selected built-in layout are persisted. Snapshot
 data, ROM bytes, memory, traces, breakpoint hits, symbols, paths, copied data, inner split
 positions, table columns, and Video controls are not persisted. Saved bounds outside the current
 screen topology are discarded in favor of normal placement.
@@ -378,8 +377,9 @@ catch up.
 
 Implemented presentation-layer types include:
 
-- `DebuggerWorkspace` — modeless tool-window lifecycle, built-in layouts, persisted bounds,
-  visibility/Hold state, menus, and shared key bindings;
+- `DebuggerWorkspace` — modeless tool-window lifecycle, built-in layouts, persisted bounds and
+  Hold state, visibility/interest tracking, and shared key bindings; top-level navigation belongs
+  to `SwingMenu`;
 - `DebuggerPanel` — sole inspection planner, trace owner, request correlator, cadence owner, and
   EDT integration point;
 - `DebuggerExecutionPanel`, `DebuggerMemoryPanel`, `DebuggerBreakpointPanel`,
@@ -470,8 +470,8 @@ The following are deliberate current limitations and must not be implied by the 
 
 Delivered in the current tree:
 
-- seven retained modeless tool windows with built-in CPU/Graphics/Timing/Full layouts, persisted
-  bounds/visibility/Hold state, tiling, and session-safe lifecycle;
+- seven retained modeless tool windows with top-level Debug navigation, built-in
+  CPU/Graphics/Timing/Full arrangements, persisted bounds/Hold state, and session-safe lifecycle;
 - one single-flight 20 Hz coherent planner with hidden/held interest withdrawal and immediate
   command/interest refresh demand;
 - structured Execution, live safe Memory with PC/SP follow, typed breakpoint cards with dedicated
