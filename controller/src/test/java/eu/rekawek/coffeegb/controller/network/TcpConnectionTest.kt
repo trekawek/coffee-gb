@@ -148,6 +148,38 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun stoppingServerTerminatesItsConnectedClient() {
+    val port = ServerSocket(0).use { it.localPort }
+    val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
+    val serverReady = LinkedBlockingQueue<ConnectionController.ServerGotConnectionEvent>()
+    val clientReady = LinkedBlockingQueue<ConnectionController.ClientConnectedToServerEvent>()
+    val clientDisconnected =
+        LinkedBlockingQueue<ConnectionController.ClientDisconnectedFromServerEvent>()
+    serverBus.register<ConnectionController.ServerStartedEvent>(serverStarted::add)
+    serverBus.register<ConnectionController.ServerGotConnectionEvent>(serverReady::add)
+    clientBus.register<ConnectionController.ClientConnectedToServerEvent>(clientReady::add)
+    clientBus.register<ConnectionController.ClientDisconnectedFromServerEvent>(clientDisconnected::add)
+
+    val server = TcpServer(serverBus, port)
+    this.server = server
+    threads += Thread(server).also { it.start() }
+    assertNotNull(serverStarted.poll(5, TimeUnit.SECONDS), "server did not start")
+
+    val client = TcpClient("localhost:$port", clientBus)
+    this.client = client
+    threads += Thread(client).also { it.start() }
+    assertNotNull(serverReady.poll(5, TimeUnit.SECONDS), "server did not activate the session")
+    assertNotNull(clientReady.poll(5, TimeUnit.SECONDS), "client did not activate the session")
+
+    server.stop()
+
+    assertNotNull(
+        clientDisconnected.poll(5, TimeUnit.SECONDS),
+        "stopping the server must terminate the connected client",
+    )
+  }
+
+  @Test
   fun fourPlayerServerStartsImmediatelyAssignsSlotsAndRelaysInput() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
