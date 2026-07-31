@@ -82,6 +82,22 @@ class DesktopHelpDialogsTest {
         assertEquals(tokens().elevatedSurface, panel.buttonBar.cancelButton.background)
       }
 
+  @Test
+  fun `about details pack as a left-aligned reading column`() =
+      onEdt {
+        val about = DesktopAboutPanel("1.2.3")
+        about.size = about.preferredSize
+        layoutTree(about)
+
+        val labels = descendants(about).filterIsInstance<javax.swing.JLabel>().associateBy { it.text }
+        val left = labels.getValue("Coffee GB").x
+        assertEquals(left, labels.getValue("Version: 1.2.3").x)
+        assertEquals(left, labels.getValue("License: MIT").x)
+        assertEquals(left, labels.getValue("Source:").x)
+        assertEquals(left, about.sourceField.x)
+        assertEquals(left, about.copyButton.x)
+      }
+
   private fun actionRegistry(): DesktopActionRegistry =
       DesktopActionRegistry(
           DesktopCommandHandlers(
@@ -117,6 +133,17 @@ class DesktopHelpDialogsTest {
           warning = Color(0x805500),
           danger = Color(0xB3261E),
       )
+
+  private fun descendants(root: java.awt.Container): Sequence<java.awt.Component> =
+      root.components.asSequence().flatMap { child ->
+        sequenceOf(child) +
+            if (child is java.awt.Container) descendants(child) else emptySequence()
+      }
+
+  private fun layoutTree(container: java.awt.Container) {
+    container.doLayout()
+    container.components.filterIsInstance<java.awt.Container>().forEach(::layoutTree)
+  }
 
   private fun <T> onEdt(action: () -> T): T {
     var result: Result<T>? = null

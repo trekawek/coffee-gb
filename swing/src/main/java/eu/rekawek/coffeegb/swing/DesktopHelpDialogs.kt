@@ -258,6 +258,7 @@ internal class DesktopAboutPanel(
   private val productName =
       JLabel("Coffee GB").apply {
         font = font.deriveFont(Font.BOLD, font.size2D * 1.35f)
+        alignmentX = Component.LEFT_ALIGNMENT
         putClientProperty("html.disable", true)
       }
   private val productDescription =
@@ -265,14 +266,24 @@ internal class DesktopAboutPanel(
           "Pocket Brew desktop emulator for Game Boy and Game Boy Color.",
           "Coffee GB description",
       )
-  private val versionLabel = JLabel("Version: $version").apply { putClientProperty("html.disable", true) }
-  private val licenseLabel = JLabel("License: MIT").apply { putClientProperty("html.disable", true) }
+  private val versionLabel =
+      JLabel("Version: $version").apply {
+        alignmentX = Component.LEFT_ALIGNMENT
+        putClientProperty("html.disable", true)
+      }
+  private val licenseLabel =
+      JLabel("License: MIT").apply {
+        alignmentX = Component.LEFT_ALIGNMENT
+        putClientProperty("html.disable", true)
+      }
   private val sourceLabel = JLabel("Source:").apply {
+    alignmentX = Component.LEFT_ALIGNMENT
     putClientProperty("html.disable", true)
     labelFor = sourceField
   }
   private val copyRow =
       JPanel(FlowLayout(FlowLayout.LEADING, 0, 0)).apply {
+        alignmentX = Component.LEFT_ALIGNMENT
         add(copyButton)
         add(Box.createHorizontalStrut(12))
         add(copyStatus)
@@ -302,6 +313,8 @@ internal class DesktopAboutPanel(
     getAccessibleContext().accessibleName = "About Coffee GB"
     getAccessibleContext().accessibleDescription =
         "Coffee GB version, license, and source repository"
+    alignmentX = Component.LEFT_ALIGNMENT
+    sourceField.alignmentX = Component.LEFT_ALIGNMENT
     border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
     add(mark, BorderLayout.WEST)
     add(details, BorderLayout.CENTER)
