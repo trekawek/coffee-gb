@@ -164,6 +164,7 @@ class NetplayWindowTest {
       bus.post(ServerGotConnectionEvent("localhost", LinkMode.FOUR_PLAYER_ADAPTER, 0, attemptId))
       flushEdt()
       assertEquals(NetplayPhase.ACTIVE, onEdt { fixture.host.currentPresentation().state.phase })
+      assertEquals(1, fixture.view.hideCalls)
 
       onEdt { fixture.view.actions.stopSession() }
       assertEquals(listOf(attemptId), serverStops.map { it.attemptId })
@@ -218,6 +219,10 @@ class NetplayWindowTest {
       presentation = onEdt { fixture.host.currentPresentation() }
       assertEquals(NetplayPhase.ACTIVE, presentation.state.phase)
       assertEquals(NetplaySessionAction.DISCONNECT, presentation.sessionAction)
+      assertEquals(1, fixture.view.hideCalls)
+
+      onEdt { fixture.host.show() }
+      assertEquals(1, fixture.view.hideCalls, "reopening an active session keeps the window open")
 
       onEdt { fixture.view.actions.stopSession() }
       assertEquals(listOf(firstAttemptId), clientStops.map { it.attemptId })
@@ -734,6 +739,7 @@ class NetplayWindowTest {
   private class RecordingNetplayView(val actions: NetplayWindowActions) : NetplayWindowView {
     val presentations = mutableListOf<NetplayUiPresentation>()
     var showCalls = 0
+    var hideCalls = 0
     var closeCalls = 0
 
     override fun render(presentation: NetplayUiPresentation) {
@@ -744,6 +750,11 @@ class NetplayWindowTest {
     override fun showOrRaise() {
       assertTrue(SwingUtilities.isEventDispatchThread())
       showCalls++
+    }
+
+    override fun hide() {
+      assertTrue(SwingUtilities.isEventDispatchThread())
+      hideCalls++
     }
 
     override fun close() {

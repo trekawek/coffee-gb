@@ -335,6 +335,9 @@ internal interface NetplayWindowView : AutoCloseable {
   fun render(presentation: NetplayUiPresentation)
 
   fun showOrRaise()
+
+  /** Hides the retained modeless window without changing the active netplay session. */
+  fun hide()
 }
 
 internal fun interface NetplayWindowViewFactory {
@@ -1006,9 +1009,11 @@ internal class NetplayWindowHost(
 
   private fun update(next: NetplayUiState) {
     requireNetplayEdt("Netplay presentation update")
+    val becameActive = state.phase != NetplayPhase.ACTIVE && next.phase == NetplayPhase.ACTIVE
     state = next
     val presentation = presentNetplay(next)
     view?.render(presentation)
+    if (becameActive) view?.hide()
     onPresentation(presentation)
   }
 
@@ -1095,6 +1100,13 @@ private class SwingNetplayWindow(
     dialog.isVisible = true
     dialog.toFront()
     dialog.requestFocus()
+  }
+
+  override fun hide() {
+    requireNetplayEdt("Netplay Swing view hiding")
+    if (!dialog.isVisible) return
+    publishBounds()
+    dialog.isVisible = false
   }
 
   override fun close() {
