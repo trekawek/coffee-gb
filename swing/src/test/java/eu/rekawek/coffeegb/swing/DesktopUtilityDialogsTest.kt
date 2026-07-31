@@ -49,6 +49,19 @@ class DesktopUtilityDialogsTest {
       }
 
   @Test
+  fun `Barcode Boy select action uses its full form row`() =
+      onEdt {
+        val form = BarcodeBoyForm(barcodeBoySelected = false, onSelectBarcodeBoy = { false })
+        val shell = factory().createFormPanel(form.spec(), form) {}
+
+        shell.size = shell.preferredSize
+        layoutTree(shell)
+
+        assertTrue(form.selectDeviceButton.width >= form.selectDeviceButton.preferredSize.width)
+        assertEquals(form.width, form.selectDeviceButton.width)
+      }
+
+  @Test
   fun `Barcode Boy validation rejects non ASCII digits and reports live length`() =
       onEdt {
         val form = BarcodeBoyForm(barcodeBoySelected = true, onSelectBarcodeBoy = { true })
@@ -231,6 +244,11 @@ class DesktopUtilityDialogsTest {
         sequenceOf(child) +
             if (child is java.awt.Container) descendants(child) else emptySequence()
       }
+
+  private fun layoutTree(container: java.awt.Container) {
+    container.doLayout()
+    container.components.filterIsInstance<java.awt.Container>().forEach(::layoutTree)
+  }
 
   private fun <T> onEdt(action: () -> T): T {
     var result: Result<T>? = null
