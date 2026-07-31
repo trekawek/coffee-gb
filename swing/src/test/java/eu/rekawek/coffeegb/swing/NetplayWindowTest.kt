@@ -226,6 +226,11 @@ class NetplayWindowTest {
 
       onEdt { fixture.view.actions.stopSession() }
       assertEquals(listOf(firstAttemptId), clientStops.map { it.attemptId })
+      assertEquals(
+          NetplayPhase.DISCONNECTED,
+          onEdt { fixture.host.currentPresentation().state.phase },
+          "disconnecting a client whose transport already stopped must not leave the UI stopping",
+      )
       bus.post(ClientDisconnectedFromServerEvent(firstAttemptId))
       flushEdt()
       assertEquals(NetplayPhase.DISCONNECTED, onEdt { fixture.host.currentPresentation().state.phase })

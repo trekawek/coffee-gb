@@ -563,8 +563,23 @@ internal class NetplayWindowHost(
         eventBus.post(StopServerEvent(activeAttemptId ?: ConnectionController.LEGACY_ATTEMPT))
       }
       state.role == NetplayRole.CLIENT && state.phase == NetplayPhase.ACTIVE -> {
+        val attemptId = activeAttemptId
         update(state.copy(phase = NetplayPhase.STOPPING, failure = null))
-        eventBus.post(StopClientEvent(activeAttemptId ?: ConnectionController.LEGACY_ATTEMPT))
+        eventBus.post(StopClientEvent(attemptId ?: ConnectionController.LEGACY_ATTEMPT))
+
+        // The connection may already have ended remotely. In that case the controller has
+        // cleared its client before this event is handled and cannot publish a terminal event
+        // in response to StopClientEvent. Do not leave the window permanently in STOPPING while
+        // waiting for an event that will never arrive.
+        if (
+            attemptId != null &&
+                activeAttemptId == attemptId &&
+                state.phase == NetplayPhase.STOPPING
+        ) {
+          activeAttemptId = null
+          restoreSerialPeripheralAfterNetplay()
+          update(disconnectedState(NetplaySetupView.JOIN))
+        }
       }
     }
   }
