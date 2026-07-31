@@ -386,6 +386,9 @@ class BasicController private constructor(
   /** Debugger pause ownership is independent from the desktop/workflow pause owner. */
   private var debugPaused = false
 
+  /** Correlates authoritative playback events with the currently committed UI lifecycle. */
+  private var playbackSessionGeneration: Long? = null
+
   private var isRewinding = false
 
   private val patches = mutableListOf<CheatPatch>()
@@ -2806,6 +2809,7 @@ class BasicController private constructor(
         )
       }
     }
+    playbackSessionGeneration = null
 
     try {
       committedSession.activate()
@@ -2901,6 +2905,7 @@ class BasicController private constructor(
     val wasEffectivelyPaused = isEffectivelyPaused()
     isPaused = paused
     updateCartridgePause(wasEffectivelyPaused)
+    publishPlaybackState()
   }
 
   private fun setDebugPaused(paused: Boolean) {
@@ -2913,6 +2918,16 @@ class BasicController private constructor(
     val wasEffectivelyPaused = isEffectivelyPaused()
     debugPaused = paused
     updateCartridgePause(wasEffectivelyPaused)
+    publishPlaybackState()
+  }
+
+  private fun publishPlaybackState() {
+    val currentSession = session ?: return
+    val generation = playbackSessionGeneration ?: return
+    postSessionEventSafely(
+        currentSession,
+        Controller.SessionPlaybackStateEvent(generation, isEffectivelyPaused()),
+    )
   }
 
   private fun relinquishDebugBreakpointPauseOwnership() {
@@ -3414,6 +3429,7 @@ class BasicController private constructor(
 
     isPaused = false
     debugPaused = false
+    playbackSessionGeneration = SessionPresentationGeneration.next()
     pauseStateBeforeResume = null
     sessionStartedNanos = System.nanoTime()
     stateSessionId = nextStateSessionId()
@@ -3480,7 +3496,9 @@ class BasicController private constructor(
             session.config.rom.title,
             session.config.rom.origin,
             openRequestId,
+            playbackSessionGeneration,
         ))
+    publishPlaybackState()
     val context = stateContext
     postSessionEventSafely(
         session,
@@ -3672,6 +3690,7 @@ class BasicController private constructor(
       postSessionEventSafely(session, StateUxSessionEvent(stateSessionId, false, null))
       postSessionEventSafely(session, Controller.EmulationStoppedEvent())
     }
+    playbackSessionGeneration = null
     stateContext = null
     pendingResume = null
     pauseStateBeforeResume = null

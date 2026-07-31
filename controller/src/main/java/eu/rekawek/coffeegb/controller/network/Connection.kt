@@ -56,6 +56,8 @@ class Connection(
     requestedMode: LinkMode = LinkMode.NORMAL,
     assignedPlayer: Int = 1,
     private val cancelTransport: (() -> Unit)? = null,
+    private val attemptId: Long = ConnectionController.LEGACY_ATTEMPT,
+    private val lifecyclePublisher: (Event) -> Unit = { mainEventBus.post(it) },
 ) : Runnable, AutoCloseable {
 
   private val input = DataInputStream(BufferedInputStream(inputStream))
@@ -218,9 +220,10 @@ class Connection(
       )
       try {
         if (server) {
-          eventBus.post(ConnectionController.ServerProtocolErrorEvent(player, diagnostic))
+          lifecyclePublisher(
+              ConnectionController.ServerProtocolErrorEvent(player, diagnostic, attemptId))
         } else {
-          eventBus.post(ConnectionController.ClientProtocolErrorEvent(diagnostic))
+          lifecyclePublisher(ConnectionController.ClientProtocolErrorEvent(diagnostic, attemptId))
         }
       } catch (callbackFailure: RuntimeException) {
         e.addSuppressed(callbackFailure)
@@ -521,7 +524,8 @@ class Connection(
           START -> {
             if (!server && !sessionActive) {
               sessionActive = true
-              eventBus.post(ConnectionController.ClientConnectedToServerEvent(mode, player))
+              lifecyclePublisher(
+                  ConnectionController.ClientConnectedToServerEvent(mode, player, attemptId))
               // The host may have sent its ROM before START. The connection is already listening at
               // that point, but the LinkedController is created by the event above; deliver cached
               // state only after that synchronous transition has completed.

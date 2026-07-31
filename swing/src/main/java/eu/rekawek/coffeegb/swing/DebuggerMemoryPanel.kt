@@ -428,7 +428,7 @@ internal class DebuggerMemoryPanel(
   private fun controlLabel(text: String, component: Component): JLabel =
       JLabel("$text:").apply {
         labelFor = component
-        accessibleContext.accessibleName = "$text control label"
+        getAccessibleContext().accessibleName = "$text control label"
       }
 
   private data class RenderedMemorySample(

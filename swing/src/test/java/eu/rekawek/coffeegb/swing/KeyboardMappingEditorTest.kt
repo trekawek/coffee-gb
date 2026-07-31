@@ -7,7 +7,6 @@ import java.awt.Component
 import java.awt.Container
 import java.awt.event.KeyEvent
 import javax.swing.AbstractButton
-import javax.swing.JTabbedPane
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -19,23 +18,17 @@ import org.junit.Test
 class KeyboardMappingEditorTest {
 
   @Test
-  fun presentsFourKeyboardNavigablePlayersWithOneCaptureActionPerBinding() =
+  fun presentsOneReusableKeyboardNavigablePadForTheSelectedPlayer() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
-        val tabs = descendants(editor).filterIsInstance<JTabbedPane>().single()
 
-        assertEquals(4, tabs.tabCount)
-        assertEquals(
-            listOf("Player 1", "Player 2", "Player 3", "Player 4"),
-            (0 until tabs.tabCount).map(tabs::getTitleAt),
-        )
         assertEquals("Keyboard mappings", editor.accessibleContext.accessibleName)
-        assertEquals("Keyboard mappings by player", tabs.accessibleContext.accessibleName)
+        assertEquals(0, editor.selectedPlayer)
 
         val actions = descendants(editor).filterIsInstance<AbstractButton>()
         assertTrue(actions.all { !it.accessibleContext.accessibleName.isNullOrBlank() })
         assertTrue(actions.all(Component::isFocusable))
-        assertEquals(32, actions.count { it.text == "Capture" })
+        assertEquals(8, actions.count { it.text == "Capture" })
         assertEquals(1, actions.count { it.text == "Reset keyboard defaults" })
         assertTrue(actions.none { it.text in setOf("Dialog key…", "Clear", "Reset") })
         assertEquals(
@@ -43,13 +36,12 @@ class KeyboardMappingEditorTest {
             button(editor, "Restore all keyboard defaults").text,
         )
         assertEquals(
-            32,
+            8,
             descendants(editor)
                 .mapNotNull { it.accessibleContext.accessibleName }
                 .count { it.startsWith("Current binding for Player ") },
         )
 
-        val playerOne = assertIs<Container>(tabs.getComponentAt(0))
         assertEquals(
             listOf(
                 "Capture Player 1 Up keyboard binding",
@@ -61,8 +53,9 @@ class KeyboardMappingEditorTest {
                 "Capture Player 1 B keyboard binding",
                 "Capture Player 1 A keyboard binding",
             ),
-            descendants(playerOne)
+            descendants(editor)
                 .filterIsInstance<AbstractButton>()
+                .filter { it.text == "Capture" }
                 .map { it.accessibleContext.accessibleName },
         )
       }
@@ -97,6 +90,7 @@ class KeyboardMappingEditorTest {
         assertIs<KeyboardMappingEditor.EditResult.Applied>(
             editor.editBinding(1, Button.A, KeyEvent.VK_Q))
 
+        editor.selectPlayer(1)
         val playerTwoCapture = button(editor, "Capture Player 2 A keyboard binding")
         playerTwoCapture.doClick()
         assertTrue(
@@ -108,6 +102,7 @@ class KeyboardMappingEditorTest {
         assertEquals(KeyEvent.VK_Z, editor.currentBinding(1, Button.A)?.code)
         assertEquals(KeyEvent.VK_Q, editor.currentBinding(0, Button.A)?.code)
 
+        editor.selectPlayer(2)
         val playerThreeCapture = button(editor, "Capture Player 3 A keyboard binding")
         playerThreeCapture.doClick()
         assertTrue(
@@ -194,6 +189,7 @@ class KeyboardMappingEditorTest {
   fun singleCaptureUsesDialogKeySemanticsAndConsumesTheWholeKeySequence() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
+        editor.selectPlayer(1)
         val captureA = button(editor, "Capture Player 2 A keyboard binding")
 
         captureA.doClick()
@@ -221,6 +217,7 @@ class KeyboardMappingEditorTest {
   fun captureAppliesARegularKeyAndReportsTheUpdatedBinding() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
+        editor.selectPlayer(1)
         val capture = button(editor, "Capture Player 2 A keyboard binding")
 
         capture.doClick()
@@ -252,25 +249,27 @@ class KeyboardMappingEditorTest {
       }
 
   @Test
-  fun switchingPlayerTabsCancelsTheHiddenCardsCapture() =
+  fun switchingTheSelectedPlayerCancelsCaptureAndReusesThePadControls() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
-        val tabs = descendants(editor).filterIsInstance<JTabbedPane>().single()
         val capture = button(editor, "Capture Player 1 A keyboard binding")
 
         capture.doClick()
         assertTrue(editor.isCaptureActive())
-        tabs.selectedIndex = 1
+        editor.selectPlayer(1)
 
         assertFalse(editor.isCaptureActive())
         assertFalse(editor.handleCaptureKey(key(capture, KeyEvent.KEY_PRESSED, KeyEvent.VK_Q)))
         assertEquals(KeyEvent.VK_Z, editor.currentBinding(0, Button.A)?.code)
+        assertEquals("Capture Player 2 A keyboard binding", capture.accessibleContext.accessibleName)
+        assertEquals(1, editor.selectedPlayer)
       }
 
   @Test
   fun displayableCaptureInstallsAndEveryExitRemovesTheDispatcher() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
+        editor.selectPlayer(1)
         val capture = button(editor, "Capture Player 2 A keyboard binding")
         editor.addNotify()
         try {
@@ -292,6 +291,7 @@ class KeyboardMappingEditorTest {
   fun aModifierIsCapturedOnlyAfterRelease() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
+        editor.selectPlayer(2)
         val capture = button(editor, "Capture Player 3 A keyboard binding")
 
         capture.doClick()

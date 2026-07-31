@@ -425,14 +425,14 @@ class ApplicationSettingsStoreTest {
 
           Files.readAllBytes(path).also { bytes ->
             val canonical = ApplicationSettingsStore.decodeProperties(bytes)
-            assertEquals("7", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
             assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
             assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
           }
         }
 
     ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
-      assertEquals("7", store.current().settings.schemaVersion.toString())
+      assertEquals("8", store.current().settings.schemaVersion.toString())
     }
     assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
@@ -804,6 +804,8 @@ class ApplicationSettingsStoreTest {
               "display.scale" to "4",
               "display.scalingMode" to "EXPLICIT",
               "display.showSgbBorder" to "true",
+              "desktop.appearance" to "LIGHT",
+              "desktop.commandBarVisible" to "true",
               "fullchanger.character" to "07 ま Magnesium Powered",
               "general.recentFileCapacity" to "10",
               "general.romChangeConfirmationPolicy" to "WHEN_RUNNING",
@@ -830,7 +832,7 @@ class ApplicationSettingsStoreTest {
               "saves.rewindMemoryMiB" to "64",
               "saves.rewindSeconds" to "30",
               "peripherals.cameraDeviceIndex" to "0",
-              "settings.schemaVersion" to "7",
+              "settings.schemaVersion" to "8",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

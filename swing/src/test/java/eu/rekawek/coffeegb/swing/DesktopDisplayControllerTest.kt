@@ -191,6 +191,22 @@ class DesktopDisplayControllerTest {
     eventBus.close()
   }
 
+  @Test
+  fun `presentation changes before an explicit scale event can pack the frame`() {
+    val settings = FakeDisplaySettings(ApplicationSettings.Display(explicitScale = 2))
+    val eventBus = EventBusImpl()
+    val order = mutableListOf<String>()
+    eventBus.register<DisplaySettingsChangedEvent> { order += "presentation" }
+    eventBus.register<SwingDisplay.SetScaleModeEvent> { order += "scale" }
+    val controller =
+        onEdt { DesktopDisplayController(settings, eventBus, FakeFullscreenRuntime()) }
+
+    onEdt { controller.selectWindowScale(1) }
+
+    assertEquals(listOf("presentation", "scale"), order)
+    eventBus.close()
+  }
+
   private fun <T> onEdt(action: () -> T): T {
     var result: Result<T>? = null
     SwingUtilities.invokeAndWait { result = runCatching(action) }

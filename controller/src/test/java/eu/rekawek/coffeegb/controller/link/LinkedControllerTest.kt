@@ -546,16 +546,28 @@ class LinkedControllerTest {
           it.timingTicker.disabled = true
         }
     val lifecycle = mutableListOf<String>()
+    val startedEvents = mutableListOf<Controller.EmulationStartedEvent>()
+    val playbackEvents = mutableListOf<Controller.SessionPlaybackStateEvent>()
     eventBus.register<Controller.RomLoadingEvent> { lifecycle += "loading" }
     eventBus.register<Controller.EmulationStoppedEvent> { lifecycle += "stopped" }
-    eventBus.register<Controller.EmulationStartedEvent> { lifecycle += "started" }
+    eventBus.register<Controller.EmulationStartedEvent> {
+      lifecycle += "started"
+      startedEvents += it
+    }
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playbackEvents::add)
 
     try {
       eventBus.post(LoadRomEvent(ROM))
       controller.runFrame()
       assertEquals(listOf("loading", "started"), lifecycle)
+      val firstGeneration = assertNotNull(startedEvents.single().sessionGeneration)
+      assertEquals(
+          Controller.SessionPlaybackStateEvent(firstGeneration, paused = false),
+          playbackEvents.single(),
+      )
       val oldSession = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       lifecycle.clear()
+      playbackEvents.clear()
 
       eventBus.post(LoadRomEvent(ROM))
       controller.runFrame()
@@ -564,6 +576,12 @@ class LinkedControllerTest {
           listOf("loading", "stopped", "started"),
           lifecycle,
           "the old linked owner must stop only after replacement commit",
+      )
+      val replacementGeneration = assertNotNull(startedEvents.last().sessionGeneration)
+      assertTrue(replacementGeneration > firstGeneration)
+      assertEquals(
+          Controller.SessionPlaybackStateEvent(replacementGeneration, paused = false),
+          playbackEvents.single(),
       )
       val replacement = assertNotNull(privateList(controller, "sessions")[0] as Session?)
       assertTrue(

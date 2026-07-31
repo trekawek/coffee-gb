@@ -51,8 +51,8 @@ internal class AudioPreferencesEditor private constructor(
 
   internal val output =
       JComboBox<OutputOption>().apply {
-        accessibleContext.accessibleName = "Audio output device"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Audio output device"
+        getAccessibleContext().accessibleDescription =
             "Choose the system default or one explicit Java Sound output."
         addActionListener {
           if (!updatingControls) {
@@ -64,7 +64,7 @@ internal class AudioPreferencesEditor private constructor(
       }
   internal val muted =
       JCheckBox("Mute audio", !initial.enabled).apply {
-        accessibleContext.accessibleName = "Mute audio"
+        getAccessibleContext().accessibleName = "Mute audio"
       }
   internal val volume =
       JSlider(
@@ -77,8 +77,8 @@ internal class AudioPreferencesEditor private constructor(
             minorTickSpacing = 5
             paintTicks = true
             paintLabels = true
-            accessibleContext.accessibleName = "Master volume"
-            accessibleContext.accessibleDescription =
+            getAccessibleContext().accessibleName = "Master volume"
+            getAccessibleContext().accessibleDescription =
                 "Choose the master volume from ${ApplicationSettings.MIN_AUDIO_VOLUME} to " +
                     "${ApplicationSettings.MAX_AUDIO_VOLUME} percent."
             toolTipText = accessibleContext.accessibleDescription
@@ -86,11 +86,11 @@ internal class AudioPreferencesEditor private constructor(
   internal val latency =
       JComboBox(ApplicationSettings.AudioLatency.entries.toTypedArray()).apply {
         selectedItem = initial.latency
-        accessibleContext.accessibleName = "Audio latency preset"
+        getAccessibleContext().accessibleName = "Audio latency preset"
       }
   internal val status =
       JLabel("Audio outputs have not been checked yet.").apply {
-        accessibleContext.accessibleName = "Audio output discovery status"
+        getAccessibleContext().accessibleName = "Audio output discovery status"
       }
   init {
     getAccessibleContext().accessibleName = "Audio preferences"
@@ -324,8 +324,6 @@ internal class AudioPreferencesEditor private constructor(
   private companion object {
     const val STABLE_ID_LABEL_PREFIX = 18
     const val STABLE_ID_LABEL_SUFFIX = 6
-    val ERROR_COLOR = java.awt.Color(0xB0, 0x00, 0x20)
-
     fun requireEdt() {
       check(SwingUtilities.isEventDispatchThread()) {
         "Audio preferences must be constructed and accessed on the EDT"

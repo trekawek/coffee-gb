@@ -38,6 +38,8 @@ interface Controller : AutoCloseable {
       val romName: String,
       val origin: RomOrigin? = null,
       val openRequestId: Long? = null,
+      /** Globally unique generation for session-scoped presentation events, when available. */
+      val sessionGeneration: Long? = null,
   ) : Event
 
   class EmulationStoppedEvent : Event
@@ -158,6 +160,20 @@ interface Controller : AutoCloseable {
   data class SnapshotLoadFailedEvent(val slot: Int, val message: String) : Event
 
   data class SessionPauseSupportEvent(val enabled: Boolean) : Event
+
+  /**
+   * Authoritative effective playback state for one committed emulation session. [paused] combines
+   * every independent pause owner (currently application workflow and debugger ownership), so UI
+   * consumers must present this result instead of interpreting pause/resume command requests.
+   */
+  data class SessionPlaybackStateEvent(
+      val sessionGeneration: Long,
+      val paused: Boolean,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0) { "Session generation must be positive" }
+    }
+  }
 
   data class SessionSnapshotSupportEvent(val snapshotSupport: SnapshotSupport?) : Event
 

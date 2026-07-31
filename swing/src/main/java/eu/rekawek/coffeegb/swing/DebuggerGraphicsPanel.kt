@@ -287,6 +287,10 @@ internal class DebuggerGraphicsPanel(
     repaint()
   }
 
+  internal fun resetFontScaleForThemeChange() = fontScaler.resetToBaseline()
+
+  internal fun recaptureFontScaleBaseline() = fontScaler.recapture(this)
+
   fun copyText(): String {
     requirePeripheralEdt("Graphics debugger copying")
     return when (tabs.selectedComponent) {
@@ -557,7 +561,7 @@ internal class DebuggerGraphicsPanel(
         add(grid)
         add(
             JLabel("Viewport overlay unavailable: scroll registers are not in this capture").apply {
-              accessibleContext.accessibleName =
+              getAccessibleContext().accessibleName =
                   "Viewport overlay unavailable because scroll registers are not captured"
             }
         )
@@ -606,8 +610,8 @@ internal class DebuggerGraphicsPanel(
           resizeWeight = 0.72
           isOneTouchExpandable = true
           dividerSize = 8
-          accessibleContext.accessibleName = "$title graphics and accessible details"
-          accessibleContext.accessibleDescription = description
+          getAccessibleContext().accessibleName = "$title graphics and accessible details"
+          getAccessibleContext().accessibleDescription = description
         }
   }
 
@@ -626,8 +630,8 @@ internal class DebuggerGraphicsPanel(
               controls?.let { add(it, BorderLayout.SOUTH) }
             }
         border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
-        accessibleContext.accessibleName = title
-        accessibleContext.accessibleDescription = description
+        getAccessibleContext().accessibleName = title
+        getAccessibleContext().accessibleDescription = description
         add(heading, BorderLayout.NORTH)
         add(graphics, BorderLayout.CENTER)
       }
@@ -646,14 +650,14 @@ internal class DebuggerGraphicsPanel(
         majorTickSpacing = 1
         paintTicks = true
         snapToTicks = true
-        accessibleContext.accessibleName = accessibleName
-        accessibleContext.accessibleDescription = "$accessibleName, nearest-neighbor integer scale"
+        getAccessibleContext().accessibleName = accessibleName
+        getAccessibleContext().accessibleDescription = "$accessibleName, nearest-neighbor integer scale"
       }
 
   private fun graphicsCheckBox(text: String, selected: Boolean): JCheckBox =
       JCheckBox(text, selected).apply {
-        accessibleContext.accessibleName = text
-        accessibleContext.accessibleDescription = "Show or hide the $text overlay"
+        getAccessibleContext().accessibleName = text
+        getAccessibleContext().accessibleDescription = "Show or hide the $text overlay"
       }
 
   private fun mapModel(): DebuggerPeripheralTableModel =

@@ -153,10 +153,18 @@ data class ApplicationSettings(
     }
   }
 
-  /** Desktop-shell state that is deliberately independent from editable display preferences. */
+  /** Desktop-shell preferences and legacy state independent from emulated display settings. */
   data class Desktop(
       val windowSize: WindowSize? = null,
+      val appearance: Appearance = Appearance.LIGHT,
+      val commandBarVisible: Boolean = true,
   )
+
+  enum class Appearance {
+    LIGHT,
+    DARK,
+    SYSTEM,
+  }
 
   /** Last normal, windowed outer-frame size. Placement and maximized state are not persisted. */
   data class WindowSize(
@@ -562,7 +570,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 7
+    const val CURRENT_SCHEMA_VERSION = 8
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50

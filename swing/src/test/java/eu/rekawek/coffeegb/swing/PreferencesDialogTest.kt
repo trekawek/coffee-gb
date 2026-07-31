@@ -105,6 +105,12 @@ class PreferencesDialogTest {
                     volume = 25,
                     latency = ApplicationSettings.AudioLatency.SAFE,
                 ),
+            desktop =
+                ApplicationSettings.Desktop(
+                    windowSize = ApplicationSettings.WindowSize(320, 288),
+                    appearance = ApplicationSettings.Appearance.DARK,
+                    commandBarVisible = false,
+                ),
             advanced =
                 current.advanced.copy(
                     bootstrapMode = BootstrapMode.NORMAL,
@@ -125,7 +131,9 @@ class PreferencesDialogTest {
     assertEquals(edit.audio, updated.audio)
     assertEquals(current.saves, updated.saves)
     assertEquals(edit.advanced, updated.advanced)
-    assertEquals(current.desktop, updated.desktop)
+    assertEquals(current.desktop.windowSize, updated.desktop.windowSize)
+    assertEquals(ApplicationSettings.Appearance.DARK, updated.desktop.appearance)
+    assertFalse(updated.desktop.commandBarVisible)
   }
 
   @Test
@@ -195,6 +203,7 @@ class PreferencesDialogTest {
         )
         assertEquals(ApplicationSettings.Display(), received?.display)
         assertEquals(ApplicationSettings.Audio(), received?.audio)
+        assertEquals(ApplicationSettings.Desktop(), received?.desktop)
         assertEquals(ApplicationSettings.Saves(), received?.saves)
         assertEquals(ApplicationSettings.Advanced(), received?.advanced)
         assertFalse(checkNotNull(received).forceWindowSize)
@@ -310,10 +319,167 @@ class PreferencesDialogTest {
         assertEquals(defaults.input.gamepadTunings, restored.gamepadTunings)
         assertEquals(defaults.display, restored.display)
         assertEquals(defaults.audio, restored.audio)
+        assertEquals(defaults.desktop, restored.desktop)
         assertEquals(defaults.saves, restored.saves)
         assertEquals(defaults.advanced, restored.advanced)
         assertEquals(0, applyCount)
         assertEquals(1, closeCount)
+      }
+
+  @Test
+  fun `dirty state follows edits and returns clean when a value is restored`() =
+      onEdt {
+        val dirtyStates = mutableListOf<Boolean>()
+        val panel =
+            PreferencesPanel(
+                ApplicationSettings(),
+                draftChanged = { dirtyStates += it },
+            )
+
+        assertFalse(panel.isDirty())
+        panel.commandBarVisible.isSelected = false
+        assertTrue(panel.isDirty())
+        assertEquals(true, dirtyStates.last())
+
+        panel.commandBarVisible.isSelected = true
+        assertFalse(panel.isDirty())
+        assertEquals(false, dirtyStates.last())
+      }
+
+  @Test
+  fun `restore page defaults changes only the selected category draft`() =
+      onEdt {
+        val defaults = ApplicationSettings()
+        val initial =
+            defaults.copy(
+                general =
+                    defaults.general.copy(
+                        romDirectory = Paths.get("custom-roms"),
+                        recentFileCapacity = 3,
+                    ),
+                audio = defaults.audio.copy(enabled = false, volume = 17),
+            )
+        val panel = PreferencesPanel(initial, defaults)
+        panel.categories.selectedCategory = PreferencesCategory.GENERAL
+
+        panel.restoreSelectedPageDefaults()
+        val restored = panel.validatedEdit()
+
+        assertEquals(defaults.general.romDirectory, restored.romDirectory)
+        assertEquals(defaults.general.recentFileCapacity, restored.recentFileCapacity)
+        assertEquals(initial.audio, restored.audio)
+        assertTrue(panel.isDirty())
+      }
+
+  @Test
+  fun `restore all defaults uses an explicit confirmation seam`() =
+      onEdt {
+        val initial =
+            ApplicationSettings(
+                desktop =
+                    ApplicationSettings.Desktop(
+                        appearance = ApplicationSettings.Appearance.DARK,
+                        commandBarVisible = false,
+                    ))
+        val panel = PreferencesPanel(initial)
+        var allowRestore = false
+        var confirmationCount = 0
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = {},
+                close = {},
+                confirmRestoreAll = {
+                  confirmationCount++
+                  allowRestore
+                },
+            )
+
+        actions.restoreAllDefaults()
+        assertEquals(ApplicationSettings.Appearance.DARK, panel.validatedEdit().desktop?.appearance)
+
+        allowRestore = true
+        actions.restoreAllDefaults()
+        assertEquals(ApplicationSettings.Appearance.LIGHT, panel.validatedEdit().desktop?.appearance)
+        assertEquals(2, confirmationCount)
+        actions.cancel()
+      }
+
+  @Test
+  fun `dirty Cancel keeps editing until discard is confirmed`() =
+      onEdt {
+        val panel = PreferencesPanel(ApplicationSettings())
+        panel.directoryField.text = "changed"
+        var allowDiscard = false
+        var closeCount = 0
+        var confirmationCount = 0
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = {},
+                close = { closeCount++ },
+                confirmDiscard = {
+                  confirmationCount++
+                  allowDiscard
+                },
+            )
+
+        actions.cancel()
+        assertEquals(0, closeCount)
+
+        allowDiscard = true
+        actions.cancel()
+        assertEquals(1, closeCount)
+        assertEquals(2, confirmationCount)
+      }
+
+  @Test
+  fun `category selection starts at a deep link and reports later navigation`() =
+      onEdt {
+        val visited = mutableListOf<PreferencesCategory>()
+        val panel =
+            PreferencesPanel(
+                ApplicationSettings(),
+                initialCategory = PreferencesCategory.AUDIO,
+                categoryChanged = { visited += it },
+            )
+
+        assertEquals(PreferencesCategory.AUDIO, panel.categories.selectedCategory)
+        panel.categories.selectedCategory = PreferencesCategory.PERIPHERALS
+
+        assertEquals(
+            listOf(PreferencesCategory.AUDIO, PreferencesCategory.PERIPHERALS),
+            visited,
+        )
+      }
+
+  @Test
+  fun `session-only persistence presentation explains scope and relabels save`() =
+      onEdt {
+        val presentation = PreferencesPersistencePresentation.sessionOnly()
+        val panel = PreferencesPanel(ApplicationSettings(), persistence = presentation)
+
+        assertTrue(panel.persistenceBanner.isVisible)
+        assertTrue(panel.persistenceBanner.text.contains("will not survive restart"))
+        assertEquals("Apply for this session", presentation.primaryActionLabel)
+      }
+
+  @Test
+  fun `after commit callback runs only after a successful apply closes`() =
+      onEdt {
+        val events = mutableListOf<String>()
+        val panel = PreferencesPanel(ApplicationSettings())
+        val actions =
+            PreferencesDialogActions(
+                panel,
+                applyEdit = { events += "commit" },
+                close = { events += "close" },
+                afterCommit = { events += "after" },
+            )
+
+        actions.apply()
+
+        assertEquals(listOf("commit", "close", "after"), events)
       }
 
   @Test
@@ -416,17 +582,25 @@ class PreferencesDialogTest {
         )
         assertEquals("Default ROM directory", panel.directoryField.accessibleContext.accessibleName)
         assertEquals("Recent files to keep", panel.recentCapacity.accessibleContext.accessibleName)
+        assertSame(
+            panel.appearance,
+            labels.single { it.text == "Appearance:" }.labelFor,
+        )
+        assertEquals("Application appearance", panel.appearance.accessibleContext.accessibleName)
+        assertEquals(
+            "Show command bar while playing",
+            panel.commandBarVisible.accessibleContext.accessibleName,
+        )
         assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
         assertEquals(
             listOf(
                 "General",
-                "System",
                 "Display",
-                "Input",
-                "Gamepads",
-                "Peripherals",
                 "Audio",
-                "Saves",
+                "Controls",
+                "Saves & Rewind",
+                "System",
+                "Peripherals",
             ),
             (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
         )
@@ -530,7 +704,7 @@ class PreferencesDialogTest {
 
         assertEquals(0, applyCount)
         assertEquals(0, closeCount)
-        assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
         assertTrue(panel.validationSummary.text.contains("8 to 512"))
         assertSame(editor, panel.focusOwnerOrInvalidComponent())
       }
@@ -562,7 +736,7 @@ class PreferencesDialogTest {
 
         assertEquals(0, applyCount)
         assertEquals(0, validationCount)
-        assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
         assertTrue(panel.savesEditor.directoryError.text.contains("below the filesystem root"))
         assertSame(
             panel.savesEditor.directoryField,
@@ -655,7 +829,7 @@ class PreferencesDialogTest {
     onEdt {
       assertEquals(0, applyCount)
       assertEquals(0, closeCount)
-      assertEquals("Saves", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+      assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
       assertTrue(panel.savesEditor.directoryError.text.contains("not writable"))
       assertTrue(panel.validationSummary.text.contains("not writable"))
     }
@@ -786,10 +960,22 @@ class PreferencesDialogTest {
       }
 
   @Test
-  fun `leaving the Input tab cancels keyboard capture`() =
+  fun `leaving the Controls category cancels keyboard capture`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
         panel.tabs.selectedIndex = 3
+        assertEquals(4, panel.controlsPlayerSelector.itemCount)
+        assertEquals(2, panel.controlsSubpages.tabCount)
+        assertEquals(
+            listOf("Keyboard", "Gamepad"),
+            (0 until panel.controlsSubpages.tabCount).map(panel.controlsSubpages::getTitleAt),
+        )
+        assertTrue(panel.controlsRuntimeGuidance.text.contains("Backspace rewinds"))
+        assertTrue(panel.controlsRuntimeGuidance.text.contains("I/J/K/L"))
+        assertEquals(true, panel.controlsRuntimeGuidance.getClientProperty("html.disable"))
+        panel.controlsPlayerSelector.selectedIndex = 1
+        assertEquals(1, panel.keyboardEditor.selectedPlayer)
+        assertEquals(1, panel.gamepadEditor.selectedPlayer)
         val capture =
             descendants(panel.keyboardEditor)
                 .filterIsInstance<AbstractButton>()
@@ -798,6 +984,11 @@ class PreferencesDialogTest {
                       "Capture Player 2 A keyboard binding"
                 }
 
+        capture.doClick()
+        assertTrue(panel.keyboardEditor.isCaptureActive())
+        panel.controlsSubpages.selectedIndex = 1
+        assertFalse(panel.keyboardEditor.isCaptureActive())
+        panel.controlsSubpages.selectedIndex = 0
         capture.doClick()
         assertTrue(panel.keyboardEditor.isCaptureActive())
         panel.tabs.selectedIndex = 0

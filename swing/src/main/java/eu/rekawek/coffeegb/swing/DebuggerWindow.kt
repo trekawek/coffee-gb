@@ -217,7 +217,7 @@ internal class DebuggerPanel(
     private val peripheralExecutor: ExecutorService = newDebuggerPeripheralExecutor(),
     private val ownsPeripheralExecutor: Boolean = true,
     private val monotonicNanos: () -> Long = System::nanoTime,
-) : JPanel(BorderLayout(6, 6)), AutoCloseable {
+) : JPanel(BorderLayout(6, 6)), AutoCloseable, DesktopThemePrepareHook, DesktopThemeRefreshHook {
   private var uiPreferences = initialPreferences.sanitized()
   internal val sessionLabel = JLabel("No emulation session")
   internal val snapshotLabel = JLabel("Waiting for a debug snapshot")
@@ -332,19 +332,19 @@ internal class DebuggerPanel(
   private var executionWorkspaceRoot: JComponent? = null
   private val executionSessionLabel =
       JLabel("No emulation session").apply {
-        accessibleContext.accessibleName = "Execution debugger session"
+        getAccessibleContext().accessibleName = "Execution debugger session"
       }
   private val executionSnapshotLabel =
       JLabel("Waiting for a debug snapshot").apply {
-        accessibleContext.accessibleName = "Execution debugger snapshot identity"
+        getAccessibleContext().accessibleName = "Execution debugger snapshot identity"
       }
   private val executionStopReasonLabel =
       JLabel("No breakpoint stop in this session").apply {
-        accessibleContext.accessibleName = "Execution debugger stop reason"
+        getAccessibleContext().accessibleName = "Execution debugger stop reason"
       }
   private val executionHistoryLabel =
       JLabel("Reverse history status unavailable").apply {
-        accessibleContext.accessibleName = "Execution debugger reverse history status"
+        getAccessibleContext().accessibleName = "Execution debugger reverse history status"
       }
 
   init {
@@ -500,7 +500,29 @@ internal class DebuggerPanel(
     fontScaler.apply(uiPreferences.fontScalePercent)
     graphicsPane.applyFontScale(uiPreferences.fontScalePercent)
     audioPane.applyFontScale(uiPreferences.fontScalePercent)
+    hardwarePane.applyFontScale(uiPreferences.fontScalePercent)
     updateControlState()
+  }
+
+  override fun desktopThemeWillChange() {
+    fontScaler.resetToBaseline()
+    graphicsPane.resetFontScaleForThemeChange()
+    audioPane.resetFontScaleForThemeChange()
+    hardwarePane.resetFontScaleForThemeChange()
+  }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    val scale = uiPreferences.fontScalePercent
+    fontScaler.recapture(this)
+    graphicsPane.recaptureFontScaleBaseline()
+    audioPane.recaptureFontScaleBaseline()
+    hardwarePane.recaptureFontScaleBaseline()
+    fontScaler.apply(scale)
+    graphicsPane.applyFontScale(scale)
+    audioPane.applyFontScale(scale)
+    hardwarePane.applyFontScale(scale)
+    revalidate()
+    repaint()
   }
 
   private fun cpuPanel(): Component {
@@ -2479,6 +2501,20 @@ private class DebuggerFontScaler(root: JComponent) {
     (component as? Container)?.components?.forEach(::capture)
   }
 
+  fun resetToBaseline() {
+    baselines.forEach { (component, baseline) ->
+      component.font = baseline.font
+      if (component is JTable && baseline.rowHeight != null) {
+        component.rowHeight = baseline.rowHeight
+      }
+    }
+  }
+
+  fun recapture(root: JComponent) {
+    baselines.clear()
+    capture(root)
+  }
+
   fun apply(requestedPercent: Int) {
     scalePercent =
         requestedPercent.coerceIn(
@@ -2564,7 +2600,7 @@ private fun debuggerTextArea(name: String, rows: Int, columns: Int): JTextArea =
       isEditable = false
       lineWrap = false
       font = Font(Font.MONOSPACED, Font.PLAIN, font.size)
-      accessibleContext.accessibleName = name
+      getAccessibleContext().accessibleName = name
       caretPosition = 0
     }
 

@@ -112,10 +112,7 @@ internal class DebuggerWorkspacePreferencesStore(
   }
 
   private fun validBounds(bounds: Rectangle): Boolean =
-      bounds.x in -100_000..100_000 &&
-          bounds.y in -100_000..100_000 &&
-          bounds.width in 420..10_000 &&
-          bounds.height in 320..10_000
+      DesktopWindowPlacement.isPlausible(bounds, Dimension(420, 320))
 }
 
 /** Owns the independent modeless windows while [DebuggerPanel] owns the one live data stream. */
@@ -252,8 +249,8 @@ internal class DebuggerWorkspace(
   }
 
   private fun positionWindow(tool: DebuggerWorkspaceTool, window: ToolWindow) {
-    val saved = window.savedBounds
-    if (saved != null && intersectsScreen(saved)) {
+    val saved = restorableDebuggerBounds(window.savedBounds)
+    if (saved != null) {
       window.dialog.bounds = saved
     } else {
       window.dialog.pack()
@@ -294,7 +291,7 @@ internal class DebuggerWorkspace(
       content: Component,
       preferences: DebuggerWorkspaceToolPreferences,
   ) {
-    val dialog = JDialog(owner, "Coffee GB · ${tool.title}", Dialog.ModalityType.MODELESS)
+    val dialog = JDialog(owner, "${tool.title} — Coffee GB", Dialog.ModalityType.MODELESS)
     val hold = JCheckBox("Hold updates", preferences.held)
     val live = JLabel("LIVE", SwingConstants.CENTER)
     val footer = JLabel("Waiting for a debugger session")
@@ -303,7 +300,15 @@ internal class DebuggerWorkspace(
     private var heldFooterText: String? = null
 
     init {
-      val stateBar = JPanel(BorderLayout(8, 0)).apply {
+      val stateBar = object : JPanel(BorderLayout(8, 0)), DesktopThemeRefreshHook {
+        override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+          live.border = BorderFactory.createCompoundBorder(
+              BorderFactory.createLineBorder(tokens.border),
+              BorderFactory.createEmptyBorder(2, 7, 2, 7),
+          )
+          repaint()
+        }
+      }.apply {
         border = BorderFactory.createEmptyBorder(4, 7, 4, 7)
         live.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(UIManager.getColor("Component.borderColor") ?: java.awt.Color.GRAY),
@@ -358,7 +363,7 @@ internal class DebuggerWorkspace(
       panel.snapshotLabel.addPropertyChangeListener("text") { updateStatus() }
       panel.statusLabel.addPropertyChangeListener("text") { updateStatus() }
       dialog.pack()
-      savedBounds?.takeIf(::intersectsScreen)?.let { bounds ->
+      restorableDebuggerBounds(savedBounds)?.let { bounds ->
         dialog.bounds = bounds
         positioned = true
       }
@@ -474,4 +479,11 @@ internal class DebuggerWorkspace(
           .screenDevices
           .flatMap { it.configurations.asIterable() }
           .any { configuration -> configuration.bounds.intersection(bounds).let { it.width >= 80 && it.height >= 60 } }
+
+  private fun restorableDebuggerBounds(bounds: Rectangle?): Rectangle? =
+      DesktopWindowPlacement.restorableBounds(
+          bounds,
+          AwtScreenLayoutProvider(owner).snapshot(),
+          Dimension(420, 320),
+      )
 }

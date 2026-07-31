@@ -191,6 +191,10 @@ internal class DebuggerAudioPanel(
     repaint()
   }
 
+  internal fun resetFontScaleForThemeChange() = fontScaler.resetToBaseline()
+
+  internal fun recaptureFontScaleBaseline() = fontScaler.recapture(this)
+
   fun copyText(): String {
     requirePeripheralEdt("Audio debugger copying")
     return when (tabs.selectedComponent) {

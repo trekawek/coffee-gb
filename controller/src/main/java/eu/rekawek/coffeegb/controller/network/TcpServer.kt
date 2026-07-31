@@ -2,14 +2,15 @@ package eu.rekawek.coffeegb.controller.network
 
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.link.LinkMode
+import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -22,6 +23,8 @@ class TcpServer(
     private val eventBus: EventBus,
     private val port: Int = PORT,
     private val mode: LinkMode = LinkMode.NORMAL,
+    private val attemptId: Long = ConnectionController.LEGACY_ATTEMPT,
+    private val lifecyclePublisher: (Event) -> Unit = { eventBus.post(it) },
 ) : Runnable {
 
   @Volatile private var doStop = false
@@ -51,31 +54,77 @@ class TcpServer(
   @Volatile private var sessionStarted = false
 
   override fun run() {
-    doStop = false
-    ServerSocket(port).use { listener ->
-      serverSocket = listener
-      listener.soTimeout = 100
-      eventBus.post(ConnectionController.ServerStartedEvent(mode))
-      if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-        // The adapter belongs to the host and is live even with no clients attached.
-        eventBus.post(ConnectionController.ServerGotConnectionEvent("localhost", mode, 0))
-      }
-      while (!doStop) {
-        try {
-          accept(listener)
-        } catch (_: SocketTimeoutException) {
-          // Poll doStop.
-        } catch (e: SocketException) {
-          if (!doStop) LOG.error("Error accepting netplay connection", e)
-        } catch (e: IOException) {
-          if (!doStop) LOG.error("Error accepting netplay connection", e)
+    var started = false
+    var startFailurePublished = false
+    try {
+      ServerSocket(port).use { listener ->
+        serverSocket = listener
+        listener.soTimeout = 100
+        lifecyclePublisher(ConnectionController.ServerStartedEvent(mode, attemptId))
+        started = true
+        if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+          // The adapter belongs to the host and is live even with no clients attached.
+          lifecyclePublisher(
+              ConnectionController.ServerGotConnectionEvent(
+                  REDACTED_PEER,
+                  mode,
+                  0,
+                  attemptId,
+              ))
+        }
+        while (!doStop) {
+          try {
+            accept(listener)
+          } catch (_: SocketTimeoutException) {
+            // Poll doStop.
+          } catch (e: SocketException) {
+            if (!doStop) {
+              LOG.error(
+                  "Error accepting netplay connection ({})",
+                  netplaySocketFailureSummary(e),
+              )
+            }
+          } catch (e: IOException) {
+            if (!doStop) {
+              LOG.error(
+                  "Error accepting netplay connection ({})",
+                  netplaySocketFailureSummary(e),
+              )
+            }
+          }
         }
       }
+    } catch (failure: IOException) {
+      if (!doStop) {
+        if (started) {
+          LOG.error(
+              "Netplay server on TCP port {} stopped unexpectedly ({})",
+              port,
+              netplaySocketFailureSummary(failure),
+          )
+        } else {
+          LOG.error(
+              "Unable to start netplay server on TCP port {} ({})",
+              port,
+              netplaySocketFailureSummary(failure),
+          )
+          startFailurePublished = true
+          lifecyclePublisher(
+              ConnectionController.ServerStartFailedEvent(
+                  ConnectionController.ServerStartFailure.PORT_UNAVAILABLE,
+                  port,
+                  attemptId,
+              ))
+        }
+      }
+    } finally {
+      serverSocket = null
+      stopClients()
+      handshakeExecutor.shutdownNow()
+      if (!startFailurePublished && (started || doStop)) {
+        lifecyclePublisher(ConnectionController.ServerStoppedEvent(attemptId))
+      }
     }
-    serverSocket = null
-    stopClients()
-    handshakeExecutor.shutdownNow()
-    eventBus.post(ConnectionController.ServerStoppedEvent())
   }
 
   private fun accept(listener: ServerSocket) {
@@ -90,7 +139,7 @@ class TcpServer(
           }
         }
     if (!admitted) {
-      LOG.info("Rejecting connection from {}: pending handshake limit reached", socket.inetAddress)
+      LOG.atInfo().log("Rejecting incoming connection: pending handshake limit reached")
       try {
         Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_BUSY)
       } finally {
@@ -103,7 +152,7 @@ class TcpServer(
       TcpClient.configure(socket)
       player = synchronized(lock) { reservePlayer() }
       if (player == null) {
-        LOG.info("Rejecting extra connection from {}: {} session is full", socket.inetAddress, mode)
+        LOG.info("Rejecting extra incoming connection: {} session is full", mode)
         try {
           Connection.reject(socket.getOutputStream(), Connection.RejectionReason.SERVER_FULL)
         } finally {
@@ -122,6 +171,8 @@ class TcpServer(
               mode,
               reservedPlayer,
               cancelTransport = { socket.close() },
+              attemptId = attemptId,
+              lifecyclePublisher = lifecyclePublisher,
           )
       pendingConnections[socket] = connection
       handshakeExecutor.execute { completeHandshake(socket, connection, reservedPlayer) }
@@ -158,27 +209,40 @@ class TcpServer(
       if (!claimed) return
       pendingConnections.remove(socket)
       pendingSockets.remove(socket)
-      LOG.info("Player {} connected from {}", player + 1, socket.inetAddress.hostAddress)
-      eventBus.post(
-          ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
+      LOG.info("Player {} connected", player + 1)
+      lifecyclePublisher(
+          ConnectionController.ServerPlayerCountEvent(
+              clients.size,
+              mode.playerCount - 1,
+              mode,
+              attemptId,
+          ))
       Thread({ runClient(handle) }, "netplay-player-${player + 1}").start()
       if (mode == LinkMode.FOUR_PLAYER_ADAPTER) {
         connection.startSession()
       } else {
-        startSessionIfFull(socket.inetAddress.hostAddress)
+        startSessionIfFull()
       }
     } catch (e: Connection.CompatibilityException) {
       if (!doStop) {
-        eventBus.post(
+        val message = safePeerDiagnostic(e.message, "Incompatible netplay peer")
+        lifecyclePublisher(
             ConnectionController.ServerProtocolErrorEvent(
                 player,
-                e.message ?: "Incompatible netplay peer",
+                message,
+                attemptId,
             ))
       }
     } catch (e: SocketTimeoutException) {
       if (!doStop) LOG.info("Player {} capability handshake timed out", player + 1)
     } catch (e: IOException) {
-      if (!doStop) LOG.info("Player {} capability handshake failed: {}", player + 1, e.message)
+      if (!doStop) {
+        LOG.info(
+            "Player {} capability handshake failed ({})",
+            player + 1,
+            netplaySocketFailureSummary(e),
+        )
+      }
     } finally {
       synchronized(lock) { pendingPlayers.remove(player) }
       pendingConnections.remove(socket)
@@ -201,14 +265,15 @@ class TcpServer(
     return player
   }
 
-  private fun startSessionIfFull(lastHost: String) {
+  private fun startSessionIfFull() {
     val toStart =
         synchronized(lock) {
           if (sessionStarted || clients.size != mode.playerCount - 1) return
           sessionStarted = true
           clients.values.sortedBy { it.player }
         }
-    eventBus.post(ConnectionController.ServerGotConnectionEvent(lastHost, mode, 0))
+    lifecyclePublisher(
+        ConnectionController.ServerGotConnectionEvent(REDACTED_PEER, mode, 0, attemptId))
     toStart.forEach { it.connection.startSession() }
   }
 
@@ -217,25 +282,34 @@ class TcpServer(
       handle.connection.use { it.run() }
     } catch (e: Connection.ProtocolException) {
       if (!doStop) {
-        val message = e.message ?: e.reason.userMessage
+        val message = safePeerDiagnostic(e.message, e.reason.userMessage)
         LOG.info("Player {} protocol error: {}", handle.player + 1, message)
-        eventBus.post(
+        lifecyclePublisher(
             ConnectionController.ServerProtocolErrorEvent(
                 handle.player,
                 message,
-          ))
+                attemptId,
+            ))
       }
     } catch (e: Connection.CompatibilityException) {
       if (!doStop) {
-        LOG.info("Player {} compatibility error: {}", handle.player + 1, e.message)
-        eventBus.post(
+        val message = safePeerDiagnostic(e.message, "Incompatible netplay peer")
+        LOG.info("Player {} compatibility error: {}", handle.player + 1, message)
+        lifecyclePublisher(
             ConnectionController.ServerProtocolErrorEvent(
                 handle.player,
-                e.message ?: "Incompatible netplay peer",
+                message,
+                attemptId,
             ))
       }
     } catch (e: IOException) {
-      if (!doStop) LOG.info("Player {} disconnected: {}", handle.player + 1, e.message)
+      if (!doStop) {
+        LOG.info(
+            "Player {} disconnected ({})",
+            handle.player + 1,
+            netplaySocketFailureSummary(e),
+        )
+      }
     } finally {
       handle.socket.close()
       onDisconnected(handle)
@@ -252,7 +326,8 @@ class TcpServer(
               // Queue removal before the slot becomes visible to accept(), so a fast replacement
               // cannot be attached and then removed by this stale disconnect.
               if (!doStop) {
-                eventBus.post(ConnectionController.ServerPlayerDisconnectedEvent(handle.player))
+                lifecyclePublisher(
+                    ConnectionController.ServerPlayerDisconnectedEvent(handle.player, attemptId))
               }
               true
             }
@@ -260,8 +335,13 @@ class TcpServer(
       if (!removed) {
         return
       }
-      eventBus.post(
-          ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
+      lifecyclePublisher(
+          ConnectionController.ServerPlayerCountEvent(
+              clients.size,
+              mode.playerCount - 1,
+              mode,
+              attemptId,
+          ))
       return
     }
     if (!clients.remove(handle.player, handle)) return
@@ -280,10 +360,15 @@ class TcpServer(
         it.connection.stop()
         it.socket.close()
       }
-      eventBus.post(ConnectionController.ServerLostConnectionEvent())
+      lifecyclePublisher(ConnectionController.ServerLostConnectionEvent(attemptId))
     }
-    eventBus.post(
-        ConnectionController.ServerPlayerCountEvent(clients.size, mode.playerCount - 1, mode))
+    lifecyclePublisher(
+        ConnectionController.ServerPlayerCountEvent(
+            clients.size,
+            mode.playerCount - 1,
+            mode,
+            attemptId,
+        ))
   }
 
   fun stop() {
@@ -317,13 +402,13 @@ class TcpServer(
       socket.close()
     } catch (e: IOException) {
       socketFailure = e
-      LOG.debug("Error closing netplay socket", e)
+      LOG.debug("Error closing netplay socket ({})", netplaySocketFailureSummary(e))
     }
     try {
       connection.close()
     } catch (e: IOException) {
       socketFailure?.let(e::addSuppressed)
-      LOG.debug("Error closing netplay connection", e)
+      LOG.debug("Error closing netplay connection ({})", netplaySocketFailureSummary(e))
     }
   }
 
@@ -337,5 +422,6 @@ class TcpServer(
     private val LOG: Logger = LoggerFactory.getLogger(TcpServer::class.java)
     const val PORT: Int = 6688
     private const val HANDSHAKE_TIMEOUT_MILLIS = 2_000
+    private const val REDACTED_PEER = "<redacted>"
   }
 }

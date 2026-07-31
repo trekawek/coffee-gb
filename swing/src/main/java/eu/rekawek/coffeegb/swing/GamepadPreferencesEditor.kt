@@ -10,12 +10,12 @@ import java.awt.Insets
 import java.text.ParseException
 import javax.swing.BorderFactory
 import javax.swing.DefaultComboBoxModel
+import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JSpinner
-import javax.swing.JSeparator
 import javax.swing.SpinnerNumberModel
 import javax.swing.SwingUtilities
 import javax.swing.Timer
@@ -35,7 +35,7 @@ internal class GamepadPreferencesEditor private constructor(
     private val defaults: ApplicationSettings.Input,
     private val snapshots: GamepadSnapshotProvider,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
-) : JPanel(BorderLayout(0, 8)) {
+) : JPanel(BorderLayout(0, 8)), DesktopThemeRefreshHook {
   constructor(
       initial: ApplicationSettings.Input,
       defaults: ApplicationSettings.Input = ApplicationSettings.Input.defaults(),
@@ -66,41 +66,51 @@ internal class GamepadPreferencesEditor private constructor(
       GamepadCatalog.Snapshot(GamepadCatalog.Status.STARTING, emptyList(), "")
   private var optionsInitialized = false
   private var updatingControls = false
+  private var selectedPlayerIndex = 0
   private var selectedTuningId: String? =
       initial.gamepadTunings.keys.sorted().firstOrNull()
 
-  internal val playerSelectors: List<JComboBox<SelectionOption>> =
-      List(PLAYER_COUNT) { player ->
-        JComboBox<SelectionOption>().apply {
-          accessibleContext.accessibleName = "Player ${player + 1} gamepad"
-          accessibleContext.accessibleDescription =
-              "Choose Disabled, automatic assignment, or one specific game controller."
-          addActionListener {
-            if (!updatingControls) {
-              selectedItem?.let {
-                selections[player] = (it as SelectionOption).selection
-                clearAssignmentErrors()
-                refreshOptions()
-              }
+  private val assignmentErrors = MutableList(PLAYER_COUNT) { " " }
+  internal val playerSelector =
+      JComboBox<SelectionOption>().apply {
+        getAccessibleContext().accessibleName = "Player 1 gamepad"
+        getAccessibleContext().accessibleDescription =
+            "Choose Disabled, automatic assignment, or one specific game controller for Player 1."
+        addActionListener {
+          if (!updatingControls) {
+            selectedItem?.let {
+              selections[selectedPlayerIndex] = (it as SelectionOption).selection
+              clearAssignmentErrors()
+              refreshSelectedPlayerPresentation()
             }
           }
         }
       }
-  internal val playerErrors: List<JLabel> =
-      List(PLAYER_COUNT) { player ->
-        JLabel(" ").apply {
-          foreground = ERROR_COLOR
-          accessibleContext.accessibleName = "Player ${player + 1} gamepad error"
-        }
+  internal val playerError =
+      JLabel(" ").apply {
+        foreground = desktopValidationErrorColor()
+        getAccessibleContext().accessibleName = "Player 1 gamepad error"
+      }
+  internal val assignmentStatus =
+      JLabel(" ").apply {
+        getAccessibleContext().accessibleName = "Player 1 gamepad status"
       }
   internal val catalogStatus =
       JLabel("Detecting game controllers…").apply {
-        accessibleContext.accessibleName = "Gamepad discovery status"
+        getAccessibleContext().accessibleName = "Gamepad discovery status"
+      }
+  internal val refreshCatalogButton =
+      JButton("Refresh").apply {
+        mnemonic = java.awt.event.KeyEvent.VK_R
+        getAccessibleContext().accessibleName = "Refresh game controllers"
+        getAccessibleContext().accessibleDescription =
+            "Read the latest non-blocking controller discovery snapshot"
+        addActionListener { refreshCatalog() }
       }
   internal val tuningDevice =
       JComboBox<DeviceOption>().apply {
-        accessibleContext.accessibleName = "Gamepad tuning device"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Gamepad tuning device"
+        getAccessibleContext().accessibleDescription =
             "Choose a stable game controller whose dead zones and axes should be adjusted."
         addActionListener {
           if (!updatingControls) {
@@ -131,9 +141,34 @@ internal class GamepadPreferencesEditor private constructor(
   internal val invertTiltY = JCheckBox("Invert tilt Y axis")
   internal val tuningError =
       JLabel(" ").apply {
-        foreground = ERROR_COLOR
-        accessibleContext.accessibleName = "Gamepad tuning error"
+        foreground = desktopValidationErrorColor()
+        getAccessibleContext().accessibleName = "Gamepad tuning error"
       }
+  internal val advancedTuningPanel by lazy(LazyThreadSafetyMode.NONE) { createTuningPanel() }
+  internal val advancedTuningToggle =
+      JCheckBox("Show advanced controller tuning").apply {
+        getAccessibleContext().accessibleName = "Show advanced controller tuning"
+        getAccessibleContext().accessibleDescription =
+            "Show per-device dead zones and axis inversion controls."
+        addActionListener {
+          advancedTuningPanel.isVisible = isSelected
+          revalidate()
+          repaint()
+        }
+      }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    playerError.foreground = tokens.danger
+    tuningError.foreground = tokens.danger
+    advancedTuningPanel.border =
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder(
+                BorderFactory.createLineBorder(tokens.border),
+                "Advanced controller tuning",
+            ),
+            BorderFactory.createEmptyBorder(4, 4, 4, 4),
+        )
+  }
 
   private val catalogTimer =
       Timer(CATALOG_REFRESH_MILLIS) { refreshCatalog() }.apply {
@@ -147,7 +182,14 @@ internal class GamepadPreferencesEditor private constructor(
         "Assign up to four players and configure per-device dead zones and axis inversion."
     border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
     add(createContent(), BorderLayout.CENTER)
-    add(catalogStatus, BorderLayout.SOUTH)
+    add(
+        JPanel(BorderLayout(8, 0)).apply {
+          getAccessibleContext().accessibleName = "Gamepad discovery"
+          add(catalogStatus, BorderLayout.CENTER)
+          add(refreshCatalogButton, BorderLayout.LINE_END)
+        },
+        BorderLayout.SOUTH,
+    )
     refreshCatalog()
   }
 
@@ -170,16 +212,17 @@ internal class GamepadPreferencesEditor private constructor(
         val players = duplicate.map { it.index }
         players.forEach { player ->
           val other = players.first { it != player }
-          playerErrors[player].text =
+          assignmentErrors[player] =
               "${selectionLabel(duplicate.first().value)} is already selected for Player ${other + 1}."
         }
       }
       val firstDuplicate = duplicates.first()
+      selectPlayer(firstDuplicate.first().index)
       val message =
           "${selectionLabel(firstDuplicate.first().value)} cannot be assigned to multiple players."
       throw PreferenceEditorValidationException(
           message,
-          playerSelectors[firstDuplicate.first().index],
+          playerSelector,
       )
     }
 
@@ -216,6 +259,27 @@ internal class GamepadPreferencesEditor private constructor(
     refreshOptions()
   }
 
+  /** Selects the player whose one assignment row is currently shown. */
+  internal fun selectPlayer(player: Int) {
+    requireEdt()
+    require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
+    if (selectedPlayerIndex != player) {
+      selectedPlayerIndex = player
+      refreshAssignmentOptions()
+    } else {
+      refreshSelectedPlayerPresentation()
+    }
+  }
+
+  internal val selectedPlayer: Int
+    get() = selectedPlayerIndex
+
+  internal fun selectionForPlayer(player: Int): ApplicationSettings.GamepadSelection {
+    requireEdt()
+    require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
+    return selections[player]
+  }
+
   internal fun refreshCatalog() {
     requireEdt()
     val nextSnapshot = snapshots.snapshot()
@@ -243,6 +307,8 @@ internal class GamepadPreferencesEditor private constructor(
     if (deviceOptionsChanged) {
       refreshOptions()
       optionsInitialized = true
+    } else {
+      refreshSelectedPlayerPresentation()
     }
   }
 
@@ -273,27 +339,54 @@ internal class GamepadPreferencesEditor private constructor(
           insets = Insets(4, 4, 4, 4)
         }
 
-    playerSelectors.forEachIndexed { player, selector ->
-      val label = JLabel("Player ${player + 1}:")
-      label.labelFor = selector
-      label.displayedMnemonic = KeyEventForPlayer[player]
-      addRow(panel, constraints, player * 2, label, selector)
-      constraints.gridx = 1
-      constraints.gridy = player * 2 + 1
-      constraints.weightx = 1.0
-      panel.add(playerErrors[player], constraints)
-    }
+    val assignmentLabel = JLabel("Controller:")
+    assignmentLabel.labelFor = playerSelector
+    assignmentLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_C
+    addRow(panel, constraints, 0, assignmentLabel, playerSelector)
+    constraints.gridx = 1
+    constraints.gridy = 1
+    constraints.weightx = 1.0
+    panel.add(assignmentStatus, constraints)
+    constraints.gridy = 2
+    panel.add(playerError, constraints)
 
     constraints.gridx = 0
-    constraints.gridy = PLAYER_COUNT * 2
+    constraints.gridy = 3
     constraints.gridwidth = 2
     constraints.weightx = 1.0
-    panel.add(JSeparator(), constraints)
+    panel.add(advancedTuningToggle, constraints)
+
+    advancedTuningPanel.isVisible = false
+    constraints.gridy = 4
+    constraints.weighty = 0.0
+    constraints.fill = GridBagConstraints.HORIZONTAL
+    panel.add(advancedTuningPanel, constraints)
+
+    constraints.gridy = 5
+    constraints.weighty = 1.0
+    constraints.fill = GridBagConstraints.BOTH
+    panel.add(JPanel(), constraints)
+    return panel
+  }
+
+  private fun createTuningPanel(): JPanel {
+    val panel = JPanel(GridBagLayout())
+    panel.border =
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createTitledBorder("Advanced controller tuning"),
+            BorderFactory.createEmptyBorder(4, 4, 4, 4),
+        )
+    val constraints =
+        GridBagConstraints().apply {
+          anchor = GridBagConstraints.LINE_START
+          fill = GridBagConstraints.HORIZONTAL
+          insets = Insets(4, 4, 4, 4)
+        }
 
     val tuningLabel = JLabel("Tune controller:")
     tuningLabel.labelFor = tuningDevice
     tuningLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_T
-    addRow(panel, constraints, PLAYER_COUNT * 2 + 1, tuningLabel, tuningDevice)
+    addRow(panel, constraints, 0, tuningLabel, tuningDevice)
 
     movementDeadZone.accessibleContext.accessibleName = "Movement dead zone"
     movementDeadZone.toolTipText =
@@ -302,7 +395,7 @@ internal class GamepadPreferencesEditor private constructor(
     val movementLabel = JLabel("Movement dead zone:")
     movementLabel.labelFor = movementDeadZone
     movementLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_M
-    addRow(panel, constraints, PLAYER_COUNT * 2 + 2, movementLabel, movementDeadZone)
+    addRow(panel, constraints, 1, movementLabel, movementDeadZone)
 
     tiltDeadZone.accessibleContext.accessibleName = "Tilt dead zone"
     tiltDeadZone.toolTipText =
@@ -311,7 +404,7 @@ internal class GamepadPreferencesEditor private constructor(
     val tiltLabel = JLabel("Tilt dead zone:")
     tiltLabel.labelFor = tiltDeadZone
     tiltLabel.displayedMnemonic = java.awt.event.KeyEvent.VK_D
-    addRow(panel, constraints, PLAYER_COUNT * 2 + 3, tiltLabel, tiltDeadZone)
+    addRow(panel, constraints, 2, tiltLabel, tiltDeadZone)
 
     listOf(invertMovementX, invertMovementY, invertTiltX, invertTiltY).forEach {
       it.accessibleContext.accessibleName = it.text
@@ -337,20 +430,13 @@ internal class GamepadPreferencesEditor private constructor(
         }
     val inversionLabel = JLabel("Axis inversion:")
     inversionLabel.labelFor = invertMovementX
-    addRow(panel, constraints, PLAYER_COUNT * 2 + 4, inversionLabel, inversionPanel)
+    addRow(panel, constraints, 3, inversionLabel, inversionPanel)
 
     constraints.gridx = 1
-    constraints.gridy = PLAYER_COUNT * 2 + 5
+    constraints.gridy = 4
     constraints.gridwidth = 1
     constraints.weightx = 1.0
     panel.add(tuningError, constraints)
-
-    constraints.gridx = 0
-    constraints.gridy = PLAYER_COUNT * 2 + 6
-    constraints.gridwidth = 2
-    constraints.weighty = 1.0
-    constraints.fill = GridBagConstraints.BOTH
-    panel.add(JPanel(), constraints)
     return panel
   }
 
@@ -371,30 +457,9 @@ internal class GamepadPreferencesEditor private constructor(
 
     updatingControls = true
     try {
-      playerSelectors.forEachIndexed { player, selector ->
-        val options =
-            buildList {
-              add(
-                  SelectionOption(
-                      ApplicationSettings.GamepadSelection.Disabled,
-                      "Disabled",
-                  ))
-              add(
-                  SelectionOption(
-                      ApplicationSettings.GamepadSelection.Auto,
-                      "Automatic",
-                  ))
-              stableIds.forEach { stableId ->
-                add(
-                    SelectionOption(
-                        ApplicationSettings.GamepadSelection.Device(stableId),
-                        deviceLabel(stableId, available[stableId]),
-                    ))
-              }
-            }
-        selector.model = DefaultComboBoxModel(options.toTypedArray())
-        selector.selectedItem = options.first { it.selection == selections[player] }
-      }
+      val options = assignmentOptions(stableIds, available)
+      playerSelector.model = DefaultComboBoxModel(options.toTypedArray())
+      playerSelector.selectedItem = options.first { it.selection == selections[selectedPlayerIndex] }
 
       val deviceOptions =
           stableIds.map { stableId ->
@@ -409,7 +474,71 @@ internal class GamepadPreferencesEditor private constructor(
     } finally {
       updatingControls = false
     }
+    refreshSelectedPlayerPresentation()
     loadTuningControls()
+  }
+
+  private fun refreshAssignmentOptions() {
+    val available = snapshot.devices().associateBy(GamepadCatalog.Device::stableId)
+    val stableIds =
+        buildSet {
+          addAll(available.keys)
+          selections.forEach { selection ->
+            if (selection is ApplicationSettings.GamepadSelection.Device) add(selection.stableId)
+          }
+          addAll(tunings.keys)
+          selectedTuningId?.let(::add)
+        }.sorted()
+    updatingControls = true
+    try {
+      val options = assignmentOptions(stableIds, available)
+      playerSelector.model = DefaultComboBoxModel(options.toTypedArray())
+      playerSelector.selectedItem = options.first { it.selection == selections[selectedPlayerIndex] }
+    } finally {
+      updatingControls = false
+    }
+    refreshSelectedPlayerPresentation()
+  }
+
+  private fun assignmentOptions(
+      stableIds: List<String>,
+      available: Map<String, GamepadCatalog.Device>,
+  ): List<SelectionOption> =
+      buildList {
+        add(SelectionOption(ApplicationSettings.GamepadSelection.Disabled, "Disabled"))
+        add(SelectionOption(ApplicationSettings.GamepadSelection.Auto, "Automatic"))
+        stableIds.forEach { stableId ->
+          add(
+              SelectionOption(
+                  ApplicationSettings.GamepadSelection.Device(stableId),
+                  deviceLabel(stableId, available[stableId]),
+              ))
+        }
+      }
+
+  private fun refreshSelectedPlayerPresentation() {
+    val playerName = "Player ${selectedPlayerIndex + 1}"
+    playerSelector.accessibleContext.accessibleName = "$playerName gamepad"
+    playerSelector.accessibleContext.accessibleDescription =
+        "Choose Disabled, automatic assignment, or one specific game controller for $playerName."
+    playerError.text = assignmentErrors[selectedPlayerIndex]
+    playerError.accessibleContext.accessibleName = "$playerName gamepad error"
+    val selection = selections[selectedPlayerIndex]
+    assignmentStatus.text =
+        when (selection) {
+          ApplicationSettings.GamepadSelection.Disabled ->
+              "$playerName uses keyboard controls only."
+          ApplicationSettings.GamepadSelection.Auto ->
+              "$playerName uses the next available controller automatically."
+          is ApplicationSettings.GamepadSelection.Device ->
+              if (snapshot.devices().any { it.stableId() == selection.stableId }) {
+                "$playerName uses ${selectionLabel(selection)}."
+              } else {
+                "$playerName keeps an unavailable configured controller assignment."
+              }
+        }
+    assignmentStatus.accessibleContext.accessibleName = "$playerName gamepad status"
+    assignmentStatus.accessibleContext.accessibleDescription = assignmentStatus.text
   }
 
   private fun loadTuningControls() {
@@ -487,7 +616,8 @@ internal class GamepadPreferencesEditor private constructor(
   }
 
   private fun clearAssignmentErrors() {
-    playerErrors.forEach { it.text = " " }
+    assignmentErrors.indices.forEach { assignmentErrors[it] = " " }
+    playerError.text = " "
   }
 
   private fun selectionLabel(selection: ApplicationSettings.GamepadSelection): String =
@@ -541,15 +671,6 @@ internal class GamepadPreferencesEditor private constructor(
     const val CATALOG_REFRESH_MILLIS = 1_000
     const val STABLE_ID_LABEL_PREFIX = 12
     const val STABLE_ID_LABEL_SUFFIX = 6
-    val ERROR_COLOR = java.awt.Color(0xB0, 0x00, 0x20)
-    val KeyEventForPlayer =
-        listOf(
-            java.awt.event.KeyEvent.VK_1,
-            java.awt.event.KeyEvent.VK_2,
-            java.awt.event.KeyEvent.VK_3,
-            java.awt.event.KeyEvent.VK_4,
-        )
-
     fun requireEdt() {
       check(SwingUtilities.isEventDispatchThread()) {
         "Gamepad preferences must be constructed and accessed on the EDT"

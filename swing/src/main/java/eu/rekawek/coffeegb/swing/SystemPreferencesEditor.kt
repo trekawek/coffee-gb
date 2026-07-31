@@ -45,24 +45,24 @@ internal class SystemPreferencesEditor private constructor(
   internal val dmgGamesProfile =
       JComboBox(PROFILE_OPTIONS.toTypedArray()).apply {
         selectedItem = profileOption(initial.dmgGamesProfile)
-        accessibleContext.accessibleName = "DMG game hardware profile"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "DMG game hardware profile"
+        getAccessibleContext().accessibleDescription =
             "Choose automatic detection or a hardware profile for DMG-compatible games."
       }
 
   internal val cgbGamesProfile =
       JComboBox(PROFILE_OPTIONS.toTypedArray()).apply {
         selectedItem = profileOption(initial.cgbGamesProfile)
-        accessibleContext.accessibleName = "CGB game hardware profile"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "CGB game hardware profile"
+        getAccessibleContext().accessibleDescription =
             "Choose automatic detection or a hardware profile for CGB-compatible games."
       }
 
   internal val bootstrapMode =
       JComboBox(BOOTSTRAP_OPTIONS.toTypedArray()).apply {
         selectedItem = bootstrapOption(initial.bootstrapMode)
-        accessibleContext.accessibleName = "Bootstrap mode"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Bootstrap mode"
+        getAccessibleContext().accessibleDescription =
             "Choose whether boot ROM startup is skipped, fast-forwarded, or shown in full."
       }
 

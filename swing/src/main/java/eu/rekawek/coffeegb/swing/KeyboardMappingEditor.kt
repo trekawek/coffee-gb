@@ -20,7 +20,6 @@ import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.JTabbedPane
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 
@@ -83,9 +82,9 @@ class KeyboardMappingEditor private constructor(
   private val gamepadTunings = initialInput.gamepadTunings.toMap()
   private val defaultKeyboard =
       defaultInput.keyboard.toMap().also { defaultInput.toPlayerMapping() }
-  private val rows = linkedMapOf<Binding, Row>()
-  private val tabs = JTabbedPane()
+  private val rows = linkedMapOf<Button, Row>()
   private val status = JLabel("Choose Capture, then press one key.")
+  private var selectedPlayerIndex = 0
 
   private var activeCapture: Capture? = null
   private var pendingModifier: Int? = null
@@ -130,15 +129,7 @@ class KeyboardMappingEditor private constructor(
         "Keyboard controls for four players. Changes remain a draft until Preferences is applied."
     border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
 
-    tabs.accessibleContext.accessibleName = "Keyboard mappings by player"
-    tabs.accessibleContext.accessibleDescription =
-        "Use Left and Right to select a player, then Tab through that player's controls."
-    repeat(PLAYER_COUNT) { player ->
-      tabs.addTab("Player ${player + 1}", createPlayerPanel(player))
-      tabs.setToolTipTextAt(player, "Edit keyboard bindings for Player ${player + 1}")
-    }
-    tabs.addChangeListener { cancelCapture() }
-    add(tabs, BorderLayout.CENTER)
+    add(createPlayerPanel(), BorderLayout.CENTER)
 
     val footer = JPanel(BorderLayout(8, 0))
     status.accessibleContext.accessibleName = "Keyboard mapping status"
@@ -146,8 +137,8 @@ class KeyboardMappingEditor private constructor(
     footer.add(status, BorderLayout.CENTER)
     footer.add(
         JButton("Reset keyboard defaults").apply {
-          accessibleContext.accessibleName = "Restore all keyboard defaults"
-          accessibleContext.accessibleDescription =
+          getAccessibleContext().accessibleName = "Restore all keyboard defaults"
+          getAccessibleContext().accessibleDescription =
               "Restore the default keyboard mapping for every player."
           addActionListener { resetToDefaults() }
         },
@@ -178,6 +169,22 @@ class KeyboardMappingEditor private constructor(
     requireEventDispatchThread()
     return keyboard[ControllerProperties.PlayerButton(player, button)]
   }
+
+  /** Selects the player represented by the reusable pad controls. */
+  internal fun selectPlayer(player: Int) {
+    requireEventDispatchThread()
+    require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
+    if (selectedPlayerIndex == player) return
+    cancelCapture()
+    selectedPlayerIndex = player
+    refreshRows()
+    getAccessibleContext().accessibleDescription =
+        "Keyboard controls for Player ${player + 1}. Changes remain a draft until Preferences is saved."
+    showStatus("Editing keyboard mappings for Player ${player + 1}.")
+  }
+
+  internal val selectedPlayer: Int
+    get() = selectedPlayerIndex
 
   /**
    * Attempts to assign one Java AWT key code.
@@ -278,7 +285,8 @@ class KeyboardMappingEditor private constructor(
       button: Button,
   ): PadPosition {
     requireEventDispatchThread()
-    val card = checkNotNull(rows[Binding(player, button)]).card
+    require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
+    val card = checkNotNull(rows[button]).card
     val layout = card.parent.layout as GridBagLayout
     val constraints = layout.getConstraints(card)
     return PadPosition(constraints.gridx, constraints.gridy)
@@ -352,36 +360,37 @@ class KeyboardMappingEditor private constructor(
     }
   }
 
-  private fun createPlayerPanel(player: Int): JPanel {
+  private fun createPlayerPanel(): JPanel {
     val panel = JPanel(GridBagLayout())
-    panel.accessibleContext.accessibleName = "Player ${player + 1} keyboard mappings"
+    panel.accessibleContext.accessibleName = "Selected player keyboard mappings"
+    panel.accessibleContext.accessibleDescription =
+        "A Game Boy-shaped arrangement of the eight keyboard bindings for the selected player."
     panel.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
 
     PAD_FOCUS_ORDER.forEach { button ->
-      val binding = Binding(player, button)
       val bindingLabel =
           JLabel("", SwingConstants.CENTER).apply {
-            accessibleContext.accessibleName = "Current binding for ${binding.displayName}"
+            getAccessibleContext().accessibleName = "Current binding"
           }
       val capture =
-          actionButton("Capture", "Capture ${binding.displayName} keyboard binding") {
-            startCapture(binding)
+          actionButton("Capture", "Capture keyboard binding") {
+            startCapture(Binding(selectedPlayerIndex, button))
           }
       val card =
           JPanel(BorderLayout(4, 4)).apply {
-            accessibleContext.accessibleName = "${binding.displayName} mapping controls"
+            getAccessibleContext().accessibleName = "Keyboard mapping controls"
             border = BorderFactory.createTitledBorder(button.keyboardEditorDisplayName())
             add(
                 JLabel("Current key", SwingConstants.CENTER).apply {
                   labelFor = capture
-                  accessibleContext.accessibleName = "${binding.displayName} button"
+                  getAccessibleContext().accessibleName = "Selected player button"
                 },
                 BorderLayout.NORTH,
             )
             add(bindingLabel, BorderLayout.CENTER)
             add(capture, BorderLayout.SOUTH)
           }
-      rows[binding] = Row(bindingLabel, capture, card)
+      rows[button] = Row(bindingLabel, capture, card)
 
       val position = PAD_POSITIONS.getValue(button)
       panel.add(
@@ -416,8 +425,8 @@ class KeyboardMappingEditor private constructor(
       action: () -> Unit,
   ): JButton =
       JButton(text).apply {
-        accessibleContext.accessibleName = accessibleName
-        accessibleContext.accessibleDescription = accessibleName
+        getAccessibleContext().accessibleName = accessibleName
+        getAccessibleContext().accessibleDescription = accessibleName
         addActionListener { action() }
       }
 
@@ -445,11 +454,19 @@ class KeyboardMappingEditor private constructor(
   }
 
   private fun refreshRows() {
-    rows.forEach { (binding, row) ->
+    rows.forEach { (button, row) ->
+      val binding = Binding(selectedPlayerIndex, button)
       val key = keyboard[binding.toPlayerButton()]
       row.currentBinding.text = key?.displayName() ?: "Unassigned"
+      row.currentBinding.accessibleContext.accessibleName =
+          "Current binding for ${binding.displayName}"
       row.currentBinding.accessibleContext.accessibleDescription =
           "${binding.displayName}: ${row.currentBinding.text}"
+      row.capture.accessibleContext.accessibleName =
+          "Capture ${binding.displayName} keyboard binding"
+      row.capture.accessibleContext.accessibleDescription =
+          row.capture.accessibleContext.accessibleName
+      row.card.accessibleContext.accessibleName = "${binding.displayName} mapping controls"
       val capture = activeCapture
       row.capture.text =
           if (capture?.binding == binding) "Press a key…" else "Capture"

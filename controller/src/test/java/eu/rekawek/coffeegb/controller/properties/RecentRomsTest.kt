@@ -51,4 +51,28 @@ class RecentRomsTest {
     properties.recentRoms.recordSuccessfulOpen(first)
     assertEquals(emptyList(), properties.recentRoms.getPaths())
   }
+
+  @Test
+  fun `committed relocation records replacement and removes old path in one update`() {
+    val properties = testEmulatorProperties()
+    val old = Path.of("moved", "old.gb")
+    val other = Path.of("other.gbc")
+    val replacement = Path.of("located", "new.gb")
+    properties.recentRoms.recordSuccessfulOpen(other)
+    properties.recentRoms.recordSuccessfulOpen(old)
+
+    val revisionsBefore = properties.settingsStore.current()
+    properties.recentRoms.recordSuccessfulOpen(replacement, old)
+
+    assertEquals(
+        listOf(
+            replacement.toAbsolutePath().normalize(),
+            other.toAbsolutePath().normalize(),
+        ),
+        properties.recentRoms.getPaths(),
+    )
+    // The old entry is never removed in a preliminary update; one immutable document now contains
+    // both sides of the relocation transaction.
+    kotlin.test.assertNotEquals(revisionsBefore, properties.settingsStore.current())
+  }
 }

@@ -40,6 +40,7 @@ public class ControllerJvmCompatibilityTest {
                         Controller.PersistenceBarrierOperation.ROM_REPLACEMENT);
 
         assertEquals("COMPATIBILITY", started.getRomName());
+        assertNull(started.getSessionGeneration());
         assertEquals(rom, loading.getRom());
         assertEquals(rom, cancelled.getRom());
         assertEquals("failure", failed.getMessage());

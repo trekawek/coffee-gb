@@ -17,14 +17,15 @@ class RecentRoms(private val emulatorProperties: EmulatorProperties) {
       }
 
   /** Records only a ROM whose controller start event has committed successfully. */
-  fun recordSuccessfulOpen(path: Path) {
+  fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path? = null) {
     val normalized = normalize(path)
+    val replaced = recentPathToReplace?.let(::normalize)
     emulatorProperties.updateSettings { current ->
       val recent =
           current.general.recentRoms
               .asSequence()
               .map(::normalize)
-              .filterNot { it == normalized }
+              .filterNot { it == normalized || it == replaced }
               .distinct()
               .toMutableList()
       recent.add(0, normalized)

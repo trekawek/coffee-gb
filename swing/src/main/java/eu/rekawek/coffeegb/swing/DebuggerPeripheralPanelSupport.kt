@@ -168,8 +168,8 @@ internal fun peripheralTextArea(accessibleName: String): JTextArea =
       lineWrap = true
       wrapStyleWord = true
       font = Font(Font.MONOSPACED, Font.PLAIN, font.size)
-      accessibleContext.accessibleName = accessibleName
-      accessibleContext.accessibleDescription = "Copyable textual $accessibleName"
+      getAccessibleContext().accessibleName = accessibleName
+      getAccessibleContext().accessibleDescription = "Copyable textual $accessibleName"
       text = "No peripheral inspection loaded"
       caretPosition = 0
     }
@@ -188,7 +188,10 @@ internal class DebuggerPeripheralFontScaler(root: JComponent) {
   private val baselines = IdentityHashMap<Component, FontBaseline>()
 
   init {
-    fun capture(component: Component) {
+    capture(root)
+  }
+
+  private fun capture(component: Component) {
       component.font?.let { font ->
         val table = component as? JTable
         baselines[component] =
@@ -203,7 +206,25 @@ internal class DebuggerPeripheralFontScaler(root: JComponent) {
             )
       }
       (component as? Container)?.components?.forEach(::capture)
+  }
+
+  fun resetToBaseline() {
+    baselines.forEach { (component, baseline) ->
+      component.font = baseline.font
+      if (component is JTable && baseline.rowHeight != null) {
+        component.rowHeight = baseline.rowHeight
+        baseline.columnWidths?.forEachIndexed { index, width ->
+          if (index < component.columnModel.columnCount) {
+            component.columnModel.getColumn(index).preferredWidth = width
+            component.columnModel.getColumn(index).width = width
+          }
+        }
+      }
     }
+  }
+
+  fun recapture(root: JComponent) {
+    baselines.clear()
     capture(root)
   }
 

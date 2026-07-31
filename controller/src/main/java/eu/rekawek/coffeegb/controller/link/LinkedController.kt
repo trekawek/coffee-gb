@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.controller.PreparedSession
 import eu.rekawek.coffeegb.controller.RetainedClosePersistence
 import eu.rekawek.coffeegb.controller.RomSessionPreparer
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.controller.SessionPresentationGeneration
 import eu.rekawek.coffeegb.controller.StateLimits
 import eu.rekawek.coffeegb.controller.TimingTicker
 import eu.rekawek.coffeegb.controller.stagedEventBus
@@ -181,6 +182,8 @@ class LinkedController(
   private var debugPort: UnsupportedDebugPort? = null
 
   private val nextDebugSessionGeneration = AtomicLong()
+
+  private var playbackSessionGeneration: Long? = null
 
   @VisibleForTesting
   internal var persistLocalBatteryCapture: (BatteryFlush) -> BatteryPersistenceResult =
@@ -1561,6 +1564,7 @@ class LinkedController(
         )
       }
     }
+    playbackSessionGeneration = null
     try {
       candidate.activate()
     } catch (activationFailure: RuntimeException) {
@@ -1580,11 +1584,18 @@ class LinkedController(
     postHostEventSafely(Controller.SessionPauseSupportEvent(false))
     postHostEventSafely(Controller.SessionSnapshotSupportEvent(null))
     installUnsupportedDebugPort()
+    playbackSessionGeneration = SessionPresentationGeneration.next()
     postHostEventSafely(
         Controller.EmulationStartedEvent(
             replacement.event.config.rom.title,
             replacement.event.config.rom.origin,
             replacement.token.event.openRequestId,
+            playbackSessionGeneration,
+        ))
+    postHostEventSafely(
+        Controller.SessionPlaybackStateEvent(
+            checkNotNull(playbackSessionGeneration),
+            paused = false,
         ))
     publishPreparedLocalRom(ready.outbound)
     if (checkpoint) commitHostCheckpoint()
@@ -1950,6 +1961,7 @@ class LinkedController(
       postHostEventSafely(Controller.EmulationStoppedEvent())
       localSession.closeAfterCartridgeFlush()
     }
+    playbackSessionGeneration = null
     sessions[localPlayer] = null
     if (checkpoint) {
       commitHostCheckpoint()

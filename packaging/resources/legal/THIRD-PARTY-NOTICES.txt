@@ -150,6 +150,7 @@ Apache-2.0 Java runtime components
 The following exact Maven components are distributed under Apache License 2.0. The complete text
 is in licenses/Apache-2.0.txt:
 
+  pkg:maven/com.formdev/flatlaf@3.7?classifier=no-natives&type=jar
   pkg:maven/com.google.code.findbugs/jsr305@3.0.2?type=jar
   pkg:maven/com.google.errorprone/error_prone_annotations@2.23.0?type=jar
   pkg:maven/com.google.guava/failureaccess@1.0.2?type=jar
@@ -164,6 +165,13 @@ is in licenses/Apache-2.0.txt:
   pkg:maven/org.jetbrains.kotlin/kotlin-stdlib-jdk8@2.4.0?type=jar
   pkg:maven/org.jetbrains.kotlin/kotlin-stdlib@2.4.0?type=jar
   pkg:maven/org.jetbrains/annotations@23.0.0?type=jar
+
+FlatLaf 3.7 is sourced from https://github.com/JFormDesigner/FlatLaf/tree/3.7. Coffee GB uses the
+official no-natives core artifact (SHA-256
+6a36f5da9af1018accbb35810247418ea10708b179fc9d9012ee7bbda6f4d8e3), which contains no native
+library payload. Its base classes target Java 8 and its multi-release Java 9 classes remain within
+Coffee GB's Java 16 runtime baseline. Native window decorations and the native system file chooser
+are not enabled.
 
 The four Apache Commons artifacts retain their required project/copyright attributions in
 licenses/Apache-Commons-NOTICE.txt.

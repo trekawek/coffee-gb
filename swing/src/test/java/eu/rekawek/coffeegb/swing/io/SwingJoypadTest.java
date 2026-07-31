@@ -15,6 +15,7 @@ import java.util.Properties;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class SwingJoypadTest {
@@ -90,6 +91,28 @@ public class SwingJoypadTest {
 
         input.update(gamepadSource, 1, Set.of(Button.B));
         assertEquals(Set.of(Button.B), hub.sample().buttons(1));
+    }
+
+    @Test
+    public void explicitBackspaceMappingWinsOverFallbackRewind() {
+        Properties properties = new Properties();
+        properties.setProperty("input.p1.btn_a", "VK_BACK_SPACE");
+        EventBusImpl bus = new EventBusImpl(null, null, false);
+        PlayerInputHub hub = new PlayerInputHub();
+        DesktopPlayerInput input = new DesktopPlayerInput(hub, bus);
+        SwingJoypad joypad = new SwingJoypad(
+                ControllerProperties.INSTANCE.getPlayerMapping(properties), bus, input);
+        List<Boolean> rewinds = new ArrayList<>();
+        bus.register(event -> rewinds.add(event.getActive()), Controller.RewindEvent.class);
+
+        assertTrue(joypad.handlesKeyCode(KeyEvent.VK_BACK_SPACE));
+        joypad.keyPressed(key(KeyEvent.VK_BACK_SPACE, KeyEvent.KEY_PRESSED));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+        assertTrue(rewinds.isEmpty());
+        joypad.keyReleased(key(KeyEvent.VK_BACK_SPACE, KeyEvent.KEY_RELEASED));
+        assertTrue(hub.sample().buttons(0).isEmpty());
+        assertTrue(rewinds.isEmpty());
+        assertFalse(joypad.handlesKeyCode(KeyEvent.VK_F12));
     }
 
     private static KeyEvent key(int code, int id) {

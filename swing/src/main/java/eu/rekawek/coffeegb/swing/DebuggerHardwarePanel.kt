@@ -297,6 +297,10 @@ internal class DebuggerHardwarePanel(
     repaint()
   }
 
+  internal fun resetFontScaleForThemeChange() = fontScaler.resetToBaseline()
+
+  internal fun recaptureFontScaleBaseline() = fontScaler.recapture(this)
+
   internal fun displayedFields(
       subsystem: DebuggerHardwareSubsystem
   ): List<DebuggerHardwareFieldView> {
