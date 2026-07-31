@@ -65,6 +65,99 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `successful located replacement atomically replaces the missing recent`() {
+    val fixture = fixture()
+    val missing = Path.of("missing", "old-game.gb").toAbsolutePath().normalize()
+    val replacement = romFile("located-game.gb", "LOCATED").toAbsolutePath().normalize()
+    fixture.recents.recorded.add(missing)
+
+    val requestId =
+        fixture.service.open(
+            RomOpenRequest(
+                replacement,
+                RomOpenSource.CHOOSER,
+                recentPathToReplace = missing,
+            ))
+    fixture.worker.runAll()
+
+    assertEquals(listOf(missing), fixture.recents.recorded)
+    val load = fixture.loads.single()
+    fixture.eventBus.post(
+        Controller.EmulationStartedEvent("LOCATED", load.image!!.origin(), requestId))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(replacement), fixture.recents.recorded)
+    fixture.close()
+  }
+
+  @Test
+  fun `invalid located replacement leaves the missing recent unchanged`() {
+    val fixture = fixture()
+    val missing = Path.of("missing", "old-game.gb").toAbsolutePath().normalize()
+    fixture.recents.recorded.add(missing)
+
+    fixture.service.open(
+        RomOpenRequest(
+            temporaryFolder.root.toPath().resolve("not-there.gb"),
+            RomOpenSource.CHOOSER,
+            recentPathToReplace = missing,
+        ))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(missing), fixture.recents.recorded)
+    assertIs<RomOpenUpdate.Failed>(fixture.updates.last())
+    fixture.close()
+  }
+
+  @Test
+  fun `cancelled located replacement leaves the missing recent unchanged`() {
+    val fixture = fixture()
+    val missing = Path.of("missing", "old-game.gb").toAbsolutePath().normalize()
+    val replacement = romFile("cancelled-location.gb", "CANCELLED")
+    fixture.recents.recorded.add(missing)
+
+    val requestId =
+        fixture.service.open(
+            RomOpenRequest(
+                replacement,
+                RomOpenSource.CHOOSER,
+                recentPathToReplace = missing,
+            ))
+    fixture.service.cancel(requestId)
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(missing), fixture.recents.recorded)
+    assertTrue(fixture.updates.none { it is RomOpenUpdate.Opened })
+    fixture.close()
+  }
+
+  @Test
+  fun `superseded located replacement leaves the missing recent unchanged`() {
+    val fixture = fixture()
+    val missing = Path.of("missing", "old-game.gb").toAbsolutePath().normalize()
+    val replacement = romFile("superseded-location.gb", "SUPERSEDED")
+    val newer = romFile("newer-request.gb", "NEWER")
+    fixture.recents.recorded.add(missing)
+
+    fixture.service.open(
+        RomOpenRequest(
+            replacement,
+            RomOpenSource.CHOOSER,
+            recentPathToReplace = missing,
+        ))
+    fixture.service.open(RomOpenRequest(newer, RomOpenSource.CHOOSER))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertEquals(listOf(missing), fixture.recents.recorded)
+    assertTrue(fixture.updates.none { it is RomOpenUpdate.Opened })
+    fixture.close()
+  }
+
+  @Test
   fun `committed controller start synchronously wins a later cancellation`() {
     val fixture = fixture()
     val source = romFile("committed-before-cancel.gb", "COMMITTED")
@@ -786,7 +879,8 @@ class RomOpenServiceTest {
 
     override fun getPaths(): List<Path> = recorded.toList()
 
-    override fun recordSuccessfulOpen(path: Path) {
+    override fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path?) {
+      recentPathToReplace?.let(recorded::remove)
       recorded.remove(path)
       recorded.add(0, path)
     }

@@ -6,21 +6,33 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyEvent
 import javax.swing.BorderFactory
+import javax.swing.JButton
 import javax.swing.JComboBox
 import javax.swing.JLabel
 import javax.swing.JPanel
+import javax.swing.JTextArea
 import javax.swing.SwingUtilities
 
 /** Draft-only host-peripheral editor. Opening Preferences never probes or opens camera hardware. */
 internal class PeripheralsPreferencesEditor private constructor(
     initial: ApplicationSettings.Peripherals,
     private val defaults: ApplicationSettings.Peripherals,
+    mobileAdapterSummary: String,
+    private val configureMobileAdapter: () -> Unit,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(GridBagLayout()) {
   constructor(
       initial: ApplicationSettings.Peripherals,
       defaults: ApplicationSettings.Peripherals = ApplicationSettings.Peripherals(),
-  ) : this(initial, defaults, requireEdt())
+      mobileAdapterSummary: String = "Offline · networking blocked for this session",
+      configureMobileAdapter: () -> Unit = {},
+  ) : this(
+      initial,
+      defaults,
+      mobileAdapterSummary,
+      configureMobileAdapter,
+      requireEdt(),
+  )
 
   internal data class CameraOption(
       val deviceIndex: Int,
@@ -31,10 +43,30 @@ internal class PeripheralsPreferencesEditor private constructor(
 
   internal val cameraDevice =
       JComboBox(CAMERA_OPTIONS.toTypedArray()).apply {
-        accessibleContext.accessibleName = "Game Boy Camera device"
-        accessibleContext.accessibleDescription = CAMERA_ORDER_EXPLANATION
+        getAccessibleContext().accessibleName = "Game Boy Camera device"
+        getAccessibleContext().accessibleDescription = CAMERA_ORDER_EXPLANATION
         toolTipText = CAMERA_ORDER_EXPLANATION
         selectedItem = CAMERA_OPTIONS.first { it.deviceIndex == initial.cameraDeviceIndex }
+      }
+  internal val mobileAdapterStatus =
+      JTextArea(mobileAdapterSummary, 3, 36).apply {
+        isEditable = false
+        isFocusable = false
+        isOpaque = false
+        lineWrap = true
+        wrapStyleWord = true
+        border = null
+        putClientProperty("html.disable", true)
+        getAccessibleContext().accessibleName = "Mobile Adapter configuration summary"
+        getAccessibleContext().accessibleDescription = text
+      }
+  internal val configureMobileAdapterButton =
+      JButton("Configure Mobile Adapter…").apply {
+        mnemonic = KeyEvent.VK_M
+        getAccessibleContext().accessibleName = "Configure Mobile Adapter"
+        getAccessibleContext().accessibleDescription =
+            "Open the retained Mobile Adapter policy and current-session window"
+        addActionListener { configureMobileAdapter() }
       }
 
   init {
@@ -69,7 +101,25 @@ internal class PeripheralsPreferencesEditor private constructor(
     constraints.weightx = 1.0
     add(explanation, constraints)
 
+    val mobileHeading = JLabel("Mobile Adapter GB:")
+    constraints.gridx = 0
     constraints.gridy = 2
+    constraints.gridwidth = 2
+    constraints.weightx = 1.0
+    constraints.weighty = 0.0
+    constraints.fill = GridBagConstraints.HORIZONTAL
+    constraints.insets = Insets(16, 4, 4, 4)
+    add(mobileHeading, constraints)
+
+    constraints.gridy = 3
+    constraints.insets = Insets(4, 4, 4, 4)
+    add(mobileAdapterStatus, constraints)
+
+    constraints.gridy = 4
+    constraints.fill = GridBagConstraints.NONE
+    add(configureMobileAdapterButton, constraints)
+
+    constraints.gridy = 5
     constraints.weighty = 1.0
     constraints.fill = GridBagConstraints.BOTH
     add(JPanel(), constraints)

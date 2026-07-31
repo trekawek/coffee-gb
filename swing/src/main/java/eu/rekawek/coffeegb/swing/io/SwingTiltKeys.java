@@ -25,6 +25,11 @@ public class SwingTiltKeys implements KeyListener {
         tiltInput.registerResetter(this::resetState);
     }
 
+    public boolean handlesKeyCode(int keyCode) {
+        return keyCode == KeyEvent.VK_I || keyCode == KeyEvent.VK_J
+                || keyCode == KeyEvent.VK_K || keyCode == KeyEvent.VK_L;
+    }
+
     @Override
     public void keyTyped(KeyEvent e) {
     }

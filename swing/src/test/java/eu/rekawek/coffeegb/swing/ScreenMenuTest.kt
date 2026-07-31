@@ -159,13 +159,11 @@ class ScreenMenuTest {
       onScreenMenuEdt {
         assertEquals(listOf("4x"), fixture.menu.submenu("Scale").items().selectedLabels())
         assertEquals(listOf("180°"), fixture.menu.submenu("Rotate").items().selectedLabels())
-        assertTrue(fixture.menu.checkItem("Fullscreen").state)
+        assertTrue(fixture.menu.checkItem("Full Screen").state)
         assertTrue(fixture.menu.checkItem("DMG grayscale").state)
+        assertFalse(fixture.menu.checkItem("Blend adjacent frames").state)
+        assertFalse(fixture.menu.checkItem("CGB color correction").state)
         assertTrue(fixture.menu.checkItem("Show SGB border").state)
-        assertTrue(
-            fixture.menu.items().none {
-              it.text == "LCD ghosting (frame blend)" || it.text == "CGB color correction"
-            })
       }
       assertEquals(0, fixture.settings.replacements)
     }
@@ -174,7 +172,7 @@ class ScreenMenuTest {
   @Test
   fun `F11 toggles fullscreen only while it is free from emulator bindings`() {
     Fixture(ApplicationSettings.Display()).use { fixture ->
-      val fullscreen = onScreenMenuEdt { fixture.menu.checkItem("Fullscreen") }
+      val fullscreen = onScreenMenuEdt { fixture.menu.checkItem("Full Screen") }
       val f11 = KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0)
 
       onScreenMenuEdt { assertEquals(f11, fullscreen.accelerator) }

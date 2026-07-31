@@ -44,6 +44,13 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
 
     @Override
     public synchronized void keyPressed(KeyEvent e) {
+        ControllerProperties.PlayerButton binding = mapping.get(e.getKeyCode());
+        if (binding != null) {
+            if (pressed[binding.getPlayer()].add(binding.getButton())) {
+                update(binding.getPlayer());
+            }
+            return;
+        }
         if (e.getKeyCode() == REWIND_KEY) {
             if (!rewindActive) {
                 rewindActive = true;
@@ -51,22 +58,23 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
             }
             return;
         }
-        ControllerProperties.PlayerButton binding = mapping.get(e.getKeyCode());
-        if (binding != null && pressed[binding.getPlayer()].add(binding.getButton())) {
-            update(binding.getPlayer());
-        }
     }
 
     @Override
     public synchronized void keyReleased(KeyEvent e) {
-        if (e.getKeyCode() == REWIND_KEY) {
-            releaseRewind();
-            return;
-        }
         ControllerProperties.PlayerButton binding = mapping.get(e.getKeyCode());
         if (binding != null && pressed[binding.getPlayer()].remove(binding.getButton())) {
             update(binding.getPlayer());
+            return;
         }
+        if (e.getKeyCode() == REWIND_KEY) {
+            releaseRewind();
+        }
+    }
+
+    /** True when an unmodified key belongs to a configured button or the fallback rewind key. */
+    public synchronized boolean handlesKeyCode(int keyCode) {
+        return mapping.containsKey(keyCode) || keyCode == REWIND_KEY;
     }
 
     @Override

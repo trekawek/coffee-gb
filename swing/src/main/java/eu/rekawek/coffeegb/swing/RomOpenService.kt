@@ -43,9 +43,14 @@ sealed interface RomOpenInput {
 data class RomOpenRequest(
     val inputs: List<RomOpenInput>,
     val source: RomOpenSource,
+    /** Missing recent entry replaced atomically only after this request commits successfully. */
+    val recentPathToReplace: Path? = null,
 ) {
-  constructor(path: Path, source: RomOpenSource) :
-      this(listOf(RomOpenInput.LocalPath(path)), source)
+  constructor(
+      path: Path,
+      source: RomOpenSource,
+      recentPathToReplace: Path? = null,
+  ) : this(listOf(RomOpenInput.LocalPath(path)), source, recentPathToReplace)
 }
 
 enum class RomOpenStage {
@@ -208,7 +213,7 @@ internal constructor(
             return@submitLifecycle
           }
           try {
-            recentStore.recordSuccessfulOpen(path)
+            recentStore.recordSuccessfulOpen(path, operation.request.recentPathToReplace)
           } catch (failure: RuntimeException) {
             LOG.warn("ROM opened but its recent-file entry could not be updated", failure)
           }
@@ -279,6 +284,7 @@ internal constructor(
         RomOpenRequest(
             request.inputs.asSequence().take(MAX_EXTERNAL_INPUTS).toList(),
             request.source,
+            request.recentPathToReplace,
         )
     val operation = Operation(nextRequestId.getAndIncrement(), boundedRequest)
     var unavailable = false
@@ -1109,7 +1115,7 @@ private fun remoteInputTechnicalDetails(value: String): String {
 internal interface RomRecentStore {
   fun getPaths(): List<Path>
 
-  fun recordSuccessfulOpen(path: Path)
+  fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path? = null)
 
   fun remove(path: Path)
 }
@@ -1119,7 +1125,8 @@ private class PreferencesRomRecentStore(
 ) : RomRecentStore {
   override fun getPaths(): List<Path> = recentRoms.getPaths()
 
-  override fun recordSuccessfulOpen(path: Path) = recentRoms.recordSuccessfulOpen(path)
+  override fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path?) =
+      recentRoms.recordSuccessfulOpen(path, recentPathToReplace)
 
   override fun remove(path: Path) = recentRoms.remove(path)
 }

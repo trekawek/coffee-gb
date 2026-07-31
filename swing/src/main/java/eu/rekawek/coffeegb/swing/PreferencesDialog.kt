@@ -6,15 +6,20 @@ import eu.rekawek.coffeegb.controller.properties.ControllerProperties
 import eu.rekawek.coffeegb.swing.io.AudioDeviceSnapshot
 import eu.rekawek.coffeegb.swing.io.GamepadCatalog
 import java.awt.BorderLayout
-import java.awt.Color
+import java.awt.CardLayout
 import java.awt.Component
+import java.awt.Container
 import java.awt.Dialog
+import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Insets
+import java.awt.Rectangle
 import java.awt.Window
 import java.awt.event.ActionEvent
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
@@ -30,24 +35,33 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.AbstractAction
+import javax.swing.AbstractButton
 import javax.swing.BorderFactory
+import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFileChooser
 import javax.swing.JLabel
+import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JRootPane
 import javax.swing.JScrollPane
+import javax.swing.JSlider
 import javax.swing.JSpinner
 import javax.swing.JTabbedPane
+import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.KeyStroke
+import javax.swing.ListSelectionModel
 import javax.swing.SpinnerNumberModel
 import javax.swing.SwingUtilities
+import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import javax.swing.text.JTextComponent
 
 /**
  * The validated portion of Preferences currently exposed by the desktop UI.
@@ -69,6 +83,7 @@ internal data class PreferencesEdit(
     val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>,
     val cameraDeviceIndex: Int,
     val audio: ApplicationSettings.Audio,
+    val desktop: ApplicationSettings.Desktop? = null,
     val saves: ApplicationSettings.Saves? = null,
     val advanced: ApplicationSettings.Advanced? = null,
     val forceWindowSize: Boolean = false,
@@ -108,7 +123,121 @@ internal data class PreferencesEdit(
                   gamepadTunings = gamepadTunings,
               ),
           peripherals = current.peripherals.copy(cameraDeviceIndex = cameraDeviceIndex),
+          desktop =
+              desktop?.let { edited ->
+                current.desktop.copy(
+                    appearance = edited.appearance,
+                    commandBarVisible = edited.commandBarVisible,
+                )
+              } ?: current.desktop,
       )
+}
+
+internal enum class PreferencesCategory(val displayName: String) {
+  GENERAL("General"),
+  DISPLAY("Display"),
+  AUDIO("Audio"),
+  CONTROLS("Controls"),
+  SAVES_AND_REWIND("Saves & Rewind"),
+  SYSTEM("System"),
+  PERIPHERALS("Peripherals"),
+}
+
+/** Presentation supplied by the settings owner without coupling the dialog to its store. */
+internal data class PreferencesPersistencePresentation(
+    val sessionOnly: Boolean = false,
+    val message: String? = null,
+) {
+  val primaryActionLabel: String
+    get() = if (sessionOnly) "Apply for this session" else "Save changes"
+
+  companion object {
+    val PERSISTENT = PreferencesPersistencePresentation()
+
+    fun sessionOnly(message: String = SESSION_ONLY_MESSAGE) =
+        PreferencesPersistencePresentation(sessionOnly = true, message = message)
+
+    private const val SESSION_ONLY_MESSAGE =
+        "Settings are read-only. Changes apply to this session and will not survive restart."
+  }
+}
+
+/** A native, keyboard-accessible category list backed by a card page. */
+internal class PreferencesCategoryNavigation(
+    pages: Map<PreferencesCategory, Component>,
+    initialCategory: PreferencesCategory,
+    private val categoryChanged: (PreferencesCategory) -> Unit,
+) : JPanel(BorderLayout(12, 0)) {
+  private val categories = PreferencesCategory.entries
+  internal val categoryList =
+      JList(categories.toTypedArray()).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        fixedCellWidth = 168
+        cellRenderer =
+            object : DefaultListCellRenderer() {
+              override fun getListCellRendererComponent(
+                  list: JList<*>?,
+                  value: Any?,
+                  index: Int,
+                  isSelected: Boolean,
+                  cellHasFocus: Boolean,
+              ): Component =
+                  super.getListCellRendererComponent(
+                          list,
+                          (value as? PreferencesCategory)?.displayName ?: value,
+                          index,
+                          isSelected,
+                          cellHasFocus,
+                      )
+                      .also { component ->
+                        (component as? JComponent)?.accessibleContext?.accessibleName =
+                            (value as? PreferencesCategory)?.displayName ?: value?.toString()
+                      }
+            }
+        getAccessibleContext().accessibleName = "Preference categories"
+        getAccessibleContext().accessibleDescription =
+            "Choose a category to show its settings page."
+      }
+  private val cardLayout = CardLayout()
+  private val pageCards = JPanel(cardLayout)
+
+  init {
+    getAccessibleContext().accessibleName = "Preference categories and pages"
+    categories.forEach { category ->
+      pageCards.add(checkNotNull(pages[category]), category.name)
+    }
+    categoryList.addListSelectionListener { event ->
+      if (!event.valueIsAdjusting) {
+        val selected = categoryList.selectedValue ?: return@addListSelectionListener
+        cardLayout.show(pageCards, selected.name)
+        categoryChanged(selected)
+      }
+    }
+    add(categoryList, BorderLayout.LINE_START)
+    add(pageCards, BorderLayout.CENTER)
+    categoryList.setSelectedValue(initialCategory, true)
+    cardLayout.show(pageCards, initialCategory.name)
+  }
+
+  var selectedCategory: PreferencesCategory
+    get() = categoryList.selectedValue ?: PreferencesCategory.GENERAL
+    set(value) {
+      categoryList.setSelectedValue(value, true)
+      cardLayout.show(pageCards, value.name)
+    }
+
+  /** Compatibility-shaped accessors retained for focused editor tests during the shell migration. */
+  var selectedIndex: Int
+    get() = categoryList.selectedIndex
+    set(value) {
+      require(value in categories.indices)
+      selectedCategory = categories[value]
+    }
+
+  val tabCount: Int
+    get() = categories.size
+
+  fun getTitleAt(index: Int): String = categories[index].displayName
 }
 
 internal fun interface RomDirectoryChooser {
@@ -126,8 +255,15 @@ internal class PreferencesPanel private constructor(
     gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
     audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
     saveDirectoryChooser: SaveDirectoryChooser = SYSTEM_SAVE_DIRECTORY_CHOOSER,
+    private val persistence: PreferencesPersistencePresentation =
+        PreferencesPersistencePresentation.PERSISTENT,
+    initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
+    categoryChanged: (PreferencesCategory) -> Unit = {},
+    private val draftChanged: (Boolean) -> Unit = {},
+    mobileAdapterSummary: String = "Offline · networking blocked for this session",
+    configureMobileAdapter: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
-) : JPanel(BorderLayout(0, 8)) {
+) : JPanel(BorderLayout(12, 8)), DesktopThemeRefreshHook {
   constructor(
       initial: ApplicationSettings,
       defaults: ApplicationSettings = ApplicationSettings(),
@@ -135,6 +271,13 @@ internal class PreferencesPanel private constructor(
       gamepadSnapshots: GamepadSnapshotProvider = EMPTY_GAMEPAD_SNAPSHOTS,
       audioDevices: AudioDeviceProvider = SYSTEM_AUDIO_DEVICES,
       saveDirectoryChooser: SaveDirectoryChooser = SYSTEM_SAVE_DIRECTORY_CHOOSER,
+      persistence: PreferencesPersistencePresentation =
+          PreferencesPersistencePresentation.PERSISTENT,
+      initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
+      categoryChanged: (PreferencesCategory) -> Unit = {},
+      draftChanged: (Boolean) -> Unit = {},
+      mobileAdapterSummary: String = "Offline · networking blocked for this session",
+      configureMobileAdapter: () -> Unit = {},
   ) : this(
       initial,
       defaults,
@@ -142,9 +285,16 @@ internal class PreferencesPanel private constructor(
       gamepadSnapshots,
       audioDevices,
       saveDirectoryChooser,
+      persistence,
+      initialCategory,
+      categoryChanged,
+      draftChanged,
+      mobileAdapterSummary,
+      configureMobileAdapter,
       requireEdt(),
   )
 
+  private val initialSettings = initial
   internal val directoryField = JTextField(initial.general.romDirectory?.toString().orEmpty(), 32)
   internal val directoryError = JLabel(" ")
   internal val recentCapacity =
@@ -163,6 +313,19 @@ internal class PreferencesPanel private constructor(
               it.policy == initial.general.romChangeConfirmationPolicy
             }
       }
+  internal val appearance =
+      JComboBox(APPEARANCE_OPTIONS.toTypedArray()).apply {
+        selectedItem = APPEARANCE_OPTIONS.first { it.appearance == initial.desktop.appearance }
+        getAccessibleContext().accessibleName = "Application appearance"
+        getAccessibleContext().accessibleDescription =
+            "Choose a light, dark, or operating-system appearance for every Coffee GB window."
+      }
+  internal val commandBarVisible =
+      JCheckBox("Show command bar while playing", initial.desktop.commandBarVisible).apply {
+        getAccessibleContext().accessibleName = "Show command bar while playing"
+        getAccessibleContext().accessibleDescription =
+            "Show the compact gameplay command bar below the emulator display."
+      }
   internal val displayEditor =
       DisplayPreferencesEditor(initial.display, defaults.display)
   internal val systemEditor =
@@ -170,56 +333,178 @@ internal class PreferencesPanel private constructor(
   internal val keyboardEditor = KeyboardMappingEditor(initial.input, defaults.input)
   internal val gamepadEditor =
       GamepadPreferencesEditor(initial.input, defaults.input, gamepadSnapshots)
+  internal val controlsPlayerSelector =
+      JComboBox(CONTROL_PLAYER_OPTIONS.toTypedArray()).apply {
+        getAccessibleContext().accessibleName = "Controls player"
+        getAccessibleContext().accessibleDescription =
+            "Choose which player's keyboard and game controller settings are shown."
+        addActionListener {
+          val player = (selectedItem as? ControlPlayerOption)?.player ?: return@addActionListener
+          keyboardEditor.selectPlayer(player)
+          gamepadEditor.selectPlayer(player)
+        }
+      }
+  internal val controlsSubpages =
+      JTabbedPane().apply {
+        getAccessibleContext().accessibleName = "Control type"
+        getAccessibleContext().accessibleDescription =
+            "Choose Keyboard or Gamepad settings for the selected player."
+      }
+  internal val controlsRuntimeGuidance =
+      JTextArea(
+              "Fixed runtime controls: Backspace rewinds; I/J/K/L tilt supported cartridges. " +
+                  "Application shortcuts are listed in Help > Keyboard Shortcuts and withdraw " +
+                  "when an unmodified key is assigned to gameplay.")
+          .apply {
+            isEditable = false
+            isOpaque = false
+            lineWrap = true
+            wrapStyleWord = true
+            rows = 2
+            putClientProperty("html.disable", true)
+            getAccessibleContext().accessibleName = "Fixed runtime controls"
+            getAccessibleContext().accessibleDescription = text
+          }
   internal val peripheralsEditor =
-      PeripheralsPreferencesEditor(initial.peripherals, defaults.peripherals)
+      PeripheralsPreferencesEditor(
+          initial.peripherals,
+          defaults.peripherals,
+          mobileAdapterSummary,
+          configureMobileAdapter,
+      )
   internal val audioEditor =
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
   internal val savesEditor =
       SavesPreferencesEditor(initial.saves, defaults.saves, saveDirectoryChooser)
   internal val validationSummary = JLabel(" ")
-  internal val tabs = JTabbedPane()
+  internal val persistenceBanner =
+      JLabel(persistence.message.orEmpty()).apply {
+        isVisible = !persistence.message.isNullOrBlank()
+        getAccessibleContext().accessibleName = "Preferences persistence notice"
+        getAccessibleContext().accessibleDescription = text
+        border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(
+                UIManager.getColor("Separator.foreground")
+                    ?: UIManager.getColor("Label.disabledForeground")
+                    ?: foreground,
+            ),
+            BorderFactory.createEmptyBorder(8, 10, 8, 10),
+        )
+      }
+  private val styledSectionLabels = mutableListOf<Pair<JLabel, Boolean>>()
+  private var trackedGamepadTunings = initial.input.gamepadTunings.toMutableMap()
+  private var explicitlyTrackedGamepadTunings = initial.input.gamepadTunings.keys.toMutableSet()
+  private var suppressDirtyNotifications = false
+  private lateinit var openingFingerprint: PreferencesDraftFingerprint
+  private var lastPublishedDirty = false
+
+  internal val categories =
+      PreferencesCategoryNavigation(
+          pages =
+              mapOf(
+                  PreferencesCategory.GENERAL to categoryPage("General", createGeneralPanel()),
+                  PreferencesCategory.DISPLAY to categoryPage("Display", displayEditor),
+                  PreferencesCategory.AUDIO to categoryPage("Audio", audioEditor),
+                  PreferencesCategory.CONTROLS to categoryPage("Controls", createControlsPanel()),
+                  PreferencesCategory.SAVES_AND_REWIND to
+                      categoryPage("Saves & Rewind", savesEditor),
+                  PreferencesCategory.SYSTEM to categoryPage("System", systemEditor),
+                  PreferencesCategory.PERIPHERALS to
+                      categoryPage("Peripherals", peripheralsEditor),
+              ),
+          initialCategory = initialCategory,
+          categoryChanged = { category ->
+            if (category != PreferencesCategory.CONTROLS) {
+              keyboardEditor.cancelCapture()
+            }
+            categoryChanged(category)
+          },
+      )
+
+  /** Temporary compatibility alias for existing focused editor tests. */
+  internal val tabs: PreferencesCategoryNavigation
+    get() = categories
 
   init {
     border = BorderFactory.createEmptyBorder(12, 12, 0, 12)
     getAccessibleContext().accessibleName = "Coffee GB preferences"
 
-    tabs.accessibleContext.accessibleName = "Preference categories"
-    tabs.addTab("General", createGeneralPanel())
-    tabs.addTab("System", JScrollPane(systemEditor).apply { border = null })
-    tabs.addTab("Display", JScrollPane(displayEditor).apply { border = null })
-    tabs.addTab("Input", JScrollPane(keyboardEditor).apply { border = null })
-    tabs.addTab("Gamepads", JScrollPane(gamepadEditor).apply { border = null })
-    tabs.addTab("Peripherals", JScrollPane(peripheralsEditor).apply { border = null })
-    tabs.addTab("Audio", JScrollPane(audioEditor).apply { border = null })
-    tabs.addTab("Saves", JScrollPane(savesEditor).apply { border = null })
-    tabs.addChangeListener {
-      if (tabs.selectedIndex != INPUT_TAB) {
-        keyboardEditor.cancelCapture()
-      }
-    }
-    add(tabs, BorderLayout.CENTER)
+    add(persistenceBanner, BorderLayout.NORTH)
+    add(categories, BorderLayout.CENTER)
 
-    validationSummary.foreground = ERROR_COLOR
+    validationSummary.foreground = desktopValidationErrorColor()
     validationSummary.accessibleContext.accessibleName = "Preferences validation error"
     add(validationSummary, BorderLayout.SOUTH)
+
+    installDirtyTracking(this)
+    installGamepadTuningTracking()
+    openingFingerprint = draftFingerprint()
+    publishDirtyState()
   }
 
-  internal fun restoreDefaults() {
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    validationSummary.foreground = tokens.danger
+    directoryError.foreground = tokens.danger
+    recentCapacityError.foreground = tokens.danger
+    controlsRuntimeGuidance.background = tokens.surface
+    controlsRuntimeGuidance.foreground = tokens.secondaryText
+    persistenceBanner.border =
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(tokens.border),
+            BorderFactory.createEmptyBorder(8, 10, 8, 10),
+        )
+    val labelFont = UIManager.getFont("Label.font")
+    if (labelFont != null) {
+      styledSectionLabels.forEach { (label, pageTitle) ->
+        label.font =
+            labelFont.deriveFont(
+                labelFont.style or java.awt.Font.BOLD,
+                labelFont.size2D + if (pageTitle) 3f else 1f,
+            )
+      }
+    }
+    revalidate()
+    repaint()
+  }
+
+  internal fun restoreSelectedPageDefaults() {
     requireEdt()
-    directoryField.text = defaults.general.romDirectory?.toString().orEmpty()
-    recentCapacity.value = defaults.general.recentFileCapacity
-    confirmationPolicy.selectedItem =
-        CONFIRMATION_OPTIONS.first {
-          it.policy == defaults.general.romChangeConfirmationPolicy
-        }
-    displayEditor.restoreDefaults()
-    systemEditor.restoreDefaults()
-    keyboardEditor.resetToDefaults()
-    gamepadEditor.restoreDefaults()
-    peripheralsEditor.restoreDefaults()
-    audioEditor.restoreDefaults()
-    savesEditor.restoreDefaults()
-    clearErrors()
+    withSuppressedDirtyNotifications {
+      when (categories.selectedCategory) {
+        PreferencesCategory.GENERAL -> restoreGeneralDefaults()
+        PreferencesCategory.DISPLAY -> displayEditor.restoreDefaults()
+        PreferencesCategory.AUDIO -> audioEditor.restoreDefaults()
+        PreferencesCategory.CONTROLS -> restoreControlsDefaults()
+        PreferencesCategory.SAVES_AND_REWIND -> savesEditor.restoreDefaults()
+        PreferencesCategory.SYSTEM -> systemEditor.restoreDefaults()
+        PreferencesCategory.PERIPHERALS -> peripheralsEditor.restoreDefaults()
+      }
+      clearErrors()
+    }
+    publishDirtyState()
+  }
+
+  internal fun restoreAllDefaults() {
+    requireEdt()
+    withSuppressedDirtyNotifications {
+      restoreGeneralDefaults()
+      displayEditor.restoreDefaults()
+      audioEditor.restoreDefaults()
+      restoreControlsDefaults()
+      savesEditor.restoreDefaults()
+      systemEditor.restoreDefaults()
+      peripheralsEditor.restoreDefaults()
+      clearErrors()
+    }
+    publishDirtyState()
+  }
+
+  /** Compatibility alias for callers that intentionally request every page. */
+  internal fun restoreDefaults() = restoreAllDefaults()
+
+  internal fun isDirty(): Boolean {
+    requireEdt()
+    return draftFingerprint() != openingFingerprint
   }
 
   internal fun validatedEdit(): PreferencesEdit {
@@ -232,26 +517,7 @@ internal class PreferencesPanel private constructor(
           displayEditor.validatedDisplay()
         } catch (failure: PreferenceEditorValidationException) {
           validationSummary.text = failure.message ?: "Resolve the display settings error."
-          tabs.selectedIndex = DISPLAY_TAB
-          throw PreferencesValidationException(
-              validationSummary.text,
-              failure.invalidComponent,
-          )
-        }
-    val input =
-        try {
-          keyboardEditor.validatedDraft()
-        } catch (failure: IllegalArgumentException) {
-          validationSummary.text = failure.message ?: "Resolve the keyboard binding conflict."
-          tabs.selectedIndex = INPUT_TAB
-          throw PreferencesValidationException(validationSummary.text, keyboardEditor)
-        }
-    val gamepad =
-        try {
-          gamepadEditor.validatedDraft()
-        } catch (failure: PreferenceEditorValidationException) {
-          validationSummary.text = failure.message ?: "Resolve the gamepad settings error."
-          tabs.selectedIndex = GAMEPADS_TAB
+          categories.selectedCategory = PreferencesCategory.DISPLAY
           throw PreferencesValidationException(
               validationSummary.text,
               failure.invalidComponent,
@@ -262,7 +528,29 @@ internal class PreferencesPanel private constructor(
           audioEditor.validatedAudio()
         } catch (failure: PreferenceEditorValidationException) {
           validationSummary.text = failure.message ?: "Resolve the audio settings error."
-          tabs.selectedIndex = AUDIO_TAB
+          categories.selectedCategory = PreferencesCategory.AUDIO
+          throw PreferencesValidationException(
+              validationSummary.text,
+              failure.invalidComponent,
+          )
+        }
+    val input =
+        try {
+          keyboardEditor.validatedDraft()
+        } catch (failure: IllegalArgumentException) {
+          validationSummary.text = failure.message ?: "Resolve the keyboard binding conflict."
+          categories.selectedCategory = PreferencesCategory.CONTROLS
+          controlsSubpages.selectedIndex = KEYBOARD_CONTROLS_PAGE
+          throw PreferencesValidationException(validationSummary.text, keyboardEditor)
+        }
+    val gamepad =
+        try {
+          gamepadEditor.validatedDraft()
+        } catch (failure: PreferenceEditorValidationException) {
+          validationSummary.text = failure.message ?: "Resolve the gamepad settings error."
+          categories.selectedCategory = PreferencesCategory.CONTROLS
+          controlsPlayerSelector.selectedIndex = gamepadEditor.selectedPlayer
+          controlsSubpages.selectedIndex = GAMEPAD_CONTROLS_PAGE
           throw PreferencesValidationException(
               validationSummary.text,
               failure.invalidComponent,
@@ -273,7 +561,7 @@ internal class PreferencesPanel private constructor(
           savesEditor.validatedSaves()
         } catch (failure: PreferenceEditorValidationException) {
           validationSummary.text = failure.message ?: "Resolve the saves settings error."
-          tabs.selectedIndex = SAVES_TAB
+          categories.selectedCategory = PreferencesCategory.SAVES_AND_REWIND
           throw PreferencesValidationException(
               validationSummary.text,
               failure.invalidComponent,
@@ -289,6 +577,11 @@ internal class PreferencesPanel private constructor(
         gamepadTunings = gamepad.tunings,
         cameraDeviceIndex = peripheralsEditor.validatedPeripherals().cameraDeviceIndex,
         audio = audio,
+        desktop =
+            initialSettings.desktop.copy(
+                appearance = (appearance.selectedItem as AppearanceOption).appearance,
+                commandBarVisible = commandBarVisible.isSelected,
+            ),
         saves = saves,
         advanced = systemEditor.validatedAdvanced(),
         forceWindowSize = displayEditor.windowScaleCommandRequested,
@@ -322,7 +615,7 @@ internal class PreferencesPanel private constructor(
     requireEdt()
     savesEditor.showDirectoryValidationError(message)
     validationSummary.text = message
-    tabs.selectedIndex = SAVES_TAB
+    categories.selectedCategory = PreferencesCategory.SAVES_AND_REWIND
     savesEditor.directoryField.requestFocusInWindow()
   }
 
@@ -335,6 +628,18 @@ internal class PreferencesPanel private constructor(
           fill = GridBagConstraints.HORIZONTAL
           insets = Insets(4, 4, 4, 4)
         }
+
+    val appearanceLabel = JLabel("Appearance:")
+    appearanceLabel.displayedMnemonic = KeyEvent.VK_A
+    appearanceLabel.labelFor = appearance
+    addRow(panel, constraints, 0, appearanceLabel, appearance)
+
+    constraints.gridx = 1
+    constraints.gridy = 1
+    constraints.gridwidth = 1
+    constraints.weightx = 1.0
+    constraints.fill = GridBagConstraints.HORIZONTAL
+    panel.add(commandBarVisible, constraints)
 
     val directoryLabel = JLabel("Default ROM directory:")
     directoryLabel.displayedMnemonic = KeyEvent.VK_D
@@ -365,12 +670,12 @@ internal class PreferencesPanel private constructor(
     val directoryRow = JPanel(BorderLayout(6, 0))
     directoryRow.add(directoryField, BorderLayout.CENTER)
     directoryRow.add(browse, BorderLayout.LINE_END)
-    addRow(panel, constraints, 0, directoryLabel, directoryRow)
+    addRow(panel, constraints, 2, directoryLabel, directoryRow)
 
-    directoryError.foreground = ERROR_COLOR
+    directoryError.foreground = desktopValidationErrorColor()
     directoryError.accessibleContext.accessibleName = "Default ROM directory error"
     constraints.gridx = 1
-    constraints.gridy = 1
+    constraints.gridy = 3
     constraints.weightx = 1.0
     panel.add(directoryError, constraints)
 
@@ -381,12 +686,12 @@ internal class PreferencesPanel private constructor(
     recentCapacity.toolTipText =
         "Choose between ${ApplicationSettings.MIN_RECENT_FILE_CAPACITY} and " +
             "${ApplicationSettings.MAX_RECENT_FILE_CAPACITY}."
-    addRow(panel, constraints, 2, recentLabel, recentCapacity)
+    addRow(panel, constraints, 4, recentLabel, recentCapacity)
 
-    recentCapacityError.foreground = ERROR_COLOR
+    recentCapacityError.foreground = desktopValidationErrorColor()
     recentCapacityError.accessibleContext.accessibleName = "Recent-file capacity error"
     constraints.gridx = 1
-    constraints.gridy = 3
+    constraints.gridy = 5
     constraints.weightx = 1.0
     panel.add(recentCapacityError, constraints)
     (recentCapacity.editor as JSpinner.DefaultEditor).textField.document.addDocumentListener(
@@ -403,15 +708,251 @@ internal class PreferencesPanel private constructor(
     confirmationLabel.labelFor = confirmationPolicy
     confirmationPolicy.accessibleContext.accessibleName =
         "Confirmation policy for replacing or closing a game"
-    addRow(panel, constraints, 4, confirmationLabel, confirmationPolicy)
+    addRow(panel, constraints, 6, confirmationLabel, confirmationPolicy)
 
     constraints.gridx = 0
-    constraints.gridy = 5
+    constraints.gridy = 7
     constraints.gridwidth = 2
     constraints.weighty = 1.0
     constraints.fill = GridBagConstraints.BOTH
     panel.add(JPanel(), constraints)
     return panel
+  }
+
+  private fun createControlsPanel(): JPanel {
+    val panel = JPanel(BorderLayout(0, 10))
+    panel.accessibleContext.accessibleName = "Keyboard and gamepad controls"
+    val playerLabel = JLabel("Player:")
+    playerLabel.labelFor = controlsPlayerSelector
+    playerLabel.displayedMnemonic = KeyEvent.VK_P
+    val playerRow =
+        JPanel(GridBagLayout()).apply {
+          val constraints =
+              GridBagConstraints().apply {
+                anchor = GridBagConstraints.LINE_START
+                fill = GridBagConstraints.HORIZONTAL
+                insets = Insets(4, 4, 4, 8)
+              }
+          add(playerLabel, constraints)
+          constraints.gridx = 1
+          constraints.weightx = 1.0
+          add(controlsPlayerSelector, constraints)
+        }
+    playerRow.accessibleContext.accessibleName = "Selected controls player"
+
+    controlsSubpages.addTab("Keyboard", keyboardEditor)
+    controlsSubpages.setToolTipTextAt(
+        KEYBOARD_CONTROLS_PAGE,
+        "Capture keyboard bindings for the selected player.",
+    )
+    controlsSubpages.addTab("Gamepad", gamepadEditor)
+    controlsSubpages.setToolTipTextAt(
+        GAMEPAD_CONTROLS_PAGE,
+        "Assign a controller and optionally tune connected devices.",
+    )
+    controlsSubpages.addChangeListener {
+      if (controlsSubpages.selectedIndex != KEYBOARD_CONTROLS_PAGE) {
+        keyboardEditor.cancelCapture()
+      }
+    }
+
+    panel.add(playerRow, BorderLayout.NORTH)
+    panel.add(controlsSubpages, BorderLayout.CENTER)
+    panel.add(controlsRuntimeGuidance, BorderLayout.SOUTH)
+    return panel
+  }
+
+  private fun categoryPage(title: String, content: Component): JScrollPane {
+    val page =
+        JPanel(BorderLayout(0, 8)).apply {
+          border = BorderFactory.createEmptyBorder(4, 8, 8, 8)
+          add(sectionLabel(title, pageTitle = true), BorderLayout.NORTH)
+          add(content, BorderLayout.CENTER)
+        }
+    return JScrollPane(page).apply {
+      border = null
+      horizontalScrollBarPolicy = JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED
+      verticalScrollBarPolicy = JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED
+      verticalScrollBar.unitIncrement = 16
+      getAccessibleContext().accessibleName = "$title preferences page"
+    }
+  }
+
+  private fun sectionLabel(text: String, pageTitle: Boolean = false): JLabel =
+      JLabel(text).apply {
+        font =
+            font.deriveFont(
+                font.style or java.awt.Font.BOLD,
+                font.size2D + if (pageTitle) 3f else 1f,
+            )
+        styledSectionLabels += this to pageTitle
+      }
+
+  private fun restoreGeneralDefaults() {
+    directoryField.text = defaults.general.romDirectory?.toString().orEmpty()
+    recentCapacity.value = defaults.general.recentFileCapacity
+    confirmationPolicy.selectedItem =
+        CONFIRMATION_OPTIONS.first {
+          it.policy == defaults.general.romChangeConfirmationPolicy
+        }
+    appearance.selectedItem =
+        APPEARANCE_OPTIONS.first { it.appearance == defaults.desktop.appearance }
+    commandBarVisible.isSelected = defaults.desktop.commandBarVisible
+  }
+
+  private fun restoreControlsDefaults() {
+    keyboardEditor.resetToDefaults()
+    gamepadEditor.restoreDefaults()
+    trackedGamepadTunings = defaults.input.gamepadTunings.toMutableMap()
+    explicitlyTrackedGamepadTunings = defaults.input.gamepadTunings.keys.toMutableSet()
+  }
+
+  private fun installDirtyTracking(component: Component) {
+    when (component) {
+      is JTextComponent ->
+          component.document.addDocumentListener(
+              object : DocumentListener {
+                override fun insertUpdate(event: DocumentEvent) = publishDirtyState()
+
+                override fun removeUpdate(event: DocumentEvent) = publishDirtyState()
+
+                override fun changedUpdate(event: DocumentEvent) = publishDirtyState()
+              })
+      is JComboBox<*> -> {
+        component.addItemListener { publishDirtyState() }
+        component.addActionListener { queueDirtyStatePublication() }
+      }
+      is JSpinner -> component.addChangeListener { publishDirtyState() }
+      is JSlider -> component.addChangeListener { publishDirtyState() }
+      is AbstractButton -> {
+        component.addItemListener { publishDirtyState() }
+        component.addActionListener { queueDirtyStatePublication() }
+      }
+      is JLabel -> {
+        if (component.accessibleContext.accessibleName.orEmpty()
+            .startsWith("Current binding for ")) {
+          component.addPropertyChangeListener("text") { publishDirtyState() }
+        }
+      }
+    }
+    if (component is Container) {
+      component.components.forEach(::installDirtyTracking)
+    }
+  }
+
+  private fun installGamepadTuningTracking() {
+    val update = {
+      if (!suppressDirtyNotifications) {
+        captureTrackedGamepadTuning()
+        publishDirtyState()
+      }
+    }
+    gamepadEditor.movementDeadZone.addChangeListener { update() }
+    gamepadEditor.tiltDeadZone.addChangeListener { update() }
+    listOf(
+            gamepadEditor.invertMovementX,
+            gamepadEditor.invertMovementY,
+            gamepadEditor.invertTiltX,
+            gamepadEditor.invertTiltY,
+        )
+        .forEach { it.addItemListener { update() } }
+  }
+
+  private fun captureTrackedGamepadTuning() {
+    val stableId =
+        (gamepadEditor.tuningDevice.selectedItem as? GamepadPreferencesEditor.DeviceOption)
+            ?.stableId ?: return
+    val tuning =
+        ApplicationSettings.GamepadTuning(
+            movementDeadZone = (gamepadEditor.movementDeadZone.value as Number).toInt(),
+            tiltDeadZone = (gamepadEditor.tiltDeadZone.value as Number).toInt(),
+            invertMovementX = gamepadEditor.invertMovementX.isSelected,
+            invertMovementY = gamepadEditor.invertMovementY.isSelected,
+            invertTiltX = gamepadEditor.invertTiltX.isSelected,
+            invertTiltY = gamepadEditor.invertTiltY.isSelected,
+        )
+    if (stableId in explicitlyTrackedGamepadTunings ||
+        tuning != ApplicationSettings.GamepadTuning()) {
+      trackedGamepadTunings[stableId] = tuning
+    } else {
+      trackedGamepadTunings.remove(stableId)
+    }
+  }
+
+  private fun draftFingerprint(): PreferencesDraftFingerprint {
+    val keyboard =
+        buildMap {
+          repeat(4) { player ->
+            eu.rekawek.coffeegb.core.joypad.Button.values().forEach { button ->
+              put(
+                  ControllerProperties.PlayerButton(player, button),
+                  keyboardEditor.currentBinding(player, button),
+              )
+            }
+          }
+        }
+    return PreferencesDraftFingerprint(
+        listOf(
+            directoryField.text,
+            spinnerText(recentCapacity),
+            (confirmationPolicy.selectedItem as? ConfirmationOption)?.policy,
+            (appearance.selectedItem as? AppearanceOption)?.appearance,
+            commandBarVisible.isSelected,
+            displayEditor.explicitScale.selectedItem,
+            displayEditor.windowScaleCommandRequested,
+            displayEditor.letterboxColor.text,
+            displayEditor.fullscreen.isSelected,
+            displayEditor.rotation.selectedItem,
+            displayEditor.grayscale.isSelected,
+            displayEditor.blending.isSelected,
+            displayEditor.colorCorrection.isSelected,
+            displayEditor.showSgbBorder.isSelected,
+            (audioEditor.output.selectedItem as? AudioPreferencesEditor.OutputOption)?.stableId,
+            audioEditor.muted.isSelected,
+            audioEditor.volume.value,
+            audioEditor.latency.selectedItem,
+            keyboard,
+            (0 until CONTROL_PLAYER_COUNT).map(gamepadEditor::selectionForPlayer),
+            trackedGamepadTunings.toMap(),
+            spinnerText(gamepadEditor.movementDeadZone),
+            spinnerText(gamepadEditor.tiltDeadZone),
+            savesEditor.directoryField.text,
+            savesEditor.batterySaves.isSelected,
+            savesEditor.rewindEnabled.isSelected,
+            spinnerText(savesEditor.rewindSeconds),
+            spinnerText(savesEditor.rewindMemory),
+            savesEditor.autosave.selectedItem,
+            savesEditor.resume.selectedItem,
+            systemEditor.dmgGamesProfile.selectedItem,
+            systemEditor.cgbGamesProfile.selectedItem,
+            systemEditor.bootstrapMode.selectedItem,
+            peripheralsEditor.cameraDevice.selectedItem,
+        ))
+  }
+
+  private fun spinnerText(spinner: JSpinner): String =
+      (spinner.editor as? JSpinner.DefaultEditor)?.textField?.text ?: spinner.value.toString()
+
+  private fun publishDirtyState() {
+    if (suppressDirtyNotifications || !::openingFingerprint.isInitialized) return
+    val dirty = isDirty()
+    if (dirty != lastPublishedDirty) {
+      lastPublishedDirty = dirty
+      draftChanged(dirty)
+    }
+  }
+
+  private fun queueDirtyStatePublication() {
+    SwingUtilities.invokeLater(::publishDirtyState)
+  }
+
+  private fun withSuppressedDirtyNotifications(action: () -> Unit) {
+    suppressDirtyNotifications = true
+    try {
+      action()
+    } finally {
+      suppressDirtyNotifications = false
+    }
   }
 
   private fun validateDirectory(): Path? {
@@ -447,14 +988,14 @@ internal class PreferencesPanel private constructor(
   private fun failDirectory(message: String): Nothing {
     directoryError.text = message
     validationSummary.text = message
-    tabs.selectedIndex = GENERAL_TAB
+    categories.selectedCategory = PreferencesCategory.GENERAL
     throw PreferencesValidationException(message, directoryField)
   }
 
   private fun failRecentCapacity(message: String): Nothing {
     recentCapacityError.text = message
     validationSummary.text = message
-    tabs.selectedIndex = GENERAL_TAB
+    categories.selectedCategory = PreferencesCategory.GENERAL
     throw PreferencesValidationException(
         message,
         (recentCapacity.editor as JSpinner.DefaultEditor).textField,
@@ -509,15 +1050,32 @@ internal class PreferencesPanel private constructor(
     override fun toString(): String = label
   }
 
+  internal data class AppearanceOption(
+      val appearance: ApplicationSettings.Appearance,
+      val label: String,
+  ) {
+    override fun toString(): String = label
+  }
+
+  internal data class ControlPlayerOption(val player: Int) {
+    init {
+      require(player in 0 until CONTROL_PLAYER_COUNT)
+    }
+
+    override fun toString(): String = "Player ${player + 1}"
+  }
+
   private companion object {
-    const val GENERAL_TAB = 0
-    const val DISPLAY_TAB = 2
-    const val INPUT_TAB = 3
-    const val GAMEPADS_TAB = 4
-    const val PERIPHERALS_TAB = 5
-    const val AUDIO_TAB = 6
-    const val SAVES_TAB = 7
-    val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
+    const val CONTROL_PLAYER_COUNT = 4
+    const val KEYBOARD_CONTROLS_PAGE = 0
+    const val GAMEPAD_CONTROLS_PAGE = 1
+    val CONTROL_PLAYER_OPTIONS = List(CONTROL_PLAYER_COUNT, ::ControlPlayerOption)
+    val APPEARANCE_OPTIONS =
+        listOf(
+            AppearanceOption(ApplicationSettings.Appearance.LIGHT, "Light"),
+            AppearanceOption(ApplicationSettings.Appearance.DARK, "Dark"),
+            AppearanceOption(ApplicationSettings.Appearance.SYSTEM, "System"),
+        )
     val CONFIRMATION_OPTIONS =
         listOf(
             ConfirmationOption(RomChangeConfirmationPolicy.ALWAYS, "Always ask"),
@@ -567,6 +1125,13 @@ internal class PreferencesPanel private constructor(
   }
 }
 
+private data class PreferencesDraftFingerprint(val values: List<Any?>)
+
+private enum class PreferencesConfirmation {
+  PROCEED,
+  CANCEL,
+}
+
 internal class PreferencesValidationException(
     message: String,
     val invalidComponent: Component,
@@ -581,62 +1146,185 @@ internal object PreferencesDialog {
       gamepadCatalog: GamepadCatalog = GamepadCatalog(),
       audioDevices: AudioDeviceProvider =
           AudioDeviceProvider { listOf(AudioDeviceSnapshot.systemDefaultDevice()) },
+      persistence: PreferencesPersistencePresentation =
+          PreferencesPersistencePresentation.PERSISTENT,
+      initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
+      initialBounds: Rectangle? = null,
+      mobileAdapterSummary: String = "Offline · networking blocked for this session",
+      configureMobileAdapter: () -> Unit = {},
+      onCategoryChanged: (PreferencesCategory) -> Unit = {},
+      onBoundsChanged: (Rectangle) -> Unit = {},
+      onClosed: () -> Unit = {},
+      afterCommit: (PreferencesEdit) -> Unit = {},
       applyEdit: (PreferencesEdit) -> Unit,
   ) {
     check(SwingUtilities.isEventDispatchThread()) {
       "Preferences dialog must be opened on the EDT"
     }
 
-    val dialog = JDialog(owner, "Preferences", Dialog.ModalityType.APPLICATION_MODAL)
-    val panel =
+    val dialog =
+        JDialog(owner, "Preferences — Coffee GB", Dialog.ModalityType.APPLICATION_MODAL)
+    val saveButton = JButton(persistence.primaryActionLabel).apply { isEnabled = false }
+    val cancelButton = JButton("Cancel")
+    val restorePageButton = JButton("Restore page defaults")
+    val restoreAllButton = JButton("Restore all Preferences defaults…")
+    val draftStatus = JLabel("No unsaved changes")
+    var applyingInProgress = false
+    lateinit var refreshFooter: () -> Unit
+    lateinit var panel: PreferencesPanel
+    panel =
         PreferencesPanel(
             initial,
             defaults,
             gamepadSnapshots = GamepadSnapshotProvider(gamepadCatalog::snapshot),
             audioDevices = audioDevices,
+            persistence = persistence,
+            initialCategory = initialCategory,
+            categoryChanged = onCategoryChanged,
+            draftChanged = { refreshFooter() },
+            mobileAdapterSummary = mobileAdapterSummary,
+            configureMobileAdapter = {
+              if (!panel.isDirty() || confirmDiscardChanges(dialog)) {
+                panel.stopBackgroundWork()
+                dialog.dispose()
+                SwingUtilities.invokeLater(configureMobileAdapter)
+              }
+            },
         )
-    val applyButton = JButton("Apply")
-    val cancelButton = JButton("Cancel")
-    val restoreButton = JButton("Restore Defaults")
+
+    refreshFooter = {
+      val dirty = panel.isDirty()
+      saveButton.isEnabled = dirty && !applyingInProgress
+      restorePageButton.isEnabled = !applyingInProgress
+      restoreAllButton.isEnabled = !applyingInProgress
+      cancelButton.isEnabled = !applyingInProgress
+      draftStatus.text = if (dirty) "Unsaved changes" else "No unsaved changes"
+      draftStatus.accessibleContext.accessibleDescription = draftStatus.text
+    }
 
     val actions =
         PreferencesDialogActions(
             panel,
             applyEdit,
             dialog::dispose,
-            applyingChanged = { applying ->
-              applyButton.isEnabled = !applying
-              restoreButton.isEnabled = !applying
+            afterCommit = afterCommit,
+            confirmDiscard = { confirmDiscardChanges(dialog) },
+            confirmRestoreAll = { confirmRestoreAllDefaults(dialog) },
+            applyingChanged = { isApplying ->
+              applyingInProgress = isApplying
+              refreshFooter()
             },
         )
 
-    applyButton.accessibleContext.accessibleName = "Apply preferences"
+    saveButton.accessibleContext.accessibleName = persistence.primaryActionLabel
     cancelButton.accessibleContext.accessibleName = "Cancel preferences"
-    restoreButton.accessibleContext.accessibleName = "Restore default preferences"
-    applyButton.addActionListener { actions.apply() }
+    restorePageButton.accessibleContext.accessibleName = "Restore current page defaults"
+    restoreAllButton.accessibleContext.accessibleName = "Restore all Preferences defaults"
+    draftStatus.accessibleContext.accessibleName = "Preferences draft status"
+    saveButton.addActionListener { actions.apply() }
     cancelButton.addActionListener { actions.cancel() }
-    restoreButton.addActionListener { actions.restoreDefaults() }
+    restorePageButton.addActionListener { actions.restorePageDefaults() }
+    restoreAllButton.addActionListener { actions.restoreAllDefaults() }
 
-    val buttons = JPanel(FlowLayout(FlowLayout.TRAILING))
-    buttons.border = BorderFactory.createEmptyBorder(0, 12, 12, 12)
-    buttons.add(restoreButton)
-    buttons.add(cancelButton)
-    buttons.add(applyButton)
+    val restoreButtons =
+        JPanel(FlowLayout(FlowLayout.LEADING, 8, 0)).apply {
+          add(restorePageButton)
+          add(restoreAllButton)
+        }
+    val outcomeButtons =
+        JPanel(FlowLayout(FlowLayout.TRAILING, 8, 0)).apply {
+          add(cancelButton)
+          add(saveButton)
+        }
+    val footer =
+        JPanel(BorderLayout(12, 0)).apply {
+          border = BorderFactory.createEmptyBorder(8, 12, 12, 12)
+          add(restoreButtons, BorderLayout.LINE_START)
+          add(draftStatus, BorderLayout.CENTER)
+          add(outcomeButtons, BorderLayout.LINE_END)
+        }
 
     dialog.contentPane.layout = BorderLayout()
     dialog.contentPane.add(panel, BorderLayout.CENTER)
-    dialog.contentPane.add(buttons, BorderLayout.SOUTH)
+    dialog.contentPane.add(footer, BorderLayout.SOUTH)
     dialog.defaultCloseOperation = JDialog.DO_NOTHING_ON_CLOSE
     dialog.addWindowListener(
         object : WindowAdapter() {
           override fun windowClosing(event: WindowEvent) = actions.cancel()
+
+          override fun windowClosed(event: WindowEvent) = onClosed()
         })
-    configurePreferencesRootPane(dialog.rootPane, applyButton, actions::cancel)
+    configurePreferencesRootPane(dialog.rootPane, saveButton, actions::cancel)
+    refreshFooter()
     dialog.pack()
-    dialog.minimumSize = dialog.size
-    dialog.setLocationRelativeTo(owner)
+    val packed = dialog.size
+    dialog.minimumSize = Dimension(720, 500)
+    dialog.size =
+        Dimension(
+            packed.width.coerceIn(dialog.minimumSize.width, 960),
+            packed.height.coerceIn(dialog.minimumSize.height, 760),
+        )
+    if (initialBounds == null) {
+      dialog.setLocationRelativeTo(owner)
+    } else {
+      dialog.bounds = Rectangle(initialBounds)
+    }
+    dialog.addComponentListener(
+        object : ComponentAdapter() {
+          override fun componentMoved(event: ComponentEvent) = publishBounds()
+
+          override fun componentResized(event: ComponentEvent) = publishBounds()
+
+          private fun publishBounds() = onBoundsChanged(Rectangle(dialog.bounds))
+        })
     dialog.isVisible = true
   }
+
+  private fun confirmDiscardChanges(parent: Window): Boolean =
+      DesktopDialogFactory().showDecision(
+          parent,
+          DesktopDecisionSpec(
+              title = "Discard Preferences changes",
+              heading = "Discard your unsaved Preferences changes?",
+              message = "Every change made since Preferences opened will be lost.",
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              "Discard changes",
+                              PreferencesConfirmation.PROCEED,
+                              destructive = true,
+                          ),
+                      cancel =
+                          DesktopDialogAction(
+                              "Keep editing",
+                              PreferencesConfirmation.CANCEL,
+                          ),
+                      defaultButton = DesktopDialogDefaultButton.CANCEL,
+                  ),
+              modality = DesktopOwnedDialogModality.DOCUMENT,
+          )) == PreferencesConfirmation.PROCEED
+
+  private fun confirmRestoreAllDefaults(parent: Window): Boolean =
+      DesktopDialogFactory().showDecision(
+          parent,
+          DesktopDecisionSpec(
+              title = "Restore all Preferences defaults",
+              heading = "Restore defaults on every Preferences page?",
+              message = "The draft changes now; nothing is saved until you choose Save changes.",
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              "Restore all defaults",
+                              PreferencesConfirmation.PROCEED,
+                          ),
+                      cancel =
+                          DesktopDialogAction("Cancel", PreferencesConfirmation.CANCEL),
+                      defaultButton = DesktopDialogDefaultButton.CANCEL,
+                  ),
+              modality = DesktopOwnedDialogModality.DOCUMENT,
+          )) == PreferencesConfirmation.PROCEED
 }
 
 /** Testable orchestration for the dialog buttons; it deliberately owns no Swing window. */
@@ -651,6 +1339,9 @@ internal class PreferencesDialogActions(
     },
     private val uiExecutor: ((() -> Unit) -> Unit) = { SwingUtilities.invokeLater(it) },
     private val applyingChanged: (Boolean) -> Unit = {},
+    private val afterCommit: (PreferencesEdit) -> Unit = {},
+    private val confirmDiscard: () -> Boolean = { true },
+    private val confirmRestoreAll: () -> Boolean = { true },
 ) {
   private var validationPending = false
   private var closed = false
@@ -713,10 +1404,12 @@ internal class PreferencesDialogActions(
     closeValidationExecutor()
     closed = true
     close()
+    afterCommit(edit)
   }
 
   fun cancel() {
     if (closed) return
+    if (panel.isDirty() && !confirmDiscard()) return
     closed = true
     validationGeneration++
     validationPending = false
@@ -726,11 +1419,20 @@ internal class PreferencesDialogActions(
     close()
   }
 
-  fun restoreDefaults() {
+  fun restorePageDefaults() {
     if (!validationPending && !closed) {
-      panel.restoreDefaults()
+      panel.restoreSelectedPageDefaults()
     }
   }
+
+  fun restoreAllDefaults() {
+    if (!validationPending && !closed && confirmRestoreAll()) {
+      panel.restoreAllDefaults()
+    }
+  }
+
+  /** Compatibility alias for the former global restore command. */
+  fun restoreDefaults() = restoreAllDefaults()
 }
 
 private val SAVE_DIRECTORY_VALIDATION_THREAD_ID = AtomicLong()

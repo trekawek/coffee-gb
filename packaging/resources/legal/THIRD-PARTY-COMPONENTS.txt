@@ -1,5 +1,6 @@
 # Exact runtime Maven purl | reviewed license files (comma separated).
 # This inventory is validated against the generated CycloneDX Maven BOM before packaging.
+pkg:maven/com.formdev/flatlaf@3.7?classifier=no-natives&type=jar|licenses/Apache-2.0.txt
 pkg:maven/com.google.code.findbugs/jsr305@3.0.2?type=jar|licenses/Apache-2.0.txt
 pkg:maven/com.google.errorprone/error_prone_annotations@2.23.0?type=jar|licenses/Apache-2.0.txt
 pkg:maven/com.google.guava/failureaccess@1.0.2?type=jar|licenses/Apache-2.0.txt

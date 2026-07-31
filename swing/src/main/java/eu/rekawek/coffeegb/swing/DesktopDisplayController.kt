@@ -98,6 +98,9 @@ internal class DesktopDisplayController(
     if (exitingFullscreen) {
       fullscreenRuntime.setFullscreen(false)
     }
+    // Publish presentation first: an explicit-size pack must see the command/status chrome for
+    // the new mode (notably the exact-1x command-bar suppression) before it measures the frame.
+    eventBus.post(DisplaySettingsChangedEvent(display))
     eventBus.post(
         SetScaleModeEvent(
             display.toRuntimeScaleMode(),
@@ -120,7 +123,6 @@ internal class DesktopDisplayController(
           forceExplicitPack = forceExplicitPack,
       )
     }
-    eventBus.post(DisplaySettingsChangedEvent(display))
   }
 
   fun setFullscreen(fullscreen: Boolean) {

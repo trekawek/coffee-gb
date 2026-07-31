@@ -164,6 +164,9 @@ internal data class FullscreenWindowSnapshot(
 internal interface FullscreenWindow {
   fun snapshot(): FullscreenWindowSnapshot
 
+  /** Retains visible owned tools across native-peer recreation. */
+  fun beginPeerTransition() = Unit
+
   fun dispose()
 
   fun setUndecorated(undecorated: Boolean)
@@ -171,6 +174,9 @@ internal interface FullscreenWindow {
   fun setBounds(bounds: DesktopBounds)
 
   fun showWindow()
+
+  /** Restores the retained owned-tool visibility after the owner peer is live again. */
+  fun endPeerTransition() = Unit
 }
 
 internal fun interface ScreenLayoutProvider {
@@ -217,10 +223,7 @@ internal class FullscreenController(
     val target = layout.resolve(before.screenId, before.bounds)
     val remembered = remember(before, target)
 
-    window.dispose()
-    window.setUndecorated(true)
-    window.setBounds(target.fullBounds)
-    window.showWindow()
+    recreatePeer(undecorated = true, bounds = target.fullBounds)
 
     rememberedPlacement = remembered
     activeFullscreenScreenId = target.screenId
@@ -239,10 +242,7 @@ internal class FullscreenController(
             ?: layout.nearest(remembered.sourceFullBounds)
     val restored = restoreAndClamp(remembered, target)
 
-    window.dispose()
-    window.setUndecorated(remembered.undecorated)
-    window.setBounds(restored)
-    window.showWindow()
+    recreatePeer(undecorated = remembered.undecorated, bounds = restored)
 
     fullscreen = false
     rememberedPlacement = null
@@ -275,6 +275,18 @@ internal class FullscreenController(
     }
     activeFullscreenScreenId = target.screenId
     activeFullscreenBounds = target.fullBounds
+  }
+
+  private fun recreatePeer(undecorated: Boolean, bounds: DesktopBounds) {
+    window.beginPeerTransition()
+    try {
+      window.dispose()
+      window.setUndecorated(undecorated)
+      window.setBounds(bounds)
+      window.showWindow()
+    } finally {
+      window.endPeerTransition()
+    }
   }
 
   private fun remember(

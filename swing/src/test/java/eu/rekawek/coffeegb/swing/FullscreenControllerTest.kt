@@ -20,6 +20,8 @@ class FullscreenControllerTest {
 
     assertTrue(controller.isFullscreen())
     assertEquals("primary", controller.activeScreenId())
+    assertEquals(1, window.peerTransitionBegins)
+    assertEquals(1, window.peerTransitionEnds)
     assertEquals(
         listOf(
             WindowOperation.Dispose,
@@ -34,6 +36,8 @@ class FullscreenControllerTest {
 
     assertFalse(controller.isFullscreen())
     assertEquals(null, controller.activeScreenId())
+    assertEquals(2, window.peerTransitionBegins)
+    assertEquals(2, window.peerTransitionEnds)
     assertEquals(
         listOf(
             WindowOperation.Dispose,
@@ -406,8 +410,14 @@ class FullscreenControllerTest {
   private class FakeWindow(initial: FullscreenWindowSnapshot) : FullscreenWindow {
     var current = initial
     val operations = mutableListOf<WindowOperation>()
+    var peerTransitionBegins = 0
+    var peerTransitionEnds = 0
 
     override fun snapshot(): FullscreenWindowSnapshot = current
+
+    override fun beginPeerTransition() {
+      peerTransitionBegins++
+    }
 
     override fun dispose() {
       operations += WindowOperation.Dispose
@@ -425,6 +435,10 @@ class FullscreenControllerTest {
 
     override fun showWindow() {
       operations += WindowOperation.Show
+    }
+
+    override fun endPeerTransition() {
+      peerTransitionEnds++
     }
   }
 

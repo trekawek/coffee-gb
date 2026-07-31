@@ -50,6 +50,27 @@ class DevicePreferencesEditorsTest {
       }
 
   @Test
+  fun `peripherals page presents redacted Mobile Adapter summary and opens configuration`() =
+      onEdt {
+        var configureCalls = 0
+        val summary = "Custom Server · 2 mappings · networking blocked for this session"
+        val editor =
+            PeripheralsPreferencesEditor(
+                ApplicationSettings.Peripherals(),
+                mobileAdapterSummary = summary,
+                configureMobileAdapter = { configureCalls++ },
+            )
+
+        assertEquals(summary, editor.mobileAdapterStatus.text)
+        assertEquals(
+            "Mobile Adapter configuration summary",
+            editor.mobileAdapterStatus.accessibleContext.accessibleName,
+        )
+        editor.configureMobileAdapterButton.doClick()
+        assertEquals(1, configureCalls)
+      }
+
+  @Test
   fun `gamepad snapshot choices retain unavailable assignments and persist per-device tuning`() =
       onEdt {
         val unavailableId = gamepadId('a')
@@ -81,7 +102,7 @@ class DevicePreferencesEditorsTest {
             ApplicationSettings.GamepadSelection.Device(unavailableId),
             selectedGamepad(editor, 0),
         )
-        assertTrue(editor.playerSelectors[0].selectedItem.toString().contains("Unavailable"))
+        assertTrue(editor.playerSelector.selectedItem.toString().contains("Unavailable"))
 
         snapshots.set(
             gamepadSnapshot(
@@ -123,9 +144,12 @@ class DevicePreferencesEditorsTest {
             ApplicationSettings.GamepadTuning(movementDeadZone = 2_048),
             draft.tunings[unavailableId],
         )
-        assertEquals("Player 1 gamepad", editor.playerSelectors[0].accessibleContext.accessibleName)
+        assertEquals("Player 2 gamepad", editor.playerSelector.accessibleContext.accessibleName)
         assertEquals("Movement dead zone", editor.movementDeadZone.accessibleContext.accessibleName)
         assertEquals("Tilt dead zone", editor.tiltDeadZone.accessibleContext.accessibleName)
+        assertFalse(editor.advancedTuningPanel.isVisible)
+        editor.advancedTuningToggle.doClick()
+        assertTrue(editor.advancedTuningPanel.isVisible)
       }
 
   @Test
@@ -154,11 +178,15 @@ class DevicePreferencesEditorsTest {
               editor.validatedDraft()
             }
 
-        assertSame(editor.playerSelectors[0], failure.invalidComponent)
-        assertTrue(editor.playerErrors[0].text.contains("Player 2"))
-        assertTrue(editor.playerErrors[1].text.contains("Player 1"))
-        assertTrue(editor.playerErrors[2].text.contains("Player 4"))
-        assertTrue(editor.playerErrors[3].text.contains("Player 3"))
+        assertSame(editor.playerSelector, failure.invalidComponent)
+        assertEquals(0, editor.selectedPlayer)
+        assertTrue(editor.playerError.text.contains("Player 2"))
+        editor.selectPlayer(1)
+        assertTrue(editor.playerError.text.contains("Player 1"))
+        editor.selectPlayer(2)
+        assertTrue(editor.playerError.text.contains("Player 4"))
+        editor.selectPlayer(3)
+        assertTrue(editor.playerError.text.contains("Player 3"))
       }
 
   @Test
@@ -235,7 +263,11 @@ class DevicePreferencesEditorsTest {
         editor.addNotify()
         try {
           assertTrue(editor.isCatalogTimerRunning())
-          editor.refreshCatalog()
+          assertEquals(
+              "Refresh game controllers",
+              editor.refreshCatalogButton.accessibleContext.accessibleName,
+          )
+          editor.refreshCatalogButton.doClick()
           assertTrue(calls.get() >= 3)
           assertTrue(allCallsOnEdt.get())
         } finally {
@@ -398,18 +430,17 @@ class DevicePreferencesEditorsTest {
 
       assertEquals(0, applyCount)
       assertEquals(0, closeCount)
-      assertEquals("Gamepads", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+      assertEquals("Controls", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
       assertTrue(panel.validationSummary.text.contains("multiple players"))
       assertEquals(
           listOf(
               "General",
-              "System",
               "Display",
-              "Input",
-              "Gamepads",
-              "Peripherals",
               "Audio",
-              "Saves",
+              "Controls",
+              "Saves & Rewind",
+              "System",
+              "Peripherals",
           ),
           (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
       )
@@ -479,7 +510,8 @@ class DevicePreferencesEditorsTest {
       player: Int,
       selection: ApplicationSettings.GamepadSelection,
   ) {
-    val selector = editor.playerSelectors[player]
+    editor.selectPlayer(player)
+    val selector = editor.playerSelector
     selector.selectedItem =
         (0 until selector.itemCount)
             .map(selector::getItemAt)
@@ -489,9 +521,7 @@ class DevicePreferencesEditorsTest {
   private fun selectedGamepad(
       editor: GamepadPreferencesEditor,
       player: Int,
-  ): ApplicationSettings.GamepadSelection =
-      (editor.playerSelectors[player].selectedItem as GamepadPreferencesEditor.SelectionOption)
-          .selection
+  ): ApplicationSettings.GamepadSelection = editor.selectionForPlayer(player)
 
   private fun selectTuningDevice(
       editor: GamepadPreferencesEditor,

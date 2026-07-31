@@ -9,7 +9,9 @@ import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
@@ -32,7 +34,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
-import javax.swing.JOptionPane
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 import org.slf4j.LoggerFactory
@@ -58,6 +59,17 @@ internal const val DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS =
 internal const val DESKTOP_SHUTDOWN_TIMEOUT_MILLIS =
     DESKTOP_SHUTDOWN_REQUIRED_BUDGET_MILLIS + DESKTOP_SHUTDOWN_SCHEDULING_MARGIN_MILLIS
 
+private enum class QuitDecision {
+  QUIT,
+  KEEP_OPEN,
+}
+
+private enum class ClosePersistenceDecision {
+  RETRY,
+  CLOSE_WITHOUT_AUTOSAVE,
+  KEEP_OPEN,
+}
+
 class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
@@ -66,7 +78,14 @@ class SwingGui private constructor(
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val desktopOpenFiles: DesktopOpenFilesBridge,
     private val jvmShutdown: DesktopJvmShutdownCoordinator,
+    private val themeManager: DesktopThemeManager,
+    private val initialTheme: DesktopThemeApplication,
+    private val desktopUiStateStore: DesktopUiStateStore,
+    private val initialDesktopUiState: DesktopUiState,
 ) {
+
+  private val desktopDialogFactory =
+      DesktopDialogFactory { themeManager.current?.tokens ?: initialTheme.tokens }
 
   private val eventBus: EventBus
 
@@ -78,8 +97,6 @@ class SwingGui private constructor(
 
   private lateinit var displayController: DesktopDisplayController
 
-  private lateinit var windowSizeController: DesktopWindowSizeController
-
   private lateinit var fullscreenEscape: FullscreenEscapeDispatcher
 
   private lateinit var romOpen: DesktopRomOpen
@@ -90,7 +107,21 @@ class SwingGui private constructor(
 
   private lateinit var debuggerController: DesktopDebuggerController
 
+  private lateinit var netplayWindow: NetplayWindowHost
+
+  private lateinit var mobileAdapterWindow: MobileAdapterConfigurationWindowHost
+
   private lateinit var menu: SwingMenu
+
+  private lateinit var desktopActions: DesktopActionRegistry
+
+  private lateinit var desktopMainPanel: DesktopMainPanel
+
+  private lateinit var desktopUiCoordinator: DesktopUiCoordinator
+
+  private lateinit var desktopPlaybackState: DesktopPlaybackState
+
+  private lateinit var desktopUiStateController: DesktopUiStateController
 
   private val desktopQuit = DesktopQuitBridge()
 
@@ -114,20 +145,14 @@ class SwingGui private constructor(
           menu.closeCameraAfterSuccessfulStop(CAMERA_SHUTDOWN_BUDGET_MILLIS)
           romOpen.close()
           runDesktopEdtStep(debuggerController::close)
+          runDesktopEdtStep(netplayWindow::close)
+          runDesktopEdtStep(mobileAdapterWindow::close)
           runDesktopEdtStep(stateUxController::close)
           console?.stop()
-          closeDesktopSettingsRecoverably(
-              suspendWindowSize = { runDesktopEdtStep(windowSizeController::suspend) },
-              closeSettings = {
-                // No process-wide key dispatcher may persist display settings once store closure
-                // begins. Removal runs on the EDT, so a queued Escape either completes before this
-                // boundary or cannot race the settings close below.
-                runDesktopEdtStep(fullscreenEscape::close)
-                closeSettings()
-              },
-              resumeWindowSize = { runDesktopEdtStep(windowSizeController::resume) },
-              finishWindowSize = { runDesktopEdtStep(windowSizeController::close) },
-          )
+          runDesktopEdtStep(desktopUiStateController::close)
+          // No process-wide key dispatcher may persist display settings once store closure begins.
+          runDesktopEdtStep(fullscreenEscape::close)
+          closeSettings()
           mobileAdapterConfiguration.close()
           jvmShutdown.markCompleted()
         },
@@ -152,6 +177,7 @@ class SwingGui private constructor(
 
   private fun startGui() {
     mainWindow = JFrame("Coffee GB")
+    mainWindow.iconImages = listOf(16, 32, 48, 128, 256).map(CoffeeGbIcon::image)
     val minimumContentSize = emulator.minimumContentSize()
     displayController =
         DesktopDisplayController(
@@ -163,12 +189,6 @@ class SwingGui private constructor(
             ),
             DisplayWindowSizingRuntime(emulator::refreshDisplayWindowSizing),
         )
-    windowSizeController =
-        DesktopWindowSizeController(
-            properties,
-            mainWindow,
-            isFullscreen = displayController::isFullscreen,
-        )
     fullscreenEscape =
         FullscreenEscapeDispatcher(
                 mainWindow,
@@ -176,17 +196,88 @@ class SwingGui private constructor(
                 exitFullscreen = { displayController.setFullscreen(false) },
             )
             .also(FullscreenEscapeDispatcher::install)
+    desktopUiStateController =
+        DesktopUiStateController(
+            mainWindow,
+            desktopUiStateStore,
+            initialDesktopUiState,
+            isFullscreen = displayController::isFullscreen,
+            onSaveFailure = {
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.warning(
+                    "Window placement could not be saved for the next launch.")
+              }
+            },
+        )
+    emulator.attachPrinterWindow(
+        mainWindow,
+        object : PrinterWindowBounds {
+          override fun restore(): java.awt.Rectangle? =
+              desktopUiStateController.utilityBounds(DesktopUtilityWindow.PRINTER)
+
+          override fun remember(bounds: java.awt.Rectangle) {
+            desktopUiStateController.rememberUtilityBounds(
+                DesktopUtilityWindow.PRINTER,
+                bounds,
+            )
+          }
+        },
+    )
+    mobileAdapterWindow =
+        MobileAdapterConfigurationWindowHost(
+            owner = mainWindow,
+            coordinator = mobileAdapterConfiguration,
+            rootEventBus = eventBus,
+            launcherState = mobileAdapterConfigurationUiState,
+            initialBounds =
+                desktopUiStateController.utilityBounds(DesktopUtilityWindow.MOBILE_ADAPTER),
+            onBoundsChanged = { bounds ->
+              desktopUiStateController.rememberUtilityBounds(
+                  DesktopUtilityWindow.MOBILE_ADAPTER,
+                  bounds,
+              )
+            },
+            tokenProvider = { themeManager.current?.tokens ?: initialTheme.tokens },
+        )
     stateUxController =
         StateUxDesktopController(
-            mainWindow,
-            eventBus,
-            emulator::captureDisplayImage,
+            owner = mainWindow,
+            rootEventBus = eventBus,
+            captureDisplayImage = emulator::captureDisplayImage,
+            initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.STATES),
+            onBoundsChanged = { bounds ->
+              desktopUiStateController.rememberUtilityBounds(DesktopUtilityWindow.STATES, bounds)
+            },
+            onDesktopStatus = { message, recovery ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.warning(message, recovery)
+              }
+            },
+            dialogFactory = desktopDialogFactory,
         )
     debuggerController =
         DesktopDebuggerController(
             mainWindow,
             eventBus,
             DesktopDebuggerViewFactory { owner -> DebuggerWindow(owner) },
+        )
+    netplayWindow =
+        NetplayWindowHost(
+            owner = mainWindow,
+            rootEventBus = eventBus,
+            onPresentation = { presentation ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.netplaySummary(netplaySummary(presentation))
+              }
+            },
+            confirmPeripheralHandoff = ::confirmNetplayPeripheralHandoff,
+            initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.NETPLAY),
+            onBoundsChanged = { bounds ->
+              desktopUiStateController.rememberUtilityBounds(
+                  DesktopUtilityWindow.NETPLAY,
+                  bounds,
+              )
+            },
         )
 
     romOpen =
@@ -195,7 +286,9 @@ class SwingGui private constructor(
             eventBus,
             properties,
             romSessionState,
-            onRecentChanged = { menu.updateRecentRoms() },
+            onRecentChanged = ::updateRecentRoms,
+            dialogFactory = desktopDialogFactory,
+            onUpdate = ::handleRomOpenUpdate,
         )
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
@@ -217,57 +310,148 @@ class SwingGui private constructor(
           },
           romOpen::close,
           { runDesktopEdtStep(debuggerController::close) },
-          { runDesktopEdtStep(windowSizeController::close) },
+          { runDesktopEdtStep(netplayWindow::close) },
+          { runDesktopEdtStep(mobileAdapterWindow::close) },
+          {
+            if (::desktopUiStateController.isInitialized) {
+              runDesktopEdtStep(desktopUiStateController::close)
+            }
+          },
           properties::close,
           mobileAdapterConfiguration::close,
       )
     }
+    desktopActions =
+        DesktopActionRegistry(
+            DesktopCommandHandlers(
+                openRom = { menu.openRomChooser() },
+                closeGame = { menu.requestCloseGame() },
+                preferences = ::showPreferences,
+                quit = ::requestClose,
+                setPaused = { paused ->
+                  eventBus.post(
+                      if (paused) Controller.PauseEmulationEvent()
+                      else Controller.ResumeEmulationEvent())
+                },
+                reset = { eventBus.post(Controller.ResetEmulationEvent()) },
+                saveState = stateUxController::saveSlot,
+                loadState = stateUxController::loadSlot,
+                manageStates = stateUxController::showBrowser,
+                openSaveFolder = stateUxController::openSaveFolder,
+                netplay = netplayWindow::show,
+                setMuted = { muted ->
+                  desktopUiCoordinator.muted(muted)
+                  eventBus.post(Sound.SoundEnabledEvent(!muted))
+                  properties.setProperty(
+                      EmulatorProperties.Key.SoundEnabled,
+                      (!muted).toString(),
+                  )
+                },
+                setFullscreen = displayController::setFullscreen,
+                screenshot = stateUxController::takeScreenshot,
+                setCommandBarVisible = ::setCommandBarVisible,
+                selectStateSlot = { slot -> desktopUiCoordinator.stateSlot(slot) },
+            ))
+    desktopActions.applyShortcuts(
+        DesktopShortcutRegistry(
+            properties.applicationSettings.input.keyboard.values.map { it.code }))
     menu =
         SwingMenu(
             properties,
             mainWindow,
             eventBus,
-            romSessionState,
             displayController,
             romOpen::open,
             ::acceptRomLifecycle,
-            ::showPreferences,
+            { category -> showPreferences(category) },
             DebuggerMenuActions(
                 debuggerController::showTool,
                 debuggerController::applyLayout,
             ),
-            stateUxController::saveSlot,
-            stateUxController::loadSlot,
-            stateUxController::showBrowser,
-            stateUxController::takeScreenshot,
-            stateUxController::openSaveFolder,
-            ::requestClose,
+            desktopActions,
             mobileAdapterConfigurationUiState,
             emulator::isLinkedControllerActive,
-            {
-              showMobileAdapterConfigurationDialog(
-                  mainWindow,
-                  mobileAdapterConfiguration,
-                  eventBus,
-                  mobileAdapterConfigurationUiState,
-              )
+            { themeManager.current?.tokens ?: initialTheme.tokens },
+            { message ->
+              desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
             },
+            mobileAdapterWindow::showOrRaise,
         )
     menu.addMenu()
+
+    val displayPanel = emulator.bind(mainWindow) { !displayController.current().fullscreen }
+    desktopMainPanel =
+        DesktopMainPanel(
+            displayPanel,
+            desktopActions,
+            onOpenRecent = { path -> romOpen.open(path, RomOpenSource.RECENT) },
+            onCancelTask = { romLoadingRequestId?.let(romOpen::cancel) },
+            initialTokens = initialTheme.tokens,
+        )
+    mainWindow.contentPane = desktopMainPanel
+    desktopUiCoordinator =
+        DesktopUiCoordinator(
+            DesktopPresentation(
+                commands =
+                    DesktopCommandPresentation(
+                        muted = !properties.applicationSettings.audio.enabled,
+                        commandBarVisible =
+                            properties.applicationSettings.desktop.commandBarVisible,
+                        exactWindowScaleOne =
+                            properties.applicationSettings.display.scalingMode ==
+                                ApplicationSettings.DisplayScalingMode.EXPLICIT &&
+                                properties.applicationSettings.display.explicitScale == 1,
+                    ),
+                persistentStatus =
+                    "Ready",
+                notice =
+                    initialTheme.fallback?.let {
+                      DesktopNotice(
+                          "${it.unavailableAppearance.displayName} appearance was unavailable; " +
+                              "System appearance is active for this launch.")
+                    },
+            ),
+            desktopMainPanel::render,
+        )
+    desktopPlaybackState = DesktopPlaybackState(desktopUiCoordinator::paused)
+    desktopUiCoordinator.publish()
+    updateRecentRoms()
+    eventBus.register<Controller.SessionPauseSupportEvent> { event ->
+      dispatchSwingMutation { desktopUiCoordinator.pauseSupport(event.enabled) }
+    }
+    eventBus.register<Controller.SessionPlaybackStateEvent> { event ->
+      dispatchSwingMutation { desktopPlaybackState.playbackChanged(event) }
+    }
+    eventBus.register<StateUxSessionEvent> { session ->
+      dispatchSwingMutation {
+        desktopUiCoordinator.stateAvailability(
+            quick = session.available,
+            browser = session.available || session.unavailableReason != null,
+        )
+      }
+    }
+    eventBus.register<Sound.SoundEnabledEvent> { event ->
+      dispatchSwingMutation { desktopUiCoordinator.muted(!event.enabled()) }
+    }
+    eventBus.register<DisplaySettingsChangedEvent> { event ->
+      dispatchSwingMutation { desktopUiCoordinator.displaySettings(event.display) }
+    }
     eventBus.register<RomLoadingEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
         romLoading = true
         romLoadingRequestId = event.openRequestId
-        updateLoadingUi("Coffee GB: Loading ${event.rom.name}…", true)
+        desktopUiCoordinator.opening(event.rom.name, event.openRequestId != null)
       }
     }
     eventBus.register<EmulationStartedEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
-        activeWindowTitle = "Coffee GB: ${event.romName}"
+        activeWindowTitle = "${event.romName} — Coffee GB"
         romLoading = false
         romLoadingRequestId = null
         romSessionState.markStarted()
-        updateLoadingUi(activeWindowTitle, false)
+        desktopPlaybackState.sessionStarted(event.sessionGeneration)
+        mainWindow.title = activeWindowTitle
+        desktopUiCoordinator.opened(event.romName)
       }
     }
     eventBus.register<LoadRomFailedEvent> { event ->
@@ -275,7 +459,7 @@ class SwingGui private constructor(
         if (matchesLoadingRequest(event.openRequestId)) {
           romLoading = false
           romLoadingRequestId = null
-          updateLoadingUi(activeWindowTitle, false)
+          desktopUiCoordinator.openingFinished("Opening the game failed")
         }
       }
     }
@@ -284,17 +468,24 @@ class SwingGui private constructor(
         if (matchesLoadingRequest(event.openRequestId)) {
           romLoading = false
           romLoadingRequestId = null
-          updateLoadingUi(activeWindowTitle, false)
+          desktopUiCoordinator.openingFinished("Opening was cancelled")
         }
       }
     }
     eventBus.register<EmulationStoppedEvent> {
       dispatchAcceptedRomLifecycle(null, ::acceptRomLifecycle) {
         if (!romOpen.hasActiveRequest()) {
+          // Fullscreen is a session presentation state. Leave it before revealing Home so the
+          // runtime, persisted display choice, and shell selection cannot disagree while idle.
+          if (displayController.isFullscreen()) {
+            displayController.setFullscreen(false)
+          }
           activeWindowTitle = "Coffee GB"
           romSessionState.markStopped()
+          desktopPlaybackState.sessionStopped()
           if (!romLoading) {
-            updateLoadingUi(activeWindowTitle, false)
+            mainWindow.title = activeWindowTitle
+            desktopUiCoordinator.stopped()
           }
         }
       }
@@ -314,7 +505,6 @@ class SwingGui private constructor(
           }
         })
 
-    emulator.bind(mainWindow) { !displayController.current().fullscreen }
     installRomDropTarget()
     mainWindow.pack()
     mainWindow.minimumSize =
@@ -324,24 +514,23 @@ class SwingGui private constructor(
             mainWindow.insets,
             mainWindow.jMenuBar?.preferredSize?.height ?: 0,
         )
-    windowSizeController.restore()
     mainWindow.repaint()
-    mainWindow.setLocationRelativeTo(null)
     mainWindow.isResizable = true
+    val legacyOuterSize =
+        properties.applicationSettings.desktop.windowSize?.let {
+          DesktopSize(it.width, it.height)
+        }
+    desktopUiStateController.restoreMainWindow(legacyOuterSize)
     // Claim native Quit only after every coordinated-shutdown dependency exists. Attaching before
     // installation also guarantees a callback can only enqueue, never run inside AppKit dispatch.
     desktopQuit.attach(::requestClose)
     installDesktopQuitHandler(desktopQuit::accept)
     mainWindow.isVisible = true
     displayController.applyCurrent()
-    windowSizeController.install()
+    desktopUiStateController.install()
     properties.consumeLoadWarning()?.let { warning ->
-      JOptionPane.showMessageDialog(
-          mainWindow,
-          warning.message,
-          "Settings warning",
-          JOptionPane.WARNING_MESSAGE,
-      )
+      LOG.warn("Desktop settings loaded with a recoverable warning")
+      desktopUiCoordinator.warning(warning.message)
     }
     if (console != null) {
       Thread(console).start()
@@ -361,6 +550,98 @@ class SwingGui private constructor(
             feedback = dropFeedback::update,
         )
   }
+
+  private fun updateRecentRoms() {
+    if (::menu.isInitialized) menu.updateRecentRoms()
+    if (::desktopMainPanel.isInitialized) {
+      desktopMainPanel.updateRecentRoms(properties.recentRoms.getPaths())
+    }
+  }
+
+  private fun handleRomOpenUpdate(update: RomOpenUpdate) {
+    if (!::desktopUiCoordinator.isInitialized) return
+    when (update) {
+      is RomOpenUpdate.Progress -> {
+        romLoading = true
+        romLoadingRequestId = update.requestId
+        val target = update.path?.fileName?.toString() ?: "ROM"
+        val stage =
+            when (update.stage) {
+              RomOpenStage.QUEUED -> "Preparing $target"
+              RomOpenStage.SNAPSHOTTING -> "Reading $target"
+              RomOpenStage.INSPECTING -> "Checking $target"
+              RomOpenStage.AWAITING_ARCHIVE_SELECTION -> "Choose a game from $target"
+              RomOpenStage.PREPARING_CORE -> "Starting $target"
+              RomOpenStage.AWAITING_PERSISTENCE_DECISION ->
+                  "Waiting for a save-before-replace decision"
+            }
+        desktopUiCoordinator.sessionTask(
+            "$stage…",
+            update.stage != RomOpenStage.AWAITING_PERSISTENCE_DECISION,
+        )
+      }
+      is RomOpenUpdate.Opened -> updateRecentRoms()
+      is RomOpenUpdate.Cancelled -> {
+        if (romLoadingRequestId == update.requestId) {
+          romLoading = false
+          romLoadingRequestId = null
+          desktopUiCoordinator.openingFinished("Opening was cancelled")
+        }
+      }
+      is RomOpenUpdate.Failed -> {
+        if (romLoadingRequestId == update.requestId) {
+          romLoading = false
+          romLoadingRequestId = null
+          desktopUiCoordinator.openingFinished("Opening the game failed")
+        }
+      }
+    }
+  }
+
+  private fun setCommandBarVisible(visible: Boolean) {
+    properties.updateApplicationSettings { current ->
+      current.copy(desktop = current.desktop.copy(commandBarVisible = visible))
+    }
+    desktopUiCoordinator.commandBarVisible(visible)
+  }
+
+  private fun netplaySummary(presentation: NetplayUiPresentation): String =
+      when (presentation.state.phase) {
+        NetplayPhase.DISCONNECTED -> "Netplay: Off"
+        NetplayPhase.STARTING_HOST -> "Netplay: Starting"
+        NetplayPhase.WAITING_FOR_PEERS -> "Netplay: Hosting"
+        NetplayPhase.CONNECTING -> "Netplay: Connecting"
+        NetplayPhase.NEGOTIATING -> "Netplay: Synchronizing"
+        NetplayPhase.ACTIVE -> "Netplay: Active"
+        NetplayPhase.STOPPING -> "Netplay: Stopping"
+        NetplayPhase.FAILED -> "Netplay: Failed"
+      }
+
+  private fun confirmNetplayPeripheralHandoff(
+      selection: Controller.SerialPeripheralSelection,
+  ): Boolean =
+      desktopDialogFactory.showDecision(
+              mainWindow,
+              DesktopDecisionSpec(
+                  title = "Use the link port for Netplay?",
+                  heading = "Netplay needs the Game Boy link port",
+                  message =
+                      "${SerialPeripheralMenuBinding.label(selection)} will be detached while " +
+                          "this netplay session is starting or active. Coffee GB will restore " +
+                          "it when the session ends or the connection fails.",
+                  buttons =
+                      DesktopDialogButtons(
+                          primary =
+                              DesktopDialogAction(
+                                  "Use Link Port",
+                                  true,
+                                  accessibleDescription =
+                                      "Detach the current peripheral and continue to Netplay",
+                              ),
+                          cancel = DesktopDialogAction("Cancel", false),
+                      ),
+              ),
+          )
 
   private fun acceptRomLifecycle(openRequestId: Long?): Boolean =
       shouldApplyRomLifecycleEvent(
@@ -383,17 +664,35 @@ class SwingGui private constructor(
     val running = romSessionState.isRunning()
     val proceed =
         proceedWithRomChange(properties.romChangeConfirmationPolicy, running) {
-          JOptionPane.showConfirmDialog(
+          desktopDialogFactory.showDecision(
               mainWindow,
-              if (running) {
-                "Quit Coffee GB and close the running game?"
-              } else {
-                "Quit Coffee GB?"
-              },
-              "Quit Coffee GB",
-              JOptionPane.YES_NO_OPTION,
-              JOptionPane.QUESTION_MESSAGE,
-          ) == JOptionPane.YES_OPTION
+              DesktopDecisionSpec(
+                  title = "Quit Coffee GB",
+                  heading = if (running) "Quit and close the running game?" else "Quit Coffee GB?",
+                  message =
+                      if (running) {
+                        "Coffee GB will finish required save work before closing the application."
+                      } else {
+                        "Close Coffee GB and all retained utility and debugger windows."
+                      },
+                  buttons =
+                      DesktopDialogButtons(
+                          primary =
+                              DesktopDialogAction(
+                                  "Quit Coffee GB",
+                                  QuitDecision.QUIT,
+                                  mnemonic = java.awt.event.KeyEvent.VK_Q,
+                                  destructive = true,
+                              ),
+                          cancel =
+                              DesktopDialogAction(
+                                  if (running) "Keep playing" else "Cancel",
+                                  QuitDecision.KEEP_OPEN,
+                              ),
+                          defaultButton = DesktopDialogDefaultButton.CANCEL,
+                      ),
+                  modality = DesktopOwnedDialogModality.APPLICATION,
+              )) == QuitDecision.QUIT
         }
     if (!proceed) {
       return
@@ -428,46 +727,72 @@ class SwingGui private constructor(
       cancel: () -> Unit,
   ) {
     SwingUtilities.invokeLater {
-      val options =
-          if (failure.closeAutosaveWaivable) {
-            arrayOf("Retry", "Close without autosave", "Keep paused session open")
-          } else {
-            arrayOf("Retry", "Keep paused session open")
-          }
       val choice =
-          JOptionPane.showOptionDialog(
+          desktopDialogFactory.showDecision(
               mainWindow,
-              "Coffee GB could not safely persist ${failure.fileName}. " +
-                  "The session and its pending changes are retained, paused awaiting retry.\n\n" +
-                  (failure.message ?: failure.cause?.message ?: failure.javaClass.simpleName),
-              "Save before quit failed",
-              JOptionPane.DEFAULT_OPTION,
-              JOptionPane.ERROR_MESSAGE,
-              null,
-              options,
-              options[0],
-          )
-      when {
-        choice == 0 -> {
+              DesktopDecisionSpec(
+                  title = "Save before quit failed",
+                  heading = "Coffee GB could not safely save ${failure.fileName}",
+                  message =
+                      "The paused session and pending changes remain open. Retry the save" +
+                          if (failure.closeAutosaveWaivable) {
+                            ", close without a new autosave, or keep the session open."
+                          } else {
+                            " or keep the session open."
+                          },
+                  buttons =
+                      DesktopDialogButtons(
+                          primary =
+                              DesktopDialogAction(
+                                  "Retry save",
+                                  ClosePersistenceDecision.RETRY,
+                                  mnemonic = java.awt.event.KeyEvent.VK_R,
+                              ),
+                          secondary =
+                              if (failure.closeAutosaveWaivable) {
+                                listOf(
+                                    DesktopDialogAction(
+                                        "Close without autosave",
+                                        ClosePersistenceDecision.CLOSE_WITHOUT_AUTOSAVE,
+                                        destructive = true,
+                                    ))
+                              } else {
+                                emptyList()
+                              },
+                          cancel =
+                              DesktopDialogAction(
+                                  "Keep paused session open",
+                                  ClosePersistenceDecision.KEEP_OPEN,
+                              ),
+                          defaultButton = DesktopDialogDefaultButton.CANCEL,
+                      ),
+              ))
+      when (choice) {
+        ClosePersistenceDecision.RETRY -> {
           updateLoadingUi("Coffee GB: Retrying save before quit…", true)
           retry()
         }
-        failure.closeAutosaveWaivable && choice == 1 -> {
+        ClosePersistenceDecision.CLOSE_WITHOUT_AUTOSAVE -> {
           if (emulator.waiveCloseAutosave(failure.requestId)) {
             updateLoadingUi("Coffee GB: Closing without a new autosave…", true)
             retry()
           } else {
             cancel()
             pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
-            JOptionPane.showMessageDialog(
+            desktopDialogFactory.showError(
                 mainWindow,
-                "The autosave attempt changed before it could be waived. Close again to retry.",
-                "Close choice expired",
-                JOptionPane.WARNING_MESSAGE,
-            )
+                DesktopErrorSpec(
+                    title = "Close choice expired",
+                    summary = "The autosave attempt changed before it could be waived.",
+                    recovery = "Close Coffee GB again to retry with the current save operation.",
+                    buttons =
+                        DesktopDialogButtons(
+                            cancel = DesktopDialogAction("Keep open", Unit),
+                        ),
+                ))
           }
         }
-        else -> {
+        ClosePersistenceDecision.KEEP_OPEN -> {
           cancel()
           pausedQuitRetryUi().let { updateLoadingUi(it.title, it.blocksInput) }
         }
@@ -479,14 +804,16 @@ class SwingGui private constructor(
     LOG.error("Desktop runtime did not shut down cleanly", failure)
     SwingUtilities.invokeLater {
       updateLoadingUi(activeWindowTitle, false)
-      JOptionPane.showMessageDialog(
+      desktopDialogFactory.showError(
           mainWindow,
-          "Coffee GB did not finish shutting down. The window has been kept open, and ROM " +
-              "opening remains paused so close can be retried safely.\n\n" +
-              (failure.message ?: failure.javaClass.simpleName),
-          "Quit failed",
-          JOptionPane.ERROR_MESSAGE,
-      )
+          DesktopErrorSpec(
+              title = "Quit failed",
+              summary = "Coffee GB did not finish shutting down.",
+              recovery =
+                  "The window is still open and ROM opening remains paused. Close again to retry.",
+              sanitizedDetails = failure.javaClass.simpleName,
+              buttons = DesktopDialogButtons(cancel = DesktopDialogAction("Keep open", Unit)),
+          ))
     }
   }
 
@@ -494,13 +821,15 @@ class SwingGui private constructor(
     LOG.error("Desktop shutdown exceeded {} ms", DESKTOP_SHUTDOWN_TIMEOUT_MILLIS)
     SwingUtilities.invokeLater {
       updateLoadingUi(activeWindowTitle, false)
-      JOptionPane.showMessageDialog(
+      desktopDialogFactory.showError(
           mainWindow,
-          "Coffee GB kept the window open instead of forcing an unsafe exit. " +
-              "Shutdown work may still be unwinding; a late completion will not close the window.",
-          "Quit is taking too long",
-          JOptionPane.WARNING_MESSAGE,
-      )
+          DesktopErrorSpec(
+              title = "Quit is taking too long",
+              summary = "Coffee GB kept the window open instead of forcing an unsafe exit.",
+              recovery =
+                  "Shutdown work may still be unwinding. Wait, then close Coffee GB again to retry.",
+              buttons = DesktopDialogButtons(cancel = DesktopDialogAction("Keep open", Unit)),
+          ))
     }
   }
 
@@ -546,6 +875,10 @@ class SwingGui private constructor(
   }
 
   private fun showPreferences() {
+    showPreferences(null)
+  }
+
+  private fun showPreferences(requestedCategory: PreferencesCategory?) {
     check(SwingUtilities.isEventDispatchThread()) {
       "Preferences must be opened from the Event Dispatch Thread"
     }
@@ -554,39 +887,113 @@ class SwingGui private constructor(
         initial = properties.applicationSettings,
         gamepadCatalog = emulator.gamepadCatalog(),
         audioDevices = AudioDeviceProvider(emulator::audioDevices),
+        persistence =
+            if (properties.isReadOnly()) {
+              PreferencesPersistencePresentation.sessionOnly(
+                  "These settings are active for this session only because the settings file " +
+                      "cannot be safely updated.")
+            } else {
+              PreferencesPersistencePresentation.PERSISTENT
+            },
+        initialCategory =
+            requestedCategory
+                ?: desktopUiStateController.lastPreferencesCategory().toPreferencesCategory(),
+        initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.PREFERENCES),
+        mobileAdapterSummary = mobileAdapterWindow.currentSummary().preferencesText(),
+        configureMobileAdapter = mobileAdapterWindow::showOrRaise,
+        onCategoryChanged = { category ->
+          desktopUiStateController.rememberPreferencesCategory(category.toDesktopCategory())
+        },
+        onBoundsChanged = { bounds ->
+          desktopUiStateController.rememberUtilityBounds(
+              DesktopUtilityWindow.PREFERENCES,
+              bounds,
+          )
+        },
     ) { edit ->
       val previousAdvanced = properties.applicationSettings.advanced
+      val previousDesktop = properties.applicationSettings.desktop
       properties.updateApplicationSettings(edit::applyTo)
       val applied = properties.applicationSettings
+      applyPreferencesRuntime(previousAdvanced, previousDesktop, applied, edit)
+    }
+    updateRecentRoms()
+  }
+
+  private fun applyPreferencesRuntime(
+      previousAdvanced: ApplicationSettings.Advanced,
+      previousDesktop: ApplicationSettings.Desktop,
+      applied: ApplicationSettings,
+      edit: PreferencesEdit,
+  ) {
+    val failedEffects = mutableListOf<String>()
+    fun applyEffect(label: String, effect: () -> Unit) {
+      try {
+        effect()
+      } catch (failure: RuntimeException) {
+        failedEffects += label
+        LOG.error("Unable to apply the saved {} Preferences effect", label, failure)
+      }
+    }
+
+    applyEffect("controls") {
       emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
-      emulator.applyDeviceSettings(applied)
-      menu.applyCameraSettings(applied.peripherals)
+      desktopActions.applyShortcuts(
+          DesktopShortcutRegistry(applied.input.keyboard.values.map { it.code }))
+    }
+    applyEffect("audio and game controllers") { emulator.applyDeviceSettings(applied) }
+    applyEffect("camera") { menu.applyCameraSettings(applied.peripherals) }
+    applyEffect("display") {
       displayController.apply(
           applied.display,
           persist = false,
           forceWindowSize = edit.forceWindowSize,
       )
-      eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
-      eventBus.post(Controller.UpdatedSavesSettingsEvent(applied.saves))
-      if (applied.advanced != previousAdvanced) {
-        eventBus.post(Controller.UpdatedSystemMappingEvent())
+    }
+    if (applied.desktop.appearance != previousDesktop.appearance) {
+      applyEffect("appearance") {
+        val application = themeManager.apply(applied.desktop.appearance.toDesktopAppearance())
+        application.fallback?.let {
+          desktopUiCoordinator.warning(
+              "${it.unavailableAppearance.displayName} appearance is unavailable; " +
+                  "System appearance is active for this launch.")
+        }
       }
+    }
+    desktopUiCoordinator.commandBarVisible(applied.desktop.commandBarVisible)
+    applyEffect("audio mute") {
+      eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
+    }
+    applyEffect("save and rewind settings") {
+      eventBus.post(Controller.UpdatedSavesSettingsEvent(applied.saves))
+    }
+    if (applied.advanced != previousAdvanced) {
+      applyEffect("system mapping") { eventBus.post(Controller.UpdatedSystemMappingEvent()) }
+    }
+    updateRecentRoms()
+    if (failedEffects.isNotEmpty()) {
+      desktopUiCoordinator.warning(
+          "Preferences were saved, but ${failedEffects.distinct().joinToString()} could not be " +
+              "applied completely. Restart Coffee GB to retry.")
     }
   }
 
   private fun updateLoadingUi(title: String, loading: Boolean) {
     dispatchSwingMutation {
-      mainWindow.title = title
+      mainWindow.title = activeWindowTitle
+      if (::desktopUiCoordinator.isInitialized) {
+        if (loading) {
+          desktopUiCoordinator.savingBeforeQuit(
+              title.removePrefix("Coffee GB: ").removeSuffix("…"))
+        } else {
+          desktopUiCoordinator.openingFinished()
+        }
+      }
       val cursor =
           Cursor.getPredefinedCursor(if (loading) Cursor.WAIT_CURSOR else Cursor.DEFAULT_CURSOR)
       mainWindow.cursor = cursor
       mainWindow.rootPane.cursor = cursor
       mainWindow.contentPane.cursor = cursor
-      // A child's explicitly configured cursor can override the frame cursor. The transparent
-      // glass pane sits above every child, so making it visible during loading both guarantees the
-      // wait pointer and prevents mouse interaction with the frozen game.
-      mainWindow.glassPane.cursor = cursor
-      mainWindow.glassPane.isVisible = loading
     }
   }
 
@@ -608,6 +1015,11 @@ class SwingGui private constructor(
       // Loading, validating, migrating, and recovering the settings file can touch the disk. Do
       // that on the calling launcher thread before entering Swing's Event Dispatch Thread.
       val properties = EmulatorProperties(settingsOverrides)
+      val themeManager = DesktopThemeManager()
+      val initialTheme =
+          themeManager.apply(properties.applicationSettings.desktop.appearance.toDesktopAppearance())
+      val desktopUiStateStore = DesktopUiStateStore()
+      val initialDesktopUiState = desktopUiStateStore.load()
       val mobileConfigurationStore =
           MobileAdapterConfigurationStore(MobileAdapterConfigurationStore.defaultPath())
       val mobileConfigurationResult = mobileConfigurationStore.load()
@@ -641,12 +1053,45 @@ class SwingGui private constructor(
                 mobileAdapterConfigurationUiState,
                 desktopOpenFiles,
                 jvmShutdown,
+                themeManager,
+                initialTheme,
+                desktopUiStateStore,
+                initialDesktopUiState,
             )
             .startGui()
       }
     }
   }
 }
+
+internal fun ApplicationSettings.Appearance.toDesktopAppearance(): DesktopAppearance =
+    when (this) {
+      ApplicationSettings.Appearance.LIGHT -> DesktopAppearance.LIGHT
+      ApplicationSettings.Appearance.DARK -> DesktopAppearance.DARK
+      ApplicationSettings.Appearance.SYSTEM -> DesktopAppearance.SYSTEM
+    }
+
+internal fun DesktopPreferencesCategory.toPreferencesCategory(): PreferencesCategory =
+    when (this) {
+      DesktopPreferencesCategory.GENERAL -> PreferencesCategory.GENERAL
+      DesktopPreferencesCategory.DISPLAY -> PreferencesCategory.DISPLAY
+      DesktopPreferencesCategory.AUDIO -> PreferencesCategory.AUDIO
+      DesktopPreferencesCategory.CONTROLS -> PreferencesCategory.CONTROLS
+      DesktopPreferencesCategory.SAVES_AND_REWIND -> PreferencesCategory.SAVES_AND_REWIND
+      DesktopPreferencesCategory.SYSTEM -> PreferencesCategory.SYSTEM
+      DesktopPreferencesCategory.PERIPHERALS -> PreferencesCategory.PERIPHERALS
+    }
+
+internal fun PreferencesCategory.toDesktopCategory(): DesktopPreferencesCategory =
+    when (this) {
+      PreferencesCategory.GENERAL -> DesktopPreferencesCategory.GENERAL
+      PreferencesCategory.DISPLAY -> DesktopPreferencesCategory.DISPLAY
+      PreferencesCategory.AUDIO -> DesktopPreferencesCategory.AUDIO
+      PreferencesCategory.CONTROLS -> DesktopPreferencesCategory.CONTROLS
+      PreferencesCategory.SAVES_AND_REWIND -> DesktopPreferencesCategory.SAVES_AND_REWIND
+      PreferencesCategory.SYSTEM -> DesktopPreferencesCategory.SYSTEM
+      PreferencesCategory.PERIPHERALS -> DesktopPreferencesCategory.PERIPHERALS
+    }
 
 /**
  * Opens the platform file delivery gate before native extraction can delay startup.

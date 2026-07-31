@@ -4,66 +4,33 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.Controller.EmulationStartedEvent
 import eu.rekawek.coffeegb.controller.Controller.EmulationStoppedEvent
 import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
-import eu.rekawek.coffeegb.controller.Controller.PauseEmulationEvent
-import eu.rekawek.coffeegb.controller.Controller.ResetEmulationEvent
-import eu.rekawek.coffeegb.controller.Controller.ResumeEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.StopEmulationEvent
 import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralSelection
 import eu.rekawek.coffeegb.controller.events.register
-import eu.rekawek.coffeegb.controller.link.LinkMode
-import eu.rekawek.coffeegb.controller.network.ConnectionController
-import eu.rekawek.coffeegb.controller.network.ConnectionController.ClientConnectedToServerEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerGotConnectionEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerLostConnectionEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerStartedEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.ServerStoppedEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StartClientEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StartServerEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopClientEvent
-import eu.rekawek.coffeegb.controller.network.ConnectionController.StopServerEvent
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatDatabase
+import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
-import eu.rekawek.coffeegb.core.genie.PatchFactory
-import eu.rekawek.coffeegb.core.sound.Sound
-import java.awt.BorderLayout
 import java.awt.Component
-import java.awt.Dimension
-import java.awt.KeyEventDispatcher
-import java.awt.KeyboardFocusManager
 import java.awt.event.KeyEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
-import java.awt.event.WindowAdapter
-import java.awt.event.WindowEvent
 import java.io.File
+import java.nio.file.Path
 import javax.swing.ButtonGroup
-import javax.swing.DefaultListCellRenderer
-import javax.swing.DefaultListModel
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
 import javax.swing.JFrame
-import javax.swing.JLabel
-import javax.swing.JList
 import javax.swing.JMenu
 import javax.swing.JMenuBar
 import javax.swing.JMenuItem
-import javax.swing.JOptionPane
-import javax.swing.JPanel
 import javax.swing.JRadioButtonMenuItem
-import javax.swing.JScrollPane
-import javax.swing.JTextField
 import javax.swing.KeyStroke
-import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
-import javax.swing.event.DocumentEvent
-import javax.swing.event.DocumentListener
 import javax.swing.filechooser.FileNameExtensionFilter
 
 internal data class ManagedStateMenuAvailability(
@@ -75,6 +42,16 @@ internal data class DebuggerMenuActions(
     val showTool: (DebuggerWorkspaceTool) -> Unit,
     val applyLayout: (DebuggerWorkspaceLayout) -> Unit,
 )
+
+private enum class StopGameDecision {
+  STOP,
+  KEEP_PLAYING,
+}
+
+private enum class PersistenceRetryDecision {
+  RETRY,
+  CANCEL,
+}
 
 /** Keeps modeless managed-state controls aligned across local/link ownership transitions. */
 internal class ManagedStateMenuAvailabilityBinding(
@@ -119,34 +96,18 @@ internal class SwingMenu(
     private val properties: EmulatorProperties,
     private val window: JFrame,
     private val eventBus: EventBus,
-    private val romSessionState: RomSessionState,
     private val displayController: DesktopDisplayController,
-    private val onOpenRom: (path: java.nio.file.Path, source: RomOpenSource) -> Unit,
+    private val onOpenRom: (path: Path, source: RomOpenSource) -> Unit,
     private val acceptRomLifecycle: (Long?) -> Boolean,
-    private val onPreferences: () -> Unit,
+    private val onPreferencesCategory: (PreferencesCategory) -> Unit,
     private val debuggerActions: DebuggerMenuActions,
-    private val onSaveState: (slot: Int) -> Unit,
-    private val onLoadState: (slot: Int) -> Unit,
-    private val onManageStates: () -> Unit,
-    private val onScreenshot: () -> Unit,
-    private val onOpenSaveFolder: () -> Unit,
-    private val onQuit: () -> Unit,
+    private val desktopActions: DesktopActionRegistry,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val isLinkedControllerActive: () -> Boolean,
-    private val onMobileAdapterConfiguration: () -> Unit = {
-      JOptionPane.showMessageDialog(
-          window,
-          mobileAdapterConfigurationUiState.detailsText(),
-          "Mobile Adapter GB configuration",
-          JOptionPane.INFORMATION_MESSAGE,
-      )
-    },
+    currentThemeTokens: () -> DesktopThemeTokens,
+    private val onDesktopStatus: (String) -> Unit = {},
+    private val onMobileAdapterConfiguration: () -> Unit,
 ) {
-
-  @Volatile private var stateSlot = 0
-
-  private var pauseSupport: Boolean = false
-
   private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
 
   private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
@@ -159,12 +120,20 @@ internal class SwingMenu(
 
   private val cheatDatabase: CheatDatabase by lazy { CheatDatabase.loadBundled() }
 
+  private val desktopDialogFactory = DesktopDialogFactory(currentThemeTokens)
+
+  private val barcodeBoyDialog = BarcodeBoyDialog(desktopDialogFactory)
+
+  private val fullChangerDialog = FullChangerDialog(desktopDialogFactory)
+
+  private val actionReplaySlotDialog = ActionReplaySlotDialog(desktopDialogFactory)
+
+  private val cheatsDialog = DesktopCheatsDialog(currentThemeTokens)
+
+  private val helpDialogs = DesktopHelpDialogs(desktopDialogFactory)
+
   // One radio-group binding mirrors the controller's exclusive serial-port owner.
   private lateinit var serialPeripheralBinding: SerialPeripheralMenuBinding
-
-  private lateinit var startServerItem: JCheckBoxMenuItem
-
-  private lateinit var connectToServerItem: JCheckBoxMenuItem
 
   private lateinit var recentRomsMenu: JMenu
 
@@ -173,34 +142,52 @@ internal class SwingMenu(
         eventBus,
         showError = { title, message ->
           SwingUtilities.invokeLater {
-            JOptionPane.showMessageDialog(
+            desktopDialogFactory.showError(
                 window,
-                message,
-                title,
-                JOptionPane.ERROR_MESSAGE,
+                DesktopErrorSpec(
+                    title = title,
+                    summary = message,
+                    recovery =
+                        "Coffee GB kept the current session open. Review the related storage settings before trying again.",
+                    buttons =
+                        DesktopDialogButtons(
+                            cancel = DesktopDialogAction("Close", Unit),
+                        ),
+                ),
             )
           }
         },
         requestRetryOrCancel = { title, message, decide ->
           SwingUtilities.invokeLater {
-            decide(
-                JOptionPane.showOptionDialog(
+            val decision =
+                desktopDialogFactory.showDecision(
                     window,
-                    message,
-                    title,
-                    JOptionPane.DEFAULT_OPTION,
-                    JOptionPane.ERROR_MESSAGE,
-                    null,
-                    arrayOf("Retry", "Cancel"),
-                    "Retry",
-                ) == 0)
+                    DesktopDecisionSpec(
+                        title = title,
+                        heading = message,
+                        message =
+                            "Retry the persistence operation now, or cancel and keep the current session open.",
+                        buttons =
+                            DesktopDialogButtons(
+                                primary =
+                                    DesktopDialogAction(
+                                        "Retry",
+                                        PersistenceRetryDecision.RETRY,
+                                    ),
+                                cancel =
+                                    DesktopDialogAction(
+                                        "Cancel",
+                                        PersistenceRetryDecision.CANCEL,
+                                    ),
+                                defaultButton = DesktopDialogDefaultButton.CANCEL,
+                            ),
+                    ),
+                )
+            decide(decision == PersistenceRetryDecision.RETRY)
           }
         },
         handleReplacement = { it.openRequestId == null },
     )
-    eventBus.register<Controller.SessionPauseSupportEvent> { event ->
-      dispatchSwingMutation { pauseSupport = event.enabled }
-    }
     eventBus.register<EmulationStartedEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
         currentRomFileName =
@@ -214,11 +201,17 @@ internal class SwingMenu(
     eventBus.register<LoadRomFailedEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
         if (event.openRequestId == null) {
-          JOptionPane.showMessageDialog(
+          desktopDialogFactory.showError(
               window,
-              "Can't open ${event.rom.name}: ${event.message}",
-              "Error",
-              JOptionPane.ERROR_MESSAGE,
+              DesktopErrorSpec(
+                  title = "Unable to open ROM",
+                  summary = "Coffee GB could not open ${event.rom.name}.",
+                  recovery = event.message,
+                  buttons =
+                      DesktopDialogButtons(
+                          cancel = DesktopDialogAction("Close", Unit),
+                      ),
+              ),
           )
         }
       }
@@ -230,19 +223,7 @@ internal class SwingMenu(
       }
     }
     eventBus.register<Controller.MobileAdapterStateBoundaryEvent> { event ->
-      dispatchSwingMutation {
-        JOptionPane.showMessageDialog(
-            window,
-            mobileAdapterStateBoundaryMessage(event),
-            "Mobile Adapter GB connection",
-            if (event.impact ==
-                Controller.MobileAdapterStateBoundaryImpact.SAVED_WITH_NON_RESTORABLE_IO) {
-              JOptionPane.INFORMATION_MESSAGE
-            } else {
-              JOptionPane.WARNING_MESSAGE
-            },
-        )
-      }
+      dispatchSwingMutation { onDesktopStatus(mobileAdapterStateBoundaryMessage(event)) }
     }
   }
 
@@ -250,12 +231,19 @@ internal class SwingMenu(
     val menuBar = JMenuBar()
 
     menuBar.add(createFileMenu())
-    menuBar.add(createGameMenu())
-    menuBar.add(createScreenMenu())
-    menuBar.add(createAudioMenu())
+    val gameMenu = createGameMenu()
+    gameMenu.addSeparator()
+    gameMenu.add(JMenuItem(desktopActions[DesktopCommand.NETPLAY]))
+    gameMenu.addSeparator()
+    val audioMenu = createAudioMenu()
+    while (audioMenu.itemCount > 0) {
+      gameMenu.add(audioMenu.getItem(0))
+    }
+    menuBar.add(gameMenu)
+    menuBar.add(createScreenMenu().apply { text = "View" })
     menuBar.add(createPeripheralsMenu())
-    menuBar.add(createLinkMenu())
     menuBar.add(createDebugMenu(debuggerActions))
+    menuBar.add(createHelpMenu())
     window.jMenuBar = menuBar
   }
 
@@ -278,8 +266,7 @@ internal class SwingMenu(
   private fun createFileMenu(): JMenu {
     val fileMenu = JMenu("File")
 
-    val load = JMenuItem("Load ROM")
-    load.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_L, KEY_MODIFIER)
+    val load = JMenuItem(desktopActions[DesktopCommand.OPEN_ROM])
     load.accessibleContext.accessibleDescription =
         "Open a Game Boy ROM or bounded ZIP or 7z archive"
     fileMenu.add(load)
@@ -288,9 +275,28 @@ internal class SwingMenu(
     fileMenu.add(recentRomsMenu)
     updateRecentRoms()
 
-    val fc = RomFileChooser()
-    fc.dialogTitle = "Open Game Boy ROM"
-    fc.fileFilter =
+    fileMenu.addSeparator()
+    val closeGame = JMenuItem(desktopActions[DesktopCommand.CLOSE_GAME])
+    fileMenu.add(closeGame)
+
+    val openSaveFolder = JMenuItem(desktopActions[DesktopCommand.OPEN_SAVE_FOLDER])
+    fileMenu.add(openSaveFolder)
+
+    fileMenu.addSeparator()
+    val preferences = JMenuItem(desktopActions[DesktopCommand.PREFERENCES])
+    fileMenu.add(preferences)
+
+    fileMenu.addSeparator()
+    val quit = JMenuItem(desktopActions[DesktopCommand.QUIT])
+    fileMenu.add(quit)
+
+    return fileMenu
+  }
+
+  internal fun openRomChooser() {
+    val chooser = RomFileChooser()
+    chooser.dialogTitle = "Open Game Boy ROM"
+    chooser.fileFilter =
         FileNameExtensionFilter(
             "Game Boy ROMs and archives (*.gb, *.gbc, *.rom, *.zip, *.7z)",
             "gb",
@@ -299,385 +305,84 @@ internal class SwingMenu(
             "zip",
             "7z",
         )
-    fc.isAcceptAllFileFilterUsed = false
-    fc.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP or 7z archive"
-    val systemDefaultRomDirectory = fc.currentDirectory
+    chooser.isAcceptAllFileFilterUsed = false
+    chooser.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP or 7z archive"
+    openRomChooser(chooser, chooser.currentDirectory, window)
+  }
 
-    load.addActionListener {
-      properties.applicationSettings.general.romDirectory?.let(fc::useConfiguredDirectory)
-          ?: run { fc.currentDirectory = systemDefaultRomDirectory }
-      val code = fc.showOpenDialog(load)
-      if (code == JFileChooser.APPROVE_OPTION) {
-        val rom = fc.selectedFile
-        launchRom(rom, RomOpenSource.CHOOSER)
-      }
+  private fun openRomChooser(
+      chooser: RomFileChooser,
+      systemDefaultRomDirectory: File,
+      parent: Component,
+  ) {
+    properties.applicationSettings.general.romDirectory?.let(chooser::useConfiguredDirectory)
+        ?: run { chooser.currentDirectory = systemDefaultRomDirectory }
+    val code = chooser.showOpenDialog(parent)
+    if (code == JFileChooser.APPROVE_OPTION) {
+      val rom = chooser.selectedFile
+      launchRom(rom, RomOpenSource.CHOOSER)
     }
-
-    fileMenu.addSeparator()
-    val preferences = JMenuItem("Preferences…")
-    preferences.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, KEY_MODIFIER)
-    preferences.addActionListener {
-      onPreferences()
-      updateRecentRoms()
-    }
-    fileMenu.add(preferences)
-
-    fileMenu.addSeparator()
-    val quit = JMenuItem("Quit")
-    quit.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_Q, KEY_MODIFIER)
-    fileMenu.add(quit)
-    quit.addActionListener { onQuit() }
-
-    return fileMenu
   }
 
   private fun createGameMenu(): JMenu {
     val gameMenu = JMenu("Game")
 
-    val pauseGame = JCheckBoxMenuItem("Pause", false)
-    pauseGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0)
-    pauseGame.state = false
-    pauseGame.isEnabled = false
-    gameMenu.add(pauseGame)
-    pauseGame.addActionListener {
-      if (pauseGame.state) {
-        eventBus.post(PauseEmulationEvent())
-      } else {
-        eventBus.post(ResumeEmulationEvent())
-      }
-    }
-    eventBus.register<EmulationStartedEvent> { event ->
-      dispatchAcceptedRomLifecycle(event.openRequestId, acceptRomLifecycle) {
-        pauseGame.isEnabled = pauseSupport
-        pauseGame.state = false
-      }
-    }
-    eventBus.register<EmulationStoppedEvent> {
-      dispatchAcceptedRomLifecycle(null, acceptRomLifecycle) {
-        pauseGame.isEnabled = false
-      }
-    }
-
-    val resetGame = JMenuItem("Reset")
-    resetGame.isEnabled = false
-    resetGame.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_R, KEY_MODIFIER)
-    gameMenu.add(resetGame)
-    resetGame.addActionListener { eventBus.post(ResetEmulationEvent()) }
-    enableWhenEmulationActive(resetGame)
-
-    val stop = JMenuItem("Stop")
-    stop.isEnabled = false
-    stop.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_S, KEY_MODIFIER)
-    gameMenu.add(stop)
-    stop.addActionListener {
-      if (confirmStopGame()) {
-        eventBus.post(StopEmulationEvent())
-      }
-    }
-    enableWhenEmulationActive(stop)
+    gameMenu.add(JCheckBoxMenuItem(desktopActions[DesktopCommand.PAUSE]))
+    gameMenu.add(JMenuItem(desktopActions[DesktopCommand.RESET]))
 
     gameMenu.addSeparator()
 
-    val saveSnapshot = JMenuItem("Save state")
-    val loadSnapshot = JMenuItem("Load state")
-    saveSnapshot.isEnabled = false
-    saveSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0)
+    val saveSnapshot = JMenuItem(desktopActions[DesktopCommand.SAVE_STATE])
+    saveSnapshot.text = "Save State"
     gameMenu.add(saveSnapshot)
-    saveSnapshot.addActionListener { onSaveState(stateSlot) }
 
-    loadSnapshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0)
+    val loadSnapshot = JMenuItem(desktopActions[DesktopCommand.LOAD_STATE])
+    loadSnapshot.text = "Load State"
     gameMenu.add(loadSnapshot)
-    loadSnapshot.addActionListener { onLoadState(stateSlot) }
-    loadSnapshot.isEnabled = false
 
-    val slotMenu = JMenu("State slot")
+    val slotMenu = JMenu("State Slot")
     gameMenu.add(slotMenu)
-    for (i in (0..9)) {
-      val slotItem = JCheckBoxMenuItem("Slot $i", i == stateSlot)
-      slotItem.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_0 + i, KEY_MODIFIER)
-      slotItem.addActionListener {
-        stateSlot = i
-        uncheckAllBut(slotMenu, slotItem)
-      }
+    val slotGroup = ButtonGroup()
+    desktopActions.stateSlotActions.forEach { action ->
+      val slotItem = JRadioButtonMenuItem(action)
+      slotGroup.add(slotItem)
       slotMenu.add(slotItem)
     }
-    slotMenu.isEnabled = false
 
-    val manageStates = JMenuItem("Manage States…")
+    val manageStates = JMenuItem(desktopActions[DesktopCommand.MANAGE_STATES])
     manageStates.mnemonic = KeyEvent.VK_M
-    manageStates.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
-    manageStates.addActionListener { onManageStates() }
     gameMenu.add(manageStates)
 
-    val openSaveFolder = JMenuItem("Open Save Folder")
-    openSaveFolder.mnemonic = KeyEvent.VK_O
-    openSaveFolder.addActionListener { onOpenSaveFolder() }
-    gameMenu.add(openSaveFolder)
-
-    ManagedStateMenuAvailabilityBinding(eventBus) { availability ->
-      saveSnapshot.isEnabled = availability.quickCommandsAvailable
-      loadSnapshot.isEnabled = availability.quickCommandsAvailable
-      slotMenu.isEnabled = availability.quickCommandsAvailable
-      manageStates.isEnabled = availability.localSessionActive
-      openSaveFolder.isEnabled = availability.localSessionActive
-    }
-    saveSnapshot.isEnabled = false
-    loadSnapshot.isEnabled = false
-    slotMenu.isEnabled = false
-    manageStates.isEnabled = false
-    openSaveFolder.isEnabled = false
-
     gameMenu.addSeparator()
-    val cheatsMenu = JMenu("Cheats")
-    gameMenu.add(cheatsMenu)
-
-    val cheatDatabaseItem = JMenuItem("Browse database")
-    cheatDatabaseItem.isEnabled = false
-    cheatsMenu.add(cheatDatabaseItem)
-    cheatDatabaseItem.addActionListener { showCheatDatabase() }
-    enableWhenEmulationActive(cheatDatabaseItem)
-
-    val gameGenie = JMenuItem("Enter code")
-    gameGenie.isEnabled = false
-    cheatsMenu.add(gameGenie)
-    gameGenie.addActionListener {
-      val code: String? =
-          JOptionPane.showInputDialog(
-              window,
-              "Enter a Game Genie or GameShark code (applies to the game in an Action Replay slot too):",
-          )
-      if (code != null) {
-        try {
-          val patches = PatchFactory.createPatches(code)
-          eventBus.post(AddPatches(patches))
-        } catch (e: Exception) {
-          JOptionPane.showMessageDialog(
-              window,
-              "${e.message}",
-              "Error",
-              JOptionPane.ERROR_MESSAGE,
-          )
-        }
-      }
-    }
-    enableWhenEmulationActive(gameGenie)
+    val cheats = JMenuItem("Cheats…")
+    cheats.accessibleContext.accessibleDescription =
+        "Browse the bundled database or add a Game Genie or GameShark code"
+    cheats.isEnabled = false
+    cheats.addActionListener { showCheats(DesktopCheatsPage.DATABASE) }
+    enableWhenEmulationActive(cheats)
+    gameMenu.add(cheats)
 
     return gameMenu
   }
 
-  private fun showCheatDatabase() {
-    try {
-      val suggestedTitle = currentRomFileName ?: currentRomTitle ?: ""
-      val gameTitle = JTextField(suggestedTitle, 32)
-      val gameListModel = DefaultListModel<CheatDatabase.CheatList>()
-      val gameList = JList(gameListModel)
-      gameList.selectionMode = ListSelectionModel.SINGLE_SELECTION
-      gameList.visibleRowCount = 10
-
-      fun refreshGameList() {
-        gameListModel.clear()
-        val title = gameTitle.text.trim()
-        if (title.isNotEmpty()) {
-          cheatDatabase.findCheatLists(listOf(title), 25).forEach(gameListModel::addElement)
-        }
-        if (!gameListModel.isEmpty) {
-          gameList.selectedIndex = 0
-        }
-      }
-
-      gameTitle.document.addDocumentListener(
-          object : DocumentListener {
-            override fun insertUpdate(event: DocumentEvent) = refreshGameList()
-
-            override fun removeUpdate(event: DocumentEvent) = refreshGameList()
-
-            override fun changedUpdate(event: DocumentEvent) = refreshGameList()
-          })
-
-      val titlePanel = JPanel(BorderLayout(8, 0))
-      titlePanel.add(JLabel("Game title:"), BorderLayout.WEST)
-      titlePanel.add(gameTitle, BorderLayout.CENTER)
-
-      val gameListScrollPane = JScrollPane(gameList)
-      gameListScrollPane.preferredSize = Dimension(CHEAT_LIST_WIDTH, 220)
-      installDoubleClickConfirm(gameList)
-
-      val gamePicker = JPanel(BorderLayout(0, 8))
-      gamePicker.add(titlePanel, BorderLayout.NORTH)
-      gamePicker.add(gameListScrollPane, BorderLayout.CENTER)
-      refreshGameList()
-
-      val gamePickerResult =
-          showListConfirmDialog(
-              gamePicker,
-              gameList,
-              "Cheat database",
-              gameTitle,
-          )
-      if (gamePickerResult != JOptionPane.OK_OPTION) {
-        return
-      }
-      val selectedList = gameList.selectedValue ?: return
-
-      val supportedCheats =
-          selectedList.cheats().filter { cheat ->
-            runCatching { PatchFactory.createPatches(cheat.code()) }.isSuccess
-          }
-      if (supportedCheats.isEmpty()) {
-        JOptionPane.showMessageDialog(
-            window,
-            "This list contains no supported Game Genie or GameShark codes.",
-            "Cheat database",
-            JOptionPane.INFORMATION_MESSAGE,
+  private fun showCheats(initialPage: DesktopCheatsPage) {
+    val databasePage =
+        DesktopCheatDatabasePage(
+            suggestedTitle = currentRomFileName ?: currentRomTitle.orEmpty(),
+            findGames = { title, limit -> cheatDatabase.findCheatLists(listOf(title), limit) },
+            onAddCodes = ::addCheatCodes,
         )
-        return
-      }
-
-      val cheatChoices =
-          ToggleSelectionList(supportedCheats)
-      cheatChoices.visibleRowCount = minOf(12, supportedCheats.size)
-      cheatChoices.selectedIndex = 0
-      cheatChoices.cellRenderer =
-          object : DefaultListCellRenderer() {
-            override fun getListCellRendererComponent(
-                list: JList<*>?,
-                value: Any?,
-                index: Int,
-                isSelected: Boolean,
-                cellHasFocus: Boolean,
-            ): Component {
-              val component =
-                  super.getListCellRendererComponent(
-                      list,
-                      value,
-                      index,
-                      isSelected,
-                      cellHasFocus,
-                  )
-              if (component is JLabel && value is CheatDatabase.Cheat) {
-                component.text = cheatLabel(value)
-                component.toolTipText = "${value.description()} (${value.code()})"
-              }
-              return component
-            }
-          }
-      val scrollPane = JScrollPane(cheatChoices)
-      scrollPane.preferredSize =
-          Dimension(
-              CHEAT_LIST_WIDTH,
-              maxOf(80, minOf(CHEAT_LIST_MAX_HEIGHT, supportedCheats.size * 24 + 8)),
-          )
-      val cheatPickerResult =
-          showListConfirmDialog(
-              scrollPane,
-              cheatChoices,
-              "${selectedList.name()} — select cheats",
-              cheatChoices,
-          )
-      if (
-          cheatPickerResult == JOptionPane.OK_OPTION &&
-              cheatChoices.selectedValuesList.isNotEmpty()) {
-        val patches =
-            cheatChoices.selectedValuesList.flatMap { PatchFactory.createPatches(it.code()) }
-        eventBus.post(AddPatches(patches))
-      }
-    } catch (e: Exception) {
-      JOptionPane.showMessageDialog(
-          window,
-          "Can't load the cheat database: ${e.message}",
-          "Cheat database",
-          JOptionPane.ERROR_MESSAGE,
-      )
-    }
+    cheatsDialog.show(
+        owner = window,
+        databasePage = databasePage,
+        initialPage = initialPage,
+        onManualCode = { code -> addCheatCodes(listOf(code)) },
+    )
   }
 
-  private fun cheatLabel(cheat: CheatDatabase.Cheat): String {
-    val code = cheat.code()
-    val visibleCode =
-        if (code.length <= CHEAT_CODE_MAX_LENGTH) code
-        else "${code.take(CHEAT_CODE_MAX_LENGTH - 1)}…"
-    return "${cheat.description()} ($visibleCode)"
-  }
-
-  private fun installDoubleClickConfirm(list: JList<*>) {
-    list.addMouseListener(
-        object : MouseAdapter() {
-          override fun mouseClicked(event: MouseEvent) {
-            if (event.clickCount != 2 || !SwingUtilities.isLeftMouseButton(event)) {
-              return
-            }
-            val index = list.locationToIndex(event.point)
-            if (index < 0 || !list.getCellBounds(index, index).contains(event.point)) {
-              return
-            }
-            val optionPane =
-                SwingUtilities.getAncestorOfClass(JOptionPane::class.java, list) as? JOptionPane
-                    ?: return
-            optionPane.value = JOptionPane.OK_OPTION
-          }
-        })
-  }
-
-  private fun showListConfirmDialog(
-      content: Component,
-      list: JList<*>,
-      title: String,
-      initialFocus: Component,
-  ): Int {
-    val optionPane =
-        JOptionPane(
-            content,
-            JOptionPane.PLAIN_MESSAGE,
-            JOptionPane.OK_CANCEL_OPTION,
-        )
-    val dialog = optionPane.createDialog(window, title)
-    var initialFocusPending = true
-    dialog.addWindowFocusListener(
-        object : WindowAdapter() {
-          override fun windowGainedFocus(event: WindowEvent) {
-            if (initialFocusPending) {
-              initialFocusPending = false
-              SwingUtilities.invokeLater { initialFocus.requestFocusInWindow() }
-            }
-          }
-        })
-    val focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager()
-    val arrowKeyDispatcher =
-        KeyEventDispatcher { event ->
-          if (
-              SwingUtilities.getWindowAncestor(event.component) !== dialog ||
-                  (event.keyCode != KeyEvent.VK_UP && event.keyCode != KeyEvent.VK_DOWN)) {
-            false
-          } else {
-            if (event.id == KeyEvent.KEY_PRESSED) {
-              moveListSelection(list, if (event.keyCode == KeyEvent.VK_UP) -1 else 1)
-            }
-            true
-          }
-        }
-    focusManager.addKeyEventDispatcher(arrowKeyDispatcher)
-    try {
-      dialog.isVisible = true
-    } finally {
-      focusManager.removeKeyEventDispatcher(arrowKeyDispatcher)
-      dialog.dispose()
-    }
-    return optionPane.value as? Int ?: JOptionPane.CLOSED_OPTION
-  }
-
-  private fun moveListSelection(list: JList<*>, offset: Int) {
-    if (list.model.size == 0) {
-      return
-    }
-    val currentIndex = list.selectedIndex
-    val nextIndex =
-        if (currentIndex < 0) {
-          if (offset > 0) 0 else list.model.size - 1
-        } else {
-          (currentIndex + offset).coerceIn(0, list.model.size - 1)
-        }
-    list.selectedIndex = nextIndex
-    list.ensureIndexIsVisible(nextIndex)
+  private fun addCheatCodes(codes: List<String>) {
+    val patches = codes.flatMap(PatchFactory::createPatches)
+    eventBus.post(AddPatches(patches))
   }
 
   private fun createPeripheralsMenu(): JMenu {
@@ -704,11 +409,9 @@ internal class SwingMenu(
                   state == CameraPeripheralUiState.Opening ||
                       state == CameraPeripheralUiState.Enabled
               if (state == CameraPeripheralUiState.OpenFailed && window.isDisplayable) {
-                JOptionPane.showMessageDialog(
-                    window,
-                    "Camera ${cameraDeviceIndex + 1} could not be opened.",
-                    "Game Boy Camera",
-                    JOptionPane.ERROR_MESSAGE,
+                onDesktopStatus(
+                    "Camera ${cameraDeviceIndex + 1} could not be opened. " +
+                        "Check the camera selection in Preferences.",
                 )
               }
             },
@@ -728,8 +431,8 @@ internal class SwingMenu(
             transitionPrerequisites = { selection ->
               serialPeripheralTransitionPrerequisites(
                   selection,
-                  serverSelected = startServerItem.state,
-                  clientSelected = connectToServerItem.state,
+                  serverSelected = false,
+                  clientSelected = false,
                   linkedControllerActive = isLinkedControllerActive(),
               )
             },
@@ -742,107 +445,100 @@ internal class SwingMenu(
     mobileAdapterDetails.addActionListener { onMobileAdapterConfiguration() }
     peripheralsMenu.add(mobileAdapterDetails)
 
-    val arMenu = JMenu("Action Replay")
-    peripheralsMenu.add(arMenu)
-
-    val arGame = JMenuItem(arGameLabel())
-    arMenu.add(arGame)
-    arGame.addActionListener {
-      val fc = JFileChooser()
-      fc.dialogTitle = "Select the game cartridge for the Action Replay's slot"
-      properties.getProperty(EmulatorProperties.Key.RomDirectory, null)?.let {
-        fc.currentDirectory = File(it)
-      }
-      if (fc.showOpenDialog(window) == JFileChooser.APPROVE_OPTION) {
-        properties.setProperty(EmulatorProperties.Key.DatelSlotRom, fc.selectedFile.absolutePath)
-        arGame.text = arGameLabel()
-        JOptionPane.showMessageDialog(
-            window,
-            "The game will be inserted in the Action Replay's slot the next time an\n" +
-                "Action Replay cartridge is loaded (File > Load ROM).",
-            "Action Replay",
-            JOptionPane.INFORMATION_MESSAGE,
-        )
-      }
-    }
-
-    val arClear = JMenuItem("Remove slot game")
-    arMenu.add(arClear)
-    arClear.addActionListener {
-      properties.setProperty(EmulatorProperties.Key.DatelSlotRom, "")
-      arGame.text = arGameLabel()
-    }
+    val actionReplaySlot = JMenuItem("Action Replay Slot…")
+    actionReplaySlot.accessibleContext.accessibleDescription =
+        "Review, choose, or remove the cartridge attached to the Action Replay slot"
+    peripheralsMenu.add(actionReplaySlot)
+    actionReplaySlot.addActionListener { showActionReplaySlot() }
 
     // the Full Changer, the IR toy of Zok Zok Heroes: picking a Cosmic Character sends
     // its transformation over the CGB infrared port (issue #94)
-    val fullChanger = JMenuItem("Full Changer transformation...")
+    val fullChanger = JMenuItem("Full Changer…")
     peripheralsMenu.add(fullChanger)
     fullChanger.isEnabled = false
     enableWhenEmulationActive(fullChanger)
     fullChanger.addActionListener {
-      val choice =
-          JOptionPane.showInputDialog(
-              window,
-              "Cosmic Character to transform into:",
-              "Full Changer",
-              JOptionPane.PLAIN_MESSAGE,
-              null,
-              COSMIC_CHARACTERS,
-              properties.getProperty(EmulatorProperties.Key.FullChangerCharacter, COSMIC_CHARACTERS[0]),
-          )
-      if (choice != null) {
-        properties.setProperty(EmulatorProperties.Key.FullChangerCharacter, choice as String)
-        eventBus.post(FullChanger.TransformEvent(COSMIC_CHARACTERS.indexOf(choice) + 1))
-      }
+      fullChangerDialog.show(
+          owner = window,
+          choices = COSMIC_CHARACTERS.toList(),
+          currentChoice =
+              properties.getProperty(
+                  EmulatorProperties.Key.FullChangerCharacter,
+                  COSMIC_CHARACTERS[0],
+              ),
+          onApply = { choice ->
+            properties.setProperty(EmulatorProperties.Key.FullChangerCharacter, choice)
+            eventBus.post(FullChanger.TransformEvent(COSMIC_CHARACTERS.indexOf(choice) + 1))
+          },
+      )
     }
 
-    val barcodeMenu = JMenu("Barcode Boy")
-    peripheralsMenu.add(barcodeMenu)
-
-    val scanBarcode = JMenuItem("Scan Barcode…")
-    barcodeMenu.add(scanBarcode)
+    val scanBarcode = JMenuItem("Barcode Boy…")
+    scanBarcode.accessibleContext.accessibleDescription =
+        "Enter and send a 13-digit barcode to the Barcode Boy peripheral"
+    peripheralsMenu.add(scanBarcode)
     scanBarcode.addActionListener {
-      if (!serialPeripheralBinding.isSelected(SerialPeripheralSelection.BARCODE_BOY)) {
-        JOptionPane.showMessageDialog(
-            window,
-            "Select Barcode Boy under Link-port device first.",
-            "Barcode Boy",
-            JOptionPane.INFORMATION_MESSAGE,
-        )
-        return@addActionListener
-      }
-      val code: String? =
-          JOptionPane.showInputDialog(window, "Enter the 13-digit barcode number (JAN-13):")
-      if (code != null) {
-        val trimmed = code.trim()
-        if (trimmed.length != 13 || !trimmed.all { it.isDigit() }) {
-          JOptionPane.showMessageDialog(
-              window,
-              "The barcode must be exactly 13 digits.",
-              "Barcode Boy",
-              JOptionPane.ERROR_MESSAGE,
-          )
-        } else {
-          eventBus.post(Controller.ScanBarcodeEvent(trimmed))
-        }
-      }
+      barcodeBoyDialog.show(
+          owner = window,
+          barcodeBoySelected =
+              serialPeripheralBinding.isSelected(SerialPeripheralSelection.BARCODE_BOY),
+          onSelectBarcodeBoy = ::selectBarcodeBoy,
+          onScan = { code -> eventBus.post(Controller.ScanBarcodeEvent(code)) },
+      )
     }
     enableWhenEmulationActive(scanBarcode)
 
     return peripheralsMenu
   }
 
-  /** Return standalone ownership to the ordinary link endpoint before starting netplay. */
-  private fun disconnectStandaloneLinkPeripheral(keep: JCheckBoxMenuItem) {
-    eventBus.post(Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.PEER_TO_PEER))
-    if (startServerItem !== keep && startServerItem.state) {
-      startServerItem.state = false
-      eventBus.post(StopServerEvent())
+  private fun showActionReplaySlot() {
+    actionReplaySlotDialog.show(
+        owner = window,
+        currentFile = currentActionReplaySlot(),
+        browseForFile = ::browseForActionReplaySlot,
+        onApply = { selected ->
+          properties.setProperty(
+              EmulatorProperties.Key.DatelSlotRom,
+              selected?.toAbsolutePath()?.toString().orEmpty(),
+          )
+        },
+    )
+  }
+
+  private fun currentActionReplaySlot(): Path? =
+      properties
+          .getProperty(EmulatorProperties.Key.DatelSlotRom, null)
+          ?.takeIf(String::isNotBlank)
+          ?.let { runCatching { Path.of(it) }.getOrNull() }
+
+  private fun browseForActionReplaySlot(): Path? {
+    val chooser = RomFileChooser()
+    chooser.dialogTitle = "Choose an Action Replay slot cartridge"
+    chooser.fileFilter =
+        FileNameExtensionFilter(
+            "Game Boy ROMs and archives (*.gb, *.gbc, *.rom, *.zip, *.7z)",
+            "gb",
+            "gbc",
+            "rom",
+            "zip",
+            "7z",
+        )
+    chooser.isAcceptAllFileFilterUsed = false
+    properties.applicationSettings.general.romDirectory?.let(chooser::useConfiguredDirectory)
+    return if (chooser.showOpenDialog(window) == JFileChooser.APPROVE_OPTION) {
+      chooser.selectedFile.toPath()
+    } else {
+      null
     }
-    if (connectToServerItem !== keep && connectToServerItem.state) {
-      connectToServerItem.state = false
-      eventBus.post(StopClientEvent())
+  }
+
+  private fun selectBarcodeBoy(): Boolean {
+    if (
+        serialPeripheralBinding.snapshot().selection != SerialPeripheralSelection.BARCODE_BOY &&
+            serialPeripheralBinding.menu.isEnabled) {
+      serialPeripheralBinding.items.getValue(SerialPeripheralSelection.BARCODE_BOY).doClick()
     }
+    return serialPeripheralBinding.snapshot().selection == SerialPeripheralSelection.BARCODE_BOY
   }
 
   private fun createScreenMenu(): JMenu {
@@ -851,198 +547,53 @@ internal class SwingMenu(
             displayController,
             eventBus,
             keyboardBindings = { properties.applicationSettings.input.keyboard.values },
+            desktopActions = desktopActions,
         )
-    val screenshot = JMenuItem("Take Screenshot")
+    val screenshot = JMenuItem(desktopActions[DesktopCommand.SCREENSHOT])
     screenshot.mnemonic = KeyEvent.VK_T
-    screenshot.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0)
-    screenshot.addActionListener { onScreenshot() }
-    screenshot.isEnabled = false
     screenMenu.insert(screenshot, 1)
-    eventBus.register<StateUxSessionEvent> { session ->
-      val localSessionActive = session.available || session.unavailableReason != null
-      dispatchSwingMutation { screenshot.isEnabled = localSessionActive }
-    }
+    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 2)
+    screenMenu.addSeparator()
+    screenMenu.add(
+        JMenuItem("More Display Settings…").apply {
+          getAccessibleContext().accessibleDescription =
+              "Open the Display category in Preferences"
+          addActionListener { onPreferencesCategory(PreferencesCategory.DISPLAY) }
+        })
     return screenMenu
   }
 
   private fun createAudioMenu(): JMenu {
     val audioMenu = JMenu("Audio")
 
-    val mute = JCheckBoxMenuItem("Mute", !properties.sound.soundEnabled)
-    mute.accelerator = KeyStroke.getKeyStroke(KeyEvent.VK_M, KEY_MODIFIER)
-    mute.accessibleContext.accessibleName = "Mute audio"
+    val mute = JCheckBoxMenuItem(desktopActions[DesktopCommand.MUTE])
+    mute.accessibleContext.accessibleName = "Mute or unmute audio"
     audioMenu.add(mute)
-
-    mute.addActionListener {
-      val enabled = !mute.state
-      eventBus.post(Sound.SoundEnabledEvent(enabled))
-      properties.setProperty(EmulatorProperties.Key.SoundEnabled, enabled.toString())
-    }
-    eventBus.register<Sound.SoundEnabledEvent> {
-      dispatchSwingMutation { mute.state = !it.enabled() }
-    }
     return audioMenu
   }
 
-  private fun createLinkMenu(): JMenu {
-    val linkMenu = JMenu("Link")
-
-    val startServer = JCheckBoxMenuItem("Start server")
-    startServerItem = startServer
-    linkMenu.add(startServer)
-    startServer.addActionListener {
-      if (startServer.state) {
-        val choices = arrayOf("Normal link (2 players)", "Four-player adapter (4 players)")
-        val selected =
-            JOptionPane.showOptionDialog(
-                window,
-                "Select the link hardware to emulate",
-                "Start link server",
-                JOptionPane.DEFAULT_OPTION,
-                JOptionPane.QUESTION_MESSAGE,
-                null,
-                choices,
-                choices[0],
-            )
-        val mode =
-            when (selected) {
-              0 -> LinkMode.NORMAL
-              1 -> LinkMode.FOUR_PLAYER_ADAPTER
-              else -> null
-            }
-        if (mode != null) {
-          disconnectStandaloneLinkPeripheral(startServer)
-          eventBus.post(StartServerEvent(mode))
-        } else {
-          startServer.state = false
-        }
-      } else {
-        eventBus.post(StopServerEvent())
+  private fun createHelpMenu(): JMenu =
+      JMenu("Help").apply {
+        mnemonic = KeyEvent.VK_H
+        add(
+            JMenuItem("Keyboard Shortcuts").apply {
+              mnemonic = KeyEvent.VK_K
+              getAccessibleContext().accessibleDescription =
+                  "Show shortcuts grouped by main window, gameplay, and debugger context"
+              addActionListener { helpDialogs.showShortcuts(window, desktopActions) }
+            })
+        add(
+            JMenuItem("About Coffee GB").apply {
+              mnemonic = KeyEvent.VK_A
+              getAccessibleContext().accessibleDescription =
+                  "Show Coffee GB version, license, and source information"
+              addActionListener {
+                val version =
+                    SwingMenu::class.java.`package`.implementationVersion ?: "development build"
+                helpDialogs.showAbout(window, version)
+              }
+            })
       }
-    }
-
-    val connectToServer = JCheckBoxMenuItem("Connect to server")
-    connectToServerItem = connectToServer
-    linkMenu.add(connectToServer)
-    connectToServer.addActionListener {
-      if (connectToServer.state) {
-        val host: String? =
-            JOptionPane.showInputDialog(window, "Please enter server IP address", "127.0.0.1")
-        if (host != null) {
-          disconnectStandaloneLinkPeripheral(connectToServer)
-          eventBus.post(StartClientEvent(host))
-        } else {
-          connectToServer.state = false
-        }
-      } else {
-        eventBus.post(StopClientEvent())
-      }
-    }
-
-    val connected = JCheckBoxMenuItem()
-    val setStatus =
-        fun(text: String, active: Boolean) {
-          connected.text = if (active) "\uD83D\uDFE2  $text" else "\uD83D\uDD34  $text"
-        }
-    connected.isEnabled = false
-    setStatus("Disconnected", false)
-    linkMenu.add(connected)
-
-    eventBus.register<ConnectionController.ClientHandshakeCompletedEvent> {
-      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
-      dispatchSwingMutation {
-        setStatus("Waiting as Player ${it.player + 1} ($mode)", false)
-      }
-    }
-    eventBus.register<ClientConnectedToServerEvent> {
-      val mode = if (it.mode == LinkMode.NORMAL) "normal link" else "four-player adapter"
-      dispatchSwingMutation {
-        setStatus("Connected as Player ${it.player + 1} ($mode)", true)
-      }
-    }
-    eventBus.register<ConnectionController.ClientConnectionRejectedEvent> {
-      dispatchSwingMutation {
-        JOptionPane.showMessageDialog(
-            window,
-            it.message,
-            "Netplay connection rejected",
-            JOptionPane.ERROR_MESSAGE,
-        )
-      }
-    }
-    eventBus.register<ConnectionController.ClientProtocolErrorEvent> {
-      dispatchSwingMutation {
-        JOptionPane.showMessageDialog(
-            window,
-            it.message,
-            "Netplay protocol error",
-            JOptionPane.ERROR_MESSAGE,
-        )
-      }
-    }
-    eventBus.register<ConnectionController.ServerProtocolErrorEvent> {
-      dispatchSwingMutation {
-        JOptionPane.showMessageDialog(
-            window,
-            "Player ${it.player + 1}: ${it.message}",
-            "Netplay protocol error",
-            JOptionPane.ERROR_MESSAGE,
-        )
-      }
-    }
-    eventBus.register<ConnectionController.ClientDisconnectedFromServerEvent> {
-      dispatchSwingMutation {
-        setStatus("Disconnected", false)
-        connectToServer.state = false
-      }
-    }
-    eventBus.register<ServerStartedEvent> {
-      dispatchSwingMutation {
-        connectToServer.isEnabled = false
-        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-          setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
-        } else {
-          setStatus("Waiting for players (0/${it.mode.playerCount - 1})", false)
-        }
-      }
-    }
-    eventBus.register<ServerStoppedEvent> {
-      dispatchSwingMutation {
-        startServer.state = false
-        connectToServer.isEnabled = true
-        setStatus("Disconnected", false)
-      }
-    }
-    eventBus.register<ConnectionController.ServerPlayerCountEvent> {
-      dispatchSwingMutation {
-        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-          setStatus(
-              "Active as Player 1 (four-player adapter; ${it.connected + 1}/4 players)", true)
-        } else if (it.connected < it.required) {
-          setStatus("Waiting for players (${it.connected}/${it.required})", false)
-        }
-      }
-    }
-    eventBus.register<ServerGotConnectionEvent> {
-      dispatchSwingMutation {
-        if (it.mode == LinkMode.FOUR_PLAYER_ADAPTER) {
-          setStatus("Active as Player 1 (four-player adapter; 1/4 players)", true)
-        } else {
-          setStatus("Connected as Player 1 (normal link)", true)
-        }
-      }
-    }
-    eventBus.register<ServerLostConnectionEvent> {
-      dispatchSwingMutation { setStatus("Disconnected", false) }
-    }
-    return linkMenu
-  }
-
-  private fun arGameLabel(): String {
-    val path = properties.getProperty(EmulatorProperties.Key.DatelSlotRom, null)
-    val name = if (path.isNullOrEmpty()) "(none)" else File(path).name
-    return "Slot game: $name…"
-  }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
     eventBus.register<EmulationStartedEvent> { event ->
@@ -1080,22 +631,40 @@ internal class SwingMenu(
 
   private fun confirmStopGame(): Boolean =
       proceedWithRomChange(properties.romChangeConfirmationPolicy, isRomRunning = true) {
-        JOptionPane.showConfirmDialog(
+        desktopDialogFactory.showDecision(
             window,
-            "Stop the running game?",
-            "Stop game",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.QUESTION_MESSAGE,
-        ) == JOptionPane.YES_OPTION
+            DesktopDecisionSpec(
+                title = "Stop game",
+                heading = "Stop the running game?",
+                message =
+                    "Coffee GB will finish the current save operation before closing the game.",
+                buttons =
+                    DesktopDialogButtons(
+                        primary =
+                            DesktopDialogAction(
+                                "Stop game",
+                                StopGameDecision.STOP,
+                                mnemonic = KeyEvent.VK_S,
+                                destructive = true,
+                            ),
+                        cancel =
+                            DesktopDialogAction(
+                                "Keep playing",
+                                StopGameDecision.KEEP_PLAYING,
+                            ),
+                        defaultButton = DesktopDialogDefaultButton.CANCEL,
+                    ),
+                modality = DesktopOwnedDialogModality.DOCUMENT,
+            )) == StopGameDecision.STOP
       }
 
+  internal fun requestCloseGame() {
+    if (confirmStopGame()) {
+      eventBus.post(StopEmulationEvent())
+    }
+  }
+
   private companion object {
-    const val CHEAT_CODE_MAX_LENGTH = 36
-
-    const val CHEAT_LIST_WIDTH = 600
-
-    const val CHEAT_LIST_MAX_HEIGHT = 300
-
     // the 70 Cosmic Characters of Zok Zok Heroes, in Full Changer ID order (1-70)
     val COSMIC_CHARACTERS =
         arrayOf(
@@ -1170,23 +739,6 @@ internal class SwingMenu(
             "69 \u307d Pop Thunder",
             "70 \u3093 Ndjamenas",
         )
-
-    val KEY_MODIFIER: Int =
-        if (System.getProperty("os.name").contains("mac", ignoreCase = true)) {
-          KeyEvent.META_DOWN_MASK
-        } else {
-          KeyEvent.CTRL_DOWN_MASK
-        }
-
-    fun uncheckAllBut(parent: JMenu, selectedItem: JCheckBoxMenuItem) {
-      for (i in 0 until parent.itemCount) {
-        val item = parent.getItem(i)
-        if (item === selectedItem) {
-          continue
-        }
-        (item as JCheckBoxMenuItem).state = false
-      }
-    }
   }
 }
 
@@ -1200,6 +752,7 @@ internal fun createScreenMenu(
     displayController: DesktopDisplayController,
     eventBus: EventBus,
     keyboardBindings: () -> Collection<ApplicationSettings.KeyboardKey>,
+    desktopActions: DesktopActionRegistry? = null,
 ): JMenu {
   check(SwingUtilities.isEventDispatchThread()) {
     "The Screen menu must be created on the Event Dispatch Thread"
@@ -1219,10 +772,13 @@ internal fun createScreenMenu(
         null
       }
 
-  val fullscreen = JCheckBoxMenuItem("Fullscreen", initial.fullscreen)
-  fullscreen.accelerator = fullscreenAccelerator()
-  fullscreen.accessibleContext.accessibleName = "Fullscreen"
-  fullscreen.addActionListener { displayController.setFullscreen(fullscreen.state) }
+  val fullscreen =
+      desktopActions?.let { JCheckBoxMenuItem(it[DesktopCommand.FULLSCREEN]) }
+          ?: JCheckBoxMenuItem("Full Screen", initial.fullscreen).apply {
+            accelerator = fullscreenAccelerator()
+            addActionListener { displayController.setFullscreen(state) }
+          }
+  fullscreen.accessibleContext.accessibleName = "Full Screen"
   screenMenu.add(fullscreen)
   screenMenu.addSeparator()
 
@@ -1264,6 +820,22 @@ internal fun createScreenMenu(
     displayController.update { it.copy(grayscale = grayscale.state) }
   }
 
+  val blending = JCheckBoxMenuItem("Blend adjacent frames", initial.blending)
+  screenMenu.add(blending)
+  blending.accessibleContext.accessibleDescription =
+      "Blend consecutive display frames to approximate LCD persistence"
+  blending.addActionListener {
+    displayController.update { it.copy(blending = blending.state) }
+  }
+
+  val colorCorrection = JCheckBoxMenuItem("CGB color correction", initial.colorCorrection)
+  screenMenu.add(colorCorrection)
+  colorCorrection.accessibleContext.accessibleDescription =
+      "Apply Game Boy Color display color correction"
+  colorCorrection.addActionListener {
+    displayController.update { it.copy(colorCorrection = colorCorrection.state) }
+  }
+
   val showSgbBorder = JCheckBoxMenuItem("Show SGB border", initial.showSgbBorder)
   screenMenu.add(showSgbBorder)
   showSgbBorder.addActionListener {
@@ -1274,9 +846,11 @@ internal fun createScreenMenu(
     val scaleKey = supportedScales.minBy { kotlin.math.abs(it - display.explicitScale) }
     scaleItems[scaleKey]?.isSelected = true
     rotateItems[display.rotation.degrees]?.isSelected = true
-    fullscreen.accelerator = fullscreenAccelerator()
+    if (desktopActions == null) fullscreen.accelerator = fullscreenAccelerator()
     fullscreen.state = display.fullscreen
     grayscale.state = display.grayscale
+    blending.state = display.blending
+    colorCorrection.state = display.colorCorrection
     showSgbBorder.state = display.showSgbBorder
   }
   eventBus.register<DisplaySettingsChangedEvent> { event ->
@@ -1296,7 +870,7 @@ internal fun createDebugMenu(actions: DebuggerMenuActions): JMenu {
     DebuggerWorkspaceTool.entries.forEach { tool ->
       add(
           JMenuItem(tool.title).apply {
-            accessibleContext.accessibleDescription =
+            getAccessibleContext().accessibleDescription =
                 "Show or raise the ${tool.title} debugger window"
             addActionListener { actions.showTool(tool) }
           })
@@ -1305,12 +879,12 @@ internal fun createDebugMenu(actions: DebuggerMenuActions): JMenu {
     add(
         JMenu("Layout").apply {
           mnemonic = KeyEvent.VK_L
-          accessibleContext.accessibleDescription =
+          getAccessibleContext().accessibleDescription =
               "Show and arrange a built-in debugger window layout"
           DebuggerWorkspaceLayout.entries.forEach { layout ->
             add(
                 JMenuItem(layout.title).apply {
-                  accessibleContext.accessibleDescription =
+                  getAccessibleContext().accessibleDescription =
                       "Show and arrange the ${layout.title} layout"
                   addActionListener { actions.applyLayout(layout) }
                 })

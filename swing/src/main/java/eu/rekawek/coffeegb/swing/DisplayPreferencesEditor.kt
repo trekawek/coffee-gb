@@ -25,7 +25,7 @@ internal class DisplayPreferencesEditor private constructor(
     initial: ApplicationSettings.Display,
     private val defaults: ApplicationSettings.Display,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
-) : JPanel(GridBagLayout()) {
+) : JPanel(GridBagLayout()), DesktopThemeRefreshHook {
   constructor(
       initial: ApplicationSettings.Display,
       defaults: ApplicationSettings.Display = ApplicationSettings.Display(),
@@ -49,8 +49,8 @@ internal class DisplayPreferencesEditor private constructor(
   internal val explicitScale =
       JComboBox(SCALES.toTypedArray()).apply {
         selectedItem = scaleOption(initial.explicitScale)
-        accessibleContext.accessibleName = "Window scale"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Window scale"
+        getAccessibleContext().accessibleDescription =
             "Resize the window to one, two, or four times. The picture still fits the window when resized."
       }
   internal var windowScaleCommandRequested = false
@@ -58,8 +58,8 @@ internal class DisplayPreferencesEditor private constructor(
 
   internal val letterboxColor =
       JTextField(formatColor(initial.letterboxColor), 8).apply {
-        accessibleContext.accessibleName = "Letterbox color"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Letterbox color"
+        getAccessibleContext().accessibleDescription =
             "Enter a six-digit RGB color in #RRGGBB form."
       }
   internal val letterboxPreview =
@@ -69,43 +69,47 @@ internal class DisplayPreferencesEditor private constructor(
         preferredSize = Dimension(48, letterboxColor.preferredSize.height)
         minimumSize = Dimension(32, letterboxColor.minimumSize.height)
         border = BorderFactory.createLineBorder(Color.GRAY)
-        accessibleContext.accessibleName = "Letterbox color preview"
-        accessibleContext.accessibleDescription = formatColor(initial.letterboxColor)
+        getAccessibleContext().accessibleName = "Letterbox color preview"
+        getAccessibleContext().accessibleDescription = formatColor(initial.letterboxColor)
       }
   internal val letterboxColorError =
       JLabel(" ").apply {
-        foreground = ERROR_COLOR
-        accessibleContext.accessibleName = "Letterbox color error"
+        foreground = desktopValidationErrorColor()
+        getAccessibleContext().accessibleName = "Letterbox color error"
       }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    letterboxColorError.foreground = tokens.danger
+  }
   internal val fullscreen =
       JCheckBox("Fullscreen", initial.fullscreen).apply {
         mnemonic = KeyEvent.VK_F
-        accessibleContext.accessibleName = "Fullscreen"
+        getAccessibleContext().accessibleName = "Fullscreen"
       }
   internal val rotation =
       JComboBox(ROTATIONS.toTypedArray()).apply {
         selectedItem = ROTATIONS.first { it.rotation == initial.rotation }
-        accessibleContext.accessibleName = "Display rotation"
+        getAccessibleContext().accessibleName = "Display rotation"
       }
   internal val grayscale =
       JCheckBox("Use grayscale palette", initial.grayscale).apply {
         mnemonic = KeyEvent.VK_G
-        accessibleContext.accessibleName = "Use grayscale palette"
+        getAccessibleContext().accessibleName = "Use grayscale palette"
       }
   internal val blending =
       JCheckBox("Blend adjacent frames", initial.blending).apply {
         mnemonic = KeyEvent.VK_B
-        accessibleContext.accessibleName = "Blend adjacent frames"
+        getAccessibleContext().accessibleName = "Blend adjacent frames"
       }
   internal val colorCorrection =
       JCheckBox("Apply CGB color correction", initial.colorCorrection).apply {
         mnemonic = KeyEvent.VK_C
-        accessibleContext.accessibleName = "Apply CGB color correction"
+        getAccessibleContext().accessibleName = "Apply CGB color correction"
       }
   internal val showSgbBorder =
       JCheckBox("Show Super Game Boy border", initial.showSgbBorder).apply {
         mnemonic = KeyEvent.VK_O
-        accessibleContext.accessibleName = "Show Super Game Boy border"
+        getAccessibleContext().accessibleName = "Show Super Game Boy border"
       }
 
   init {
@@ -258,7 +262,6 @@ internal class DisplayPreferencesEditor private constructor(
 
   private companion object {
     const val COLOR_ERROR = "Enter a color in #RRGGBB form."
-    val ERROR_COLOR = Color(0xB0, 0x00, 0x20)
     val SCALES = listOf(1, 2, 4).map(::ScaleOption)
     val ROTATIONS = ApplicationSettings.Rotation.entries.map(::RotationOption)
 

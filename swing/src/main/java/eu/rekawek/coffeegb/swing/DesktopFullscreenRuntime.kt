@@ -1,12 +1,17 @@
 package eu.rekawek.coffeegb.swing
 
+import java.awt.Dialog
 import java.awt.GraphicsConfiguration
 import java.awt.GraphicsEnvironment
 import java.awt.Insets
+import java.awt.KeyboardFocusManager
+import java.awt.Rectangle
 import java.awt.Toolkit
+import java.awt.Window
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import javax.swing.JFrame
+import javax.swing.JMenuBar
 import javax.swing.SwingUtilities
 import javax.swing.Timer
 
@@ -33,6 +38,7 @@ internal class DesktopFullscreenRuntime(
     minimumContentSize: DesktopSize,
 ) : FullscreenRuntime {
   private var transitioning = false
+  private val chromeVisibility = FullscreenChromeVisibility()
   private val controller =
       FullscreenController(
           JFrameFullscreenWindow(frame),
@@ -66,11 +72,18 @@ internal class DesktopFullscreenRuntime(
     transitioning = true
     try {
       if (fullscreen) {
-        controller.enterFullscreen()
+        chromeVisibility.hide(frame.jMenuBar)
+        try {
+          controller.enterFullscreen()
+        } catch (failure: RuntimeException) {
+          chromeVisibility.restore()
+          throw failure
+        }
         refreshTimer.start()
       } else {
         refreshTimer.stop()
         controller.exitFullscreen()
+        chromeVisibility.restore()
       }
     } finally {
       transitioning = false
@@ -100,9 +113,34 @@ internal class DesktopFullscreenRuntime(
   }
 }
 
+/** Retains the exact menu-bar visibility across the native-peer fullscreen transition. */
+internal class FullscreenChromeVisibility {
+  private var retained: RetainedChrome? = null
+
+  fun hide(menuBar: JMenuBar?) {
+    if (retained != null) return
+    retained = RetainedChrome(menuBar, menuBar?.isVisible == true)
+    menuBar?.isVisible = false
+  }
+
+  fun restore() {
+    val previous = retained ?: return
+    retained = null
+    previous.menuBar?.isVisible = previous.visible
+  }
+
+  private data class RetainedChrome(
+      val menuBar: JMenuBar?,
+      val visible: Boolean,
+  )
+}
+
 private class JFrameFullscreenWindow(
     private val frame: JFrame,
 ) : FullscreenWindow {
+  private var peerTransitionActive = false
+  private var retainedOwnedWindows = emptyList<RetainedOwnedWindow>()
+
   override fun snapshot(): FullscreenWindowSnapshot {
     val bounds = frame.bounds
     return FullscreenWindowSnapshot(
@@ -115,6 +153,25 @@ private class JFrameFullscreenWindow(
         frame.graphicsConfiguration?.device?.iDstring,
         frame.isUndecorated,
     )
+  }
+
+  override fun beginPeerTransition() {
+    check(!peerTransitionActive) { "A fullscreen peer transition is already active" }
+    peerTransitionActive = true
+    val activeWindow = KeyboardFocusManager.getCurrentKeyboardFocusManager().activeWindow
+    retainedOwnedWindows =
+        ownedWindowTree(frame)
+            .filter { (owned, _) ->
+              owned.isVisible && isRetainableModelessWindow(owned)
+            }
+            .map { (owned, depth) ->
+              RetainedOwnedWindow(
+                  window = owned,
+                  bounds = Rectangle(owned.bounds),
+                  active = owned === activeWindow,
+                  depth = depth,
+              )
+            }
   }
 
   override fun dispose() = frame.dispose()
@@ -130,9 +187,47 @@ private class JFrameFullscreenWindow(
   override fun showWindow() {
     frame.isVisible = true
   }
+
+  override fun endPeerTransition() {
+    val retained = retainedOwnedWindows
+    retainedOwnedWindows = emptyList()
+    peerTransitionActive = false
+    // Disposing an owner makes every descendant undisplayable. Recreate each retained peer in
+    // ownership order so nested tools never race a still-undisplayable parent.
+    retained.sortedBy(RetainedOwnedWindow::depth).forEach { entry ->
+      entry.window.bounds = entry.bounds
+      entry.window.isVisible = true
+    }
+    retained.firstOrNull { it.active }?.window?.let { active ->
+      active.toFront()
+      active.requestFocus()
+    }
+  }
+
+  private data class RetainedOwnedWindow(
+      val window: Window,
+      val bounds: Rectangle,
+      val active: Boolean,
+      val depth: Int,
+  )
+
+  private fun ownedWindowTree(root: Window): List<Pair<Window, Int>> {
+    val result = mutableListOf<Pair<Window, Int>>()
+    fun visit(owner: Window, depth: Int) {
+      owner.ownedWindows.forEach { owned ->
+        result += owned to depth
+        visit(owned, depth + 1)
+      }
+    }
+    visit(root, 0)
+    return result
+  }
+
+  private fun isRetainableModelessWindow(window: Window): Boolean =
+      window !is Dialog || window.modalityType == Dialog.ModalityType.MODELESS
 }
 
-private class AwtScreenLayoutProvider(
+internal class AwtScreenLayoutProvider(
     private val frame: JFrame,
 ) : ScreenLayoutProvider {
   override fun snapshot(): ScreenLayout {

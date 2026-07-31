@@ -25,14 +25,17 @@ import eu.rekawek.coffeegb.controller.state.StateUserError
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.Component
 import java.awt.Dialog
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Point
+import java.awt.Rectangle
+import java.awt.Window
 import java.awt.event.ActionEvent
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
@@ -45,10 +48,6 @@ import java.time.ZoneId
 import java.time.DateTimeException
 import java.time.format.DateTimeFormatter
 import java.util.UUID
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
@@ -59,7 +58,6 @@ import javax.swing.JDialog
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
-import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
@@ -71,9 +69,13 @@ import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
+import javax.swing.UIManager
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 import javax.swing.filechooser.FileNameExtensionFilter
 import javax.swing.table.AbstractTableModel
 import javax.swing.table.DefaultTableCellRenderer
+import javax.swing.border.TitledBorder
 import javax.swing.plaf.basic.BasicHTML
 
 /**
@@ -86,17 +88,32 @@ internal class StateUxDesktopController(
     private val owner: JFrame,
     rootEventBus: EventBus,
     private val captureDisplayImage: () -> StateImage,
-    private val openPath: (Path) -> Boolean = DesktopStateExternalActions()::openPath,
+    initialBounds: Rectangle? = null,
+    onBoundsChanged: (Rectangle) -> Unit = {},
+    private val onDesktopStatus: (String, DesktopCommand?) -> Unit = { _, _ -> },
+    private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
   private val requestIds = AtomicLong()
   private var currentSession: StateUxSessionEvent? = null
-  private var browser: StateBrowserDialog? = null
+  private val browser =
+      StateBrowserWindowHost(
+          initialSession = { currentSession },
+          viewFactory =
+              StateBrowserWindowViewFactory { session ->
+                StateBrowserDialog(
+                    owner,
+                    eventBus,
+                    ::nextRequestId,
+                    captureDisplayImage,
+                    session,
+                    initialBounds,
+                    onBoundsChanged,
+                    dialogFactory,
+                )
+              },
+      )
   private var pendingClose: PendingClose? = null
-  private val externalActions: ExecutorService =
-      Executors.newSingleThreadExecutor { task ->
-        Thread(task, "coffee-gb-desktop-external-action").apply { isDaemon = true }
-      }
   private var closed = false
 
   init {
@@ -108,7 +125,7 @@ internal class StateUxDesktopController(
         if (current == null || event.sessionId >= current.sessionId) {
           currentSession = event
           pendingClose = null
-          browser?.updateSession(event)
+          browser.updateSession(event)
         }
       }
     }
@@ -129,27 +146,27 @@ internal class StateUxDesktopController(
             )
         currentSession = unavailable
         pendingClose = null
-        browser?.updateSession(unavailable)
+        browser.updateSession(unavailable)
       }
     }
     eventBus.register<StateOperationCompletedEvent> { event ->
       onEdt {
         if (closed) return@onEdt
         if (!isCurrent(event.sessionId)) return@onEdt
-        browser?.operationCompleted(event)
+        browser.operationCompleted(event)
         if (event.recoveryMessages.isNotEmpty()) {
-          showTextDetails(
-              owner,
-              "State storage recovery",
-              event.message,
-              event.recoveryMessages.joinToString("\n"),
-              JOptionPane.WARNING_MESSAGE,
+          onDesktopStatus(
+              "${event.message} Open Manage States to review storage recovery details.",
+              DesktopCommand.MANAGE_STATES,
           )
         }
         when (event.operation) {
           StateOperation.SCREENSHOT ->
               event.path?.let {
-                showScreenshotSaved(event.message, it)
+                onDesktopStatus(
+                    "${event.message} Use Open Save Folder to reveal the screenshot.",
+                    DesktopCommand.OPEN_SAVE_FOLDER,
+                )
               }
           StateOperation.OPEN_FOLDER ->
               if (event.folderOpened == false) {
@@ -170,7 +187,7 @@ internal class StateUxDesktopController(
       onEdt {
         if (closed) return@onEdt
         if (!isCurrent(event.sessionId)) return@onEdt
-        browser?.operationFailed(event)
+        browser.operationFailed(event)
         showStateError(owner, event.error)
       }
     }
@@ -185,20 +202,36 @@ internal class StateUxDesktopController(
             } ?: "an unknown time"
         val duration =
             event.playDurationNanos?.let(::formatDuration)?.let { " after $it of play" }.orEmpty()
-        val accept =
-            JOptionPane.showConfirmDialog(
+        val choice =
+            dialogFactory.showDecision(
                 owner,
-                "Resume the autosave from $saved$duration?",
-                "Resume previous game",
-                JOptionPane.YES_NO_OPTION,
-                JOptionPane.QUESTION_MESSAGE,
-            ) == JOptionPane.YES_OPTION
+                DesktopDecisionSpec(
+                    title = "Resume previous game",
+                    heading = "Resume the autosave from $saved$duration?",
+                    message =
+                        "Resume continues from that saved session. Start fresh leaves this launch at its normal beginning.",
+                    buttons =
+                        DesktopDialogButtons(
+                            primary =
+                                DesktopDialogAction(
+                                    "Resume",
+                                    StateResumeChoice.RESUME,
+                                ),
+                            cancel =
+                                DesktopDialogAction(
+                                    "Start fresh",
+                                    StateResumeChoice.START_FRESH,
+                                ),
+                            defaultButton = DesktopDialogDefaultButton.NONE,
+                        ),
+                ),
+            )
         if (isCurrent(expectedSessionId)) {
           eventBus.post(
               StateResumeDecisionEvent(
                   event.requestId,
                   expectedSessionId,
-                  accept,
+                  choice == StateResumeChoice.RESUME,
               ))
         }
       }
@@ -214,24 +247,7 @@ internal class StateUxDesktopController(
   fun showBrowser() {
     requireEdt("State browser opening")
     if (closed) return
-    val existing = browser
-    if (existing != null && existing.isDisplayable) {
-      existing.toFront()
-      existing.requestFocus()
-      return
-    }
-    browser =
-        StateBrowserDialog(
-                owner,
-                eventBus,
-                ::nextRequestId,
-                captureDisplayImage,
-                currentSession,
-            )
-            .also {
-              it.onClosed = { browser = null }
-              it.show()
-            }
+    browser.showOrRaise()
   }
 
   fun takeScreenshot() {
@@ -310,25 +326,47 @@ internal class StateUxDesktopController(
       pending.onPrepared()
       return
     }
-    val options = arrayOf("Retry autosave", "Close without autosave", "Cancel")
     val choice =
-        JOptionPane.showOptionDialog(
+        dialogFactory.showError(
             owner,
-            stateErrorPanel(error),
-            "Autosave failed",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.ERROR_MESSAGE,
-            null,
-            options,
-            options[0],
+            DesktopErrorSpec(
+                title = "Autosave failed",
+                summary = error.summary,
+                recovery =
+                    error.suggestedAction +
+                        " Closing without autosave can lose progress from this session.",
+                sanitizedDetails = error.detail,
+                buttons =
+                    DesktopDialogButtons(
+                        primary =
+                            DesktopDialogAction(
+                                "Retry autosave",
+                                StateCloseAutosaveChoice.RETRY,
+                            ),
+                        secondary =
+                            listOf(
+                                DesktopDialogAction(
+                                    "Close without autosave",
+                                    StateCloseAutosaveChoice.CLOSE_WITHOUT_AUTOSAVE,
+                                    destructive = true,
+                                )),
+                        cancel =
+                            DesktopDialogAction(
+                                "Cancel",
+                                StateCloseAutosaveChoice.CANCEL,
+                            ),
+                        defaultButton = DesktopDialogDefaultButton.CANCEL,
+                    ),
+            ),
         )
     when (choice) {
-      0 -> prepareClose(pending.onPrepared)
-      1 -> {
+      StateCloseAutosaveChoice.RETRY -> prepareClose(pending.onPrepared)
+      StateCloseAutosaveChoice.CLOSE_WITHOUT_AUTOSAVE -> {
         val requestId = nextRequestId()
         pendingClose = PendingClose(requestId, pending.onPrepared)
         eventBus.post(StateSkipCloseAutosaveRequestEvent(requestId, event.sessionId))
       }
+      StateCloseAutosaveChoice.CANCEL -> Unit
     }
   }
 
@@ -338,12 +376,7 @@ internal class StateUxDesktopController(
       showStateError(owner, it)
       return false
     }
-    JOptionPane.showMessageDialog(
-        owner,
-        "State management requires a running local game.",
-        "State management unavailable",
-        JOptionPane.INFORMATION_MESSAGE,
-    )
+    onDesktopStatus("State management requires a running local game.", null)
     return false
   }
 
@@ -362,47 +395,6 @@ internal class StateUxDesktopController(
         null
       }
 
-  private fun showScreenshotSaved(message: String, path: Path) {
-    requireEdt("Screenshot completion dialog")
-    val normalized = path.toAbsolutePath().normalize()
-    val choice =
-        JOptionPane.showOptionDialog(
-            owner,
-            selectablePathPanel(message, normalized),
-            "Screenshot saved",
-            JOptionPane.DEFAULT_OPTION,
-            JOptionPane.INFORMATION_MESSAGE,
-            null,
-            arrayOf("Open", "Close"),
-            "Open",
-        )
-    if (choice != 0 || closed) return
-    try {
-      externalActions.execute {
-        val opened = runCatching { openPath(normalized) }.getOrDefault(false)
-        if (!opened) {
-          onEdt {
-            if (!closed) {
-              showSelectablePath(
-                  owner,
-                  "Open screenshot",
-                  "Coffee GB could not open the screenshot. Copy this path into your file manager:",
-                  normalized,
-              )
-            }
-          }
-        }
-      }
-    } catch (_: RejectedExecutionException) {
-      showSelectablePath(
-          owner,
-          "Open screenshot",
-          "Coffee GB is shutting down. Copy this path into your file manager:",
-          normalized,
-      )
-    }
-  }
-
   private fun isCurrent(sessionId: Long): Boolean =
       currentSession?.sessionId == sessionId
 
@@ -413,9 +405,7 @@ internal class StateUxDesktopController(
     if (closed) return
     closed = true
     pendingClose = null
-    browser?.dispose()
-    browser = null
-    externalActions.shutdownNow()
+    browser.close()
     eventBus.close()
   }
 
@@ -424,9 +414,104 @@ internal class StateUxDesktopController(
       val onPrepared: () -> Unit,
   )
 
+  private enum class StateResumeChoice {
+    RESUME,
+    START_FRESH,
+  }
+
+  private enum class StateCloseAutosaveChoice {
+    RETRY,
+    CLOSE_WITHOUT_AUTOSAVE,
+    CANCEL,
+  }
+
   private companion object {
     val RESUME_TIME_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault())
+  }
+}
+
+internal interface StateBrowserWindowView : AutoCloseable {
+  fun showOrRaise()
+
+  fun updateSession(event: StateUxSessionEvent)
+
+  fun operationCompleted(event: StateOperationCompletedEvent)
+
+  fun operationFailed(event: StateOperationFailedEvent)
+}
+
+internal fun interface StateBrowserWindowViewFactory {
+  fun create(initialSession: StateUxSessionEvent?): StateBrowserWindowView
+}
+
+/** Owns one lazy modeless State Manager view for the full desktop-controller lifetime. */
+internal class StateBrowserWindowHost(
+    private val initialSession: () -> StateUxSessionEvent?,
+    private val viewFactory: StateBrowserWindowViewFactory,
+) : AutoCloseable {
+  private var view: StateBrowserWindowView? = null
+  private var closed = false
+
+  init {
+    requireEdt("State browser host construction")
+  }
+
+  fun showOrRaise() {
+    requireEdt("State browser display")
+    if (closed) return
+    retainedView().showOrRaise()
+  }
+
+  fun updateSession(event: StateUxSessionEvent) {
+    requireEdt("State browser session update")
+    if (!closed) view?.updateSession(event)
+  }
+
+  fun operationCompleted(event: StateOperationCompletedEvent) {
+    requireEdt("State browser completion")
+    if (!closed) view?.operationCompleted(event)
+  }
+
+  fun operationFailed(event: StateOperationFailedEvent) {
+    requireEdt("State browser failure")
+    if (!closed) view?.operationFailed(event)
+  }
+
+  private fun retainedView(): StateBrowserWindowView =
+      view ?: viewFactory.create(initialSession()).also { view = it }
+
+  override fun close() {
+    requireEdt("State browser host disposal")
+    if (closed) return
+    closed = true
+    try {
+      view?.close()
+    } finally {
+      view = null
+    }
+  }
+}
+
+private enum class StateNamedChoice {
+  SAVE,
+  CANCEL,
+}
+
+private enum class StateDeleteChoice {
+  DELETE,
+  KEEP,
+}
+
+internal fun validateNamedStateLabel(value: String): DesktopInlineValidation {
+  val label = value.trim()
+  return when {
+    label.isEmpty() -> DesktopInlineValidation(false, "Enter a state name.")
+    label.codePointCount(0, label.length) > 120 ->
+        DesktopInlineValidation(false, "Use no more than 120 characters.")
+    label.any(Character::isISOControl) ->
+        DesktopInlineValidation(false, "State names cannot contain control characters.")
+    else -> DesktopInlineValidation(true)
   }
 }
 
@@ -436,9 +521,12 @@ internal class StateBrowserDialog(
     private val nextRequestId: () -> Long,
     private val captureDisplayImage: () -> StateImage,
     initialSession: StateUxSessionEvent?,
-) {
+    initialBounds: Rectangle? = null,
+    private val onBoundsChanged: (Rectangle) -> Unit = {},
+    private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
+) : StateBrowserWindowView {
   private val dialog =
-      JDialog(owner, "Manage States", Dialog.ModalityType.MODELESS)
+      JDialog(owner, "States — Coffee GB", Dialog.ModalityType.MODELESS)
   private val eventBus = rootEventBus.fork("state-browser-${System.identityHashCode(this)}")
   private val model = StateBrowserTableModel()
   private val table = StateBrowserTable(model)
@@ -455,19 +543,15 @@ internal class StateBrowserDialog(
   private var session = initialSession
   private var latestCatalogRequest = 0L
   private val pendingOperations = mutableSetOf<Long>()
-  private val disposed = AtomicBoolean()
-
-  var onClosed: () -> Unit = {}
-
-  val isDisplayable: Boolean
-    get() = dialog.isDisplayable
+  private var positioned = initialBounds != null
+  private var closed = false
 
   init {
     requireEdt("State browser construction")
-    dialog.defaultCloseOperation = JDialog.DO_NOTHING_ON_CLOSE
+    dialog.defaultCloseOperation = JDialog.HIDE_ON_CLOSE
     dialog.addWindowListener(
         object : WindowAdapter() {
-          override fun windowClosing(event: WindowEvent) = dispose()
+          override fun windowClosing(event: WindowEvent) = publishBounds()
         })
     dialog.minimumSize = Dimension(760, 460)
     dialog.accessibleContext.accessibleName = "Manage save states"
@@ -491,7 +575,6 @@ internal class StateBrowserDialog(
     detail.isEditable = false
     detail.lineWrap = true
     detail.wrapStyleWord = true
-    detail.background = Color(UI_BACKGROUND)
     detail.font = detail.font.deriveFont(Font.PLAIN)
     detail.accessibleContext.accessibleName = "Selected state details"
 
@@ -513,7 +596,7 @@ internal class StateBrowserDialog(
     configureButton(delete, KeyEvent.VK_D) { deleteSelected() }
     configureButton(export, KeyEvent.VK_E) { exportSelected() }
     configureButton(refresh, KeyEvent.VK_R) { requestCatalog() }
-    configureButton(close, KeyEvent.VK_C) { dispose() }
+    configureButton(close, KeyEvent.VK_C) { hide() }
     val buttons = JPanel(FlowLayout(FlowLayout.TRAILING))
     listOf(save, load, named, delete, export, refresh, close).forEach(buttons::add)
 
@@ -523,17 +606,18 @@ internal class StateBrowserDialog(
     bottom.add(status, BorderLayout.CENTER)
     bottom.add(buttons, BorderLayout.SOUTH)
 
-    dialog.contentPane.layout = BorderLayout(8, 8)
+    val content = StateBrowserContentPanel(preview, detail)
+    dialog.contentPane = content
     dialog.rootPane.border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-    dialog.contentPane.add(split, BorderLayout.CENTER)
-    dialog.contentPane.add(bottom, BorderLayout.SOUTH)
+    content.add(split, BorderLayout.CENTER)
+    content.add(bottom, BorderLayout.SOUTH)
     configureKeys()
 
     eventBus.register<StateCatalogReadyEvent> { event ->
       onEdt {
         if (event.requestId != latestCatalogRequest ||
             event.sessionId != session?.sessionId ||
-            disposed.get()) {
+            closed) {
           return@onEdt
         }
         applyCatalog(event.catalog)
@@ -541,20 +625,29 @@ internal class StateBrowserDialog(
     }
     updateAvailability()
     dialog.pack()
-    dialog.setLocationRelativeTo(owner)
+    initialBounds?.let { dialog.bounds = Rectangle(it) }
+    dialog.addComponentListener(
+        object : ComponentAdapter() {
+          override fun componentMoved(event: ComponentEvent) = publishBounds()
+
+          override fun componentResized(event: ComponentEvent) = publishBounds()
+        })
   }
 
-  fun show() {
+  override fun showOrRaise() {
     requireEdt("State browser display")
+    if (closed) return
+    if (!positioned) {
+      dialog.setLocationRelativeTo(dialog.owner)
+      positioned = true
+    }
     dialog.isVisible = true
+    dialog.toFront()
+    dialog.requestFocus()
     requestCatalog()
   }
 
-  fun requestFocus() = dialog.requestFocus()
-
-  fun toFront() = dialog.toFront()
-
-  fun updateSession(event: StateUxSessionEvent) {
+  override fun updateSession(event: StateUxSessionEvent) {
     requireEdt("State browser session update")
     val previous = session
     if (previous != null && event.sessionId < previous.sessionId) return
@@ -563,19 +656,24 @@ internal class StateBrowserDialog(
     latestCatalogRequest = 0
     model.entries = emptyList()
     updateAvailability()
-    if (event.available) requestCatalog()
+    if (event.available && dialog.isVisible) requestCatalog()
   }
 
-  fun operationCompleted(event: StateOperationCompletedEvent) {
+  override fun operationCompleted(event: StateOperationCompletedEvent) {
     requireEdt("State browser completion")
     val owned = pendingOperations.remove(event.requestId)
+    if (event.recoveryMessages.isNotEmpty()) {
+      status.text = event.message
+      detail.text = event.recoveryMessages.joinToString("\n")
+      detail.caretPosition = 0
+    }
     when (stateBrowserCompletionAction(event.operation, owned)) {
       StateBrowserCompletionAction.IGNORE -> return
       StateBrowserCompletionAction.REFRESH_CATALOG -> {
         if (owned) status.text = event.message
         // Quick-save requests originate in the main Game menu, not this modeless dialog. Refresh
         // their shared catalog without pretending that the browser owns the operation/status.
-        requestCatalog(announce = owned)
+        if (dialog.isVisible) requestCatalog(announce = owned)
       }
       StateBrowserCompletionAction.UPDATE_SELECTION -> {
         status.text = event.message
@@ -584,26 +682,34 @@ internal class StateBrowserDialog(
     }
   }
 
-  fun operationFailed(event: StateOperationFailedEvent) {
+  override fun operationFailed(event: StateOperationFailedEvent) {
     requireEdt("State browser failure")
     if (!pendingOperations.remove(event.requestId)) return
     status.text = event.error.summary
     updateSelection()
   }
 
-  fun dispose() {
+  private fun hide() {
+    requireEdt("State browser hiding")
+    if (closed) return
+    publishBounds()
+    dialog.isVisible = false
+  }
+
+  override fun close() {
     requireEdt("State browser disposal")
-    if (!disposed.compareAndSet(false, true)) return
+    if (closed) return
+    closed = true
     pendingOperations.clear()
     eventBus.close()
+    publishBounds()
     dialog.dispose()
-    onClosed()
   }
 
   private fun requestCatalog(announce: Boolean = true) {
     requireEdt("State catalog request")
     val expectedSessionId = availableSessionId()
-    if (expectedSessionId == null || disposed.get()) {
+    if (expectedSessionId == null || closed) {
       updateAvailability()
       return
     }
@@ -678,21 +784,66 @@ internal class StateBrowserDialog(
   private fun newNamed() {
     requireEdt("Named state request")
     val expectedSessionId = availableSessionId() ?: return
-    val label =
-        JOptionPane.showInputDialog(
+    val labelField =
+        JTextField(36).apply {
+          getAccessibleContext().accessibleName = "State name"
+          getAccessibleContext().accessibleDescription =
+              "A printable state name containing at most 120 characters"
+          putClientProperty("html.disable", true)
+        }
+    val labelPrompt = JLabel("State name:").apply { labelFor = labelField }
+    val form =
+        JPanel(BorderLayout(0, 6)).apply {
+          getAccessibleContext().accessibleName = "Named state fields"
+          add(labelPrompt, BorderLayout.NORTH)
+          add(labelField, BorderLayout.CENTER)
+        }
+    fun publishValidation() {
+      val validation = validateNamedStateLabel(labelField.text)
+      val shell =
+          SwingUtilities.getAncestorOfClass(DesktopFormPanel::class.java, labelField)
+              as? DesktopFormPanel<*>
+      shell?.setSubmissionState(validation.valid, validation.message)
+    }
+    labelField.document.addDocumentListener(
+        object : DocumentListener {
+          override fun insertUpdate(event: DocumentEvent) = publishValidation()
+
+          override fun removeUpdate(event: DocumentEvent) = publishValidation()
+
+          override fun changedUpdate(event: DocumentEvent) = publishValidation()
+        })
+    SwingUtilities.invokeLater { labelField.requestFocusInWindow() }
+    val result =
+        dialogFactory.showForm(
             dialog,
-            "Name this state (up to 120 characters):",
-            "New named state",
-            JOptionPane.PLAIN_MESSAGE,
-        )?.trim() ?: return
-    if (label.isEmpty()) {
-      status.text = "Enter a non-empty state name."
-      return
-    }
-    if (label.codePointCount(0, label.length) > 120 || label.any(Character::isISOControl)) {
-      status.text = "State names may contain up to 120 printable characters."
-      return
-    }
+            DesktopFormSpec(
+                title = "New named state",
+                heading = "Save a named state",
+                description = "Choose a recognizable name for this point in the game.",
+                contentAccessibleName = "Named state fields",
+                buttons =
+                    DesktopDialogButtons(
+                        primary =
+                            DesktopDialogAction(
+                                "Save state",
+                                StateNamedChoice.SAVE,
+                            ),
+                        cancel =
+                            DesktopDialogAction(
+                                "Cancel",
+                                StateNamedChoice.CANCEL,
+                            ),
+                        defaultButton = DesktopDialogDefaultButton.PRIMARY,
+                    ),
+                initiallyValid = false,
+                modality = DesktopOwnedDialogModality.DOCUMENT,
+            ),
+            form,
+        )
+    if (result != StateNamedChoice.SAVE) return
+    val label = labelField.text.trim()
+    check(validateNamedStateLabel(label).valid) { "The named-state form submitted invalid text" }
     val requestId = nextRequestId()
     val thumbnail = captureThumbnailOrReport() ?: return
     if (availableSessionId() != expectedSessionId) return
@@ -714,15 +865,33 @@ internal class StateBrowserDialog(
     val expectedSessionId = availableSessionId() ?: return
     val selected = selectedEntry() ?: return
     if (selected.isEmpty) return
-    val answer =
-        JOptionPane.showConfirmDialog(
+    val choice =
+        dialogFactory.showDecision(
             dialog,
-            "Delete ${model.name(selected)} from source ${selected.key.sourceIndex + 1}?",
-            "Delete state",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.WARNING_MESSAGE,
+            DesktopDecisionSpec(
+                title = "Delete state",
+                heading = "Delete ${model.name(selected)}?",
+                message =
+                    "This permanently removes the state from source ${selected.key.sourceIndex + 1}. This action cannot be undone.",
+                buttons =
+                    DesktopDialogButtons(
+                        primary =
+                            DesktopDialogAction(
+                                "Delete state",
+                                StateDeleteChoice.DELETE,
+                                destructive = true,
+                            ),
+                        cancel =
+                            DesktopDialogAction(
+                                "Keep state",
+                                StateDeleteChoice.KEEP,
+                            ),
+                        defaultButton = DesktopDialogDefaultButton.CANCEL,
+                    ),
+                modality = DesktopOwnedDialogModality.DOCUMENT,
+            ),
         )
-    if (answer != JOptionPane.YES_OPTION) return
+    if (choice != StateDeleteChoice.DELETE) return
     if (availableSessionId() != expectedSessionId) return
     val requestId = nextRequestId()
     pendingOperations += requestId
@@ -848,7 +1017,7 @@ internal class StateBrowserDialog(
           },
       )
     }
-    bind(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close-state-browser", ::dispose)
+    bind(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "hide-state-browser", ::hide)
     bind(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "load-selected-state", ::loadSelected)
     bind(KeyStroke.getKeyStroke(KeyEvent.VK_DELETE, 0), "delete-selected-state", ::deleteSelected)
     bind(
@@ -859,8 +1028,39 @@ internal class StateBrowserDialog(
     bind(KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0), "refresh-states") { requestCatalog() }
   }
 
-  private companion object {
-    const val UI_BACKGROUND = 0xEEEEEE
+  private fun publishBounds() {
+    if (dialog.width > 0 && dialog.height > 0) {
+      onBoundsChanged(Rectangle(dialog.bounds))
+    }
+  }
+}
+
+internal class StateBrowserContentPanel(
+    private val preview: JLabel,
+    private val detail: JTextArea,
+) : JPanel(BorderLayout(8, 8)), DesktopThemeRefreshHook {
+  init {
+    desktopThemeChanged(DesktopThemeTokens.capture(DesktopAppearance.SYSTEM))
+  }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    val labelFont = UIManager.getFont("Label.font") ?: preview.font
+    val detailFont = UIManager.getFont("TextArea.font") ?: labelFont
+    preview.border =
+        BorderFactory.createTitledBorder(
+            BorderFactory.createLineBorder(tokens.border),
+            "Preview",
+            TitledBorder.LEADING,
+            TitledBorder.TOP,
+            labelFont,
+            tokens.primaryText,
+        )
+    detail.font = detailFont.deriveFont(Font.PLAIN)
+    detail.background = tokens.elevatedSurface
+    detail.foreground = tokens.primaryText
+    detail.caretColor = tokens.primaryText
+    revalidate()
+    repaint()
   }
 }
 
@@ -1056,30 +1256,20 @@ internal fun boundedStateUiText(value: String, maximumChars: Int): String {
 }
 
 private fun showStateError(parent: Component, error: StateUserError) {
-  JOptionPane.showMessageDialog(
-      parent,
-      stateErrorPanel(error),
-      "State operation failed",
-      JOptionPane.ERROR_MESSAGE,
+  val owner = desktopDialogOwner(parent)
+  DesktopDialogFactory().showError(
+      owner,
+      DesktopErrorSpec(
+          title = "State operation failed",
+          summary = error.summary,
+          recovery = error.suggestedAction,
+          sanitizedDetails = error.detail,
+          buttons =
+              DesktopDialogButtons(
+                  cancel = DesktopDialogAction("Close", Unit),
+              ),
+      ),
   )
-}
-
-private fun stateErrorPanel(error: StateUserError): JPanel {
-  val panel = JPanel(BorderLayout(0, 8))
-  panel.add(JLabel("<html><b>${escapeHtml(error.summary)}</b></html>"), BorderLayout.NORTH)
-  val details =
-      JTextArea(
-          "Details:\n${error.detail}\n\nWhat to do:\n${error.suggestedAction}",
-          10,
-          58,
-      )
-  details.isEditable = false
-  details.lineWrap = true
-  details.wrapStyleWord = true
-  details.caretPosition = 0
-  details.accessibleContext.accessibleName = "Copyable state error details"
-  panel.add(JScrollPane(details), BorderLayout.CENTER)
-  return panel
 }
 
 private fun showSelectablePath(
@@ -1088,11 +1278,19 @@ private fun showSelectablePath(
     message: String,
     path: Path,
 ) {
-  JOptionPane.showMessageDialog(
-      parent,
+  DesktopDialogFactory().showInformation(
+      desktopDialogOwner(parent),
+      DesktopInformationSpec(
+          title = title,
+          heading = title,
+          description = message,
+          contentAccessibleName = "Copyable path",
+          buttons =
+              DesktopDialogButtons(
+                  cancel = DesktopDialogAction("Close", Unit),
+              ),
+      ),
       selectablePathPanel(message, path),
-      title,
-      JOptionPane.INFORMATION_MESSAGE,
   )
 }
 
@@ -1107,26 +1305,11 @@ internal fun selectablePathPanel(message: String, path: Path): JPanel {
   return panel
 }
 
-private fun showTextDetails(
-    parent: Component,
-    title: String,
-    summary: String,
-    details: String,
-    messageType: Int,
-) {
-  val text = JTextArea(details, 8, 54)
-  text.isEditable = false
-  text.lineWrap = true
-  text.wrapStyleWord = true
-  text.caretPosition = 0
-  val panel = JPanel(BorderLayout(0, 8))
-  panel.add(JLabel(summary), BorderLayout.NORTH)
-  panel.add(JScrollPane(text), BorderLayout.CENTER)
-  JOptionPane.showMessageDialog(parent, panel, title, messageType)
-}
-
-private fun escapeHtml(value: String): String =
-    value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+private fun desktopDialogOwner(component: Component): Window =
+    (component as? Window)
+        ?: checkNotNull(SwingUtilities.getWindowAncestor(component)) {
+          "State dialogs require an owned Swing component"
+        }
 
 private fun requireEdt(operation: String) {
   check(SwingUtilities.isEventDispatchThread()) { "$operation must run on the Event Dispatch Thread" }

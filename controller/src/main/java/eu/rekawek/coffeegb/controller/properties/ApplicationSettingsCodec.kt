@@ -28,6 +28,8 @@ object ApplicationSettingsCodec {
   const val DISPLAY_FULLSCREEN_KEY = "display.fullscreen"
   const val DESKTOP_WINDOW_WIDTH_KEY = "desktop.windowWidth"
   const val DESKTOP_WINDOW_HEIGHT_KEY = "desktop.windowHeight"
+  const val DESKTOP_APPEARANCE_KEY = "desktop.appearance"
+  const val DESKTOP_COMMAND_BAR_VISIBLE_KEY = "desktop.commandBarVisible"
   const val SAVE_DIRECTORY_KEY = "saves.directory"
   const val PREVIOUS_SAVE_DIRECTORY_PREFIX = "saves.previousDirectory."
   const val REWIND_ENABLED_KEY = "saves.rewindEnabled"
@@ -63,6 +65,8 @@ object ApplicationSettingsCodec {
   private val versionSixFixedKeys =
       versionFiveFixedKeys + setOf(DESKTOP_WINDOW_WIDTH_KEY, DESKTOP_WINDOW_HEIGHT_KEY)
   private val versionSevenFixedKeys = versionSixFixedKeys + CAMERA_DEVICE_INDEX_KEY
+  private val versionEightFixedKeys =
+      versionSevenFixedKeys + setOf(DESKTOP_APPEARANCE_KEY, DESKTOP_COMMAND_BAR_VISIBLE_KEY)
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -83,6 +87,7 @@ object ApplicationSettingsCodec {
             version == "4" ||
             version == "5" ||
             version == "6" ||
+            version == "7" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -143,6 +148,8 @@ object ApplicationSettingsCodec {
       known[DESKTOP_WINDOW_WIDTH_KEY] = size.width.toString()
       known[DESKTOP_WINDOW_HEIGHT_KEY] = size.height.toString()
     }
+    known[DESKTOP_APPEARANCE_KEY] = settings.desktop.appearance.name
+    known[DESKTOP_COMMAND_BAR_VISIBLE_KEY] = settings.desktop.commandBarVisible.toString()
     known[EmulatorProperties.Key.DisplayGrayscale.propertyName] = settings.display.grayscale.toString()
     known[EmulatorProperties.Key.DisplayBlending.propertyName] = settings.display.blending.toString()
     known[EmulatorProperties.Key.DisplayColorCorrection.propertyName] =
@@ -446,13 +453,31 @@ object ApplicationSettingsCodec {
                           parseDesktopWindowSize(raw)
                         } else {
                           null
-                        }),
+                        },
+                    appearance =
+                        if (sourceVersion >= 8) {
+                          parseDesktopAppearance(raw[DESKTOP_APPEARANCE_KEY])
+                        } else {
+                          ApplicationSettings.Appearance.LIGHT
+                        },
+                    commandBarVisible =
+                        if (sourceVersion >= 8) {
+                          parseBoolean(
+                              raw[DESKTOP_COMMAND_BAR_VISIBLE_KEY],
+                              true,
+                              DESKTOP_COMMAND_BAR_VISIBLE_KEY,
+                          )
+                        } else {
+                          true
+                        },
+                ),
         )
 
     val preservedCollisions =
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 8 -> versionEightFixedKeys
           sourceVersion >= 7 -> versionSevenFixedKeys
           sourceVersion >= 6 -> versionSixFixedKeys
           sourceVersion >= 5 -> versionFiveFixedKeys
@@ -657,6 +682,16 @@ object ApplicationSettingsCodec {
           "Invalid desktop window size: ${width}x$height (expected positive dimensions)",
           failure,
       )
+    }
+  }
+
+  private fun parseDesktopAppearance(value: String?): ApplicationSettings.Appearance {
+    if (value == null) return ApplicationSettings.Appearance.LIGHT
+    return try {
+      ApplicationSettings.Appearance.valueOf(value)
+    } catch (_: IllegalArgumentException) {
+      throw IllegalArgumentException(
+          "Invalid $DESKTOP_APPEARANCE_KEY: $value (expected LIGHT, DARK, or SYSTEM)")
     }
   }
 
@@ -920,7 +955,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionSevenFixedKeys ||
+      key in versionEightFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

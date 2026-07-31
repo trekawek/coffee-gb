@@ -30,11 +30,11 @@ import javax.swing.BorderFactory
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JDialog
+import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JLayeredPane
 import javax.swing.JList
-import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.JRootPane
@@ -47,7 +47,19 @@ import javax.swing.SwingUtilities
 import javax.swing.Timer
 import javax.swing.TransferHandler
 import javax.swing.UIManager
+import javax.swing.filechooser.FileNameExtensionFilter
 import org.slf4j.LoggerFactory
+
+internal enum class MissingRecentRecovery {
+  LOCATE,
+  REMOVE,
+  CANCEL,
+}
+
+private enum class RomOpenConfirmation {
+  OPEN,
+  CANCEL,
+}
 
 /**
  * Desktop-facing coordinator for every ROM entry route. It performs only syntactic routing on the
@@ -59,6 +71,7 @@ internal class DesktopRomOpen(
     private val properties: EmulatorProperties,
     private val sessionState: RomSessionState,
     private val onRecentChanged: () -> Unit,
+    private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
     private val onUpdate: (RomOpenUpdate) -> Unit = {},
 ) : AutoCloseable {
 
@@ -81,17 +94,17 @@ internal class DesktopRomOpen(
       SwingUtilities.invokeLater { open(inputs, source) }
       return
     }
-    val singlePath = (inputs.singleOrNull() as? RomOpenInput.LocalPath)?.path
-    if (singlePath != null && !confirm(singlePath)) {
-      return
-    }
-    service.open(RomOpenRequest(inputs, source))
+    beginOpen(inputs, source)
   }
 
   fun ownsVisibleRequest(requestId: Long): Boolean =
       service.ownsVisibleRequest(requestId)
 
   fun hasActiveRequest(): Boolean = service.hasActiveRequest()
+
+  fun cancel(requestId: Long) {
+    service.cancel(requestId)
+  }
 
   /** Drains current opening work without permanently invalidating desktop callbacks. */
   fun quiesce() {
@@ -122,16 +135,34 @@ internal class DesktopRomOpen(
     val fileName = path.fileName?.toString()?.takeIf(String::isNotBlank) ?: path.toString()
     val running = sessionState.isRunning()
     return proceedWithRomChange(properties.romChangeConfirmationPolicy, running) {
-      val message =
-          if (running) "Replace the running game with $fileName?"
-          else "Open $fileName?"
-      JOptionPane.showConfirmDialog(
+      dialogFactory.showDecision(
           owner,
-          message,
-          "Open ROM",
-          JOptionPane.YES_NO_OPTION,
-          JOptionPane.QUESTION_MESSAGE,
-      ) == JOptionPane.YES_OPTION
+          DesktopDecisionSpec(
+              title = if (running) "Replace game" else "Open ROM",
+              heading = if (running) "Replace the running game?" else "Open this game?",
+              message =
+                  if (running) {
+                    "$fileName will replace the current game after its save work completes."
+                  } else {
+                    "Open $fileName in Coffee GB."
+                  },
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              if (running) "Save and open" else "Open",
+                              RomOpenConfirmation.OPEN,
+                              mnemonic = KeyEvent.VK_O,
+                          ),
+                      cancel =
+                          DesktopDialogAction(
+                              if (running) "Keep playing" else "Cancel",
+                              RomOpenConfirmation.CANCEL,
+                          ),
+                      defaultButton = DesktopDialogDefaultButton.CANCEL,
+                  ),
+              modality = DesktopOwnedDialogModality.DOCUMENT,
+          )) == RomOpenConfirmation.OPEN
     }
   }
 
@@ -151,10 +182,11 @@ internal class DesktopRomOpen(
       }
       is RomOpenUpdate.Failed -> {
         progress.close(update.requestId)
-        showRomOpenError(owner, update.failure)
         if (update.source == RomOpenSource.RECENT &&
             update.failure.kind == RomOpenFailureKind.MISSING) {
-          offerMissingRecentRemoval(update.path)
+          offerMissingRecentRecovery(update.path)
+        } else {
+          showRomOpenError(owner, update.failure, dialogFactory)
         }
       }
     }
@@ -164,7 +196,7 @@ internal class DesktopRomOpen(
     when (update.stage) {
       RomOpenStage.AWAITING_ARCHIVE_SELECTION -> {
         progress.close(update.requestId)
-        val selected = chooseArchiveCandidate(owner, update.candidates)
+        val selected = chooseArchiveCandidate(owner, update.candidates, dialogFactory)
         applyArchiveSelectionIfCurrent(
             update.requestId,
             selected,
@@ -180,31 +212,90 @@ internal class DesktopRomOpen(
               update.requestId,
               update.persistenceFileName ?: "the current game's save",
           )
-      else ->
-          progress.show(
-              update.requestId,
-              progressMessage(update),
-              update.copiedBytes,
-          )
+      // Routine opening work is represented by DesktopMainPanel's nonmodal task banner. Keep the
+      // retained dialog only for archive selection and persistence decisions that require input.
+      else -> progress.close(update.requestId)
     }
   }
 
-  private fun offerMissingRecentRemoval(path: Path?) {
-    if (path == null) {
-      return
-    }
-    val choice =
-        JOptionPane.showConfirmDialog(
+  private fun offerMissingRecentRecovery(path: Path?) {
+    path ?: return
+    val name = path.fileName?.toString()?.takeIf(String::isNotBlank) ?: "This recent ROM"
+    val result =
+      dialogFactory.showDecision(
             owner,
-            "This file is no longer available. Remove it from Recent ROMs?",
-            "Missing recent ROM",
-            JOptionPane.YES_NO_OPTION,
-            JOptionPane.QUESTION_MESSAGE,
-        )
-    if (choice == JOptionPane.YES_OPTION) {
-      service.removeRecent(path)
-      onRecentChanged()
+            DesktopDecisionSpec(
+                title = "Recent ROM not found",
+                heading = "$name is no longer available",
+                message =
+                    "Choose its new location, remove the unavailable entry from Recent ROMs, " +
+                        "or keep the list unchanged.",
+                buttons =
+                    DesktopDialogButtons(
+                        primary =
+                            DesktopDialogAction(
+                                "Locate file…",
+                                MissingRecentRecovery.LOCATE,
+                                mnemonic = KeyEvent.VK_L,
+                            ),
+                        secondary =
+                            listOf(
+                                DesktopDialogAction(
+                                    "Remove from Recent",
+                                    MissingRecentRecovery.REMOVE,
+                                    mnemonic = KeyEvent.VK_R,
+                                    destructive = true,
+                                )),
+                        cancel =
+                            DesktopDialogAction("Cancel", MissingRecentRecovery.CANCEL),
+                        defaultButton = DesktopDialogDefaultButton.CANCEL,
+                    ),
+                modality = DesktopOwnedDialogModality.DOCUMENT,
+            ))
+    when (result) {
+      MissingRecentRecovery.LOCATE -> locateMissingRecent(path)
+      MissingRecentRecovery.REMOVE -> {
+        service.removeRecent(path)
+        onRecentChanged()
+      }
+      MissingRecentRecovery.CANCEL -> Unit
     }
+  }
+
+  private fun locateMissingRecent(missingPath: Path) {
+    val chooser =
+        RomFileChooser().apply {
+          dialogTitle = "Locate ${missingPath.fileName ?: "recent ROM"}"
+          fileFilter =
+              FileNameExtensionFilter(
+                  "Game Boy ROMs and archives (*.gb, *.gbc, *.rom, *.zip, *.7z)",
+                  "gb",
+                  "gbc",
+                  "rom",
+                  "zip",
+                  "7z",
+              )
+          isAcceptAllFileFilterUsed = false
+          missingPath.parent?.let(::useConfiguredDirectory)
+          getAccessibleContext().accessibleName = "Locate the missing recent ROM"
+    }
+    if (chooser.showOpenDialog(owner) == JFileChooser.APPROVE_OPTION) {
+      beginOpen(
+          listOf(RomOpenInput.LocalPath(chooser.selectedFile.toPath())),
+          RomOpenSource.CHOOSER,
+          recentPathToReplace = missingPath,
+      )
+    }
+  }
+
+  private fun beginOpen(
+      inputs: List<RomOpenInput>,
+      source: RomOpenSource,
+      recentPathToReplace: Path? = null,
+  ): Long? {
+    val singlePath = (inputs.singleOrNull() as? RomOpenInput.LocalPath)?.path
+    if (singlePath != null && !confirm(singlePath)) return null
+    return service.open(RomOpenRequest(inputs, source, recentPathToReplace))
   }
 
   private fun progressMessage(update: RomOpenUpdate.Progress): String {
@@ -363,6 +454,7 @@ internal class RomOpenProgressDialog(
 internal fun chooseArchiveCandidate(
     owner: Window,
     candidates: List<RomSourceSnapshot.ArchiveCandidate>,
+    dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ): RomSourceSnapshot.ArchiveCandidate? {
   if (candidates.isEmpty()) {
     return null
@@ -372,7 +464,7 @@ internal fun chooseArchiveCandidate(
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         selectedIndex = 0
         visibleRowCount = minOf(candidates.size, 10)
-        accessibleContext.accessibleName = "ROMs in archive"
+        getAccessibleContext().accessibleName = "ROMs in archive"
         cellRenderer =
             object : DefaultListCellRenderer() {
               override fun getListCellRendererComponent(
@@ -400,25 +492,45 @@ internal fun chooseArchiveCandidate(
                       }
             }
       }
-  val panel =
-      JPanel(BorderLayout(0, 8)).apply {
-        add(JLabel("Choose a ROM from this archive:"), BorderLayout.NORTH)
-        add(JScrollPane(list), BorderLayout.CENTER)
+  val content =
+      JScrollPane(list).apply {
         preferredSize = Dimension(540, minOf(360, 75 + candidates.size * 28))
+        getAccessibleContext().accessibleName = "ROMs available in the archive"
       }
-  return if (
-      JOptionPane.showConfirmDialog(
+  val outcome =
+      dialogFactory.showForm(
           owner,
-          panel,
-          "Choose ROM",
-          JOptionPane.OK_CANCEL_OPTION,
-          JOptionPane.QUESTION_MESSAGE,
-      ) == JOptionPane.OK_OPTION
-  ) {
-    list.selectedValue
-  } else {
-    null
-  }
+          DesktopFormSpec(
+              title = "Choose ROM — Coffee GB",
+              heading = "Choose a game from this archive",
+              description =
+                  "The archive contains more than one supported ROM. Select the game to open.",
+              contentAccessibleName = "ROM archive contents",
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              "Open selected ROM",
+                              ArchiveSelectionDecision.OPEN,
+                              mnemonic = KeyEvent.VK_O,
+                          ),
+                      cancel =
+                          DesktopDialogAction(
+                              "Cancel",
+                              ArchiveSelectionDecision.CANCEL,
+                          ),
+                      defaultButton = DesktopDialogDefaultButton.PRIMARY,
+                  ),
+              modality = DesktopOwnedDialogModality.DOCUMENT,
+          ),
+          content,
+      )
+  return list.selectedValue.takeIf { outcome == ArchiveSelectionDecision.OPEN }
+}
+
+private enum class ArchiveSelectionDecision {
+  OPEN,
+  CANCEL,
 }
 
 internal fun archiveCandidateLabel(candidate: RomSourceSnapshot.ArchiveCandidate): String {
@@ -432,12 +544,25 @@ internal fun archiveCandidateAccessibleLabel(
     "${candidate.title().ifBlank { "Untitled ROM" }}, " +
         "${candidate.entryName()}, ${formatByteCount(candidate.uncompressedBytes())}"
 
-internal fun showRomOpenError(owner: Window, failure: RomOpenFailure) {
-  JOptionPane.showMessageDialog(
+internal fun showRomOpenError(
+    owner: Window,
+    failure: RomOpenFailure,
+    dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
+) {
+  dialogFactory.showError(
       owner,
-      createRomOpenErrorPanel(failure),
-      "Unable to open ROM",
-      JOptionPane.ERROR_MESSAGE,
+      DesktopErrorSpec(
+          title = "Unable to open ROM — Coffee GB",
+          summary = failure.message,
+          recovery =
+              "Check the selected file or archive, then try again. Technical details are available below.",
+          sanitizedDetails = failure.technicalDetails,
+          buttons =
+              DesktopDialogButtons(
+                  cancel = DesktopDialogAction("Close", Unit),
+              ),
+          modality = DesktopOwnedDialogModality.DOCUMENT,
+      ),
   )
 }
 
@@ -449,8 +574,8 @@ internal fun createRomOpenErrorPanel(failure: RomOpenFailure): JPanel {
         lineWrap = true
         wrapStyleWord = true
         font = font.deriveFont(Font.BOLD)
-        accessibleContext.accessibleName = "ROM open error"
-        accessibleContext.accessibleDescription = failure.message
+        getAccessibleContext().accessibleName = "ROM open error"
+        getAccessibleContext().accessibleDescription = failure.message
         columns = 48
       }
   val details =
@@ -460,17 +585,17 @@ internal fun createRomOpenErrorPanel(failure: RomOpenFailure): JPanel {
         wrapStyleWord = true
         font = Font(Font.MONOSPACED, Font.PLAIN, 11)
         caretPosition = 0
-        accessibleContext.accessibleName = "Technical error details"
+        getAccessibleContext().accessibleName = "Technical error details"
       }
   val detailsScroll =
       JScrollPane(details).apply {
         preferredSize = Dimension(580, 150)
         isVisible = false
-        accessibleContext.accessibleName = "Technical error details"
+        getAccessibleContext().accessibleName = "Technical error details"
       }
   val toggle =
       JToggleButton("Show technical details").apply {
-        accessibleContext.accessibleName = "Show technical error details"
+        getAccessibleContext().accessibleName = "Show technical error details"
         addActionListener {
           detailsScroll.isVisible = isSelected
           text = if (isSelected) "Hide technical details" else "Show technical details"
@@ -480,8 +605,8 @@ internal fun createRomOpenErrorPanel(failure: RomOpenFailure): JPanel {
   val copy =
       JButton("Copy details").apply {
         mnemonic = KeyEvent.VK_C
-        accessibleContext.accessibleName = "Copy technical error details"
-        accessibleContext.accessibleDescription =
+        getAccessibleContext().accessibleName = "Copy technical error details"
+        getAccessibleContext().accessibleDescription =
             "Copy the redacted technical error details to the clipboard"
         addActionListener {
           runCatching {
@@ -632,30 +757,53 @@ internal class DesktopQuitBridge(
 
 /** Visible and screen-reader feedback for a supported drag entering the ROM drop target. */
 internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
-  private val normalBorder = root.border
+  private var normalBorder = root.border
+  private var activeDuringThemeChange = false
   private val idleDescription =
       "Drop one Game Boy ROM or ZIP or 7z archive here to open it"
   private val message =
-      JLabel("Drop to open this ROM or archive", SwingConstants.CENTER).apply {
-        name = "romDropFeedback"
-        isOpaque = true
-        background = UIManager.getColor("ToolTip.background") ?: Color(255, 255, 220)
-        foreground = UIManager.getColor("ToolTip.foreground") ?: Color.BLACK
-        border =
-            BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(
-                    UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
-                    2,
-                ),
-                BorderFactory.createEmptyBorder(8, 16, 8, 16),
-            )
-        putClientProperty("html.disable", true)
-        accessibleContext.accessibleName = "ROM or archive drop target active"
-        accessibleContext.accessibleDescription =
-            "Release to open the dropped Game Boy ROM or ZIP or 7z archive"
-        isVisible = false
+      object : JLabel("Drop to open this ROM or archive", SwingConstants.CENTER),
+          DesktopThemePrepareHook,
+          DesktopThemeRefreshHook {
+        override fun desktopThemeWillChange() {
+          activeDuringThemeChange = isVisible
+          root.border = normalBorder
+        }
+
+        override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+          normalBorder = root.border
+          background = tokens.elevatedSurface
+          foreground = tokens.primaryText
+          border =
+              BorderFactory.createCompoundBorder(
+                  BorderFactory.createLineBorder(tokens.focus, 2),
+                  BorderFactory.createEmptyBorder(8, 16, 8, 16),
+              )
+          highlight = BorderFactory.createLineBorder(tokens.focus, 3)
+          update(activeDuringThemeChange)
+        }
+
+        init {
+          name = "romDropFeedback"
+          isOpaque = true
+          background = UIManager.getColor("ToolTip.background") ?: Color(255, 255, 220)
+          foreground = UIManager.getColor("ToolTip.foreground") ?: Color.BLACK
+          border =
+              BorderFactory.createCompoundBorder(
+                  BorderFactory.createLineBorder(
+                      UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
+                      2,
+                  ),
+                  BorderFactory.createEmptyBorder(8, 16, 8, 16),
+              )
+          putClientProperty("html.disable", true)
+          getAccessibleContext().accessibleName = "ROM or archive drop target active"
+          getAccessibleContext().accessibleDescription =
+              "Release to open the dropped Game Boy ROM or ZIP or 7z archive"
+          isVisible = false
+        }
       }
-  private val highlight =
+  private var highlight =
       BorderFactory.createLineBorder(
           UIManager.getColor("Component.focusColor") ?: Color(65, 105, 225),
           3,

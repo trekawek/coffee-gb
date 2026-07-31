@@ -279,7 +279,7 @@ internal object DebuggerGraphicsRenderModelFactory {
 internal abstract class DebuggerGraphicsCanvas(
     accessibleName: String,
     emptyDescription: String,
-) : JPanel() {
+) : JPanel(), DesktopThemeRefreshHook {
   protected var emptyDescription: String = emptyDescription
   protected var selectedIndex: Int = -1
 
@@ -370,6 +370,12 @@ internal abstract class DebuggerGraphicsCanvas(
 
   protected fun selectionColor(): Color =
       uiColor("Component.focusColor", uiColor("Table.selectionBackground", Color(220, 90, 45)))
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    background = uiColor("Panel.background", tokens.surface)
+    foreground = uiColor("Label.foreground", tokens.primaryText)
+    repaint()
+  }
 
   override fun getToolTipText(event: MouseEvent): String? =
       indexAt(event.point)?.takeIf { it in 0 until itemCount }?.let(::selectedDescription)

@@ -39,7 +39,7 @@ internal class SavesPreferencesEditor private constructor(
     private val defaults: ApplicationSettings.Saves,
     private val directoryChooser: SaveDirectoryChooser,
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
-) : JPanel(GridBagLayout()) {
+) : JPanel(GridBagLayout()), DesktopThemeRefreshHook {
   constructor(
       initial: ApplicationSettings.Saves,
       defaults: ApplicationSettings.Saves = ApplicationSettings.Saves(),
@@ -116,7 +116,7 @@ internal class SavesPreferencesEditor private constructor(
     directoryRow.add(browse, BorderLayout.LINE_END)
     addRow(constraints, 0, directoryLabel, directoryRow)
 
-    directoryError.foreground = java.awt.Color(0xB0, 0x00, 0x20)
+    directoryError.foreground = desktopValidationErrorColor()
     directoryError.accessibleContext.accessibleName = "Save directory error"
     constraints.gridx = 1
     constraints.gridy = 1
@@ -167,6 +167,10 @@ internal class SavesPreferencesEditor private constructor(
     constraints.fill = GridBagConstraints.BOTH
     add(JPanel(), constraints)
     updateRewindAvailability()
+  }
+
+  override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
+    directoryError.foreground = tokens.danger
   }
 
   fun validatedSaves(): ApplicationSettings.Saves {

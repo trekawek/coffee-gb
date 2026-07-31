@@ -967,6 +967,55 @@ class BasicControllerDebugPortTest {
   }
 
   @Test
+  fun effectivePlaybackEventsFollowCombinedDesktopDebuggerAndBreakpointOwnership() {
+    withController { eventBus, port, _, _, _ ->
+      val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+      eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+
+      assertTrue(await(port.pause()).value().paused())
+      val debugPause = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(debugPause.paused)
+
+      val step = await(port.step(DebugStepKind.INSTRUCTION)).value().snapshot()
+      assertTrue(step.paused())
+      val breakpoint =
+          DebugBreakpoint(
+              DebugBreakpointId(68),
+              true,
+              DebugCounterCondition.atMasterTick(step.masterTick() + 64),
+          )
+      assertTrue(await(port.setBreakpoint(breakpoint)).isSuccess)
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      val bothOwners = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(debugPause.sessionGeneration, bothOwners.sessionGeneration)
+      assertTrue(bothOwners.paused)
+
+      eventBus.post(Controller.ResumeEmulationEvent())
+      val debuggerStillOwnsPause =
+          assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(debugPause.sessionGeneration, debuggerStillOwnsPause.sessionGeneration)
+      assertTrue(debuggerStillOwnsPause.paused)
+
+      assertFalse(await(port.resume()).value().paused())
+      val resumed = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(debugPause.sessionGeneration, resumed.sessionGeneration)
+      assertFalse(resumed.paused)
+
+      val hit = awaitBreakpointHit(port)
+      assertEquals(breakpoint.id(), hit.breakpointId())
+      val breakpointPause = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(debugPause.sessionGeneration, breakpointPause.sessionGeneration)
+      assertTrue(breakpointPause.paused)
+
+      assertFalse(await(port.resume()).value().paused())
+      val breakpointResumed = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(debugPause.sessionGeneration, breakpointResumed.sessionGeneration)
+      assertFalse(breakpointResumed.paused)
+    }
+  }
+
+  @Test
   fun pausedFrameBoundaryStillServicesApplicationStop() {
     withController { eventBus, port, _, _, _ ->
       val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()

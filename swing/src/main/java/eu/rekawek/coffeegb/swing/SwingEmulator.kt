@@ -74,6 +74,8 @@ class SwingEmulator(
 
   private var boundPanel: JPanel? = null
 
+  private var inputRouter: DesktopInputRouter? = null
+
   private var preferredSizeChangedWhileFullscreen = false
 
   private val controllerLifecycle = ControllerLifecycleGate()
@@ -186,6 +188,8 @@ class SwingEmulator(
           closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
         },
         finishTeardown = {
+          inputRouter?.close()
+          inputRouter = null
           eventBus.post(ConnectionController.StopServerEvent())
           eventBus.post(ConnectionController.StopClientEvent())
           joypad.stop()
@@ -195,11 +199,16 @@ class SwingEmulator(
           gamepadThread.join(1000)
           sound.stopThread()
           display.stop()
+          printer.close()
         },
     )
   }
 
   internal fun isLinkedControllerActive(): Boolean = linkedControllerActive
+
+  internal fun attachPrinterWindow(owner: java.awt.Window, bounds: PrinterWindowBounds) {
+    printer.attachDesktopWindow(owner, bounds)
+  }
 
   /**
    * Applies an explicit close-autosave waiver to the controller retained by a failed stop. The
@@ -212,6 +221,7 @@ class SwingEmulator(
       } ?: false
 
   fun applyKeyboardMapping(mapping: ControllerProperties.PlayerMapping) {
+    inputRouter?.releaseForOwnershipChange()
     joypad.updateMapping(mapping)
   }
 
@@ -243,7 +253,7 @@ class SwingEmulator(
   fun bind(
       jFrame: JFrame,
       isWindowedLayout: () -> Boolean = { true },
-  ) {
+  ): JPanel {
     val mainPanel = JPanel()
     mainPanel.setLayout(BoxLayout(mainPanel, BoxLayout.X_AXIS))
     mainPanel.minimumSize = minimumContentSize()
@@ -254,11 +264,25 @@ class SwingEmulator(
     boundPanel = mainPanel
 
     jFrame.contentPane = mainPanel
-    jFrame.addKeyListener(joypad)
     jFrame.addWindowFocusListener(joypad)
     jFrame.addWindowFocusListener(tiltInput)
-    jFrame.addKeyListener(tiltKeys)
     jFrame.addMouseMotionListener(accelerometer)
+    check(inputRouter == null) { "The emulator input router is already installed" }
+    inputRouter =
+        DesktopInputRouter(
+                jFrame,
+                joypadHandles = joypad::handlesKeyCode,
+                joypadPressed = joypad::keyPressed,
+                joypadReleased = joypad::keyReleased,
+                tiltHandles = tiltKeys::handlesKeyCode,
+                tiltPressed = tiltKeys::keyPressed,
+                tiltReleased = tiltKeys::keyReleased,
+                releaseAll = {
+                  joypad.releaseForLifecycleChange()
+                  tiltInput.releaseForLifecycleChange()
+                },
+            )
+            .also(DesktopInputRouter::install)
 
     eventBus.register<SwingDisplay.DisplaySizeUpdatedEvent> {
       check(SwingUtilities.isEventDispatchThread()) {
@@ -279,6 +303,7 @@ class SwingEmulator(
         preferredSizeChangedWhileFullscreen = false
       }
     }
+    return mainPanel
   }
 
   /** Refreshes top-level constraints at a fullscreen boundary even when geometry did not change. */
