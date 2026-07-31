@@ -51,16 +51,24 @@ interface Controller : AutoCloseable {
       val state: MachineState? = null,
       val image: RomImage? = null,
       val openRequestId: Long? = null,
+      /**
+       * Whether a completed ROM activation may consult the autosave-resume policy. A Reset is a
+       * deliberate fresh boot, so it sets this to false rather than restoring or proposing old
+       * progress.
+       */
+      val allowAutosaveResume: Boolean = true,
   ) : Event {
     constructor(
         image: RomImage,
         state: MachineState? = null,
         openRequestId: Long? = null,
+        allowAutosaveResume: Boolean = true,
     ) : this(
         image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
         state,
         image,
         openRequestId,
+        allowAutosaveResume,
     )
   }
 

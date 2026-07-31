@@ -33,6 +33,7 @@ import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRepository
+import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
 import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveMetadata
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout
@@ -830,6 +831,94 @@ class BasicControllerStateUxTest {
       assertNotNull(
           frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
           "a completed scan with no autosave must restore the user's running state",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun resettingGameDoesNotScanOrOfferTheAutosave() {
+    val directory = Files.createTempDirectory("controller-reset-no-resume")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        resumePolicy = ApplicationSettings.ResumePolicy.ASK,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val resumeOffers = LinkedBlockingQueue<StateResumeAvailableEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateResumeAvailableEvent>(resumeOffers::add)
+    val preparedConfiguration = AtomicReference<Gameboy.GameboyConfiguration>()
+    val preparedGameboy = AtomicReference<Gameboy>()
+    val preparer =
+        SessionPreparer { emulatorProperties, event ->
+          val configuration =
+              Controller.createGameboyConfig(emulatorProperties, Rom(event.rom))
+                  .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+          val gameboy = configuration.build()
+          preparedConfiguration.set(configuration)
+          preparedGameboy.set(gameboy)
+          PreparedSession.Ready(configuration, gameboy)
+        }
+    val stateExecutor = ManualExecutorService()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory { paths ->
+              val configuration = assertNotNull(preparedConfiguration.get())
+              val gameboy = assertNotNull(preparedGameboy.get())
+              StateRepository(paths.layout)
+                  .save(
+                      StateRef.Autosave,
+                      StateCodec.encode(StateCodec.capture(configuration, gameboy)),
+                      StateSaveMetadata(savedAt = Instant.EPOCH),
+                  )
+              StateWorkspace(paths)
+            },
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val initialOffer = assertNotNull(resumeOffers.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          StateResumeDecisionEvent(
+              initialOffer.requestId,
+              initialOffer.sessionId,
+              accept = false,
+          ))
+
+      eventBus.post(Controller.ResetEmulationEvent())
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      Thread.sleep(150)
+
+      assertEquals(0, stateExecutor.queuedCount(), "reset must not scan the autosave")
+      assertNull(
+          resumeOffers.poll(250, TimeUnit.MILLISECONDS),
+          "reset must not offer a prior autosave",
       )
     } finally {
       controller.close()
