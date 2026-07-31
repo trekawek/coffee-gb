@@ -398,10 +398,13 @@ internal class DesktopHomePanel(
 internal class DesktopCommandBar(
     private val actions: DesktopActionRegistry,
 ) : JPanel(BorderLayout(8, 0)) {
-  private val slot = JComboBox((0..9).map { "Slot $it" }.toTypedArray())
-  private val netplay = JButton(actions[DesktopCommand.NETPLAY])
+  // These controls are deliberately pointer-only. Retaining focus after a click lets Swing's
+  // button/combo bindings steal emulator keys such as Space, Enter, or the arrows.
+  private val slot =
+      JComboBox((0..9).map { "Slot $it" }.toTypedArray()).apply { isFocusable = false }
+  private val netplay = gameButton(actions[DesktopCommand.NETPLAY])
   private val secondary = JPanel(FlowLayout(FlowLayout.TRAILING, 4, 0))
-  private val overflow = JButton("More")
+  private val overflow = JButton("More").apply { isFocusable = false }
   private val overflowMenu = JPopupMenu()
   private var synchronizingSlot = false
 
@@ -410,9 +413,9 @@ internal class DesktopCommandBar(
     getAccessibleContext().accessibleName = "Game commands"
 
     val primary = JPanel(FlowLayout(FlowLayout.LEADING, 4, 0))
-    primary.add(JButton(actions[DesktopCommand.PAUSE]))
-    primary.add(JButton(actions[DesktopCommand.SAVE_STATE]))
-    primary.add(JButton(actions[DesktopCommand.LOAD_STATE]))
+    primary.add(gameButton(actions[DesktopCommand.PAUSE]))
+    primary.add(gameButton(actions[DesktopCommand.SAVE_STATE]))
+    primary.add(gameButton(actions[DesktopCommand.LOAD_STATE]))
     slot.accessibleContext.accessibleName = "Current state slot"
     slot.addActionListener {
       if (!synchronizingSlot) {
@@ -426,10 +429,10 @@ internal class DesktopCommandBar(
     }
     primary.add(slot)
 
-    secondary.add(JButton(actions[DesktopCommand.OPEN_ROM]))
-    secondary.add(JToggleButton(actions[DesktopCommand.MUTE]))
+    secondary.add(gameButton(actions[DesktopCommand.OPEN_ROM]))
+    secondary.add(gameToggleButton(actions[DesktopCommand.MUTE]))
     secondary.add(netplay)
-    secondary.add(JToggleButton(actions[DesktopCommand.FULLSCREEN]))
+    secondary.add(gameToggleButton(actions[DesktopCommand.FULLSCREEN]))
 
     listOf(
             DesktopCommand.OPEN_ROM,
@@ -477,6 +480,12 @@ internal class DesktopCommandBar(
     secondary.isVisible = !compact
     overflow.isVisible = compact
   }
+
+  private fun gameButton(action: Action): JButton =
+      JButton(action).apply { isFocusable = false }
+
+  private fun gameToggleButton(action: Action): JToggleButton =
+      JToggleButton(action).apply { isFocusable = false }
 
   private companion object {
     const val COMPACT_WIDTH = 650
