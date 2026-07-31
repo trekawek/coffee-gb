@@ -200,6 +200,25 @@ class DesktopMainPanelTest {
   }
 
   @Test
+  fun `game command controls never retain keyboard focus`() {
+    onEdt {
+      val panel = panel(actions())
+      val commandBar =
+          descendants(panel).filterIsInstance<JPanel>().single {
+            it.accessibleContext.accessibleName == "Game commands"
+          }
+
+      val controls =
+          descendants(commandBar).filter { it is AbstractButton || it is JComboBox<*> }
+      assertTrue(controls.isNotEmpty())
+      assertTrue(
+          controls.all { !it.isFocusable },
+          "Game controls must not steal mapped emulator keys after a click",
+      )
+    }
+  }
+
+  @Test
   fun `text status remains visible when full screen hides command chrome`() {
     onEdt {
       val actions = actions()
