@@ -106,11 +106,9 @@ internal class SwingMenu(
     private val onPreferencesCategory: (PreferencesCategory) -> Unit,
     private val debuggerActions: DebuggerMenuActions,
     private val desktopActions: DesktopActionRegistry,
-    private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
     private val isLinkedControllerActive: () -> Boolean,
     currentThemeTokens: () -> DesktopThemeTokens,
     private val onDesktopStatus: (String) -> Unit = {},
-    private val onMobileAdapterConfiguration: () -> Unit,
 ) {
   private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
 
@@ -432,6 +430,7 @@ internal class SwingMenu(
     serialPeripheralBinding =
         SerialPeripheralMenuBinding(
             eventBus,
+            mobileAdapterVisible = false,
             transitionPrerequisites = { selection ->
               serialPeripheralTransitionPrerequisites(
                   selection,
@@ -442,12 +441,6 @@ internal class SwingMenu(
             },
         )
     peripheralsMenu.add(serialPeripheralBinding.menu)
-
-    val mobileAdapterDetails = JMenuItem("Mobile Adapter GB configuration…")
-    mobileAdapterDetails.accessibleContext.accessibleDescription =
-        "Edit the private custom-service policy and session-only network permissions"
-    mobileAdapterDetails.addActionListener { onMobileAdapterConfiguration() }
-    peripheralsMenu.add(mobileAdapterDetails)
 
     val actionReplaySlot = JMenuItem("Action Replay Slot…")
     actionReplaySlot.accessibleContext.accessibleDescription =

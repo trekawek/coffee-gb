@@ -50,24 +50,18 @@ class DevicePreferencesEditorsTest {
       }
 
   @Test
-  fun `peripherals page presents redacted Mobile Adapter summary and opens configuration`() =
+  fun `peripherals page only exposes supported host peripherals`() =
       onEdt {
-        var configureCalls = 0
-        val summary = "Custom Server · 2 mappings · networking blocked for this session"
         val editor =
             PeripheralsPreferencesEditor(
                 ApplicationSettings.Peripherals(),
-                mobileAdapterSummary = summary,
-                configureMobileAdapter = { configureCalls++ },
             )
 
-        assertEquals(summary, editor.mobileAdapterStatus.text)
-        assertEquals(
-            "Mobile Adapter configuration summary",
-            editor.mobileAdapterStatus.accessibleContext.accessibleName,
+        assertFalse(
+            editor.components.filterIsInstance<javax.swing.JLabel>().any { label ->
+              label.text.contains("Mobile Adapter")
+            },
         )
-        editor.configureMobileAdapterButton.doClick()
-        assertEquals(1, configureCalls)
       }
 
   @Test

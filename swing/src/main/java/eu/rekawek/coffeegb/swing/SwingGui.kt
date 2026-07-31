@@ -385,13 +385,11 @@ class SwingGui private constructor(
                 debuggerController::applyLayout,
             ),
             desktopActions,
-            mobileAdapterConfigurationUiState,
             emulator::isLinkedControllerActive,
             { themeManager.current?.tokens ?: initialTheme.tokens },
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
             },
-            mobileAdapterWindow::showOrRaise,
         )
     menu.addMenu()
 
@@ -929,8 +927,6 @@ class SwingGui private constructor(
             requestedCategory
                 ?: desktopUiStateController.lastPreferencesCategory().toPreferencesCategory(),
         initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.PREFERENCES),
-        mobileAdapterSummary = mobileAdapterWindow.currentSummary().preferencesText(),
-        configureMobileAdapter = mobileAdapterWindow::showOrRaise,
         onCategoryChanged = { category ->
           desktopUiStateController.rememberPreferencesCategory(category.toDesktopCategory())
         },

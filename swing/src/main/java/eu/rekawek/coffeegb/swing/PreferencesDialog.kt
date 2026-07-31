@@ -260,8 +260,6 @@ internal class PreferencesPanel private constructor(
     initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
     categoryChanged: (PreferencesCategory) -> Unit = {},
     private val draftChanged: (Boolean) -> Unit = {},
-    mobileAdapterSummary: String = "Offline · networking blocked for this session",
-    configureMobileAdapter: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(BorderLayout(12, 8)), DesktopThemeRefreshHook {
   constructor(
@@ -276,8 +274,6 @@ internal class PreferencesPanel private constructor(
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       categoryChanged: (PreferencesCategory) -> Unit = {},
       draftChanged: (Boolean) -> Unit = {},
-      mobileAdapterSummary: String = "Offline · networking blocked for this session",
-      configureMobileAdapter: () -> Unit = {},
   ) : this(
       initial,
       defaults,
@@ -289,8 +285,6 @@ internal class PreferencesPanel private constructor(
       initialCategory,
       categoryChanged,
       draftChanged,
-      mobileAdapterSummary,
-      configureMobileAdapter,
       requireEdt(),
   )
 
@@ -369,8 +363,6 @@ internal class PreferencesPanel private constructor(
       PeripheralsPreferencesEditor(
           initial.peripherals,
           defaults.peripherals,
-          mobileAdapterSummary,
-          configureMobileAdapter,
       )
   internal val audioEditor =
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
@@ -1149,8 +1141,6 @@ internal object PreferencesDialog {
           PreferencesPersistencePresentation.PERSISTENT,
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       initialBounds: Rectangle? = null,
-      mobileAdapterSummary: String = "Offline · networking blocked for this session",
-      configureMobileAdapter: () -> Unit = {},
       onCategoryChanged: (PreferencesCategory) -> Unit = {},
       onBoundsChanged: (Rectangle) -> Unit = {},
       onClosed: () -> Unit = {},
@@ -1181,14 +1171,6 @@ internal object PreferencesDialog {
             initialCategory = initialCategory,
             categoryChanged = onCategoryChanged,
             draftChanged = { refreshFooter() },
-            mobileAdapterSummary = mobileAdapterSummary,
-            configureMobileAdapter = {
-              if (!panel.isDirty() || confirmDiscardChanges(dialog)) {
-                panel.stopBackgroundWork()
-                dialog.dispose()
-                SwingUtilities.invokeLater(configureMobileAdapter)
-              }
-            },
         )
 
     refreshFooter = {

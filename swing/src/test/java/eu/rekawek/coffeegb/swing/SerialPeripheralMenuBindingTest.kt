@@ -27,6 +27,32 @@ import org.junit.Test
 class SerialPeripheralMenuBindingTest {
 
   @Test
+  fun `mobile adapter is hidden when the desktop UI disables it`() {
+    val eventBus = EventBusImpl()
+    try {
+      val binding = onEdtResult { SerialPeripheralMenuBinding(eventBus, mobileAdapterVisible = false) }
+
+      assertFalse(binding.items.containsKey(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertFalse(binding.isSelected(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertFalse(
+          onEdtResult {
+            binding.menu.menuComponents
+                .filterIsInstance<javax.swing.JMenuItem>()
+                .any { item -> item.text == "Mobile Adapter GB" }
+          },
+      )
+
+      eventBus.post(
+          Controller.SerialPeripheralSelectionChangedEvent(
+              SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      flushEdt()
+      assertEquals(SerialPeripheralSelection.PEER_TO_PEER, binding.snapshot().selection)
+    } finally {
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun `radio choices enforce one owner and post only typed selection requests`() {
     val eventBus = EventBusImpl()
     try {
