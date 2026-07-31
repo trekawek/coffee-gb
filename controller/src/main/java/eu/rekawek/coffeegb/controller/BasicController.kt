@@ -49,6 +49,8 @@ import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveMetadata
 import eu.rekawek.coffeegb.controller.state.StateScreenshotRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateSkipCloseAutosaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateStorageResolver
 import eu.rekawek.coffeegb.controller.state.StateUserError
@@ -365,6 +367,8 @@ class BasicController private constructor(
 
   private val latestSaveRequests = mutableMapOf<StateRef, Long>()
 
+  private var pendingSlotLoadAvailability: PendingSlotLoadAvailability? = null
+
   /** Successful manual saves whose captures intentionally normalized live host I/O. */
   private val mobileAdapterExternalIoSaveRequests = mutableSetOf<Long>()
 
@@ -459,6 +463,9 @@ class BasicController private constructor(
     eventQueue.register<StateSaveRequestEvent> { requestStateSave(it) }
     eventQueue.register<StateLoadRequestEvent> { requestStateLoad(it) }
     eventQueue.register<StateLoadRefRequestEvent> { requestStateLoadRef(it) }
+    eventQueue.register<StateSlotLoadAvailabilityRequestEvent> {
+      requestStateSlotLoadAvailability(it)
+    }
     eventQueue.register<StateDeleteRequestEvent> { requestStateDelete(it) }
     eventQueue.register<StateExportRequestEvent> { requestStateExport(it) }
     eventQueue.register<StateScreenshotRequestEvent> { requestScreenshot(it) }
@@ -1658,6 +1665,29 @@ class BasicController private constructor(
     }
   }
 
+  private fun requestStateSlotLoadAvailability(
+      event: StateSlotLoadAvailabilityRequestEvent,
+  ) {
+    val context = stateContext
+    if (context == null || session == null || context.sessionId != event.expectedSessionId) {
+      eventBus.post(
+          StateSlotLoadAvailabilityEvent(
+              event.requestId,
+              event.expectedSessionId,
+              event.ref,
+              available = false,
+          ))
+      return
+    }
+    latestStateRequests[StateOperation.LOAD_AVAILABILITY] = event.requestId
+    pendingSlotLoadAvailability =
+        PendingSlotLoadAvailability(event.requestId, context.sessionId, event.ref)
+    val compatibilityManager = snapshotManager
+    stateWorker.probeLoadFirst(context, event.requestId, event.ref) {
+      compatibilityManager?.readSnapshotReadOnly(event.ref.index)
+    }
+  }
+
   private fun requestStateDelete(event: StateDeleteRequestEvent) {
     val context =
         requireStateContext(
@@ -1878,6 +1908,11 @@ class BasicController private constructor(
       return
     }
 
+    if (event.operation == StateOperation.LOAD_AVAILABILITY) {
+      finishStateSlotLoadAvailability(event)
+      return
+    }
+
     val failure = event.result as? StateWorkerResult.Failure
     if (failure != null) {
       finishStateWorkerFailure(event, failure.error)
@@ -1973,6 +2008,35 @@ class BasicController private constructor(
       is StateWorkerResult.Resume -> finishResumeScan(event, result)
       is StateWorkerResult.Failure -> error("Handled above")
     }
+  }
+
+  private fun finishStateSlotLoadAvailability(event: StateWorkerCompletedEvent) {
+    if (!isLatest(StateOperation.LOAD_AVAILABILITY, event.requestId)) return
+    val pending = pendingSlotLoadAvailability ?: return
+    if (pending.requestId != event.requestId || pending.sessionId != event.context.sessionId) return
+    pendingSlotLoadAvailability = null
+    latestStateRequests.remove(StateOperation.LOAD_AVAILABILITY)
+    val currentSession = session
+    val context = stateContext
+    val available =
+        if (currentSession == null || context == null || context.sessionId != pending.sessionId) {
+          false
+        } else {
+          when (val result = event.result) {
+            is StateWorkerResult.Loaded ->
+                managedStateApplicable(result.result, currentSession, context)
+            is StateWorkerResult.CompatibilityLoaded ->
+                compatibilityStateApplicable(result.snapshot, currentSession)
+            else -> false
+          }
+        }
+    eventBus.post(
+        StateSlotLoadAvailabilityEvent(
+            pending.requestId,
+            pending.sessionId,
+            pending.ref,
+            available,
+        ))
   }
 
   private fun finishStateSave(
@@ -2098,6 +2162,15 @@ class BasicController private constructor(
               releaseResumePause()
               return
             }
+    val currentSession = session
+    val context = stateContext
+    if (currentSession == null ||
+        context == null ||
+        !managedStateApplicable(located.second, currentSession, context)) {
+      pendingResume = null
+      releaseResumePause()
+      return
+    }
     when (properties.saves.resumePolicy) {
       eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy.NEVER ->
           releaseResumePause()
@@ -2124,6 +2197,41 @@ class BasicController private constructor(
       }
     }
   }
+
+  private fun managedStateApplicable(
+      read: StateReadResult,
+      currentSession: Session,
+      context: StateWorkerContext,
+  ): Boolean =
+      try {
+        when (read.state.root) {
+          is SessionStateRoot ->
+              StateCodec.validateDecodedForApply(read.state, currentSession, context.identity)
+          is MachineStateRoot ->
+              StateCodec.validateDecodedForApply(
+                  read.state,
+                  currentSession.config,
+                  currentSession.gameboy,
+                  context.identity,
+              )
+          else -> return false
+        }
+        true
+      } catch (_: Exception) {
+        false
+      }
+
+  private fun compatibilityStateApplicable(
+      snapshot: CompatibilitySnapshot,
+      currentSession: Session,
+  ): Boolean =
+      try {
+        val manager = snapshotManager ?: return false
+        manager.validateSnapshotReadOnly(snapshot, currentSession)
+        true
+      } catch (_: Exception) {
+        false
+      }
 
   private fun applyResumeDecision(event: StateResumeDecisionEvent) {
     val pending = pendingResume ?: return
@@ -3431,6 +3539,7 @@ class BasicController private constructor(
     debugPaused = false
     playbackSessionGeneration = SessionPresentationGeneration.next()
     pauseStateBeforeResume = null
+    pendingSlotLoadAvailability = null
     sessionStartedNanos = System.nanoTime()
     stateSessionId = nextStateSessionId()
     installDebugPort(session)
@@ -3662,6 +3771,7 @@ class BasicController private constructor(
         }
     pendingResume = null
     pendingCloseRequestId = null
+    pendingSlotLoadAvailability = null
     latestStateRequests.clear()
     latestSaveRequests.clear()
     mobileAdapterExternalIoSaveRequests.clear()
@@ -3693,6 +3803,7 @@ class BasicController private constructor(
     playbackSessionGeneration = null
     stateContext = null
     pendingResume = null
+    pendingSlotLoadAvailability = null
     pauseStateBeforeResume = null
     cancelPendingRomSwitch()
     pendingCloseRequestId = null
@@ -4409,6 +4520,12 @@ class BasicController private constructor(
       val sessionId: Long,
       val key: StateEntryKey,
       val read: StateReadResult,
+  )
+
+  private data class PendingSlotLoadAvailability(
+      val requestId: Long,
+      val sessionId: Long,
+      val ref: StateRef.Slot,
   )
 
   /** Owns a prepared fallback machine until the controller takes it, even across cancel races. */

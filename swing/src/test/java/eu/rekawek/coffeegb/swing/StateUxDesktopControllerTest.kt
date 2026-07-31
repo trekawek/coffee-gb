@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
+import eu.rekawek.coffeegb.controller.state.StateRef
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUserError
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import java.awt.Color
@@ -23,6 +26,114 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateUxDesktopControllerTest {
+
+  @Test
+  fun `selected slot availability ignores stale probes and follows save delete and session state`() {
+    var nextRequestId = 0L
+    val requests = mutableListOf<StateSlotLoadAvailabilityRequestEvent>()
+    val publications = mutableListOf<Pair<Int, Boolean>>()
+    val tracker =
+        StateSlotLoadAvailabilityTracker(
+            nextRequestId = { ++nextRequestId },
+            postRequest = requests::add,
+            publish = { slot, available -> publications += slot to available },
+        )
+
+    tracker.sessionChanged(StateUxSessionEvent(1, true, Path.of("game-1")))
+    assertEquals(StateRef.Slot(0), requests.single().ref)
+    tracker.slotSelected(4)
+    assertEquals(StateRef.Slot(4), requests.last().ref)
+
+    tracker.availabilityChanged(StateSlotLoadAvailabilityEvent(1, 1, StateRef.Slot(0), true))
+    assertEquals(4 to false, publications.last())
+    tracker.availabilityChanged(StateSlotLoadAvailabilityEvent(2, 1, StateRef.Slot(4), true))
+    assertEquals(4 to true, publications.last())
+
+    tracker.operationCompleted(
+        StateOperationCompletedEvent(3, 1, StateOperation.DELETE, StateRef.Slot(4), message = "Deleted"))
+    assertEquals(4 to false, publications.last())
+    assertEquals(3, requests.last().requestId)
+    tracker.operationCompleted(
+        StateOperationCompletedEvent(4, 1, StateOperation.SAVE, StateRef.Slot(4), message = "Saved"))
+    assertEquals(4 to true, publications.last())
+
+    tracker.sessionChanged(StateUxSessionEvent(2, false, null))
+    assertEquals(4 to false, publications.last())
+    tracker.availabilityChanged(StateSlotLoadAvailabilityEvent(3, 1, StateRef.Slot(4), true))
+    assertEquals(4 to false, publications.last())
+  }
+
+  @Test
+  fun `unrelated browser load failure does not invalidate selected quick slot`() {
+    var nextRequestId = 0L
+    val requests = mutableListOf<StateSlotLoadAvailabilityRequestEvent>()
+    val publications = mutableListOf<Pair<Int, Boolean>>()
+    val tracker =
+        StateSlotLoadAvailabilityTracker(
+            nextRequestId = { ++nextRequestId },
+            postRequest = requests::add,
+            publish = { slot, available -> publications += slot to available },
+        )
+
+    tracker.sessionChanged(StateUxSessionEvent(1, true, Path.of("game-1")))
+    tracker.availabilityChanged(StateSlotLoadAvailabilityEvent(1, 1, StateRef.Slot(0), true))
+    val quickLoadRequestId = ++nextRequestId
+    tracker.quickLoadRequested(quickLoadRequestId, expectedSessionId = 1, slot = 0)
+    val publicationCount = publications.size
+    val probeCount = requests.size
+
+    tracker.operationFailed(
+        StateOperationFailedEvent(
+            requestId = 99,
+            sessionId = 1,
+            operation = StateOperation.LOAD,
+            error = stateFailure(),
+        ))
+
+    assertEquals(publicationCount, publications.size)
+    assertEquals(probeCount, requests.size)
+    assertEquals(0 to true, publications.last())
+
+    tracker.operationFailed(
+        StateOperationFailedEvent(
+            requestId = quickLoadRequestId,
+            sessionId = 1,
+            operation = StateOperation.LOAD,
+            error = stateFailure(),
+        ))
+
+    assertEquals(0 to false, publications.last())
+    assertEquals(probeCount + 1, requests.size)
+  }
+
+  @Test
+  fun `save completion cannot revive slot after current session becomes unavailable`() {
+    var nextRequestId = 0L
+    val publications = mutableListOf<Pair<Int, Boolean>>()
+    val tracker =
+        StateSlotLoadAvailabilityTracker(
+            nextRequestId = { ++nextRequestId },
+            postRequest = {},
+            publish = { slot, available -> publications += slot to available },
+        )
+
+    tracker.sessionChanged(StateUxSessionEvent(1, true, Path.of("game-1")))
+    tracker.availabilityChanged(StateSlotLoadAvailabilityEvent(1, 1, StateRef.Slot(0), true))
+    tracker.sessionChanged(StateUxSessionEvent(1, false, null))
+    val publicationCount = publications.size
+
+    tracker.operationCompleted(
+        StateOperationCompletedEvent(
+            requestId = 2,
+            sessionId = 1,
+            operation = StateOperation.SAVE,
+            ref = StateRef.Slot(0),
+            message = "Saved",
+        ))
+
+    assertEquals(publicationCount, publications.size)
+    assertEquals(0 to false, publications.last())
+  }
 
   @Test
   fun `named state validation retains draft until printable bounded text is entered`() {
@@ -177,6 +288,9 @@ class StateUxDesktopControllerTest {
       closeCalls++
     }
   }
+
+  private fun stateFailure() =
+      StateUserError("Load failed", "State was unavailable", "Refresh and retry")
 
   private fun <T> onEdt(action: () -> T): T {
     val task = FutureTask(action)

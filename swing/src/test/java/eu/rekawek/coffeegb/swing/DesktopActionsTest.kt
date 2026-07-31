@@ -5,6 +5,7 @@ import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import javax.swing.Action
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -24,6 +25,7 @@ class DesktopActionsTest {
             stateCommandsAvailable = true,
             stateBrowserAvailable = true,
             stateSlot = 4,
+            loadableStateSlots = setOf(4),
             muted = true,
             commandBarVisible = false,
         ))
@@ -32,17 +34,55 @@ class DesktopActionsTest {
     assertEquals(true, registry[DesktopCommand.PAUSE].getValue(Action.SELECTED_KEY))
     assertEquals("Unmute", registry[DesktopCommand.MUTE].getValue(Action.NAME))
     assertTrue(registry[DesktopCommand.SAVE_STATE].isEnabled)
+    assertTrue(registry[DesktopCommand.LOAD_STATE].isEnabled)
     assertFalse(
         registry[DesktopCommand.FULLSCREEN].getValue(Action.SELECTED_KEY) as Boolean)
     assertEquals(true, registry.stateSlotActions[4].getValue(Action.SELECTED_KEY))
 
     registry[DesktopCommand.PAUSE].actionPerformed(event())
     registry[DesktopCommand.SAVE_STATE].actionPerformed(event())
+    registry[DesktopCommand.LOAD_STATE].actionPerformed(event())
     registry[DesktopCommand.MUTE].actionPerformed(event())
     registry.stateSlotActions[7].actionPerformed(event())
 
-    assertEquals(listOf("paused=false", "save=4", "muted=false", "slot=7"), calls)
+    assertEquals(
+        listOf("paused=false", "save=4", "load=4", "muted=false", "slot=7"),
+        calls,
+    )
     assertEquals(7, registry.current().stateSlot)
+    assertFalse(registry[DesktopCommand.LOAD_STATE].isEnabled)
+  }
+
+  @Test
+  fun `selected slot gates only load while save and slot selection remain available`() {
+    val registry = registry(mutableListOf())
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            stateCommandsAvailable = true,
+            stateSlot = 2,
+            loadableStateSlots = setOf(4),
+        ))
+
+    assertTrue(registry[DesktopCommand.SAVE_STATE].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_STATE].isEnabled)
+    assertTrue(registry.stateSlotActions.all { it.isEnabled })
+
+    registry.stateSlotActions[4].actionPerformed(event())
+
+    assertTrue(registry[DesktopCommand.SAVE_STATE].isEnabled)
+    assertTrue(registry[DesktopCommand.LOAD_STATE].isEnabled)
+    assertTrue(registry.stateSlotActions.all { it.isEnabled })
+  }
+
+  @Test
+  fun `command presentation rejects loadable slots outside the stable range`() {
+    assertFailsWith<IllegalArgumentException> {
+      DesktopCommandPresentation(loadableStateSlots = setOf(-1))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      DesktopCommandPresentation(loadableStateSlots = setOf(10))
+    }
   }
 
   @Test
@@ -55,11 +95,13 @@ class DesktopActionsTest {
             pauseSupported = true,
             stateCommandsAvailable = true,
             stateBrowserAvailable = true,
+            loadableStateSlots = setOf(0),
         ))
 
     assertFalse(registry[DesktopCommand.OPEN_ROM].isEnabled)
     assertFalse(registry[DesktopCommand.RESET].isEnabled)
     assertFalse(registry[DesktopCommand.SAVE_STATE].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_STATE].isEnabled)
     assertFalse(registry[DesktopCommand.NETPLAY].isEnabled)
     assertTrue(registry[DesktopCommand.QUIT].isEnabled.not())
   }

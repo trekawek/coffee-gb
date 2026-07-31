@@ -253,6 +253,11 @@ class SwingGui private constructor(
                 desktopUiCoordinator.warning(message, recovery)
               }
             },
+            onSlotLoadAvailability = { slot, available ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.stateSlotLoadAvailability(slot, available)
+              }
+            },
             dialogFactory = desktopDialogFactory,
         )
     debuggerController =
@@ -350,7 +355,10 @@ class SwingGui private constructor(
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
                 setCommandBarVisible = ::setCommandBarVisible,
-                selectStateSlot = { slot -> desktopUiCoordinator.stateSlot(slot) },
+                selectStateSlot = { slot ->
+                  desktopUiCoordinator.stateSlot(slot)
+                  stateUxController.selectSlot(slot)
+                },
             ))
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(

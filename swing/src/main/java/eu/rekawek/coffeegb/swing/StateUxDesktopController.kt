@@ -21,6 +21,8 @@ import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateScreenshotRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateSkipCloseAutosaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUserError
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -91,6 +93,7 @@ internal class StateUxDesktopController(
     initialBounds: Rectangle? = null,
     onBoundsChanged: (Rectangle) -> Unit = {},
     private val onDesktopStatus: (String, DesktopCommand?) -> Unit = { _, _ -> },
+    onSlotLoadAvailability: (slot: Int, available: Boolean) -> Unit = { _, _ -> },
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
@@ -115,6 +118,12 @@ internal class StateUxDesktopController(
       )
   private var pendingClose: PendingClose? = null
   private var closed = false
+  private val slotLoadAvailability =
+      StateSlotLoadAvailabilityTracker(
+          nextRequestId = ::nextRequestId,
+          postRequest = eventBus::post,
+          publish = onSlotLoadAvailability,
+      )
 
   init {
     requireEdt("State desktop controller construction")
@@ -125,6 +134,7 @@ internal class StateUxDesktopController(
         if (current == null || event.sessionId >= current.sessionId) {
           currentSession = event
           pendingClose = null
+          slotLoadAvailability.sessionChanged(event)
           browser.updateSession(event)
         }
       }
@@ -146,6 +156,7 @@ internal class StateUxDesktopController(
             )
         currentSession = unavailable
         pendingClose = null
+        slotLoadAvailability.sessionChanged(unavailable)
         browser.updateSession(unavailable)
       }
     }
@@ -153,6 +164,7 @@ internal class StateUxDesktopController(
       onEdt {
         if (closed) return@onEdt
         if (!isCurrent(event.sessionId)) return@onEdt
+        slotLoadAvailability.operationCompleted(event)
         browser.operationCompleted(event)
         if (event.recoveryMessages.isNotEmpty()) {
           onDesktopStatus(
@@ -187,8 +199,15 @@ internal class StateUxDesktopController(
       onEdt {
         if (closed) return@onEdt
         if (!isCurrent(event.sessionId)) return@onEdt
+        slotLoadAvailability.operationFailed(event)
         browser.operationFailed(event)
         showStateError(owner, event.error)
+      }
+    }
+    eventBus.register<StateSlotLoadAvailabilityEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        slotLoadAvailability.availabilityChanged(event)
       }
     }
     eventBus.register<StateResumeAvailableEvent> { event ->
@@ -294,7 +313,14 @@ internal class StateUxDesktopController(
     val ref = StateRef.Slot(slot)
     if (!requireAvailableSession()) return
     val expectedSessionId = checkNotNull(currentSession).sessionId
-    eventBus.post(StateLoadRefRequestEvent(nextRequestId(), expectedSessionId, ref))
+    val requestId = nextRequestId()
+    slotLoadAvailability.quickLoadRequested(requestId, expectedSessionId, slot)
+    eventBus.post(StateLoadRefRequestEvent(requestId, expectedSessionId, ref))
+  }
+
+  fun selectSlot(slot: Int) {
+    requireEdt("Quick state slot selection")
+    slotLoadAvailability.slotSelected(slot)
   }
 
   fun openSaveFolder() {
@@ -429,6 +455,125 @@ internal class StateUxDesktopController(
     val RESUME_TIME_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss z").withZone(ZoneId.systemDefault())
   }
+}
+
+/** Correlates one selected-slot availability probe without performing filesystem work on the EDT. */
+internal class StateSlotLoadAvailabilityTracker(
+    private val nextRequestId: () -> Long,
+    private val postRequest: (StateSlotLoadAvailabilityRequestEvent) -> Unit,
+    private val publish: (slot: Int, available: Boolean) -> Unit,
+) {
+  private var session: StateUxSessionEvent? = null
+  private var selectedSlot = 0
+  private var pending: Pending? = null
+  private var pendingQuickLoad: PendingQuickLoad? = null
+
+  fun sessionChanged(event: StateUxSessionEvent) {
+    val current = session
+    if (current != null && event.sessionId < current.sessionId) return
+    session = event
+    pending = null
+    pendingQuickLoad = null
+    publish(selectedSlot, false)
+    request()
+  }
+
+  fun slotSelected(slot: Int) {
+    require(slot in 0..9)
+    selectedSlot = slot
+    pending = null
+    publish(slot, false)
+    request()
+  }
+
+  fun quickLoadRequested(requestId: Long, expectedSessionId: Long, slot: Int) {
+    require(requestId > 0)
+    require(expectedSessionId > 0)
+    require(slot in 0..9)
+    val current = session
+    if (current?.available != true || current.sessionId != expectedSessionId) return
+    pendingQuickLoad = PendingQuickLoad(requestId, expectedSessionId, slot)
+  }
+
+  fun availabilityChanged(event: StateSlotLoadAvailabilityEvent) {
+    val expected = pending ?: return
+    if (event.requestId != expected.requestId ||
+        event.sessionId != expected.sessionId ||
+        event.ref.index != expected.slot ||
+        event.sessionId != session?.sessionId ||
+        event.ref.index != selectedSlot) {
+      return
+    }
+    pending = null
+    publish(selectedSlot, event.available)
+  }
+
+  fun operationCompleted(event: StateOperationCompletedEvent) {
+    val current = session ?: return
+    if (event.sessionId != current.sessionId) return
+    if (event.operation == StateOperation.LOAD &&
+        pendingQuickLoad?.requestId == event.requestId) {
+      pendingQuickLoad = null
+    }
+    val slot = (event.ref as? StateRef.Slot)?.index ?: return
+    if (slot != selectedSlot) return
+    when (event.operation) {
+      StateOperation.SAVE -> {
+        if (!current.available) return
+        pending = null
+        publish(slot, true)
+      }
+      StateOperation.DELETE -> {
+        pending = null
+        publish(slot, false)
+        request()
+      }
+      else -> Unit
+    }
+  }
+
+  fun operationFailed(event: StateOperationFailedEvent) {
+    if (event.operation != StateOperation.LOAD) return
+    val quickLoad = pendingQuickLoad ?: return
+    if (event.requestId != quickLoad.requestId ||
+        event.sessionId != quickLoad.sessionId) {
+      return
+    }
+    pendingQuickLoad = null
+    val current = session
+    if (current?.available != true ||
+        current.sessionId != quickLoad.sessionId ||
+        selectedSlot != quickLoad.slot) {
+      return
+    }
+    pending = null
+    publish(selectedSlot, false)
+    request()
+  }
+
+  private fun request() {
+    val current = session?.takeIf { it.available } ?: return
+    val requestId = nextRequestId()
+    pending = Pending(requestId, current.sessionId, selectedSlot)
+    postRequest(
+        StateSlotLoadAvailabilityRequestEvent(
+            requestId,
+            current.sessionId,
+            StateRef.Slot(selectedSlot),
+        ))
+  }
+
+  private data class Pending(
+      val requestId: Long,
+      val sessionId: Long,
+      val slot: Int,
+  )
+
+  private data class PendingQuickLoad(
+      val requestId: Long,
+      val sessionId: Long,
+      val slot: Int,
+  )
 }
 
 internal interface StateBrowserWindowView : AutoCloseable {

@@ -11,6 +11,7 @@ internal class DesktopUiCoordinator(
     private val render: (DesktopPresentation) -> Unit,
     private val edtCheck: () -> Boolean = SwingUtilities::isEventDispatchThread,
 ) {
+  private var stagedPauseSupport = initial.commands.pauseSupported
   private var current = normalize(initial)
 
   fun current(): DesktopPresentation = current
@@ -55,7 +56,9 @@ internal class DesktopUiCoordinator(
               it.commands.copy(
                   gameLoaded = true,
                   sessionBusy = false,
+                  pauseSupported = stagedPauseSupport,
                   paused = false,
+                  loadableStateSlots = emptySet(),
               ),
           persistentStatus = "$gameTitle is running",
           statusRecoveryCommand = null,
@@ -76,6 +79,7 @@ internal class DesktopUiCoordinator(
   }
 
   fun stopped() {
+    stagedPauseSupport = false
     update {
       it.copy(
           gameTitle = null,
@@ -88,6 +92,7 @@ internal class DesktopUiCoordinator(
                   paused = false,
                   stateCommandsAvailable = false,
                   stateBrowserAvailable = false,
+                  loadableStateSlots = emptySet(),
                   fullscreen = false,
               ),
           persistentStatus = "Ready",
@@ -107,8 +112,10 @@ internal class DesktopUiCoordinator(
     }
   }
 
-  fun pauseSupport(enabled: Boolean) =
-      update { it.copy(commands = it.commands.copy(pauseSupported = enabled)) }
+  fun pauseSupport(enabled: Boolean) {
+    stagedPauseSupport = enabled
+    update { it.copy(commands = it.commands.copy(pauseSupported = enabled)) }
+  }
 
   fun paused(paused: Boolean) =
       update {
@@ -128,8 +135,20 @@ internal class DesktopUiCoordinator(
                 it.commands.copy(
                     stateCommandsAvailable = quick,
                     stateBrowserAvailable = browser,
+                    loadableStateSlots =
+                        if (quick) it.commands.loadableStateSlots else emptySet(),
                 ))
       }
+
+  fun stateSlotLoadAvailability(slot: Int, available: Boolean) {
+    require(slot in 0..9)
+    update {
+      val slots =
+          if (available) it.commands.loadableStateSlots + slot
+          else it.commands.loadableStateSlots - slot
+      it.copy(commands = it.commands.copy(loadableStateSlots = slots))
+    }
+  }
 
   fun muted(muted: Boolean) = update { it.copy(commands = it.commands.copy(muted = muted)) }
 
@@ -183,6 +202,10 @@ internal class DesktopUiCoordinator(
                 pauseSupported = value.commands.pauseSupported && loaded,
                 stateCommandsAvailable = value.commands.stateCommandsAvailable && loaded,
                 stateBrowserAvailable = value.commands.stateBrowserAvailable && loaded,
+                loadableStateSlots =
+                    value.commands.loadableStateSlots.takeIf {
+                      loaded && value.commands.stateCommandsAvailable
+                    } ?: emptySet(),
             ))
   }
 

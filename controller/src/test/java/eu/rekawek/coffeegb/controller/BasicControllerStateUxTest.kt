@@ -11,24 +11,36 @@ import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateDeleteRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateEntryKey
 import eu.rekawek.coffeegb.controller.state.StateImage
+import eu.rekawek.coffeegb.controller.state.Int32MapEntry
+import eu.rekawek.coffeegb.controller.state.Int32MapState
+import eu.rekawek.coffeegb.controller.state.Int32State
+import eu.rekawek.coffeegb.controller.state.ListState
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
+import eu.rekawek.coffeegb.controller.state.ObjectArrayState
 import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.controller.state.StateRef
 import eu.rekawek.coffeegb.controller.state.StateRepository
+import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveMetadata
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityEvent
+import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.controller.state.StateWorkspace
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -760,6 +772,117 @@ class BasicControllerStateUxTest {
   }
 
   @Test
+  fun invalidAutosaveIsNeverOfferedForResumeAfterTheRomStarts() {
+    val directory = Files.createTempDirectory("controller-invalid-resume")
+    val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
+    val properties =
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
+          it.updateApplicationSettings { settings ->
+            settings.copy(
+                saves =
+                    ApplicationSettings.Saves(
+                        directory = directory.resolve("saves"),
+                        resumePolicy = ApplicationSettings.ResumePolicy.ASK,
+                    ))
+          }
+        }
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val resumeOffers = LinkedBlockingQueue<StateResumeAvailableEvent>()
+    val failures = LinkedBlockingQueue<StateOperationFailedEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<StateResumeAvailableEvent>(resumeOffers::add)
+    eventBus.register<StateOperationFailedEvent>(failures::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+    val preparedConfiguration = AtomicReference<Gameboy.GameboyConfiguration>()
+    val preparedGameboy = AtomicReference<Gameboy>()
+    val preparer =
+        SessionPreparer { emulatorProperties, event ->
+          val configuration =
+              Controller.createGameboyConfig(emulatorProperties, Rom(event.rom))
+                  .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+          val gameboy = configuration.build()
+          preparedConfiguration.set(configuration)
+          preparedGameboy.set(gameboy)
+          PreparedSession.Ready(configuration, gameboy)
+        }
+    val stateExecutor = ManualExecutorService()
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            RewindManager(enabled = false),
+            StateWorkspaceFactory { paths ->
+              val configuration = assertNotNull(preparedConfiguration.get())
+              val gameboy = assertNotNull(preparedGameboy.get())
+              val captured = StateCodec.capture(configuration, gameboy)
+              val machine = (captured.root as MachineStateRoot).machine
+              val invalidMachine =
+                  MachineState(
+                      machine.root.replaceRecordField(
+                          "eu.rekawek.coffeegb.core.gpu.Display\$DisplayState",
+                          "i",
+                          Int32State(-1),
+                      ),
+                      machine.rtcRuntime,
+                      machine.hardware,
+                      machine.dmgFifoRuntime,
+                  )
+              val invalidState =
+                  StateFile(
+                      captured.identities,
+                      MachineStateRoot(invalidMachine),
+                      captured.diagnostics,
+                      captured.formatVersion,
+                  )
+              StateRepository(paths.layout)
+                  .save(
+                      StateRef.Autosave,
+                      StateCodec.encode(invalidState),
+                      StateSaveMetadata(savedAt = Instant.EPOCH),
+                  )
+              StateWorkspace(paths)
+            },
+            StateOperationWorkerFactory { bus ->
+              StateOperationWorker(bus, executor = stateExecutor)
+            },
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.LoadRomEvent(rom))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      stateExecutor.awaitQueued(1)
+      Thread.sleep(100)
+      frames.clear()
+
+      stateExecutor.runNext()
+
+      assertNull(
+          resumeOffers.poll(250, TimeUnit.MILLISECONDS),
+          "an inapplicable autosave must not be proposed after ROM startup",
+      )
+      assertNull(
+          failures.poll(250, TimeUnit.MILLISECONDS),
+          "a background resume scan should reject the autosave silently",
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "rejecting the autosave must release the startup pause",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      properties.close()
+      deleteTree(directory)
+    }
+  }
+
+  @Test
   fun workerResultsApplyAtFramesSuppressStaleRequestsAndPreserveSessionOnFailure() {
     val directory = Files.createTempDirectory("controller-state-ux")
     val rom = directory.resolve("game.gbc").toFile().also { it.writeBytes(ROM.readBytes()) }
@@ -935,12 +1058,14 @@ class BasicControllerStateUxTest {
     val legacyRestored = LinkedBlockingQueue<Controller.SnapshotRestoredEvent>()
     val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
     val failed = LinkedBlockingQueue<StateOperationFailedEvent>()
+    val availability = LinkedBlockingQueue<StateSlotLoadAvailabilityEvent>()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<Controller.SnapshotSavedEvent>(legacySaved::add)
     eventBus.register<Controller.SnapshotRestoredEvent>(legacyRestored::add)
     eventBus.register<StateOperationCompletedEvent>(completed::add)
     eventBus.register<StateOperationFailedEvent>(failed::add)
+    eventBus.register<StateSlotLoadAvailabilityEvent>(availability::add)
     val stateExecutor = ManualExecutorService()
     val controller =
         BasicController(
@@ -969,6 +1094,17 @@ class BasicControllerStateUxTest {
               .resolve(slot.index.toString())
               .resolve("state.cgbstate")
 
+      eventBus.post(
+          StateSlotLoadAvailabilityRequestEvent(
+              89,
+              stateSession.sessionId,
+              StateRef.Slot(5),
+          ))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      assertFalse(
+          assertNotNull(availability.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+
       eventBus.post(Controller.SaveSnapshotEvent(slot.index))
       assertEquals(
           slot.index,
@@ -977,6 +1113,13 @@ class BasicControllerStateUxTest {
       val legacySidecar = directory.resolve("game.sn${slot.index}")
       val legacyBytes = Files.readAllBytes(legacySidecar)
       assertFalse(Files.exists(managedState))
+
+      eventBus.post(
+          StateSlotLoadAvailabilityRequestEvent(90, stateSession.sessionId, slot))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      assertTrue(
+          assertNotNull(availability.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
 
       eventBus.post(StateLoadRefRequestEvent(100, stateSession.sessionId, slot))
       stateExecutor.awaitQueued(1)
@@ -994,6 +1137,17 @@ class BasicControllerStateUxTest {
 
       Files.createDirectories(managedState.parent)
       Files.write(managedState, byteArrayOf(1, 2, 3, 4))
+      eventBus.post(
+          StateSlotLoadAvailabilityRequestEvent(91, stateSession.sessionId, slot))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      assertFalse(
+          assertNotNull(availability.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+      assertNull(
+          failed.poll(250, TimeUnit.MILLISECONDS),
+          "an availability probe must not present corrupt-state errors",
+      )
+
       eventBus.post(StateLoadRefRequestEvent(101, stateSession.sessionId, slot))
       stateExecutor.awaitQueued(1)
       stateExecutor.runNext()
@@ -1118,6 +1272,34 @@ class BasicControllerStateUxTest {
     bytes[6 + data.size] = (checksum ushr 8).toByte()
     bytes[7 + data.size] = checksum.toByte()
     return bytes
+  }
+
+  private fun RecordState.replaceRecordField(
+      ownerClass: String,
+      fieldName: String,
+      replacement: StateValue,
+  ): RecordState {
+    fun replace(value: StateValue): StateValue =
+        when (value) {
+          is RecordState ->
+              RecordState(
+                  value.typeId,
+                  value.fields.map { field ->
+                    val owner = StateTypeRegistry.recordClassNames[value.typeId - 1] == ownerClass
+                    StateField(
+                        field.name,
+                        if (owner && field.name == fieldName) replacement
+                        else replace(field.value),
+                    )
+                  },
+              )
+          is ObjectArrayState -> ObjectArrayState(value.values.map(::replace))
+          is ListState -> ListState(value.values.map(::replace))
+          is Int32MapState ->
+              Int32MapState(value.entries.map { Int32MapEntry(it.key, replace(it.value)) })
+          else -> value
+        }
+    return replace(this) as RecordState
   }
 
   private fun deleteTree(path: Path) {

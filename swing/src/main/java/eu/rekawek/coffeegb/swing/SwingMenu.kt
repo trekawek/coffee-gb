@@ -21,6 +21,7 @@ import java.awt.Component
 import java.awt.event.KeyEvent
 import java.io.File
 import java.nio.file.Path
+import javax.swing.Action
 import javax.swing.ButtonGroup
 import javax.swing.JCheckBoxMenuItem
 import javax.swing.JFileChooser
@@ -42,6 +43,9 @@ internal data class DebuggerMenuActions(
     val showTool: (DebuggerWorkspaceTool) -> Unit,
     val applyLayout: (DebuggerWorkspaceLayout) -> Unit,
 )
+
+/** A dynamic Pause/Resume label is a command, not a checked state in the platform menu. */
+internal fun pauseResumeMenuItem(action: Action): JMenuItem = JMenuItem(action)
 
 private enum class StopGameDecision {
   STOP,
@@ -327,7 +331,7 @@ internal class SwingMenu(
   private fun createGameMenu(): JMenu {
     val gameMenu = JMenu("Game")
 
-    gameMenu.add(JCheckBoxMenuItem(desktopActions[DesktopCommand.PAUSE]))
+    gameMenu.add(pauseResumeMenuItem(desktopActions[DesktopCommand.PAUSE]))
     gameMenu.add(JMenuItem(desktopActions[DesktopCommand.RESET]))
 
     gameMenu.addSeparator()

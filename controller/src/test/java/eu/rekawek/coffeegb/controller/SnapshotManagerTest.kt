@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.controller.state.ListState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.ObjectArrayState
 import eu.rekawek.coffeegb.controller.state.RecordState
+import eu.rekawek.coffeegb.controller.state.StateApplyException
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StateCompression
@@ -26,6 +27,7 @@ import eu.rekawek.coffeegb.core.memento.Memento
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.io.ByteArrayInputStream
@@ -38,6 +40,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.deleteIfExists
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -393,6 +396,63 @@ class SnapshotManagerTest {
 
       assertContentEquals(original, file.readBytes())
       assertTrue(LegacySnapshotImporter.hasJavaSerializationHeader(file.readBytes()))
+    }
+  }
+
+  @Test
+  fun compatibilityPreflightDoesNotAdvancePausedMbc3Rtc() {
+    val time = VirtualTimeSource(120_000)
+    val rom =
+        StateCodecTestSupport.rom(seed = 4).also {
+          it[0x147] = 0x10
+          it[0x149] = 0x03
+        }
+    val configuration = StateCodecTestSupport.configuration(rom).setRtcTimeSource(time)
+    StateCodecTestSupport.session(configuration).use { session ->
+      val manager = SnapshotManager(configuration)
+      val portable =
+          CompatibilitySnapshot.Portable(
+              StateCodec.capture(session),
+              StateIdentity.from(configuration),
+          )
+      val legacy =
+          CompatibilitySnapshot.Legacy(
+              LegacySnapshotImporter.importGameboyState(LEGACY_FIXTURES.last().readBytes()))
+      session.gameboy.setCartridgeClockPaused(true)
+
+      val beforePortableState =
+          StateGraph.capture(session.gameboy.captureStateWithoutTimeSource())
+      val beforePortableRuntime = session.gameboy.captureRtcRuntimeStateWithoutTimeSource()
+      time.forward(7, TimeUnit.SECONDS)
+
+      manager.validateSnapshotReadOnly(portable, session)
+
+      assertEquals(
+          beforePortableState,
+          StateGraph.capture(session.gameboy.captureStateWithoutTimeSource()),
+      )
+      assertEquals(
+          beforePortableRuntime,
+          session.gameboy.captureRtcRuntimeStateWithoutTimeSource(),
+      )
+
+      val beforeLegacyState =
+          StateGraph.capture(session.gameboy.captureStateWithoutTimeSource())
+      val beforeLegacyRuntime = session.gameboy.captureRtcRuntimeStateWithoutTimeSource()
+      time.forward(7, TimeUnit.SECONDS)
+
+      assertFailsWith<StateApplyException> {
+        manager.validateSnapshotReadOnly(legacy, session)
+      }
+
+      assertEquals(
+          beforeLegacyState,
+          StateGraph.capture(session.gameboy.captureStateWithoutTimeSource()),
+      )
+      assertEquals(
+          beforeLegacyRuntime,
+          session.gameboy.captureRtcRuntimeStateWithoutTimeSource(),
+      )
     }
   }
 
