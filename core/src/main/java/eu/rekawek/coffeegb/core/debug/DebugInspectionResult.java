@@ -14,7 +14,8 @@ public record DebugInspectionResult(
         List<DebugMemoryBlock> memoryBlocks,
         Optional<DebugGraphicsInspection> graphics,
         Optional<DebugAudioInspection> audio,
-        Optional<TraceReadResult> trace) {
+        Optional<TraceReadResult> trace,
+        Optional<DebugHardwareInspection> hardware) {
 
     public DebugInspectionResult {
         Objects.requireNonNull(snapshot, "snapshot");
@@ -24,6 +25,7 @@ public record DebugInspectionResult(
         Objects.requireNonNull(graphics, "graphics");
         Objects.requireNonNull(audio, "audio");
         Objects.requireNonNull(trace, "trace");
+        Objects.requireNonNull(hardware, "hardware");
         anchoredBlocks = List.copyOf(anchoredBlocks);
         memoryBlocks = List.copyOf(memoryBlocks);
         if (anchoredBlocks.size() != request.anchoredRequests().size()
@@ -43,6 +45,9 @@ public record DebugInspectionResult(
         requirePresence(
                 "audio", request.sections().contains(DebugInspectionSection.AUDIO),
                 audio.isPresent());
+        requirePresence(
+                "hardware", request.sections().contains(DebugInspectionSection.HARDWARE),
+                hardware.isPresent());
         requirePresence("trace", request.traceRequest().isPresent(), trace.isPresent());
         if (trace.isPresent()) {
             var traceRequest = request.traceRequest().orElseThrow();
@@ -64,6 +69,19 @@ public record DebugInspectionResult(
         }
     }
 
+    /** Compatibility constructor for transports that predate hardware inspection. */
+    public DebugInspectionResult(
+            DebugSnapshot snapshot,
+            DebugInspectionRequest request,
+            List<DebugMemoryBlock> anchoredBlocks,
+            List<DebugMemoryBlock> memoryBlocks,
+            Optional<DebugGraphicsInspection> graphics,
+            Optional<DebugAudioInspection> audio,
+            Optional<TraceReadResult> trace) {
+        this(snapshot, request, anchoredBlocks, memoryBlocks,
+                graphics, audio, trace, Optional.empty());
+    }
+
     /** Compatibility constructor for snapshot-and-memory-only inspection results. */
     public DebugInspectionResult(
             DebugSnapshot snapshot,
@@ -71,7 +89,7 @@ public record DebugInspectionResult(
             List<DebugMemoryBlock> anchoredBlocks,
             List<DebugMemoryBlock> memoryBlocks) {
         this(snapshot, request, anchoredBlocks, memoryBlocks,
-                Optional.empty(), Optional.empty(), Optional.empty());
+                Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty());
     }
 
     private static void requirePresence(String name, boolean requested, boolean present) {

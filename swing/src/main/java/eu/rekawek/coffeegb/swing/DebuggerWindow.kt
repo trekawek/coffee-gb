@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugPort
@@ -32,19 +33,13 @@ import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult
 import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.Container
-import java.awt.Dialog
-import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-import java.awt.event.ComponentAdapter
-import java.awt.event.ComponentEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
-import java.awt.event.WindowAdapter
-import java.awt.event.WindowEvent
 import java.util.EnumSet
 import java.util.IdentityHashMap
 import java.util.Optional
@@ -62,7 +57,6 @@ import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
-import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JPanel
@@ -80,86 +74,40 @@ import javax.swing.SwingUtilities
 import javax.swing.Timer
 import org.slf4j.LoggerFactory
 
-/** Modeless desktop debugger retained by [DesktopDebuggerController]. */
+/** Retained multi-window desktop debugger owned by [DesktopDebuggerController]. */
 internal class DebuggerWindow(owner: JFrame) : DesktopDebuggerView {
   private val preferencesStore = DebuggerPreferencesStore()
   private val initialPreferences = preferencesStore.load()
-  private val panel = DebuggerPanel(initialPreferences = initialPreferences)
-  private val dialog = JDialog(owner, "Coffee GB Debugger", Dialog.ModalityType.MODELESS)
-  private var positioned = false
+  private val panel =
+      DebuggerPanel(
+          pollingIntervalMillis = WORKSPACE_POLLING_INTERVAL_MILLIS,
+          initialPreferences = initialPreferences,
+      )
+  private val workspace = DebuggerWorkspace(owner, panel)
   private var closed = false
-
-  init {
-    requireDebuggerWindowEdt("Debugger window construction")
-    dialog.defaultCloseOperation = JDialog.HIDE_ON_CLOSE
-    dialog.minimumSize = Dimension(900, 620)
-    dialog.preferredSize = Dimension(1120, 760)
-    dialog.contentPane = panel
-    dialog.accessibleContext.accessibleName = "Coffee GB debugger"
-    dialog.addWindowListener(
-        object : WindowAdapter() {
-          override fun windowClosing(event: WindowEvent) {
-            savePreferences()
-            panel.setPollingActive(false)
-          }
-
-          override fun windowClosed(event: WindowEvent) {
-            savePreferences()
-            panel.setPollingActive(false)
-          }
-        })
-    dialog.addComponentListener(
-        object : ComponentAdapter() {
-          override fun componentShown(event: ComponentEvent) {
-            panel.setPollingActive(true)
-          }
-
-          override fun componentHidden(event: ComponentEvent) {
-            savePreferences()
-            panel.setPollingActive(false)
-          }
-        })
-    dialog.pack()
-    initialPreferences.bounds?.let { bounds ->
-      dialog.setBounds(bounds.x, bounds.y, bounds.width, bounds.height)
-      positioned = true
-    }
-  }
 
   override fun updateSession(event: Controller.SessionDebugPortEvent) {
     requireDebuggerWindowEdt("Debugger session update")
-    if (!closed) panel.updateSession(event)
+    if (!closed) workspace.updateSession(event)
   }
 
   override fun showWindow() {
     requireDebuggerWindowEdt("Debugger window opening")
     if (closed) return
-    if (!positioned) {
-      dialog.setLocationRelativeTo(dialog.owner)
-      positioned = true
-    }
-    dialog.isVisible = true
-    panel.setPollingActive(true)
-    dialog.toFront()
-    dialog.requestFocus()
+    workspace.showWindow()
   }
 
   override fun close() {
     requireDebuggerWindowEdt("Debugger window disposal")
     if (closed) return
     closed = true
-    savePreferences()
-    panel.close()
-    dialog.dispose()
+    preferencesStore.save(panel.preferences())
+    workspace.close()
   }
 
-  private fun savePreferences() {
-    if (!dialog.isDisplayable) return
-    val bounds = dialog.bounds
-    preferencesStore.save(
-        panel.preferences(
-            DebuggerWindowBounds(bounds.x, bounds.y, bounds.width, bounds.height),
-        ))
+  private companion object {
+    /** Fast enough to feel live while leaving the emulation thread in control of the cadence. */
+    const val WORKSPACE_POLLING_INTERVAL_MILLIS = 50
   }
 }
 
@@ -262,6 +210,7 @@ internal class DebuggerPanel(
     private val copyText: (String) -> Unit = ::copyDebuggerText,
     private val peripheralExecutor: ExecutorService = newDebuggerPeripheralExecutor(),
     private val ownsPeripheralExecutor: Boolean = true,
+    private val monotonicNanos: () -> Long = System::nanoTime,
 ) : JPanel(BorderLayout(6, 6)), AutoCloseable {
   private var uiPreferences = initialPreferences.sanitized()
   internal val sessionLabel = JLabel("No emulation session")
@@ -322,6 +271,13 @@ internal class DebuggerPanel(
   internal val graphicsPane = DebuggerGraphicsPanel(copyText)
   internal val audioPane = DebuggerAudioPanel(copyText)
   internal val timelinePane = timelinePanel()
+  internal val executionPane = DebuggerExecutionPanel(copyText)
+  internal val workspaceMemoryPane =
+      DebuggerMemoryPanel(
+          DebuggerMemoryPanelCallbacks(
+              onInterestChanged = { _ -> workspaceMemoryInterestChanged() },
+          ))
+  internal val hardwarePane = DebuggerHardwarePanel(copyText)
 
   private val pollingTimer =
       Timer(pollingIntervalMillis) { requestRefresh() }.apply { isRepeats = true }
@@ -356,9 +312,34 @@ internal class DebuggerPanel(
   private var traceDisableRetries = 0
   @Volatile private var peripheralPreparationTask: Future<*>? = null
   @Volatile private var peripheralPreparationRequestId = 0L
+  private val graphicsCaptureCadence =
+      DebuggerHeavyPaneCadence(GRAPHICS_CAPTURE_INTERVAL_MILLIS)
   private var closed = false
   private var lastAppliedStateRequestId = 0L
   private var lastAppliedCommandRequestId = 0L
+  private var workspaceMode = false
+  private var workspaceSamplingActive = true
+  private val workspaceVisibleTools = EnumSet.noneOf(DebuggerWorkspaceTool::class.java)
+  private val workspaceHeldTools = EnumSet.noneOf(DebuggerWorkspaceTool::class.java)
+  private val workspaceCapturedComponents =
+      java.util.Collections.newSetFromMap(IdentityHashMap<Component, Boolean>())
+  private var executionWorkspaceRoot: JComponent? = null
+  private val executionSessionLabel =
+      JLabel("No emulation session").apply {
+        accessibleContext.accessibleName = "Execution debugger session"
+      }
+  private val executionSnapshotLabel =
+      JLabel("Waiting for a debug snapshot").apply {
+        accessibleContext.accessibleName = "Execution debugger snapshot identity"
+      }
+  private val executionStopReasonLabel =
+      JLabel("No breakpoint stop in this session").apply {
+        accessibleContext.accessibleName = "Execution debugger stop reason"
+      }
+  private val executionHistoryLabel =
+      JLabel("Reverse history status unavailable").apply {
+        accessibleContext.accessibleName = "Execution debugger reverse history status"
+      }
 
   init {
     requireDebuggerWindowEdt("Debugger panel construction")
@@ -459,6 +440,7 @@ internal class DebuggerPanel(
     backInstructionButton.addActionListener { reverseCommand(DebugStepKind.INSTRUCTION) }
     backFrameButton.addActionListener { reverseCommand(DebugStepKind.FRAME) }
     refreshButton.addActionListener {
+      graphicsCaptureCadence.reset()
       requestRefresh()
       requestMetadata()
     }
@@ -495,6 +477,9 @@ internal class DebuggerPanel(
     memoryReadButton.addActionListener { selectMemoryRange() }
     tabs.addChangeListener {
       if (pollingActive) {
+        if (!workspaceMode && tabs.selectedComponent === graphicsPane) {
+          graphicsCaptureCadence.reset()
+        }
         syncPollingTimer()
         requestRefresh()
       }
@@ -607,6 +592,175 @@ internal class DebuggerPanel(
     fontScaler.apply(fontScaler.scalePercent)
   }
 
+  /** Installs the production multi-window presentation without changing the legacy test surface. */
+  internal fun setWorkspaceMode(enabled: Boolean) {
+    requireDebuggerWindowEdt("Debugger workspace mode change")
+    workspaceMode = enabled
+    graphicsCaptureCadence.reset()
+    if (!enabled) workspaceSamplingActive = true
+    if (enabled) {
+      getAccessibleContext().accessibleDescription =
+          "Shared realtime debugger coordinator; each visible tool window receives coherent snapshots"
+      runButton.text = "Resume"
+      stepInstructionButton.text = "Step"
+      stepFrameButton.text = "Next frame"
+      backInstructionButton.text = "Step back"
+      backFrameButton.text = "Previous frame"
+      refreshButton.isVisible = false
+      syncExecutionWorkspaceHeader(force = true)
+    }
+    updateControlState()
+  }
+
+  internal fun workspaceComponent(tool: DebuggerWorkspaceTool): Component {
+    requireDebuggerWindowEdt("Debugger workspace component lookup")
+    val component =
+        when (tool) {
+          DebuggerWorkspaceTool.EXECUTION -> executionWorkspaceComponent()
+          DebuggerWorkspaceTool.MEMORY -> workspaceMemoryPane
+          DebuggerWorkspaceTool.BREAKPOINTS -> breakpointPane
+          DebuggerWorkspaceTool.VIDEO -> graphicsPane
+          DebuggerWorkspaceTool.HARDWARE -> hardwarePane
+          DebuggerWorkspaceTool.AUDIO -> audioPane
+          DebuggerWorkspaceTool.TIMELINE -> timelinePane
+        }
+    if (workspaceCapturedComponents.add(component)) {
+      fontScaler.capture(component)
+      fontScaler.apply(fontScaler.scalePercent)
+    }
+    return component
+  }
+
+  private fun executionWorkspaceComponent(): JComponent =
+      executionWorkspaceRoot
+          ?: JPanel(BorderLayout(6, 6)).also { root ->
+            val identity = JPanel(GridLayout(0, 1, 2, 2)).apply {
+              border = BorderFactory.createEmptyBorder(4, 7, 2, 7)
+              add(executionSessionLabel)
+              add(executionSnapshotLabel)
+              add(executionStopReasonLabel)
+              add(executionHistoryLabel)
+            }
+            val controls = JPanel(FlowLayout(FlowLayout.LEADING, 5, 3)).apply {
+              listOf(
+                      pauseButton,
+                      runButton,
+                      stepInstructionButton,
+                      stepFrameButton,
+                      backInstructionButton,
+                      backFrameButton,
+                  )
+                  .forEach(::add)
+              add(historyToggle)
+            }
+            root.add(
+                JPanel(BorderLayout()).apply {
+                  add(identity, BorderLayout.CENTER)
+                  add(controls, BorderLayout.SOUTH)
+                },
+                BorderLayout.NORTH,
+            )
+            root.add(executionPane, BorderLayout.CENTER)
+            root.accessibleContext.accessibleName = "Execution debugger workspace"
+            executionWorkspaceRoot = root
+            syncExecutionWorkspaceHeader(force = true)
+          }
+
+  private fun syncExecutionWorkspaceHeader(force: Boolean = false) {
+    if (!workspaceMode || (!force && !toolIsLive(DebuggerWorkspaceTool.EXECUTION))) return
+    executionSessionLabel.text = sessionLabel.text
+    executionSnapshotLabel.text = snapshotLabel.text
+    executionStopReasonLabel.text = stopReasonLabel.text
+    executionHistoryLabel.text = historyLabel.text
+  }
+
+  internal fun setWorkspaceToolState(
+      tool: DebuggerWorkspaceTool,
+      visible: Boolean,
+      held: Boolean,
+  ) {
+    requireDebuggerWindowEdt("Debugger tool interest change")
+    val visibilityChanged =
+        if (visible) workspaceVisibleTools.add(tool) else workspaceVisibleTools.remove(tool)
+    val holdChanged =
+        if (held) workspaceHeldTools.add(tool) else workspaceHeldTools.remove(tool)
+    if ((visibilityChanged || holdChanged) &&
+        (tool == DebuggerWorkspaceTool.VIDEO || tool == DebuggerWorkspaceTool.HARDWARE)) {
+      graphicsCaptureCadence.reset()
+    }
+    if (workspaceMode && pollingActive && (visibilityChanged || holdChanged)) {
+      requestRefresh()
+      if (tool == DebuggerWorkspaceTool.EXECUTION ||
+          tool == DebuggerWorkspaceTool.BREAKPOINTS) {
+        requestMetadata()
+      }
+    }
+  }
+
+  internal fun setWorkspaceSamplingActive(active: Boolean) {
+    requireDebuggerWindowEdt("Debugger workspace sampling state change")
+    if (!workspaceMode || closed || workspaceSamplingActive == active) return
+    workspaceSamplingActive = active
+    windowEpoch++
+    if (active) {
+      syncPollingTimer()
+      if (pollingActive) {
+        requestRefresh()
+        requestMetadata()
+      }
+    } else {
+      syncPollingTimer()
+      cancelPeripheralPreparation()
+      refreshInFlight = false
+      activeRefreshRequestId = 0L
+      refreshAgain = false
+      metadataAgain = false
+    }
+    updateControlState()
+  }
+
+  internal fun copyWorkspaceTool(tool: DebuggerWorkspaceTool) {
+    requireDebuggerWindowEdt("Debugger workspace copy")
+    val text =
+        when (tool) {
+          DebuggerWorkspaceTool.EXECUTION -> executionPane.copyText()
+          DebuggerWorkspaceTool.MEMORY -> debuggerComponentText(workspaceMemoryPane)
+          DebuggerWorkspaceTool.BREAKPOINTS -> breakpointPane.copyText()
+          DebuggerWorkspaceTool.VIDEO -> graphicsPane.copyText()
+          DebuggerWorkspaceTool.HARDWARE -> hardwarePane.copyText()
+          DebuggerWorkspaceTool.AUDIO -> audioPane.copyText()
+          DebuggerWorkspaceTool.TIMELINE -> timelineModel.copyText(timelineTable.selectedRows)
+        }
+    if (text.isBlank()) {
+      statusLabel.text = "The ${tool.title.lowercase()} window has no text to copy"
+      return
+    }
+    runCatching { copyText(text) }
+        .onSuccess { statusLabel.text = "Copied ${tool.title.lowercase()} data" }
+        .onFailure {
+          LOG.warn("Debugger clipboard copy failed", it)
+          statusLabel.text = "Copy failed — the system clipboard is unavailable"
+        }
+  }
+
+  internal fun workspaceZoom(delta: Int) {
+    zoomFont(delta)
+  }
+
+  internal fun workspaceResetZoom() {
+    setFontScale(DebuggerUiPreferences.DEFAULT_FONT_SCALE_PERCENT)
+  }
+
+  private fun workspaceMemoryInterestChanged() {
+    if (workspaceMode && pollingActive && toolIsLive(DebuggerWorkspaceTool.MEMORY)) {
+      statusLabel.text = "Memory sampling range updated"
+      requestRefresh()
+    }
+  }
+
+  private fun toolIsLive(tool: DebuggerWorkspaceTool): Boolean =
+      tool in workspaceVisibleTools && tool !in workspaceHeldTools
+
   private fun installKeyboardBindings() {
     val input = getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
     val shortcutMask = debuggerMenuShortcutMask()
@@ -704,6 +858,7 @@ internal class DebuggerPanel(
     fontScaler.apply(scale)
     graphicsPane.applyFontScale(scale)
     audioPane.applyFontScale(scale)
+    hardwarePane.applyFontScale(scale)
     uiPreferences = uiPreferences.copy(fontScalePercent = scale)
     revalidate()
     repaint()
@@ -764,6 +919,7 @@ internal class DebuggerPanel(
       releaseTimelineOwnership(previousClient, "Session changed; timeline capture released")
     }
     cancelPeripheralPreparation()
+    graphicsCaptureCadence.reset()
     latestGeneration = generation
     client = nextClient
     windowEpoch++
@@ -786,6 +942,9 @@ internal class DebuggerPanel(
     timelineModel.clear()
     graphicsPane.clear()
     audioPane.clear()
+    executionPane.clear()
+    workspaceMemoryPane.clear()
+    hardwarePane.clear()
     setTimelineSelected(false)
     timelineWarning.text =
         when {
@@ -795,6 +954,16 @@ internal class DebuggerPanel(
         }
     breakpointPane.clear()
     breakpointPane.replace(emptyList(), nextClient?.capabilities, null, null)
+    workspaceMemoryPane.clear()
+    workspaceMemoryPane.setFollowCapabilities(
+        programCounter = nextClient?.capabilities?.memoryRead() == true,
+        stackPointer = nextClient?.capabilities?.memoryRead() == true,
+    )
+    nextClient
+        ?.capabilities
+        ?.maxInspectionBytes()
+        ?.takeIf { it > 0 }
+        ?.let(workspaceMemoryPane::setMaximumSampleLength)
     syncPollingTimer()
     if (nextClient == null) {
       clearSessionView()
@@ -829,6 +998,7 @@ internal class DebuggerPanel(
         requestMetadata()
       }
     }
+    syncExecutionWorkspaceHeader(force = true)
     updateControlState()
   }
 
@@ -838,6 +1008,7 @@ internal class DebuggerPanel(
     pollingActive = active
     windowEpoch++
     if (active) {
+      graphicsCaptureCadence.reset()
       syncPollingTimer()
       if (traceOwner === client && traceDisableRequested && !traceConfigurationInFlight) {
         submitTraceDisable(checkNotNull(client))
@@ -859,7 +1030,7 @@ internal class DebuggerPanel(
   internal fun requestRefresh() {
     requireDebuggerWindowEdt("Debugger refresh")
     val attached = client ?: return
-    if (closed || !pollingActive || !canPollInspection(attached)) return
+    if (closed || !samplingActive() || !canPollInspection(attached)) return
     if (refreshInFlight) {
       refreshAgain = true
       return
@@ -956,17 +1127,22 @@ internal class DebuggerPanel(
       peripheralPreparationTask = null
       peripheralPreparationRequestId = 0L
     }
-    if (token.epoch == windowEpoch && pollingActive) {
+    if (token.epoch == windowEpoch && samplingActive()) {
       when (completion) {
         is RefreshCompletion.Unexpected -> showFailure("Refresh", completion.failure)
         RefreshCompletion.Empty -> statusLabel.text = "Refresh returned no result"
         is RefreshCompletion.TypedFailure -> {
           val result = completion.result
-          if (result.error().code() == DebugErrorCode.SIDE_EFFECTFUL_ADDRESS &&
-              plan.request.anchoredRequests().isNotEmpty()) {
+          val anchoredAddressMoved =
+              plan.request.anchoredRequests().isNotEmpty() &&
+                  (result.error().code() == DebugErrorCode.SIDE_EFFECTFUL_ADDRESS ||
+                      (workspaceMode &&
+                          result.error().code() == DebugErrorCode.INVALID_ARGUMENT))
+          if (anchoredAddressMoved) {
             // Register-relative ranges were planned from the previous snapshot but resolve
             // against the new safe point. If another pause owner moved PC/SP across a safe
-            // boundary, first obtain a fresh scalar snapshot and then re-plan once from it.
+            // boundary (or a running CPU moved beyond the address space), first obtain a
+            // fresh scalar snapshot and then re-plan once from it.
             snapshotOnlyRefreshPending = true
             refreshAgain = true
             statusLabel.text =
@@ -989,7 +1165,7 @@ internal class DebuggerPanel(
         }
       }
     }
-    val repeat = refreshAgain && pollingActive
+    val repeat = refreshAgain && samplingActive()
     refreshAgain = false
     updateControlState()
     if (repeat) requestRefresh()
@@ -1014,12 +1190,21 @@ internal class DebuggerPanel(
       )
     }
     val anchored = ArrayList<DebugAnchoredMemoryRequest>(2)
+    val explicit = ArrayList<DebugMemoryRequest>(1)
     var codeIndex: Int? = null
     var stackIndex: Int? = null
+    var workspaceMemoryInterest: DebuggerMemoryInterest? = null
+    var workspaceMemoryAnchoredIndex: Int? = null
+    var workspaceMemoryExplicitIndex: Int? = null
     var remainingBytes = attached.capabilities.maxInspectionBytes()
     val previous = snapshot
-    val replanAfterSnapshot = previous?.paused() != true
-    if (attached.capabilities.memoryRead() && previous?.paused() == true) {
+    val captureExecutionMemory =
+        if (workspaceMode) toolIsLive(DebuggerWorkspaceTool.EXECUTION)
+        else previous?.paused() == true
+    val replanAfterSnapshot =
+        if (workspaceMode) previous == null && captureExecutionMemory
+        else previous?.paused() != true
+    if (attached.capabilities.memoryRead() && previous != null && captureExecutionMemory) {
       pcAnchoredLength(
               previous.registers().pc(),
               minOf(MAX_INSTRUCTION_BYTES, remainingBytes),
@@ -1037,41 +1222,114 @@ internal class DebuggerPanel(
         remainingBytes -= length
       }
     }
-    val explicit =
-        selectedMemory
-            ?.takeIf {
-              previous?.paused() == true &&
-                  attached.capabilities.memoryRead() &&
-                  it.length() <= remainingBytes
-            }
-            ?.let(::listOf)
-            ?: emptyList()
+    if (!workspaceMode) {
+      selectedMemory
+          ?.takeIf {
+            previous?.paused() == true &&
+                attached.capabilities.memoryRead() &&
+                it.length() <= remainingBytes
+          }
+          ?.let { request ->
+            explicit += request
+            remainingBytes -= request.length()
+          }
+    } else if (toolIsLive(DebuggerWorkspaceTool.MEMORY) && attached.capabilities.memoryRead()) {
+      val interest = workspaceMemoryPane.currentInterest
+      workspaceMemoryInterest = interest
+      when (interest) {
+        is DebuggerMemoryInterest.Absolute ->
+            interest.request
+                .takeIf {
+                  it.length() <= remainingBytes && validateMemoryRequest(it) == null
+                }
+                ?.let { request ->
+                  workspaceMemoryExplicitIndex = explicit.size
+                  explicit += request
+                  remainingBytes -= request.length()
+                }
+        is DebuggerMemoryInterest.Anchored ->
+            interest.request
+                .takeIf {
+                  it.length() <= remainingBytes &&
+                      previous != null &&
+                      isSafeAnchoredRequest(it, previous)
+                }
+                ?.let { request ->
+                  workspaceMemoryAnchoredIndex = anchored.size
+                  anchored += request
+                  remainingBytes -= request.length()
+                }
+      }
+    }
     return InspectionPlan(
         DebugInspectionRequest(anchored, explicit, sections, traceRequest),
         codeIndex,
         stackIndex,
-        explicit.isNotEmpty(),
+        !workspaceMode && explicit.isNotEmpty(),
         replanAfterSnapshot,
+        workspaceMemoryInterest,
+        workspaceMemoryAnchoredIndex,
+        workspaceMemoryExplicitIndex,
     )
   }
 
   private fun selectedInspectionSections(
       attached: DebuggerClient
-  ): Set<DebugInspectionSection> =
-      when {
+  ): Set<DebugInspectionSection> {
+    if (!workspaceMode) {
+      return when {
         tabs.selectedComponent === graphicsPane &&
-            attached.capabilities.supportsInspection(DebugInspectionSection.GRAPHICS) ->
+            attached.capabilities.supportsInspection(DebugInspectionSection.GRAPHICS) &&
+            graphicsCaptureCadence.acquire(monotonicNanos()) ->
             EnumSet.of(DebugInspectionSection.GRAPHICS)
         tabs.selectedComponent === audioPane &&
             attached.capabilities.supportsInspection(DebugInspectionSection.AUDIO) ->
             EnumSet.of(DebugInspectionSection.AUDIO)
         else -> emptySet()
       }
+    }
+    val sections = EnumSet.noneOf(DebugInspectionSection::class.java)
+    val graphicsInterested =
+        toolIsLive(DebuggerWorkspaceTool.VIDEO) || toolIsLive(DebuggerWorkspaceTool.HARDWARE)
+    if (graphicsInterested &&
+        attached.capabilities.supportsInspection(DebugInspectionSection.GRAPHICS) &&
+        graphicsCaptureCadence.acquire(monotonicNanos())) {
+      sections += DebugInspectionSection.GRAPHICS
+    }
+    if ((toolIsLive(DebuggerWorkspaceTool.AUDIO) ||
+            toolIsLive(DebuggerWorkspaceTool.HARDWARE)) &&
+        attached.capabilities.supportsInspection(DebugInspectionSection.AUDIO)) {
+      sections += DebugInspectionSection.AUDIO
+    }
+    if (toolIsLive(DebuggerWorkspaceTool.HARDWARE) &&
+        attached.capabilities.supportsInspection(DebugInspectionSection.HARDWARE)) {
+      sections += DebugInspectionSection.HARDWARE
+    }
+    return sections
+  }
+
+  /** Side-effect-free interest probe; cadence slots are consumed only by inspectionPlan(). */
+  private fun hasSelectedInspectionInterest(attached: DebuggerClient): Boolean {
+    if (!workspaceMode) {
+      return tabs.selectedComponent === graphicsPane &&
+          attached.capabilities.supportsInspection(DebugInspectionSection.GRAPHICS) ||
+          tabs.selectedComponent === audioPane &&
+          attached.capabilities.supportsInspection(DebugInspectionSection.AUDIO)
+    }
+    val hardwareLive = toolIsLive(DebuggerWorkspaceTool.HARDWARE)
+    return ((toolIsLive(DebuggerWorkspaceTool.VIDEO) || hardwareLive) &&
+            attached.capabilities.supportsInspection(DebugInspectionSection.GRAPHICS)) ||
+        ((toolIsLive(DebuggerWorkspaceTool.AUDIO) || hardwareLive) &&
+            attached.capabilities.supportsInspection(DebugInspectionSection.AUDIO)) ||
+        (hardwareLive &&
+            attached.capabilities.supportsInspection(DebugInspectionSection.HARDWARE))
+  }
 
   private fun traceInspectionRequest(attached: DebuggerClient): Optional<TraceReadRequest> {
     if (traceOwner !== attached ||
         traceDisableRequested ||
-        !pollingActive ||
+        !samplingActive() ||
+        (workspaceMode && !toolIsLive(DebuggerWorkspaceTool.TIMELINE)) ||
         !attached.capabilities.coherentTraceInspection()) {
       return Optional.empty()
     }
@@ -1088,19 +1346,68 @@ internal class DebuggerPanel(
     renderBreakpointHit()
     snapshotLabel.text =
         "${view.identity.label} — ${if (view.paused) "PAUSED" else "RUNNING"} — ${view.timingText}"
+    syncExecutionWorkspaceHeader()
     registersArea.text = view.registers.render()
     machineArea.text = renderMachine(result.snapshot)
     val graphics = result.graphics?.takeIf { it.identity == view.identity }
-    if (tabs.selectedComponent === graphicsPane && graphics != null) {
-      graphicsPane.render(graphics)
-    } else {
-      graphicsPane.showNotCaptured(view.identity)
-    }
     val audio = result.audio?.takeIf { it.identity == view.identity }
-    if (tabs.selectedComponent === audioPane && audio != null) {
-      audioPane.render(audio)
+    val graphicsRequested =
+        DebugInspectionSection.GRAPHICS in plan.request.sections()
+    val code = plan.codeIndex?.let { result.anchoredBlocks[it] }
+    val stackBlock = plan.stackIndex?.let { result.anchoredBlocks[it] }
+    if (workspaceMode) {
+      if (toolIsLive(DebuggerWorkspaceTool.EXECUTION)) {
+        executionPane.render(result.snapshot, code, stackBlock, client!!.capabilities)
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.VIDEO)) {
+        if (graphicsRequested) {
+          if (graphics != null) graphicsPane.render(graphics)
+          else graphicsPane.showNotCaptured(view.identity)
+        }
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.AUDIO)) {
+        if (audio != null) audioPane.render(audio)
+        else audioPane.showNotCaptured(view.identity)
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.HARDWARE)) {
+        hardwarePane.render(
+            result.snapshot,
+            graphics,
+            audio,
+            result.hardware,
+            preserveGraphicsFields = !graphicsRequested,
+        )
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.MEMORY)) {
+        plan.workspaceMemoryInterest?.let { interest ->
+          val block =
+              plan.workspaceMemoryAnchoredIndex?.let { result.anchoredBlocks[it] }
+                  ?: plan.workspaceMemoryExplicitIndex?.let { result.memoryBlocks[it] }
+          if (block != null) {
+            workspaceMemoryPane.render(view.identity, interest, block)
+          } else {
+            workspaceMemoryPane.showNotSampled(
+                view.identity,
+                interest,
+                "The selected live range is outside a side-effect-free view or the session limit.",
+            )
+          }
+        }
+      }
     } else {
-      audioPane.showNotCaptured(view.identity)
+      if (tabs.selectedComponent === graphicsPane) {
+        if (graphicsRequested) {
+          if (graphics != null) graphicsPane.render(graphics)
+          else graphicsPane.showNotCaptured(view.identity)
+        }
+      } else {
+        graphicsPane.showNotCaptured(view.identity)
+      }
+      if (tabs.selectedComponent === audioPane && audio != null) {
+        audioPane.render(audio)
+      } else {
+        audioPane.showNotCaptured(view.identity)
+      }
     }
     applyTimelineInspection(result)
 
@@ -1110,17 +1417,13 @@ internal class DebuggerPanel(
       memoryArea.text = "Paused-only view; memory is blank while the emulator is running."
     } else {
       val identity = view.identity
-      val code = plan.codeIndex?.let { result.anchoredBlocks[it] }
       disassemblyArea.text =
           code?.let {
             runCatching { DebugDisassembler.disassemble(it) }
                 .getOrElse { failure -> "Disassembly unavailable: ${failure.message}" }
           } ?: "Current PC is outside the side-effect-free ROM/WRAM/HRAM inspection views."
 
-      val stackCapture =
-          plan.stackIndex?.let {
-            DebuggerMemoryCapture(identity, result.anchoredBlocks[it])
-          }
+      val stackCapture = stackBlock?.let { DebuggerMemoryCapture(identity, it) }
       stackArea.text =
           DebuggerPresentation.stack(result.snapshot, client!!.capabilities, stackCapture, STACK_BYTES)
               .render()
@@ -1133,13 +1436,15 @@ internal class DebuggerPanel(
             "Choose a bounded range and select Read."
           }
     }
-    statusLabel.text = "Snapshot refreshed"
+    statusLabel.text = if (workspaceMode) "Live snapshot updated" else "Snapshot refreshed"
 
     // A plan made without a prior paused snapshot (or as an explicit scalar retry) deliberately
     // carries no register-relative ranges. Re-plan it exactly once against this coherent result.
     // A paused PC/SP outside the safe views may still produce zero blocks on that follow-up and
     // must not create an immediate refresh loop.
-    if (view.paused && plan.replanAfterSnapshot && client?.capabilities?.memoryRead() == true) {
+    if ((workspaceMode || view.paused) &&
+        plan.replanAfterSnapshot &&
+        client?.capabilities?.memoryRead() == true) {
       refreshAgain = true
     }
     if (wasRunning && view.paused) requestMetadata()
@@ -1150,6 +1455,7 @@ internal class DebuggerPanel(
     val attached = client ?: return
     if (traceOwner !== attached ||
         traceDisableRequested ||
+        (workspaceMode && !toolIsLive(DebuggerWorkspaceTool.TIMELINE)) ||
         result.request.traceRequest().isEmpty) return
     val trace = result.trace
     if (trace == null) {
@@ -1182,7 +1488,7 @@ internal class DebuggerPanel(
   private fun requestMetadata() {
     requireDebuggerWindowEdt("Debugger metadata refresh")
     val attached = client ?: return
-    if (closed || !pollingActive) return
+    if (closed || !samplingActive()) return
     if (metadataInFlight) {
       metadataAgain = true
       return
@@ -1190,15 +1496,26 @@ internal class DebuggerPanel(
     val token = token(attached)
     metadataInFlight = true
     updateControlState()
+    val breakpointInterest = !workspaceMode || toolIsLive(DebuggerWorkspaceTool.BREAKPOINTS)
+    val executionInterest = !workspaceMode || toolIsLive(DebuggerWorkspaceTool.EXECUTION)
     val breakpoints =
-        if (attached.capabilities.breakpoints()) attached.listBreakpoints()
-        else completedResult(DebugResult.success(DebugBreakpointList(emptyList())))
+        if (breakpointInterest && attached.capabilities.breakpoints()) {
+          attached.listBreakpoints()
+        } else {
+          completedResult(DebugResult.success(DebugBreakpointList(breakpointRows)))
+        }
     val history =
-        if (attached.capabilities.history().checkpointHistory()) attached.historyStatus()
-        else completedResult<DebugResult<DebugHistoryStatus>?>(null)
+        if (executionInterest && attached.capabilities.history().checkpointHistory()) {
+          attached.historyStatus()
+        } else {
+          completedResult(historyStatus?.let { DebugResult.success(it) })
+        }
     val lastHit =
-        if (attached.capabilities.breakpoints()) attached.lastBreakpointHit()
-        else completedResult<DebugResult<DebugBreakpointHit>?>(null)
+        if ((breakpointInterest || executionInterest) && attached.capabilities.breakpoints()) {
+          attached.lastBreakpointHit()
+        } else {
+          completedResult(lastBreakpointHit?.let { DebugResult.success(it) })
+        }
     breakpoints
         .thenCombine(history) { breakpointResult, historyResult ->
           MetadataResult(breakpointResult, historyResult, null)
@@ -1208,7 +1525,7 @@ internal class DebuggerPanel(
           dispatchSwingMutation {
             if (!sameSession(token)) return@dispatchSwingMutation
             metadataInFlight = false
-            if (token.epoch == windowEpoch && pollingActive) {
+            if (token.epoch == windowEpoch && samplingActive()) {
               when {
                 token.requestId < lastAppliedCommandRequestId -> metadataAgain = true
                 failure != null -> showFailure("Metadata refresh", failure)
@@ -1218,13 +1535,15 @@ internal class DebuggerPanel(
                   breakpointRows = result.breakpoints.value().breakpoints()
                   advanceBreakpointId(breakpointRows)
                   applyBreakpointHit(result.lastHit)
-                  breakpointPane.replace(
-                      breakpointRows,
-                      attached.capabilities,
-                      lastBreakpointHit,
-                      snapshot?.takeIf { it.paused() }?.registers()?.pc(),
-                      isCurrentBreakpointStop(lastBreakpointHit),
-                  )
+                  if (!workspaceMode || toolIsLive(DebuggerWorkspaceTool.BREAKPOINTS)) {
+                    breakpointPane.replace(
+                        breakpointRows,
+                        attached.capabilities,
+                        lastBreakpointHit,
+                        snapshot?.takeIf { it.paused() }?.registers()?.pc(),
+                        isCurrentBreakpointStop(lastBreakpointHit),
+                    )
+                  }
                   val historyResult = result.history
                   if (historyResult != null) {
                     if (historyResult.isFailure) showFailure("History refresh", historyResult)
@@ -1235,7 +1554,7 @@ internal class DebuggerPanel(
                 }
               }
             }
-            val repeat = metadataAgain && pollingActive
+            val repeat = metadataAgain && samplingActive()
             metadataAgain = false
             updateControlState()
             if (repeat) requestMetadata()
@@ -1271,13 +1590,16 @@ internal class DebuggerPanel(
   private fun renderBreakpointHit() {
     val hit =
         lastBreakpointHit?.takeIf { it.snapshot().sessionGeneration() == latestGeneration }
-    breakpointPane.updateExecutionContext(
-        hit,
-        snapshot?.takeIf { it.paused() }?.registers()?.pc(),
-        isCurrentBreakpointStop(hit),
-    )
+    if (!workspaceMode || toolIsLive(DebuggerWorkspaceTool.BREAKPOINTS)) {
+      breakpointPane.updateExecutionContext(
+          hit,
+          snapshot?.takeIf { it.paused() }?.registers()?.pc(),
+          isCurrentBreakpointStop(hit),
+      )
+    }
     if (hit == null) {
       stopReasonLabel.text = "No breakpoint stop in this session"
+      syncExecutionWorkspaceHeader()
       return
     }
     val id = hit.breakpointId().value()
@@ -1290,6 +1612,7 @@ internal class DebuggerPanel(
     stopReasonLabel.text =
         "$prefix breakpoint #$id — $condition — matched tick ${hit.matchMasterTick()}, " +
             "paused tick ${hit.snapshot().masterTick()}"
+    syncExecutionWorkspaceHeader()
   }
 
   private fun isCurrentBreakpointStop(hit: DebugBreakpointHit?): Boolean {
@@ -1315,12 +1638,15 @@ internal class DebuggerPanel(
           "History: ${if (view.enabled) "ON" else "OFF"}, ${view.checkpointCount} checkpoints, " +
               "${view.futureCheckpointCount} future — ${view.cursor}"
         }
-    updatingHistoryToggle = true
-    try {
-      historyToggle.isSelected = view.enabled
-    } finally {
-      updatingHistoryToggle = false
+    if (!workspaceMode || toolIsLive(DebuggerWorkspaceTool.EXECUTION)) {
+      updatingHistoryToggle = true
+      try {
+        historyToggle.isSelected = view.enabled
+      } finally {
+        updatingHistoryToggle = false
+      }
     }
+    syncExecutionWorkspaceHeader()
   }
 
   private fun pauseCommand() {
@@ -1743,13 +2069,39 @@ internal class DebuggerPanel(
   private fun applyCommandSnapshot(value: DebugSnapshot) {
     snapshot = value
     val view = DebuggerPresentation.snapshot(value)
+    if (workspaceMode) {
+      // Invalidate payloads before publishing the shared identity, so no tool footer can claim
+      // that retained graphics, audio, or memory belongs to this command-only snapshot.
+      if (toolIsLive(DebuggerWorkspaceTool.VIDEO)) {
+        graphicsPane.showNotCaptured(view.identity)
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.AUDIO)) {
+        audioPane.showNotCaptured(view.identity)
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.MEMORY)) {
+        workspaceMemoryPane.showNotSampled(
+            view.identity,
+            "Awaiting the next coherent live capture after the command.",
+        )
+      }
+    }
     snapshotLabel.text =
         "${view.identity.label} — ${if (view.paused) "PAUSED" else "RUNNING"} — ${view.timingText}"
     registersArea.text = view.registers.render()
     machineArea.text = renderMachine(value)
-    graphicsPane.showNotCaptured(view.identity)
-    audioPane.showNotCaptured(view.identity)
+    if (workspaceMode) {
+      if (toolIsLive(DebuggerWorkspaceTool.EXECUTION)) {
+        client?.capabilities?.let { executionPane.renderSnapshot(value, it) }
+      }
+      if (toolIsLive(DebuggerWorkspaceTool.HARDWARE)) {
+        hardwarePane.render(value)
+      }
+    } else {
+      graphicsPane.showNotCaptured(view.identity)
+      audioPane.showNotCaptured(view.identity)
+    }
     renderBreakpointHit()
+    syncExecutionWorkspaceHeader()
   }
 
   private fun <T> executeCommand(
@@ -1879,6 +2231,9 @@ internal class DebuggerPanel(
     memoryArea.text = "No memory"
     graphicsPane.clear()
     audioPane.clear()
+    executionPane.clear()
+    workspaceMemoryPane.clear()
+    hardwarePane.clear()
     timelineModel.clear()
     traceCursor = -1L
     setTimelineSelected(false)
@@ -1910,6 +2265,9 @@ internal class DebuggerPanel(
     memoryArea.text = "Debugger hidden; memory view released"
     graphicsPane.clear()
     audioPane.clear()
+    executionPane.clear("Debugger hidden; execution state released")
+    workspaceMemoryPane.clear()
+    hardwarePane.clear()
     updatingHistoryToggle = true
     try {
       historyToggle.isSelected = false
@@ -1937,7 +2295,7 @@ internal class DebuggerPanel(
 
   private fun syncPollingTimer() {
     val attached = client
-    if (pollingActive && attached != null && canPollInspection(attached)) {
+    if (samplingActive() && attached != null && canPollInspection(attached)) {
       pollingTimer.start()
     } else {
       pollingTimer.stop()
@@ -1952,10 +2310,13 @@ internal class DebuggerPanel(
 
   private fun canPollInspection(attached: DebuggerClient): Boolean =
       attached.capabilities.coherentInspection() ||
-          selectedInspectionSections(attached).isNotEmpty() ||
+          hasSelectedInspectionInterest(attached) ||
           (traceOwner === attached &&
               !traceDisableRequested &&
               attached.capabilities.coherentTraceInspection())
+
+  private fun samplingActive(): Boolean =
+      pollingActive && (!workspaceMode || workspaceSamplingActive)
 
   override fun close() {
     requireDebuggerWindowEdt("Debugger panel disposal")
@@ -2008,6 +2369,7 @@ internal class DebuggerPanel(
       val trace: TraceReadResult?,
       val graphics: DebuggerGraphicsPaneView?,
       val audio: DebuggerAudioPaneView?,
+      val hardware: DebugHardwareInspection?,
   ) {
     companion object {
       fun withoutPeripherals(value: DebugInspectionResult): PreparedInspection {
@@ -2041,6 +2403,7 @@ internal class DebuggerPanel(
               value.trace().orElse(null),
               graphics,
               audio,
+              value.hardware().orElse(null),
           )
     }
   }
@@ -2051,6 +2414,9 @@ internal class DebuggerPanel(
       val stackIndex: Int?,
       val includesExplicitMemory: Boolean,
       val replanAfterSnapshot: Boolean,
+      val workspaceMemoryInterest: DebuggerMemoryInterest? = null,
+      val workspaceMemoryAnchoredIndex: Int? = null,
+      val workspaceMemoryExplicitIndex: Int? = null,
   )
 
   private data class MetadataResult(
@@ -2062,6 +2428,7 @@ internal class DebuggerPanel(
   private companion object {
     val LOG = LoggerFactory.getLogger(DebuggerPanel::class.java)
     const val DEFAULT_POLLING_INTERVAL_MILLIS = 400
+    const val GRAPHICS_CAPTURE_INTERVAL_MILLIS = 100L
     const val MAX_INSTRUCTION_BYTES = 3
     const val STACK_BYTES = 16
     const val TRACE_PAGE_SIZE = 256
@@ -2295,6 +2662,15 @@ private fun stackAnchoredLength(address: Int, maximum: Int): Int? {
       }
   return minOf(maximum, endExclusive - address).takeIf { it > 0 }
 }
+
+private fun isSafeAnchoredRequest(
+    request: DebugAnchoredMemoryRequest,
+    snapshot: DebugSnapshot,
+): Boolean =
+    runCatching { request.resolve(snapshot) }
+        .getOrNull()
+        ?.let { resolved -> validateMemoryRequest(resolved) == null }
+        ?: false
 
 private fun validateMemoryRequest(request: DebugMemoryRequest): String? {
   val start = request.address()

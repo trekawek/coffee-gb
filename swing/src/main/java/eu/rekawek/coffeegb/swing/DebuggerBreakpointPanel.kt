@@ -8,8 +8,13 @@ import eu.rekawek.coffeegb.core.debug.DebugPpuMode
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpoint
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointId
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugCounterType
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugInterruptCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugMemoryCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugOpcodeCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPcCondition
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugPpuCondition
 import eu.rekawek.coffeegb.core.debug.breakpoint.DebugSerialCondition
 import java.awt.BorderLayout
 import java.awt.CardLayout
@@ -36,11 +41,13 @@ import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
+import javax.swing.JSpinner
 import javax.swing.JTable
 import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.RowFilter
+import javax.swing.SpinnerNumberModel
 import javax.swing.SwingUtilities
 import javax.swing.UIManager
 import javax.swing.event.DocumentEvent
@@ -670,23 +677,34 @@ internal class DebuggerBreakpointWorkspaceTableModel(
 internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
   internal val kindCombo = JComboBox<DebuggerBreakpointEditorKind>()
   internal val enabledCheckBox = JCheckBox("Enabled", true)
-  internal val addressField = JTextField("\$0100", 15)
-  internal val memoryAddressField = JTextField("\$C000", 15)
-  internal val valueField = JTextField("", 5)
-  internal val maskField = JTextField("", 5)
-  internal val opcodeField = JTextField("\$00", 5)
+  internal val addressField = DebuggerHexSpinner(0x0100, listOf(0x0000..0xffff))
+  internal val addressRangeCheckBox = JCheckBox("Use inclusive range")
+  internal val addressEndField = DebuggerHexSpinner(0x0100, listOf(0x0100..0xffff))
+  internal val memoryAddressField = DebuggerHexSpinner(0xc000, listOf(0x0000..0xffff))
+  internal val memoryRangeCheckBox = JCheckBox("Use inclusive range")
+  internal val memoryAddressEndField = DebuggerHexSpinner(0xc000, listOf(0xc000..0xffff))
+  internal val valueCheckBox = JCheckBox("Match value")
+  internal val valueField = DebuggerHexSpinner(0x00, listOf(0x00..0xff), digits = 2)
+  internal val maskCheckBox = JCheckBox("Apply mask")
+  internal val maskField = DebuggerHexSpinner(0xff, listOf(0x01..0xff), digits = 2)
+  internal val opcodeField = DebuggerHexSpinner(0x00, listOf(0x00..0xff), digits = 2)
   internal val interruptCombo = JComboBox(DebugInterruptType.entries.toTypedArray())
-  internal val ppuFrameField = JTextField("", 12)
-  internal val ppuLyField = JTextField("", 5)
+  internal val ppuFrameCheckBox = JCheckBox("Match frame")
+  internal val ppuFrameField = JSpinner(SpinnerNumberModel(0L, 0L, Long.MAX_VALUE, 1L))
+  internal val ppuLyCheckBox = JCheckBox("Match scanline")
+  internal val ppuLyField = JSpinner(SpinnerNumberModel(0, 0, MAX_PPU_LY, 1))
   internal val ppuModeCombo = JComboBox(PpuModeChoice.entries.toTypedArray())
-  internal val serialValueField = JTextField("", 5)
-  internal val serialMaskField = JTextField("", 5)
-  internal val counterField = JTextField("0", 18)
+  internal val serialValueCheckBox = JCheckBox("Match value")
+  internal val serialValueField = DebuggerHexSpinner(0x00, listOf(0x00..0xff), digits = 2)
+  internal val serialMaskCheckBox = JCheckBox("Apply mask")
+  internal val serialMaskField = DebuggerHexSpinner(0xff, listOf(0x01..0xff), digits = 2)
+  internal val counterField = JSpinner(SpinnerNumberModel(0L, 0L, Long.MAX_VALUE, 1L))
 
   private val cardLayout = CardLayout()
   private val cards = JPanel(cardLayout)
   private var capabilities: DebugCapabilities? = null
   private var interactionEnabled = false
+  private var suppressChangeEvents = false
   internal var onChange: () -> Unit = {}
   val programCounterNegotiatedKind =
       DebuggerBreakpointEditorKind.PROGRAM_COUNTER.negotiatedKind
@@ -707,21 +725,75 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
     enabledCheckBox.accessibleContext.accessibleDescription =
         "Create or save the breakpoint as enabled or disabled"
 
-    configureField(addressField, "Breakpoint address or inclusive range")
-    configureField(memoryAddressField, "Watchpoint address or inclusive range")
-    configureField(valueField, "Optional observed memory byte value")
-    configureField(maskField, "Optional observed memory byte mask")
-    configureField(opcodeField, "Opcode byte")
-    configureField(ppuFrameField, "Optional PPU owner frame")
-    configureField(ppuLyField, "Optional PPU scanline from 0 through 153")
-    configureField(serialValueField, "Optional serial byte value")
-    configureField(serialMaskField, "Optional serial byte mask")
-    configureField(counterField, "Non-negative counter value")
+    configureHexSpinner(addressField, "Breakpoint range start") {
+      rangeStartChanged(addressField, addressRangeCheckBox, addressEndField)
+    }
+    configureCheckBox(
+        addressRangeCheckBox,
+        "Use an inclusive program-counter range instead of one exact address",
+    ) {
+      rangeSelectionChanged(addressField, addressRangeCheckBox, addressEndField)
+    }
+    configureHexSpinner(addressEndField, "Breakpoint inclusive range end")
+
+    configureHexSpinner(memoryAddressField, "Watchpoint range start") {
+      rangeStartChanged(memoryAddressField, memoryRangeCheckBox, memoryAddressEndField)
+    }
+    configureCheckBox(
+        memoryRangeCheckBox,
+        "Use an inclusive watchpoint range instead of one exact address",
+    ) {
+      rangeSelectionChanged(memoryAddressField, memoryRangeCheckBox, memoryAddressEndField)
+    }
+    configureHexSpinner(memoryAddressEndField, "Watchpoint inclusive range end")
+    configureCheckBox(valueCheckBox, "Constrain the observed memory byte") {
+      optionalValueSelectionChanged(valueCheckBox, maskCheckBox)
+    }
+    configureHexSpinner(valueField, "Observed memory byte value")
+    configureCheckBox(maskCheckBox, "Apply a non-zero bit mask to the memory byte") {
+      updateEnabledState()
+      notifyChange()
+    }
+    configureHexSpinner(maskField, "Observed memory byte mask")
+    configureHexSpinner(opcodeField, "Opcode byte")
+
+    configureCheckBox(ppuFrameCheckBox, "Constrain the PPU owner frame") {
+      updateEnabledState()
+      notifyChange()
+    }
+    configureDecimalSpinner(ppuFrameField, "PPU owner frame", 12)
+    configureCheckBox(ppuLyCheckBox, "Constrain the PPU scanline") {
+      updateEnabledState()
+      notifyChange()
+    }
+    configureDecimalSpinner(ppuLyField, "PPU scanline from 0 through 153", 4)
+
+    configureCheckBox(serialValueCheckBox, "Constrain the observed serial byte") {
+      optionalValueSelectionChanged(serialValueCheckBox, serialMaskCheckBox)
+    }
+    configureHexSpinner(serialValueField, "Observed serial byte value")
+    configureCheckBox(serialMaskCheckBox, "Apply a non-zero bit mask to the serial byte") {
+      updateEnabledState()
+      notifyChange()
+    }
+    configureHexSpinner(serialMaskField, "Observed serial byte mask")
+    configureDecimalSpinner(counterField, "Non-negative counter value", 16)
     interruptCombo.accessibleContext.accessibleName = "Accepted interrupt"
     ppuModeCombo.accessibleContext.accessibleName = "Optional PPU mode"
 
-    cards.add(addressCard(addressField, memory = false), CARD_PROGRAM_COUNTER)
-    cards.add(addressCard(memoryAddressField, memory = true), CARD_MEMORY)
+    cards.add(
+        addressCard(addressField, addressRangeCheckBox, addressEndField, memory = false),
+        CARD_PROGRAM_COUNTER,
+    )
+    cards.add(
+        addressCard(
+            memoryAddressField,
+            memoryRangeCheckBox,
+            memoryAddressEndField,
+            memory = true,
+        ),
+        CARD_MEMORY,
+    )
     cards.add(singleFieldCard("Opcode:", opcodeField), CARD_OPCODE)
     cards.add(comboCard("Interrupt:", interruptCombo), CARD_INTERRUPT)
     cards.add(ppuCard(), CARD_PPU)
@@ -738,9 +810,11 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
 
     kindCombo.addActionListener {
       showSelectedCard()
-      onChange()
+      notifyChange()
     }
-    enabledCheckBox.addActionListener { onChange() }
+    enabledCheckBox.addActionListener { notifyChange() }
+    interruptCombo.addActionListener { notifyChange() }
+    ppuModeCombo.addActionListener { notifyChange() }
     showSelectedCard()
   }
 
@@ -760,7 +834,9 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
   fun draft(): DebuggerBreakpointDraft =
       when (selectedKind) {
         DebuggerBreakpointEditorKind.PROGRAM_COUNTER ->
-            DebuggerBreakpointDraft.ProgramCounter(addressField.text)
+            DebuggerBreakpointDraft.ProgramCounter(
+                addressText(addressField, addressRangeCheckBox, addressEndField)
+            )
         DebuggerBreakpointEditorKind.MEMORY_READ ->
             memoryDraft(DebugMemoryAccess.READ)
         DebuggerBreakpointEditorKind.MEMORY_WRITE ->
@@ -768,15 +844,21 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
         DebuggerBreakpointEditorKind.MEMORY_EXECUTE ->
             memoryDraft(DebugMemoryAccess.EXECUTE)
         DebuggerBreakpointEditorKind.BASE_OPCODE ->
-            DebuggerBreakpointDraft.Opcode(false, opcodeField.text)
+            DebuggerBreakpointDraft.Opcode(
+                false,
+                DebuggerPresentation.formatByte(opcodeField.intValue),
+            )
         DebuggerBreakpointEditorKind.CB_OPCODE ->
-            DebuggerBreakpointDraft.Opcode(true, opcodeField.text)
+            DebuggerBreakpointDraft.Opcode(
+                true,
+                DebuggerPresentation.formatByte(opcodeField.intValue),
+            )
         DebuggerBreakpointEditorKind.INTERRUPT ->
             DebuggerBreakpointDraft.Interrupt(interruptCombo.selectedItem as? DebugInterruptType)
         DebuggerBreakpointEditorKind.PPU_STATE ->
             DebuggerBreakpointDraft.Ppu(
-                ppuFrameField.text,
-                ppuLyField.text,
+                if (ppuFrameCheckBox.isSelected) spinnerLong(ppuFrameField).toString() else "",
+                if (ppuLyCheckBox.isSelected) spinnerLong(ppuLyField).toString() else "",
                 (ppuModeCombo.selectedItem as PpuModeChoice).mode,
             )
         DebuggerBreakpointEditorKind.SERIAL_START ->
@@ -784,56 +866,123 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
         DebuggerBreakpointEditorKind.SERIAL_COMPLETION ->
             serialDraft(DebugSerialCondition.Event.BYTE_TRANSFERRED)
         DebuggerBreakpointEditorKind.MASTER_TICK ->
-            DebuggerBreakpointDraft.Counter(DebugCounterType.MASTER_TICK, counterField.text)
+            DebuggerBreakpointDraft.Counter(
+                DebugCounterType.MASTER_TICK,
+                spinnerLong(counterField).toString(),
+            )
         DebuggerBreakpointEditorKind.FRAME_COUNTER ->
-            DebuggerBreakpointDraft.Counter(DebugCounterType.FRAME, counterField.text)
+            DebuggerBreakpointDraft.Counter(
+                DebugCounterType.FRAME,
+                spinnerLong(counterField).toString(),
+            )
       }
 
   fun load(draft: DebuggerBreakpointDraft) {
     requireBreakpointPanelEdt("Breakpoint draft loading")
-    kindCombo.selectedItem = draft.editorKind
-    when (draft) {
-      is DebuggerBreakpointDraft.ProgramCounter -> addressField.text = draft.addressText
-      is DebuggerBreakpointDraft.Memory -> {
-        memoryAddressField.text = draft.addressText
-        valueField.text = draft.valueText
-        maskField.text = draft.maskText
+    val parsed = draft.parse()
+    require(parsed.isValid) { "Cannot load an invalid breakpoint draft: ${parsed.error}" }
+    val condition = parsed.value!!
+    withSuppressedChangeEvents {
+      kindCombo.selectedItem = draft.editorKind
+      when (draft) {
+        is DebuggerBreakpointDraft.ProgramCounter -> {
+          val pc = condition as DebugPcCondition
+          loadAddressControls(
+              addressField,
+              addressRangeCheckBox,
+              addressEndField,
+              pc.startAddress,
+              pc.endAddress,
+          )
+        }
+        is DebuggerBreakpointDraft.Memory -> {
+          val memory = condition as DebugMemoryCondition
+          loadAddressControls(
+              memoryAddressField,
+              memoryRangeCheckBox,
+              memoryAddressEndField,
+              memory.startAddress(),
+              memory.endAddress(),
+          )
+          loadOptionalByte(
+              valueCheckBox,
+              valueField,
+              maskCheckBox,
+              maskField,
+              memory.hasValueConstraint(),
+              memory.value(),
+              memory.valueMask(),
+          )
+        }
+        is DebuggerBreakpointDraft.Opcode -> {
+          opcodeField.intValue = (condition as DebugOpcodeCondition).opcode
+        }
+        is DebuggerBreakpointDraft.Interrupt -> {
+          interruptCombo.selectedItem = (condition as DebugInterruptCondition).interrupt
+        }
+        is DebuggerBreakpointDraft.Ppu -> {
+          val ppu = condition as DebugPpuCondition
+          ppuFrameCheckBox.isSelected = ppu.constrainsFrame()
+          ppuFrameField.value = if (ppu.constrainsFrame()) ppu.frame else 0L
+          ppuLyCheckBox.isSelected = ppu.constrainsLy()
+          ppuLyField.value = if (ppu.constrainsLy()) ppu.ly else 0
+          ppuModeCombo.selectedItem = PpuModeChoice.from(ppu.mode)
+        }
+        is DebuggerBreakpointDraft.Serial -> {
+          val serial = condition as DebugSerialCondition
+          loadOptionalByte(
+              serialValueCheckBox,
+              serialValueField,
+              serialMaskCheckBox,
+              serialMaskField,
+              serial.hasValueConstraint(),
+              serial.value(),
+              serial.valueMask(),
+          )
+        }
+        is DebuggerBreakpointDraft.Counter -> {
+          counterField.value = (condition as DebugCounterCondition).value
+        }
       }
-      is DebuggerBreakpointDraft.Opcode -> opcodeField.text = draft.opcodeText
-      is DebuggerBreakpointDraft.Interrupt -> interruptCombo.selectedItem = draft.interrupt
-      is DebuggerBreakpointDraft.Ppu -> {
-        ppuFrameField.text = draft.frameText
-        ppuLyField.text = draft.lyText
-        ppuModeCombo.selectedItem = PpuModeChoice.from(draft.mode)
-      }
-      is DebuggerBreakpointDraft.Serial -> {
-        serialValueField.text = draft.valueText
-        serialMaskField.text = draft.maskText
-      }
-      is DebuggerBreakpointDraft.Counter -> counterField.text = draft.valueText
     }
     showSelectedCard()
-    onChange()
+    notifyChange()
   }
 
   fun reset() {
     requireBreakpointPanelEdt("Breakpoint editor reset")
-    kindCombo.selectedItem = DebuggerBreakpointEditorKind.PROGRAM_COUNTER
-    enabledCheckBox.isSelected = true
-    addressField.text = "\$0100"
-    memoryAddressField.text = "\$C000"
-    valueField.text = ""
-    maskField.text = ""
-    opcodeField.text = "\$00"
-    interruptCombo.selectedIndex = 0
-    ppuFrameField.text = ""
-    ppuLyField.text = ""
-    ppuModeCombo.selectedItem = PpuModeChoice.ANY
-    serialValueField.text = ""
-    serialMaskField.text = ""
-    counterField.text = "0"
+    withSuppressedChangeEvents {
+      kindCombo.selectedItem = DebuggerBreakpointEditorKind.PROGRAM_COUNTER
+      enabledCheckBox.isSelected = true
+      loadAddressControls(addressField, addressRangeCheckBox, addressEndField, 0x0100, 0x0100)
+      loadAddressControls(
+          memoryAddressField,
+          memoryRangeCheckBox,
+          memoryAddressEndField,
+          0xc000,
+          0xc000,
+      )
+      loadOptionalByte(valueCheckBox, valueField, maskCheckBox, maskField, false, 0, 0)
+      opcodeField.intValue = 0x00
+      interruptCombo.selectedIndex = 0
+      ppuFrameCheckBox.isSelected = false
+      ppuFrameField.value = 0L
+      ppuLyCheckBox.isSelected = false
+      ppuLyField.value = 0
+      ppuModeCombo.selectedItem = PpuModeChoice.ANY
+      loadOptionalByte(
+          serialValueCheckBox,
+          serialValueField,
+          serialMaskCheckBox,
+          serialMaskField,
+          false,
+          0,
+          0,
+      )
+      counterField.value = 0L
+    }
     showSelectedCard()
-    onChange()
+    notifyChange()
   }
 
   fun focusPrimaryEditor() {
@@ -845,9 +994,15 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
       DebuggerBreakpointEditorKind.BASE_OPCODE,
       DebuggerBreakpointEditorKind.CB_OPCODE -> opcodeField
       DebuggerBreakpointEditorKind.INTERRUPT -> interruptCombo
-      DebuggerBreakpointEditorKind.PPU_STATE -> ppuFrameField
+      DebuggerBreakpointEditorKind.PPU_STATE ->
+          when {
+            ppuFrameCheckBox.isSelected -> ppuFrameField
+            ppuLyCheckBox.isSelected -> ppuLyField
+            else -> ppuModeCombo
+          }
       DebuggerBreakpointEditorKind.SERIAL_START,
-      DebuggerBreakpointEditorKind.SERIAL_COMPLETION -> serialValueField
+      DebuggerBreakpointEditorKind.SERIAL_COMPLETION ->
+          if (serialValueCheckBox.isSelected) serialValueField else serialValueCheckBox
       DebuggerBreakpointEditorKind.MASTER_TICK,
       DebuggerBreakpointEditorKind.FRAME_COUNTER -> counterField
     }.requestFocusInWindow()
@@ -856,13 +1011,17 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
   private fun memoryDraft(access: DebugMemoryAccess): DebuggerBreakpointDraft.Memory =
       DebuggerBreakpointDraft.Memory(
           access,
-          memoryAddressField.text,
-          valueField.text,
-          maskField.text,
+          addressText(memoryAddressField, memoryRangeCheckBox, memoryAddressEndField),
+          optionalByteText(valueCheckBox, valueField),
+          optionalMaskText(valueCheckBox, maskCheckBox, maskField),
       )
 
   private fun serialDraft(event: DebugSerialCondition.Event): DebuggerBreakpointDraft.Serial =
-      DebuggerBreakpointDraft.Serial(event, serialValueField.text, serialMaskField.text)
+      DebuggerBreakpointDraft.Serial(
+          event,
+          optionalByteText(serialValueCheckBox, serialValueField),
+          optionalMaskText(serialValueCheckBox, serialMaskCheckBox, serialMaskField),
+      )
 
   private fun showSelectedCard() {
     cardLayout.show(cards, cardName(selectedKind))
@@ -873,43 +1032,95 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
     val enabled = interactionEnabled && selectedKindSupported
     kindCombo.isEnabled = interactionEnabled && capabilities?.breakpoints() == true
     enabledCheckBox.isEnabled = enabled
-    listOf(
-            addressField,
-            memoryAddressField,
-            valueField,
-            maskField,
-            opcodeField,
-            interruptCombo,
-            ppuFrameField,
-            ppuLyField,
-            ppuModeCombo,
-            serialValueField,
-            serialMaskField,
-            counterField,
-        )
-        .forEach { it.isEnabled = enabled }
+    addressField.isEnabled = enabled
+    addressRangeCheckBox.isEnabled = enabled
+    addressEndField.isEnabled = enabled && addressRangeCheckBox.isSelected
+    memoryAddressField.isEnabled = enabled
+    memoryRangeCheckBox.isEnabled = enabled
+    memoryAddressEndField.isEnabled = enabled && memoryRangeCheckBox.isSelected
+    valueCheckBox.isEnabled = enabled
+    valueField.isEnabled = enabled && valueCheckBox.isSelected
+    maskCheckBox.isEnabled = enabled && valueCheckBox.isSelected
+    maskField.isEnabled = enabled && valueCheckBox.isSelected && maskCheckBox.isSelected
+    opcodeField.isEnabled = enabled
+    interruptCombo.isEnabled = enabled
+    ppuFrameCheckBox.isEnabled = enabled
+    ppuFrameField.isEnabled = enabled && ppuFrameCheckBox.isSelected
+    ppuLyCheckBox.isEnabled = enabled
+    ppuLyField.isEnabled = enabled && ppuLyCheckBox.isSelected
+    ppuModeCombo.isEnabled = enabled
+    serialValueCheckBox.isEnabled = enabled
+    serialValueField.isEnabled = enabled && serialValueCheckBox.isSelected
+    serialMaskCheckBox.isEnabled = enabled && serialValueCheckBox.isSelected
+    serialMaskField.isEnabled =
+        enabled && serialValueCheckBox.isSelected && serialMaskCheckBox.isSelected
+    counterField.isEnabled = enabled
   }
 
-  private fun addressCard(address: JTextField, memory: Boolean): JPanel =
+  private fun addressCard(
+      address: DebuggerHexSpinner,
+      rangeCheckBox: JCheckBox,
+      endAddress: DebuggerHexSpinner,
+      memory: Boolean,
+  ): JPanel =
       formPanel().apply {
-        addFormRow(0, "Address/range:", address)
+        addFormRow(0, "Start:", address)
+        addFormRow(1, "Range:", rangeCheckBox)
+        addFormRow(2, "End:", endAddress)
         if (memory) {
-          addFormRow(1, "Value:", valueField)
-          addFormRow(2, "Mask:", maskField)
+          addFormRow(
+              3,
+              "Value:",
+              optionalControl(valueCheckBox, valueField),
+              valueField,
+          )
+          addFormRow(
+              4,
+              "Mask:",
+              optionalControl(maskCheckBox, maskField),
+              maskField,
+          )
         }
       }
 
   private fun ppuCard(): JPanel =
       formPanel().apply {
-        addFormRow(0, "Frame:", ppuFrameField)
-        addFormRow(1, "LY:", ppuLyField)
+        addFormRow(
+            0,
+            "Frame:",
+            optionalControl(ppuFrameCheckBox, ppuFrameField),
+            ppuFrameField,
+        )
+        addFormRow(
+            1,
+            "LY:",
+            optionalControl(ppuLyCheckBox, ppuLyField),
+            ppuLyField,
+        )
         addFormRow(2, "Mode:", ppuModeCombo)
       }
 
   private fun serialCard(): JPanel =
       formPanel().apply {
-        addFormRow(0, "Value:", serialValueField)
-        addFormRow(1, "Mask:", serialMaskField)
+        addFormRow(
+            0,
+            "Value:",
+            optionalControl(serialValueCheckBox, serialValueField),
+            serialValueField,
+        )
+        addFormRow(
+            1,
+            "Mask:",
+            optionalControl(serialMaskCheckBox, serialMaskField),
+            serialMaskField,
+        )
+      }
+
+  private fun optionalControl(checkBox: JCheckBox, spinner: JSpinner): JPanel =
+      JPanel(FlowLayout(FlowLayout.LEADING, 0, 0)).apply {
+        isOpaque = false
+        add(checkBox)
+        add(spinner)
       }
 
   private fun singleFieldCard(label: String, field: Component): JPanel =
@@ -920,9 +1131,14 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
 
   private fun formPanel(): JPanel = JPanel(GridBagLayout())
 
-  private fun JPanel.addFormRow(row: Int, text: String, field: Component) {
+  private fun JPanel.addFormRow(
+      row: Int,
+      text: String,
+      field: Component,
+      labelTarget: Component = field,
+  ) {
     add(
-        labelFor(text, field),
+        labelFor(text, labelTarget),
         GridBagConstraints().apply {
           gridx = 0
           gridy = row
@@ -943,16 +1159,145 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
     )
   }
 
-  private fun configureField(field: JTextField, accessibleName: String) {
+  private fun configureHexSpinner(
+      field: DebuggerHexSpinner,
+      accessibleName: String,
+      onValueChanged: () -> Unit = ::notifyChange,
+  ) {
     field.accessibleContext.accessibleName = accessibleName
-    field.document.addDocumentListener(
-        object : DocumentListener {
-          override fun insertUpdate(event: DocumentEvent) = onChange()
+    field.accessibleContext.accessibleDescription =
+        "$accessibleName; use the arrow controls or enter a hexadecimal value"
+    field.addChangeListener { onValueChanged() }
+  }
 
-          override fun removeUpdate(event: DocumentEvent) = onChange()
+  private fun configureDecimalSpinner(field: JSpinner, accessibleName: String, columns: Int) {
+    field.editor =
+        JSpinner.NumberEditor(field, "0").apply {
+          textField.columns = columns
+          textField.horizontalAlignment = JTextField.RIGHT
+        }
+    field.accessibleContext.accessibleName = accessibleName
+    field.accessibleContext.accessibleDescription =
+        "$accessibleName; use the arrow controls or enter a bounded decimal value"
+    field.addChangeListener { notifyChange() }
+  }
 
-          override fun changedUpdate(event: DocumentEvent) = onChange()
-        })
+  private fun configureCheckBox(
+      field: JCheckBox,
+      accessibleDescription: String,
+      onSelectionChanged: () -> Unit,
+  ) {
+    field.accessibleContext.accessibleDescription = accessibleDescription
+    field.addActionListener { onSelectionChanged() }
+  }
+
+  private fun rangeStartChanged(
+      start: DebuggerHexSpinner,
+      rangeCheckBox: JCheckBox,
+      end: DebuggerHexSpinner,
+  ) {
+    withSuppressedChangeEvents {
+      end.setAllowedRanges(
+          listOf(start.intValue..MAX_ADDRESS),
+          if (rangeCheckBox.isSelected) end.intValue else start.intValue,
+      )
+    }
+    updateEnabledState()
+    notifyChange()
+  }
+
+  private fun rangeSelectionChanged(
+      start: DebuggerHexSpinner,
+      rangeCheckBox: JCheckBox,
+      end: DebuggerHexSpinner,
+  ) {
+    withSuppressedChangeEvents {
+      end.setAllowedRanges(
+          listOf(start.intValue..MAX_ADDRESS),
+          if (rangeCheckBox.isSelected) end.intValue else start.intValue,
+      )
+    }
+    updateEnabledState()
+    notifyChange()
+  }
+
+  private fun optionalValueSelectionChanged(valueCheckBox: JCheckBox, maskCheckBox: JCheckBox) {
+    if (!valueCheckBox.isSelected) maskCheckBox.isSelected = false
+    updateEnabledState()
+    notifyChange()
+  }
+
+  private fun loadAddressControls(
+      start: DebuggerHexSpinner,
+      rangeCheckBox: JCheckBox,
+      end: DebuggerHexSpinner,
+      startAddress: Int,
+      endAddress: Int,
+  ) {
+    start.intValue = startAddress
+    rangeCheckBox.isSelected = startAddress != endAddress
+    end.setAllowedRanges(listOf(startAddress..MAX_ADDRESS), endAddress)
+  }
+
+  private fun loadOptionalByte(
+      valueCheckBox: JCheckBox,
+      valueField: DebuggerHexSpinner,
+      maskCheckBox: JCheckBox,
+      maskField: DebuggerHexSpinner,
+      constrained: Boolean,
+      value: Int,
+      mask: Int,
+  ) {
+    valueCheckBox.isSelected = constrained
+    valueField.intValue = if (constrained) value else 0
+    val customMask = constrained && mask != 0xff
+    maskCheckBox.isSelected = customMask
+    maskField.intValue = if (customMask) mask else 0xff
+  }
+
+  private fun addressText(
+      start: DebuggerHexSpinner,
+      rangeCheckBox: JCheckBox,
+      end: DebuggerHexSpinner,
+  ): String {
+    val formattedStart = DebuggerPresentation.formatWord(start.intValue)
+    return if (rangeCheckBox.isSelected) {
+      "$formattedStart-${DebuggerPresentation.formatWord(end.intValue)}"
+    } else {
+      formattedStart
+    }
+  }
+
+  private fun optionalByteText(
+      checkBox: JCheckBox,
+      field: DebuggerHexSpinner,
+  ): String = if (checkBox.isSelected) DebuggerPresentation.formatByte(field.intValue) else ""
+
+  private fun optionalMaskText(
+      valueCheckBox: JCheckBox,
+      maskCheckBox: JCheckBox,
+      field: DebuggerHexSpinner,
+  ): String =
+      if (valueCheckBox.isSelected && maskCheckBox.isSelected) {
+        DebuggerPresentation.formatByte(field.intValue)
+      } else {
+        ""
+      }
+
+  private fun spinnerLong(field: JSpinner): Long = (field.value as Number).toLong()
+
+  private inline fun withSuppressedChangeEvents(action: () -> Unit) {
+    val previouslySuppressed = suppressChangeEvents
+    suppressChangeEvents = true
+    try {
+      action()
+    } finally {
+      suppressChangeEvents = previouslySuppressed
+    }
+  }
+
+  private fun notifyChange() {
+    if (!suppressChangeEvents) onChange()
   }
 
   private fun cardName(kind: DebuggerBreakpointEditorKind): String =
@@ -979,6 +1324,8 @@ internal class DebuggerBreakpointDraftEditor : JPanel(BorderLayout(4, 4)) {
     const val CARD_PPU = "ppu"
     const val CARD_SERIAL = "serial"
     const val CARD_COUNTER = "counter"
+    const val MAX_ADDRESS = 0xffff
+    const val MAX_PPU_LY = 153
   }
 }
 

@@ -119,7 +119,7 @@ class DesktopDebuggerControllerTest {
       assertEquals("Tools", menu.text)
       assertTrue(menu.isEnabled)
       val item = menu.menuComponents.filterIsInstance<JMenuItem>().single()
-      assertEquals("Debugger", item.text)
+      assertEquals("Debug Workspace", item.text)
       assertTrue(item.isEnabled)
       assertFalse(item.accessibleContext.accessibleDescription.isNullOrBlank())
       item.doClick()

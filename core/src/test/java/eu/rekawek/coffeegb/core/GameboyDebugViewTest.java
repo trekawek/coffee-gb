@@ -159,6 +159,63 @@ public class GameboyDebugViewTest {
     }
 
     @Test
+    public void hardwareInspectionCapturesOwnerStateWithoutCpuBusReads() throws Exception {
+        try (Gameboy gameboy = cgbGameboy()) {
+            var bus = gameboy.getAddressSpace();
+            bus.setByte(0xff00, 0x20);
+            bus.setByte(0xff01, 0xa5);
+            bus.setByte(0xff02, 0x81);
+            bus.setByte(0xff56, 0xc1);
+            bus.setByte(0xff4f, 0x01);
+            bus.setByte(0xff70, 0x05);
+            bus.setByte(0xff6c, 0x01);
+            bus.setByte(0xff72, 0x12);
+            bus.setByte(0xff73, 0x34);
+            bus.setByte(0xff74, 0x56);
+            bus.setByte(0xff75, 0x70);
+            bus.setByte(0xff51, 0x12);
+            bus.setByte(0xff52, 0x30);
+            bus.setByte(0xff53, 0x04);
+            bus.setByte(0xff54, 0x50);
+            bus.setByte(0xff55, 0x80);
+            bus.setByte(0xff46, 0x9a);
+
+            var snapshot = gameboy.captureDebugSnapshot(9, 12, 0, 0, 0, true);
+            var request = new DebugInspectionRequest(
+                    List.of(), List.of(), EnumSet.of(DebugInspectionSection.HARDWARE));
+            var result = gameboy.inspectDebugMemory(snapshot, request);
+            var hardware = result.hardware().orElseThrow();
+
+            assertSame(snapshot, result.snapshot());
+            assertFalse(result.graphics().isPresent());
+            assertFalse(result.audio().isPresent());
+            assertEquals(0xef, hardware.joypad().joyp());
+            assertEquals(0xa5, hardware.serial().sb());
+            assertEquals(0xfd, hardware.serial().sc());
+            assertEquals(0xff, hardware.infrared().rp());
+            assertTrue(hardware.infrared().localOutput());
+            assertEquals(0x9a, hardware.oamDma().dma());
+            assertEquals(0x9a00, hardware.oamDma().sourceAddress());
+            assertTrue(hardware.oamDma().active());
+            assertEquals(0x12, hardware.vramDma().hdma1());
+            assertEquals(0x30, hardware.vramDma().hdma2());
+            assertEquals(0x04, hardware.vramDma().hdma3());
+            assertEquals(0x50, hardware.vramDma().hdma4());
+            assertTrue(hardware.vramDma().active());
+            assertTrue(hardware.vramDma().hblankMode());
+            assertEquals(0x1230, hardware.vramDma().sourceAddress());
+            assertEquals(0x8450, hardware.vramDma().destinationAddress());
+            assertEquals(DebugGraphicsHardwareMode.CGB_NATIVE,
+                    hardware.system().hardwareMode());
+            assertEquals(0xff, hardware.system().vbk());
+            assertEquals(0xfd, hardware.system().svbk());
+            assertFalse(hardware.system().bootRomMapped());
+            assertEquals(0x12, hardware.system().ff72());
+            assertEquals(0x70 | 0x8f, hardware.system().ff75());
+        }
+    }
+
+    @Test
     public void peripheralInspectionBypassesActiveCpuBusLocksWithoutMutatingStorage()
             throws Exception {
         try (Gameboy gameboy = gameboy()) {

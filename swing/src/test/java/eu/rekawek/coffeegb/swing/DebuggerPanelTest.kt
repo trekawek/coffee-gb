@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.core.debug.DebugExecutionState
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection
 import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
@@ -343,6 +344,49 @@ class DebuggerPanelTest {
       flushEdt()
 
       assertEquals(4, client.inspections.size)
+      val replanned = client.inspections.last().request
+      assertEquals(1, replanned.anchoredRequests().size)
+      assertEquals(DebugInspectionAnchor.PROGRAM_COUNTER, replanned.anchoredRequests().single().anchor())
+      assertEquals(1, replanned.anchoredRequests().single().length())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `live workspace replans when moving registers invalidate an anchored range`() {
+    val client = RecordingDebuggerClient(111, capabilities())
+    val panel = attach(client)
+    try {
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.EXECUTION)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = false)
+        panel.setPollingActive(true)
+      }
+
+      val initialLiveCall = client.inspections.last()
+      completeInspection(initialLiveCall, snapshot(111, 1, paused = false, pc = 0x3ff0))
+      flushEdt()
+
+      val staleAnchoredCall = client.inspections.last()
+      assertTrue(staleAnchoredCall.request.anchoredRequests().isNotEmpty())
+      staleAnchoredCall.completion.complete(
+          DebugResult.failure(
+              DebugErrorCode.INVALID_ARGUMENT,
+              "Program counter moved beyond the planned address range",
+          ))
+      flushEdt()
+
+      val snapshotOnlyCall = client.inspections.last()
+      assertEquals(0, snapshotOnlyCall.request.blockCount())
+      completeInspection(
+          snapshotOnlyCall,
+          snapshot(111, 2, paused = false, pc = 0x7fff, sp = 0x100),
+      )
+      flushEdt()
+
       val replanned = client.inspections.last().request
       assertEquals(1, replanned.anchoredRequests().size)
       assertEquals(DebugInspectionAnchor.PROGRAM_COUNTER, replanned.anchoredRequests().single().anchor())
@@ -1141,7 +1185,10 @@ class DebuggerPanelTest {
     try {
       val labels = onEdt { descendants(panel).filterIsInstance<JLabel>() }
       assertSame(panel.memorySpace, labels.single { it.text == "Space:" }.labelFor)
-      assertSame(panel.memoryRange, labels.single { it.text == "Range:" }.labelFor)
+      assertSame(
+          panel.memoryRange,
+          labels.single { it.text == "Range:" && it.labelFor === panel.memoryRange }.labelFor,
+      )
       assertSame(panel.timelineCapacity, labels.single { it.text == "Capacity:" }.labelFor)
       assertTrue(onEdt { panel.refreshButton.mnemonic != 0 })
       assertNotNull(
@@ -1204,9 +1251,239 @@ class DebuggerPanelTest {
     }
   }
 
+  @Test
+  fun `workspace keeps scalar polling at twenty hertz while video samples at ten hertz`() {
+    var nowNanos = 0L
+    val executor = ManualExecutorService()
+    val client =
+        RecordingDebuggerClient(
+            112,
+            capabilities(inspectionSections = setOf(DebugInspectionSection.GRAPHICS)),
+        )
+    val panel = attach(client, executor) { nowNanos }
+    try {
+      completeInspection(client.inspections.single(), snapshot(112, 1, paused = false))
+      flushEdt()
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.VIDEO)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.VIDEO, visible = true, held = false)
+        panel.setPollingActive(true)
+      }
+
+      val firstVideo = client.inspections.last()
+      assertEquals(setOf(DebugInspectionSection.GRAPHICS), firstVideo.request.sections())
+      completeInspection(
+          firstVideo,
+          snapshot(112, 2, paused = false),
+          graphics = graphicsInspection(),
+      )
+      executor.runNext()
+      flushEdt()
+      assertTrue(onEdt { panel.graphicsPane.tileTable.rowCount > 0 })
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+
+      nowNanos = TimeUnit.MILLISECONDS.toNanos(50)
+      onEdt { panel.requestRefresh() }
+      val scalarOnly = client.inspections.last()
+      assertTrue(scalarOnly.request.sections().isEmpty())
+      completeInspection(scalarOnly, snapshot(112, 3, paused = false))
+      flushEdt()
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 3")
+      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+      assertTrue(onEdt { panel.graphicsPane.tileTable.rowCount > 0 })
+
+      nowNanos = TimeUnit.MILLISECONDS.toNanos(100)
+      onEdt { panel.requestRefresh() }
+      val nextVideo = client.inspections.last()
+      assertEquals(setOf(DebugInspectionSection.GRAPHICS), nextVideo.request.sections())
+    } finally {
+      onEdt(panel::close)
+      executor.shutdownNow()
+    }
+  }
+
+  @Test
+  fun `workspace continuously samples execution and memory while the emulator is running`() {
+    val client = RecordingDebuggerClient(110, capabilities())
+    val panel = attach(client)
+    try {
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.EXECUTION)
+        panel.workspaceComponent(DebuggerWorkspaceTool.MEMORY)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = false)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.MEMORY, visible = true, held = false)
+        panel.setPollingActive(true)
+      }
+
+      val firstLive = client.inspections.last()
+      assertEquals(1, firstLive.request.memoryRequests().size)
+      assertTrue(firstLive.request.anchoredRequests().isEmpty())
+      completeInspection(firstLive, snapshot(110, 1, paused = false))
+      flushEdt()
+
+      val continuous = client.inspections.last()
+      assertEquals(
+          listOf(DebugInspectionAnchor.PROGRAM_COUNTER, DebugInspectionAnchor.STACK_POINTER),
+          continuous.request.anchoredRequests().map { it.anchor() },
+      )
+      assertEquals(1, continuous.request.memoryRequests().size)
+      completeInspection(continuous, snapshot(110, 2, paused = false))
+      flushEdt()
+
+      assertContains(onEdt { panel.executionPane.coherenceLabel.text }, "LIVE")
+      assertContains(onEdt { panel.workspaceMemoryPane.statusLabel.text }, "live")
+      assertFalse(onEdt { panel.refreshButton.isVisible })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `holding every visible workspace tool suspends sampling and freezes its presentation`() {
+    val client = RecordingDebuggerClient(112, capabilities())
+    val panel = attach(client)
+    try {
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.EXECUTION)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = false)
+        panel.setWorkspaceSamplingActive(true)
+        panel.setPollingActive(true)
+      }
+
+      val firstLive = client.inspections.last()
+      completeInspection(firstLive, snapshot(112, 1, paused = false))
+      flushEdt()
+      val coherentLive = client.inspections.last()
+      completeInspection(coherentLive, snapshot(112, 2, paused = false))
+      flushEdt()
+      val frozenText = onEdt { panel.executionPane.coherenceLabel.text }
+
+      onEdt {
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = true)
+        panel.setWorkspaceSamplingActive(false)
+      }
+      val countWhileHeld = client.inspections.size
+      onEdt { panel.requestRefresh() }
+      assertEquals(countWhileHeld, client.inspections.size)
+
+      client.inspections.last().completion.complete(
+          DebugResult.success(
+              inspection(client.inspections.last().request, snapshot(112, 3, paused = false))))
+      flushEdt()
+      assertEquals(frozenText, onEdt { panel.executionPane.coherenceLabel.text })
+
+      onEdt {
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = false)
+        panel.setWorkspaceSamplingActive(true)
+      }
+      assertEquals(countWhileHeld + 1, client.inspections.size)
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `command snapshot invalidates live memory before publishing its new identity`() {
+    val client = RecordingDebuggerClient(113, capabilities())
+    val panel = attach(client)
+    try {
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.MEMORY)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.MEMORY, visible = true, held = false)
+        panel.setWorkspaceSamplingActive(true)
+        panel.setPollingActive(true)
+      }
+
+      completeInspection(client.inspections.last(), snapshot(113, 1, paused = false))
+      flushEdt()
+      assertTrue(onEdt { panel.workspaceMemoryPane.memoryTable.rowCount } > 0)
+
+      onEdt { panel.pauseButton.doClick() }
+      client.pauses.single().complete(DebugResult.success(snapshot(113, 2, paused = true)))
+      flushEdt()
+
+      assertEquals(0, onEdt { panel.workspaceMemoryPane.memoryTable.rowCount })
+      assertContains(
+          onEdt { panel.workspaceMemoryPane.statusLabel.text },
+          "Session 113, snapshot 2",
+      )
+      assertContains(onEdt { panel.workspaceMemoryPane.statusLabel.text }, "Awaiting")
+      assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 2")
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `held timeline ignores an in-flight page while execution keeps sampling`() {
+    val client = RecordingDebuggerClient(114, capabilities(trace = true))
+    val panel = attach(client)
+    try {
+      onEdt {
+        panel.setPollingActive(false)
+        panel.setWorkspaceMode(true)
+        panel.workspaceComponent(DebuggerWorkspaceTool.TIMELINE)
+        panel.workspaceComponent(DebuggerWorkspaceTool.EXECUTION)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.TIMELINE, visible = true, held = false)
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.EXECUTION, visible = true, held = false)
+        panel.setWorkspaceSamplingActive(true)
+        panel.setPollingActive(true)
+      }
+      completeInspection(client.inspections.last(), snapshot(114, 1, paused = false))
+      flushEdt()
+      completeInspection(client.inspections.last(), snapshot(114, 2, paused = false))
+      flushEdt()
+
+      onEdt { panel.timelineToggle.doClick() }
+      val enable = client.traceConfigurations.single()
+      enable.completion.complete(DebugResult.success(enable.configuration))
+      flushEdt()
+      val pendingPage = client.inspections.last()
+      assertTrue(pendingPage.request.traceRequest().isPresent)
+
+      onEdt {
+        panel.setWorkspaceToolState(DebuggerWorkspaceTool.TIMELINE, visible = true, held = true)
+      }
+      completeInspection(
+          pendingPage,
+          snapshot(114, 3, paused = false),
+          TraceReadResult(
+              listOf(
+                  TraceEntry(
+                      1,
+                      10,
+                      TraceSource.PPU,
+                      PpuTrace(PpuTrace.Kind.SCANLINE_STARTED, 0, 0, 0, DebugPpuMode.OAM_SEARCH),
+                  )),
+              1,
+              0,
+              0,
+              1,
+              2,
+          ),
+      )
+      flushEdt()
+
+      assertEquals(0, onEdt { panel.timelineModel.rowCount })
+      assertTrue(client.inspections.last().request.traceRequest().isEmpty)
+      assertTrue(client.inspections.last().request.anchoredRequests().isNotEmpty())
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
   private fun attach(
       client: RecordingDebuggerClient,
       peripheralExecutor: AbstractExecutorService? = null,
+      monotonicNanos: () -> Long = System::nanoTime,
   ): DebuggerPanel =
       onEdt {
         val panel =
@@ -1214,6 +1491,7 @@ class DebuggerPanelTest {
               DebuggerPanel(
                   clientFactory = { error("DebugPort factory is not used by this test") },
                   pollingIntervalMillis = 60_000,
+                  monotonicNanos = monotonicNanos,
               )
             } else {
               DebuggerPanel(
@@ -1221,6 +1499,7 @@ class DebuggerPanelTest {
                   pollingIntervalMillis = 60_000,
                   peripheralExecutor = peripheralExecutor,
                   ownsPeripheralExecutor = false,
+                  monotonicNanos = monotonicNanos,
               )
             }
         panel
@@ -1236,9 +1515,10 @@ class DebuggerPanelTest {
       trace: TraceReadResult? = null,
       graphics: DebugGraphicsInspection? = null,
       audio: DebugAudioInspection? = null,
+      hardware: DebugHardwareInspection? = null,
   ) {
     call.completion.complete(
-        DebugResult.success(inspection(call.request, snapshot, trace, graphics, audio)))
+        DebugResult.success(inspection(call.request, snapshot, trace, graphics, audio, hardware)))
   }
 
   private fun inspection(
@@ -1247,6 +1527,7 @@ class DebuggerPanelTest {
       trace: TraceReadResult? = null,
       graphics: DebugGraphicsInspection? = null,
       audio: DebugAudioInspection? = null,
+      hardware: DebugHardwareInspection? = null,
   ): DebugInspectionResult {
     val anchored =
         request.anchoredRequests().map { anchored ->
@@ -1281,8 +1562,30 @@ class DebuggerPanelTest {
         Optional.ofNullable(graphics),
         Optional.ofNullable(audio),
         Optional.ofNullable(traceResult),
+        Optional.ofNullable(
+            if (DebugInspectionSection.HARDWARE in request.sections()) {
+              hardware ?: hardwareInspection()
+            } else {
+              null
+            }
+        ),
     )
   }
+
+  private fun hardwareInspection(): DebugHardwareInspection =
+      DebugHardwareInspection(
+          DebugHardwareInspection.Joypad(0xff, 0, 0x0f, false, 0, -1, false, -1),
+          DebugHardwareInspection.Serial(0, 0x7e, 0, 0, false, 0),
+          DebugHardwareInspection.Infrared(false, -1, false, false, false),
+          DebugHardwareInspection.OamDma(0xff, false, 0xff00, 0, false, false),
+          DebugHardwareInspection.VramDma(
+              false, -1, -1, -1, -1, -1, false, false, -1, -1, -1),
+          DebugHardwareInspection.System(
+              DebugGraphicsHardwareMode.DMG,
+              -1, -1, -1, -1, false,
+              -1, -1, -1, -1, -1, -1, -1,
+          ),
+      )
 
   private fun memoryBlock(
       addressSpace: DebugAddressSpace,

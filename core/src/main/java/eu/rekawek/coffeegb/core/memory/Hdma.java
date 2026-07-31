@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
@@ -705,6 +706,26 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         } else if (hblankTransfer && hblankRequestTicks == 0) {
             return true;
         } else return !hblankTransfer;
+    }
+
+    /** Captures the retained HDMA latches and current block progress without bus reads. */
+    public DebugHardwareInspection.VramDma captureDebugVramDmaInspection() {
+        int sourceAddress = src & 0xfff0;
+        int destinationAddress = 0x8000 | (dst & 0x1ff0);
+        int currentBlockBytes = !transferInProgress || tick <= 0
+                ? 0 : Math.min(16, (tick + 1) / 2);
+        return new DebugHardwareInspection.VramDma(
+                true,
+                (sourceAddress >>> 8) & 0xff,
+                sourceAddress & 0xf0,
+                (destinationAddress >>> 8) & 0x1f,
+                destinationAddress & 0xf0,
+                (transferInProgress ? 0 : 0x80) | (length & 0x7f),
+                transferInProgress,
+                hblankTransfer,
+                sourceAddress,
+                destinationAddress,
+                currentBlockBytes);
     }
 
     /** Whether an HBlank transfer is still armed, including between HBlank bursts. */

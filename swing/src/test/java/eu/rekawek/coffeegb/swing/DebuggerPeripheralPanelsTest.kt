@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection
 import java.awt.Color
 import java.awt.event.KeyEvent
+import java.awt.image.BufferedImage
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
@@ -17,15 +18,42 @@ import javax.swing.JLabel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 import kotlin.test.assertContains
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class DebuggerPeripheralPanelsTest {
+
+  @Test
+  fun `graphics render model decodes tile pixels map attributes objects and palettes`() {
+    val view = DebuggerPeripheralPanePreparation.graphics(SNAPSHOT_IDENTITY, graphicsInspection())
+    val model = DebuggerGraphicsRenderModelFactory.create(view)
+
+    assertEquals(768, model.tiles.size)
+    assertContentEquals(
+        intArrayOf(3, 2, 1, 0, 3, 2, 1, 0),
+        model.tiles.first().pixels.copyOfRange(0, 8),
+    )
+    val windowCell = model.windowCells.first()
+    assertEquals(1, windowCell.bank)
+    assertEquals(5, windowCell.palette)
+    assertEquals(0x8030, windowCell.tileAddress)
+    assertTrue(windowCell.xFlip)
+    assertTrue(windowCell.yFlip)
+    val firstObject = model.objects.first()
+    assertEquals(0, firstObject.x)
+    assertEquals(0, firstObject.y)
+    assertEquals(0x8070, firstObject.tileAddress)
+    assertEquals(1, firstObject.bank)
+    assertEquals(19, model.palettes.size)
+    assertEquals(4, model.palettes.first().swatches.size)
+  }
 
   @Test
   fun `worker preparation decodes complete graphics and audio payloads into text views`() {
@@ -61,6 +89,14 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(1024, graphics.windowMapRows.size)
       assertEquals(40, graphics.objectRows.size)
       assertEquals(76, graphics.paletteRows.size)
+      assertSame(graphics.renderModel, DebuggerGraphicsRenderModelFactory.create(graphics))
+      assertContentEquals(
+          intArrayOf(3, 2, 1, 0, 3, 2, 1, 0),
+          graphics.renderModel.tiles.first().pixels.copyOfRange(0, 8),
+      )
+      assertEquals(768, graphics.tableData.tiles.size)
+      assertEquals(1024, graphics.tableData.backgroundMap.size)
+      assertEquals(1024, graphics.tableData.windowMap.size)
       assertContains(graphics.tileRows.first().colorIndexRows, "32103210")
       assertContains(graphics.objectRows.first().accessibilityText, "Object 0")
       assertContains(graphics.objectRows.first().priorityText, "master priority is off")
@@ -95,6 +131,59 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(1024, panel.windowMapTable.rowCount)
       assertEquals(40, panel.objectTable.rowCount)
       assertEquals(76, panel.paletteTable.rowCount)
+      assertEquals(384, panel.tileAtlasCanvas.itemCount)
+      assertEquals(1024, panel.backgroundMapCanvas.itemCount)
+      assertEquals(1024, panel.windowMapCanvas.itemCount)
+      assertEquals(40, panel.objectThumbnailCanvas.itemCount)
+      assertEquals(40, panel.objectPlacementCanvas.itemCount)
+      assertEquals(19, panel.paletteCanvas.itemCount)
+      assertEquals("Graphical VRAM tile atlas", panel.tileAtlasCanvas.accessibleContext.accessibleName)
+      assertEquals(
+          "Graphical OAM screen placement",
+          panel.objectPlacementCanvas.accessibleContext.accessibleName,
+      )
+      assertFalse(panel.tileBankSelector.isEditable)
+      assertFalse(panel.tilePaletteSelector.isEditable)
+
+      panel.windowMapCanvas.selectCellIndex(0)
+      assertEquals(0, panel.windowMapTable.selectedRow)
+      assertEquals(1, panel.tileAtlasCanvas.displayedBank)
+      assertEquals(3, panel.tileAtlasCanvas.selectedTile?.index)
+      assertEquals(5, panel.paletteCanvas.selectedPalette?.index)
+      assertEquals("CGB background", panel.paletteCanvas.selectedPalette?.group)
+      performKey(panel.windowMapCanvas, KeyEvent.VK_RIGHT)
+      assertEquals(1, panel.windowMapTable.selectedRow)
+      assertEquals(1, panel.windowMapCanvas.selectedCell?.column)
+      assertContains(panel.windowMapCanvas.accessibleContext.accessibleDescription, "column 1")
+
+      val model = DebuggerGraphicsRenderModelFactory.create(view)
+      panel.objectThumbnailCanvas.selectObject(model.objects.first(), notify = true)
+      assertEquals(0, panel.objectTable.selectedRow)
+      assertEquals(0, panel.objectPlacementCanvas.selectedObject?.index)
+      assertEquals(7, panel.tileAtlasCanvas.selectedTile?.index)
+      assertEquals("CGB object", panel.paletteCanvas.selectedPalette?.group)
+
+      val atlasImage =
+          BufferedImage(
+              panel.tileAtlasCanvas.preferredSize.width,
+              panel.tileAtlasCanvas.preferredSize.height,
+              BufferedImage.TYPE_INT_RGB,
+          )
+      panel.tileAtlasCanvas.size = panel.tileAtlasCanvas.preferredSize
+      val atlasGraphics = atlasImage.createGraphics()
+      try {
+        panel.tileAtlasCanvas.paint(atlasGraphics)
+      } finally {
+        atlasGraphics.dispose()
+      }
+      val sampledColors =
+          sequence {
+                for (y in 0 until atlasImage.height step 8) {
+                  for (x in 0 until atlasImage.width step 8) yield(atlasImage.getRGB(x, y))
+                }
+              }
+              .toSet()
+      assertTrue(sampledColors.size > 1)
       assertEquals("Graphics debugger pane", panel.accessibleContext.accessibleName)
       assertContains(panel.accessibleContext.accessibleDescription, "graphics")
       assertEquals("Object attribute memory", panel.objectTable.accessibleContext.accessibleName)
@@ -150,6 +239,12 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(0, panel.windowMapTable.rowCount)
       assertEquals(0, panel.objectTable.rowCount)
       assertEquals(0, panel.paletteTable.rowCount)
+      assertEquals(0, panel.tileAtlasCanvas.itemCount)
+      assertEquals(0, panel.backgroundMapCanvas.itemCount)
+      assertEquals(0, panel.windowMapCanvas.itemCount)
+      assertEquals(0, panel.objectThumbnailCanvas.itemCount)
+      assertEquals(0, panel.objectPlacementCanvas.itemCount)
+      assertEquals(0, panel.paletteCanvas.itemCount)
       assertContains(panel.overviewArea.text, "No graphics")
       assertContains(panel.accessibleContext.accessibleDescription, "not retained")
     }
@@ -219,6 +314,12 @@ class DebuggerPeripheralPanelsTest {
 
   private fun performCopy(component: JComponent) {
     val key = KeyStroke.getKeyStroke(KeyEvent.VK_C, peripheralMenuShortcutMask())
+    val actionKey = assertNotNull(component.getInputMap(JComponent.WHEN_FOCUSED).get(key))
+    assertNotNull(component.actionMap.get(actionKey)).actionPerformed(null)
+  }
+
+  private fun performKey(component: JComponent, keyCode: Int) {
+    val key = KeyStroke.getKeyStroke(keyCode, 0)
     val actionKey = assertNotNull(component.getInputMap(JComponent.WHEN_FOCUSED).get(key))
     assertNotNull(component.actionMap.get(actionKey)).actionPerformed(null)
   }

@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
 import eu.rekawek.coffeegb.core.events.EventBus;
@@ -121,6 +122,28 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
             result &= ~0x02;
         }
         return result;
+    }
+
+    /**
+     * Captures RP and its physical inputs without calling {@code FullChanger.onRpRead()}.
+     * Ordinary FF56 reads intentionally arm/advance some infrared peripherals.
+     */
+    public DebugHardwareInspection.Infrared captureDebugInfraredInspection(boolean available) {
+        if (!available) {
+            return new DebugHardwareInspection.Infrared(false, -1, false, false, false);
+        }
+        boolean receivedLight = fullChanger.isLightOn() || endpoint.isLightOn();
+        boolean serialInputHigh = serialEndpoint.isSerialInputHigh();
+        int result = rp | 0x2c | 0x02;
+        if (serialInputHigh) {
+            result |= 0x10;
+        }
+        int readMode = rp & 0xc0;
+        if (readMode == 0x80 || (readMode == 0xc0 && receivedLight)) {
+            result &= ~0x02;
+        }
+        return new DebugHardwareInspection.Infrared(
+                true, result, (rp & 0x01) != 0, receivedLight, serialInputHigh);
     }
 
     @Override

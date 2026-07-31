@@ -11,7 +11,9 @@ import eu.rekawek.coffeegb.core.debug.DebugAudioInspection;
 import eu.rekawek.coffeegb.core.debug.DebugCpuState;
 import eu.rekawek.coffeegb.core.debug.DebugExecutionState;
 import eu.rekawek.coffeegb.core.debug.DebugFeatureState;
+import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode;
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugInterruptState;
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation;
 import eu.rekawek.coffeegb.core.debug.DebugInspectionSection;
@@ -1037,8 +1039,48 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         var audio = request.sections().contains(DebugInspectionSection.AUDIO)
                 ? Optional.of(sound.captureDebugAudioInspection())
                 : Optional.<DebugAudioInspection>empty();
+        var hardware = request.sections().contains(DebugInspectionSection.HARDWARE)
+                ? Optional.of(captureDebugHardwareInspection())
+                : Optional.<DebugHardwareInspection>empty();
         return new DebugInspectionResult(snapshot, request, anchoredBlocks, memoryBlocks,
-                graphics, audio, Optional.ofNullable(trace));
+                graphics, audio, Optional.ofNullable(trace), hardware);
+    }
+
+    private DebugHardwareInspection captureDebugHardwareInspection() {
+        DebugGraphicsHardwareMode hardwareMode = !gbc
+                ? DebugGraphicsHardwareMode.DMG
+                : speedMode.isDmgCompat()
+                        ? DebugGraphicsHardwareMode.CGB_COMPATIBILITY
+                        : DebugGraphicsHardwareMode.CGB_NATIVE;
+        boolean cgbHardware = hardwareMode != DebugGraphicsHardwareMode.DMG;
+        DebugHardwareInspection.VramDma vramDma = cgbHardware
+                ? hdma.captureDebugVramDmaInspection()
+                : new DebugHardwareInspection.VramDma(
+                        false, -1, -1, -1, -1, -1,
+                        false, false, -1, -1, -1);
+        int key0 = cgbHardware ? speedMode.getByte(0xff4c) : -1;
+        int key1 = cgbHardware ? speedMode.getByte(0xff4d) : -1;
+        int vbk = cgbHardware
+                ? 0xfe | (gpu.getRegisters().get(GpuRegister.VBK) & 1) : -1;
+        int svbk = cgbHardware ? mmu.getDebugSvbk() : -1;
+        int opri = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff6c) : -1;
+        int ff72 = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff72) : -1;
+        int ff73 = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff73) : -1;
+        int ff74 = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff74) : -1;
+        int ff75 = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff75) : -1;
+        int pcm12 = cgbHardware ? sound.getByte(0xff76) : -1;
+        int pcm34 = cgbHardware ? sound.getByte(0xff77) : -1;
+        var system = new DebugHardwareInspection.System(
+                hardwareMode, key0, key1, vbk, svbk, !biosShadow.isBootFinished(),
+                opri, ff72, ff73, ff74, ff75, pcm12, pcm34);
+        return new DebugHardwareInspection(
+                joypad.captureDebugJoypadInspection(
+                        hardwareProfile.capabilities().superGameboyCommands()),
+                serialPort.captureDebugSerialInspection(),
+                infraredPort.captureDebugInfraredInspection(cgbHardware),
+                dma.captureDebugOamDmaInspection(),
+                vramDma,
+                system);
     }
 
     private DebugPpuMode toDebugPpuMode() {

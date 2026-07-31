@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import eu.rekawek.coffeegb.core.debug.trace.DmaTrace;
@@ -310,6 +311,13 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
 
     public boolean isTransferInProgress() {
         return transferInProgress;
+    }
+
+    /** Captures the OAM-DMA latch and progress without reading FF46 through the bus. */
+    public DebugHardwareInspection.OamDma captureDebugOamDmaInspection() {
+        return new DebugHardwareInspection.OamDma(
+                regValue, transferInProgress, from & 0xffff,
+                Math.min(currentByte, 0xa0), isOamBlocked(), cpuClockPaused);
     }
 
     public boolean isCpuAccessBlocked(int address, boolean gbc) {

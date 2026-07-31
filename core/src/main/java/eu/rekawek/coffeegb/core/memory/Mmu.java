@@ -182,6 +182,20 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
         return getSpace(address).getByte(address);
     }
 
+    /** Returns the owner-held SVBK value without routing a read through the MMU bus. */
+    public int getDebugSvbk() {
+        return gbcRam.getByte(GbcRam.SVBK);
+    }
+
+    /** Returns one owner-held undocumented CGB register without MMU address dispatch. */
+    public int getDebugUndocumentedGbcRegister(int address) {
+        if (!undocumentedGbcRegisters.accepts(address)) {
+            throw new IllegalArgumentException("Not an undocumented CGB register: "
+                    + Integer.toHexString(address));
+        }
+        return undocumentedGbcRegisters.getByte(address);
+    }
+
     /**
      * Copies debugger-visible memory without entering the emulated CPU bus. Only RAM owned by
      * this MMU is exposed: work RAM, its E000-FDFF echo, and high RAM. Cartridge, VRAM, OAM and
