@@ -107,15 +107,40 @@ internal object DebuggerPeripheralPanePreparation {
           appendLine(graphics.backgroundPaletteIndexText)
           append(graphics.objectPaletteIndexText)
         }
+    val preparedTileRows = immutableList(tileRows)
+    val preparedBackgroundMapRows = immutableList(backgroundMapRows)
+    val preparedWindowMapRows = immutableList(windowMapRows)
+    val preparedObjectRows = immutableList(objectRows)
+    val preparedPaletteRows = immutableList(paletteRows)
+    ensurePeripheralPreparationActive()
+    val renderModel =
+        DebuggerGraphicsRenderModelFactory.create(
+            preparedTileRows,
+            preparedBackgroundMapRows,
+            preparedWindowMapRows,
+            preparedObjectRows,
+            preparedPaletteRows,
+        )
+    ensurePeripheralPreparationActive()
+    val tableData =
+        DebuggerGraphicsTableData.create(
+            preparedTileRows,
+            preparedBackgroundMapRows,
+            preparedWindowMapRows,
+            preparedObjectRows,
+            preparedPaletteRows,
+        )
     return DebuggerGraphicsPaneView(
         identity = identity,
         overviewText = overview,
         accessibilityText = "${identity.label}. ${graphics.accessibilityText}",
-        tileRows = immutableList(tileRows),
-        backgroundMapRows = immutableList(backgroundMapRows),
-        windowMapRows = immutableList(windowMapRows),
-        objectRows = immutableList(objectRows),
-        paletteRows = immutableList(paletteRows),
+        tileRows = preparedTileRows,
+        backgroundMapRows = preparedBackgroundMapRows,
+        windowMapRows = preparedWindowMapRows,
+        objectRows = preparedObjectRows,
+        paletteRows = preparedPaletteRows,
+        renderModel = renderModel,
+        tableData = tableData,
     )
   }
 
@@ -274,7 +299,112 @@ internal data class DebuggerGraphicsPaneView(
     val windowMapRows: List<DebuggerTileMapTableRow>,
     val objectRows: List<DebuggerObjectTableRow>,
     val paletteRows: List<DebuggerPaletteTableRow>,
+    val renderModel: DebuggerGraphicsRenderModel =
+        DebuggerGraphicsRenderModelFactory.create(
+            tileRows,
+            backgroundMapRows,
+            windowMapRows,
+            objectRows,
+            paletteRows,
+        ),
+    val tableData: DebuggerGraphicsTableData =
+        DebuggerGraphicsTableData.create(
+            tileRows,
+            backgroundMapRows,
+            windowMapRows,
+            objectRows,
+            paletteRows,
+        ),
 )
+
+internal data class DebuggerGraphicsTableData(
+    val tiles: List<List<Any>>,
+    val backgroundMap: List<List<Any>>,
+    val windowMap: List<List<Any>>,
+    val objects: List<List<Any>>,
+    val palettes: List<List<Any>>,
+) {
+  companion object {
+    fun create(
+        tileRows: List<DebuggerTileBankRow>,
+        backgroundMapRows: List<DebuggerTileMapTableRow>,
+        windowMapRows: List<DebuggerTileMapTableRow>,
+        objectRows: List<DebuggerObjectTableRow>,
+        paletteRows: List<DebuggerPaletteTableRow>,
+    ): DebuggerGraphicsTableData =
+        DebuggerGraphicsTableData(
+            tiles =
+                freezeTableRows(
+                    tileRows.map { row ->
+                      listOf<Any>(
+                          row.bank,
+                          row.tileIndex,
+                          row.addressText,
+                          row.colorIndexRows,
+                          row.accessibilityText,
+                      )
+                    }
+                ),
+            backgroundMap = freezeTableRows(backgroundMapRows.map(::mapTableCells)),
+            windowMap = freezeTableRows(windowMapRows.map(::mapTableCells)),
+            objects =
+                freezeTableRows(
+                    objectRows.map { row ->
+                      listOf<Any>(
+                          row.index,
+                          row.addressText,
+                          row.coordinateText,
+                          row.sizeText,
+                          row.tileText,
+                          row.paletteText,
+                          row.bank,
+                          row.flagsText,
+                          row.flipText,
+                          row.priorityText,
+                          row.visibilityText,
+                          row.accessibilityText,
+                      )
+                    }
+                ),
+            palettes =
+                freezeTableRows(
+                    paletteRows.map { row ->
+                      listOf<Any>(
+                          row.group,
+                          row.palette,
+                          row.sourceText,
+                          row.colorIndex,
+                          row.rawValueText,
+                          row.componentText,
+                          row.hexColor,
+                          row.colorName,
+                          DebuggerPalettePreview(row.hexColor, row.rgb888),
+                          row.accessibilityText,
+                      )
+                    }
+                ),
+        )
+
+    private fun mapTableCells(row: DebuggerTileMapTableRow): List<Any> =
+        listOf(
+            row.row,
+            row.column,
+            row.mapAddressText,
+            row.tileNumberText,
+            row.tileDataAddressText,
+            row.bank,
+            row.palette,
+            row.attributesText,
+            row.flagsText,
+            row.accessibilityText,
+        )
+
+    private fun freezeTableRows(rows: List<List<Any>>): List<List<Any>> =
+        Collections.unmodifiableList(
+            rows.map { row -> Collections.unmodifiableList(ArrayList(row)) }
+        )
+  }
+}
 
 internal data class DebuggerTileBankRow(
     val bank: Int,

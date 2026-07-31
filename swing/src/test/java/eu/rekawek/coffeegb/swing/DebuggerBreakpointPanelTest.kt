@@ -58,37 +58,45 @@ class DebuggerBreakpointPanelTest {
     val cases =
         listOf(
             EditorCase(DebuggerBreakpointEditorKind.PROGRAM_COUNTER, DebugPcCondition.at(0x150)) {
-              panel.editor.addressField.text = "\$0150"
+              panel.editor.addressField.intValue = 0x0150
+              panel.editor.addressRangeCheckBox.isSelected = false
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.MEMORY_READ,
                 DebugMemoryCondition(DebugMemoryAccess.READ, 0xc000, 0xc00f, 0xa0, 0xf0),
             ) {
-              panel.editor.memoryAddressField.text = "C000-C00F"
-              panel.editor.valueField.text = "A0"
-              panel.editor.maskField.text = "F0"
+              panel.editor.memoryAddressField.intValue = 0xc000
+              panel.editor.memoryRangeCheckBox.doClick()
+              panel.editor.memoryAddressEndField.intValue = 0xc00f
+              panel.editor.valueCheckBox.doClick()
+              panel.editor.valueField.intValue = 0xa0
+              panel.editor.maskCheckBox.doClick()
+              panel.editor.maskField.intValue = 0xf0
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.MEMORY_WRITE,
                 DebugMemoryCondition(DebugMemoryAccess.WRITE, 0xd000, 0xd000),
             ) {
-              panel.editor.memoryAddressField.text = "D000"
-              panel.editor.valueField.text = ""
-              panel.editor.maskField.text = ""
+              panel.editor.memoryAddressField.intValue = 0xd000
+              panel.editor.memoryRangeCheckBox.isSelected = false
+              panel.editor.valueCheckBox.isSelected = false
+              panel.editor.maskCheckBox.isSelected = false
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.MEMORY_EXECUTE,
                 DebugMemoryCondition(DebugMemoryAccess.EXECUTE, 0x200, 0x2ff),
             ) {
-              panel.editor.memoryAddressField.text = "0200-02FF"
-              panel.editor.valueField.text = ""
-              panel.editor.maskField.text = ""
+              panel.editor.memoryAddressField.intValue = 0x0200
+              panel.editor.memoryRangeCheckBox.doClick()
+              panel.editor.memoryAddressEndField.intValue = 0x02ff
+              panel.editor.valueCheckBox.isSelected = false
+              panel.editor.maskCheckBox.isSelected = false
             },
             EditorCase(DebuggerBreakpointEditorKind.BASE_OPCODE, DebugOpcodeCondition.base(0x3e)) {
-              panel.editor.opcodeField.text = "3E"
+              panel.editor.opcodeField.intValue = 0x3e
             },
             EditorCase(DebuggerBreakpointEditorKind.CB_OPCODE, DebugOpcodeCondition.cb(0x7c)) {
-              panel.editor.opcodeField.text = "7C"
+              panel.editor.opcodeField.intValue = 0x7c
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.INTERRUPT,
@@ -100,35 +108,40 @@ class DebuggerBreakpointPanelTest {
                 DebuggerBreakpointEditorKind.PPU_STATE,
                 DebugPpuCondition(12, 144, DebugPpuMode.VBLANK),
             ) {
-              panel.editor.ppuFrameField.text = "12"
-              panel.editor.ppuLyField.text = "144"
+              panel.editor.ppuFrameCheckBox.doClick()
+              panel.editor.ppuFrameField.value = 12L
+              panel.editor.ppuLyCheckBox.doClick()
+              panel.editor.ppuLyField.value = 144
               panel.editor.ppuModeCombo.selectedItem = PpuModeChoice.VBLANK
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.SERIAL_START,
                 DebugSerialCondition(DebugSerialCondition.Event.TRANSFER_STARTED, 0x81),
             ) {
-              panel.editor.serialValueField.text = "81"
-              panel.editor.serialMaskField.text = ""
+              panel.editor.serialValueCheckBox.doClick()
+              panel.editor.serialValueField.intValue = 0x81
+              panel.editor.serialMaskCheckBox.isSelected = false
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.SERIAL_COMPLETION,
                 DebugSerialCondition(DebugSerialCondition.Event.BYTE_TRANSFERRED, 0xa0, 0xf0),
             ) {
-              panel.editor.serialValueField.text = "A0"
-              panel.editor.serialMaskField.text = "F0"
+              panel.editor.serialValueCheckBox.isSelected = true
+              panel.editor.serialValueField.intValue = 0xa0
+              panel.editor.serialMaskCheckBox.doClick()
+              panel.editor.serialMaskField.intValue = 0xf0
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.MASTER_TICK,
                 DebugCounterCondition.atMasterTick(1234),
             ) {
-              panel.editor.counterField.text = "1234"
+              panel.editor.counterField.value = 1234L
             },
             EditorCase(
                 DebuggerBreakpointEditorKind.FRAME_COUNTER,
                 DebugCounterCondition.atFrame(16),
             ) {
-              panel.editor.counterField.text = "0x10"
+              panel.editor.counterField.value = 16L
             },
         )
 
@@ -145,7 +158,7 @@ class DebuggerBreakpointPanelTest {
       assertEquals(0, panel.table.rowCount)
       assertEquals(12, saves.size)
       assertEquals("Breakpoint condition type", panel.editor.kindCombo.accessibleContext.accessibleName)
-      assertSame(panel.editor.addressField, findLabel(panel, "Address/range:").labelFor)
+      assertSame(panel.editor.addressField, findLabel(panel, "Start:").labelFor)
       assertNotNull(
           panel
               .getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)

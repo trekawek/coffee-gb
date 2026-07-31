@@ -43,6 +43,18 @@ internal class DebuggerPeripheralTableModel(
     fireTableDataChanged()
   }
 
+  /**
+   * Installs rows that were already defensively frozen by a worker-side presentation boundary.
+   * This avoids copying thousands of graphics cells on the EDT for every live capture.
+   */
+  fun replacePrepared(nextRows: List<List<Any>>) {
+    require(nextRows.all { it.size == columns.size }) {
+      "Prepared peripheral debugger table rows must match the column count"
+    }
+    rows = nextRows
+    fireTableDataChanged()
+  }
+
   fun clear() {
     if (rows.isEmpty()) return
     rows = emptyList()

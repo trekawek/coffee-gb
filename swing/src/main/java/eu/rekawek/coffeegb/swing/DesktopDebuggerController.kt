@@ -7,7 +7,7 @@ import javax.swing.JFrame
 import javax.swing.SwingUtilities
 
 /**
- * A modeless debugger surface whose lifetime is owned by [DesktopDebuggerController].
+ * A retained modeless debugger workspace whose lifetime is owned by [DesktopDebuggerController].
  *
  * [close] disposes only view-owned resources; the emulation session retains ownership of every
  * port supplied through [updateSession].
@@ -16,7 +16,7 @@ internal interface DesktopDebuggerView : AutoCloseable {
   /** Replaces or revokes the view's session-bound command port. */
   fun updateSession(event: Controller.SessionDebugPortEvent)
 
-  /** Shows, raises, or reopens the retained modeless surface. */
+  /** Shows, raises, or reopens the retained modeless tool windows. */
   fun showWindow()
 }
 
@@ -28,9 +28,10 @@ internal fun interface DesktopDebuggerViewFactory {
 /**
  * EDT-owned bridge between session debug-port publication and the modeless desktop debugger.
  *
- * The controller retains at most one view. Closing the window hides it, so the Tools command can
- * reopen the same surface. Session generations are monotonic and a revocation is terminal for its
- * generation; delayed older publications therefore cannot resurrect a stopped or replaced port.
+ * The controller retains at most one workspace. Closing its tool windows hides them, so the Tools
+ * command can reopen the same workspace. Session generations are monotonic and a revocation is
+ * terminal for its generation; delayed older publications therefore cannot resurrect a stopped or
+ * replaced port.
  * The session owns [eu.rekawek.coffeegb.core.debug.DebugPort], so this class never closes one.
  */
 internal class DesktopDebuggerController(

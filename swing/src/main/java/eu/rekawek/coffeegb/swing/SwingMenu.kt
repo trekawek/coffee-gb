@@ -1287,9 +1287,9 @@ internal fun createToolsMenu(onDebugger: () -> Unit): JMenu {
     "The Tools menu must be created on the Event Dispatch Thread"
   }
   val toolsMenu = JMenu("Tools")
-  val debugger = JMenuItem("Debugger")
+  val debugger = JMenuItem("Debug Workspace")
   debugger.accessibleContext.accessibleDescription =
-      "Open the modeless debugger for the current emulation session"
+      "Open the realtime modeless debugger workspace for the current emulation session"
   debugger.addActionListener { onDebugger() }
   toolsMenu.add(debugger)
   return toolsMenu

@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.cpu.BitUtils;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.debug.DebugButton;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.InputTrace;
 import eu.rekawek.coffeegb.core.events.Event;
@@ -355,6 +356,22 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     @Override
     public int getByte(int address) {
         return p1 | 0b11000000 | getInputLines();
+    }
+
+    /** Captures current JOYP and ICD2 state without entering the address-space read path. */
+    public DebugHardwareInspection.Joypad captureDebugJoypadInspection(
+            boolean superGameBoyAvailable) {
+        int joyp = p1 | 0b11000000 | getInputLines();
+        if (!superGameBoyAvailable) {
+            return new DebugHardwareInspection.Joypad(
+                    joyp, getDebugButtonMask(), filteredInputLines,
+                    false, 0, -1, false, -1);
+        }
+        SgbMultiplayerStatus multiplayer = getSgbMultiplayerStatus();
+        return new DebugHardwareInspection.Joypad(
+                joyp, getDebugButtonMask(), filteredInputLines,
+                true, multiplayer.playerCount(), multiplayer.selectedPlayer(),
+                transferInProgress, currentPacketIndex);
     }
 
     private int getInputLines() {

@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -241,6 +242,13 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         } else {
             throw new IllegalArgumentException();
         }
+    }
+
+    /** Captures link-register and clock progress without logging or touching the endpoint. */
+    public DebugHardwareInspection.Serial captureDebugSerialInspection() {
+        int effectiveSc = sc | (isColorMode() ? 0b01111100 : 0b01111110);
+        return new DebugHardwareInspection.Serial(
+                sb, effectiveSc, receivedBits, serialClocks, serialClockSignal, haltWakeDelay);
     }
 
     @Override

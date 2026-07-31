@@ -2,12 +2,25 @@ package eu.rekawek.coffeegb.swing
 
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Dimension
+import java.awt.FlowLayout
+import java.awt.GridLayout
+import java.awt.event.ActionEvent
+import java.awt.event.KeyEvent
+import javax.swing.AbstractAction
 import javax.swing.BorderFactory
+import javax.swing.JCheckBox
+import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
+import javax.swing.JSlider
+import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.JTable
+import javax.swing.KeyStroke
+import javax.swing.SwingConstants
 
 /** EDT-only renderer for a payload-free [DebuggerGraphicsPaneView]. */
 internal class DebuggerGraphicsPanel(
@@ -20,6 +33,24 @@ internal class DebuggerGraphicsPanel(
   internal val windowMapTable = JTable()
   internal val objectTable = JTable()
   internal val paletteTable = JTable()
+  internal val tileAtlasCanvas = DebuggerTileAtlasCanvas(::selectTile)
+  internal val backgroundMapCanvas =
+      DebuggerTileMapCanvas("Graphical background tile map", ::selectBackgroundCell)
+  internal val windowMapCanvas =
+      DebuggerTileMapCanvas("Graphical window tile map", ::selectWindowCell)
+  internal val objectThumbnailCanvas = DebuggerOamThumbnailCanvas(::selectObject)
+  internal val objectPlacementCanvas = DebuggerOamPlacementCanvas(::selectObject)
+  internal val paletteCanvas = DebuggerPaletteCanvas(::selectPalette)
+  internal val tileBankSelector = JComboBox<String>()
+  internal val tilePaletteSelector = JComboBox<String>()
+  internal val tileZoomSlider = graphicsZoomSlider("Tile atlas zoom", 1, 5, 2)
+  internal val backgroundZoomSlider = graphicsZoomSlider("Background map zoom", 1, 4, 2)
+  internal val windowZoomSlider = graphicsZoomSlider("Window map zoom", 1, 4, 2)
+  internal val objectZoomSlider = graphicsZoomSlider("Object graphics zoom", 1, 4, 2)
+  internal val tileGridCheckBox = graphicsCheckBox("Tile grid", true)
+  internal val backgroundGridCheckBox = graphicsCheckBox("Tile grid", true)
+  internal val windowGridCheckBox = graphicsCheckBox("Tile grid", true)
+  internal val objectGridCheckBox = graphicsCheckBox("Screen grid", true)
 
   private val tileModel =
       DebuggerPeripheralTableModel(
@@ -66,6 +97,10 @@ internal class DebuggerGraphicsPanel(
   private val objectPane: Component
   private val palettePane: Component
   private val fontScaler: DebuggerPeripheralFontScaler
+  private var graphicsModel: DebuggerGraphicsRenderModel? = null
+  private var tilePalettes: List<DebuggerGraphicalPalette> = emptyList()
+  private var updatingControls = false
+  private var updatingSelection = false
 
   init {
     requirePeripheralEdt("Graphics debugger panel construction")
@@ -125,15 +160,61 @@ internal class DebuggerGraphicsPanel(
     setColumnWidths(paletteTable, 115, 110, 105, 50, 80, 180, 75, 80, 80, 520)
 
     overviewPane.accessibleContext.accessibleName = "Graphics inspection overview"
-    tilePane = tablePane("Decoded color-index rows; one text row per VRAM tile", tileTable)
-    backgroundMapPane = tablePane("Background map entries", backgroundMapTable)
-    windowMapPane = tablePane("Window map entries", windowMapTable)
-    objectPane = tablePane("Object attribute memory: exactly 40 hardware entries", objectTable)
+    configureControls()
+    tilePane =
+        graphicsDetailPane(
+            "Tile atlas",
+            "Every VRAM tile is decoded graphically; select a tile for its exact textual data.",
+            tileControls(),
+            JScrollPane(tileAtlasCanvas),
+            "Decoded tile details",
+            tileTable,
+        )
+    backgroundMapPane =
+        graphicsDetailPane(
+            "Background map",
+            "The full 32 by 32 map is composed from captured tiles and palettes.",
+            mapControls(backgroundZoomSlider, backgroundGridCheckBox),
+            JScrollPane(backgroundMapCanvas),
+            "Selected background map entry details",
+            backgroundMapTable,
+        )
+    windowMapPane =
+        graphicsDetailPane(
+            "Window map",
+            "The full 32 by 32 window map is composed from captured tiles and palettes.",
+            mapControls(windowZoomSlider, windowGridCheckBox),
+            JScrollPane(windowMapCanvas),
+            "Selected window map entry details",
+            windowMapTable,
+        )
+    objectPane =
+        graphicsDetailPane(
+            "Objects",
+            "Sprite thumbnails and their captured screen placement remain synchronized.",
+            objectControls(),
+            objectGraphicsPane(),
+            "Selected object attribute details",
+            objectTable,
+        )
     palettePane =
-        tablePane(
-            "Every swatch also includes raw, component, hexadecimal, and descriptive text",
+        graphicsDetailPane(
+            "Palettes",
+            "Select any swatch for raw RGB and accessible color details.",
+            null,
+            JScrollPane(paletteCanvas),
+            "Selected palette swatch details",
             paletteTable,
         )
+    installSelectionLinks()
+    installCanvasCopy(tileAtlasCanvas) { tileModel.copyText(tileTable.selectedRows) }
+    installCanvasCopy(backgroundMapCanvas) {
+      backgroundMapModel.copyText(backgroundMapTable.selectedRows)
+    }
+    installCanvasCopy(windowMapCanvas) { windowMapModel.copyText(windowMapTable.selectedRows) }
+    installCanvasCopy(objectThumbnailCanvas) { objectModel.copyText(objectTable.selectedRows) }
+    installCanvasCopy(objectPlacementCanvas) { objectModel.copyText(objectTable.selectedRows) }
+    installCanvasCopy(paletteCanvas) { paletteModel.copyText(paletteTable.selectedRows) }
     tabs.addTab("Overview", overviewPane)
     tabs.addTab("Tile banks", tilePane)
     tabs.addTab("Background map", backgroundMapPane)
@@ -148,53 +229,12 @@ internal class DebuggerGraphicsPanel(
     requirePeripheralEdt("Graphics debugger rendering")
     overviewArea.text = view.overviewText
     overviewArea.caretPosition = 0
-    tileModel.replace(
-        view.tileRows.map { row ->
-          listOf<Any>(
-              row.bank,
-              row.tileIndex,
-              row.addressText,
-              row.colorIndexRows,
-              row.accessibilityText,
-          )
-        }
-    )
-    backgroundMapModel.replace(view.backgroundMapRows.map(::mapCells))
-    windowMapModel.replace(view.windowMapRows.map(::mapCells))
-    objectModel.replace(
-        view.objectRows.map { row ->
-          listOf<Any>(
-              row.index,
-              row.addressText,
-              row.coordinateText,
-              row.sizeText,
-              row.tileText,
-              row.paletteText,
-              row.bank,
-              row.flagsText,
-              row.flipText,
-              row.priorityText,
-              row.visibilityText,
-              row.accessibilityText,
-          )
-        }
-    )
-    paletteModel.replace(
-        view.paletteRows.map { row ->
-          listOf<Any>(
-              row.group,
-              row.palette,
-              row.sourceText,
-              row.colorIndex,
-              row.rawValueText,
-              row.componentText,
-              row.hexColor,
-              row.colorName,
-              DebuggerPalettePreview(row.hexColor, row.rgb888),
-              row.accessibilityText,
-          )
-        }
-    )
+    tileModel.replacePrepared(view.tableData.tiles)
+    backgroundMapModel.replacePrepared(view.tableData.backgroundMap)
+    windowMapModel.replacePrepared(view.tableData.windowMap)
+    objectModel.replacePrepared(view.tableData.objects)
+    paletteModel.replacePrepared(view.tableData.palettes)
+    renderGraphics(view)
     getAccessibleContext().accessibleDescription = view.accessibilityText
   }
 
@@ -203,7 +243,7 @@ internal class DebuggerGraphicsPanel(
     releaseRows()
     overviewArea.text =
         "Snapshot: ${identity.label}\n" +
-            "Graphics inspection was not captured for this snapshot; select Graphics to refresh."
+            "Graphics inspection was not captured for this snapshot; select Graphics for the next live capture."
     overviewArea.caretPosition = 0
     getAccessibleContext().accessibleDescription =
         "${identity.label}. Graphics inspection was not captured for this snapshot."
@@ -218,6 +258,21 @@ internal class DebuggerGraphicsPanel(
   }
 
   private fun releaseRows() {
+    graphicsModel = null
+    tilePalettes = emptyList()
+    updatingControls = true
+    try {
+      tileBankSelector.removeAllItems()
+      tilePaletteSelector.removeAllItems()
+    } finally {
+      updatingControls = false
+    }
+    tileAtlasCanvas.clear()
+    backgroundMapCanvas.clear()
+    windowMapCanvas.clear()
+    objectThumbnailCanvas.clear()
+    objectPlacementCanvas.clear()
+    paletteCanvas.clear()
     tileModel.clear()
     backgroundMapModel.clear()
     windowMapModel.clear()
@@ -245,19 +300,361 @@ internal class DebuggerGraphicsPanel(
     }
   }
 
-  private fun mapCells(row: DebuggerTileMapTableRow): List<Any> =
-      listOf(
-          row.row,
-          row.column,
-          row.mapAddressText,
-          row.tileNumberText,
-          row.tileDataAddressText,
-          row.bank,
-          row.palette,
-          row.attributesText,
-          row.flagsText,
-          row.accessibilityText,
-      )
+  private fun renderGraphics(view: DebuggerGraphicsPaneView) {
+    val previousBank = tileAtlasCanvas.displayedBank
+    val previousPaletteName = tilePaletteSelector.selectedItem as? String
+    val model = DebuggerGraphicsRenderModelFactory.create(view)
+    graphicsModel = model
+    tilePalettes = model.palettes.ifEmpty { listOf(model.fallbackPalette()) }
+
+    val bank = previousBank.takeIf { it in model.availableBanks } ?: model.availableBanks.firstOrNull() ?: 0
+    val defaultPalette =
+        tilePalettes.firstOrNull { it.displayName == previousPaletteName }
+            ?: model.backgroundCells.firstOrNull()?.let(model::backgroundPalette)
+            ?: tilePalettes.first()
+    updatingControls = true
+    try {
+      tileBankSelector.removeAllItems()
+      model.availableBanks.forEach { tileBankSelector.addItem("VRAM bank $it") }
+      tileBankSelector.selectedIndex = model.availableBanks.indexOf(bank).coerceAtLeast(0)
+      tilePaletteSelector.removeAllItems()
+      tilePalettes.forEach { tilePaletteSelector.addItem(it.displayName) }
+      tilePaletteSelector.selectedIndex = tilePalettes.indexOf(defaultPalette).coerceAtLeast(0)
+    } finally {
+      updatingControls = false
+    }
+
+    tileAtlasCanvas.render(model, bank, defaultPalette)
+    backgroundMapCanvas.render(model, model.backgroundCells)
+    windowMapCanvas.render(model, model.windowCells)
+    objectThumbnailCanvas.render(model)
+    objectPlacementCanvas.render(model)
+    paletteCanvas.render(model)
+  }
+
+  private fun configureControls() {
+    tileBankSelector.accessibleContext.accessibleName = "Tile atlas VRAM bank"
+    tileBankSelector.accessibleContext.accessibleDescription =
+        "Select which captured VRAM bank is shown in the graphical tile atlas"
+    tileBankSelector.maximumRowCount = 4
+    tileBankSelector.addActionListener {
+      if (!updatingControls) {
+        graphicsModel?.availableBanks?.getOrNull(tileBankSelector.selectedIndex)?.let { bank ->
+          tileAtlasCanvas.setBank(bank)
+          tileAtlasCanvas.selectedTile?.let(::selectTile)
+        }
+      }
+    }
+    tilePaletteSelector.accessibleContext.accessibleName = "Tile atlas preview palette"
+    tilePaletteSelector.accessibleContext.accessibleDescription =
+        "Select a captured palette used to color the graphical tile atlas"
+    tilePaletteSelector.maximumRowCount = 20
+    tilePaletteSelector.addActionListener {
+      if (!updatingControls) {
+        tilePalettes.getOrNull(tilePaletteSelector.selectedIndex)?.let { palette ->
+          tileAtlasCanvas.setPalette(palette)
+        }
+      }
+    }
+
+    tileZoomSlider.addChangeListener { tileAtlasCanvas.setZoom(tileZoomSlider.value) }
+    backgroundZoomSlider.addChangeListener {
+      backgroundMapCanvas.setZoom(backgroundZoomSlider.value)
+    }
+    windowZoomSlider.addChangeListener { windowMapCanvas.setZoom(windowZoomSlider.value) }
+    objectZoomSlider.addChangeListener {
+      objectThumbnailCanvas.setZoom(objectZoomSlider.value)
+      objectPlacementCanvas.setZoom(objectZoomSlider.value)
+    }
+    tileGridCheckBox.addActionListener {
+      tileAtlasCanvas.setGridVisible(tileGridCheckBox.isSelected)
+    }
+    backgroundGridCheckBox.addActionListener {
+      backgroundMapCanvas.setGridVisible(backgroundGridCheckBox.isSelected)
+    }
+    windowGridCheckBox.addActionListener {
+      windowMapCanvas.setGridVisible(windowGridCheckBox.isSelected)
+    }
+    objectGridCheckBox.addActionListener {
+      objectPlacementCanvas.setGridVisible(objectGridCheckBox.isSelected)
+    }
+  }
+
+  private fun installSelectionLinks() {
+    tileTable.selectionModel.addListSelectionListener {
+      selectedTableRow(tileTable)?.takeIf { !updatingSelection }?.let { tableRow ->
+        graphicsModel?.tiles?.firstOrNull { it.tableRow == tableRow }?.let { tile ->
+          withLinkedSelection {
+            selectTileBank(tile.bank)
+            tileAtlasCanvas.selectTile(tile)
+          }
+        }
+      }
+    }
+    backgroundMapTable.selectionModel.addListSelectionListener {
+      selectedTableRow(backgroundMapTable)?.takeIf { !updatingSelection }?.let { tableRow ->
+        graphicsModel?.backgroundCells?.firstOrNull { it.tableRow == tableRow }?.let { cell ->
+          backgroundMapCanvas.selectCell(cell)
+          selectBackgroundCell(cell)
+        }
+      }
+    }
+    windowMapTable.selectionModel.addListSelectionListener {
+      selectedTableRow(windowMapTable)?.takeIf { !updatingSelection }?.let { tableRow ->
+        graphicsModel?.windowCells?.firstOrNull { it.tableRow == tableRow }?.let { cell ->
+          windowMapCanvas.selectCell(cell)
+          selectWindowCell(cell)
+        }
+      }
+    }
+    objectTable.selectionModel.addListSelectionListener {
+      selectedTableRow(objectTable)?.takeIf { !updatingSelection }?.let { tableRow ->
+        graphicsModel?.objects?.firstOrNull { it.tableRow == tableRow }?.let(::selectObject)
+      }
+    }
+    paletteTable.selectionModel.addListSelectionListener {
+      selectedTableRow(paletteTable)?.takeIf { !updatingSelection }?.let { tableRow ->
+        graphicsModel?.palettes?.forEach { palette ->
+          palette.swatches.firstOrNull { it.tableRow == tableRow }?.let { swatch ->
+            selectPalette(palette, swatch)
+            return@addListSelectionListener
+          }
+        }
+      }
+    }
+  }
+
+  private fun selectTile(tile: DebuggerGraphicalTile) {
+    withLinkedSelection { selectTableRow(tileTable, tile.tableRow) }
+  }
+
+  private fun selectBackgroundCell(cell: DebuggerGraphicalMapCell) {
+    withLinkedSelection {
+      selectTableRow(backgroundMapTable, cell.tableRow)
+      linkTile(cell.bank, cell.tileAddress)
+      graphicsModel?.backgroundPalette(cell)?.let(::linkPalette)
+    }
+  }
+
+  private fun selectWindowCell(cell: DebuggerGraphicalMapCell) {
+    withLinkedSelection {
+      selectTableRow(windowMapTable, cell.tableRow)
+      linkTile(cell.bank, cell.tileAddress)
+      graphicsModel?.backgroundPalette(cell)?.let(::linkPalette)
+    }
+  }
+
+  private fun selectObject(value: DebuggerGraphicalObject) {
+    withLinkedSelection {
+      objectThumbnailCanvas.selectObject(value)
+      objectPlacementCanvas.selectObject(value)
+      selectTableRow(objectTable, value.tableRow)
+      linkTile(value.bank, value.tileAddress)
+      graphicsModel?.objectPalette(value)?.let(::linkPalette)
+    }
+  }
+
+  private fun selectPalette(
+      palette: DebuggerGraphicalPalette,
+      swatch: DebuggerGraphicalSwatch,
+  ) {
+    withLinkedSelection {
+      paletteCanvas.selectSwatch(palette, swatch)
+      selectTableRow(paletteTable, swatch.tableRow)
+      selectTilePalette(palette)
+    }
+  }
+
+  private fun linkTile(bank: Int, address: Int) {
+    val tile = graphicsModel?.tile(bank, address) ?: return
+    selectTileBank(bank)
+    tileAtlasCanvas.selectTile(tile)
+    selectTableRow(tileTable, tile.tableRow)
+  }
+
+  private fun linkPalette(palette: DebuggerGraphicalPalette) {
+    val swatch = palette.swatches.firstOrNull() ?: return
+    paletteCanvas.selectSwatch(palette, swatch)
+    selectTableRow(paletteTable, swatch.tableRow)
+    selectTilePalette(palette)
+  }
+
+  private fun selectTileBank(bank: Int) {
+    val index = graphicsModel?.availableBanks?.indexOf(bank) ?: -1
+    if (index < 0) return
+    updatingControls = true
+    try {
+      tileBankSelector.selectedIndex = index
+    } finally {
+      updatingControls = false
+    }
+    tileAtlasCanvas.setBank(bank)
+  }
+
+  private fun selectTilePalette(palette: DebuggerGraphicalPalette) {
+    val index = tilePalettes.indexOfFirst {
+      it.group == palette.group && it.label == palette.label
+    }
+    if (index < 0) return
+    updatingControls = true
+    try {
+      tilePaletteSelector.selectedIndex = index
+    } finally {
+      updatingControls = false
+    }
+    tileAtlasCanvas.setPalette(tilePalettes[index])
+  }
+
+  private inline fun withLinkedSelection(action: () -> Unit) {
+    if (updatingSelection) return
+    updatingSelection = true
+    try {
+      action()
+    } finally {
+      updatingSelection = false
+    }
+  }
+
+  private fun selectedTableRow(table: JTable): Int? =
+      table.selectionModel.leadSelectionIndex.takeIf { it in 0 until table.rowCount }
+
+  private fun selectTableRow(table: JTable, row: Int) {
+    if (row !in 0 until table.rowCount) return
+    table.selectionModel.setSelectionInterval(row, row)
+    table.scrollRectToVisible(table.getCellRect(row, 0, true))
+  }
+
+  private fun installCanvasCopy(canvas: JComponent, text: () -> String) {
+    val actionName = "copy-graphics-selection"
+    canvas
+        .getInputMap(JComponent.WHEN_FOCUSED)
+        .put(KeyStroke.getKeyStroke(KeyEvent.VK_C, peripheralMenuShortcutMask()), actionName)
+    canvas.actionMap.put(
+        actionName,
+        object : AbstractAction() {
+          override fun actionPerformed(event: ActionEvent?) {
+            text().takeIf(String::isNotBlank)?.let(copyToClipboard)
+          }
+        },
+    )
+  }
+
+  private fun tileControls(): Component =
+      JPanel(FlowLayout(FlowLayout.LEADING, 8, 2)).apply {
+        add(controlLabel("Bank:", tileBankSelector))
+        add(tileBankSelector)
+        add(controlLabel("Preview palette:", tilePaletteSelector))
+        add(tilePaletteSelector)
+        add(controlLabel("Zoom:", tileZoomSlider))
+        add(tileZoomSlider)
+        add(tileGridCheckBox)
+      }
+
+  private fun mapControls(zoom: JSlider, grid: JCheckBox): Component =
+      JPanel(FlowLayout(FlowLayout.LEADING, 8, 2)).apply {
+        add(controlLabel("Zoom:", zoom))
+        add(zoom)
+        add(grid)
+        add(
+            JLabel("Viewport overlay unavailable: scroll registers are not in this capture").apply {
+              accessibleContext.accessibleName =
+                  "Viewport overlay unavailable because scroll registers are not captured"
+            }
+        )
+      }
+
+  private fun objectControls(): Component =
+      JPanel(FlowLayout(FlowLayout.LEADING, 8, 2)).apply {
+        add(controlLabel("Zoom:", objectZoomSlider))
+        add(objectZoomSlider)
+        add(objectGridCheckBox)
+      }
+
+  private fun objectGraphicsPane(): Component =
+      JPanel(GridLayout(1, 2, 4, 0)).apply {
+        add(
+            namedGraphicsPane(
+                "Sprite thumbnails",
+                "Forty decoded OAM objects; transparent pixels use a checkerboard.",
+                JScrollPane(objectThumbnailCanvas),
+            )
+        )
+        add(
+            namedGraphicsPane(
+                "Screen placement",
+                "Objects positioned on the 160 by 144 pixel display, including clipping.",
+                JScrollPane(objectPlacementCanvas),
+            )
+        )
+      }
+
+  private fun graphicsDetailPane(
+      title: String,
+      description: String,
+      controls: Component?,
+      graphics: Component,
+      detailDescription: String,
+      table: JTable,
+  ): Component {
+    val graphicalPane = namedGraphicsPane(title, description, graphics, controls)
+    return JSplitPane(
+            JSplitPane.VERTICAL_SPLIT,
+            graphicalPane,
+            tablePane(detailDescription, table),
+        )
+        .apply {
+          resizeWeight = 0.72
+          isOneTouchExpandable = true
+          dividerSize = 8
+          accessibleContext.accessibleName = "$title graphics and accessible details"
+          accessibleContext.accessibleDescription = description
+        }
+  }
+
+  private fun namedGraphicsPane(
+      title: String,
+      description: String,
+      graphics: Component,
+      controls: Component? = null,
+  ): Component =
+      JPanel(BorderLayout(2, 2)).apply {
+        val heading =
+            JPanel(BorderLayout()).apply {
+              border = BorderFactory.createEmptyBorder(3, 4, 3, 4)
+              add(JLabel(title).apply { font = font.deriveFont(java.awt.Font.BOLD) }, BorderLayout.NORTH)
+              add(JLabel(description), BorderLayout.CENTER)
+              controls?.let { add(it, BorderLayout.SOUTH) }
+            }
+        border = BorderFactory.createEmptyBorder(2, 2, 2, 2)
+        accessibleContext.accessibleName = title
+        accessibleContext.accessibleDescription = description
+        add(heading, BorderLayout.NORTH)
+        add(graphics, BorderLayout.CENTER)
+      }
+
+  private fun controlLabel(text: String, target: Component): JLabel =
+      JLabel(text).apply { labelFor = target }
+
+  private fun graphicsZoomSlider(
+      accessibleName: String,
+      minimum: Int,
+      maximum: Int,
+      value: Int,
+  ): JSlider =
+      JSlider(SwingConstants.HORIZONTAL, minimum, maximum, value).apply {
+        preferredSize = Dimension(92, preferredSize.height)
+        majorTickSpacing = 1
+        paintTicks = true
+        snapToTicks = true
+        accessibleContext.accessibleName = accessibleName
+        accessibleContext.accessibleDescription = "$accessibleName, nearest-neighbor integer scale"
+      }
+
+  private fun graphicsCheckBox(text: String, selected: Boolean): JCheckBox =
+      JCheckBox(text, selected).apply {
+        accessibleContext.accessibleName = text
+        accessibleContext.accessibleDescription = "Show or hide the $text overlay"
+      }
 
   private fun mapModel(): DebuggerPeripheralTableModel =
       DebuggerPeripheralTableModel(

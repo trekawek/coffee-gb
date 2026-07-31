@@ -261,17 +261,21 @@ public class DebugApiModelTest {
 
         DebugGraphicsInspection graphics = dmgGraphics();
         DebugAudioInspection audio = audioInspection();
+        DebugHardwareInspection hardware = hardwareInspection();
         TraceReadResult trace = new TraceReadResult(List.of(), -1, 0, 0, 0, 0);
         DebugInspectionResult result = new DebugInspectionResult(
                 snapshot(true), request, List.of(), List.of(),
-                Optional.of(graphics), Optional.of(audio), Optional.of(trace));
+                Optional.of(graphics), Optional.of(audio), Optional.of(trace),
+                Optional.of(hardware));
         assertSame(graphics, result.graphics().orElseThrow());
         assertSame(audio, result.audio().orElseThrow());
         assertSame(trace, result.trace().orElseThrow());
+        assertSame(hardware, result.hardware().orElseThrow());
 
         assertThrows(IllegalArgumentException.class, () -> new DebugInspectionResult(
                 snapshot(true), request, List.of(), List.of(),
-                Optional.empty(), Optional.of(audio), Optional.of(trace)));
+                Optional.empty(), Optional.of(audio), Optional.of(trace),
+                Optional.of(hardware)));
     }
 
     @Test
@@ -711,6 +715,23 @@ public class DebugApiModelTest {
                 List.of(audioChannel(1), audioChannel(2),
                         audioChannel(3), audioChannel(4)),
                 new DebugByteData(new byte[DebugAudioInspection.WAVE_RAM_LENGTH]));
+    }
+
+    private static DebugHardwareInspection hardwareInspection() {
+        return new DebugHardwareInspection(
+                new DebugHardwareInspection.Joypad(
+                        0xff, 0, 0x0f, false, 0, -1, false, -1),
+                new DebugHardwareInspection.Serial(0, 0x7e, 0, 0, false, 0),
+                new DebugHardwareInspection.Infrared(false, -1, false, false, false),
+                new DebugHardwareInspection.OamDma(
+                        0xff, false, 0xff00, 0, false, false),
+                new DebugHardwareInspection.VramDma(
+                        false, -1, -1, -1, -1, -1,
+                        false, false, -1, -1, -1),
+                new DebugHardwareInspection.System(
+                        DebugGraphicsHardwareMode.DMG,
+                        -1, -1, -1, -1, false,
+                        -1, -1, -1, -1, -1, -1, -1));
     }
 
     private static DebugAudioChannelInspection audioChannel(int channel) {
