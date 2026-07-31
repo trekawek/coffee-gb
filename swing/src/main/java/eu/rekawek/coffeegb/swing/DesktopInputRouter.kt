@@ -25,8 +25,8 @@ import javax.swing.SwingUtilities
 import javax.swing.text.JTextComponent
 
 /**
- * Routes unmodified gameplay keys while the main window owns focus and yields every other desktop
- * context to normal Swing dispatch.
+ * Routes unmodified gameplay keys while the main window owns focus, including through ordinary
+ * focusable controls, and yields text, capture, menu, and contextual navigation keys to Swing.
  *
  * A press captures its matching release for one input owner. Leaving game scope clears every
  * capture and releases all transient input first, so focus, menu, dialog, debugger, mapping, and
@@ -36,7 +36,7 @@ internal class DesktopInputRouter private constructor(
     private val registry: KeyEventDispatcherRegistry,
     private val lifecycle: DesktopInputLifecycleRegistry,
     private val belongsToMainWindow: (Component?) -> Boolean,
-    private val yieldsToComponent: (Component?) -> Boolean,
+    private val yieldsToComponent: (Component?, Int) -> Boolean,
     private val isMenuActive: () -> Boolean,
     private val joypadHandles: (Int) -> Boolean,
     private val joypadPressed: (KeyEvent) -> Unit,
@@ -71,7 +71,7 @@ internal class DesktopInputRouter private constructor(
       DesktopKeyboardFocusManagerDispatcherRegistry(focusManager),
       WindowDesktopInputLifecycleRegistry(mainWindow, focusManager),
       belongsToMainWindow = { component -> component.belongsToInputWindow(mainWindow) },
-      yieldsToComponent = ::componentOwnsDesktopKeys,
+      yieldsToComponent = ::componentOwnsDesktopKey,
       isMenuActive = { MenuSelectionManager.defaultManager().selectedPath.isNotEmpty() },
       joypadHandles,
       joypadPressed,
@@ -87,7 +87,7 @@ internal class DesktopInputRouter private constructor(
       registry: KeyEventDispatcherRegistry,
       lifecycle: DesktopInputLifecycleRegistry = DesktopInputLifecycleRegistry.NOOP,
       belongsToMainWindow: (Component?) -> Boolean = { true },
-      yieldsToComponent: (Component?) -> Boolean = { false },
+      yieldsToComponent: (Component?, Int) -> Boolean = { _, _ -> false },
       isMenuActive: () -> Boolean = { false },
       joypadHandles: (Int) -> Boolean,
       joypadPressed: (KeyEvent) -> Unit,
@@ -147,7 +147,7 @@ internal class DesktopInputRouter private constructor(
     if (keyCode == KeyEvent.VK_UNDEFINED) return false
 
     if (!belongsToMainWindow(event.component) ||
-        yieldsToComponent(event.component) ||
+        yieldsToComponent(event.component, keyCode) ||
         isMenuActive() ||
         hasDesktopCommandModifier(event)) {
       releaseScope()
@@ -203,12 +203,21 @@ private fun hasDesktopCommandModifier(event: KeyEvent): Boolean =
     event.modifiersEx and
         (InputEvent.CTRL_DOWN_MASK or InputEvent.META_DOWN_MASK or InputEvent.ALT_DOWN_MASK) != 0
 
-internal fun componentOwnsDesktopKeys(component: Component?): Boolean {
+internal fun componentOwnsDesktopKey(component: Component?, keyCode: Int): Boolean {
   var current = component
+  var contextualControl = false
   while (current != null) {
-    if (current is JTextComponent ||
-        current is JMenu ||
-        current is AbstractButton ||
+    if (current is JTextComponent || current is JMenu) {
+      return true
+    }
+    if ((current as? JComponent)?.getClientProperty(DesktopInputRouter.INPUT_CAPTURE_PROPERTY) ==
+        true) {
+      return true
+    }
+    if (current is JComboBox<*> && current.isPopupVisible) {
+      return true
+    }
+    if (current is AbstractButton ||
         current is JComboBox<*> ||
         current is JList<*> ||
         current is JTable ||
@@ -217,15 +226,11 @@ internal fun componentOwnsDesktopKeys(component: Component?): Boolean {
         current is JSlider ||
         current is JScrollBar ||
         current is JTabbedPane) {
-      return true
-    }
-    if ((current as? JComponent)?.getClientProperty(DesktopInputRouter.INPUT_CAPTURE_PROPERTY) ==
-        true) {
-      return true
+      contextualControl = true
     }
     current = current.parent
   }
-  return false
+  return contextualControl && (keyCode == KeyEvent.VK_ENTER || keyCode == KeyEvent.VK_ESCAPE)
 }
 
 private fun Component?.belongsToInputWindow(window: Window): Boolean =
