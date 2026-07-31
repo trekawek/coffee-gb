@@ -428,7 +428,8 @@ data class ApplicationSettings(
       val batterySavesEnabled: Boolean = true,
       val rewindEnabled: Boolean = true,
       val rewindSeconds: Int = DEFAULT_REWIND_SECONDS,
-      val autosavePolicy: AutosavePolicy = AutosavePolicy.DISABLED,
+      /** Retained solely to read older settings files; autosave is now always enabled. */
+      val autosavePolicy: AutosavePolicy = AutosavePolicy.ON_CLOSE_AND_ROM_SWITCH,
       val resumePolicy: ResumePolicy = ResumePolicy.ASK,
       val rewindMemoryMiB: Int = DEFAULT_REWIND_MEMORY_MIB,
   ) {

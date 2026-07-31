@@ -27,6 +27,7 @@ import eu.rekawek.coffeegb.controller.state.StateEntryKey
 import eu.rekawek.coffeegb.controller.state.StateExportRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateExternalActions
 import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateImage
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
@@ -37,6 +38,7 @@ import eu.rekawek.coffeegb.controller.state.StateOperation
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationWorker
+import eu.rekawek.coffeegb.controller.state.StatePngCodec
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StatePrepareCloseRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateReadResult
@@ -140,6 +142,12 @@ class BasicController private constructor(
         LiveBatteryStorageResolver.DEFAULT,
     private val mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
         SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
+    /**
+     * Captures the most recently presented display image without making the controller depend on
+     * a desktop toolkit. Autosaves remain valid if a presentation implementation cannot provide
+     * an image, but the desktop injects this for the Home recent-game previews.
+     */
+    private val autosaveThumbnailProvider: () -> StateImage? = { null },
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -185,6 +193,7 @@ class BasicController private constructor(
       console: Console?,
       externalActions: StateExternalActions,
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
+      autosaveThumbnailProvider: () -> StateImage? = { null },
   ) : this(
       parentEventBus,
       properties,
@@ -199,6 +208,7 @@ class BasicController private constructor(
       },
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
       mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
+      autosaveThumbnailProvider = autosaveThumbnailProvider,
   )
 
   internal constructor(
@@ -208,6 +218,7 @@ class BasicController private constructor(
       sessionPreparer: SessionPreparer,
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
           SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
+      autosaveThumbnailProvider: () -> StateImage? = { null },
   ) : this(
       parentEventBus,
       properties,
@@ -220,6 +231,7 @@ class BasicController private constructor(
       StateOperationWorkerFactory.DEFAULT,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
       mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
+      autosaveThumbnailProvider = autosaveThumbnailProvider,
   )
 
   internal constructor(
@@ -294,6 +306,7 @@ class BasicController private constructor(
           LiveBatteryStorageResolver.DEFAULT,
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
           SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
+      autosaveThumbnailProvider: () -> StateImage? = { null },
   ) : this(
       parentEventBus,
       properties,
@@ -307,6 +320,7 @@ class BasicController private constructor(
       closeTimeoutMillis,
       liveBatteryStorageResolver,
       mobileAdapterConfigurationProvider,
+      autosaveThumbnailProvider,
   )
 
   private val timingTicker = TimingTicker()
@@ -416,6 +430,9 @@ class BasicController private constructor(
   private var closePersistenceAttempt: RetainedClosePersistence? = null
 
   private var closeAutosaveCapture: StateFile? = null
+
+  /** Captured alongside [closeAutosaveCapture] so retries persist the exact same preview. */
+  private var closeAutosaveThumbnail: StateImage? = null
 
   private var closeAutosavePlayDurationNanos: Long? = null
 
@@ -1735,10 +1752,7 @@ class BasicController private constructor(
   private fun prepareClose(event: StatePrepareCloseRequestEvent) {
     val context = stateContext
     val currentSession = session
-    if (currentSession == null ||
-        properties.saves.autosavePolicy !=
-            eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
-                .ON_CLOSE_AND_ROM_SWITCH) {
+    if (currentSession == null) {
       eventBus.post(
           StatePrepareCloseCompletedEvent(
               event.requestId,
@@ -1759,7 +1773,7 @@ class BasicController private constructor(
                   StateUserError(
                       "Close autosave is unavailable.",
                       "The configured save workspace could not be initialized for this game.",
-                      "Choose a writable Saves directory, retry, or explicitly close without autosave.",
+                      "Choose a writable Saves directory, retry, or explicitly close without saving.",
                   ),
           ))
       return
@@ -1790,7 +1804,7 @@ class BasicController private constructor(
           capturePortableState(currentSession),
           label = "Autosave",
           playDurationNanos = currentPlayDurationNanos(),
-          thumbnail = null,
+          thumbnail = captureAutosaveThumbnail(),
       )
     } catch (failure: Throwable) {
       pendingCloseRequestId = null
@@ -1816,11 +1830,7 @@ class BasicController private constructor(
     cancelPendingRomSwitch(restorePause = true)
     val currentSession = session
     val context = stateContext
-    val autosaveRequired =
-        currentSession != null &&
-            properties.saves.autosavePolicy ==
-                eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
-                    .ON_CLOSE_AND_ROM_SWITCH
+    val autosaveRequired = currentSession != null
     if (!autosaveRequired) {
       requestLoad(properties, event)
       return
@@ -1839,7 +1849,7 @@ class BasicController private constructor(
           StateUserError(
               "ROM switch was cancelled because autosave is unavailable.",
               "The configured save workspace could not be initialized for the active game.",
-              "Choose a writable Saves directory, retry opening the ROM, or disable autosave.",
+              "Choose a writable Saves directory, then retry opening the ROM.",
           )
       restorePauseStateAfterLoading()
       eventBus.post(
@@ -1860,6 +1870,7 @@ class BasicController private constructor(
               checkNotNull(context),
               capturePortableState(checkNotNull(currentSession)),
               currentPlayDurationNanos(),
+              captureAutosaveThumbnail(),
           )
       pendingRomSwitch = pending
       submitRomSwitchAutosave(pending)
@@ -1870,7 +1881,7 @@ class BasicController private constructor(
           stateError(
               "ROM switch was cancelled because autosave could not be captured.",
               failure,
-              "The current game remains active. Retry opening the ROM or disable autosave in Preferences.",
+              "The current game remains active. Retry opening the ROM after resolving the problem.",
           )
       eventBus.post(
           Controller.LoadRomFailedEvent(
@@ -1893,7 +1904,7 @@ class BasicController private constructor(
         pending.state,
         label = "Autosave",
         playDurationNanos = pending.playDurationNanos,
-        thumbnail = null,
+        thumbnail = pending.thumbnail,
     )
   }
 
@@ -2083,6 +2094,12 @@ class BasicController private constructor(
         pendingRomSwitch = null
         requestLoad(properties, pending.event)
       }
+      StateWorkerPurpose.AUTOSAVE_STOP -> {
+        val job = stopJob
+        if (job == null || job.requestId != event.requestId) return
+        job.awaitingAutosaveDecision = false
+        beginStopPersistence(job)
+      }
       StateWorkerPurpose.AUTOSAVE_CLOSE -> {
         if (pendingCloseRequestId != event.requestId) return
         pendingCloseRequestId = null
@@ -2116,6 +2133,11 @@ class BasicController private constructor(
             "${error.summary} ${error.suggestedAction}",
             pending.event.openRequestId,
         )
+      }
+      StateWorkerPurpose.AUTOSAVE_STOP -> {
+        val job = stopJob
+        if (job == null || job.requestId != event.requestId) return
+        postStopAutosaveFailure(job, error)
       }
       StateWorkerPurpose.AUTOSAVE_CLOSE -> {
         if (pendingCloseRequestId != event.requestId) return
@@ -2471,6 +2493,15 @@ class BasicController private constructor(
           ),
       )
 
+  /** A missing preview is non-authoritative, so it cannot prevent the state itself from saving. */
+  private fun captureAutosaveThumbnail(): StateImage? =
+      try {
+        autosaveThumbnailProvider()
+      } catch (failure: RuntimeException) {
+        LOG.warn("Unable to capture an autosave thumbnail", failure)
+        null
+      }
+
   private fun currentPlayDurationNanos(): Long? =
       sessionStartedNanos?.let { started -> (System.nanoTime() - started).coerceAtLeast(0L) }
 
@@ -2693,9 +2724,11 @@ class BasicController private constructor(
     }
     stopJob?.let { job ->
       if (job.requestId == requestId && job.attempt == null) {
-        val attempt = PersistenceTask(job.capture)
-        job.attempt = attempt
-        persistenceExecutor.execute(attempt)
+        if (job.awaitingAutosaveDecision) {
+          submitStopAutosave(job)
+        } else {
+          beginStopPersistence(job)
+        }
       }
     }
   }
@@ -2749,14 +2782,89 @@ class BasicController private constructor(
 
     setPaused(true)
     val capture = currentSession.gameboy.prepareCartridgeFlush()
-    val attempt = PersistenceTask(capture)
-    stopJob =
+    val job =
         StopJob(
             requestId = nextPersistenceRequestId++,
             pausedBeforeStop = pausedBeforeStop,
             capture = capture,
-            attempt = attempt,
+            attempt = null,
         )
+    stopJob = job
+    submitStopAutosave(job)
+  }
+
+  /** Writes the terminal autosave before battery persistence can release the current machine. */
+  private fun submitStopAutosave(job: StopJob) {
+    val currentSession = session
+    val context = stateContext
+    if (currentSession == null || context == null) {
+      postStopAutosaveFailure(
+          job,
+          StateUserError(
+              "Game unload was cancelled because autosave is unavailable.",
+              "The configured save workspace could not be initialized for the active game.",
+              "Choose a writable Saves directory, then retry closing the game.",
+          ),
+      )
+      return
+    }
+    if (job.state == null) {
+      try {
+        job.context = context
+        job.state = capturePortableState(currentSession)
+        job.playDurationNanos = currentPlayDurationNanos()
+        job.thumbnail = captureAutosaveThumbnail()
+      } catch (failure: Throwable) {
+        postStopAutosaveFailure(
+            job,
+            stateError(
+                "Game unload was cancelled because autosave could not be captured.",
+                failure,
+                "The game is still active. Retry closing it after resolving the problem.",
+            ),
+        )
+        return
+      }
+    }
+    try {
+      job.awaitingAutosaveDecision = false
+      stateWorker.save(
+          checkNotNull(job.context),
+          job.requestId,
+          StateWorkerPurpose.AUTOSAVE_STOP,
+          StateRef.Autosave,
+          checkNotNull(job.state),
+          label = "Autosave",
+          playDurationNanos = job.playDurationNanos,
+          thumbnail = job.thumbnail,
+      )
+    } catch (failure: Throwable) {
+      postStopAutosaveFailure(
+          job,
+          stateError(
+              "Game unload was cancelled because autosave could not be scheduled.",
+              failure,
+              "The game is still active. Retry closing it after resolving the problem.",
+          ),
+      )
+    }
+  }
+
+  private fun postStopAutosaveFailure(job: StopJob, error: StateUserError) {
+    job.awaitingAutosaveDecision = true
+    postPersistenceFailure(
+        job.requestId,
+        Controller.PersistenceBarrierOperation.STOP,
+        "autosave state",
+        "${error.summary} ${error.suggestedAction}",
+        null,
+    )
+  }
+
+  private fun beginStopPersistence(job: StopJob) {
+    if (job.attempt != null) return
+    val attempt = PersistenceTask(job.capture)
+    job.attempt = attempt
     persistenceExecutor.execute(attempt)
   }
 
@@ -3544,6 +3652,7 @@ class BasicController private constructor(
     stateSessionId = nextStateSessionId()
     installDebugPort(session)
     closeAutosaveCapture = null
+    closeAutosaveThumbnail = null
     closeAutosavePlayDurationNanos = null
     closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
@@ -3737,6 +3846,7 @@ class BasicController private constructor(
     }
     stateSessionId = nextStateSessionId()
     closeAutosaveCapture = null
+    closeAutosaveThumbnail = null
     closeAutosavePlayDurationNanos = null
     closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
@@ -3946,6 +4056,7 @@ class BasicController private constructor(
           shouldPersistCloseAutosave()) {
         try {
           closeAutosaveCapture = session?.let(::capturePortableState)
+          closeAutosaveThumbnail = captureAutosaveThumbnail()
         } catch (failure: Throwable) {
           throw closeBarrierFailure(
               "Close autosave could not be captured. The session is retained.",
@@ -4031,6 +4142,7 @@ class BasicController private constructor(
     closeRequestId = null
     closePersistenceAttempt = null
     closeAutosaveCapture = null
+    closeAutosaveThumbnail = null
     closeAutosavePlayDurationNanos = null
     closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
@@ -4080,7 +4192,7 @@ class BasicController private constructor(
                                 savedAt = java.time.Instant.now(),
                                 playDurationNanos = closeAutosavePlayDurationNanos,
                             ),
-                            null,
+                            closeAutosaveThumbnail?.thumbnail()?.let(StatePngCodec::encode),
                         )
                         CloseAutosaveResult.Success
                       } catch (failure: Throwable) {
@@ -4124,6 +4236,7 @@ class BasicController private constructor(
         closeAutosaveCompletedSessionId = context.sessionId
         closeAutosaveSkippedSessionId = null
         closeAutosaveCapture = null
+        closeAutosaveThumbnail = null
         closeAutosaveAttempt = null
       }
     }
@@ -4131,9 +4244,6 @@ class BasicController private constructor(
 
   private fun shouldPersistCloseAutosave(): Boolean =
       session != null &&
-          properties.saves.autosavePolicy ==
-              eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
-                  .ON_CLOSE_AND_ROM_SWITCH &&
           closeAutosaveCompletedSessionId != stateSessionId &&
           closeAutosaveSkippedSessionId != stateSessionId
 
@@ -4263,15 +4373,13 @@ class BasicController private constructor(
         closeRequestId != requestId ||
         closeAutosaveWaivableRequestId != requestId ||
         session == null ||
-        properties.saves.autosavePolicy !=
-            eu.rekawek.coffeegb.controller.properties.ApplicationSettings.AutosavePolicy
-                .ON_CLOSE_AND_ROM_SWITCH ||
         closeAutosaveCompletedSessionId == stateSessionId ||
         closeAutosaveAttempt?.isDone == false) {
       return false
     }
     closeAutosaveSkippedSessionId = stateSessionId
     closeAutosaveCapture = null
+    closeAutosaveThumbnail = null
     closeAutosavePlayDurationNanos = null
     closeAutosavePlayDurationCaptured = false
     closeAutosaveAttempt = null
@@ -4441,6 +4549,11 @@ class BasicController private constructor(
       val requestId: Long,
       val pausedBeforeStop: Boolean,
       val capture: BatteryFlush,
+      var context: StateWorkerContext? = null,
+      var state: StateFile? = null,
+      var playDurationNanos: Long? = null,
+      var thumbnail: StateImage? = null,
+      var awaitingAutosaveDecision: Boolean = false,
       var attempt: PersistenceTask?,
   )
 
@@ -4512,6 +4625,7 @@ class BasicController private constructor(
       val context: StateWorkerContext,
       val state: StateFile,
       val playDurationNanos: Long?,
+      val thumbnail: StateImage?,
       var awaitingDecision: Boolean = false,
   )
 

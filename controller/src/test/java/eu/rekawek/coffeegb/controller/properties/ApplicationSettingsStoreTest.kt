@@ -825,7 +825,7 @@ class ApplicationSettingsStoreTest {
               "general.recent.0" to Path.of("/legacy/roms/first.gb").toString(),
               "general.recent.1" to Path.of("/legacy/roms/second.gbc").toString(),
               "rom.recent.future" to "preserve future recent metadata",
-              "saves.autosavePolicy" to "DISABLED",
+              "saves.autosavePolicy" to "ON_CLOSE_AND_ROM_SWITCH",
               "saves.batteryEnabled" to "false",
               "saves.resumePolicy" to "ASK",
               "saves.rewindEnabled" to "true",

@@ -111,13 +111,15 @@ Coffee GB displays the full selectable path instead.
 
 ## Autosave and resume
 
-The Saves preferences tab controls whether Coffee GB writes a distinct autosave before a ROM switch
-and before the window closes. A ROM switch is cancelled when the autosave cannot be captured or
-committed, leaving the current game active. On close, a completed permanent autosave failure or an
-unavailable workspace offers retry, close without a new autosave, or cancel. A timed-out writer
-remains retained and cannot be waived because it may still commit; retry or cancel remains
-available. No failed load replaces the active session: decoding and validation complete first, and
-applying the state has rollback protection at the frame boundary.
+Coffee GB always writes a distinct autosave, with a thumbnail of the displayed game frame, before a
+ROM switch, **Close Game**, and application shutdown. A ROM switch or game unload is cancelled when
+the autosave cannot be captured or committed, leaving the current game active. On application
+close, a completed permanent autosave failure or an unavailable workspace offers retry, close
+without a new autosave, or cancel. A timed-out writer remains retained and cannot be waived because
+it may still commit; retry or cancel remains available. No failed load replaces the active session:
+decoding and validation complete first, and applying the state has rollback protection at the frame
+boundary. The Autosave preference has been retired; its legacy settings value is normalized to this
+mandatory behavior.
 
 On the next launch of the same ROM, resume policy can be:
 

@@ -121,9 +121,10 @@ Delivered in this branch:
   preferences. FlatLaf Light/Dark is packaged with System-LAF fallback, semantic theme tokens,
   shared Pocket Brew imagery, whole-window theme refresh, and updated legal inventory.
 - The main frame now has Home/Game cards, one ROM-open pipeline for every entry route, a bounded
-  recent list, drag-and-drop guidance, a responsive shared-action command bar, an in-window task
-  banner, and an always-visible textual status region. Exact 1x packs after command chrome has
-  adopted the new presentation, and Close Game leaves fullscreen before revealing Home.
+  recent-game card grid with asynchronously loaded autosave thumbnails, drag-and-drop guidance, a
+  responsive shared-action command bar, an in-window task banner, and an always-visible textual
+  status region. Exact 1x packs after command chrome has adopted the new presentation, and Close
+  Game leaves fullscreen before revealing Home.
 - Main bounds/maximized state and retained utility bounds are stored separately from emulator
   settings, validated against current monitor geometry, and never record transient content or
   utility visibility. Fullscreen native-peer recreation retains the exact visible modeless owned
@@ -249,8 +250,8 @@ Idle:
 |                    or drop a ROM/archive here                    |
 |                                                                  |
 | Recent                                                           |
-| Pokemon Crystal.gbc                    ~/Games/Game Boy/          |
-| Tetris.gb                              ~/Games/                    |
+| [saved frame] Pokemon Crystal.gbc    [saved frame] Tetris.gb      |
+|               ~/Games/Game Boy/                    ~/Games/       |
 +------------------------------------------------------------------+
 ```
 
@@ -309,11 +310,14 @@ or generations; `DesktopUiCoordinator` does not renumber or serialize unrelated 
 ### Home surface
 
 The Home card contains no folder scanner, database, cover download, or play-time tracking. It
-uses the existing recent-file list and its configured capacity, showing at most five entries with
-the filename and an elided parent directory. When recents are disabled or empty, the section is
-absent. Activating a missing entry offers **Remove from Recent** or **Locate File...** without
-silently deleting it. Startup does not synchronously probe every recent path: a stale network
-location must not freeze the EDT merely to decorate the Home card.
+uses the existing recent-file list and its configured capacity, showing at most five cards with an
+autosave thumbnail, filename, and elided parent directory. The thumbnail is the hash-bound image
+already saved beside a valid autosave; a missing or legacy thumbnail gets a neutral **No preview**
+card rather than a misleading substitute. Reads run off the EDT, and a corrupt or incompatible
+active autosave never falls through to an older fallback preview. When recents are disabled or
+empty, the section is absent. Activating a missing entry offers **Remove from Recent** or **Locate
+File...** without silently deleting it. Startup does not synchronously probe every recent path: a
+stale network location must not freeze the EDT merely to decorate the Home card.
 
 Locate File selects a candidate through the same correlated ROM-open pipeline. It replaces/removes
 the stale recent entry only after that candidate commits successfully; Cancel, validation failure,

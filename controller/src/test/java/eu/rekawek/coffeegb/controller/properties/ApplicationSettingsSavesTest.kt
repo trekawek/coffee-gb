@@ -44,7 +44,7 @@ class ApplicationSettingsSavesTest {
       assertEquals("true", canonical[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
       assertEquals("30", canonical[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
       assertEquals("64", canonical[ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY])
-      assertEquals("DISABLED", canonical[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
+      assertEquals("ON_CLOSE_AND_ROM_SWITCH", canonical[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
       assertEquals("ASK", canonical[ApplicationSettingsCodec.RESUME_POLICY_KEY])
       assertTrue(
           canonical.keys.any {
@@ -124,7 +124,7 @@ class ApplicationSettingsSavesTest {
     assertEquals("true", encoded[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
     assertEquals("30", encoded[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
     assertEquals("64", encoded[ApplicationSettingsCodec.REWIND_MEMORY_MIB_KEY])
-    assertEquals("DISABLED", encoded[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
+    assertEquals("ON_CLOSE_AND_ROM_SWITCH", encoded[ApplicationSettingsCodec.AUTOSAVE_POLICY_KEY])
     assertEquals("ASK", encoded[ApplicationSettingsCodec.RESUME_POLICY_KEY])
   }
 

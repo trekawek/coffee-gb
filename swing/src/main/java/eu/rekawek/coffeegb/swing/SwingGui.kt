@@ -32,6 +32,7 @@ import java.nio.file.StandardOpenOption
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JFrame
 import javax.swing.SwingUtilities
@@ -125,6 +126,11 @@ class SwingGui private constructor(
 
   private val desktopQuit = DesktopQuitBridge()
 
+  /** Reads Home previews outside Swing; every UI update is guarded by this monotonically rising id. */
+  private val recentGamePreviewLoader = RecentGamePreviewLoader()
+
+  private val recentGamePreviewGeneration = AtomicLong()
+
   private var activeWindowTitle = "Coffee GB"
 
   private var romLoading = false
@@ -148,6 +154,7 @@ class SwingGui private constructor(
           runDesktopEdtStep(netplayWindow::close)
           runDesktopEdtStep(mobileAdapterWindow::close)
           runDesktopEdtStep(stateUxController::close)
+          recentGamePreviewLoader.close()
           console?.stop()
           runDesktopEdtStep(desktopUiStateController::close)
           // No process-wide key dispatcher may persist display settings once store closure begins.
@@ -322,6 +329,7 @@ class SwingGui private constructor(
               runDesktopEdtStep(desktopUiStateController::close)
             }
           },
+          recentGamePreviewLoader::close,
           properties::close,
           mobileAdapterConfiguration::close,
       )
@@ -494,6 +502,9 @@ class SwingGui private constructor(
           if (!romLoading) {
             mainWindow.title = activeWindowTitle
             desktopUiCoordinator.stopped()
+            // The unload autosave just committed its preview; refresh Home now rather than
+            // waiting for another ROM-open or preference change.
+            updateRecentRoms()
           }
         }
       }
@@ -562,7 +573,18 @@ class SwingGui private constructor(
   private fun updateRecentRoms() {
     if (::menu.isInitialized) menu.updateRecentRoms()
     if (::desktopMainPanel.isInitialized) {
-      desktopMainPanel.updateRecentRoms(properties.recentRoms.getPaths())
+      val paths = properties.recentRoms.getPaths().take(MAXIMUM_HOME_RECENTS)
+      desktopMainPanel.updateRecentGames(paths.map(::DesktopRecentGame))
+      val generation = recentGamePreviewGeneration.incrementAndGet()
+      val saves = properties.applicationSettings.saves
+      recentGamePreviewLoader.load(paths, saves) { games ->
+        dispatchSwingMutation {
+          if (generation == recentGamePreviewGeneration.get() &&
+              ::desktopMainPanel.isInitialized) {
+            desktopMainPanel.updateRecentGames(games)
+          }
+        }
+      }
     }
   }
 
@@ -1008,6 +1030,7 @@ class SwingGui private constructor(
   companion object {
     private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
     private const val DESKTOP_SMOKE_MARKER_ENV = "COFFEE_GB_DESKTOP_SMOKE_MARKER"
+    private const val MAXIMUM_HOME_RECENTS = 5
 
     fun run(
         debug: Boolean,

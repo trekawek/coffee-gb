@@ -70,6 +70,7 @@ so the portable JAR remains compatible during the migration window.
 | `audio.masterVolume` | integer percentage in `0..100` | `100` |
 | `audio.latencyPreset` | `LOW`, `BALANCED`, or `SAFE` | `BALANCED` |
 | `saves.batteryEnabled` | boolean | `true` |
+| `saves.autosavePolicy` | legacy value, always normalized to `ON_CLOSE_AND_ROM_SWITCH` | `ON_CLOSE_AND_ROM_SWITCH` |
 | `rom.directory` | optional local path | absent |
 | `general.recentFileCapacity` | integer in `0..50` | `10` |
 | `general.romChangeConfirmationPolicy` | `ALWAYS`, `WHEN_RUNNING`, or `NEVER` | `WHEN_RUNNING` |

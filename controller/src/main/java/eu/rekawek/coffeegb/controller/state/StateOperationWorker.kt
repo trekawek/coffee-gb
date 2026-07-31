@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory
 internal enum class StateWorkerPurpose {
   MANUAL,
   AUTOSAVE_ROM_SWITCH,
+  AUTOSAVE_STOP,
   AUTOSAVE_CLOSE,
   RESUME_SCAN,
 }
@@ -380,7 +381,7 @@ private data class StateQueuedWork(
     get() =
         when (purpose) {
           StateWorkerPurpose.AUTOSAVE_CLOSE -> 0
-          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH -> 1
+          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH, StateWorkerPurpose.AUTOSAVE_STOP -> 1
           StateWorkerPurpose.MANUAL, StateWorkerPurpose.RESUME_SCAN -> 2
         }
 
