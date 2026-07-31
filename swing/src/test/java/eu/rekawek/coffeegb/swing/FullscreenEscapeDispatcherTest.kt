@@ -74,6 +74,34 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
+  fun `main-window fullscreen F11 exits once and consumes the complete key sequence`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        var fullscreen = true
+        var exitCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isFullscreen = { fullscreen },
+                exitFullscreen = {
+                  exitCount++
+                  fullscreen = false
+                },
+            )
+        dispatcher.install()
+
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        assertEquals(1, exitCount)
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F11)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
+        assertEquals(1, exitCount)
+        dispatcher.close()
+      }
+
+  @Test
   fun `lost release during fullscreen peer transition cannot latch the next escape`() =
       onEdt {
         val registry = RecordingRegistry()
@@ -128,8 +156,8 @@ class FullscreenEscapeDispatcherTest {
         fullscreen = true
         assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
-        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
-        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F11)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F10)))
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F10)))
         assertEquals(0, exitCount)
         dispatcher.close()
       }

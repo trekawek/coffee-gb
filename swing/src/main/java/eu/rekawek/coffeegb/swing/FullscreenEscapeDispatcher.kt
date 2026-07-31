@@ -10,8 +10,8 @@ import java.awt.event.WindowEvent
 import javax.swing.SwingUtilities
 
 /**
- * Reserves Escape for leaving fullscreen without taking it away from windowed emulator input or
- * from owned dialogs.
+ * Reserves Escape and F11 for leaving fullscreen without taking F11 away from windowed emulator
+ * input or from owned dialogs.
  *
  * One captured press owns the complete physical-key sequence. The exit action may synchronously
  * leave fullscreen, but auto-repeat presses and the matching release are still consumed until the
@@ -27,9 +27,9 @@ internal class FullscreenEscapeDispatcher private constructor(
 ) : KeyEventDispatcher, AutoCloseable {
   private val lifecycleLock = Any()
   private var installed = false
-  private var escapeSequenceCaptured = false
-  private val resetEscapeSequence: () -> Unit = {
-    synchronized(lifecycleLock) { escapeSequenceCaptured = false }
+  private var fullscreenExitSequenceKeyCode: Int? = null
+  private val resetFullscreenExitSequence: () -> Unit = {
+    synchronized(lifecycleLock) { fullscreenExitSequenceKeyCode = null }
   }
 
   constructor(
@@ -61,7 +61,7 @@ internal class FullscreenEscapeDispatcher private constructor(
       if (installed) return
       registry.add(this)
       try {
-        lifecycleRegistry.add(resetEscapeSequence)
+        lifecycleRegistry.add(resetFullscreenExitSequence)
         installed = true
       } catch (failure: RuntimeException) {
         registry.remove(this)
@@ -74,11 +74,11 @@ internal class FullscreenEscapeDispatcher private constructor(
     synchronized(lifecycleLock) {
       if (!installed) return
       try {
-        lifecycleRegistry.remove(resetEscapeSequence)
+        lifecycleRegistry.remove(resetFullscreenExitSequence)
       } finally {
         registry.remove(this)
         installed = false
-        escapeSequenceCaptured = false
+        fullscreenExitSequenceKeyCode = null
       }
     }
   }
@@ -87,22 +87,23 @@ internal class FullscreenEscapeDispatcher private constructor(
     var requestExit = false
     val consume =
         synchronized(lifecycleLock) {
-          if (event.keyCode != KeyEvent.VK_ESCAPE) {
+          if (event.keyCode !in FULLSCREEN_EXIT_KEYS) {
             return@synchronized false
           }
           if (!belongsToMainWindow(event.component)) {
-            if (event.id == KeyEvent.KEY_RELEASED) {
-              escapeSequenceCaptured = false
+            if (event.id == KeyEvent.KEY_RELEASED &&
+                fullscreenExitSequenceKeyCode == event.keyCode) {
+              fullscreenExitSequenceKeyCode = null
             }
             return@synchronized false
           }
 
           when (event.id) {
             KeyEvent.KEY_PRESSED -> {
-              if (escapeSequenceCaptured) {
+              if (fullscreenExitSequenceKeyCode != null) {
                 true
               } else if (isFullscreen()) {
-                escapeSequenceCaptured = true
+                fullscreenExitSequenceKeyCode = event.keyCode
                 requestExit = true
                 true
               } else {
@@ -110,8 +111,10 @@ internal class FullscreenEscapeDispatcher private constructor(
               }
             }
             KeyEvent.KEY_RELEASED -> {
-              val captured = escapeSequenceCaptured
-              escapeSequenceCaptured = false
+              val captured = fullscreenExitSequenceKeyCode == event.keyCode
+              if (captured) {
+                fullscreenExitSequenceKeyCode = null
+              }
               captured
             }
             else -> false
@@ -121,6 +124,10 @@ internal class FullscreenEscapeDispatcher private constructor(
       exitFullscreen()
     }
     return consume
+  }
+
+  private companion object {
+    val FULLSCREEN_EXIT_KEYS = setOf(KeyEvent.VK_ESCAPE, KeyEvent.VK_F11)
   }
 }
 
