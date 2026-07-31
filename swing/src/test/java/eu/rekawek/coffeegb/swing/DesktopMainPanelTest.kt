@@ -126,39 +126,40 @@ class DesktopMainPanelTest {
       val panel = panel(actions)
       panel.updateRecentRoms((0..7).map { Path.of("/games/game-$it.gb") })
 
-      val buttons = descendants(panel).filterIsInstance<AbstractButton>()
-      val sharedOpenButtons =
-          buttons.filter { it.action === actions[DesktopCommand.OPEN_ROM] }
-      assertTrue(
-          sharedOpenButtons.size >= 2,
-          "Home and command-bar Open controls must reuse the same action",
-      )
-      assertTrue(sharedOpenButtons.all { it.action === actions[DesktopCommand.OPEN_ROM] })
+      val home = descendants(panel).filterIsInstance<DesktopHomePanel>().single()
+      val buttons = descendants(home).filterIsInstance<AbstractButton>()
+      assertEquals(1, buttons.count { it.action === actions[DesktopCommand.OPEN_ROM] })
       assertEquals(
           5,
           buttons.count {
             it.accessibleContext.accessibleName?.startsWith("Open recent ROM") == true
           },
       )
+      assertTrue(buttons.all { !it.isFocusable })
+      assertTrue(descendants(home).filterIsInstance<JLabel>().isEmpty())
     }
   }
 
   @Test
-  fun `home shows a saved autosave thumbnail on its recent-game card`() {
+  fun `clicking a recent-game thumbnail opens that game`() {
     onEdt {
-      val panel = panel(actions())
+      val opened = mutableListOf<Path>()
+      val panel = panel(actions(), onOpenRecent = opened::add)
+      val path = Path.of("/games/tetris.gb")
       panel.updateRecentGames(
           listOf(
               DesktopRecentGame(
-                  Path.of("/games/tetris.gb"),
+                  path,
                   StateImage(1, 1, intArrayOf(0x112233)),
               )))
 
       val preview =
-          descendants(panel).filterIsInstance<JLabel>().single {
-            it.accessibleContext.accessibleName == "Saved preview for tetris.gb"
+          descendants(panel).filterIsInstance<AbstractButton>().single {
+            it.accessibleContext.accessibleName == "Open recent ROM tetris.gb"
           }
       assertTrue(preview.icon != null)
+      preview.doClick()
+      assertEquals(listOf(path), opened)
     }
   }
 
@@ -296,12 +297,13 @@ class DesktopMainPanelTest {
 
   private fun panel(
       actions: DesktopActionRegistry,
+      onOpenRecent: (Path) -> Unit = {},
       onCancel: () -> Unit = {},
   ) =
       DesktopMainPanel(
           gameSurface = JPanel(),
           actions = actions,
-          onOpenRecent = {},
+          onOpenRecent = onOpenRecent,
           onCancelTask = onCancel,
           initialTokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM),
       )
