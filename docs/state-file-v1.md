@@ -165,12 +165,12 @@ Every value starts with a one-byte tag:
 
 Float NaN payloads and signed zero are preserved with `doubleToRawLongBits`. Int32-map keys are
 strictly increasing and unique. Record type IDs are the one-based stable entries of the audited
-98-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
+99-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
 The 11 enum type IDs use the same audited ordering, while enum value IDs are an explicit v1
 one-based registry verified against the production enum names. Class names from input are never
 loaded or instantiated.
 
-The record ID/name/field registry is the exact ordered 98-record appendix in
+The record ID/name/field registry is the exact ordered 99-record appendix in
 [state-memento-schema.md](state-memento-schema.md), where each bullet's one-based position is its
 ID. IDs 88 through 91 deliberately name non-serializable normal-state leaves; the local legacy
 importer has ID-aligned historical descriptor classes with the same field schemas. StateFile does
@@ -180,10 +180,15 @@ mapper state. ID 94 is the append-only VF001 General mapper state. ID 95 is the 
 Adapter engine state and ID 96 is its append-only serial-endpoint state. Those released host-free
 record shapes remain unchanged. ID 97 appends the Mobile Adapter network-capture engine state,
 whose final `externalIoAtCapture` boolean marks deterministic normalization of live host I/O, and
-ID 98 appends its serial-endpoint wrapper. Captures without external ownership continue using IDs
-95/96; captures with a pending backend request or open connection use IDs 97/98, preserve only
-deterministic guest-visible parser/configuration/timing state, and restore as externally
-disconnected. None of IDs 92 through 98 has a legacy descriptor because no released
+ID 98 appends its serial-endpoint wrapper. ID 99 appends the deterministic active-wire endpoint
+state. Captures without external ownership use IDs 95/96 at wire boundaries and ID 99 during an
+acknowledgement/response or in-flight request byte; captures with a pending backend request or open
+connection use IDs 97/98 at boundaries, preserve only deterministic guest-visible
+parser/configuration/timing state, and restore as externally
+disconnected. An in-flight deterministic request byte may pair ID 99 with nested ID 97 so its
+latched reply finishes before the normalized disconnect takes effect. Other mid-byte external-I/O
+captures use ID 99 wire phase 11, retain only the already-latched reply byte, and reset the wire at
+that byte boundary. None of IDs 92 through 99 has a legacy descriptor because no released
 Java-serialized snapshot could contain them. The v1 enum registry is:
 
 | Type ID | Enum | Value IDs in order starting at 1 |

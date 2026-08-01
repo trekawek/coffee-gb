@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
+import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.sgb.Commands
 import java.lang.reflect.Array as ReflectArray
 import java.util.IdentityHashMap
@@ -154,6 +155,17 @@ internal object StateSemantics {
       val value = value(name) ?: return
       require(value.javaClass.name in allowed,
           "has incompatible $name record ${value.javaClass.name}")
+    }
+
+    fun requiredRecordType(name: String, vararg allowed: String) {
+      val value = value(name)
+      require(value != null, "has no " + name + " record")
+      if (value != null) {
+        require(
+            value.javaClass.name in allowed,
+            "has incompatible " + name + " record " + value.javaClass.name,
+        )
+      }
     }
 
     fun recordElements(name: String, expected: String) {
@@ -769,7 +781,7 @@ internal object StateSemantics {
           ))
       put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState",
           constrained("Mobile Adapter endpoint bit/byte latches and nested pure engine state are bounded.") {
-            it.recordType("engineState", MOBILE_ADAPTER_ENGINE_STATE)
+            it.requiredRecordType("engineState", MOBILE_ADAPTER_ENGINE_STATE)
             it.range("sb", 0, 0xff)
             it.range("sendBitIndex", 0, 7)
           })
@@ -788,9 +800,13 @@ internal object StateSemantics {
           ))
       put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState",
           constrained("Additive Mobile Adapter endpoint state bounds its latches and nested network capture state.") {
-            it.recordType("engineState", MOBILE_ADAPTER_NETWORK_ENGINE_STATE)
+            it.requiredRecordType("engineState", MOBILE_ADAPTER_NETWORK_ENGINE_STATE)
             it.range("sb", 0, 0xff)
             it.range("sendBitIndex", 0, 7)
+          })
+      put("eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState",
+          constrained("Additive Mobile Adapter wire state preserves a bounded ACK, poll, response, and sender-ACK transaction.") {
+            validateMobileAdapterWireState(it)
           })
 
       put("eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",
@@ -829,12 +845,236 @@ internal object StateSemantics {
     }
   }
 
+  private fun validateMobileAdapterWireState(fields: RecordFields) {
+    fields.requiredRecordType(
+        "engineState",
+        MOBILE_ADAPTER_ENGINE_STATE,
+        MOBILE_ADAPTER_NETWORK_ENGINE_STATE,
+    )
+    fields.range("sb", 0, 0xff)
+    fields.range("sendBitIndex", 0, 7)
+    val byteTransferActive = fields.boolean("byteTransferActive")
+    fields.require(
+        byteTransferActive || fields.int("sendBitIndex") == 0,
+        "has a nonzero bit index outside an active byte transfer",
+    )
+    fields.oneOf(
+        "wirePhaseId",
+        MOBILE_WIRE_RECEIVE_REQUEST,
+        MOBILE_WIRE_REQUEST_ACK_DEVICE,
+        MOBILE_WIRE_REQUEST_ACK_COMMAND,
+        MOBILE_WIRE_RESPONSE_TURNAROUND,
+        MOBILE_WIRE_RESPONSE_WAIT,
+        MOBILE_WIRE_RESPONSE_STREAM,
+        MOBILE_WIRE_RESPONSE_ACK_DEVICE,
+        MOBILE_WIRE_RESPONSE_ACK_COMMAND,
+        MOBILE_WIRE_RESPONSE_READY,
+        MOBILE_WIRE_NORMALIZED_DISCONNECT,
+    )
+    fields.range("currentReply", 0, 0xff)
+    fields.range("responseRetryCount", 0, MOBILE_MAX_RESPONSE_RETRIES)
+
+    val phase = fields.int("wirePhaseId")
+    val acknowledgement = fields.byteArray("requestAcknowledgement")
+    val response = fields.byteArray("responsePacket")
+    fields.require(response.size <= MOBILE_PACKET_BYTES, "has an oversized wire response packet")
+    val responseByteIndex = fields.int("responseByteIndex")
+    fields.require(
+        responseByteIndex in 0..response.size,
+        "has invalid responseByteIndex=$responseByteIndex",
+    )
+    val engineOutput = mobileAdapterEngineOutput(fields)
+    if (phase == MOBILE_WIRE_NORMALIZED_DISCONNECT) {
+      fields.require(
+          byteTransferActive &&
+              engineOutput.outcomeId in
+                  setOf(
+                      MOBILE_OUTCOME_IDLE_TIMEOUT_RESET,
+                      MOBILE_OUTCOME_CANCELLED,
+                      MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED,
+                  ) &&
+              engineOutput.packetCount == 0 &&
+              engineOutput.acknowledgement.isEmpty() &&
+              engineOutput.responsePacket.isEmpty() &&
+              acknowledgement.isEmpty() &&
+              response.isEmpty() &&
+              responseByteIndex == 0 &&
+              !fields.boolean("awaitingResponse") &&
+              fields.int("responseRetryCount") == 0,
+          "has an inconsistent normalized disconnect byte",
+      )
+      return
+    }
+    if (phase == MOBILE_WIRE_RECEIVE_REQUEST) {
+      fields.require(
+          byteTransferActive &&
+              fields.int("currentReply") == MOBILE_IDLE_BYTE &&
+              acknowledgement.isEmpty() &&
+              response.isEmpty() &&
+              responseByteIndex == 0 &&
+              !fields.boolean("awaitingResponse") &&
+              fields.int("responseRetryCount") == 0,
+          "has an inconsistent in-flight request byte",
+      )
+      return
+    }
+    fields.require(
+        acknowledgement.size == 2,
+        "must retain exactly two request acknowledgement bytes",
+    )
+
+    fields.require(
+        response.contentEquals(engineOutput.responsePacket),
+        "has a response packet detached from its engine result",
+    )
+    fields.require(
+        mobileWireAcknowledgementMatches(acknowledgement, engineOutput),
+        "has a request acknowledgement detached from its engine result",
+    )
+    if (acknowledgement.size == 2) {
+      fields.require(
+          (acknowledgement[0].toInt() and 0xff) == (engineOutput.deviceId or 0x80),
+          "has a wire acknowledgement for another device ID",
+      )
+    }
+
+    val streamingOrResponseAck =
+        phase == MOBILE_WIRE_RESPONSE_STREAM ||
+            phase == MOBILE_WIRE_RESPONSE_ACK_DEVICE ||
+            phase == MOBILE_WIRE_RESPONSE_ACK_COMMAND ||
+            phase == MOBILE_WIRE_RESPONSE_READY
+    fields.require(
+        !streamingOrResponseAck || response.isNotEmpty(),
+        "has a response phase without a packet",
+    )
+    if (phase == MOBILE_WIRE_RESPONSE_STREAM) {
+      fields.require(responseByteIndex < response.size, "has an exhausted response cursor")
+    }
+    if (phase == MOBILE_WIRE_RESPONSE_ACK_DEVICE || phase == MOBILE_WIRE_RESPONSE_ACK_COMMAND) {
+      fields.require(
+          responseByteIndex == response.size,
+          "starts the response acknowledgement before the packet ends",
+      )
+    } else if (
+        phase == MOBILE_WIRE_REQUEST_ACK_DEVICE ||
+            phase == MOBILE_WIRE_REQUEST_ACK_COMMAND ||
+            phase == MOBILE_WIRE_RESPONSE_TURNAROUND ||
+            phase == MOBILE_WIRE_RESPONSE_WAIT ||
+            phase == MOBILE_WIRE_RESPONSE_READY
+    ) {
+      fields.require(responseByteIndex == 0, "has a response cursor before streaming begins")
+    }
+
+    if (phase <= MOBILE_WIRE_RESPONSE_WAIT) {
+      fields.require(
+          fields.int("responseRetryCount") == 0,
+          "has a response retry count during request acknowledgement",
+      )
+    }
+
+    val awaitingResponse = fields.boolean("awaitingResponse")
+    fields.require(
+        awaitingResponse == response.isNotEmpty(),
+        "has inconsistent response-wait ownership",
+    )
+    fields.require(
+        awaitingResponse || phase <= MOBILE_WIRE_REQUEST_ACK_COMMAND,
+        "has a response phase when no response is expected",
+    )
+    if (phase == MOBILE_WIRE_RESPONSE_READY) {
+      fields.require(
+          !byteTransferActive,
+          "is mid-byte in the response-ready phase",
+      )
+    }
+
+    if (byteTransferActive) {
+      val expectedReply =
+          when (phase) {
+            MOBILE_WIRE_REQUEST_ACK_DEVICE, MOBILE_WIRE_RESPONSE_ACK_DEVICE ->
+                acknowledgement[0].toInt() and 0xff
+            MOBILE_WIRE_REQUEST_ACK_COMMAND -> acknowledgement[1].toInt() and 0xff
+            MOBILE_WIRE_RESPONSE_TURNAROUND, MOBILE_WIRE_RESPONSE_WAIT -> MOBILE_IDLE_BYTE
+            MOBILE_WIRE_RESPONSE_STREAM -> response[responseByteIndex].toInt() and 0xff
+            MOBILE_WIRE_RESPONSE_ACK_COMMAND -> 0
+            else -> -1
+          }
+      fields.require(
+          fields.int("currentReply") == expectedReply,
+          "has an in-flight reply inconsistent with its wire phase",
+      )
+    }
+  }
+
+  private fun mobileAdapterEngineOutput(fields: RecordFields): MobileAdapterEngineOutput =
+      when (val state = fields.value("engineState")) {
+        is MobileAdapterEngine.MobileAdapterEngineState ->
+            MobileAdapterEngineOutput(
+                state.deviceId(),
+                state.outcomeId(),
+                state.packetCount(),
+                state.acknowledgement(),
+                state.responsePacket(),
+            )
+        is MobileAdapterEngine.MobileAdapterEngineNetworkState ->
+            MobileAdapterEngineOutput(
+                state.deviceId(),
+                state.outcomeId(),
+                state.packetCount(),
+                state.acknowledgement(),
+                state.responsePacket(),
+            )
+        else -> throw StateApplyException("Mobile Adapter wire state has no compatible engine")
+      }
+
+  private fun mobileWireAcknowledgementMatches(
+      acknowledgement: ByteArray,
+      engineOutput: MobileAdapterEngineOutput,
+  ): Boolean {
+    if (acknowledgement.contentEquals(engineOutput.acknowledgement)) return true
+    if (engineOutput.acknowledgement.isNotEmpty() || engineOutput.responsePacket.isEmpty()) {
+      return false
+    }
+    val expectedCommand =
+        when (engineOutput.outcomeId) {
+          MOBILE_OUTCOME_BACKEND_RESPONSE ->
+              engineOutput.responsePacket.getOrNull(2)?.toInt()?.and(0xff) ?: -1
+          MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED -> 0x95
+          MOBILE_OUTCOME_BACKEND_ERROR ->
+              if (
+                  engineOutput.responsePacket.size >= 8 &&
+                      (engineOutput.responsePacket[2].toInt() and 0xff) == 0x6e
+              ) {
+                (engineOutput.responsePacket[6].toInt() and 0xff) xor 0x80
+              } else {
+                -1
+              }
+          else -> -1
+        }
+    return acknowledgement.size == 2 &&
+        (acknowledgement[1].toInt() and 0xff) == expectedCommand
+  }
+
+  private data class MobileAdapterEngineOutput(
+      val deviceId: Int,
+      val outcomeId: Int,
+      val packetCount: Int,
+      val acknowledgement: ByteArray,
+      val responsePacket: ByteArray,
+  )
+
   private fun validateMobileAdapterEngine(
       fields: RecordFields,
       externalIoAtCapture: Boolean,
   ) {
-    fields.oneOf("phaseId", MOBILE_PHASE_SLEEP, MOBILE_PHASE_SESSION)
-    fields.range("outcomeId", MOBILE_OUTCOME_NEED_MORE, MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED)
+    fields.oneOf(
+        "phaseId",
+        MOBILE_PHASE_SLEEP,
+        MOBILE_PHASE_SESSION,
+        MOBILE_PHASE_TELEPHONE,
+        MOBILE_PHASE_INTERNET,
+    )
+    fields.range("outcomeId", MOBILE_OUTCOME_NEED_MORE, MOBILE_OUTCOME_SERVICE_ERROR)
     fields.require(
         fields.int("outcomeId") != MOBILE_OUTCOME_TIME_REGRESSION,
         "contains a transient time-regression outcome",
@@ -967,9 +1207,18 @@ internal object StateSemantics {
         when (outcome) {
           MOBILE_OUTCOME_SESSION_STARTED -> 0x90
           MOBILE_OUTCOME_SESSION_ENDED -> 0x91
+          MOBILE_OUTCOME_TELEPHONE_DIALLED -> 0x92
+          MOBILE_OUTCOME_TELEPHONE_HUNG_UP -> 0x93
           MOBILE_OUTCOME_SESSION_RESET -> 0x96
+          MOBILE_OUTCOME_TELEPHONE_STATUS -> 0x97
           MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY -> 0x99
           MOBILE_OUTCOME_CONFIG_WRITE -> 0x9a
+          MOBILE_OUTCOME_ISP_LOGGED_IN -> 0xa1
+          MOBILE_OUTCOME_ISP_LOGGED_OUT -> 0xa2
+          MOBILE_OUTCOME_SERVICE_ERROR ->
+              if (response.size == 10) (response[6].toInt() and 0xff) xor 0x80 else -1
+          MOBILE_OUTCOME_BACKEND_ERROR ->
+              if (response.size == 10) (response[6].toInt() and 0xff) xor 0x80 else -1
           MOBILE_OUTCOME_CHECKSUM_ERROR -> 0xf1
           MOBILE_OUTCOME_UNSUPPORTED_COMMAND -> 0xf0
           else -> -1
@@ -980,13 +1229,25 @@ internal object StateSemantics {
             response.isEmpty() &&
             acknowledgement.size == 2 &&
             (acknowledgement[1].toInt() and 0xff) == 0xf2
-    if (!internalErrorAck) {
+    val releasedAcklessBackendError =
+        outcome == MOBILE_OUTCOME_BACKEND_ERROR &&
+            response.isNotEmpty() &&
+            acknowledgement.isEmpty()
+    if (outcome == MOBILE_OUTCOME_BACKEND_ERROR) {
+      fields.require(
+          !(fields.int("errorId") == MOBILE_ERROR_BACKEND_BUSY && !internalErrorAck) &&
+              !(fields.int("errorId") == MOBILE_ERROR_BACKEND_RESPONSE_INVALID &&
+                  internalErrorAck),
+          "has an inconsistent backend error shape",
+      )
+    }
+    if (!internalErrorAck && !releasedAcklessBackendError) {
       fields.require(
           (expectedAck == -1) == acknowledgement.isEmpty(),
           "has inconsistent outcome/acknowledgement presence",
       )
     }
-    if (!internalErrorAck && expectedAck != -1) {
+    if (!internalErrorAck && !releasedAcklessBackendError && expectedAck != -1) {
       fields.require(
           (acknowledgement[1].toInt() and 0xff) == expectedAck,
           "has an acknowledgement inconsistent with its outcome",
@@ -997,9 +1258,15 @@ internal object StateSemantics {
         outcome == MOBILE_OUTCOME_SESSION_STARTED ||
             outcome == MOBILE_OUTCOME_SESSION_ENDED ||
             outcome == MOBILE_OUTCOME_SESSION_RESET ||
+            outcome == MOBILE_OUTCOME_TELEPHONE_DIALLED ||
+            outcome == MOBILE_OUTCOME_TELEPHONE_HUNG_UP ||
+            outcome == MOBILE_OUTCOME_TELEPHONE_STATUS ||
             outcome == MOBILE_OUTCOME_CONFIG_READ ||
             outcome == MOBILE_OUTCOME_CONFIG_READ_BOUNDARY ||
             outcome == MOBILE_OUTCOME_CONFIG_WRITE ||
+            outcome == MOBILE_OUTCOME_ISP_LOGGED_IN ||
+            outcome == MOBILE_OUTCOME_ISP_LOGGED_OUT ||
+            outcome == MOBILE_OUTCOME_SERVICE_ERROR ||
             outcome == MOBILE_OUTCOME_BACKEND_RESPONSE ||
             outcome == MOBILE_OUTCOME_BACKEND_ERROR ||
             outcome == MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED
@@ -1008,7 +1275,11 @@ internal object StateSemantics {
         "has inconsistent outcome/response presence",
     )
     if (expectsResponse && !internalErrorAck) {
-      if (expectedAck != -1) {
+      if (
+          expectedAck != -1 &&
+              outcome != MOBILE_OUTCOME_SERVICE_ERROR &&
+              outcome != MOBILE_OUTCOME_BACKEND_ERROR
+      ) {
         fields.require(
             (response[2].toInt() and 0xff) == expectedAck,
             "has a response command inconsistent with its outcome",
@@ -1021,12 +1292,43 @@ internal object StateSemantics {
                 data.contentEquals(MOBILE_BEGIN_SESSION_DATA),
                 "has an invalid begin-session response",
             )
-        MOBILE_OUTCOME_SESSION_ENDED, MOBILE_OUTCOME_SESSION_RESET ->
+        MOBILE_OUTCOME_SESSION_ENDED,
+        MOBILE_OUTCOME_SESSION_RESET,
+        MOBILE_OUTCOME_TELEPHONE_DIALLED,
+        MOBILE_OUTCOME_TELEPHONE_HUNG_UP,
+        MOBILE_OUTCOME_ISP_LOGGED_OUT ->
             fields.require(data.isEmpty(), "has data in an empty response")
+        MOBILE_OUTCOME_TELEPHONE_STATUS -> {
+          val phase = fields.int("phaseId")
+          val expected =
+              if (phase == MOBILE_PHASE_SESSION) byteArrayOf(0, 0x4d, 0)
+              else byteArrayOf(4, 0x4d, 0)
+          fields.require(
+              phase != MOBILE_PHASE_SLEEP && data.contentEquals(expected),
+              "has an invalid telephone-status response",
+          )
+        }
         MOBILE_OUTCOME_CONFIG_READ, MOBILE_OUTCOME_CONFIG_READ_BOUNDARY ->
             validateMobileConfigurationResponse(fields, outcome, data)
         MOBILE_OUTCOME_CONFIG_WRITE ->
             fields.require(data.size == 1, "has an invalid configuration-write response")
+        MOBILE_OUTCOME_ISP_LOGGED_IN ->
+            fields.require(
+                data.size == 12 &&
+                    (data[0].toInt() and 0xff) == 127 &&
+                    data[1].toInt() == 0 &&
+                    data[2].toInt() == 0 &&
+                    data[3].toInt() == 1 &&
+                    data.copyOfRange(4, data.size).all { it.toInt() == 0 },
+                "has an invalid ISP-login response",
+            )
+        MOBILE_OUTCOME_SERVICE_ERROR -> {
+          fields.require(
+              (response[2].toInt() and 0xff) == 0x6e,
+              "has an invalid service-error response command",
+          )
+          validateMobileServiceError(fields, data)
+        }
         MOBILE_OUTCOME_BACKEND_RESPONSE ->
             validateMobileBackendResponse(fields, response[2].toInt() and 0xff, data)
         MOBILE_OUTCOME_BACKEND_ERROR -> validateMobileBackendError(fields, data)
@@ -1042,6 +1344,28 @@ internal object StateSemantics {
     if (outcome == MOBILE_OUTCOME_SESSION_STARTED || outcome == MOBILE_OUTCOME_SESSION_RESET) {
       fields.require(phase == MOBILE_PHASE_SESSION, "has a session result while asleep")
     }
+    if (outcome == MOBILE_OUTCOME_TELEPHONE_DIALLED) {
+      fields.require(phase == MOBILE_PHASE_TELEPHONE, "has a dial result in the wrong phase")
+    }
+    if (outcome == MOBILE_OUTCOME_TELEPHONE_HUNG_UP) {
+      fields.require(phase == MOBILE_PHASE_SESSION, "has a hang-up result in the wrong phase")
+    }
+    if (outcome == MOBILE_OUTCOME_ISP_LOGGED_IN) {
+      fields.require(phase == MOBILE_PHASE_INTERNET, "has an ISP-login result in the wrong phase")
+    }
+    if (outcome == MOBILE_OUTCOME_ISP_LOGGED_OUT) {
+      fields.require(phase == MOBILE_PHASE_TELEPHONE, "has an ISP-logout result in the wrong phase")
+    }
+    if (
+        outcome == MOBILE_OUTCOME_BACKEND_RESPONSE ||
+            outcome == MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED ||
+            outcome == MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED
+    ) {
+      fields.require(
+          phase == MOBILE_PHASE_SESSION || phase == MOBILE_PHASE_INTERNET,
+          "has a backend result in the wrong phase",
+      )
+    }
     if (outcome == MOBILE_OUTCOME_SESSION_ENDED ||
         outcome == MOBILE_OUTCOME_IDLE_TIMEOUT_RESET ||
         outcome == MOBILE_OUTCOME_CANCELLED) {
@@ -1050,7 +1374,7 @@ internal object StateSemantics {
     if (outcome == MOBILE_OUTCOME_IDLE_TIMEOUT_RESET || outcome == MOBILE_OUTCOME_CANCELLED) {
       fields.require(!fields.boolean("serialByteObserved"), "cleanup retained serial idle ownership")
     }
-    if (phase == MOBILE_PHASE_SESSION) {
+    if (phase != MOBILE_PHASE_SLEEP) {
       fields.require(
           fields.boolean("serialByteObserved"),
           "has an active session without serial input ownership",
@@ -1076,13 +1400,46 @@ internal object StateSemantics {
     if (outcome != MOBILE_OUTCOME_NEED_MORE &&
         outcome != MOBILE_OUTCOME_IDLE_BOUNDARY_WAIT &&
         outcome != MOBILE_OUTCOME_PENDING_LIMIT &&
-        !(outcome == MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED &&
-            externalIoAtCapture)) {
+        outcome != MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED) {
       fields.require(fields.int("packetCount") == 0, "completed result retained parser bytes")
     }
     if (externalIoAtCapture) {
-      fields.require(phase == MOBILE_PHASE_SESSION, "captured external I/O while asleep")
+      fields.require(
+          phase == MOBILE_PHASE_SESSION || phase == MOBILE_PHASE_INTERNET,
+          "captured external I/O outside a backend-capable phase",
+      )
     }
+  }
+
+  private fun validateMobileServiceError(fields: RecordFields, data: ByteArray) {
+    fields.require(data.size == 2, "has an invalid service error response")
+    if (data.size != 2) return
+    val command = data[0].toInt() and 0xff
+    val error = data[1].toInt() and 0xff
+    val valid =
+        when (command) {
+          0x12 -> error in 0x01..0x03
+          0x13, 0x17, 0x21, 0x22 -> error == 0x01 || error == 0x02
+          else -> false
+        }
+    fields.require(valid, "has an invalid service error code")
+    if (!valid) return
+    val phase = fields.int("phaseId")
+    val phaseValid =
+        when (command) {
+          0x12 -> if (error == 0x01) phase != MOBILE_PHASE_SESSION else phase == MOBILE_PHASE_SESSION
+          0x13 ->
+              if (error == 0x01) {
+                phase != MOBILE_PHASE_TELEPHONE && phase != MOBILE_PHASE_INTERNET
+              } else {
+                phase == MOBILE_PHASE_TELEPHONE || phase == MOBILE_PHASE_INTERNET
+              }
+          0x17 -> if (error == 0x01) phase == MOBILE_PHASE_SLEEP else phase != MOBILE_PHASE_SLEEP
+          0x21 -> if (error == 0x01) phase != MOBILE_PHASE_TELEPHONE else phase == MOBILE_PHASE_TELEPHONE
+          0x22 -> if (error == 0x01) phase != MOBILE_PHASE_INTERNET else phase == MOBILE_PHASE_INTERNET
+          else -> false
+        }
+    fields.require(phaseValid, "has a service error in an impossible phase")
   }
 
   private fun validateMobileBackendResponse(
@@ -1115,6 +1472,19 @@ internal object StateSemantics {
           else -> false
         }
     fields.require(valid, "has an invalid backend error code")
+    if (valid && fields.int("errorId") == MOBILE_ERROR_BACKEND_RESPONSE_INVALID) {
+      val expected =
+          when (command) {
+            0x15, 0x24, 0x26 -> 0x00
+            0x23, 0x25 -> 0x03
+            0x28 -> 0x02
+            else -> -1
+          }
+      fields.require(
+          error == expected,
+          "has a backend-response-invalid error with the wrong protocol code",
+      )
+    }
   }
 
   private fun validateMobileOutputPacket(fields: RecordFields, response: ByteArray) {
@@ -1332,8 +1702,22 @@ internal object StateSemantics {
   private const val MOBILE_CONFIGURATION_BYTES = 256
   private const val MOBILE_CONFIGURATION_OPERATION_BYTES = 128
   private const val MOBILE_PENDING_PACKET_SLOTS = 2
+  private const val MOBILE_IDLE_BYTE = 0xd2
+  private const val MOBILE_WIRE_RECEIVE_REQUEST = 1
+  private const val MOBILE_WIRE_REQUEST_ACK_DEVICE = 2
+  private const val MOBILE_WIRE_REQUEST_ACK_COMMAND = 3
+  private const val MOBILE_WIRE_RESPONSE_TURNAROUND = 4
+  private const val MOBILE_WIRE_RESPONSE_WAIT = 5
+  private const val MOBILE_WIRE_RESPONSE_STREAM = 6
+  private const val MOBILE_WIRE_RESPONSE_ACK_DEVICE = 7
+  private const val MOBILE_WIRE_RESPONSE_ACK_COMMAND = 8
+  private const val MOBILE_WIRE_RESPONSE_READY = 9
+  private const val MOBILE_WIRE_NORMALIZED_DISCONNECT = 11
+  private const val MOBILE_MAX_RESPONSE_RETRIES = 4
   private const val MOBILE_PHASE_SLEEP = 1
   private const val MOBILE_PHASE_SESSION = 2
+  private const val MOBILE_PHASE_TELEPHONE = 3
+  private const val MOBILE_PHASE_INTERNET = 4
   private const val MOBILE_OUTCOME_NEED_MORE = 1
   private const val MOBILE_OUTCOME_SESSION_STARTED = 2
   private const val MOBILE_OUTCOME_SESSION_ENDED = 3
@@ -1357,6 +1741,12 @@ internal object StateSemantics {
   private const val MOBILE_OUTCOME_BACKEND_ERROR = 21
   private const val MOBILE_OUTCOME_BACKEND_REMOTE_CLOSED = 22
   private const val MOBILE_OUTCOME_EXTERNAL_IO_DISCONNECTED = 23
+  private const val MOBILE_OUTCOME_TELEPHONE_DIALLED = 24
+  private const val MOBILE_OUTCOME_TELEPHONE_HUNG_UP = 25
+  private const val MOBILE_OUTCOME_TELEPHONE_STATUS = 26
+  private const val MOBILE_OUTCOME_ISP_LOGGED_IN = 27
+  private const val MOBILE_OUTCOME_ISP_LOGGED_OUT = 28
+  private const val MOBILE_OUTCOME_SERVICE_ERROR = 29
   private const val MOBILE_ERROR_NONE = 0
   private const val MOBILE_ERROR_INVALID_MAGIC = 1
   private const val MOBILE_ERROR_RESERVED_VALUE = 2

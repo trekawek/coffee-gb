@@ -1,6 +1,6 @@
 # Audited state-record schema
 
-This is the exact captured-field inventory for all 98 production record types admitted by
+This is the exact captured-field inventory for all 99 production record types admitted by
 `StateTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
 each line names the non-serializable `ComponentState` record and every component captured by
 `captureState`. The
@@ -21,6 +21,12 @@ canonical v1 bytes unchanged.
 Array and collection fields are deep-owned by the detached state adapter. The ownership contract,
 safe points, derived/excluded state, and subsystem grouping are in
 [state-machine-inventory.md](state-machine-inventory.md).
+
+Mobile Adapter engine records include the complete private 256-byte adapter configuration. A
+capture made while an ISP-login request is only partly parsed can also include bounded ID/password
+bytes in `packetBuffer`. State files containing this peripheral must therefore be kept private or
+explicitly redacted; sockets, resolver handles, backend tasks, and runtime connection identifiers
+remain excluded.
 
 The 11 explicit behavior tags are `Cpu.State`, `InterruptManager.InterruptType`, `Gpu.Mode`,
 `OamSearch.State`, `Hdma.CpuRequestArbitration`, `Hdma.HaltHdmaState`,
@@ -134,3 +140,4 @@ altering the 1.7.13/1.7.14 migration schema listed below.
 - `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointState`: engineState, sb, sendBitIndex
 - `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine$MobileAdapterEngineNetworkState`: phaseId, outcomeId, errorId, deviceId, packetBuffer, packetCount, expectedPacketBytes, configuration, responsePacket, acknowledgement, idlePhaseUnits, serialByteObserved, pendingPacketSlots, externalIoAtCapture
 - `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointNetworkState`: engineState, sb, sendBitIndex
+- `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointWireState`: engineState, sb, sendBitIndex, byteTransferActive, wirePhaseId, currentReply, requestAcknowledgement, responsePacket, responseByteIndex, awaitingResponse, responseRetryCount

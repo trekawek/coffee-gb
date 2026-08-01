@@ -34,14 +34,15 @@ public class MobileAdapterContractTest {
     public void sourceInventoryIsPinnedLicensedScopedAndCleanRoom() throws Exception {
         List<Map<String, String>> sources = rows("/mobile-adapter/sources.tsv");
         assertEquals(Set.of("DAN_PACKET", "DAN_COMMANDS", "DAN_TIMEOUT",
-                "LIBMOBILE_CORROBORATION", "ROADMAP_311"),
+                "LIBMOBILE_CORROBORATION", "REON_SERVER_VALIDATION", "ROADMAP_311"),
                 sources.stream().map(r -> r.get("key")).collect(Collectors.toSet()));
         for (Map<String, String> source : sources) {
             for (String field : List.of("upstream", "revision", "url", "license", "accessed",
                     "claim", "disagreement", "redistribution")) {
                 assertFalse(source.get("key") + ":" + field, source.get(field).isBlank());
             }
-            assertEquals("2026-07-26", source.get("accessed"));
+            assertEquals(source.get("key").equals("REON_SERVER_VALIDATION") ?
+                    "2026-08-01" : "2026-07-26", source.get("accessed"));
         }
         assertTrue(sources.stream().anyMatch(r -> r.get("revision").equals(
                 "490595c3b8506d3f155aa6be9d7a5cd7d0fa9a5b") &&
@@ -49,6 +50,10 @@ public class MobileAdapterContractTest {
         assertTrue(sources.stream().anyMatch(r -> r.get("revision").equals(
                 "0704f56902f23b7ebf05c82c222e0e145e3140b6") &&
                 r.get("redistribution").contains("no-code")));
+        assertTrue(sources.stream().anyMatch(r -> r.get("revision").equals(
+                "f7bfc0470aed561936b396ed29f2bde50ca601ab") &&
+                r.get("license").equals("MIT") &&
+                r.get("redistribution").contains("no-server-code")));
 
         String contract = read(repositoryRoot().resolve("docs/mobile-adapter-contract.md"));
         String adr = read(repositoryRoot().resolve("docs/adr/0002-mobile-adapter-clean-room.md"));
@@ -60,7 +65,8 @@ public class MobileAdapterContractTest {
     }
 
     @Test
-    public void commandInventoryIsConservativeAndHasNoSpeculativeServiceSupport() throws Exception {
+    public void commandInventoryPreservesHistoricalColumnsAndFreezesCrystalServiceSupport()
+            throws Exception {
         List<Map<String, String>> commands = rows("/mobile-adapter/commands.tsv");
         assertEquals(commands.size(), commands.stream().map(r -> r.get("id")).distinct().count());
         Map<String, String> statuses = commands.stream().collect(Collectors.toMap(
@@ -89,6 +95,22 @@ public class MobileAdapterContractTest {
         for (String excludedServiceCommand : List.of("0x12", "0x21", "0x22")) {
             assertEquals(excludedServiceCommand, "unsupported",
                     phase352Statuses.get(excludedServiceCommand));
+        }
+
+        Map<String, String> phase353Statuses = commands.stream().collect(Collectors.toMap(
+                r -> r.get("id"), r -> r.get("phase_353_status")));
+        for (String minimumCommand : List.of("0x10", "0x11", "0x13", "0x16", "0x19", "0x22")) {
+            assertEquals(minimumCommand, "supported", phase353Statuses.get(minimumCommand));
+        }
+        assertEquals("supported-crystal-isp", phase353Statuses.get("0x12"));
+        assertEquals("supported-blue-adapter", phase353Statuses.get("0x17"));
+        assertEquals("supported-crystal-isp", phase353Statuses.get("0x21"));
+        for (String backendCommand : List.of("0x15", "0x23", "0x24", "0x25", "0x26", "0x28")) {
+            assertEquals(backendCommand, "custom-backend-wire-channel",
+                    phase353Statuses.get(backendCommand));
+        }
+        for (String excludedCommand : List.of("0x0f", "0x14", "0x18", "0x3f")) {
+            assertEquals(excludedCommand, "unsupported", phase353Statuses.get(excludedCommand));
         }
         for (Map<String, String> row : commands) {
             assertFalse(row.get("evidence").isBlank());
@@ -370,9 +392,11 @@ public class MobileAdapterContractTest {
                     sha256(Files.readAllBytes(root.resolve(entry.getKey()))));
             assertTrue(Set.of("evidence-registry", "conformance-vector", "documentation")
                     .contains(row.get("kind")));
-            String expectedProvenance = Set.of("README.md", "commands.tsv")
-                    .contains(entry.getKey()) ?
-                    "coffee-gb-phase-346+352" : "coffee-gb-phase-346";
+            String expectedProvenance = switch (entry.getKey()) {
+                case "README.md", "commands.tsv" -> "coffee-gb-phase-346+352+353";
+                case "sources.tsv" -> "coffee-gb-phase-346+353";
+                default -> "coffee-gb-phase-346";
+            };
             assertEquals(expectedProvenance, row.get("provenance"));
             assertFalse(row.get("generator").isBlank());
         }

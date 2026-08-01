@@ -1,13 +1,18 @@
 # Synthetic Mobile Adapter contract transcripts
 
-These resources began as the Phase #346 clean-room contract and now include the Phase #352 command
-status inventory. They are not captured traffic. Packet bytes are generated from the public format
+These resources began as the Phase #346 clean-room contract and now include the append-only Phase
+#351, #352, and #353 command-status inventory. They are not captured traffic. Packet bytes are
+generated from the public format
 in `docs/mobile-adapter-contract.md`. Configuration content is synthetic, contains no
 account/server/credential data, and uses only the ASCII marker and bounds described by the source.
 Hashes cover decoded request, response, and acknowledgement bytes concatenated in that order.
 
 `manifest.tsv` lists every other artifact in this directory and freezes its whole-file SHA-256,
 kind, provenance, and reproduction method. It deliberately does not hash itself.
+
+`sources.tsv` also pins the REON revision used as a local validation target. That row records
+service provenance only; it is not protocol evidence and no REON server code, configuration, or
+response data is included.
 
 Every transcript records the 262-byte parser-buffer and two-pending-packet-slot ceilings. The
 exact 3,000 ms partial-packet boundary remains waiting; the first injected time beyond it resets.
@@ -20,13 +25,15 @@ payload, and the big-endian 16-bit additive sum of command/reserved/length/paylo
 request command OR `80`. The JUnit contract test independently reconstructs every packet and hash.
 Normal tests perform no network, DNS, filesystem backend, or artifact regeneration.
 
-`commands.tsv` keeps the frozen `phase_351_status` column and appends `phase_352_status`. The
-`custom-backend-direct-channel` value means that the deterministic engine can offer and poll a
-bounded typed request when a controller backend has been explicitly installed. It does not mean
-that the idle-high serial endpoint emits the response bytes. That evidence-dependent scheduling is
-owned by #353, so no DNS/TCP/UDP row was added to `transcripts.tsv`. Direct-channel request,
-completion, generation, queue, connection-ID, state-capture, and error behavior is instead tested
-against the deterministic in-memory backend in `MobileAdapterEngineTest`.
+`commands.tsv` keeps the frozen `phase_351_status` and `phase_352_status` columns and appends
+`phase_353_status`. The `custom-backend-direct-channel` historical value means that the
+deterministic engine can offer and poll a bounded typed request when a controller backend has been
+explicitly installed. The Phase #353 `custom-backend-wire-channel` value additionally means that
+the endpoint schedules the request acknowledgement, poll/turnaround bytes, response packet, and
+response acknowledgement. Dial, telephone status, ISP lifecycle, backend ownership, connection-ID,
+state-capture, and error behavior are covered by focused engine and endpoint tests. The original
+synthetic transcript corpus remains frozen rather than relabeling new implementation tests as
+captured traffic.
 
 Do not extend a command from `unsupported` using emulator source alone. Add pinned independent
 evidence, license/redistribution status, uncertainty, and a reviewed contract change first. Add

@@ -97,17 +97,19 @@ attacker. See
 [normative v9 contract](docs/netplay-protocol-v9.md). The implemented foundation boundary is
 documented in [netplay-v9-foundation.md](docs/netplay-v9-foundation.md).
 
-Mobile Adapter GB support includes a deterministic engine, an exclusive link-port selector, and
-an optional bounded outbound DNS/TCP/UDP backend for explicitly configured custom services. Host
+Mobile Adapter GB support includes a deterministic engine, a byte-pipelined link-port endpoint,
+a blue-adapter dial/status/ISP lifecycle modeled for Japanese Pokémon Crystal, and an optional bounded
+outbound DNS/TCP/UDP backend for explicitly configured custom services. Host
 networking is offline by default, requires session-only consent, and applies a separate development
-confirmation to loopback/private-LAN destinations. There is no listener, relay, dial-up, Nintendo
+confirmation to loopback/private-LAN destinations. The guest dial command is emulated without a
+telephone call; there is no listener, relay, real dial-up, Nintendo
 production-service preset, automatic endpoint selection, or bundled service data. The public-IP
 policy cannot identify who operates an address, so users must configure only a trusted non-Nintendo
-custom service; DNS names, network metadata, and guest payloads are sent without TLS. The frozen
-evidence still does not define the acknowledgement/response polling order, so Coffee GB exposes
-direct engine/backend channels to tests without claiming commercial-game compatibility; a
-user-supplied ROM and custom-service validation remain a later phase. See
-[the Mobile Adapter contract](docs/mobile-adapter-contract.md).
+custom service; DNS names, network metadata, and guest payloads are sent without TLS. Deterministic
+tests cover the Crystal command path and acknowledgement/response schedule without bundling a ROM;
+end-to-end gameplay validation still requires a user-supplied ROM and selected custom service. See
+[the Mobile Adapter contract](docs/mobile-adapter-contract.md) and the
+[Japanese Crystal/REON validation record](docs/mobile-adapter-crystal-reon-validation.md).
 
 ### Hardware profiles and command-line selection
 

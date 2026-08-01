@@ -74,7 +74,10 @@ request or open connection instead use the additive network engine and endpoint 
 and 98. ID 97 appends `externalIoAtCapture`; a true marker carries the deterministic
 external-I/O-disconnected outcome, no host response bytes or handle, and restores with backend
 ownership cleared. Captures without external ownership continue using IDs 95/96. In v2, the
-MBC3 `subSecondTicks` scalar is the explicit profile's numerator-domain phase:
+additive active-wire endpoint record is ID 99 and may contain either engine shape under the same
+normalization rules. Its phase 11 preserves one already-latched reply across a mid-byte external
+normalization and aborts the old wire transaction at that byte boundary. The MBC3 `subSecondTicks`
+scalar is the explicit profile's numerator-domain phase:
 
 | Identity | Valid phase | Live increment per machine tick |
 |---|---:|---:|

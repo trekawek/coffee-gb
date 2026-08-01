@@ -1145,6 +1145,17 @@ internal object StateGraph {
             return
           }
           if (candidate.typeId != target.typeId) {
+            if (isMobileAdapterEndpointStatePair(candidate, target)) {
+              // One Mobile Adapter endpoint legitimately alternates between released, active-wire,
+              // and external-I/O-aborted records. The candidate's own record semantics are checked
+              // before commit; this preflight only needs to establish endpoint compatibility.
+              return
+            }
+            if (isMobileAdapterWireEngineStatePair(candidate, target, owner, field)) {
+              // ID 99 may nest either the pure engine or its host-I/O-normalized counterpart.
+              // Both are restorable by the same endpoint; candidate semantics were checked first.
+              return
+            }
             throw StateApplyException(
                 "$path has ${recordClass(candidate).name}, expected ${recordClass(target).name}")
           }
@@ -1280,6 +1291,24 @@ internal object StateGraph {
   private fun isVariableArray(owner: String?, field: String?): Boolean =
       owner to field in VARIABLE_ARRAY_FIELDS
 
+  private fun isMobileAdapterEndpointStatePair(
+      candidate: RecordState,
+      target: RecordState,
+  ): Boolean =
+      candidate.typeId in MOBILE_ADAPTER_ENDPOINT_STATE_IDS &&
+          target.typeId in MOBILE_ADAPTER_ENDPOINT_STATE_IDS
+
+  private fun isMobileAdapterWireEngineStatePair(
+      candidate: RecordState,
+      target: RecordState,
+      owner: String?,
+      field: String?,
+  ): Boolean =
+      owner == MOBILE_ADAPTER_WIRE_ENDPOINT_STATE &&
+          field == "engineState" &&
+          candidate.typeId in MOBILE_ADAPTER_ENGINE_STATE_IDS &&
+          target.typeId in MOBILE_ADAPTER_ENGINE_STATE_IDS
+
   private fun isAuditedNullable(owner: String?, field: String?, element: Boolean): Boolean =
       owner to field in if (element) AUDITED_NULLABLE_ELEMENTS else AUDITED_NULLABLE_FIELDS
 
@@ -1295,10 +1324,37 @@ internal object StateGraph {
               "responsePacket",
           "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState" to
               "acknowledgement",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState" to
+              "requestAcknowledgement",
+          "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState" to
+              "responsePacket",
           "eu.rekawek.coffeegb.core.ir.FullChanger\$FullChangerState" to "schedule",
           "eu.rekawek.coffeegb.core.sgb.Commands\$TransferCommand\$TransferCommandState" to
               "dataTransfer",
       )
+
+  private val MOBILE_ADAPTER_ENDPOINT_STATE_IDS by lazy {
+    setOf(
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointState") + 1,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState") + 1,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState") + 1,
+    ).also { ids -> check(ids.size == 3 && ids.none { it <= 0 }) }
+  }
+
+  private val MOBILE_ADAPTER_ENGINE_STATE_IDS by lazy {
+    setOf(
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineState") + 1,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState") + 1,
+    ).also { ids -> check(ids.size == 2 && ids.none { it <= 0 }) }
+  }
+
+  private const val MOBILE_ADAPTER_WIRE_ENDPOINT_STATE =
+      "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState"
 
   private const val MEMORY_BATTERY_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"

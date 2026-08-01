@@ -269,7 +269,8 @@ class StateCoverageMatrixTest {
               repeat(8) { sendBit() }
               setSb(0x66)
               startSending()
-              repeat(8) { sendBit() }
+              // Leave six clocks for continuePeripheral so this covers an armed ID 99 wire state.
+              repeat(2) { sendBit() }
             },
         )
 
