@@ -191,9 +191,13 @@ class DebuggerPeripheralPanelsTest {
               .asSequence()
               .flatMap { palette -> palette.swatches.asSequence().map { palette to it } }
               .first { (_, swatch) -> view.paletteRows[swatch.tableRow].hexColor == "#FF0000" }
+      val selectedObject = model.objects[5]
+      panel.objectThumbnailCanvas.selectObject(selectedObject, notify = true)
       panel.paletteCanvas.selectSwatch(redPalette, redSwatch, notify = true)
       assertEquals("#FF0000", panel.paletteDetails.value("Hex"))
       assertContains(panel.paletteDetails.value("Components"), "R ")
+      assertEquals(selectedObject.index, panel.objectThumbnailCanvas.selectedObject?.index)
+      assertEquals(selectedObject.index, panel.objectPlacementCanvas.selectedObject?.index)
 
       val originalSize = panel.objectDetails.font.size
       panel.applyFontScale(150)
