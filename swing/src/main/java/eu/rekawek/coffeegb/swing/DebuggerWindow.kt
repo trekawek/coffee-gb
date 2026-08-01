@@ -1237,7 +1237,7 @@ internal class DebuggerPanel(
           if (workspaceMode) {
             pcExecutionMemoryRequest(
                 previous.registers().pc(),
-                executionMemoryBudget(remainingBytes),
+                executionMemoryBudget(remainingBytes, STACK_BYTES),
             )
           } else {
             pcAnchoredLength(
@@ -2732,12 +2732,12 @@ private fun pcInspectionBounds(address: Int): PcInspectionBounds? =
       else -> null
     }
 
-private fun executionMemoryBudget(remainingBytes: Int): Int =
+private fun executionMemoryBudget(remainingBytes: Int, reservedStackBytes: Int): Int =
     minOf(
         EXECUTION_CONTEXT_BYTES,
         maxOf(
             minOf(EXECUTION_CONTEXT_CURRENT_INSTRUCTION_BYTES, remainingBytes),
-            remainingBytes - STACK_BYTES,
+            remainingBytes - reservedStackBytes,
         ),
     )
 
