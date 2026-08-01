@@ -286,7 +286,7 @@ internal class DebuggerPanel(
   internal val hardwarePane = DebuggerHardwarePanel(copyText)
 
   private val pollingTimer =
-      Timer(pollingIntervalMillis) { requestRefresh() }.apply { isRepeats = true }
+      Timer(pollingIntervalMillis) { requestRefresh(automatic = true) }.apply { isRepeats = true }
   private val fontScaler: DebuggerFontScaler
   private var client: DebuggerClient? = null
   private var latestGeneration = NO_GENERATION
@@ -1055,9 +1055,17 @@ internal class DebuggerPanel(
     updateControlState()
   }
 
-  internal fun requestRefresh() {
+  /**
+   * Requests one coherent debugger capture.
+   *
+   * Automatic requests stop once execution is paused so that the paused instruction context can
+   * be browsed without a periodic repaint moving the selection or scroll position. Explicit
+   * refreshes remain available for inspecting a different range while paused.
+   */
+  internal fun requestRefresh(automatic: Boolean = false) {
     requireDebuggerWindowEdt("Debugger refresh")
     val attached = client ?: return
+    if (automatic && snapshot?.paused() == true) return
     if (closed || !samplingActive() || !canPollInspection(attached)) return
     if (refreshInFlight) {
       refreshAgain = true
@@ -1381,6 +1389,7 @@ internal class DebuggerPanel(
     val wasRunning = snapshot?.paused() == false
     val view = DebuggerPresentation.snapshot(result.snapshot)
     snapshot = result.snapshot
+    syncPollingTimer()
     renderBreakpointHit()
     snapshotLabel.text =
         "${view.identity.label} — ${if (view.paused) "PAUSED" else "RUNNING"} — ${view.timingText}"
@@ -1480,9 +1489,15 @@ internal class DebuggerPanel(
     // carries no register-relative ranges. Re-plan it exactly once against this coherent result.
     // A paused PC/SP outside the safe views may still produce zero blocks on that follow-up and
     // must not create an immediate refresh loop.
-    if ((workspaceMode || view.paused) &&
-        plan.replanAfterSnapshot &&
-        client?.capabilities?.memoryRead() == true) {
+    val replanAfterSnapshot =
+        (workspaceMode || view.paused) &&
+            plan.replanAfterSnapshot &&
+            client?.capabilities?.memoryRead() == true
+    if (view.paused) {
+      // A timer tick may have coalesced behind a capture that observed the pause. Keep only the
+      // single follow-up needed to obtain PC/SP-relative bytes, then leave the paused view stable.
+      refreshAgain = replanAfterSnapshot
+    } else if (replanAfterSnapshot) {
       refreshAgain = true
     }
     if (wasRunning && view.paused) requestMetadata()
@@ -2106,6 +2121,7 @@ internal class DebuggerPanel(
 
   private fun applyCommandSnapshot(value: DebugSnapshot) {
     snapshot = value
+    syncPollingTimer()
     val view = DebuggerPresentation.snapshot(value)
     if (workspaceMode) {
       // Invalidate payloads before publishing the shared identity, so no tool footer can claim
@@ -2333,7 +2349,10 @@ internal class DebuggerPanel(
 
   private fun syncPollingTimer() {
     val attached = client
-    if (samplingActive() && attached != null && canPollInspection(attached)) {
+    if (samplingActive() &&
+        snapshot?.paused() != true &&
+        attached != null &&
+        canPollInspection(attached)) {
       pollingTimer.start()
     } else {
       pollingTimer.stop()
