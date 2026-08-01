@@ -7,27 +7,23 @@ import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import java.awt.BorderLayout
 import java.awt.CardLayout
-import java.awt.Color
 import java.awt.Dimension
 import java.awt.Font
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import java.awt.Insets
 import java.awt.event.ActionEvent
 import java.awt.event.KeyEvent
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
-import javax.swing.Box
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
+import javax.swing.JTable
 import javax.swing.JTree
 import javax.swing.KeyStroke
-import javax.swing.SwingConstants
-import javax.swing.UIManager
+import javax.swing.ListSelectionModel
 import javax.swing.event.TreeSelectionEvent
+import javax.swing.table.AbstractTableModel
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.TreePath
@@ -1406,7 +1402,21 @@ private class DebuggerHardwareCard(
     private val subsystem: DebuggerHardwareSubsystem,
     specs: List<DebuggerHardwareFieldSpec>,
 ) : JPanel(BorderLayout(4, 5)) {
-  private val rows = linkedMapOf<String, DebuggerHardwareFieldComponent>()
+  private val expectedIds = specs.map(DebuggerHardwareFieldSpec::id)
+  private val emptyFields = specs.map(::emptyHardwareField)
+  private val tableModel = DebuggerHardwareTableModel(emptyFields)
+  private val table =
+      JTable(tableModel).apply {
+        setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION)
+        fillsViewportHeight = true
+        autoCreateRowSorter = false
+        autoResizeMode = JTable.AUTO_RESIZE_LAST_COLUMN
+        rowSelectionAllowed = true
+        columnSelectionAllowed = false
+        accessibleContext.accessibleName = "${subsystem.title} hardware values"
+        accessibleContext.accessibleDescription =
+            "Read-only field, raw value, address or source, decoded meaning, and provenance"
+      }
 
   init {
     border = BorderFactory.createEmptyBorder(5, 7, 7, 7)
@@ -1425,42 +1435,12 @@ private class DebuggerHardwareCard(
         }
     add(heading, BorderLayout.NORTH)
 
-    val fieldPanel = JPanel(GridBagLayout())
-    fieldPanel.accessibleContext.accessibleName = "${subsystem.title} semantic values"
-    fieldPanel.add(
-        DebuggerHardwareColumnHeader(),
-        GridBagConstraints().apply {
-          gridx = 0
-          gridy = 0
-          weightx = 1.0
-          fill = GridBagConstraints.HORIZONTAL
-        },
-    )
-    specs.forEachIndexed { index, spec ->
-      val row = DebuggerHardwareFieldComponent(spec)
-      rows[spec.id] = row
-      fieldPanel.add(
-          row,
-          GridBagConstraints().apply {
-            gridx = 0
-            gridy = index + 1
-            weightx = 1.0
-            fill = GridBagConstraints.HORIZONTAL
-            anchor = GridBagConstraints.NORTH
-          },
-      )
-    }
-    fieldPanel.add(
-        Box.createVerticalGlue(),
-        GridBagConstraints().apply {
-          gridx = 0
-          gridy = specs.size + 1
-          weightx = 1.0
-          weighty = 1.0
-          fill = GridBagConstraints.BOTH
-        },
-    )
-    val scroll = JScrollPane(fieldPanel)
+    setColumnWidth(0, 225)
+    setColumnWidth(1, 135)
+    setColumnWidth(2, 155)
+    setColumnWidth(3, 620)
+    setColumnWidth(4, 120)
+    val scroll = JScrollPane(table)
     scroll.border = BorderFactory.createEmptyBorder()
     scroll.accessibleContext.accessibleName = "${subsystem.title} register list"
     add(scroll, BorderLayout.CENTER)
@@ -1469,10 +1449,10 @@ private class DebuggerHardwareCard(
   fun replace(fields: List<DebuggerHardwareFieldView>) {
     val values = fields.associateBy(DebuggerHardwareFieldView::id)
     require(values.size == fields.size) { "Hardware field ids must be unique for ${subsystem.title}" }
-    require(values.keys == rows.keys) {
+    require(values.keys == expectedIds.toSet()) {
       "Hardware fields for ${subsystem.title} do not match the fixed semantic inventory"
     }
-    rows.forEach { (id, row) -> row.render(values.getValue(id)) }
+    tableModel.replace(expectedIds.map(values::getValue))
     getAccessibleContext().accessibleDescription =
         "${subsystem.description} ${fields.count { it.provenance == DebuggerHardwareProvenance.CURRENT }} current values; " +
             "${fields.count { it.provenance == DebuggerHardwareProvenance.SAMPLED }} sampled values; " +
@@ -1480,23 +1460,22 @@ private class DebuggerHardwareCard(
   }
 
   fun clear() {
-    rows.values.forEach(DebuggerHardwareFieldComponent::clear)
+    tableModel.replace(emptyFields)
     getAccessibleContext().accessibleDescription = "${subsystem.description} No snapshot is loaded."
   }
 
-  fun displayedFields(): List<DebuggerHardwareFieldView> = rows.values.map { it.view }
+  fun displayedFields(): List<DebuggerHardwareFieldView> = tableModel.fields
 
   fun copyText(): String =
       buildString {
-            append("Field\tAddress/source\tRaw value\tDecoded meaning\tProvenance")
-            rows.values.forEach { row ->
-              val field = row.view
+            append("Field\tRaw value\tAddress/source\tDecoded meaning\tProvenance")
+            tableModel.fields.forEach { field ->
               append('\n')
               append(
                   listOf(
                           field.name,
-                          field.address,
                           field.rawValue,
+                          field.address,
                           field.decodedValue,
                           field.provenance.displayText,
                       )
@@ -1509,144 +1488,47 @@ private class DebuggerHardwareCard(
   fun requestInitialFocus() {
     // The tree remains the predictable keyboard navigation owner; cards contain no controls.
   }
+
+  private fun setColumnWidth(column: Int, width: Int) {
+    table.columnModel.getColumn(column).apply {
+      minWidth = width
+      preferredWidth = width
+    }
+  }
 }
 
-private class DebuggerHardwareFieldComponent(
-    private val spec: DebuggerHardwareFieldSpec,
-) : JPanel(GridBagLayout()) {
-  internal val nameLabel = JLabel(spec.name)
-  internal val addressLabel = JLabel(spec.address)
-  internal val rawValueLabel = JLabel()
-  internal val decodedLabel = JLabel()
-  internal val provenanceLabel = JLabel()
-
-  var view: DebuggerHardwareFieldView = emptyHardwareField(spec)
+private class DebuggerHardwareTableModel(initialFields: List<DebuggerHardwareFieldView>) :
+    AbstractTableModel() {
+  var fields: List<DebuggerHardwareFieldView> = initialFields
     private set
 
-  init {
-    border = BorderFactory.createMatteBorder(0, 0, 1, 0, separatorColor())
-    nameLabel.font = nameLabel.font.deriveFont(Font.BOLD)
-    nameLabel.preferredSize = Dimension(FIELD_WIDTH, nameLabel.preferredSize.height)
-    nameLabel.minimumSize = nameLabel.preferredSize
-    addressLabel.font = Font(Font.MONOSPACED, Font.PLAIN, addressLabel.font.size)
-    addressLabel.preferredSize = Dimension(ADDRESS_WIDTH, addressLabel.preferredSize.height)
-    addressLabel.minimumSize = addressLabel.preferredSize
-    rawValueLabel.font = Font(Font.MONOSPACED, Font.PLAIN, rawValueLabel.font.size)
-    rawValueLabel.preferredSize = Dimension(RAW_VALUE_WIDTH, rawValueLabel.preferredSize.height)
-    rawValueLabel.minimumSize = rawValueLabel.preferredSize
-    provenanceLabel.horizontalAlignment = SwingConstants.CENTER
-    provenanceLabel.isOpaque = true
-    provenanceLabel.border = BorderFactory.createCompoundBorder(
-        BorderFactory.createLineBorder(separatorColor()),
-        BorderFactory.createEmptyBorder(2, 5, 2, 5),
-    )
-    provenanceLabel.preferredSize = Dimension(PROVENANCE_WIDTH, provenanceLabel.preferredSize.height + 4)
-    provenanceLabel.minimumSize = provenanceLabel.preferredSize
+  override fun getRowCount(): Int = fields.size
 
-    addCell(nameLabel, 0, 0.0, GridBagConstraints.NONE)
-    addCell(rawValueLabel, 1, 0.0, GridBagConstraints.NONE)
-    addCell(addressLabel, 2, 0.0, GridBagConstraints.NONE)
-    addCell(decodedLabel, 3, 1.0, GridBagConstraints.HORIZONTAL)
-    addCell(provenanceLabel, 4, 0.0, GridBagConstraints.NONE)
-    render(view)
-  }
+  override fun getColumnCount(): Int = COLUMNS.size
 
-  fun render(next: DebuggerHardwareFieldView) {
-    require(next.id == spec.id && next.name == spec.name && next.address == spec.address) {
-      "Hardware field metadata changed for ${spec.id}"
+  override fun getColumnName(column: Int): String = COLUMNS[column]
+
+  override fun getValueAt(rowIndex: Int, columnIndex: Int): String {
+    val field = fields[rowIndex]
+    return when (columnIndex) {
+      0 -> field.name
+      1 -> field.rawValue
+      2 -> field.address
+      3 -> field.decodedValue
+      4 -> field.provenance.displayText
+      else -> error("Unknown hardware table column: $columnIndex")
     }
-    view = next
-    rawValueLabel.text = next.rawValue
-    decodedLabel.text = next.decodedValue
-    provenanceLabel.text = next.provenance.displayText
-    provenanceLabel.background = provenanceBackground(next.provenance)
-    provenanceLabel.foreground = provenanceForeground(next.provenance)
-    val description =
-        "${next.name}, ${next.address}, raw ${next.rawValue}; ${next.decodedValue} Provenance ${next.provenance.displayText}."
-    getAccessibleContext().accessibleName = "${next.name} read-only hardware value"
-    getAccessibleContext().accessibleDescription = description
-    nameLabel.accessibleContext.accessibleName = "${next.name} label"
-    addressLabel.accessibleContext.accessibleName = "${next.name} address or source"
-    rawValueLabel.accessibleContext.accessibleName = "${next.name} raw value"
-    rawValueLabel.accessibleContext.accessibleDescription = next.rawValue
-    decodedLabel.accessibleContext.accessibleName = "${next.name} decoded meaning"
-    decodedLabel.accessibleContext.accessibleDescription = next.decodedValue
-    provenanceLabel.accessibleContext.accessibleName = "${next.name} provenance"
-    provenanceLabel.accessibleContext.accessibleDescription = next.provenance.displayText
   }
 
-  fun clear() {
-    render(emptyHardwareField(spec))
-  }
+  override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean = false
 
-  private fun addCell(
-      component: JComponent,
-      x: Int,
-      weight: Double,
-      fillMode: Int,
-  ) {
-    add(
-        component,
-        GridBagConstraints().apply {
-          gridx = x
-          gridy = 0
-          weightx = weight
-          fill = fillMode
-          anchor = GridBagConstraints.WEST
-          insets = Insets(5, if (x == 0) 3 else 7, 5, if (x == 4) 3 else 7)
-        },
-    )
+  fun replace(next: List<DebuggerHardwareFieldView>) {
+    fields = next.toList()
+    fireTableDataChanged()
   }
 
   private companion object {
-    const val FIELD_WIDTH = 165
-    const val RAW_VALUE_WIDTH = 165
-    const val ADDRESS_WIDTH = 100
-    const val PROVENANCE_WIDTH = 105
-  }
-}
-
-private class DebuggerHardwareColumnHeader : JPanel(GridBagLayout()) {
-  init {
-    border = BorderFactory.createMatteBorder(0, 0, 1, 0, separatorColor())
-    addHeader("Field", 0, FIELD_WIDTH, 0.0)
-    addHeader("Raw value", 1, RAW_VALUE_WIDTH, 0.0)
-    addHeader("Address / source", 2, ADDRESS_WIDTH, 0.0)
-    addHeader("Decoded meaning", 3, null, 1.0)
-    addHeader("Provenance", 4, PROVENANCE_WIDTH, 0.0)
-    getAccessibleContext().accessibleName = "Hardware value column headings"
-  }
-
-  private fun addHeader(
-      text: String,
-      x: Int,
-      width: Int?,
-      weight: Double,
-  ) {
-    val label = JLabel(text)
-    label.font = label.font.deriveFont(Font.BOLD)
-    width?.let {
-      label.preferredSize = Dimension(it, label.preferredSize.height)
-      label.minimumSize = label.preferredSize
-    }
-    add(
-        label,
-        GridBagConstraints().apply {
-          gridx = x
-          gridy = 0
-          weightx = weight
-          fill = if (weight > 0) GridBagConstraints.HORIZONTAL else GridBagConstraints.NONE
-          anchor = GridBagConstraints.WEST
-          insets = Insets(3, if (x == 0) 3 else 7, 4, if (x == 4) 3 else 7)
-        },
-    )
-  }
-
-  private companion object {
-    const val FIELD_WIDTH = 165
-    const val RAW_VALUE_WIDTH = 165
-    const val ADDRESS_WIDTH = 100
-    const val PROVENANCE_WIDTH = 105
+    val COLUMNS = listOf("Field", "Raw value", "Address / source", "Decoded meaning", "Provenance")
   }
 }
 
@@ -1659,27 +1541,6 @@ private fun emptyHardwareField(spec: DebuggerHardwareFieldSpec): DebuggerHardwar
         "No coherent debug snapshot is loaded; no value is substituted.",
         DebuggerHardwareProvenance.UNKNOWN,
     )
-
-private fun separatorColor(): Color =
-    UIManager.getColor("Separator.foreground") ?: UIManager.getColor("controlShadow") ?: Color.GRAY
-
-private fun provenanceBackground(provenance: DebuggerHardwareProvenance): Color {
-  val base = UIManager.getColor("Panel.background") ?: Color.LIGHT_GRAY
-  return when (provenance) {
-    DebuggerHardwareProvenance.CURRENT -> UIManager.getColor("Table.selectionBackground") ?: base
-    DebuggerHardwareProvenance.SAMPLED,
-    DebuggerHardwareProvenance.TRACE -> UIManager.getColor("ToolTip.background") ?: base
-    DebuggerHardwareProvenance.UNKNOWN,
-    DebuggerHardwareProvenance.NOT_EXPOSED -> base
-  }
-}
-
-private fun provenanceForeground(provenance: DebuggerHardwareProvenance): Color =
-    if (provenance == DebuggerHardwareProvenance.CURRENT) {
-      UIManager.getColor("Table.selectionForeground") ?: Color.WHITE
-    } else {
-      UIManager.getColor("Label.foreground") ?: Color.BLACK
-    }
 
 private data class DebuggerApuRegisterSpec(
     val address: Int,
