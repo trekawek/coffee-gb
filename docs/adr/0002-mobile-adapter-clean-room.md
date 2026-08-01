@@ -2,7 +2,8 @@
 
 - Status: accepted; Phase 0 contract through Phase 3 wire/service path implemented; ROM-to-service validation remains partial
 - Date: 2026-07-30
-- Issues: #399, #352, #351, #346, #314, #318, #311
+- Updated: 2026-08-01
+- Issues: #399, #353, #352, #351, #346, #314, #318, #311
 
 ## Decision
 
@@ -50,6 +51,33 @@ therefore presentation and handoff, not the fail-closed authorization boundary. 
 persistence has one active write and one queued write; shutdown and a retry each use their own
 2,000 ms deadline shared across the writer and all still-tracked backends.
 
+The retained Mobile Adapter configuration dialog has a bounded owner-selected image import, while
+the current desktop continues to hide Mobile Adapter controls. Its controller reader runs off the
+EDT, rejects a symbolic link in the selected final path component, and accepts only a stable regular
+exact 256-byte opaque image or a validated exact 512-byte `MA`/`LM` envelope. It requires a
+non-null provider file key, compares type, identity, size, and timestamps around the open/read, and
+compares the opened channel size at both checkpoints before discarding all library metadata after
+bytes `0..255`. Coffee GB does not chmod or modify the selected source, create a file-level copy,
+or log or persist the selected source path; the path is retained only while the queued import runs.
+The private store target, its same-file aliases, and names reserved for atomic backup/temporary
+artifacts are rejected before read and rechecked before save, so an observed conflict fails before
+persistence starts. With a stable directory entry, persistence neither replaces nor cleans up the
+selected source. Only the copied or extracted 256 bytes enter the existing owner-only atomic
+configuration store. The durable Coffee GB device ID and structured custom-server policy are
+preserved.
+
+Java 16 exposes no portable descriptor-bound file type/identity query or nonblocking regular-file
+open. A process able to rewrite the selected directory can therefore still swap an entry between
+the identity checkpoints or substitute a FIFO during the narrow blocking-open window. Providers
+without a stable file key fail closed with `IMPORT_READ_FAILED`; owners should select private input
+from a directory not writable by an untrusted process.
+
+Every owner-triggered import attempt revokes all prepared/active backends and both process-local
+gates before reporting success or any stale, malformed, conflicting-source, busy, read, or storage
+failure. No `LM` device, DNS, relay, token, or host value becomes Coffee GB network policy or
+authority. An import therefore never authorizes networking; the owner must separately grant both
+applicable runtime gates again.
+
 Captured state may contain packet/parser phase, bounded request/response bytes, configuration
 bytes, deterministic timer counters, the bounded pending-packet count, status codes, and a boolean
 marker that external I/O existed at capture. Runtime connection identifiers, backend generations,
@@ -90,6 +118,15 @@ independently restated blue-adapter status/ISP response facts. Coffee GB adds it
 bound. No implementation code, data structure, control-flow translation, or source text is copied.
 Later contributors must not consult a source under an incompatible license while writing
 production code unless a separate legal review records a safe method.
+
+The image-import format has a separate, narrow provenance boundary. Pinned MIT-licensed REON commit
+[`f7bfc0470aed561936b396ed29f2bde50ca601ab`, `web/htdocs/user/adapter_config.php`](https://github.com/REONTeam/reon/blob/f7bfc0470aed561936b396ed29f2bde50ca601ab/web/htdocs/user/adapter_config.php)
+is the public 512-byte producer used for the validation scenario. Pinned LGPL-3.0-or-later libmobile
+commit
+[`0704f56902f23b7ebf05c82c222e0e145e3140b6`, `config.c`](https://github.com/REONTeam/libmobile/blob/0704f56902f23b7ebf05c82c222e0e145e3140b6/config.c)
+corroborates the game-visible and library-region checks. Coffee GB uses independently restated
+magic, checksum, version, type, and size facts only; it copies no copyrighted implementation text,
+data structure, or control flow.
 
 No Nintendo server endpoint, credential, configuration image, commercial ROM/save, proprietary
 trace, or firmware byte is committed. The backend targets explicit user-configured custom or

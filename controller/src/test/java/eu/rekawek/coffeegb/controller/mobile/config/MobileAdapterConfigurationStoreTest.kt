@@ -550,6 +550,70 @@ class MobileAdapterConfigurationStoreTest {
   }
 
   @Test
+  fun `import rejects private target and transaction artifacts without changing sources`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-config-import-conflict")
+    val target = directory.resolve("adapter.bin")
+    val backup = backupPath(target)
+    val temp = temporaryTransactionPath(target)
+    val sources = listOf(target, backup, temp)
+    val originalBytes =
+        sources.associateWith { source ->
+          ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { index ->
+                (index * 17 + source.fileName.toString().length).toByte()
+              }
+              .also { Files.write(source, it) }
+        }
+    val store = MobileAdapterConfigurationStore(target)
+    val replacement = configuration(24, 0x62)
+
+    sources.forEach { source ->
+      assertEquals(
+          MobileAdapterConfigurationError.IMPORT_SOURCE_CONFLICT,
+          store.validateImportSource(source),
+      )
+      val save = store.saveImported(source, replacement)
+      assertFalse(save.saved)
+      assertEquals(MobileAdapterConfigurationError.IMPORT_SOURCE_CONFLICT, save.error)
+      originalBytes.forEach { (path, bytes) ->
+        assertTrue(Files.exists(path))
+        assertContentEquals(bytes, Files.readAllBytes(path))
+      }
+    }
+  }
+
+  @Test
+  fun `import save rechecks a source that becomes a target hard-link alias`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-config-import-hard-link")
+    val target = directory.resolve("adapter.bin")
+    val source = directory.resolve("selected.bin")
+    val targetBytes = ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { it.toByte() }
+    Files.write(target, targetBytes)
+    Files.write(
+        source,
+        ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { 0x55.toByte() },
+    )
+    val store = MobileAdapterConfigurationStore(target)
+    assertEquals(null, store.validateImportSource(source))
+    Files.delete(source)
+    try {
+      Files.createLink(source, target)
+    } catch (unsupported: UnsupportedOperationException) {
+      return
+    } catch (denied: IOException) {
+      return
+    } catch (denied: SecurityException) {
+      return
+    }
+
+    val save = store.saveImported(source, configuration(25, 0x63))
+
+    assertFalse(save.saved)
+    assertEquals(MobileAdapterConfigurationError.IMPORT_SOURCE_CONFLICT, save.error)
+    assertContentEquals(targetBytes, Files.readAllBytes(target))
+    assertContentEquals(targetBytes, Files.readAllBytes(source))
+  }
+
+  @Test
   fun `non regular target is rejected without following a symbolic link`() {
     val directory = Files.createTempDirectory("coffee-gb-mobile-config-symlink")
     val external = directory.resolve("external.bin")
@@ -635,6 +699,12 @@ class MobileAdapterConfigurationStoreTest {
             .digest(target.fileName.toString().toByteArray(StandardCharsets.UTF_8))
     val id = (0 until 16).joinToString("") { "%02x".format(digest[it].toInt() and 0xff) }
     return target.parent.resolve(".coffeegb-$id.backup")
+  }
+
+  private fun temporaryTransactionPath(target: Path): Path {
+    val backupName = backupPath(target).fileName.toString()
+    val id = backupName.removePrefix(".coffeegb-").removeSuffix(".backup")
+    return target.parent.resolve(".coffeegb-$id.tmp-test.part")
   }
 
   private class FailBeforeWriteWriter : AtomicFileWriter() {

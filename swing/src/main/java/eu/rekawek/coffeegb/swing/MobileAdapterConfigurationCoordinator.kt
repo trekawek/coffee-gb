@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfiguration
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationImageReader
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSaveResult
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterNetworkPolicy
@@ -16,6 +17,7 @@ import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterRuntimeAuthori
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterTransportProtocol
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterTransportTarget
 import eu.rekawek.coffeegb.core.events.EventBus
+import java.nio.file.Path
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ExecutorService
@@ -42,6 +44,8 @@ internal data class MobileAdapterRuntimeUiState(
 internal class MobileAdapterConfigurationCoordinator(
     initialConfiguration: MobileAdapterConfiguration,
     private val store: MobileAdapterConfigurationStore,
+    private val imageReader: MobileAdapterConfigurationImageReader =
+        MobileAdapterConfigurationImageReader(),
 ) : AutoCloseable {
   /** Orders each runtime mutation with its synchronous cancel/refresh publication. */
   private val transitionPublicationLock = Any()
@@ -159,11 +163,7 @@ internal class MobileAdapterConfigurationCoordinator(
                   )
               revokePreparedBackends()
               current.set(updated)
-              MobileAdapterConfiguration(
-                  before.configuration.deviceId,
-                  before.configuration.configurationBytes(),
-                  replacementPolicy,
-              ) to updated
+              replacementPolicy to updated
             }
           }
       if (prepared == null) {
@@ -173,7 +173,7 @@ internal class MobileAdapterConfigurationCoordinator(
                 error = MobileAdapterConfigurationError.CONFIGURATION_STALE,
             )
       } else {
-        val (candidate, revoked) = prepared
+        val (policy, revoked) = prepared
         // Cancellation only rotates the attached backend generation; it does not mutate that
         // backend's authorization. Replace it immediately with the old policy plus revoked runtime
         // gates, so no new guest request can reuse consent while the owner-only write is pending or
@@ -184,6 +184,16 @@ internal class MobileAdapterConfigurationCoordinator(
           // Submission shares the transition lock with publication so concurrent saves enter the
           // single writer in the same order as their revisions and controller notifications.
           writer.execute {
+            // An earlier queued image import may have committed while this policy save waited.
+            // Apply the requested policy to the device and image that are durable when the write
+            // actually runs, so orthogonal configuration updates cannot overwrite one another.
+            val durable = durableConfiguration.get()
+            val candidate =
+                MobileAdapterConfiguration(
+                    durable.deviceId,
+                    durable.configurationBytes(),
+                    policy,
+                )
             val result = store.save(candidate)
             // Saves are serialized, but callers can enqueue another edit or grant runtime consent
             // on the interim revision before this one finishes. Reconcile after every result
@@ -192,6 +202,116 @@ internal class MobileAdapterConfigurationCoordinator(
             val committedConfiguration =
                 if (result.saved) {
                   durableConfiguration.set(candidate)
+                  candidate
+                } else {
+                  durableConfiguration.get()
+                }
+            synchronized(transitionPublicationLock) {
+              val reconciled =
+                  synchronized(authorityLock) {
+                    if (coordinatorClosed) {
+                      null
+                    } else {
+                      val value =
+                          MobileAdapterRuntimeUiState(
+                              revision = nextRevision(),
+                              configuration = committedConfiguration,
+                              networkConsent = false,
+                              privateLocalDevelopment = false,
+                          )
+                      revokePreparedBackends()
+                      current.set(value)
+                      value
+                    }
+                  }
+              reconciled?.let { postRevocationAndRefresh(eventBus, it.revision) }
+            }
+            completeSafely(completed, result)
+          }
+        } catch (_: RejectedExecutionException) {
+          immediateResult =
+              MobileAdapterConfigurationSaveResult(
+                  saved = false,
+                  error = MobileAdapterConfigurationError.CONFIGURATION_BUSY,
+              )
+        }
+      }
+    }
+    immediateResult?.let { completeSafely(completed, it) }
+  }
+
+  /**
+   * Imports one bounded owner-selected adapter image away from the EDT.
+   *
+   * The imported image replaces only the game-visible 256-byte configuration. Coffee GB's
+   * device ID and structured network policy remain authoritative, and both runtime authorization
+   * gates are revoked before the source is read or durable storage is changed.
+   */
+  fun importConfigurationImage(
+      expectedRevision: Long,
+      source: Path,
+      eventBus: EventBus,
+      completed: (MobileAdapterConfigurationSaveResult) -> Unit,
+  ) {
+    var immediateResult: MobileAdapterConfigurationSaveResult? = null
+    synchronized(transitionPublicationLock) {
+      val (stale, revoked) =
+          synchronized(authorityLock) {
+            check(!coordinatorClosed) { "Mobile Adapter configuration is closed" }
+            val before = current.get()
+            val updated =
+                before.copy(
+                    revision = nextRevision(),
+                    networkConsent = false,
+                    privateLocalDevelopment = false,
+                )
+            revokePreparedBackends()
+            current.set(updated)
+            (before.revision != expectedRevision) to updated
+          }
+      // Import selection is itself an authority boundary. Revoke even when the window revision
+      // raced stale; the stale result still performs no source read or durable write.
+      postRevocationAndRefresh(eventBus, revoked.revision)
+      if (stale) {
+        immediateResult =
+            MobileAdapterConfigurationSaveResult(
+                saved = false,
+                error = MobileAdapterConfigurationError.CONFIGURATION_STALE,
+            )
+      } else {
+        try {
+          writer.execute {
+            val sourceError = store.validateImportSource(source)
+            val read = if (sourceError == null) imageReader.read(source) else null
+            val imported = read?.image()
+            val candidate =
+                imported?.let { image ->
+                  // An earlier queued policy save may have committed while this import waited.
+                  // Preserve the configuration that is durable when this write actually runs.
+                  val durable = durableConfiguration.get()
+                  MobileAdapterConfiguration(
+                      durable.deviceId,
+                      image,
+                      durable.networkPolicy,
+                  )
+                }
+            val result =
+                if (sourceError != null) {
+                  MobileAdapterConfigurationSaveResult(
+                      saved = false,
+                      error = sourceError,
+                  )
+                } else if (candidate == null) {
+                  MobileAdapterConfigurationSaveResult(
+                      saved = false,
+                      error = checkNotNull(checkNotNull(read).error),
+                  )
+                } else {
+                  store.saveImported(source, candidate)
+                }
+            val committedConfiguration =
+                if (result.saved) {
+                  durableConfiguration.set(checkNotNull(candidate))
                   candidate
                 } else {
                   durableConfiguration.get()

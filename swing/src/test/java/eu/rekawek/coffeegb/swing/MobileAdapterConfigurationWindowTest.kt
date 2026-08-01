@@ -14,6 +14,7 @@ import java.awt.Color
 import java.awt.Component
 import java.awt.Container
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
@@ -21,6 +22,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JLabel
 import javax.swing.SwingUtilities
+import javax.swing.JTextArea
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -75,7 +78,12 @@ class MobileAdapterConfigurationWindowTest {
   fun `panel uses a structured mapping table live inline validation literal text and semantic theme`() =
       onEdt {
         val edited = mutableListOf<MobileAdapterPolicyDraft>()
-        val actions = noOpActions().copy(draftChanged = edited::add)
+        val imports = AtomicInteger()
+        val actions =
+            noOpActions().copy(
+                draftChanged = edited::add,
+                importConfigurationImage = { imports.incrementAndGet() },
+            )
         val initialTokens = tokens()
         val panel = MobileAdapterConfigurationPanel(actions, initialTokens)
         val policy = customPolicy()
@@ -106,6 +114,15 @@ class MobileAdapterConfigurationWindowTest {
             descendants(panel)
                 .filterIsInstance<JLabel>()
                 .none { it.text.startsWith("<html>", ignoreCase = true) })
+        val importExplanation =
+            descendants(panel)
+                .filterIsInstance<JTextArea>()
+                .single { it.accessibleContext.accessibleName == "Mobile Adapter image import explanation" }
+                .text
+        assertTrue(importExplanation.contains("account data"))
+        assertTrue(importExplanation.contains("host metadata is ignored"))
+        panel.importImageButton.doClick()
+        assertEquals(1, imports.get())
 
         panel.mappingModel.setValueAt("0", 0, 1)
         assertEquals("0", edited.last().portMappings.first().guestPort)
@@ -120,6 +137,7 @@ class MobileAdapterConfigurationWindowTest {
         assertTrue(panel.validationStatus.isVisible)
         assertTrue(panel.validationStatus.text.contains("1..65535"))
         assertFalse(panel.saveButton.isEnabled)
+        assertFalse(panel.importImageButton.isEnabled)
 
         val dark =
             initialTokens.copy(
@@ -310,6 +328,112 @@ class MobileAdapterConfigurationWindowTest {
   }
 
   @Test
+  fun `adapter image import preserves policy and device while revoking session permissions`() {
+    val bus = EventBusImpl()
+    val coordinator = coordinator(customConfiguration())
+    val source = Files.createTempFile("coffee-gb-mobile-window-import", ".bin")
+    val image = ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { index ->
+      (index xor 0x5a).toByte()
+    }
+    Files.write(source, image)
+    val selected = AtomicInteger()
+    val imported = CountDownLatch(1)
+    val latest = AtomicReference<MobileAdapterConfigurationPresentation>()
+    val fixture =
+        onEdt {
+          HostFixture(
+              coordinator,
+              bus,
+              RecordingDecisions(),
+              imageSelector = {
+                selected.incrementAndGet()
+                source
+              },
+          ) { presentation ->
+            latest.set(presentation)
+            if (presentation.policyStatusTone == MobileAdapterStatusTone.SUCCESS &&
+                presentation.policyStatus.startsWith("Adapter image imported")) {
+              imported.countDown()
+            }
+          }
+        }
+    try {
+      onEdt {
+        fixture.host.show()
+        fixture.view.actions.setNetworkConsent(true)
+        fixture.view.actions.setPrivateLocalDevelopment(true)
+      }
+      assertTrue(coordinator.snapshot().networkConsent)
+      assertTrue(coordinator.snapshot().privateLocalDevelopment)
+
+      onEdt { fixture.view.actions.importConfigurationImage() }
+      assertTrue(imported.await(5, TimeUnit.SECONDS))
+      flushEdt()
+
+      val runtime = coordinator.snapshot()
+      assertEquals(0x08, runtime.configuration.deviceId)
+      assertEquals(customPolicy(), runtime.configuration.networkPolicy)
+      assertContentEquals(image, runtime.configuration.configurationBytes())
+      assertFalse(runtime.networkConsent)
+      assertFalse(runtime.privateLocalDevelopment)
+      assertEquals(1, selected.get())
+      assertFalse(latest.get().policyStatus.contains(source.toString()))
+      assertTrue(latest.get().policyStatus.contains("host metadata was ignored"))
+    } finally {
+      onEdt { fixture.host.close() }
+      coordinator.close()
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `chooser approval after host shutdown does not start an import`() {
+    val bus = EventBusImpl()
+    val coordinator = coordinator(customConfiguration())
+    val source = Files.createTempFile("coffee-gb-mobile-window-late-import", ".bin")
+    Files.write(
+        source,
+        ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { 0x5a.toByte() },
+    )
+    val selected = AtomicInteger()
+    lateinit var fixture: HostFixture
+    fixture =
+        onEdt {
+          HostFixture(
+              coordinator,
+              bus,
+              RecordingDecisions(),
+              imageSelector = {
+                selected.incrementAndGet()
+                fixture.host.close()
+                coordinator.close()
+                source
+              },
+          )
+        }
+    val before = coordinator.snapshot()
+    try {
+      onEdt {
+        fixture.host.show()
+        val presentationsBeforeSelection = fixture.view.presentations.toList()
+
+        fixture.view.actions.importConfigurationImage()
+
+        assertEquals(presentationsBeforeSelection, fixture.view.presentations)
+      }
+      assertEquals(1, selected.get())
+      assertEquals(1, fixture.view.closeCalls)
+      assertEquals(before, coordinator.snapshot())
+      assertTrue(
+          fixture.view.presentations.none { it.savePhase == MobileAdapterSavePhase.IMPORTING })
+    } finally {
+      onEdt { fixture.host.close() }
+      coordinator.close()
+      bus.close()
+    }
+  }
+
+  @Test
   fun `dirty close offers discard or keep editing while clean close only hides`() {
     val bus = EventBusImpl()
     val coordinator = coordinator(offlineConfiguration())
@@ -345,6 +469,7 @@ class MobileAdapterConfigurationWindowTest {
       coordinator: MobileAdapterConfigurationCoordinator,
       eventBus: EventBusImpl,
       decisions: RecordingDecisions,
+      imageSelector: () -> Path? = { null },
       onPresentation: (MobileAdapterConfigurationPresentation) -> Unit = {},
   ) {
     lateinit var view: RecordingView
@@ -364,6 +489,8 @@ class MobileAdapterConfigurationWindowTest {
               RecordingView(actions, onPresentation).also { view = it }
             },
             decisions,
+            onSummary = {},
+            imageSelector = MobileAdapterConfigurationImageSelector(imageSelector),
         )
   }
 
@@ -503,7 +630,7 @@ class MobileAdapterConfigurationWindowTest {
       )
 
   private fun noOpActions() =
-      MobileAdapterConfigurationWindowActions({}, {}, {}, {}, {}, {}, {})
+      MobileAdapterConfigurationWindowActions({}, {}, {}, {}, {}, {}, {}, {})
 
   private fun tokens() =
       DesktopThemeTokens(
