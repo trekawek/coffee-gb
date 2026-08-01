@@ -154,7 +154,7 @@ internal class DesktopMainPanel(
       updateRecentGames(paths.map(::DesktopRecentGame))
 
   fun updateRecentGames(games: List<DesktopRecentGame>) {
-    home.updateRecentGames(games.take(MAXIMUM_HOME_RECENTS))
+    home.updateRecentGames(games)
   }
 
   fun current(): DesktopPresentation = presentation
@@ -172,7 +172,6 @@ internal class DesktopMainPanel(
   private companion object {
     const val HOME_CARD = "home"
     const val GAME_CARD = "game"
-    const val MAXIMUM_HOME_RECENTS = 5
     const val EXACT_ONE_COMMAND_BAR_REVEAL_WIDTH = 720
   }
 }
