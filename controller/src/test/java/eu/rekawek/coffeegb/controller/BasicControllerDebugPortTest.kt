@@ -1009,10 +1009,15 @@ class BasicControllerDebugPortTest {
       assertFalse(resumed.value().paused())
       assertError(DebugErrorCode.NOT_PAUSED, await(port.step(DebugStepKind.INSTRUCTION)))
 
+      // A pause requested from the desktop is resumable from the debugger too, so every playback
+      // surface controls the same effective emulation state.
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(port.snapshot()).value().paused())
+      assertFalse(await(port.resume()).value().paused())
+
       // A separate desktop pause can authorize a step; the debugger then owns the resulting
       // pause independently until its own resume command is issued.
       eventBus.post(Controller.PauseEmulationEvent())
-      assertTrue(await(port.snapshot()).value().paused())
       assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
       val debugResume = await(port.resume())
       assertTrue(debugResume.isSuccess)

@@ -255,7 +255,7 @@ internal class DebuggerPanel(
   internal val snapshotLabel = JLabel("Waiting for a debug snapshot")
   internal val stopReasonLabel = JLabel("No breakpoint stop in this session")
   internal val statusLabel = JLabel("Debugger ready")
-  internal val runButton = JButton("Release debug pause")
+  internal val runButton = JButton("Resume")
   internal val pauseButton = JButton("Pause")
   internal val stepInstructionButton = JButton("Step instruction")
   internal val stepFrameButton = JButton("Step frame")
@@ -443,10 +443,8 @@ internal class DebuggerPanel(
     statusLabel.border = BorderFactory.createEmptyBorder(3, 4, 2, 4)
     add(statusLabel, BorderLayout.SOUTH)
 
-    runButton.accessibleContext.accessibleDescription =
-        "Release the debugger-owned pause with F6; an application-owned pause may remain"
-    runButton.toolTipText =
-        "Release the debugger-owned pause; an application-owned pause may remain"
+    runButton.accessibleContext.accessibleDescription = "Resume emulation with F6"
+    runButton.toolTipText = "Resume emulation (F6)"
     pauseButton.accessibleContext.accessibleDescription = "Pause at the next safe point with F6"
     stepInstructionButton.accessibleContext.accessibleDescription =
         "Execute one CPU instruction with F7"
@@ -1804,7 +1802,7 @@ internal class DebuggerPanel(
 
   private fun runCommand() {
     val attached = client ?: return
-    executeCommand("Release debug pause", attached::resume) { value ->
+    executeCommand("Resume", attached::resume) { value ->
       value?.let(::applyCommandSnapshot)
     }
   }

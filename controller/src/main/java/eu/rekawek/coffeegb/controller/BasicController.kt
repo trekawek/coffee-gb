@@ -937,12 +937,22 @@ class BasicController private constructor(
       when (command) {
         is QueuedDebugCommand.Pause -> handleDebugPause(command)
         is QueuedDebugCommand.Resume -> {
-          if (!debugPaused) {
-            command.fail(DebugErrorCode.ALREADY_RUNNING, "The debugger does not own a pause")
+          // The desktop menu and the debugger's execution window are two views of the same
+          // playback control. A regular desktop pause therefore remains resumable from the
+          // debugger, while workflow pauses (loading and autosave resume discovery) stay owned
+          // by their workflow until it reaches a safe decision point.
+          val canReleaseApplicationPause =
+              isPaused && pauseStateBeforeLoading == null && pauseStateBeforeResume == null
+          if (!debugPaused && !canReleaseApplicationPause) {
+            command.fail(DebugErrorCode.ALREADY_RUNNING, "The emulator is already running")
             return
           }
           debugCheckpointHistory.invalidateFuture(checkNotNull(session))
-          setDebugPaused(false)
+          if (debugPaused) {
+            setDebugPaused(false)
+          } else {
+            setPaused(false)
+          }
           command.complete(DebugResult.success(captureDebugSnapshot()))
         }
         is QueuedDebugCommand.Snapshot ->
