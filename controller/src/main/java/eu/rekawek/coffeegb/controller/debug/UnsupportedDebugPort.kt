@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -69,6 +70,10 @@ internal class UnsupportedDebugPort(
   override fun readMemory(
       request: DebugMemoryRequest?
   ): CompletionStage<DebugResult<DebugMemoryBlock>> = unavailable()
+
+  override fun writeMemory(
+      write: DebugMemoryWrite?
+  ): CompletionStage<DebugResult<DebugSnapshot>> = unavailable()
 
   override fun setButton(
       button: DebugButton?,

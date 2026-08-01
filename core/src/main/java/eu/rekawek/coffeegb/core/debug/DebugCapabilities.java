@@ -19,6 +19,7 @@ public record DebugCapabilities(
         boolean machineCycleStep,
         boolean frameStep,
         boolean memoryRead,
+        boolean memoryWrite,
         boolean buttonInput,
         int maxMemoryReadLength,
         Set<DebugBreakpointKind> breakpointKinds,
@@ -38,6 +39,10 @@ public record DebugCapabilities(
         if (memoryRead != (maxMemoryReadLength > 0)) {
             throw new IllegalArgumentException(
                     "Memory-read capability and maximum length must agree");
+        }
+        if (memoryWrite && !memoryRead) {
+            throw new IllegalArgumentException(
+                    "Memory-write capability requires memory-read support");
         }
         Objects.requireNonNull(breakpointKinds, "breakpointKinds");
         EnumSet<DebugBreakpointKind> breakpointCopy = breakpointKinds.isEmpty()
@@ -96,6 +101,30 @@ public record DebugCapabilities(
         }
     }
 
+    /** Compatibility constructor for transports that predate memory-write negotiation. */
+    public DebugCapabilities(
+            boolean pauseResume,
+            boolean snapshot,
+            boolean instructionStep,
+            boolean machineCycleStep,
+            boolean frameStep,
+            boolean memoryRead,
+            boolean buttonInput,
+            int maxMemoryReadLength,
+            Set<DebugBreakpointKind> breakpointKinds,
+            int maxBreakpoints,
+            Set<TraceCategory> traceCategories,
+            int maxTraceCapacity,
+            int maxTraceReadEntries,
+            DebugHistoryCapabilities history,
+            Set<DebugInspectionSection> inspectionSections,
+            int maxInspectionTraceEntries) {
+        this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
+                memoryRead, false, buttonInput, maxMemoryReadLength,
+                breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
+                maxTraceReadEntries, history, inspectionSections, maxInspectionTraceEntries);
+    }
+
     /** Compatibility constructor for transports that predate peripheral inspection. */
     public DebugCapabilities(
             boolean pauseResume,
@@ -113,7 +142,7 @@ public record DebugCapabilities(
             int maxTraceReadEntries,
             DebugHistoryCapabilities history) {
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
-                memoryRead, buttonInput, maxMemoryReadLength,
+                memoryRead, false, buttonInput, maxMemoryReadLength,
                 breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
                 maxTraceReadEntries, history, Set.of(), 0);
     }
@@ -134,9 +163,26 @@ public record DebugCapabilities(
             int maxTraceCapacity,
             int maxTraceReadEntries) {
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
-                memoryRead, buttonInput, maxMemoryReadLength,
+                memoryRead, false, buttonInput, maxMemoryReadLength,
                 breakpointKinds, maxBreakpoints, traceCategories, maxTraceCapacity,
                 maxTraceReadEntries, DebugHistoryCapabilities.disabled(), Set.of(), 0);
+    }
+
+    /** Compatibility constructor for transports that expose only the phase-one operations. */
+    public DebugCapabilities(
+            boolean pauseResume,
+            boolean snapshot,
+            boolean instructionStep,
+            boolean machineCycleStep,
+            boolean frameStep,
+            boolean memoryRead,
+            boolean memoryWrite,
+            boolean buttonInput,
+            int maxMemoryReadLength) {
+        this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
+                memoryRead, memoryWrite, buttonInput, maxMemoryReadLength,
+                Set.of(), 0, Set.of(), 0, 0, DebugHistoryCapabilities.disabled(),
+                Set.of(), 0);
     }
 
     /** Compatibility constructor for transports that expose only the phase-one operations. */
@@ -150,7 +196,7 @@ public record DebugCapabilities(
             boolean buttonInput,
             int maxMemoryReadLength) {
         this(pauseResume, snapshot, instructionStep, machineCycleStep, frameStep,
-                memoryRead, buttonInput, maxMemoryReadLength,
+                memoryRead, false, buttonInput, maxMemoryReadLength,
                 Set.of(), 0, Set.of(), 0, 0, DebugHistoryCapabilities.disabled(),
                 Set.of(), 0);
     }

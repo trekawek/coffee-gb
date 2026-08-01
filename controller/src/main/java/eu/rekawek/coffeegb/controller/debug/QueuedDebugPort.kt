@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -244,6 +245,24 @@ internal class QueuedDebugPort(
         }
     return submit(validation) { requestId, completion ->
       QueuedDebugCommand.ReadMemory(requestId, generation, requireNotNull(request), completion)
+    }
+  }
+
+  override fun writeMemory(
+      write: DebugMemoryWrite?
+  ): CompletionStage<DebugResult<DebugSnapshot>> {
+    val validation =
+        when {
+          write == null -> DebugError(DebugErrorCode.INVALID_ARGUMENT, "Memory write is required")
+          !debugCapabilities.memoryWrite() ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                  "Memory writes are unavailable for this session",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.WriteMemory(requestId, generation, requireNotNull(write), completion)
     }
   }
 
@@ -687,6 +706,13 @@ internal sealed class QueuedDebugCommand<T> protected constructor(
       val request: DebugMemoryRequest,
       completion: (DebugResult<DebugMemoryBlock>) -> Boolean,
   ) : QueuedDebugCommand<DebugMemoryBlock>(requestId, sessionGeneration, completion)
+
+  class WriteMemory internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val write: DebugMemoryWrite,
+      completion: (DebugResult<DebugSnapshot>) -> Boolean,
+  ) : QueuedDebugCommand<DebugSnapshot>(requestId, sessionGeneration, completion)
 
   class SetButton internal constructor(
       requestId: Long,

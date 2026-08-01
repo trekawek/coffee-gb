@@ -446,7 +446,8 @@ The implementation builds on these repository contracts:
 
 The following are deliberate current limitations and must not be implied by the UI:
 
-- register, memory, PPU, or APU editing — there is no atomic safe-point mutation protocol;
+- register, PPU, or APU editing — there is no atomic safe-point mutation protocol; safe RAM/HRAM
+  byte editing is available only from the paused Memory workspace through the typed owner command;
 - full bank-correct scrolling disassembly, source, symbols, step-over/out, or call stacks — these
   need a bank-aware `DebugLocation` and structured instruction/source models;
 - generic I/O/VRAM/OAM reads through the memory grid — use decoded hardware/graphics DTOs;

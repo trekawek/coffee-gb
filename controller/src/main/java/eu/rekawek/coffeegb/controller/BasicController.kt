@@ -954,6 +954,7 @@ class BasicController private constructor(
             command.complete(DebugResult.success(debugCheckpointHistory.status()))
         is QueuedDebugCommand.StepBackward -> handleDebugStepBackward(command)
         is QueuedDebugCommand.ReadMemory -> handleDebugMemoryRead(command)
+        is QueuedDebugCommand.WriteMemory -> handleDebugMemoryWrite(command)
         is QueuedDebugCommand.SetButton -> handleDebugButton(command)
         is QueuedDebugCommand.SetBreakpoint -> handleDebugSetBreakpoint(command)
         is QueuedDebugCommand.RemoveBreakpoint -> handleDebugRemoveBreakpoint(command)
@@ -1307,6 +1308,34 @@ class BasicController private constructor(
       command.fail(
           DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
           "The requested range contains a side-effectful or unavailable address",
+      )
+    }
+  }
+
+  private fun handleDebugMemoryWrite(command: QueuedDebugCommand.WriteMemory) {
+    if (!isEffectivelyPaused()) {
+      command.fail(DebugErrorCode.NOT_PAUSED, "Pause the debug session before editing memory")
+      return
+    }
+    val currentSession = checkNotNull(session)
+    val gameboy = currentSession.gameboy
+    try {
+      gameboy.writeDebugMemory(command.write)
+      // A direct RAM change cannot be reconstructed by the existing input-only replay log. Drop
+      // retained rewind/reverse observations rather than making a later reverse appear valid.
+      rewindManager.clear()
+      debugCheckpointHistory.clear(DebugHistoryTruncationReason.BRANCH_INVALIDATED)
+      resetDebugTimelineObservation(gameboy)
+      command.complete(DebugResult.success(captureDebugSnapshot()))
+    } catch (_: UnsupportedOperationException) {
+      command.fail(
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+          "The selected address space is not writable by the debugger",
+      )
+    } catch (_: IllegalArgumentException) {
+      command.fail(
+          DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
+          "The selected address is side-effectful or unavailable for debugger writes",
       )
     }
   }
@@ -4492,6 +4521,7 @@ class BasicController private constructor(
             true,
             true,
             false,
+            true,
             true,
             true,
             true,

@@ -95,6 +95,16 @@ public class DebugApiModelTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugMemoryBlock(DebugAddressSpace.SYSTEM_BUS, 0xffff,
                         new byte[]{1, 2}));
+
+        DebugMemoryWrite write = new DebugMemoryWrite(
+                DebugAddressSpace.WORK_RAM, 0xc000, 0xff);
+        assertEquals(DebugAddressSpace.WORK_RAM, write.addressSpace());
+        assertEquals(0xc000, write.address());
+        assertEquals(0xff, write.value());
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0x10000, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc000, 0x100));
     }
 
     @Test
@@ -375,12 +385,19 @@ public class DebugApiModelTest {
         assertTrue(capabilities.inspectionSections().isEmpty());
         assertFalse(capabilities.coherentTraceInspection());
 
+        DebugCapabilities writable = new DebugCapabilities(
+                true, true, true, false, true, true, true, true, 4096);
+        assertTrue(writable.memoryWrite());
+
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
                         false, true, 1));
         assertThrows(IllegalArgumentException.class,
                 () -> new DebugCapabilities(true, true, true, true, true,
                         true, true, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> new DebugCapabilities(true, true, true, true, true,
+                        false, true, true, 0));
     }
 
     @Test

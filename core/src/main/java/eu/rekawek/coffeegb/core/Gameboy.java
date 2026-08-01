@@ -22,6 +22,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionResult;
 import eu.rekawek.coffeegb.core.debug.DebugMapperState;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock;
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest;
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite;
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
 import eu.rekawek.coffeegb.core.debug.DebugPpuState;
 import eu.rekawek.coffeegb.core.debug.DebugRegisters;
@@ -1008,6 +1009,32 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         return new DebugMemoryBlock(request.addressSpace(), address,
                 mmu.readDebugMemory(address, request.length()));
+    }
+
+    /** Writes one byte through a debugger-owned, side-effect-free RAM view. */
+    public void writeDebugMemory(DebugMemoryWrite write) {
+        if (write == null) {
+            throw new IllegalArgumentException("Debug memory write must not be null");
+        }
+        int address = write.address();
+        switch (write.addressSpace()) {
+            case SYSTEM_BUS:
+                break;
+            case WORK_RAM:
+                if (address < 0xc000 || address >= 0xfe00) {
+                    throw new IllegalArgumentException("WORK_RAM address must be within C000-FDFF");
+                }
+                break;
+            case HIGH_RAM:
+                if (address < 0xff80 || address >= 0xffff) {
+                    throw new IllegalArgumentException("HIGH_RAM address must be within FF80-FFFE");
+                }
+                break;
+            default:
+                throw new UnsupportedOperationException(
+                        "Debug address space is not writable: " + write.addressSpace());
+        }
+        mmu.writeDebugMemory(address, write.value());
     }
 
     /** Copies requested memory and peripherals against one already-captured coherent snapshot. */

@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.debug.DebugStepStopReason
@@ -247,7 +248,10 @@ class BasicControllerDebugPortTest {
     withController { _, port, _, _, _ ->
       assertTrue(await(port.pause()).isSuccess)
       assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(
+          await(port.configureTrace(TraceConfiguration(32, EnumSet.of(TraceCategory.CPU)))).isSuccess)
       assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertTrue(await(port.readTrace(TraceReadRequest.initial(32))).value().entries().isNotEmpty())
       assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
       val beforeReverse = await(port.historyStatus()).value()
 
@@ -897,6 +901,41 @@ class BasicControllerDebugPortTest {
                   DebugMemoryRequest(DebugAddressSpace.IO_REGISTERS, 0xff0f, 1)))
       assertTrue(unsupported.isFailure)
       assertEquals(DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE, unsupported.error().code())
+    }
+  }
+
+  @Test
+  fun debuggerMemoryWritesRequirePauseAndInvalidateRetainedHistory() {
+    withController { _, port, _, _, _ ->
+      assertTrue(port.capabilities().memoryWrite())
+      assertError(
+          DebugErrorCode.NOT_PAUSED,
+          await(port.writeMemory(DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc000, 0x7f))),
+      )
+
+      assertTrue(await(port.pause()).isSuccess)
+      assertTrue(await(port.configureHistory(DebugHistoryConfiguration.defaults())).isSuccess)
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+
+      val written =
+          await(port.writeMemory(DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc000, 0x7f)))
+      assertTrue(written.isSuccess)
+      assertTrue(written.value().paused())
+      val workRam =
+          await(port.readMemory(DebugMemoryRequest(DebugAddressSpace.WORK_RAM, 0xc000, 1)))
+      assertEquals(0x7f, workRam.value().unsignedByteAt(0))
+      val echo =
+          await(port.readMemory(DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xe000, 1)))
+      assertEquals(0x7f, echo.value().unsignedByteAt(0))
+
+      assertError(
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+          await(port.writeMemory(DebugMemoryWrite(DebugAddressSpace.ROM, 0x0100, 0x00))),
+      )
+      val history = await(port.historyStatus()).value()
+      assertEquals(0, history.checkpointCount())
+      assertEquals(DebugHistoryTruncationReason.BRANCH_INVALIDATED, history.lastTruncationReason())
+      assertTrue(await(port.readTrace(TraceReadRequest.initial(32))).value().entries().isEmpty())
     }
   }
 
