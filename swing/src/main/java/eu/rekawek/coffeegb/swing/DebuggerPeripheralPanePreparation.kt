@@ -107,6 +107,62 @@ internal object DebuggerPeripheralPanePreparation {
           appendLine(graphics.backgroundPaletteIndexText)
           append(graphics.objectPaletteIndexText)
         }
+    val overviewProperties =
+        immutableList(
+            listOf(
+                DebuggerOverviewProperty("Snapshot", identity.label),
+                DebuggerOverviewProperty("Hardware mode", graphics.hardwareModeText),
+                DebuggerOverviewProperty(
+                    "CPU-selected VRAM bank",
+                    graphics.selectedVramBank.toString(),
+                ),
+                DebuggerOverviewProperty("LCDC raw value", graphics.lcdc.rawValueText),
+                DebuggerOverviewProperty(
+                    "LCD display",
+                    if (graphics.lcdc.lcdEnabled) "enabled" else "disabled",
+                ),
+                DebuggerOverviewProperty(
+                    "Window enabled",
+                    if (graphics.lcdc.windowEnabled) "enabled" else "disabled",
+                ),
+                DebuggerOverviewProperty(
+                    "Window map",
+                    "${graphics.windowMap.baseAddressText}; " + graphics.windowMap.addressingText,
+                ),
+                DebuggerOverviewProperty(
+                    "Background map",
+                    "${graphics.backgroundMap.baseAddressText}; " +
+                        graphics.backgroundMap.addressingText,
+                ),
+                DebuggerOverviewProperty(
+                    "Tile data addressing",
+                    graphics.backgroundMap.addressingText,
+                ),
+                DebuggerOverviewProperty(
+                    "Objects enabled",
+                    if (graphics.lcdc.objectsEnabled) "enabled" else "disabled",
+                ),
+                DebuggerOverviewProperty(
+                    "Sprite size",
+                    "8 by ${graphics.objectHeight} pixels",
+                ),
+                DebuggerOverviewProperty("OAM entries", "40 captured"),
+                DebuggerOverviewProperty(
+                    "Background/window enabled or priority",
+                    if (graphics.lcdc.backgroundWindowEnabledOrPriority) "enabled / priority on"
+                    else "disabled / priority off",
+                ),
+                DebuggerOverviewProperty(
+                    "Background CGB palette index",
+                    graphics.backgroundPaletteIndexText.removePrefix("Background CGB palette index "),
+                ),
+                DebuggerOverviewProperty(
+                    "Object CGB palette index",
+                    graphics.objectPaletteIndexText.removePrefix("Object CGB palette index "),
+                ),
+                DebuggerOverviewProperty("Capture status", "Captured"),
+            )
+        )
     val preparedTileRows = immutableList(tileRows)
     val preparedBackgroundMapRows = immutableList(backgroundMapRows)
     val preparedWindowMapRows = immutableList(windowMapRows)
@@ -131,6 +187,7 @@ internal object DebuggerPeripheralPanePreparation {
         objectRows = preparedObjectRows,
         paletteRows = preparedPaletteRows,
         renderModel = renderModel,
+        overviewProperties = overviewProperties,
     )
   }
 
@@ -205,6 +262,43 @@ internal object DebuggerPeripheralPanePreparation {
           appendLine("VIN to left ${yesNo(audio.vinToLeft)}")
           append("VIN to right ${yesNo(audio.vinToRight)}")
         }
+    val overviewProperties =
+        immutableList(
+            listOf(
+                DebuggerOverviewProperty("Snapshot", identity.label),
+                DebuggerOverviewProperty("APU status", audio.enabledText.removePrefix("APU ")),
+                DebuggerOverviewProperty("Frame sequencer", audio.frameSequencerText),
+                DebuggerOverviewProperty(
+                    "Left mixer volume",
+                    "setting ${audio.leftVolume} of 7; gain ${audio.leftVolume + 1} of 8",
+                ),
+                DebuggerOverviewProperty(
+                    "Right mixer volume",
+                    "setting ${audio.rightVolume} of 7; gain ${audio.rightVolume + 1} of 8",
+                ),
+                DebuggerOverviewProperty("VIN to left", yesNo(audio.vinToLeft)),
+                DebuggerOverviewProperty("VIN to right", yesNo(audio.vinToRight)),
+                DebuggerOverviewProperty(
+                    "NR50 raw value",
+                    audio.globalRegisters.first { it.name == "NR50" }.let { register ->
+                      "${register.valueText} at ${register.addressText}"
+                    },
+                ),
+                DebuggerOverviewProperty(
+                    "NR51 raw value",
+                    audio.globalRegisters.first { it.name == "NR51" }.let { register ->
+                      "${register.valueText} at ${register.addressText}"
+                    },
+                ),
+                DebuggerOverviewProperty(
+                    "NR52 raw value",
+                    audio.globalRegisters.first { it.name == "NR52" }.let { register ->
+                      "${register.valueText} at ${register.addressText}"
+                    },
+                ),
+                DebuggerOverviewProperty("Capture status", "Captured"),
+            )
+        )
     return DebuggerAudioPaneView(
         identity = identity,
         overviewText = overview,
@@ -212,6 +306,7 @@ internal object DebuggerPeripheralPanePreparation {
         channelRows = immutableList(channelRows),
         registerRows = immutableList(registerRows),
         waveRows = immutableList(waveRows),
+        overviewProperties = overviewProperties,
     )
   }
 
@@ -297,6 +392,12 @@ internal data class DebuggerGraphicsPaneView(
             objectRows,
             paletteRows,
         ),
+    val overviewProperties: List<DebuggerOverviewProperty> = emptyList(),
+)
+
+internal data class DebuggerOverviewProperty(
+    val label: String,
+    val value: String,
 )
 
 internal data class DebuggerTileBankRow(
@@ -355,6 +456,7 @@ internal data class DebuggerAudioPaneView(
     val channelRows: List<DebuggerAudioChannelTableRow>,
     val registerRows: List<DebuggerAudioRegisterTableRow>,
     val waveRows: List<DebuggerWaveSampleTableRow>,
+    val overviewProperties: List<DebuggerOverviewProperty> = emptyList(),
 )
 
 internal data class DebuggerAudioChannelTableRow(

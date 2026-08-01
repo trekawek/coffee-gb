@@ -1103,7 +1103,7 @@ class DebuggerPanelTest {
       assertEquals(true, executor.lastCancellationMayInterrupt)
       executor.runNext()
       flushEdt()
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "No graphics")
       assertEquals(0, onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount })
 
       onEdt { panel.setPollingActive(true) }
@@ -1119,7 +1119,7 @@ class DebuggerPanelTest {
       assertTrue(onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount > 0 })
 
       onEdt { panel.setPollingActive(false) }
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "No graphics")
       assertEquals(0, onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount })
     } finally {
       onEdt(panel::close)
@@ -1152,7 +1152,7 @@ class DebuggerPanelTest {
       executor.runNext()
       flushEdt()
       assertTrue(onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount > 0 })
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "snapshot 2")
       assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 2")
 
       onEdt { panel.tabs.selectedIndex = 0 }
@@ -1161,8 +1161,8 @@ class DebuggerPanelTest {
       completeInspection(cpuCall, snapshot(20, 3, paused = false))
       flushEdt()
       assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 3")
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 3")
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "not captured")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "snapshot 3")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "Not captured")
       assertEquals(0, onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount })
 
       onEdt { panel.tabs.selectedComponent = panel.audioPane }
@@ -1175,14 +1175,14 @@ class DebuggerPanelTest {
       executor.runNext()
       flushEdt()
       assertEquals(4, onEdt { panel.audioPane.channelTable.rowCount })
-      assertContains(onEdt { panel.audioPane.overviewArea.text }, "snapshot 4")
+      assertContains(onEdt { panel.audioPane.overviewProperties.copyText() }, "snapshot 4")
 
       onEdt { panel.pauseButton.doClick() }
       client.pauses.single().complete(DebugResult.success(snapshot(20, 5, paused = true)))
       flushEdt()
       assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 5")
-      assertContains(onEdt { panel.audioPane.overviewArea.text }, "snapshot 5")
-      assertContains(onEdt { panel.audioPane.overviewArea.text }, "not captured")
+      assertContains(onEdt { panel.audioPane.overviewProperties.copyText() }, "snapshot 5")
+      assertContains(onEdt { panel.audioPane.overviewProperties.copyText() }, "Not captured")
       assertEquals(0, onEdt { panel.audioPane.channelTable.rowCount })
     } finally {
       onEdt(panel::close)
@@ -1224,7 +1224,7 @@ class DebuggerPanelTest {
       assertFalse(completionThread.isAlive)
       assertEquals(true, executor.lastCancellationMayInterrupt)
       flushEdt()
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "No graphics")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "No graphics")
     } finally {
       executor.releaseSubmission()
       onEdt(panel::close)
@@ -1351,7 +1351,7 @@ class DebuggerPanelTest {
       executor.runNext()
       flushEdt()
       assertTrue(onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount > 0 })
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "snapshot 2")
 
       nowNanos = TimeUnit.MILLISECONDS.toNanos(50)
       onEdt { panel.requestRefresh() }
@@ -1360,7 +1360,7 @@ class DebuggerPanelTest {
       completeInspection(scalarOnly, snapshot(112, 3, paused = false))
       flushEdt()
       assertContains(onEdt { panel.snapshotLabel.text }, "snapshot 3")
-      assertContains(onEdt { panel.graphicsPane.overviewArea.text }, "snapshot 2")
+      assertContains(onEdt { panel.graphicsPane.overviewProperties.copyText() }, "snapshot 2")
       assertTrue(onEdt { panel.graphicsPane.tileAtlasCanvas.itemCount > 0 })
 
       nowNanos = TimeUnit.MILLISECONDS.toNanos(100)
