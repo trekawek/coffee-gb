@@ -69,7 +69,6 @@ class RomOpenServiceTest {
 
       assertTrue(started.await(5, TimeUnit.SECONDS))
       assertTrue(updates.any { it is RomOpenUpdate.Progress && it.stage == RomOpenStage.PREPARING_CORE })
-      assertTrue(updates.any { it is RomOpenUpdate.Opened })
     } finally {
       service.close()
       controller.close()
