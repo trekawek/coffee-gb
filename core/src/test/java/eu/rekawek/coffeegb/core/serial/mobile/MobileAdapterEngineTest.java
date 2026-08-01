@@ -254,6 +254,46 @@ public class MobileAdapterEngineTest {
         roundTripOutcome(configWrite, MobileAdapterEngine.Outcome.CONFIG_WRITE,
                 restoredOutcomes);
 
+        MobileAdapterEngine dialled = engine(ClockSpec.LEGACY);
+        feed(dialled, BEGIN);
+        feed(dialled, packet(0x12, ispDialData()));
+        roundTripOutcome(dialled, MobileAdapterEngine.Outcome.TELEPHONE_DIALLED,
+                restoredOutcomes);
+
+        MobileAdapterEngine hungUp = engine(ClockSpec.LEGACY);
+        feed(hungUp, BEGIN);
+        feed(hungUp, packet(0x12, ispDialData()));
+        feed(hungUp, packet(0x13, new byte[0]));
+        roundTripOutcome(hungUp, MobileAdapterEngine.Outcome.TELEPHONE_HUNG_UP,
+                restoredOutcomes);
+
+        MobileAdapterEngine telephoneStatus = engine(ClockSpec.LEGACY);
+        feed(telephoneStatus, BEGIN);
+        feed(telephoneStatus, packet(0x17, new byte[0]));
+        roundTripOutcome(telephoneStatus, MobileAdapterEngine.Outcome.TELEPHONE_STATUS,
+                restoredOutcomes);
+
+        MobileAdapterEngine loggedIn = engine(ClockSpec.LEGACY);
+        feed(loggedIn, BEGIN);
+        feed(loggedIn, packet(0x12, ispDialData()));
+        feed(loggedIn, packet(0x21, ispLoginData()));
+        roundTripOutcome(loggedIn, MobileAdapterEngine.Outcome.ISP_LOGGED_IN,
+                restoredOutcomes);
+
+        MobileAdapterEngine loggedOut = engine(ClockSpec.LEGACY);
+        feed(loggedOut, BEGIN);
+        feed(loggedOut, packet(0x12, ispDialData()));
+        feed(loggedOut, packet(0x21, ispLoginData()));
+        feed(loggedOut, packet(0x22, new byte[0]));
+        roundTripOutcome(loggedOut, MobileAdapterEngine.Outcome.ISP_LOGGED_OUT,
+                restoredOutcomes);
+
+        MobileAdapterEngine serviceError = engine(ClockSpec.LEGACY);
+        feed(serviceError, BEGIN);
+        feed(serviceError, packet(0x12, new byte[]{0, '1'}));
+        roundTripOutcome(serviceError, MobileAdapterEngine.Outcome.SERVICE_ERROR,
+                restoredOutcomes);
+
         MobileAdapterEngine unsupported = engine(ClockSpec.LEGACY);
         feed(unsupported, packet(0x7e, new byte[0]));
         roundTripOutcome(unsupported, MobileAdapterEngine.Outcome.UNSUPPORTED_COMMAND,
@@ -437,8 +477,49 @@ public class MobileAdapterEngineTest {
                 backendErrorState.errorId());
         assertThrows(IllegalArgumentException.class,
                 () -> live.restoreState(wrongBackendErrorCommand));
+        MobileAdapterEngine.MobileAdapterEngineState responseBearingBusy = copyState(
+                backendErrorState,
+                backendErrorState.packetBuffer(),
+                backendErrorState.responsePacket(),
+                MobileAdapterEngine.ErrorCode.BACKEND_BUSY.id());
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(responseBearingBusy));
+        MobileAdapterEngine.MobileAdapterEngineState invalidResponseWithUseError = copyState(
+                backendErrorState,
+                backendErrorState.packetBuffer(),
+                backendErrorState.responsePacket(),
+                MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID.id());
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(invalidResponseWithUseError));
         assertEngineStatesEqual(baseline, state(live));
         assertEquals(1, backend.occupiedRequestSlots());
+
+        MobileAdapterEngine loggedIn = engine(ClockSpec.LEGACY);
+        feed(loggedIn, BEGIN);
+        feed(loggedIn, packet(0x12, ispDialData()));
+        feed(loggedIn, packet(0x21, ispLoginData()));
+        MobileAdapterEngine.MobileAdapterEngineState loggedInState = state(loggedIn);
+        MobileAdapterEngine.MobileAdapterEngineState nonCanonicalLoginResponse = copyState(
+                loggedInState,
+                loggedInState.packetBuffer(),
+                packet(0xa1, new byte[]{127, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0}),
+                loggedInState.errorId());
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(nonCanonicalLoginResponse));
+        assertEngineStatesEqual(baseline, state(live));
+
+        MobileAdapterEngine wrongNumber = engine(ClockSpec.LEGACY);
+        feed(wrongNumber, BEGIN);
+        feed(wrongNumber, packet(0x12, new byte[]{0, '1'}));
+        MobileAdapterEngine.MobileAdapterEngineState dialValueError = state(wrongNumber);
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(copyPhaseState(dialValueError, 3)));
+        MobileAdapterEngine asleepDial = engine(ClockSpec.LEGACY);
+        feed(asleepDial, packet(0x12, ispDialData()));
+        MobileAdapterEngine.MobileAdapterEngineState dialPhaseError = state(asleepDial);
+        assertThrows(IllegalArgumentException.class,
+                () -> live.restoreState(copyPhaseState(dialPhaseError, 2)));
+        assertEngineStatesEqual(baseline, state(live));
 
         MobileAdapterEngine.MobileAdapterEngineState ownerlessResult = copyTimingState(
                 responseState, 0, false);
@@ -812,8 +893,118 @@ public class MobileAdapterEngineTest {
         assertEquals(0, backend.occupiedRequestSlots());
         assertFalse(engine.hasExternalIo());
 
-        assertUnsupported(feed(engine, packet(0x12, new byte[]{0, '1'})));
-        assertUnsupported(feed(engine, packet(0x21, new byte[10])));
+        assertServiceError(feed(engine, packet(0x12, new byte[]{0, '1'})), 0x12, 0x03);
+        assertServiceError(feed(engine, packet(0x21, new byte[10])), 0x21, 0x01);
+    }
+
+    @Test
+    public void crystalServiceFlowDialsBlueAdapterLogsIntoIspAndReportsTelephoneState() {
+        MobileAdapterEngine engine = engine(ClockSpec.LEGACY);
+
+        assertServiceError(feed(engine, packet(0x17, new byte[0])), 0x17, 0x01);
+        assertEquals(MobileAdapterEngine.Phase.SLEEP, engine.snapshot().phase());
+        feed(engine, BEGIN);
+
+        MobileAdapterEngine.EngineResult disconnected = feed(
+                engine, packet(0x17, new byte[0]));
+        assertEquals(MobileAdapterEngine.Outcome.TELEPHONE_STATUS, disconnected.outcome());
+        assertEquals(MobileAdapterEngine.Phase.SESSION, disconnected.phase());
+        assertArrayEquals(new byte[]{0, 0x4d, 0}, responseData(disconnected));
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x97},
+                disconnected.acknowledgement());
+
+        MobileAdapterEngine.EngineResult dialled = feed(engine, packet(0x12, ispDialData()));
+        assertEquals(MobileAdapterEngine.Outcome.TELEPHONE_DIALLED, dialled.outcome());
+        assertEquals(MobileAdapterEngine.Phase.TELEPHONE, dialled.phase());
+        assertEquals(0, responseData(dialled).length);
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x92}, dialled.acknowledgement());
+
+        MobileAdapterEngine.EngineResult connected = feed(engine, packet(0x17, new byte[0]));
+        assertArrayEquals(new byte[]{4, 0x4d, 0}, responseData(connected));
+
+        MobileAdapterEngine.EngineResult loggedIn = feed(engine, packet(0x21, ispLoginData()));
+        assertEquals(MobileAdapterEngine.Outcome.ISP_LOGGED_IN, loggedIn.outcome());
+        assertEquals(MobileAdapterEngine.Phase.INTERNET, loggedIn.phase());
+        assertArrayEquals(new byte[]{127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+                responseData(loggedIn));
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0xa1},
+                loggedIn.acknowledgement());
+
+        MobileAdapterEngine.EngineResult internetStatus = feed(
+                engine, packet(0x17, new byte[0]));
+        assertArrayEquals(new byte[]{4, 0x4d, 0}, responseData(internetStatus));
+
+        MobileAdapterEngine.EngineResult loggedOut = feed(engine, packet(0x22, new byte[0]));
+        assertEquals(MobileAdapterEngine.Outcome.ISP_LOGGED_OUT, loggedOut.outcome());
+        assertEquals(MobileAdapterEngine.Phase.TELEPHONE, loggedOut.phase());
+        assertEquals(0, responseData(loggedOut).length);
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0xa2},
+                loggedOut.acknowledgement());
+
+        MobileAdapterEngine.EngineResult hungUp = feed(engine, packet(0x13, new byte[0]));
+        assertEquals(MobileAdapterEngine.Outcome.TELEPHONE_HUNG_UP, hungUp.outcome());
+        assertEquals(MobileAdapterEngine.Phase.SESSION, hungUp.phase());
+        assertEquals(0, responseData(hungUp).length);
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x93}, hungUp.acknowledgement());
+    }
+
+    @Test
+    public void serviceCommandsRejectInvalidStateAndBodiesWithTypedAdapterErrors() {
+        MobileAdapterEngine engine = engine(ClockSpec.LEGACY);
+        assertServiceError(feed(engine, packet(0x12, ispDialData())), 0x12, 0x01);
+
+        feed(engine, BEGIN);
+        assertServiceError(feed(engine, packet(0x12, new byte[0])), 0x12, 0x02);
+        byte[] oversizedDial = new byte[MobileAdapterEngine.MAX_DIAL_DATA_BYTES + 1];
+        Arrays.fill(oversizedDial, (byte) '1');
+        oversizedDial[0] = 0;
+        assertServiceError(feed(engine, packet(0x12, oversizedDial)), 0x12, 0x02);
+        assertServiceError(feed(engine, packet(0x12, new byte[]{1, '#', '9', '6', '7', '7'})),
+                0x12, 0x02);
+        assertServiceError(feed(engine, packet(0x12, new byte[]{0, '1'})), 0x12, 0x03);
+        assertServiceError(feed(engine, packet(0x21, ispLoginData())), 0x21, 0x01);
+
+        feed(engine, packet(0x12, ispDialData()));
+        assertServiceError(feed(engine, packet(0x17, new byte[]{1})), 0x17, 0x02);
+        assertServiceError(feed(engine, packet(0x21, Arrays.copyOf(ispLoginData(), 9))),
+                0x21, 0x02);
+        byte[] oversizedUser = ispLoginData();
+        oversizedUser[0] = MobileAdapterEngine.MAX_ISP_CREDENTIAL_BYTES + 1;
+        assertServiceError(feed(engine, packet(0x21, oversizedUser)), 0x21, 0x02);
+        assertServiceError(feed(engine, packet(0x22, new byte[0])), 0x22, 0x01);
+
+        feed(engine, packet(0x21, ispLoginData()));
+        assertServiceError(feed(engine, packet(0x22, new byte[]{1})), 0x22, 0x02);
+        feed(engine, packet(0x22, new byte[0]));
+        feed(engine, packet(0x13, new byte[0]));
+        assertServiceError(feed(engine, packet(0x13, new byte[0])), 0x13, 0x01);
+    }
+
+    @Test
+    public void ispLogoutCancelsPendingBackendOwnershipAndInternetAcceptsNetworkCommands() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterEngine engine = new MobileAdapterEngine(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        feed(engine, BEGIN);
+        feed(engine, packet(0x12, ispDialData()));
+        assertBackendError(feed(engine, packet(0x28,
+                "service.test".getBytes(StandardCharsets.US_ASCII))), 0x28, 0x01);
+        assertEquals(0, backend.occupiedRequestSlots());
+        feed(engine, packet(0x21, ispLoginData()));
+
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                feed(engine, packet(0x28,
+                        "service.test".getBytes(StandardCharsets.US_ASCII))).outcome());
+        assertTrue(engine.hasExternalIo());
+        assertEquals(1, backend.occupiedRequestSlots());
+        MobileAdapterBackendPort.BackendGeneration stale = backend.generation();
+
+        MobileAdapterEngine.EngineResult loggedOut = feed(engine, packet(0x22, new byte[0]));
+        assertEquals(MobileAdapterEngine.Outcome.ISP_LOGGED_OUT, loggedOut.outcome());
+        assertEquals(0, loggedOut.pendingPacketSlots());
+        assertFalse(engine.hasExternalIo());
+        assertEquals(0, backend.occupiedRequestSlots());
+        assertFalse(stale == backend.generation());
     }
 
     @Test
@@ -1044,16 +1235,14 @@ public class MobileAdapterEngineTest {
     }
 
     @Test
-    public void serialEndpointRemainsIdleHighAndPersistsOnlyDeterministicProtocolState() {
+    public void serialEndpointSchedulesRequestAndResponseBytesAndPersistsPartialRequests() {
         DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
         MobileAdapterSerialEndpoint endpoint = new MobileAdapterSerialEndpoint(
                 ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
         for (byte value : BEGIN) {
-            endpoint.setSb(value & 0xff);
-            endpoint.startSending();
             assertTrue(endpoint.isSerialInputHigh());
             assertEquals(-1, endpoint.recvBit());
-            for (int bit = 0; bit < 8; bit++) assertEquals(1, endpoint.sendBit());
+            assertEquals(0xd2, exchange(endpoint, value & 0xff));
         }
         assertEquals(MobileAdapterEngine.Outcome.SESSION_STARTED,
                 endpoint.snapshot().outcome());
@@ -1062,25 +1251,46 @@ public class MobileAdapterEngineTest {
         assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x90},
                 endpoint.snapshot().acknowledgement());
 
+        assertEquals(0x88, exchange(endpoint, 0x80));
+        assertEquals(0x90, exchange(endpoint, 0x00));
+        assertEquals(0xd2, exchange(endpoint, 0x00));
+        assertEquals(0xd2, exchange(endpoint, 0x4b));
+        byte[] response = endpoint.snapshot().responsePacket();
+        for (byte value : response) {
+            assertEquals(value & 0xff, exchange(endpoint, 0x4b));
+        }
+        assertEquals(0x88, exchange(endpoint, 0x80));
+        assertEquals(0x00, exchange(endpoint, 0x10));
+
         endpoint.setSb(0x99);
         endpoint.startSending();
-        for (int bit = 0; bit < 3; bit++) assertEquals(1, endpoint.sendBit());
-        MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState captured =
-                (MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState)
+        assertEquals(1, endpoint.sendBit());
+        assertEquals(1, endpoint.sendBit());
+        assertEquals(0, endpoint.sendBit());
+        MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState captured =
+                (MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState)
                         endpoint.captureState();
         assertEquals(0x99, captured.sb());
         assertEquals(3, captured.sendBitIndex());
-        assertEquals(0, captured.engineState().packetCount());
+        assertTrue(captured.byteTransferActive());
+        assertEquals(1, captured.wirePhaseId());
+        MobileAdapterEngine.MobileAdapterEngineState capturedEngine =
+                (MobileAdapterEngine.MobileAdapterEngineState) captured.engineState();
+        assertEquals(0, capturedEngine.packetCount());
 
         MobileAdapterSerialEndpoint restored = new MobileAdapterSerialEndpoint(
                 ClockSpec.LEGACY, 0, new byte[256]);
         restored.restoreState(captured);
         assertResultsEqual(endpoint.snapshot(), restored.snapshot());
-        for (int bit = 3; bit < 8; bit++) assertEquals(1, restored.sendBit());
+        assertEquals(1, restored.sendBit());
+        assertEquals(0, restored.sendBit());
+        assertEquals(0, restored.sendBit());
+        assertEquals(1, restored.sendBit());
+        assertEquals(0, restored.sendBit());
         assertEquals(1, restored.snapshot().retainedBytes());
         MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState invalid =
                 new MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState(
-                        captured.engineState(), captured.sb(), 8);
+                        capturedEngine, captured.sb(), 8);
         MobileAdapterEngine.EngineResult beforeInvalidRestore = restored.snapshot();
         assertThrows(IllegalArgumentException.class, () -> restored.restoreState(invalid));
         assertResultsEqual(beforeInvalidRestore, restored.snapshot());
@@ -1094,7 +1304,7 @@ public class MobileAdapterEngineTest {
         assertEquals(0, endpoint.snapshot().retainedBytes());
         assertEquals(0, endpoint.snapshot().pendingPacketSlots());
         assertEquals(0, backend.occupiedRequestSlots());
-        for (int bit = 0; bit < 8; bit++) assertEquals(1, endpoint.sendBit());
+        assertEquals(0xd2, exchange(endpoint, 0x99));
         SerialEndpoint.NULL_ENDPOINT.disconnect();
     }
 
@@ -1106,20 +1316,26 @@ public class MobileAdapterEngineTest {
         endpoint.setSb(0x99);
         endpoint.startSending();
         assertEquals(0, endpoint.snapshot().retainedBytes());
-        for (int bit = 0; bit < 3; bit++) assertEquals(1, endpoint.sendBit());
+        for (int bit = 0; bit < 3; bit++) {
+            assertEquals((0xd2 >>> (7 - bit)) & 1, endpoint.sendBit());
+        }
         assertEquals(0, endpoint.snapshot().retainedBytes());
 
         // Rewriting SC with the transfer bit set restarts the byte; the abandoned three clocks
         // must not consume an input byte or contribute to packet magic.
         endpoint.startSending();
-        for (int bit = 0; bit < 8; bit++) assertEquals(1, endpoint.sendBit());
+        for (int bit = 0; bit < 8; bit++) {
+            assertEquals((0xd2 >>> (7 - bit)) & 1, endpoint.sendBit());
+        }
         assertEquals(1, endpoint.snapshot().retainedBytes());
 
         endpoint.setSb(0x66);
         endpoint.startSending();
-        for (int bit = 0; bit < 7; bit++) assertEquals(1, endpoint.sendBit());
+        for (int bit = 0; bit < 7; bit++) {
+            assertEquals((0xd2 >>> (7 - bit)) & 1, endpoint.sendBit());
+        }
         assertEquals(1, endpoint.snapshot().retainedBytes());
-        assertEquals(1, endpoint.sendBit());
+        assertEquals(0, endpoint.sendBit());
         assertEquals(2, endpoint.snapshot().retainedBytes());
         assertEquals(MobileAdapterEngine.Outcome.NEED_MORE, endpoint.snapshot().outcome());
     }
@@ -1128,6 +1344,8 @@ public class MobileAdapterEngineTest {
     public void persistedEnumCodesAreExplicitUniqueAndRoundTrip() {
         assertEquals(1, MobileAdapterEngine.Phase.SLEEP.id());
         assertEquals(2, MobileAdapterEngine.Phase.SESSION.id());
+        assertEquals(3, MobileAdapterEngine.Phase.TELEPHONE.id());
+        assertEquals(4, MobileAdapterEngine.Phase.INTERNET.id());
 
         assertEquals(1, MobileAdapterEngine.Outcome.NEED_MORE.id());
         assertEquals(2, MobileAdapterEngine.Outcome.SESSION_STARTED.id());
@@ -1152,6 +1370,12 @@ public class MobileAdapterEngineTest {
         assertEquals(21, MobileAdapterEngine.Outcome.BACKEND_ERROR.id());
         assertEquals(22, MobileAdapterEngine.Outcome.BACKEND_REMOTE_CLOSED.id());
         assertEquals(23, MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED.id());
+        assertEquals(24, MobileAdapterEngine.Outcome.TELEPHONE_DIALLED.id());
+        assertEquals(25, MobileAdapterEngine.Outcome.TELEPHONE_HUNG_UP.id());
+        assertEquals(26, MobileAdapterEngine.Outcome.TELEPHONE_STATUS.id());
+        assertEquals(27, MobileAdapterEngine.Outcome.ISP_LOGGED_IN.id());
+        assertEquals(28, MobileAdapterEngine.Outcome.ISP_LOGGED_OUT.id());
+        assertEquals(29, MobileAdapterEngine.Outcome.SERVICE_ERROR.id());
 
         assertEquals(0, MobileAdapterEngine.ErrorCode.NONE.id());
         assertEquals(1, MobileAdapterEngine.ErrorCode.INVALID_MAGIC.id());
@@ -1213,11 +1437,34 @@ public class MobileAdapterEngineTest {
         return result;
     }
 
+    private static byte[] ispDialData() {
+        return new byte[]{0, '#', '9', '6', '7', '7'};
+    }
+
+    private static byte[] ispLoginData() {
+        return new byte[]{
+                3, 'u', 's', 'r',
+                3, 'p', 'w', 'd',
+                1, 1, 1, 1,
+                8, 8, 8, 8
+        };
+    }
+
     private static MobileAdapterEngine.EngineResult feed(
             MobileAdapterEngine engine, byte[] bytes) {
         MobileAdapterEngine.EngineResult result = engine.snapshot();
         for (byte value : bytes) result = engine.acceptByte(value & 0xff);
         return result;
+    }
+
+    private static int exchange(MobileAdapterSerialEndpoint endpoint, int outgoing) {
+        endpoint.setSb(outgoing);
+        endpoint.startSending();
+        int incoming = 0;
+        for (int bit = 0; bit < 8; bit++) {
+            incoming = incoming << 1 | endpoint.sendBit();
+        }
+        return incoming;
     }
 
     private static byte[] packet(int command, byte[] data) {
@@ -1264,10 +1511,28 @@ public class MobileAdapterEngineTest {
     private static void assertBackendError(MobileAdapterEngine.EngineResult result,
                                            int command, int error) {
         assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, result.outcome());
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) (command ^ 0x80)},
+                result.acknowledgement());
         assertEquals(0x6e, result.responsePacket()[2] & 0xff);
         assertArrayEquals(new byte[]{(byte) command, (byte) error},
                 Arrays.copyOfRange(result.responsePacket(), 6, 8));
         assertPacketChecksum(result.responsePacket());
+    }
+
+    private static void assertServiceError(MobileAdapterEngine.EngineResult result,
+                                           int command, int error) {
+        assertEquals(MobileAdapterEngine.Outcome.SERVICE_ERROR, result.outcome());
+        assertEquals(MobileAdapterEngine.ErrorCode.NONE, result.error());
+        assertArrayEquals(new byte[]{(byte) 0x88, (byte) (command ^ 0x80)},
+                result.acknowledgement());
+        assertEquals(0x6e, result.responsePacket()[2] & 0xff);
+        assertArrayEquals(new byte[]{(byte) command, (byte) error}, responseData(result));
+        assertPacketChecksum(result.responsePacket());
+    }
+
+    private static byte[] responseData(MobileAdapterEngine.EngineResult result) {
+        byte[] response = result.responsePacket();
+        return Arrays.copyOfRange(response, 6, response.length - 2);
     }
 
     private static MobileAdapterEngine.MobileAdapterEngineState state(
@@ -1337,6 +1602,25 @@ public class MobileAdapterEngineTest {
                 source.acknowledgement(),
                 idlePhaseUnits,
                 serialByteObserved,
+                source.pendingPacketSlots());
+    }
+
+    private static MobileAdapterEngine.MobileAdapterEngineState copyPhaseState(
+            MobileAdapterEngine.MobileAdapterEngineState source,
+            int phaseId) {
+        return new MobileAdapterEngine.MobileAdapterEngineState(
+                phaseId,
+                source.outcomeId(),
+                source.errorId(),
+                source.deviceId(),
+                source.packetBuffer(),
+                source.packetCount(),
+                source.expectedPacketBytes(),
+                source.configuration(),
+                source.responsePacket(),
+                source.acknowledgement(),
+                source.idlePhaseUnits(),
+                source.serialByteObserved(),
                 source.pendingPacketSlots());
     }
 

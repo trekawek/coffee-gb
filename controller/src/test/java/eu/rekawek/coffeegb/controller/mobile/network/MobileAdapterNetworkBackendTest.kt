@@ -338,17 +338,16 @@ class MobileAdapterNetworkBackendTest {
   }
 
   @Test
-  fun `oversized TCP response closes its stream slot with a typed transfer limit`() {
+  fun `large TCP response is delivered across bounded transfers`() {
     val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     ServerSocket(0, 1, loopback).use { server ->
       val serverDone = CountDownLatch(1)
-      thread(isDaemon = true, name = "mobile-adapter-test-oversized-tcp") {
+      val response = ByteArray(MobileAdapterNetworkBackend.MAX_TRANSFER_BODY_BYTES + 1) { it.toByte() }
+      thread(isDaemon = true, name = "mobile-adapter-test-chunked-tcp") {
         try {
           server.accept().use { socket ->
             socket.getInputStream().readNBytes(1)
-            socket
-                .getOutputStream()
-                .write(ByteArray(MobileAdapterNetworkBackend.MAX_TRANSFER_BODY_BYTES + 1))
+            socket.getOutputStream().write(response)
             socket.getOutputStream().flush()
           }
         } finally {
@@ -365,18 +364,20 @@ class MobileAdapterNetworkBackendTest {
             BackendStatus.SUCCESS,
             submit(backend, 1, TCP_OPEN, openPayload(127, 0, 0, 1, 80)).status(),
         )
-        val transfer = submit(backend, 2, TRANSFER, byteArrayOf(0, 1))
-        assertEquals(BackendStatus.REMOTE_CLOSED, transfer.status())
-        assertTrue(transfer.payload().isEmpty())
-        assertTrue(
-            drainStatuses(backend).any {
-              it.error == MobileAdapterNetworkError.TRANSFER_LIMIT &&
-                  it.slot == 0 &&
-                  it.activeConnections == 0
-            })
+        val received = ByteArrayOutputStream()
+        var requestId = 2L
+        while (received.size() < response.size) {
+          val body = if (requestId == 2L) byteArrayOf(1) else ByteArray(0)
+          val transfer = submit(backend, requestId++, TRANSFER, byteArrayOf(0) + body)
+          assertEquals(BackendStatus.SUCCESS, transfer.status())
+          assertEquals(0, transfer.payload().first().toInt())
+          assertTrue(transfer.payload().size <= MobileAdapterNetworkBackend.MAX_COMMAND_PAYLOAD_BYTES)
+          received.write(transfer.payload(), 1, transfer.payload().size - 1)
+        }
+        assertContentEquals(response, received.toByteArray())
         assertEquals(
-            BackendStatus.INVALID_CONNECTION,
-            submit(backend, 3, TRANSFER, byteArrayOf(0)).status(),
+            BackendStatus.REMOTE_CLOSED,
+            submit(backend, requestId, TRANSFER, byteArrayOf(0)).status(),
         )
         assertTrue(serverDone.await(2, TimeUnit.SECONDS))
       } finally {
@@ -571,7 +572,7 @@ class MobileAdapterNetworkBackendTest {
   }
 
   @Test
-  fun `silent TCP and UDP reads return typed timeouts and release their slots`() {
+  fun `silent TCP read returns empty success and preserves its slot`() {
     val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     ServerSocket(0, 1, loopback).use { server ->
       val requestReceived = CountDownLatch(1)
@@ -593,23 +594,22 @@ class MobileAdapterNetworkBackendTest {
             BackendStatus.SUCCESS,
             submit(backend, 1, TCP_OPEN, openPayload(127, 0, 0, 1, 80)).status(),
         )
-        val timedOut = submit(backend, 2, TRANSFER, byteArrayOf(0) + "ping".toByteArray())
+        val pending = submit(backend, 2, TRANSFER, byteArrayOf(0) + "ping".toByteArray())
         assertTrue(requestReceived.await(2, TimeUnit.SECONDS))
-        assertEquals(BackendStatus.REMOTE_CLOSED, timedOut.status())
-        assertTrue(
-            drainStatuses(backend).any {
-              it.error == MobileAdapterNetworkError.TIMEOUT &&
-                  it.slot == 0 &&
-                  it.activeConnections == 0
-            })
-        assertFalse(backend.hasExternalWork())
+        assertEquals(BackendStatus.SUCCESS, pending.status())
+        assertContentEquals(byteArrayOf(0), pending.payload())
+        assertEquals(BackendStatus.SUCCESS, submit(backend, 3, TCP_CLOSE, byteArrayOf(0)).status())
       } finally {
         releasePeer.countDown()
         backend.close()
         assertTrue(backend.awaitTermination(2_000))
       }
     }
+  }
 
+  @Test
+  fun `silent UDP read returns typed timeout and releases its slot`() {
+    val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     DatagramSocket(0, loopback).use { server ->
       val requestReceived = CountDownLatch(1)
       val releasePeer = CountDownLatch(1)
@@ -1090,6 +1090,7 @@ class MobileAdapterNetworkBackendTest {
               if (status != null) {
                 observed += status
               } else if (backend.isTerminated()) {
+                while (true) observed += backend.pollStatus() ?: break
                 break
               } else {
                 Thread.yield()

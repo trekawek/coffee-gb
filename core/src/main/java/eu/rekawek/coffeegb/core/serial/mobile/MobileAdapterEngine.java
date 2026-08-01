@@ -11,11 +11,10 @@ import java.util.Objects;
 /**
  * Deterministic, platform-neutral Mobile Adapter GB packet engine.
  *
- * <p>The engine implements the clean-room packet subset frozen for issues #351 and #352. It
+ * <p>The engine implements the clean-room packet subset frozen for issues #351 through #353. It
  * accepts one complete serial byte at a time, retains at most one 262-byte packet, and exposes
- * response packet and acknowledgement bytes as separate immutable channels. It deliberately does
- * not prescribe an on-wire ordering for those channels because the clean-room evidence does not
- * define one.
+ * response packet and acknowledgement bytes as separate immutable channels. The engine does not
+ * prescribe their on-wire ordering; {@link MobileAdapterSerialEndpoint} owns that byte schedule.
  */
 public final class MobileAdapterEngine implements StatefulComponent<MobileAdapterEngine> {
 
@@ -35,6 +34,12 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
     /** RFC-compatible textual ceiling used before a name reaches the controller backend. */
     public static final int MAX_DNS_NAME_BYTES = 253;
 
+    /** One adapter-model byte followed by at most 32 dial-string bytes. */
+    public static final int MAX_DIAL_DATA_BYTES = 33;
+
+    /** The documented bound for each ISP login credential field. */
+    public static final int MAX_ISP_CREDENTIAL_BYTES = 32;
+
     public static final int MAX_LOGICAL_CONNECTIONS = 2;
 
     public static final int IDLE_TIMEOUT_MILLIS = 3_000;
@@ -47,13 +52,23 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     private static final int COMMAND_END_SESSION = 0x11;
 
+    private static final int COMMAND_DIAL = 0x12;
+
+    private static final int COMMAND_HANG_UP = 0x13;
+
     private static final int COMMAND_TRANSFER = 0x15;
 
     private static final int COMMAND_RESET = 0x16;
 
+    private static final int COMMAND_TELEPHONE_STATUS = 0x17;
+
     private static final int COMMAND_CONFIG_READ = 0x19;
 
     private static final int COMMAND_CONFIG_WRITE = 0x1a;
+
+    private static final int COMMAND_ISP_LOGIN = 0x21;
+
+    private static final int COMMAND_ISP_LOGOUT = 0x22;
 
     private static final int COMMAND_TCP_OPEN = 0x23;
 
@@ -83,6 +98,14 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     private static final byte[] BEGIN_SESSION_DATA =
             "NINTENDO".getBytes(StandardCharsets.US_ASCII);
+
+    /** Blue-adapter prefix followed by the Mobile System GB ISP access code used by Crystal. */
+    private static final byte[] ISP_DIAL_DATA =
+            new byte[]{0, '#', '9', '6', '7', '7'};
+
+    private static final byte[] TELEPHONE_DISCONNECTED = new byte[]{0, 0x4d, 0};
+
+    private static final byte[] TELEPHONE_CONNECTED = new byte[]{4, 0x4d, 0};
 
     private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -191,6 +214,25 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
     }
 
     /**
+     * Records a completed link-layer byte that is not part of the request packet parser.
+     *
+     * <p>Acknowledgement, turnaround, polling, response, and response-acknowledgement bytes all
+     * keep a real Mobile Adapter transaction alive. The wire endpoint calls this method for those
+     * bytes so the three-second serial timeout measures silence rather than parser input alone.
+     * No parser or command output is changed.
+     */
+    void observeSerialActivity() {
+        if (outcome == Outcome.CANCELLED ||
+                outcome == Outcome.IDLE_TIMEOUT_RESET ||
+                outcome == Outcome.IDLE_BOUNDARY_WAIT) {
+            outcome = Outcome.NEED_MORE;
+            error = ErrorCode.NONE;
+        }
+        serialByteObserved = true;
+        idlePhaseUnits = 0;
+    }
+
+    /**
      * Advances the engine by a nonnegative number of emulated master ticks.
      *
      * <p>A negative value is reported as a time regression and changes no state. At the exact
@@ -215,16 +257,21 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         advancePositiveTicks(1);
     }
 
-    private void advancePositiveTicks(long ticks) {
+    /** No-allocation tick path that tells the owning wire endpoint when timeout reset occurred. */
+    boolean tickAndReportTimeoutReset() {
+        return advancePositiveTicks(1);
+    }
+
+    private boolean advancePositiveTicks(long ticks) {
         if (ticks == 0 || !serialByteObserved) {
-            return;
+            return false;
         }
 
         long remainingToBoundary = idleBoundaryPhaseUnits - idlePhaseUnits;
         long ticksThroughBoundary = remainingToBoundary / phaseUnitsPerTick;
         if (ticks > ticksThroughBoundary) {
             timeoutReset();
-            return;
+            return true;
         }
 
         idlePhaseUnits = Math.addExact(
@@ -233,6 +280,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             outcome = Outcome.IDLE_BOUNDARY_WAIT;
             error = ErrorCode.NONE;
         }
+        return false;
     }
 
     /** Reserves one of the two deterministic packet slots without allocating. */
@@ -336,6 +384,23 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         cancelBackendOwnership();
         serialByteObserved = false;
         idlePhaseUnits = 0;
+        return snapshot();
+    }
+
+    /**
+     * Aborts a response whose required link-layer poll gate was invalid.
+     *
+     * <p>The byte-pipelined endpoint calls this only after the packet engine has completed a
+     * request but before its response may be exposed. Existing synchronous command state remains
+     * committed for compatibility with direct engine clients. Any host ownership is revoked and
+     * all operation-local parser/output state is discarded.
+     */
+    EngineResult abortWireTransaction() {
+        if (hasExternalIo()) cancelBackendOwnership();
+        clearParser();
+        clearOutput();
+        outcome = Outcome.NEED_MORE;
+        error = ErrorCode.NONE;
         return snapshot();
     }
 
@@ -448,10 +513,15 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         switch (command) {
             case COMMAND_BEGIN_SESSION -> beginSession(data);
             case COMMAND_END_SESSION -> endSession(data);
+            case COMMAND_DIAL -> dial(data);
+            case COMMAND_HANG_UP -> hangUp(data);
             case COMMAND_TRANSFER -> submitBackendCommand(command, validateTransfer(data));
             case COMMAND_RESET -> resetSession(data);
+            case COMMAND_TELEPHONE_STATUS -> telephoneStatus(data);
             case COMMAND_CONFIG_READ -> readConfiguration(data);
             case COMMAND_CONFIG_WRITE -> writeConfiguration(data);
+            case COMMAND_ISP_LOGIN -> ispLogin(data);
+            case COMMAND_ISP_LOGOUT -> ispLogout(data);
             case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN ->
                     submitBackendCommand(command, validateOpen(data));
             case COMMAND_TCP_CLOSE ->
@@ -468,6 +538,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             unsupported();
             return;
         }
+        if (hasExternalIo()) cancelBackendOwnership();
         phase = Phase.SESSION;
         outcome = Outcome.SESSION_STARTED;
         responsePacket = packet(COMMAND_BEGIN_SESSION | 0x80, data);
@@ -487,6 +558,51 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         acknowledgement = acknowledgement(COMMAND_END_SESSION ^ 0x80);
     }
 
+    private void dial(byte[] data) {
+        if (phase != Phase.SESSION) {
+            serviceCommandError(COMMAND_DIAL, 0x01);
+            return;
+        }
+        if (data.length < 1 || data.length > MAX_DIAL_DATA_BYTES || data[0] != 0) {
+            serviceCommandError(COMMAND_DIAL, 0x02);
+            return;
+        }
+        for (int i = 1; i < data.length; i++) {
+            int value = data[i] & 0xff;
+            if ((value < '0' || value > '9') && value != '#' && value != '*') {
+                serviceCommandError(COMMAND_DIAL, 0x02);
+                return;
+            }
+        }
+        if (!Arrays.equals(data, ISP_DIAL_DATA)) {
+            serviceCommandError(COMMAND_DIAL, 0x03);
+            return;
+        }
+
+        if (hasExternalIo()) cancelBackendOwnership();
+        phase = Phase.TELEPHONE;
+        outcome = Outcome.TELEPHONE_DIALLED;
+        responsePacket = packet(COMMAND_DIAL | 0x80, EMPTY_BYTES);
+        acknowledgement = acknowledgement(COMMAND_DIAL ^ 0x80);
+    }
+
+    private void hangUp(byte[] data) {
+        if (phase != Phase.TELEPHONE && phase != Phase.INTERNET) {
+            serviceCommandError(COMMAND_HANG_UP, 0x01);
+            return;
+        }
+        if (data.length != 0) {
+            serviceCommandError(COMMAND_HANG_UP, 0x02);
+            return;
+        }
+
+        if (hasExternalIo()) cancelBackendOwnership();
+        phase = Phase.SESSION;
+        outcome = Outcome.TELEPHONE_HUNG_UP;
+        responsePacket = packet(COMMAND_HANG_UP | 0x80, EMPTY_BYTES);
+        acknowledgement = acknowledgement(COMMAND_HANG_UP ^ 0x80);
+    }
+
     private void resetSession(byte[] data) {
         if (data.length != 0) {
             unsupported();
@@ -498,6 +614,71 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         outcome = Outcome.SESSION_RESET;
         responsePacket = packet(COMMAND_RESET | 0x80, EMPTY_BYTES);
         acknowledgement = acknowledgement(COMMAND_RESET ^ 0x80);
+    }
+
+    private void telephoneStatus(byte[] data) {
+        if (!isSessionActive()) {
+            serviceCommandError(COMMAND_TELEPHONE_STATUS, 0x01);
+            return;
+        }
+        if (data.length != 0) {
+            serviceCommandError(COMMAND_TELEPHONE_STATUS, 0x02);
+            return;
+        }
+
+        outcome = Outcome.TELEPHONE_STATUS;
+        byte[] status = phase == Phase.SESSION ?
+                TELEPHONE_DISCONNECTED : TELEPHONE_CONNECTED;
+        responsePacket = packet(COMMAND_TELEPHONE_STATUS | 0x80, status);
+        acknowledgement = acknowledgement(COMMAND_TELEPHONE_STATUS ^ 0x80);
+    }
+
+    private void ispLogin(byte[] data) {
+        if (phase != Phase.TELEPHONE) {
+            serviceCommandError(COMMAND_ISP_LOGIN, 0x01);
+            return;
+        }
+        if (ispDnsOffset(data) < 0) {
+            serviceCommandError(COMMAND_ISP_LOGIN, 0x02);
+            return;
+        }
+
+        phase = Phase.INTERNET;
+        outcome = Outcome.ISP_LOGGED_IN;
+        byte[] assignedAddresses = new byte[12];
+        assignedAddresses[0] = 127;
+        assignedAddresses[3] = 1;
+        responsePacket = packet(COMMAND_ISP_LOGIN | 0x80, assignedAddresses);
+        acknowledgement = acknowledgement(COMMAND_ISP_LOGIN ^ 0x80);
+    }
+
+    private static int ispDnsOffset(byte[] data) {
+        if (data.length < 10) return -1;
+        int userLength = data[0] & 0xff;
+        if (userLength > MAX_ISP_CREDENTIAL_BYTES) return -1;
+        int passwordLengthOffset = 1 + userLength;
+        if (passwordLengthOffset >= data.length) return -1;
+        int passwordLength = data[passwordLengthOffset] & 0xff;
+        if (passwordLength > MAX_ISP_CREDENTIAL_BYTES) return -1;
+        int dnsOffset = passwordLengthOffset + 1 + passwordLength;
+        return dnsOffset + 8 == data.length ? dnsOffset : -1;
+    }
+
+    private void ispLogout(byte[] data) {
+        if (phase != Phase.INTERNET) {
+            serviceCommandError(COMMAND_ISP_LOGOUT, 0x01);
+            return;
+        }
+        if (data.length != 0) {
+            serviceCommandError(COMMAND_ISP_LOGOUT, 0x02);
+            return;
+        }
+
+        if (hasExternalIo()) cancelBackendOwnership();
+        phase = Phase.TELEPHONE;
+        outcome = Outcome.ISP_LOGGED_OUT;
+        responsePacket = packet(COMMAND_ISP_LOGOUT | 0x80, EMPTY_BYTES);
+        acknowledgement = acknowledgement(COMMAND_ISP_LOGOUT ^ 0x80);
     }
 
     private void readConfiguration(byte[] data) {
@@ -584,7 +765,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                     ErrorCode.BACKEND_RESPONSE_INVALID);
             return;
         }
-        if (phase != Phase.SESSION) {
+        if (!canUseBackend()) {
             backendCommandError(command, invalidUseErrorCode(command),
                     ErrorCode.BACKEND_UNAVAILABLE);
             return;
@@ -726,6 +907,16 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         error = engineError;
         responsePacket = packet(COMMAND_ERROR_STATUS,
                 new byte[]{(byte) command, (byte) commandError});
+        acknowledgement = acknowledgement(command ^ 0x80);
+    }
+
+    private void serviceCommandError(int command, int commandError) {
+        clearOutput();
+        outcome = Outcome.SERVICE_ERROR;
+        error = ErrorCode.NONE;
+        responsePacket = packet(COMMAND_ERROR_STATUS,
+                new byte[]{(byte) command, (byte) commandError});
+        acknowledgement = acknowledgement(command ^ 0x80);
     }
 
     private static int protocolErrorCode(int command,
@@ -791,6 +982,16 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
     private boolean isOpenConnection(int connectionId) {
         return connectionId >= 0 && connectionId < connectionKinds.length &&
                 connectionKinds[connectionId] != CONNECTION_EMPTY;
+    }
+
+    private boolean isSessionActive() {
+        return phase != Phase.SLEEP;
+    }
+
+    private boolean canUseBackend() {
+        // Phase #352 exposed the direct backend immediately after BEGIN_SESSION. Preserve that
+        // route while also admitting the real Crystal path after ISP_LOGIN.
+        return phase == Phase.SESSION || phase == Phase.INTERNET;
     }
 
     private void clearLogicalConnection(int connectionId) {
@@ -1010,9 +1211,18 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         int expectedAck = switch (restoredOutcome) {
             case SESSION_STARTED -> COMMAND_BEGIN_SESSION ^ 0x80;
             case SESSION_ENDED -> COMMAND_END_SESSION ^ 0x80;
+            case TELEPHONE_DIALLED -> COMMAND_DIAL ^ 0x80;
+            case TELEPHONE_HUNG_UP -> COMMAND_HANG_UP ^ 0x80;
             case SESSION_RESET -> COMMAND_RESET ^ 0x80;
+            case TELEPHONE_STATUS -> COMMAND_TELEPHONE_STATUS ^ 0x80;
             case CONFIG_READ, CONFIG_READ_BOUNDARY -> COMMAND_CONFIG_READ ^ 0x80;
             case CONFIG_WRITE -> COMMAND_CONFIG_WRITE ^ 0x80;
+            case ISP_LOGGED_IN -> COMMAND_ISP_LOGIN ^ 0x80;
+            case ISP_LOGGED_OUT -> COMMAND_ISP_LOGOUT ^ 0x80;
+            case SERVICE_ERROR -> restoredResponse.length == 10 ?
+                    (restoredResponse[6] & 0xff) ^ 0x80 : -1;
+            case BACKEND_ERROR -> restoredResponse.length == 10 ?
+                    (restoredResponse[6] & 0xff) ^ 0x80 : -1;
             case CHECKSUM_ERROR -> ACK_CHECKSUM_ERROR;
             case UNSUPPORTED_COMMAND -> ACK_UNSUPPORTED;
             default -> -1;
@@ -1022,7 +1232,17 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                         restoredOutcome == Outcome.PENDING_LIMIT) &&
                 restoredResponse.length == 0 && restoredAck.length == 2 &&
                 (restoredAck[1] & 0xff) == ACK_INTERNAL_ERROR;
-        if (!internalErrorAck &&
+        boolean releasedAcklessBackendError =
+                restoredOutcome == Outcome.BACKEND_ERROR &&
+                        restoredResponse.length != 0 && restoredAck.length == 0;
+        if (restoredOutcome == Outcome.BACKEND_ERROR &&
+                (restoredError == ErrorCode.BACKEND_BUSY && !internalErrorAck ||
+                        restoredError == ErrorCode.BACKEND_RESPONSE_INVALID &&
+                                internalErrorAck)) {
+            throw new IllegalArgumentException(
+                    "Mobile Adapter backend error shape is inconsistent");
+        }
+        if (!internalErrorAck && !releasedAcklessBackendError &&
                 ((expectedAck == -1) != (restoredAck.length == 0) ||
                         expectedAck != -1 && (restoredAck[1] & 0xff) != expectedAck)) {
             throw new IllegalArgumentException("Mobile Adapter outcome/acknowledgement is inconsistent");
@@ -1030,7 +1250,9 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
         boolean expectsResponse = switch (restoredOutcome) {
             case SESSION_STARTED, SESSION_ENDED, SESSION_RESET,
+                    TELEPHONE_DIALLED, TELEPHONE_HUNG_UP, TELEPHONE_STATUS,
                     CONFIG_READ, CONFIG_READ_BOUNDARY, CONFIG_WRITE,
+                    ISP_LOGGED_IN, ISP_LOGGED_OUT, SERVICE_ERROR,
                     BACKEND_RESPONSE, BACKEND_ERROR, BACKEND_REMOTE_CLOSED -> true;
             default -> false;
         };
@@ -1039,6 +1261,8 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
             throw new IllegalArgumentException("Mobile Adapter outcome/response is inconsistent");
         }
         if (expectsResponse && expectedAck != -1 &&
+                restoredOutcome != Outcome.SERVICE_ERROR &&
+                restoredOutcome != Outcome.BACKEND_ERROR &&
                 (restoredResponse[2] & 0xff) != expectedAck) {
             throw new IllegalArgumentException("Mobile Adapter response command is inconsistent");
         }
@@ -1051,11 +1275,14 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                         throw new IllegalArgumentException("Mobile Adapter begin response is invalid");
                     }
                 }
-                case SESSION_ENDED, SESSION_RESET -> {
+                case SESSION_ENDED, SESSION_RESET, TELEPHONE_DIALLED,
+                        TELEPHONE_HUNG_UP, ISP_LOGGED_OUT -> {
                     if (responseData.length != 0) {
                         throw new IllegalArgumentException("Mobile Adapter empty response has data");
                     }
                 }
+                case TELEPHONE_STATUS ->
+                        validateTelephoneStatus(restoredPhase, responseData);
                 case CONFIG_READ, CONFIG_READ_BOUNDARY ->
                         validateConfigurationResponse(restoredOutcome, responseData);
                 case CONFIG_WRITE -> {
@@ -1064,6 +1291,22 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                                 "Mobile Adapter configuration-write response is invalid");
                     }
                 }
+                case ISP_LOGGED_IN -> {
+                    if (responseData.length != 12 || (responseData[0] & 0xff) != 127 ||
+                            responseData[1] != 0 || responseData[2] != 0 ||
+                            responseData[3] != 1 ||
+                            !allZero(responseData, 4, responseData.length)) {
+                        throw new IllegalArgumentException(
+                                "Mobile Adapter ISP-login response is invalid");
+                    }
+                }
+                case SERVICE_ERROR -> {
+                    if ((restoredResponse[2] & 0xff) != COMMAND_ERROR_STATUS) {
+                        throw new IllegalArgumentException(
+                                "Mobile Adapter service error response command is invalid");
+                    }
+                    validateCapturedServiceError(restoredPhase, responseData);
+                }
                 case BACKEND_RESPONSE -> validateCapturedBackendResponse(restoredResponse[2] & 0xff,
                         responseData);
                 case BACKEND_ERROR -> {
@@ -1071,7 +1314,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                         throw new IllegalArgumentException(
                                 "Mobile Adapter backend error response command is invalid");
                     }
-                    validateCapturedBackendError(responseData);
+                    validateCapturedBackendError(restoredError, responseData);
                 }
                 case BACKEND_REMOTE_CLOSED -> {
                     if ((restoredResponse[2] & 0xff) != (COMMAND_REMOTE_CLOSED | 0x80) ||
@@ -1088,6 +1331,28 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 restoredOutcome == Outcome.SESSION_RESET) && restoredPhase != Phase.SESSION) {
             throw new IllegalArgumentException("Mobile Adapter session result has the wrong phase");
         }
+        if (restoredOutcome == Outcome.TELEPHONE_DIALLED &&
+                restoredPhase != Phase.TELEPHONE) {
+            throw new IllegalArgumentException("Mobile Adapter dial result has the wrong phase");
+        }
+        if (restoredOutcome == Outcome.TELEPHONE_HUNG_UP &&
+                restoredPhase != Phase.SESSION) {
+            throw new IllegalArgumentException("Mobile Adapter hang-up result has the wrong phase");
+        }
+        if (restoredOutcome == Outcome.ISP_LOGGED_IN && restoredPhase != Phase.INTERNET) {
+            throw new IllegalArgumentException("Mobile Adapter ISP-login result has the wrong phase");
+        }
+        if (restoredOutcome == Outcome.ISP_LOGGED_OUT &&
+                restoredPhase != Phase.TELEPHONE) {
+            throw new IllegalArgumentException("Mobile Adapter ISP-logout result has the wrong phase");
+        }
+        if ((restoredOutcome == Outcome.BACKEND_RESPONSE ||
+                restoredOutcome == Outcome.BACKEND_REMOTE_CLOSED ||
+                restoredOutcome == Outcome.EXTERNAL_IO_DISCONNECTED) &&
+                restoredPhase != Phase.SESSION && restoredPhase != Phase.INTERNET) {
+            throw new IllegalArgumentException(
+                    "Mobile Adapter backend result has the wrong phase");
+        }
         if ((restoredOutcome == Outcome.SESSION_ENDED ||
                 restoredOutcome == Outcome.IDLE_TIMEOUT_RESET ||
                 restoredOutcome == Outcome.CANCELLED) && restoredPhase != Phase.SLEEP) {
@@ -1101,7 +1366,7 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
                 restoredOutcome == Outcome.CANCELLED) && restoredSerialByteObserved) {
             throw new IllegalArgumentException("Mobile Adapter cleanup retained idle ownership");
         }
-        if (restoredPhase == Phase.SESSION && !restoredSerialByteObserved) {
+        if (restoredPhase != Phase.SLEEP && !restoredSerialByteObserved) {
             throw new IllegalArgumentException("Mobile Adapter session has no serial input owner");
         }
         boolean commandDerivedOutcome = switch (restoredOutcome) {
@@ -1118,14 +1383,65 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         if (restoredOutcome != Outcome.NEED_MORE &&
                 restoredOutcome != Outcome.IDLE_BOUNDARY_WAIT &&
                 restoredOutcome != Outcome.PENDING_LIMIT &&
-                !(externalIoAtCapture &&
-                        restoredOutcome == Outcome.EXTERNAL_IO_DISCONNECTED) &&
+                restoredOutcome != Outcome.EXTERNAL_IO_DISCONNECTED &&
                 restoredPacketCount != 0) {
             throw new IllegalArgumentException("Completed Mobile Adapter result retained parser bytes");
         }
-        if (externalIoAtCapture && restoredPhase != Phase.SESSION) {
+        if (externalIoAtCapture && restoredPhase != Phase.SESSION &&
+                restoredPhase != Phase.INTERNET) {
             throw new IllegalArgumentException(
                     "Captured Mobile Adapter external I/O must belong to a session");
+        }
+    }
+
+    private static void validateTelephoneStatus(Phase phase, byte[] responseData) {
+        byte[] expected = phase == Phase.SESSION ?
+                TELEPHONE_DISCONNECTED : TELEPHONE_CONNECTED;
+        if (phase == Phase.SLEEP || !Arrays.equals(responseData, expected)) {
+            throw new IllegalArgumentException("Mobile Adapter telephone-status response is invalid");
+        }
+    }
+
+    private static boolean allZero(byte[] values, int fromIndex, int toIndex) {
+        for (int i = fromIndex; i < toIndex; i++) {
+            if (values[i] != 0) return false;
+        }
+        return true;
+    }
+
+    private static void validateCapturedServiceError(Phase phase, byte[] responseData) {
+        if (responseData.length != 2) {
+            throw new IllegalArgumentException("Mobile Adapter service error response is invalid");
+        }
+        int command = responseData[0] & 0xff;
+        int error = responseData[1] & 0xff;
+        boolean valid = switch (command) {
+            case COMMAND_DIAL -> error >= 0x01 && error <= 0x03;
+            case COMMAND_HANG_UP, COMMAND_TELEPHONE_STATUS,
+                    COMMAND_ISP_LOGIN, COMMAND_ISP_LOGOUT ->
+                    error == 0x01 || error == 0x02;
+            default -> false;
+        };
+        if (!valid) {
+            throw new IllegalArgumentException("Mobile Adapter service error code is invalid");
+        }
+        boolean phaseValid = switch (command) {
+            case COMMAND_DIAL -> error == 0x01 ?
+                    phase != Phase.SESSION : phase == Phase.SESSION;
+            case COMMAND_HANG_UP -> error == 0x01 ?
+                    phase != Phase.TELEPHONE && phase != Phase.INTERNET :
+                    phase == Phase.TELEPHONE || phase == Phase.INTERNET;
+            case COMMAND_TELEPHONE_STATUS -> error == 0x01 ?
+                    phase == Phase.SLEEP : phase != Phase.SLEEP;
+            case COMMAND_ISP_LOGIN -> error == 0x01 ?
+                    phase != Phase.TELEPHONE : phase == Phase.TELEPHONE;
+            case COMMAND_ISP_LOGOUT -> error == 0x01 ?
+                    phase != Phase.INTERNET : phase == Phase.INTERNET;
+            default -> false;
+        };
+        if (!phaseValid) {
+            throw new IllegalArgumentException(
+                    "Mobile Adapter service error phase is invalid");
         }
     }
 
@@ -1148,7 +1464,9 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         }
     }
 
-    private static void validateCapturedBackendError(byte[] responseData) {
+    private static void validateCapturedBackendError(
+            ErrorCode engineError,
+            byte[] responseData) {
         if (responseData.length != 2) {
             throw new IllegalArgumentException("Mobile Adapter backend error response is invalid");
         }
@@ -1164,6 +1482,18 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         };
         if (!valid) {
             throw new IllegalArgumentException("Mobile Adapter backend error code is invalid");
+        }
+        if (engineError == ErrorCode.BACKEND_RESPONSE_INVALID) {
+            int expected = switch (command) {
+                case COMMAND_TRANSFER, COMMAND_TCP_CLOSE, COMMAND_UDP_CLOSE -> 0x00;
+                case COMMAND_TCP_OPEN, COMMAND_UDP_OPEN -> 0x03;
+                case COMMAND_DNS_QUERY -> 0x02;
+                default -> -1;
+            };
+            if (error != expected) {
+                throw new IllegalArgumentException(
+                        "Mobile Adapter invalid backend response has the wrong protocol code");
+            }
         }
     }
 
@@ -1220,7 +1550,9 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     public enum Phase {
         SLEEP(1),
-        SESSION(2);
+        SESSION(2),
+        TELEPHONE(3),
+        INTERNET(4);
 
         private final int id;
 
@@ -1263,7 +1595,13 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         BACKEND_RESPONSE(20),
         BACKEND_ERROR(21),
         BACKEND_REMOTE_CLOSED(22),
-        EXTERNAL_IO_DISCONNECTED(23);
+        EXTERNAL_IO_DISCONNECTED(23),
+        TELEPHONE_DIALLED(24),
+        TELEPHONE_HUNG_UP(25),
+        TELEPHONE_STATUS(26),
+        ISP_LOGGED_IN(27),
+        ISP_LOGGED_OUT(28),
+        SERVICE_ERROR(29);
 
         private final int id;
 

@@ -868,7 +868,10 @@ class MobileAdapterNetworkBackend(
           }
         }
       }
-      val input = ByteBuffer.allocate(MAX_TRANSFER_BODY_BYTES + 1)
+      // TCP is a byte stream, so a response larger than one Mobile Adapter packet is not an
+      // oversized message. Read only what this command can return and leave the remaining bytes
+      // in the socket for the game's next TRANSFER command.
+      val input = ByteBuffer.allocate(MAX_TRANSFER_BODY_BYTES)
       val deadline = deadline(READ_TIMEOUT_MILLIS)
       var remoteClosedAfterPayload = false
       while (true) {
@@ -881,13 +884,6 @@ class MobileAdapterNetworkBackend(
             break
           }
         }
-        if (input.position() > MAX_TRANSFER_BODY_BYTES) {
-          return TransferResult.Failure(
-              BackendStatus.REMOTE_CLOSED,
-              MobileAdapterNetworkError.TRANSFER_LIMIT,
-              true,
-          )
-        }
         if (read > 0) {
           // Drain only bytes immediately available; a later transfer owns later stream data.
           while (input.hasRemaining()) {
@@ -898,18 +894,13 @@ class MobileAdapterNetworkBackend(
             }
             if (more == 0) break
           }
-          if (input.position() > MAX_TRANSFER_BODY_BYTES) {
-            return TransferResult.Failure(
-                BackendStatus.REMOTE_CLOSED,
-                MobileAdapterNetworkError.TRANSFER_LIMIT,
-                true,
-            )
-          }
           break
         }
         when (awaitReady(connection.channel, selector, SelectionKey.OP_READ, deadline, generation, context)) {
           WaitResult.READY -> Unit
-          WaitResult.TIMEOUT -> return timeoutTransfer(close = true)
+          // A TCP write may be only one fragment of a larger request. No immediate response is a
+          // successful empty transfer, not evidence that the peer or logical slot has failed.
+          WaitResult.TIMEOUT -> return TransferResult.Success(EMPTY_BYTES)
           WaitResult.CANCELLED -> return cancelledTransfer()
         }
       }

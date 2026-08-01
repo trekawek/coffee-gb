@@ -971,11 +971,37 @@ class SerialPeripheralControllerTest {
       bytes: ByteArray,
   ): MobileAdapterEngine.EngineResult {
     bytes.forEach { value ->
-      endpoint.setSb(value.toInt() and 0xff)
-      endpoint.startSending()
-      repeat(8) { endpoint.sendBit() }
+      exchangeMobileByte(endpoint, value.toInt() and 0xff)
     }
-    return endpoint.snapshot()
+    val result = endpoint.snapshot()
+    if (result.acknowledgement().size == 2) {
+      exchangeMobileByte(endpoint, 0x80)
+      exchangeMobileByte(endpoint, 0)
+      var first = 0xd2
+      repeat(8) {
+        if (first == 0xd2) first = exchangeMobileByte(endpoint, 0x4b)
+      }
+      check(first == 0x99)
+      val header = ByteArray(6)
+      header[0] = first.toByte()
+      for (index in 1 until header.size) {
+        header[index] = exchangeMobileByte(endpoint, 0x4b).toByte()
+      }
+      val dataSize =
+          ((header[4].toInt() and 0xff) shl 8) or (header[5].toInt() and 0xff)
+      repeat(dataSize + 2) { exchangeMobileByte(endpoint, 0x4b) }
+      exchangeMobileByte(endpoint, 0x80)
+      exchangeMobileByte(endpoint, (header[2].toInt() and 0xff) xor 0x80)
+    }
+    return result
+  }
+
+  private fun exchangeMobileByte(endpoint: MobileAdapterSerialEndpoint, outgoing: Int): Int {
+    endpoint.setSb(outgoing)
+    endpoint.startSending()
+    var incoming = 0
+    repeat(8) { incoming = (incoming shl 1) or endpoint.sendBit() }
+    return incoming
   }
 
   private fun assertBackendEmpty(backend: DeterministicMobileAdapterBackend) {

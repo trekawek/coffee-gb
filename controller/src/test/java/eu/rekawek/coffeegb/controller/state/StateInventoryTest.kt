@@ -24,7 +24,7 @@ class StateInventoryTest {
           "- `${type.name}`: $fields"
         }
 
-    assertEquals(98, runtime.size)
+    assertEquals(99, runtime.size)
     assertEquals(runtime, documented)
     assertEquals(11, StateTypeRegistry.enumClasses.size)
   }
@@ -56,6 +56,12 @@ class StateInventoryTest {
             1,
     )
     assertEquals(
+        99,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState") +
+            1,
+    )
+    assertEquals(
         8,
         StatePayloadSectionCodec.serialPeripheralId(SerialPeripheralState.MOBILE_ADAPTER_GB),
     )
@@ -69,6 +75,14 @@ class StateInventoryTest {
     assertEquals(21, MobileAdapterEngine.Outcome.BACKEND_ERROR.id())
     assertEquals(22, MobileAdapterEngine.Outcome.BACKEND_REMOTE_CLOSED.id())
     assertEquals(23, MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED.id())
+    assertEquals(3, MobileAdapterEngine.Phase.TELEPHONE.id())
+    assertEquals(4, MobileAdapterEngine.Phase.INTERNET.id())
+    assertEquals(24, MobileAdapterEngine.Outcome.TELEPHONE_DIALLED.id())
+    assertEquals(25, MobileAdapterEngine.Outcome.TELEPHONE_HUNG_UP.id())
+    assertEquals(26, MobileAdapterEngine.Outcome.TELEPHONE_STATUS.id())
+    assertEquals(27, MobileAdapterEngine.Outcome.ISP_LOGGED_IN.id())
+    assertEquals(28, MobileAdapterEngine.Outcome.ISP_LOGGED_OUT.id())
+    assertEquals(29, MobileAdapterEngine.Outcome.SERVICE_ERROR.id())
     assertEquals(9, MobileAdapterEngine.ErrorCode.BACKEND_BUSY.id())
     assertEquals(10, MobileAdapterEngine.ErrorCode.BACKEND_UNAVAILABLE.id())
     assertEquals(11, MobileAdapterEngine.ErrorCode.BACKEND_RESPONSE_INVALID.id())
@@ -119,7 +133,7 @@ class StateInventoryTest {
   @Test
   fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
     assertEquals(StateTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
-    assertEquals(98, StateSemantics.policyAudit.size)
+    assertEquals(99, StateSemantics.policyAudit.size)
     assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
   }
 

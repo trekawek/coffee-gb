@@ -596,11 +596,50 @@ class MobileAdapterControllerLifecycleTest {
   }
 
   private fun feedMobile(endpoint: MobileAdapterSerialEndpoint, bytes: ByteArray) {
-    bytes.forEach { byte ->
-      endpoint.setSb(byte.toInt() and 0xff)
-      endpoint.startSending()
-      repeat(8) { endpoint.sendBit() }
+    bytes.forEach { byte -> exchangeMobileByte(endpoint, byte.toInt() and 0xff) }
+  }
+
+  private fun completeMobileTransaction(
+      endpoint: MobileAdapterSerialEndpoint,
+      request: ByteArray,
+  ) {
+    val command = request[2].toInt() and 0xff
+    request.forEach { byte ->
+      assertEquals(0xd2, exchangeMobileByte(endpoint, byte.toInt() and 0xff))
     }
+    assertEquals(0x88, exchangeMobileByte(endpoint, 0x80))
+    assertEquals(command xor 0x80, exchangeMobileByte(endpoint, 0))
+
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
+    var first = 0xd2
+    while (first == 0xd2 && System.nanoTime() < deadline) {
+      endpoint.pollBackendCompletion()
+      first = exchangeMobileByte(endpoint, 0x4b)
+      if (first == 0xd2) Thread.sleep(2)
+    }
+    assertEquals(0x99, first, "Mobile Adapter response timed out")
+
+    val header = ByteArray(6)
+    header[0] = first.toByte()
+    for (index in 1 until header.size) {
+      header[index] = exchangeMobileByte(endpoint, 0x4b).toByte()
+    }
+    val responseCommand = header[2].toInt() and 0xff
+    val dataSize = ((header[4].toInt() and 0xff) shl 8) or (header[5].toInt() and 0xff)
+    repeat(dataSize + 2) { exchangeMobileByte(endpoint, 0x4b) }
+    assertEquals(0x88, exchangeMobileByte(endpoint, 0x80))
+    assertEquals(0, exchangeMobileByte(endpoint, responseCommand xor 0x80))
+  }
+
+  private fun exchangeMobileByte(
+      endpoint: MobileAdapterSerialEndpoint,
+      outgoing: Int,
+  ): Int {
+    endpoint.setSb(outgoing)
+    endpoint.startSending()
+    var incoming = 0
+    repeat(8) { incoming = incoming shl 1 or endpoint.sendBit() }
+    return incoming
   }
 
   private fun packet(command: Int, data: ByteArray): ByteArray {
@@ -666,8 +705,11 @@ class MobileAdapterControllerLifecycleTest {
 
     fun openLiveUdp(backend: MobileAdapterNetworkBackend): MobileAdapterSerialEndpoint {
       val endpoint = assertNotNull(endpoint.get())
-      feedMobile(endpoint, packet(BEGIN_SESSION, "NINTENDO".encodeToByteArray()))
-      feedMobile(
+      completeMobileTransaction(
+          endpoint,
+          packet(BEGIN_SESSION, "NINTENDO".encodeToByteArray()),
+      )
+      completeMobileTransaction(
           endpoint,
           packet(UDP_OPEN, byteArrayOf(127, 0, 0, 1, 0, 53)),
       )

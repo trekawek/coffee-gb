@@ -16,6 +16,91 @@ import org.junit.Test
 class MobileAdapterPortableStateTest {
 
   @Test
+  fun activeWireTransactionRoundTripsThroughThePortableCodec() {
+    val endpoint = endpoint()
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feedRaw(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      val file = StateCodec.capture(session)
+      val root = (file.root as SessionStateRoot).session
+      assertEquals(
+          listOf(MOBILE_ENGINE_STATE, MOBILE_WIRE_ENDPOINT_STATE),
+          recordNames(root.serialState).sorted(),
+      )
+
+      // Move the live endpoint back to its released record shape before applying the active-wire
+      // candidate. One endpoint legitimately alternates between these additive record types.
+      assertEquals(0x88, exchange(endpoint, 0x80))
+      assertEquals(0x90, exchange(endpoint, 0))
+      drainResponse(endpoint)
+      assertTrue(
+          endpoint.captureState() is
+              MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState)
+
+      StateCodec.decodeAndApply(StateCodec.encode(file), session)
+      val wireState =
+          endpoint.captureState()
+              as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState
+      assertEquals(2, wireState.wirePhaseId())
+      assertEquals(0x88, exchange(endpoint, 0x80))
+      assertEquals(0x90, exchange(endpoint, 0))
+      drainResponse(endpoint)
+    }
+  }
+
+  @Test
+  fun completedAsyncResponseRetainsItsWireAckAcrossPortableRoundTrip() {
+    val backend = DeterministicMobileAdapterBackend()
+    val endpoint = endpoint(backend)
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feedRaw(endpoint, packet(0x28, "service.test".encodeToByteArray()))
+      assertEquals(0x88, exchange(endpoint, 0x80))
+      assertEquals(0xa8, exchange(endpoint, 0))
+      assertEquals(0xd2, exchange(endpoint, 0))
+      assertEquals(0xd2, exchange(endpoint, 0x4b))
+      assertEquals(
+          MobileAdapterBackendPort.CompletionResult.COMPLETED,
+          backend.complete(backend.generation(), 0, byteArrayOf(127, 0, 0, 1)),
+      )
+      assertEquals(
+          MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+          endpoint.pollBackendCompletion().outcome(),
+      )
+
+      val wireState =
+          endpoint.captureState()
+              as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState
+      assertContentEquals(
+          byteArrayOf(0x88.toByte(), 0xa8.toByte()),
+          wireState.requestAcknowledgement(),
+      )
+      assertTrue(
+          (wireState.engineState() as MobileAdapterEngine.MobileAdapterEngineState)
+              .acknowledgement()
+              .isEmpty())
+      val file = StateCodec.capture(session)
+      val root = (file.root as SessionStateRoot).session
+      assertEquals(
+          listOf(MOBILE_ENGINE_STATE, MOBILE_WIRE_ENDPOINT_STATE),
+          recordNames(root.serialState).sorted(),
+      )
+
+      drainResponse(endpoint)
+      assertTrue(
+          endpoint.captureState() is
+              MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState)
+      StateCodec.decodeAndApply(StateCodec.encode(file), session)
+      assertEquals(
+          9,
+          (endpoint.captureState()
+                  as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState)
+              .wirePhaseId(),
+      )
+      drainResponse(endpoint)
+    }
+  }
+
+  @Test
   fun partialPacketRoundTripsWithoutAHostHandleAndContinuesExactly() {
     val backend = TrackingBackend()
     val endpoint = endpoint(backend)
@@ -97,6 +182,38 @@ class MobileAdapterPortableStateTest {
   }
 
   @Test
+  fun releasedAcklessBackendErrorEndpointStillRoundTripsThroughPortableCodec() {
+    val endpoint = endpoint()
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feed(endpoint, packet(0x28, "fixture.test".encodeToByteArray()))
+      val current = endpoint.snapshot()
+      assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, current.outcome())
+      assertTrue(current.acknowledgement().isNotEmpty())
+
+      val captured = StateCodec.capture(session)
+      val impossibleResponseInvalid =
+          captured.replaceMobileEngineField("errorId", Int32State(11))
+      val before = session.captureDetachedState()
+      assertFailsWith<StateDecodeException> {
+        StateCodec.decodeAndApply(StateCodec.encode(impossibleResponseInvalid), session)
+      }
+      assertEquals(before, session.captureDetachedState())
+
+      val released =
+          captured.replaceMobileEngineField("acknowledgement", BytesState(byteArrayOf()))
+      StateCodec.decodeAndApply(StateCodec.encode(released), session)
+
+      assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, endpoint.snapshot().outcome())
+      assertTrue(endpoint.snapshot().acknowledgement().isEmpty())
+      assertContentEquals(current.responsePacket(), endpoint.snapshot().responsePacket())
+      assertTrue(
+          endpoint.captureState() is
+              MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState)
+    }
+  }
+
+  @Test
   fun openExternalIoWithAPartialPacketCapturesAsAServiceFreeDisconnectedMarker() {
     val backend = TrackingBackend()
     val endpoint = endpoint(backend)
@@ -111,6 +228,7 @@ class MobileAdapterPortableStateTest {
           MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
           endpoint.pollBackendCompletion().outcome(),
       )
+      drainResponse(endpoint)
       assertTrue(endpoint.hasExternalIo())
       val transfer = packet(0x15, byteArrayOf(0, 1, 2))
       feed(endpoint, transfer.copyOf(6))
@@ -150,6 +268,14 @@ class MobileAdapterPortableStateTest {
       assertTrue(endpoint.snapshot().responsePacket().isEmpty())
       assertTrue(endpoint.snapshot().acknowledgement().isEmpty())
 
+      val normalizedAgain = StateCodec.encode(StateCodec.capture(session))
+      StateCodec.decodeAndApply(normalizedAgain, session)
+      assertEquals(6, endpoint.snapshot().retainedBytes())
+      assertEquals(
+          MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+          endpoint.snapshot().outcome(),
+      )
+
       feed(endpoint, transfer.copyOfRange(6, transfer.size))
       assertEquals(MobileAdapterEngine.Outcome.BACKEND_ERROR, endpoint.snapshot().outcome())
       assertEquals(
@@ -157,6 +283,150 @@ class MobileAdapterPortableStateTest {
           endpoint.snapshot().error(),
       )
       assertEquals(0, backend.occupiedRequestSlots())
+    }
+  }
+
+  @Test
+  fun normalizedExternalReplyByteAppliesOverPureWireAndFinishesExactly() {
+    val backend = TrackingBackend()
+    val endpoint = endpoint(backend)
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feedRaw(endpoint, packet(0x23, byteArrayOf(127, 0, 0, 1, 0, 80)))
+      assertEquals(0x88, exchange(endpoint, 0x80))
+      assertEquals(0xa3, exchange(endpoint, 0))
+      assertEquals(
+          MobileAdapterBackendPort.CompletionResult.COMPLETED,
+          backend.complete(backend.generation(), 0, byteArrayOf(0)),
+      )
+      assertEquals(
+          MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+          endpoint.pollBackendCompletion().outcome(),
+      )
+      assertEquals(0xd2, exchange(endpoint, 0))
+      assertEquals(0xd2, exchange(endpoint, 0x4b))
+      endpoint.setSb(0x4b)
+      endpoint.startSending()
+      var reply = 0
+      repeat(3) { reply = reply shl 1 or endpoint.sendBit() }
+
+      val file = StateCodec.capture(session)
+      val captured = (file.root as SessionStateRoot).session
+      assertEquals(
+          listOf(MOBILE_NETWORK_ENGINE_STATE, MOBILE_WIRE_ENDPOINT_STATE),
+          recordNames(captured.serialState).sorted(),
+      )
+      val wire = checkNotNull(captured.serialState.findRecord(MOBILE_WIRE_ENDPOINT_STATE))
+      assertEquals(Int32State(11), wire.field("wirePhaseId"))
+      assertEquals(BytesState(byteArrayOf()), wire.field("requestAcknowledgement"))
+      assertEquals(BytesState(byteArrayOf()), wire.field("responsePacket"))
+
+      endpoint.disconnect()
+      endpoint.setSb(0x99)
+      endpoint.startSending()
+      repeat(3) { endpoint.sendBit() }
+      val pureTarget =
+          endpoint.captureState()
+              as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState
+      assertTrue(pureTarget.engineState() is MobileAdapterEngine.MobileAdapterEngineState)
+
+      StateCodec.decodeAndApply(StateCodec.encode(file), session)
+      val recaptured =
+          endpoint.captureState()
+              as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState
+      assertEquals(11, recaptured.wirePhaseId())
+      assertTrue(recaptured.engineState() is MobileAdapterEngine.MobileAdapterEngineState)
+      repeat(5) { reply = reply shl 1 or endpoint.sendBit() }
+      assertEquals(0x99, reply)
+      assertEquals(
+          MobileAdapterEngine.Outcome.EXTERNAL_IO_DISCONNECTED,
+          endpoint.snapshot().outcome(),
+      )
+      assertTrue(
+          endpoint.captureState() is
+              MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointState)
+    }
+  }
+
+  @Test
+  fun pureWireCandidateAppliesOverNormalizedExternalWireTarget() {
+    val backend = TrackingBackend()
+    val endpoint = endpoint(backend)
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      endpoint.setSb(0x99)
+      endpoint.startSending()
+      var reply = 0
+      repeat(3) { reply = reply shl 1 or endpoint.sendBit() }
+      val pureFile = StateCodec.capture(session)
+
+      endpoint.disconnect()
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feedRaw(endpoint, packet(0x23, byteArrayOf(127, 0, 0, 1, 0, 80)))
+      exchange(endpoint, 0x80)
+      exchange(endpoint, 0)
+      assertEquals(
+          MobileAdapterBackendPort.CompletionResult.COMPLETED,
+          backend.complete(backend.generation(), 0, byteArrayOf(0)),
+      )
+      endpoint.pollBackendCompletion()
+      exchange(endpoint, 0)
+      exchange(endpoint, 0x4b)
+      endpoint.setSb(0x4b)
+      endpoint.startSending()
+      repeat(3) { endpoint.sendBit() }
+      val networkTarget =
+          endpoint.captureState()
+              as MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState
+      assertEquals(11, networkTarget.wirePhaseId())
+      assertTrue(
+          networkTarget.engineState() is
+              MobileAdapterEngine.MobileAdapterEngineNetworkState)
+
+      StateCodec.decodeAndApply(StateCodec.encode(pureFile), session)
+      repeat(5) { reply = reply shl 1 or endpoint.sendBit() }
+      assertEquals(0xd2, reply)
+      assertEquals(1, endpoint.snapshot().retainedBytes())
+      assertTrue(!endpoint.hasExternalIo())
+    }
+  }
+
+  @Test
+  fun runtimeOnlyPendingWirePhaseRejectsBeforeMutation() {
+    val endpoint = endpoint()
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feedRaw(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      val file = StateCodec.capture(session)
+      val corrupted =
+          StateFile(
+              file.identities,
+              SessionStateRoot(
+                  (file.root as SessionStateRoot).session.let { captured ->
+                    SessionState(
+                        captured.machine,
+                        captured.serialPeripheral,
+                        captured.serialState.replaceRecordField(
+                            MOBILE_WIRE_ENDPOINT_STATE,
+                            "wirePhaseId",
+                            Int32State(10),
+                        ),
+                        captured.serialRuntime,
+                        captured.heldButtons,
+                    )
+                  }),
+              file.diagnostics,
+              file.formatVersion,
+          )
+      val before = session.captureDetachedState()
+      val stages = mutableListOf<ApplyStage>()
+
+      val failure =
+          assertFailsWith<StateDecodeException> {
+            StateCodec.decodeAndApply(StateCodec.encode(corrupted), session) { stages += it }
+          }
+
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason)
+      assertTrue(stages.isEmpty())
+      assertEquals(before, session.captureDetachedState())
     }
   }
 
@@ -290,6 +560,45 @@ class MobileAdapterPortableStateTest {
         assertEquals(0, backend.cancellations, label)
         assertEquals(before, session.captureDetachedState(), label)
       }
+
+      val missingEngine =
+          file.replaceMobileEngineField(
+              "engineState",
+              NullState,
+              MOBILE_ENDPOINT_STATE,
+          )
+      val stages = mutableListOf<ApplyStage>()
+      val failure =
+          assertFailsWith<StateDecodeException>("missing nested engine") {
+            StateCodec.decodeAndApply(StateCodec.encode(missingEngine), session) { stages += it }
+          }
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason)
+      assertTrue(stages.isEmpty())
+      assertEquals(0, backend.cancellations)
+      assertEquals(before, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun impossibleServiceErrorPhaseRejectsBeforeMutation() {
+    val endpoint = endpoint()
+    StateCodecTestSupport.session(endpoint = endpoint).use { session ->
+      feed(endpoint, packet(0x10, "NINTENDO".encodeToByteArray()))
+      feed(endpoint, packet(0x12, byteArrayOf(0, '1'.code.toByte())))
+      assertEquals(MobileAdapterEngine.Outcome.SERVICE_ERROR, endpoint.snapshot().outcome())
+      val file = StateCodec.capture(session)
+      val corrupted = file.replaceMobileEngineField("phaseId", Int32State(3))
+      val before = session.captureDetachedState()
+      val stages = mutableListOf<ApplyStage>()
+
+      val failure =
+          assertFailsWith<StateDecodeException> {
+            StateCodec.decodeAndApply(StateCodec.encode(corrupted), session) { stages += it }
+          }
+
+      assertEquals(StateDecodeReason.TARGET_STATE_MISMATCH, failure.reason)
+      assertTrue(stages.isEmpty())
+      assertEquals(before, session.captureDetachedState())
     }
   }
 
@@ -385,11 +694,41 @@ class MobileAdapterPortableStateTest {
   }
 
   private fun feed(endpoint: MobileAdapterSerialEndpoint, bytes: ByteArray) {
+    feedRaw(endpoint, bytes)
+    val result = endpoint.snapshot()
+    if (result.acknowledgement().size != 2) return
+    exchange(endpoint, 0x80)
+    exchange(endpoint, 0)
+    if (result.responsePacket().isNotEmpty()) drainResponse(endpoint)
+  }
+
+  private fun feedRaw(endpoint: MobileAdapterSerialEndpoint, bytes: ByteArray) {
     bytes.forEach { byte ->
-      endpoint.setSb(byte.toInt() and 0xff)
-      endpoint.startSending()
-      repeat(8) { endpoint.sendBit() }
+      exchange(endpoint, byte.toInt() and 0xff)
     }
+  }
+
+  private fun drainResponse(endpoint: MobileAdapterSerialEndpoint) {
+    var first = 0xd2
+    repeat(8) {
+      if (first == 0xd2) first = exchange(endpoint, 0x4b)
+    }
+    check(first == 0x99)
+    val header = ByteArray(6)
+    header[0] = first.toByte()
+    for (index in 1 until header.size) header[index] = exchange(endpoint, 0x4b).toByte()
+    val size = ((header[4].toInt() and 0xff) shl 8) or (header[5].toInt() and 0xff)
+    repeat(size + 2) { exchange(endpoint, 0x4b) }
+    exchange(endpoint, 0x80)
+    exchange(endpoint, (header[2].toInt() and 0xff) xor 0x80)
+  }
+
+  private fun exchange(endpoint: MobileAdapterSerialEndpoint, outgoing: Int): Int {
+    endpoint.setSb(outgoing)
+    endpoint.startSending()
+    var incoming = 0
+    repeat(8) { incoming = (incoming shl 1) or endpoint.sendBit() }
+    return incoming
   }
 
   private fun packet(command: Int, data: ByteArray): ByteArray {
@@ -514,5 +853,7 @@ class MobileAdapterPortableStateTest {
         "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine\$MobileAdapterEngineNetworkState"
     const val MOBILE_NETWORK_ENDPOINT_STATE =
         "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState"
+    const val MOBILE_WIRE_ENDPOINT_STATE =
+        "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState"
   }
 }

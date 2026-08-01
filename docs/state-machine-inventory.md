@@ -8,7 +8,7 @@ Before mutation, apply checks the hardware tag, nested record/mapper tree, invar
 serial endpoint and component-state root, cartridge RTC locations, runtime DTO, held input, and linked
 topology against the already-configured target. Null is admitted only for audited owner/field or
 array-element positions, not inferred from the non-null value's type. The adapter then reconstructs
-the complete replacement and applies the semantic policy registered for each of the 98 admitted
+the complete replacement and applies the semantic policy registered for each of the 99 admitted
 record types. Those policies reject invalid indices, counts, capacities, command phases, and scalar
 relationships before the first live mutation. If an unexpected component apply nevertheless
 throws, the adapter restores the machine, both RTC locations, serial endpoint/runtime, held
@@ -32,7 +32,7 @@ Protocol v8 remains StateFile-v1-only and rejects MGB before linked construction
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 
-The exact field-by-field inventory of all 98 admitted production record types is committed in
+The exact field-by-field inventory of all 99 admitted production record types is committed in
 [state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 106
 production state contracts and capture owner/call-site files is committed in
 [state-originator-sites.md](state-originator-sites.md). `StateTypeRegistry` is the executable type
@@ -82,7 +82,7 @@ volatiles, monitor state) remain controller services and are not portable machin
 | GPS endpoint | Master ticks, startup beacons, UART output queue/bit delay, RX parser/parity and TAIP command | No time/network/location service is retained; emulated response data is deterministic |
 | Barcode Boy endpoint | Handshake/send/receive phase and exact 30-byte active frame in `BarcodeBoyState`; exact 30-byte queued frame and external-transfer latch in deep-owned `BarcodeBoyRuntimeState` | No callback/service is retained; active data exists exactly in `SENDING`, and pending payload arrays are cloned on capture and access |
 | Four-player adapter | Shared SB/armed/connected/pending arrays, reply/transmit buffers, packet/bit/timing/rate/size/phase and restart requests | Endpoint objects and player-slot association are reconstructed from `LinkedTopologyState` |
-| Mobile Adapter GB endpoint | Endpoint SB/bit cursor plus engine phase/outcome/error IDs, device ID, packet parser buffer/count/expected size, 256-byte configuration, response and acknowledgement bytes, idle phase, serial-byte observation, and bounded pending-packet slots. Host-free captures retain released record IDs 95/96. A capture with a pending backend request or open connection uses additive IDs 97/98 and a true `externalIoAtCapture` marker. | The live backend port, sockets, callbacks, connection table, and request ownership are never captured. External ownership is normalized to the disconnected outcome with empty output while deterministic guest parser/configuration/timing state is retained; restore cancels backend ownership. Structural preflight admits the released and additive endpoint shapes through the audited false-marker equivalent without rewriting decoded StateFile bytes. |
+| Mobile Adapter GB endpoint | Endpoint SB/bit cursor, active-byte flag, wire phase/response cursor/retry count, plus engine phase/outcome/error IDs, device ID, packet parser buffer/count/expected size, 256-byte configuration, response and acknowledgement bytes, idle phase, serial-byte observation, and bounded pending-packet slots. Host-free boundary captures retain released record IDs 95/96; active deterministic wire captures use ID 99. A capture with a pending backend request or open connection uses additive IDs 97/98 at a byte boundary and a true `externalIoAtCapture` marker; an in-flight request byte uses endpoint ID 99 with nested engine ID 97. Other active bytes use ID 99 phase 11 with only their latched reply. | The live backend port, sockets, callbacks, connection table, and request ownership are never captured. External ownership is normalized to the disconnected outcome with empty output while deterministic guest parser/configuration/timing state is retained; restore cancels backend ownership after finishing any already-latched reply byte. Structural preflight admits the released and additive endpoint/engine shapes without rewriting decoded StateFile bytes. |
 | Infrared | RP register plus Full Changer schedule/armed/running/index/remaining phase | Physical/peer IR endpoint callback is topology/service state |
 | Cartridge/battery | Mapper state, RAM/EEPROM/flash, bank/register/mode gates, write-dirty state; memory/file battery byte buffers, clock-presence and dirty flag | Immutable ROM bytes, file path, atomic-writer/event-bus services and pending user-error diagnostics are host persistence state rather than emulation behavior; BasicRom battery and Datel slot presence must match the configured target |
 | MBC3 RTC | Six-bit seconds/minutes, five-bit hours, day/control, subsecond ticks, latch snapshot, halt/overflow; separately tagged primary and Datel-slot pause flag/reference in `CartridgeRtcRuntimeState` | Injected `TimeSource` is never captured; both physical cartridge constructors receive the configured service |
@@ -147,7 +147,7 @@ types are rejected through the adapter before its live-mutation callback.
 Records whose fields are deliberately not range-constrained still have an explicit policy and
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
 documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
-are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 98
+are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 99
 admitted record types, so a new state record cannot enter the model without an audited choice. Rollback
 is retained for unexpected failures in legacy restore code; it is not the validation path for a
 deterministically malformed detached candidate.
