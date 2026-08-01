@@ -896,10 +896,16 @@ class MobileAdapterNetworkBackend(
           }
           break
         }
+        if (body.isNotEmpty()) {
+          // A nonempty TRANSFER may be only one fragment of a larger request. Probe once for an
+          // already-available reply, then let the game send its next fragment without a host-time
+          // delay. The bounded wait below belongs only to an explicit receive poll.
+          return TransferResult.Success(EMPTY_BYTES)
+        }
         when (awaitReady(connection.channel, selector, SelectionKey.OP_READ, deadline, generation, context)) {
           WaitResult.READY -> Unit
-          // A TCP write may be only one fragment of a larger request. No immediate response is a
-          // successful empty transfer, not evidence that the peer or logical slot has failed.
+          // No data after an explicit receive poll is a successful empty transfer, not evidence
+          // that the peer or logical slot has failed.
           WaitResult.TIMEOUT -> return TransferResult.Success(EMPTY_BYTES)
           WaitResult.CANCELLED -> return cancelledTransfer()
         }

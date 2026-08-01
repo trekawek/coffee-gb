@@ -441,10 +441,13 @@ class MobileAdapterNetworkBackendTest {
         assertEquals(0, closed.slot)
         assertEquals(1, closed.activeConnections)
 
-        val surviving = submit(backend, 4, TRANSFER, byteArrayOf(1) + "ping".toByteArray())
+        var surviving = submit(backend, 4, TRANSFER, byteArrayOf(1) + "ping".toByteArray())
+        if (surviving.payload().size == 1) {
+          surviving = submit(backend, 5, TRANSFER, byteArrayOf(1))
+        }
         assertEquals(BackendStatus.SUCCESS, surviving.status())
         assertContentEquals(byteArrayOf(1) + "pong".toByteArray(), surviving.payload())
-        assertEquals(BackendStatus.SUCCESS, submit(backend, 5, TCP_CLOSE, byteArrayOf(1)).status())
+        assertEquals(BackendStatus.SUCCESS, submit(backend, 6, TCP_CLOSE, byteArrayOf(1)).status())
         assertTrue(serverDone.await(2, TimeUnit.SECONDS))
         assertFalse(backend.hasExternalWork())
       } finally {
@@ -510,10 +513,13 @@ class MobileAdapterNetworkBackendTest {
             byteArrayOf(0),
             submit(backend, 4, TCP_OPEN, openPayload(127, 0, 0, 1, 80)).payload(),
         )
-        val reopened = submit(backend, 5, TRANSFER, byteArrayOf(0) + "ping".toByteArray())
+        var reopened = submit(backend, 5, TRANSFER, byteArrayOf(0) + "ping".toByteArray())
+        if (reopened.payload().size == 1) {
+          reopened = submit(backend, 6, TRANSFER, byteArrayOf(0))
+        }
         assertEquals(BackendStatus.SUCCESS, reopened.status())
         assertContentEquals(byteArrayOf(0) + "pong".toByteArray(), reopened.payload())
-        assertEquals(BackendStatus.SUCCESS, submit(backend, 6, TCP_CLOSE, byteArrayOf(0)).status())
+        assertEquals(BackendStatus.SUCCESS, submit(backend, 7, TCP_CLOSE, byteArrayOf(0)).status())
         assertTrue(serverDone.await(2, TimeUnit.SECONDS))
       } finally {
         backend.close()
@@ -572,16 +578,21 @@ class MobileAdapterNetworkBackendTest {
   }
 
   @Test
-  fun `silent TCP read returns empty success and preserves its slot`() {
+  fun `nonempty TCP write returns immediate empty success and preserves its slot`() {
     val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     ServerSocket(0, 1, loopback).use { server ->
       val requestReceived = CountDownLatch(1)
       val releasePeer = CountDownLatch(1)
-      thread(isDaemon = true, name = "mobile-adapter-test-tcp-timeout") {
+      thread(isDaemon = true, name = "mobile-adapter-test-tcp-write") {
         server.accept().use { socket ->
           socket.getInputStream().readNBytes(4)
           requestReceived.countDown()
-          releasePeer.await(3, TimeUnit.SECONDS)
+          if (!releasePeer.await(600, TimeUnit.MILLISECONDS)) {
+            // The old behavior waited for a reply after every write and therefore consumed this
+            // marker. An immediate successful return lets the test release the peer first.
+            socket.getOutputStream().write("late".toByteArray())
+            socket.getOutputStream().flush()
+          }
         }
       }
       val backend =
@@ -598,6 +609,47 @@ class MobileAdapterNetworkBackendTest {
         assertTrue(requestReceived.await(2, TimeUnit.SECONDS))
         assertEquals(BackendStatus.SUCCESS, pending.status())
         assertContentEquals(byteArrayOf(0), pending.payload())
+        releasePeer.countDown()
+        assertEquals(BackendStatus.SUCCESS, submit(backend, 3, TCP_CLOSE, byteArrayOf(0)).status())
+      } finally {
+        releasePeer.countDown()
+        backend.close()
+        assertTrue(backend.awaitTermination(2_000))
+      }
+    }
+  }
+
+  @Test
+  fun `connection-only TCP poll waits for data and preserves its slot`() {
+    val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+    ServerSocket(0, 1, loopback).use { server ->
+      val accepted = CountDownLatch(1)
+      val releasePeer = CountDownLatch(1)
+      thread(isDaemon = true, name = "mobile-adapter-test-tcp-poll") {
+        server.accept().use {
+          accepted.countDown()
+          releasePeer.await(3, TimeUnit.SECONDS)
+        }
+      }
+      val backend =
+          MobileAdapterNetworkBackend(
+              literalPolicy(MobileAdapterTransportProtocol.TCP, 80, server.localPort),
+              MobileAdapterRuntimeAuthorization(true, true),
+          )
+      try {
+        assertEquals(
+            BackendStatus.SUCCESS,
+            submit(backend, 1, TCP_OPEN, openPayload(127, 0, 0, 1, 80)).status(),
+        )
+        assertTrue(accepted.await(2, TimeUnit.SECONDS))
+
+        val started = System.nanoTime()
+        val poll = submit(backend, 2, TRANSFER, byteArrayOf(0))
+        val elapsed = System.nanoTime() - started
+
+        assertTrue(elapsed >= TimeUnit.MILLISECONDS.toNanos(750))
+        assertEquals(BackendStatus.SUCCESS, poll.status())
+        assertContentEquals(byteArrayOf(0), poll.payload())
         assertEquals(BackendStatus.SUCCESS, submit(backend, 3, TCP_CLOSE, byteArrayOf(0)).status())
       } finally {
         releasePeer.countDown()

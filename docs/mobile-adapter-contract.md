@@ -271,8 +271,10 @@ valid packet is committed only after checksum and command-specific validation.
 Timeouts and transfer limits preserve transport framing:
 
 - DNS and TCP-connect timeout fail that request without creating a connection slot.
-- TCP write timeout closes the affected slot. A one-second TCP read with no data returns an empty
-  successful TRANSFER and preserves the slot so a game can send a later request fragment. UDP read
+- TCP write timeout closes the affected slot. After a nonempty TCP write, Coffee GB performs one
+  immediate nonblocking read; no available data returns an empty successful TRANSFER so the game
+  can send its next request fragment without a host-time delay. A connection-ID-only receive poll
+  waits up to one second before returning the same empty success. Both preserve the slot. UDP read
   timeout closes its slot and reports typed `TIMEOUT`; the direct core channel consumes that close
   as an empty remote-close response `9f` so the logical ID cannot remain usable.
 - UDP write timeout reports typed `TIMEOUT` but retains the connected slot. A datagram is never

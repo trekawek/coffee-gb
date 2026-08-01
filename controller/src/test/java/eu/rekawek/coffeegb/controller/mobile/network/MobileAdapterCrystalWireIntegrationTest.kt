@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -25,16 +26,19 @@ import org.junit.Test
 class MobileAdapterCrystalWireIntegrationTest {
 
   @Test
-  fun `synthetic crystal-shaped sequence reaches mapped HTTP fixture and drains its reply`() {
+  fun `synthetic crystal-shaped sequence drains hello response and consumes remote close`() {
     val loopback = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     DnsFixture(loopback).use { dns ->
       ServerSocket(0, 1, loopback).use { server ->
         val expectedRequest =
             "GET /mobile-adapter/fixture/index.txt HTTP/1.0\r\n" +
                 "Host: crystal.service.test\r\n\r\n"
-        val body = ByteArray(600) { ('A'.code + it % 26).toByte() }
+        val body = "<p>hello world</p>\n".ascii()
         val expectedResponse =
-            "HTTP/1.0 200 OK\r\nContent-Length: ${body.size}\r\n\r\n"
+            ("HTTP/1.0 200 OK\r\n" +
+                    "Content-Type: text/html\r\n" +
+                    "Content-Length: ${body.size}\r\n" +
+                    "Connection: close\r\n\r\n")
                 .toByteArray(StandardCharsets.US_ASCII) + body
         val serverFailure = AtomicReference<Throwable?>()
         val serverDone = CountDownLatch(1)
@@ -46,9 +50,6 @@ class MobileAdapterCrystalWireIntegrationTest {
               receivedRequest.add(request)
               socket.getOutputStream().write(expectedResponse)
               socket.getOutputStream().flush()
-              while (socket.getInputStream().read() != -1) {
-                // The fixture remains open until command 24 closes the logical connection.
-              }
             }
           } catch (failure: Throwable) {
             serverFailure.set(failure)
@@ -127,7 +128,8 @@ class MobileAdapterCrystalWireIntegrationTest {
               assertNotNull(receivedRequest.poll(2, TimeUnit.SECONDS)),
           )
 
-          assertResponse(endpoint, 0x24, byteArrayOf(0), 0xa4, byteArrayOf(0))
+          assertResponse(endpoint, 0x15, byteArrayOf(0), 0x9f, EMPTY_BYTES)
+          assertFalse(backend.hasExternalWork())
           assertResponse(endpoint, 0x22, EMPTY_BYTES, 0xa2, EMPTY_BYTES)
           assertResponse(endpoint, 0x13, EMPTY_BYTES, 0x93, EMPTY_BYTES)
           assertResponse(endpoint, 0x11, EMPTY_BYTES, 0x91, EMPTY_BYTES)
