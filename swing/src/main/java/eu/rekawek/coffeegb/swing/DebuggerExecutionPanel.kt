@@ -83,8 +83,9 @@ internal class DebuggerExecutionPanel(
     instructionTable.accessibleContext.accessibleDescription =
         "Best-effort instruction context before and after the current program counter"
     instructionTable.columnModel.getColumn(0).preferredWidth = 90
-    instructionTable.columnModel.getColumn(1).preferredWidth = 420
-    instructionTable.columnModel.getColumn(2).preferredWidth = 260
+    instructionTable.columnModel.getColumn(1).preferredWidth = 100
+    instructionTable.columnModel.getColumn(2).preferredWidth = 320
+    instructionTable.columnModel.getColumn(3).preferredWidth = 260
     instructionTable.minimumSize = Dimension(320, 92)
 
     configureTable(stackTable, "Stack bytes")
@@ -284,12 +285,13 @@ internal class DebuggerExecutionPanel(
   private class InstructionTableModel : AbstractTableModel() {
     private data class Row(
         val address: String,
+        val bytes: String,
         val instruction: String,
         val source: String,
         val offset: Int = -1,
     )
 
-    private var rows = listOf(Row("—", "Waiting for a coherent snapshot", ""))
+    private var rows = listOf(Row("—", "", "Waiting for a coherent snapshot", ""))
 
     override fun getRowCount(): Int = rows.size
 
@@ -300,14 +302,22 @@ internal class DebuggerExecutionPanel(
     override fun getValueAt(rowIndex: Int, columnIndex: Int): Any =
         when (columnIndex) {
           0 -> rows[rowIndex].address
-          1 -> rows[rowIndex].instruction
+          1 -> rows[rowIndex].bytes
+          2 -> rows[rowIndex].instruction
           else -> rows[rowIndex].source
         }
 
     fun render(snapshot: DebugSnapshot, memory: DebugMemoryBlock?): Int? {
       val pc = snapshot.registers().pc()
       if (memory == null) {
-        rows = listOf(Row(DebuggerPresentation.formatWord(pc), "Live instruction bytes are outside the safe memory views", ""))
+        rows =
+            listOf(
+                Row(
+                    DebuggerPresentation.formatWord(pc),
+                    "",
+                    "Live instruction bytes are outside the safe memory views",
+                    "",
+                ))
         fireTableDataChanged()
         return null
       }
@@ -317,6 +327,7 @@ internal class DebuggerExecutionPanel(
             listOf(
                 Row(
                     DebuggerPresentation.formatWord(pc),
+                    "",
                     "Current PC is outside the captured instruction context",
                     "",
                 ))
@@ -330,6 +341,7 @@ internal class DebuggerExecutionPanel(
             listOf(
                 Row(
                     DebuggerPresentation.formatWord(pc),
+                    "",
                     "Instruction bytes are truncated in this capture",
                     memory.addressSpace().name,
                 ))
@@ -345,13 +357,15 @@ internal class DebuggerExecutionPanel(
     }
 
     fun message(value: String) {
-      rows = listOf(Row("—", value, ""))
+      rows = listOf(Row("—", "", value, ""))
       fireTableDataChanged()
     }
 
     fun copyText(): String =
         rows.joinToString("\n") { row ->
-          listOf(row.address, row.instruction, row.source).filter(String::isNotBlank).joinToString("  ")
+          listOf(row.address, row.bytes, row.instruction, row.source)
+              .filter(String::isNotBlank)
+              .joinToString("  ")
         }
 
     private fun precedingRows(memory: DebugMemoryBlock, currentOffset: Int): List<Row> {
@@ -403,9 +417,14 @@ internal class DebuggerExecutionPanel(
       val source =
           if (sourceAt >= 0) disassembly.substring(sourceAt + sourceMarker.length).removeSuffix("]")
           else memory.addressSpace().name
+      val bytes =
+          (0 until length).joinToString(" ") { index ->
+            "%02X".format(memory.unsignedByteAt(offset + index))
+          }
       return Row(
           DebuggerPresentation.formatWord(memory.startAddress() + offset),
-          body.substringAfter(':', body).trim(),
+          bytes,
+          body.substringAfter(':', body).trim().removePrefix(bytes).trim(),
           if (inferredPredecessor) "$source; inferred pre-PC boundary" else source,
           offset,
       )
@@ -417,7 +436,7 @@ internal class DebuggerExecutionPanel(
     }
 
     private companion object {
-      val COLUMNS = arrayOf("PC", "Bytes and instruction", "Memory view")
+      val COLUMNS = arrayOf("PC", "Bytes", "Instruction", "Memory view")
       const val MAX_INSTRUCTION_BYTES = 3
       const val PREVIOUS_CONTEXT_ROWS = 4
       const val FOLLOWING_CONTEXT_ROWS = 6

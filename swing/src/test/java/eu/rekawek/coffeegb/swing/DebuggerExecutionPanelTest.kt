@@ -66,9 +66,11 @@ class DebuggerExecutionPanelTest {
         val currentRow = addresses.indexOf("${'$'}0206")
 
         assertEquals(listOf("${'$'}0200", "${'$'}0201", "${'$'}0203"), addresses.take(3))
+        assertEquals(listOf("PC", "Bytes", "Instruction", "Memory view"), (0 until table.columnCount).map(table::getColumnName))
         assertTrue(currentRow in 3 until table.rowCount)
         assertEquals(currentRow, table.selectedRow)
-        assertContains(table.getValueAt(currentRow, 1).toString(), "3E 56")
+        assertEquals("3E 56", table.getValueAt(currentRow, 1))
+        assertContains(table.getValueAt(currentRow, 2).toString(), "LD A,56")
         assertContains(panel.copyText(), "${'$'}0203")
         assertContains(panel.copyText(), "${'$'}020B")
       }
