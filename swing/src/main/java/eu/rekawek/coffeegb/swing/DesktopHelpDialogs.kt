@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.swing
 
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
@@ -9,6 +10,8 @@ import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.awt.font.TextAttribute
+import java.net.URI
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -19,7 +22,6 @@ import javax.swing.JScrollPane
 import javax.swing.JTabbedPane
 import javax.swing.JTable
 import javax.swing.JTextArea
-import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
@@ -226,22 +228,10 @@ internal class DesktopShortcutGuidePanel(
 internal class DesktopAboutPanel(
     internal val version: String,
     private val clipboardWriter: DesktopClipboardWriter = systemHelpClipboardWriter(),
-) : JPanel(BorderLayout(20, 0)), DesktopThemeRefreshHook {
+    private val uriOpener: DesktopUriOpener = systemHelpUriOpener(),
+) : JPanel(), DesktopThemeRefreshHook {
   internal val versionInformation =
       "Coffee GB $version\nLicense: MIT\nSource: $COFFEE_GB_SOURCE_URL"
-  internal val mark =
-      JLabel(CoffeeGbIcon.swingIcon(112)).apply {
-        alignmentY = Component.TOP_ALIGNMENT
-        getAccessibleContext().accessibleName = "Coffee GB Pocket Brew mark"
-      }
-  internal val sourceField =
-      JTextField(COFFEE_GB_SOURCE_URL).apply {
-        isEditable = false
-        caretPosition = 0
-        putClientProperty("html.disable", true)
-        getAccessibleContext().accessibleName = "Coffee GB source repository"
-        getAccessibleContext().accessibleDescription = "Selectable source repository address"
-      }
   internal val copyButton =
       JButton("Copy version info").apply {
         mnemonic = KeyEvent.VK_C
@@ -253,6 +243,20 @@ internal class DesktopAboutPanel(
       JLabel(" ").apply {
         putClientProperty("html.disable", true)
         getAccessibleContext().accessibleName = "Copy version information status"
+      }
+  internal val sourceLink =
+      JButton(COFFEE_GB_SOURCE_URL).apply {
+        alignmentX = Component.LEFT_ALIGNMENT
+        horizontalAlignment = javax.swing.SwingConstants.LEFT
+        border = BorderFactory.createEmptyBorder()
+        isContentAreaFilled = false
+        isOpaque = false
+        cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        font = font.deriveFont(mapOf(TextAttribute.UNDERLINE to TextAttribute.UNDERLINE_ON))
+        putClientProperty("html.disable", true)
+        toolTipText = "Open Coffee GB source repository"
+        getAccessibleContext().accessibleName = "Coffee GB source repository"
+        getAccessibleContext().accessibleDescription = "Open the Coffee GB source repository"
       }
 
   private val productName =
@@ -279,7 +283,7 @@ internal class DesktopAboutPanel(
   private val sourceLabel = JLabel("Source:").apply {
     alignmentX = Component.LEFT_ALIGNMENT
     putClientProperty("html.disable", true)
-    labelFor = sourceField
+    labelFor = sourceLink
   }
   private val copyRow =
       JPanel(FlowLayout(FlowLayout.LEADING, 0, 0)).apply {
@@ -288,46 +292,42 @@ internal class DesktopAboutPanel(
         add(Box.createHorizontalStrut(12))
         add(copyStatus)
       }
-  private val details =
-      JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        alignmentY = Component.TOP_ALIGNMENT
-        add(productName)
-        add(Box.createVerticalStrut(6))
-        add(productDescription)
-        add(Box.createVerticalStrut(14))
-        add(versionLabel)
-        add(Box.createVerticalStrut(5))
-        add(licenseLabel)
-        add(Box.createVerticalStrut(14))
-        add(sourceLabel)
-        add(Box.createVerticalStrut(4))
-        add(sourceField)
-        add(Box.createVerticalStrut(14))
-        add(copyRow)
-      }
-  private var copyFailed = false
+  private var actionFailed = false
 
   init {
     check(SwingUtilities.isEventDispatchThread()) { "About content must be created on the EDT" }
     getAccessibleContext().accessibleName = "About Coffee GB"
     getAccessibleContext().accessibleDescription =
         "Coffee GB version, license, and source repository"
+    layout = BoxLayout(this, BoxLayout.Y_AXIS)
     alignmentX = Component.LEFT_ALIGNMENT
-    sourceField.alignmentX = Component.LEFT_ALIGNMENT
     border = BorderFactory.createEmptyBorder(4, 0, 4, 0)
-    add(mark, BorderLayout.WEST)
-    add(details, BorderLayout.CENTER)
+    add(productName)
+    add(Box.createVerticalStrut(6))
+    add(productDescription)
+    add(Box.createVerticalStrut(14))
+    add(versionLabel)
+    add(Box.createVerticalStrut(5))
+    add(licenseLabel)
+    add(Box.createVerticalStrut(14))
+    add(sourceLabel)
+    add(Box.createVerticalStrut(4))
+    add(sourceLink)
+    add(Box.createVerticalStrut(14))
+    add(copyRow)
     copyButton.addActionListener {
       runCatching { clipboardWriter.copy(versionInformation) }
           .onSuccess { showCopyStatus("Version info copied.", failure = false) }
           .onFailure { showCopyStatus("Could not copy version info.", failure = true) }
     }
+    sourceLink.addActionListener {
+      runCatching { uriOpener.open(COFFEE_GB_SOURCE_URI) }
+          .onFailure { showCopyStatus("Could not open the source link.", failure = true) }
+    }
   }
 
   override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
     background = tokens.surface
-    details.background = tokens.surface
     copyRow.background = tokens.surface
     productName.foreground = tokens.primaryText
     productDescription.background = tokens.surface
@@ -335,14 +335,12 @@ internal class DesktopAboutPanel(
     versionLabel.foreground = tokens.primaryText
     licenseLabel.foreground = tokens.primaryText
     sourceLabel.foreground = tokens.primaryText
-    sourceField.background = tokens.elevatedSurface
-    sourceField.foreground = tokens.primaryText
-    sourceField.caretColor = tokens.focus
-    copyStatus.foreground = if (copyFailed) tokens.danger else tokens.secondaryText
+    sourceLink.foreground = tokens.accent
+    copyStatus.foreground = if (actionFailed) tokens.danger else tokens.secondaryText
   }
 
   private fun showCopyStatus(message: String, failure: Boolean) {
-    copyFailed = failure
+    actionFailed = failure
     copyStatus.text = message
     copyStatus.accessibleContext.accessibleDescription = message
     repaint()
@@ -369,12 +367,11 @@ internal class DesktopHelpDialogs(
   }
 
   fun showAbout(owner: java.awt.Window, version: String) {
-    dialogFactory.showInformation(
+    dialogFactory.showContent(
         owner,
-        DesktopInformationSpec(
+        DesktopContentSpec(
             title = "About Coffee GB",
-            heading = "About Coffee GB",
-            description = "Application identity, build information, license, and source.",
+            accessibleDescription = "Coffee GB version, license, and source repository.",
             contentAccessibleName = "Coffee GB application information",
             buttons = closeInformationButtons(),
         ),
@@ -413,4 +410,19 @@ private fun systemHelpClipboardWriter(): DesktopClipboardWriter =
       Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
     }
 
+internal fun interface DesktopUriOpener {
+  fun open(uri: URI)
+}
+
+private fun systemHelpUriOpener(): DesktopUriOpener =
+    DesktopUriOpener { uri ->
+      check(java.awt.Desktop.isDesktopSupported()) { "Opening links is not supported on this desktop" }
+      val desktop = java.awt.Desktop.getDesktop()
+      check(desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+        "Opening links is not supported on this desktop"
+      }
+      desktop.browse(uri)
+    }
+
 private const val COFFEE_GB_SOURCE_URL = "https://github.com/trekawek/coffee-gb"
+private val COFFEE_GB_SOURCE_URI = URI.create(COFFEE_GB_SOURCE_URL)
