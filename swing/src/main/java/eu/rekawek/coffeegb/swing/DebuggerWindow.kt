@@ -1233,15 +1233,25 @@ internal class DebuggerPanel(
         if (workspaceMode) previous == null && captureExecutionMemory
         else previous?.paused() != true
     if (attached.capabilities.memoryRead() && previous != null && captureExecutionMemory) {
-      pcAnchoredLength(
-              previous.registers().pc(),
-              minOf(MAX_INSTRUCTION_BYTES, remainingBytes),
-          )
-          ?.let { length ->
+      val executionMemory =
+          if (workspaceMode) {
+            pcExecutionMemoryRequest(
+                previous.registers().pc(),
+                executionMemoryBudget(remainingBytes),
+            )
+          } else {
+            pcAnchoredLength(
+                    previous.registers().pc(),
+                    minOf(MAX_INSTRUCTION_BYTES, remainingBytes),
+                )
+                ?.let { length ->
+                  DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, length)
+                }
+          }
+      executionMemory?.let { request ->
         codeIndex = anchored.size
-        anchored +=
-            DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, length)
-        remainingBytes -= length
+        anchored += request
+        remainingBytes -= request.length()
       }
       stackAnchoredLength(previous.registers().sp(), minOf(STACK_BYTES, remainingBytes))?.let {
           length ->
@@ -2694,6 +2704,51 @@ private fun pcAnchoredLength(address: Int, maximum: Int): Int? {
       }
   return minOf(maximum, endExclusive - address).takeIf { it > 0 }
 }
+
+internal fun pcExecutionMemoryRequest(
+    address: Int,
+    maximum: Int,
+): DebugAnchoredMemoryRequest? {
+  val bounds = pcInspectionBounds(address) ?: return null
+  if (maximum <= 0) return null
+  val forwardSpace = bounds.endExclusive - address
+  val forwardForCurrent =
+      minOf(EXECUTION_CONTEXT_CURRENT_INSTRUCTION_BYTES, forwardSpace)
+  val before =
+      minOf(
+          EXECUTION_CONTEXT_BEFORE_BYTES,
+          address - bounds.start,
+          (maximum - forwardForCurrent).coerceAtLeast(0),
+      )
+  val length = before + minOf(maximum - before, forwardSpace)
+  return DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, -before, length)
+}
+
+private fun pcInspectionBounds(address: Int): PcInspectionBounds? =
+    when (address) {
+      in 0x0000..0x7fff -> PcInspectionBounds(0x0000, 0x8000)
+      in 0xc000..0xfdff -> PcInspectionBounds(0xc000, 0xfe00)
+      in 0xff80..0xfffe -> PcInspectionBounds(0xff80, 0xffff)
+      else -> null
+    }
+
+private fun executionMemoryBudget(remainingBytes: Int): Int =
+    minOf(
+        EXECUTION_CONTEXT_BYTES,
+        maxOf(
+            minOf(EXECUTION_CONTEXT_CURRENT_INSTRUCTION_BYTES, remainingBytes),
+            remainingBytes - STACK_BYTES,
+        ),
+    )
+
+private data class PcInspectionBounds(
+    val start: Int,
+    val endExclusive: Int,
+)
+
+private const val EXECUTION_CONTEXT_BYTES = 40
+private const val EXECUTION_CONTEXT_BEFORE_BYTES = 12
+private const val EXECUTION_CONTEXT_CURRENT_INSTRUCTION_BYTES = 3
 
 private fun stackAnchoredLength(address: Int, maximum: Int): Int? {
   val endExclusive =

@@ -1330,6 +1330,9 @@ class DebuggerPanelTest {
           listOf(DebugInspectionAnchor.PROGRAM_COUNTER, DebugInspectionAnchor.STACK_POINTER),
           continuous.request.anchoredRequests().map { it.anchor() },
       )
+      val instructionContext = continuous.request.anchoredRequests().first()
+      assertEquals(-12, instructionContext.offset())
+      assertEquals(40, instructionContext.length())
       assertEquals(1, continuous.request.memoryRequests().size)
       completeInspection(continuous, snapshot(110, 2, paused = false))
       flushEdt()

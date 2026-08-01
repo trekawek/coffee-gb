@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.debug.DebugCapabilities
 import eu.rekawek.coffeegb.core.debug.DebugDisassembler
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
+import eu.rekawek.coffeegb.core.cpu.Opcodes
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -78,7 +79,9 @@ internal class DebuggerExecutionPanel(
       border = null
     }
 
-    configureTable(instructionTable, "Current instruction")
+    configureTable(instructionTable, "Instructions around the program counter")
+    instructionTable.accessibleContext.accessibleDescription =
+        "Best-effort instruction context before and after the current program counter"
     instructionTable.columnModel.getColumn(0).preferredWidth = 90
     instructionTable.columnModel.getColumn(1).preferredWidth = 420
     instructionTable.columnModel.getColumn(2).preferredWidth = 260
@@ -91,7 +94,7 @@ internal class DebuggerExecutionPanel(
     stackTable.columnModel.getColumn(3).preferredWidth = 260
 
     val instruction = JPanel(BorderLayout()).apply {
-      border = BorderFactory.createTitledBorder("Instruction at PC")
+      border = BorderFactory.createTitledBorder("Instructions around PC")
       add(JScrollPane(instructionTable), BorderLayout.CENTER)
     }
     val stack = JPanel(BorderLayout()).apply {
@@ -150,7 +153,10 @@ internal class DebuggerExecutionPanel(
     retired.text = "%,d".format(execution.retiredInstructions())
     timing.text = "F${snapshot.frame()} · ${snapshot.framePosition()}"
 
-    instructionModel.render(snapshot, instruction)
+    instructionModel.render(snapshot, instruction)?.let { currentRow ->
+      instructionTable.selectionModel.setSelectionInterval(currentRow, currentRow)
+      instructionTable.scrollRectToVisible(instructionTable.getCellRect(currentRow, 0, true))
+    } ?: instructionTable.clearSelection()
     val stackView =
         DebuggerPresentation.stack(
             snapshot,
@@ -168,7 +174,8 @@ internal class DebuggerExecutionPanel(
   /** Keeps command completions visually current while the next coherent memory capture arrives. */
   fun renderSnapshot(snapshot: DebugSnapshot, capabilities: DebugCapabilities) {
     render(snapshot, null, null, capabilities)
-    instructionModel.message("Capturing the instruction at the new PC…")
+    instructionModel.message("Capturing instruction context at the new PC…")
+    instructionTable.clearSelection()
     stackModel.message("Capturing stack bytes at the new SP…")
   }
 
@@ -182,6 +189,7 @@ internal class DebuggerExecutionPanel(
     retired.text = "—"
     timing.text = "—"
     instructionModel.message(message)
+    instructionTable.clearSelection()
     stackModel.message(message)
     coherenceLabel.text = message
     lastSnapshot = null
@@ -274,45 +282,145 @@ internal class DebuggerExecutionPanel(
       }
 
   private class InstructionTableModel : AbstractTableModel() {
-    private var row = arrayOf("—", "Waiting for a coherent snapshot", "")
+    private data class Row(
+        val address: String,
+        val instruction: String,
+        val source: String,
+        val offset: Int = -1,
+    )
 
-    override fun getRowCount(): Int = 1
+    private var rows = listOf(Row("—", "Waiting for a coherent snapshot", ""))
+
+    override fun getRowCount(): Int = rows.size
 
     override fun getColumnCount(): Int = COLUMNS.size
 
     override fun getColumnName(column: Int): String = COLUMNS[column]
 
-    override fun getValueAt(rowIndex: Int, columnIndex: Int): Any = row[columnIndex]
+    override fun getValueAt(rowIndex: Int, columnIndex: Int): Any =
+        when (columnIndex) {
+          0 -> rows[rowIndex].address
+          1 -> rows[rowIndex].instruction
+          else -> rows[rowIndex].source
+        }
 
-    fun render(snapshot: DebugSnapshot, memory: DebugMemoryBlock?) {
+    fun render(snapshot: DebugSnapshot, memory: DebugMemoryBlock?): Int? {
+      val pc = snapshot.registers().pc()
       if (memory == null) {
-        message("Live instruction bytes are outside the safe memory views")
-        row[0] = DebuggerPresentation.formatWord(snapshot.registers().pc())
-        return
+        rows = listOf(Row(DebuggerPresentation.formatWord(pc), "Live instruction bytes are outside the safe memory views", ""))
+        fireTableDataChanged()
+        return null
       }
-      val disassembly =
-          runCatching { DebugDisassembler.disassemble(memory) }
-              .getOrElse { "Disassembly unavailable: ${it.message.orEmpty()}" }
-      val sourceMarker = " [best-effort: "
-      val sourceAt = disassembly.indexOf(sourceMarker)
-      val body = if (sourceAt >= 0) disassembly.substring(0, sourceAt) else disassembly
-      val detail = body.substringAfter(':', body).trim()
-      val source =
-          if (sourceAt >= 0) disassembly.substring(sourceAt + sourceMarker.length).removeSuffix("]")
-          else memory.addressSpace().name
-      row = arrayOf(DebuggerPresentation.formatWord(memory.startAddress()), detail, source)
-      fireTableRowsUpdated(0, 0)
+      val currentOffset = pc - memory.startAddress()
+      if (currentOffset !in 0 until memory.length()) {
+        rows =
+            listOf(
+                Row(
+                    DebuggerPresentation.formatWord(pc),
+                    "Current PC is outside the captured instruction context",
+                    "",
+                ))
+        fireTableDataChanged()
+        return null
+      }
+
+      val current = rowAt(memory, currentOffset, inferredPredecessor = false)
+      if (current == null) {
+        rows =
+            listOf(
+                Row(
+                    DebuggerPresentation.formatWord(pc),
+                    "Instruction bytes are truncated in this capture",
+                    memory.addressSpace().name,
+                ))
+        fireTableDataChanged()
+        return null
+      }
+      val previous = precedingRows(memory, currentOffset)
+      val following = followingRows(memory, currentOffset)
+      rows = previous + following
+      val selected = rows.indexOfFirst { it.offset == currentOffset }
+      fireTableDataChanged()
+      return selected.takeIf { it >= 0 }
     }
 
     fun message(value: String) {
-      row = arrayOf("—", value, "")
-      fireTableRowsUpdated(0, 0)
+      rows = listOf(Row("—", value, ""))
+      fireTableDataChanged()
     }
 
-    fun copyText(): String = row.joinToString("  ").trim()
+    fun copyText(): String =
+        rows.joinToString("\n") { row ->
+          listOf(row.address, row.instruction, row.source).filter(String::isNotBlank).joinToString("  ")
+        }
+
+    private fun precedingRows(memory: DebugMemoryBlock, currentOffset: Int): List<Row> {
+      val reverse = mutableListOf<Row>()
+      var endOffset = currentOffset
+      repeat(PREVIOUS_CONTEXT_ROWS) {
+        val previous =
+            (MAX_INSTRUCTION_BYTES downTo 1).firstNotNullOfOrNull { length ->
+              val startOffset = endOffset - length
+              rowAt(memory, startOffset, inferredPredecessor = true)
+                  ?.takeIf { instructionLength(memory, startOffset) == length }
+            } ?: return reverse.asReversed()
+        reverse += previous
+        endOffset = previous.offset
+      }
+      return reverse.asReversed()
+    }
+
+    private fun followingRows(memory: DebugMemoryBlock, currentOffset: Int): List<Row> {
+      val result = mutableListOf<Row>()
+      var offset = currentOffset
+      repeat(FOLLOWING_CONTEXT_ROWS + 1) {
+        val row = rowAt(memory, offset, inferredPredecessor = false) ?: return result
+        result += row
+        offset += instructionLength(memory, offset)
+      }
+      return result
+    }
+
+    private fun rowAt(
+        memory: DebugMemoryBlock,
+        offset: Int,
+        inferredPredecessor: Boolean,
+    ): Row? {
+      if (offset !in 0 until memory.length()) return null
+      val length = instructionLength(memory, offset)
+      if (offset + length > memory.length()) return null
+      val instruction =
+          DebugMemoryBlock(
+              memory.addressSpace(),
+              memory.startAddress() + offset,
+              ByteArray(length) { index -> memory.byteAt(offset + index) },
+          )
+      val disassembly =
+          runCatching { DebugDisassembler.disassemble(instruction) }.getOrNull() ?: return null
+      val sourceMarker = " [best-effort: "
+      val sourceAt = disassembly.indexOf(sourceMarker)
+      val body = if (sourceAt >= 0) disassembly.substring(0, sourceAt) else disassembly
+      val source =
+          if (sourceAt >= 0) disassembly.substring(sourceAt + sourceMarker.length).removeSuffix("]")
+          else memory.addressSpace().name
+      return Row(
+          DebuggerPresentation.formatWord(memory.startAddress() + offset),
+          body.substringAfter(':', body).trim(),
+          if (inferredPredecessor) "$source; inferred pre-PC boundary" else source,
+          offset,
+      )
+    }
+
+    private fun instructionLength(memory: DebugMemoryBlock, offset: Int): Int {
+      val opcode = memory.unsignedByteAt(offset)
+      return if (opcode == 0xcb) 2 else (Opcodes.COMMANDS[opcode]?.operandLength ?: 0) + 1
+    }
 
     private companion object {
       val COLUMNS = arrayOf("PC", "Bytes and instruction", "Memory view")
+      const val MAX_INSTRUCTION_BYTES = 3
+      const val PREVIOUS_CONTEXT_ROWS = 4
+      const val FOLLOWING_CONTEXT_ROWS = 6
     }
   }
 
