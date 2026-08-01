@@ -190,6 +190,71 @@ internal enum class MobileAdapterStatusTone {
   ERROR,
 }
 
+internal data class MobileAdapterGuestImagePersistencePresentation(
+    val status: String,
+    val tone: MobileAdapterStatusTone,
+)
+
+internal data class MobileAdapterGuestImagePersistenceCursor(
+    val sequence: Long,
+    val phase: Controller.MobileAdapterConfigurationPersistencePhase,
+)
+
+internal fun presentMobileAdapterGuestImagePersistence(
+    phase: Controller.MobileAdapterConfigurationPersistencePhase,
+    error: MobileAdapterConfigurationError?,
+): MobileAdapterGuestImagePersistencePresentation =
+    when (phase) {
+      Controller.MobileAdapterConfigurationPersistencePhase.PENDING ->
+          MobileAdapterGuestImagePersistencePresentation(
+              "Changes received from the emulated Mobile Adapter are active and being saved. Keep Coffee GB open until saving finishes.",
+              MobileAdapterStatusTone.WARNING,
+          )
+      Controller.MobileAdapterConfigurationPersistencePhase.SAVED ->
+          MobileAdapterGuestImagePersistencePresentation(
+              "Changes received from the emulated Mobile Adapter are active and saved. No action is needed.",
+              MobileAdapterStatusTone.SUCCESS,
+          )
+      Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED ->
+          MobileAdapterGuestImagePersistencePresentation(
+              "Pending changes received from the emulated Mobile Adapter were replaced by the owner-selected adapter image. Review the imported image before continuing.",
+              MobileAdapterStatusTone.NEUTRAL,
+          )
+      Controller.MobileAdapterConfigurationPersistencePhase.FAILED -> {
+        val stableError = checkNotNull(error)
+        MobileAdapterGuestImagePersistencePresentation(
+            "${stableError.code}: ${stableError.userMessage} Changes received from the emulated Mobile Adapter remain active for this session but could not be saved. Check private configuration storage, then retry by closing Coffee GB again.",
+            MobileAdapterStatusTone.ERROR,
+        )
+      }
+    }
+
+/**
+ * Accepts the globally sequenced guest-image durability stream without carrying its correlation
+ * metadata into presentation. A failed write remains retryable, so a later saved/superseded phase
+ * for that same sequence must be allowed to replace the warning.
+ */
+internal fun acceptsMobileAdapterGuestImagePersistence(
+    current: MobileAdapterGuestImagePersistenceCursor?,
+    sequence: Long,
+    phase: Controller.MobileAdapterConfigurationPersistencePhase,
+): Boolean {
+  if (current == null || sequence > current.sequence) return true
+  if (sequence < current.sequence) return false
+  return mobileAdapterGuestImagePersistencePhaseOrder(phase) >
+      mobileAdapterGuestImagePersistencePhaseOrder(current.phase)
+}
+
+private fun mobileAdapterGuestImagePersistencePhaseOrder(
+    phase: Controller.MobileAdapterConfigurationPersistencePhase
+): Int =
+    when (phase) {
+      Controller.MobileAdapterConfigurationPersistencePhase.PENDING -> 0
+      Controller.MobileAdapterConfigurationPersistencePhase.FAILED -> 1
+      Controller.MobileAdapterConfigurationPersistencePhase.SAVED,
+      Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED -> 2
+    }
+
 internal data class MobileAdapterSessionPresentation(
     val summary: String,
     val cancelEnabled: Boolean,
@@ -282,6 +347,8 @@ internal data class MobileAdapterConfigurationPresentation(
     val savePhase: MobileAdapterSavePhase,
     val networkConsent: Boolean,
     val privateLocalDevelopment: Boolean,
+    val guestImageStatus: String,
+    val guestImageStatusTone: MobileAdapterStatusTone,
     val policyStatus: String,
     val policyStatusTone: MobileAdapterStatusTone,
     val session: MobileAdapterSessionPresentation,
@@ -400,6 +467,7 @@ internal class MobileAdapterConfigurationWindowHost(
     private val viewFactory: MobileAdapterConfigurationWindowViewFactory,
     private val decisions: MobileAdapterConfigurationDecisionPrompter,
     private val onSummary: (MobileAdapterConfigurationSummary) -> Unit = {},
+    private val onGuestImagePersistenceFailure: (String) -> Unit = {},
     private val imageSelector: MobileAdapterConfigurationImageSelector =
         MobileAdapterConfigurationImageSelector { null },
 ) : AutoCloseable {
@@ -413,6 +481,12 @@ internal class MobileAdapterConfigurationWindowHost(
   private var savePhase = MobileAdapterSavePhase.IDLE
   private var policyStatus = "Review saved policy and session-only permissions separately."
   private var policyStatusTone = MobileAdapterStatusTone.NEUTRAL
+  private var guestImagePersistence =
+      MobileAdapterGuestImagePersistencePresentation(
+          "No guest-authored adapter image changes have been received this session.",
+          MobileAdapterStatusTone.NEUTRAL,
+      )
+  private var guestImagePersistenceCursor: MobileAdapterGuestImagePersistenceCursor? = null
   private var closed = false
   private var saveGeneration = 0L
 
@@ -428,6 +502,7 @@ internal class MobileAdapterConfigurationWindowHost(
         DesktopThemeTokens.capture(DesktopAppearance.SYSTEM)
       },
       onSummary: (MobileAdapterConfigurationSummary) -> Unit = {},
+      onGuestImagePersistenceFailure: (String) -> Unit = {},
   ) : this(
       coordinator = coordinator,
       rootEventBus = rootEventBus,
@@ -444,12 +519,14 @@ internal class MobileAdapterConfigurationWindowHost(
           },
       decisions = DesktopMobileAdapterConfigurationDecisionPrompter(owner, dialogFactory),
       onSummary = onSummary,
+      onGuestImagePersistenceFailure = onGuestImagePersistenceFailure,
       imageSelector = DesktopMobileAdapterConfigurationImageSelector(owner),
   )
 
   init {
     requireMobileAdapterEdt("Mobile Adapter window host construction")
     registerNetworkStatus()
+    registerGuestImagePersistenceStatus()
     publish()
   }
 
@@ -744,6 +821,8 @@ internal class MobileAdapterConfigurationWindowHost(
           savePhase = savePhase,
           networkConsent = runtime.networkConsent,
           privateLocalDevelopment = runtime.privateLocalDevelopment,
+          guestImageStatus = guestImagePersistence.status,
+          guestImageStatusTone = guestImagePersistence.tone,
           policyStatus = policyStatus,
           policyStatusTone = policyStatusTone,
           session =
@@ -770,6 +849,28 @@ internal class MobileAdapterConfigurationWindowHost(
         if (previous == null || next.attachmentId >= previous.attachmentId) {
           network = next
           publish()
+        }
+      }
+    }
+  }
+
+  private fun registerGuestImagePersistenceStatus() {
+    eventBus.register<Controller.MobileAdapterConfigurationPersistenceStatusEvent> { event ->
+      dispatchSwingMutation {
+        if (closed ||
+            !acceptsMobileAdapterGuestImagePersistence(
+                guestImagePersistenceCursor,
+                event.sequence,
+                event.phase,
+            )) {
+          return@dispatchSwingMutation
+        }
+        guestImagePersistenceCursor =
+            MobileAdapterGuestImagePersistenceCursor(event.sequence, event.phase)
+        guestImagePersistence = presentMobileAdapterGuestImagePersistence(event.phase, event.error)
+        publish()
+        if (event.phase == Controller.MobileAdapterConfigurationPersistencePhase.FAILED) {
+          onGuestImagePersistenceFailure(guestImagePersistence.status)
         }
       }
     }
@@ -1029,6 +1130,8 @@ internal class MobileAdapterConfigurationPanel(
       JCheckBox("Development only: allow loopback and private/LAN destinations")
   internal val sessionStatus = mobileAdapterLiteralText("", 3, "Current session status")
   internal val cancelNetwork = JButton("Cancel active network work")
+  internal val guestImageStatus =
+      mobileAdapterLiteralText("", 3, "Guest-authored adapter image persistence status")
   internal val policyStatus = mobileAdapterLiteralText("", 3, "Mobile Adapter policy status")
   internal val importImageButton = JButton("Import adapter image…")
   internal val reloadButton = JButton("Reload policy")
@@ -1119,6 +1222,8 @@ internal class MobileAdapterConfigurationPanel(
       sessionStatus.accessibleContext.accessibleDescription = next.session.summary
       cancelNetwork.isEnabled = next.session.cancelEnabled
 
+      guestImageStatus.text = next.guestImageStatus
+      guestImageStatus.accessibleContext.accessibleDescription = next.guestImageStatus
       policyStatus.text = next.policyStatus
       policyStatus.accessibleContext.accessibleDescription = next.policyStatus
       importImageButton.text =
@@ -1173,6 +1278,7 @@ internal class MobileAdapterConfigurationPanel(
     mappingsTable.selectionBackground = tokens.focus
     mappingsTable.selectionForeground = contrastingMobileAdapterText(tokens.focus)
     policyStatus.background = tokens.surface
+    guestImageStatus.background = tokens.surface
     sessionStatus.background = tokens.surface
     startupSummary.background = tokens.surface
     validationStatus.background = tokens.surface
@@ -1217,9 +1323,12 @@ internal class MobileAdapterConfigurationPanel(
         )
     val buttonRow = JPanel(FlowLayout(FlowLayout.LEADING, 0, 0))
     buttonRow.add(importImageButton)
+    val actionsAndStatus = JPanel(BorderLayout(0, tokens.spacing.related))
+    actionsAndStatus.add(buttonRow, BorderLayout.NORTH)
+    actionsAndStatus.add(guestImageStatus, BorderLayout.CENTER)
     val content = JPanel(BorderLayout(0, tokens.spacing.related))
     content.add(explanation, BorderLayout.CENTER)
-    content.add(buttonRow, BorderLayout.SOUTH)
+    content.add(actionsAndStatus, BorderLayout.SOUTH)
     imageSection.add(heading, BorderLayout.NORTH)
     imageSection.add(content, BorderLayout.CENTER)
     return imageSection
@@ -1489,6 +1598,7 @@ internal class MobileAdapterConfigurationPanel(
 
   private fun applyStatusColors() {
     validationStatus.foreground = tokens.danger
+    guestImageStatus.foreground = colorFor(current.guestImageStatusTone)
     policyStatus.foreground = colorFor(current.policyStatusTone)
     sessionStatus.foreground = colorFor(current.session.tone)
   }
@@ -1519,6 +1629,9 @@ internal class MobileAdapterConfigurationPanel(
           savePhase = MobileAdapterSavePhase.IDLE,
           networkConsent = false,
           privateLocalDevelopment = false,
+          guestImageStatus =
+              "No guest-authored adapter image changes have been received this session.",
+          guestImageStatusTone = MobileAdapterStatusTone.NEUTRAL,
           policyStatus = "",
           policyStatusTone = MobileAdapterStatusTone.NEUTRAL,
           session = MobileAdapterSessionPresentation("", false),
