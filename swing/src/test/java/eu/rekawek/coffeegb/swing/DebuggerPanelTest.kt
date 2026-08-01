@@ -280,6 +280,38 @@ class DebuggerPanelTest {
   }
 
   @Test
+  fun `automatic sampling freezes after the complete paused instruction capture`() {
+    val client = RecordingDebuggerClient(82, capabilities())
+    val panel = attach(client)
+    try {
+      completeInspection(client.inspections.single(), snapshot(82, 1, paused = false))
+      flushEdt()
+
+      assertEquals(1, client.inspections.size)
+      onEdt { panel.requestRefresh(automatic = true) }
+      onEdt { panel.requestRefresh(automatic = true) }
+      assertEquals(2, client.inspections.size)
+
+      completeInspection(client.inspections.last(), snapshot(82, 2, paused = true))
+      flushEdt()
+
+      // The first paused response gets one PC/SP-relative follow-up. The coalesced timer tick
+      // above must not schedule a further capture after that instruction context is complete.
+      assertEquals(3, client.inspections.size)
+      completeInspection(client.inspections.last(), snapshot(82, 3, paused = true))
+      flushEdt()
+      assertEquals(3, client.inspections.size)
+      onEdt { panel.requestRefresh(automatic = true) }
+      assertEquals(3, client.inspections.size)
+
+      onEdt { panel.requestRefresh() }
+      assertEquals(4, client.inspections.size)
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
   fun `polling does not submit inspection when coherent inspection is unavailable`() {
     val client = RecordingDebuggerClient(9, capabilities(coherentInspection = false))
     val panel = attach(client)
