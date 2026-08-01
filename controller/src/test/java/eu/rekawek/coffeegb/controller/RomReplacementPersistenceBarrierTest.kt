@@ -33,7 +33,7 @@ class RomReplacementPersistenceBarrierTest {
   fun failedBarrierKeepsOldSessionAndRetryCommitsReplacementOffTimingThread() {
     withFixture { fixture ->
       fixture.start()
-      Files.createDirectory(fixture.oldSave)
+      fixture.blockAutosave()
 
       fixture.eventBus.post(
           LoadRomEvent(
@@ -43,7 +43,7 @@ class RomReplacementPersistenceBarrierTest {
 
       val observed = assertNotNull(fixture.failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals("coffee-gb-controller", observed.threadName)
-      assertEquals("old.sav", observed.event.fileName)
+      assertEquals("autosave state", observed.event.fileName)
       assertEquals(73, observed.event.openRequestId)
       assertNull(
           fixture.stopped.poll(300, TimeUnit.MILLISECONDS),
@@ -62,7 +62,7 @@ class RomReplacementPersistenceBarrierTest {
               .contains("replacement"),
       )
 
-      Files.delete(fixture.oldSave)
+      fixture.unblockAutosave()
       fixture.eventBus.post(Controller.RetryRomReplacementEvent(observed.event.requestId))
 
       assertNotNull(fixture.stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
@@ -72,7 +72,7 @@ class RomReplacementPersistenceBarrierTest {
             assertEquals(73, it.openRequestId)
           }.romName,
       )
-      assertTrue(Files.isRegularFile(fixture.oldSave))
+      assertTrue(fixture.autosaveExists())
     }
   }
 
@@ -80,7 +80,7 @@ class RomReplacementPersistenceBarrierTest {
   fun cancellingFailedBarrierResumesExactOldSessionAndIgnoresStaleRetry() {
     withFixture { fixture ->
       fixture.start()
-      Files.createDirectory(fixture.oldSave)
+      fixture.blockAutosave()
       fixture.frames.clear()
 
       fixture.eventBus.post(LoadRomEvent(fixture.nextRom.toFile()))
@@ -111,7 +111,7 @@ class RomReplacementPersistenceBarrierTest {
   fun failedStopBarrierCanBeRetriedWithoutClosingTheSessionEarly() {
     withFixture { fixture ->
       fixture.start()
-      Files.createDirectory(fixture.oldSave)
+      fixture.blockAutosave()
 
       fixture.eventBus.post(Controller.StopEmulationEvent())
 
@@ -119,11 +119,11 @@ class RomReplacementPersistenceBarrierTest {
       assertEquals(Controller.PersistenceBarrierOperation.STOP, failure.operation)
       assertNull(fixture.stopped.poll(300, TimeUnit.MILLISECONDS))
 
-      Files.delete(fixture.oldSave)
+      fixture.unblockAutosave()
       fixture.eventBus.post(Controller.RetryRomReplacementEvent(failure.requestId))
 
       assertNotNull(fixture.stopped.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      assertTrue(Files.isRegularFile(fixture.oldSave))
+      assertTrue(fixture.autosaveExists())
     }
   }
 
@@ -131,7 +131,7 @@ class RomReplacementPersistenceBarrierTest {
   fun cancellingFailedStopResumesTheOldSession() {
     withFixture { fixture ->
       fixture.start()
-      Files.createDirectory(fixture.oldSave)
+      fixture.blockAutosave()
       fixture.frames.clear()
       fixture.eventBus.post(Controller.StopEmulationEvent())
       val failure =
@@ -148,7 +148,7 @@ class RomReplacementPersistenceBarrierTest {
   fun synchronousCloseFailureRetainsCaptureForASecondCloseAttempt() {
     withFixture { fixture ->
       fixture.start()
-      Files.createDirectory(fixture.oldSave)
+      fixture.blockAutosave()
 
       val failure =
           assertFailsWith<Controller.PersistenceBarrierException> {
@@ -157,14 +157,14 @@ class RomReplacementPersistenceBarrierTest {
 
       assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
       assertNull(fixture.stopped.poll(300, TimeUnit.MILLISECONDS))
-      Files.delete(fixture.oldSave)
+      fixture.unblockAutosave()
 
       assertNotNull(fixture.controller.closeWithState())
       assertNull(
           fixture.stopped.poll(300, TimeUnit.MILLISECONDS),
           "synchronous close must not invoke unbounded lifecycle subscribers",
       )
-      assertTrue(Files.isRegularFile(fixture.oldSave))
+      assertTrue(fixture.autosaveExists())
     }
   }
 
@@ -249,10 +249,10 @@ class RomReplacementPersistenceBarrierTest {
     val stateRestoreFailures = LinkedBlockingQueue<Controller.SnapshotLoadFailedEvent>()
     val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
     val oldRom = directory.resolve("old.gb")
-    val oldSave = directory.resolve("old.sav")
     val nextRom = directory.resolve("next.gb")
+    private val stateRoot = directory.resolve(".coffee-gb")
     private val properties =
-        EmulatorProperties().also {
+        EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
           it.properties[EmulatorProperties.Key.BootstrapMode.propertyName] =
               BootstrapMode.SKIP.name
         }
@@ -290,13 +290,26 @@ class RomReplacementPersistenceBarrierTest {
     }
 
     fun close() {
-      if (Files.isDirectory(oldSave)) {
-        Files.delete(oldSave)
-      }
+      unblockAutosave()
       controller.close()
       properties.close()
       eventBus.close()
     }
+
+    fun blockAutosave() {
+      Files.writeString(stateRoot, "blocked")
+    }
+
+    fun unblockAutosave() {
+      if (!Files.isDirectory(stateRoot)) {
+        Files.deleteIfExists(stateRoot)
+      }
+    }
+
+    fun autosaveExists(): Boolean =
+        Files.walk(stateRoot).use { paths ->
+          paths.anyMatch { it.fileName.toString() == "state.cgbstate" }
+        }
   }
 
   private data class ObservedFailure(

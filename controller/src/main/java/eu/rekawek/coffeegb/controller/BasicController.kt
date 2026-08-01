@@ -2371,7 +2371,7 @@ class BasicController private constructor(
       return
     }
     val currentSession = session ?: return
-    if (loadJob != null || replacementJob != null || stopJob != null) {
+    if (loadJob != null || pendingRomSwitch != null || replacementJob != null || stopJob != null) {
       postStateFailure(
           requestId,
           StateOperation.LOAD,
@@ -3980,7 +3980,7 @@ class BasicController private constructor(
 
   private fun loadSnapshot(slot: Int) {
     val currentSession = session ?: return
-    if (loadJob != null || replacementJob != null || stopJob != null) {
+    if (loadJob != null || pendingRomSwitch != null || replacementJob != null || stopJob != null) {
       currentSession.eventBus.post(
           Controller.SnapshotLoadFailedEvent(
               slot,
