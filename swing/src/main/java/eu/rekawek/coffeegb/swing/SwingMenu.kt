@@ -47,6 +47,32 @@ internal data class DebuggerMenuActions(
 /** A dynamic Pause/Resume label is a command, not a checked state in the platform menu. */
 internal fun pauseResumeMenuItem(action: Action): JMenuItem = JMenuItem(action)
 
+internal fun mobileAdapterConfigurationMenuItem(onShow: () -> Unit): JMenuItem =
+    JMenuItem("Configure Mobile Adapter…").apply {
+      accessibleContext.accessibleDescription =
+          "Import a private adapter image, configure a custom service, grant session permissions, and inspect network status"
+      addActionListener { onShow() }
+    }
+
+internal fun hasMobileAdapterDesktopControls(menuBar: JMenuBar): Boolean {
+  val peripherals =
+      menuBar.components.filterIsInstance<JMenu>().singleOrNull { it.text == "Peripherals" }
+          ?: return false
+  val linkPort =
+      peripherals.menuComponents.filterIsInstance<JMenu>().singleOrNull {
+        it.text == "Link-port device"
+      } ?: return false
+  val ownerVisible =
+      linkPort.menuComponents.filterIsInstance<JMenuItem>().any {
+        it.text == "Mobile Adapter GB" && it.isVisible && it.isEnabled
+      }
+  val configurationVisible =
+      peripherals.menuComponents.filterIsInstance<JMenuItem>().any {
+        it.text == "Configure Mobile Adapter…" && it.isVisible && it.isEnabled
+      }
+  return ownerVisible && configurationVisible
+}
+
 private enum class StopGameDecision {
   STOP,
   KEEP_PLAYING,
@@ -107,6 +133,7 @@ internal class SwingMenu(
     private val debuggerActions: DebuggerMenuActions,
     private val desktopActions: DesktopActionRegistry,
     private val isLinkedControllerActive: () -> Boolean,
+    private val onMobileAdapterConfiguration: () -> Unit,
     currentThemeTokens: () -> DesktopThemeTokens,
     private val onDesktopStatus: (String) -> Unit = {},
 ) {
@@ -430,7 +457,6 @@ internal class SwingMenu(
     serialPeripheralBinding =
         SerialPeripheralMenuBinding(
             eventBus,
-            mobileAdapterVisible = false,
             transitionPrerequisites = { selection ->
               serialPeripheralTransitionPrerequisites(
                   selection,
@@ -441,6 +467,7 @@ internal class SwingMenu(
             },
         )
     peripheralsMenu.add(serialPeripheralBinding.menu)
+    peripheralsMenu.add(mobileAdapterConfigurationMenuItem(onMobileAdapterConfiguration))
 
     val actionReplaySlot = JMenuItem("Action Replay Slot…")
     actionReplaySlot.accessibleContext.accessibleDescription =

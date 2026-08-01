@@ -401,6 +401,7 @@ class SwingGui private constructor(
             ),
             desktopActions,
             emulator::isLinkedControllerActive,
+            mobileAdapterWindow::show,
             { themeManager.current?.tokens ?: initialTheme.tokens },
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
@@ -907,6 +908,9 @@ class SwingGui private constructor(
     check(mainWindow.jMenuBar != null && mainWindow.contentPane.componentCount > 0) {
       "Desktop startup smoke requires the production menu and display content"
     }
+    check(hasMobileAdapterDesktopControls(mainWindow.jMenuBar)) {
+      "Desktop startup smoke requires the production Mobile Adapter controls"
+    }
     val marker =
         try {
           Path.of(markerText).toAbsolutePath().normalize()
@@ -915,7 +919,8 @@ class SwingGui private constructor(
           exitProcess(1)
         }
     val evidence =
-        "Coffee GB desktop ready OK: edt=true, visible=true, displayable=true, menu=true\n"
+        "Coffee GB desktop ready OK: edt=true, visible=true, displayable=true, menu=true, " +
+            "mobile-adapter=true\n"
     writeDesktopStartupEvidence(marker, evidence) { failure ->
       if (failure != null) {
         LOG.error("Unable to write desktop startup smoke evidence", failure)
@@ -950,6 +955,8 @@ class SwingGui private constructor(
             requestedCategory
                 ?: desktopUiStateController.lastPreferencesCategory().toPreferencesCategory(),
         initialBounds = desktopUiStateController.utilityBounds(DesktopUtilityWindow.PREFERENCES),
+        mobileAdapterSummary = mobileAdapterWindow.currentSummary().preferencesText(),
+        configureMobileAdapter = mobileAdapterWindow::showOrRaise,
         onCategoryChanged = { category ->
           desktopUiStateController.rememberPreferencesCategory(category.toDesktopCategory())
         },
