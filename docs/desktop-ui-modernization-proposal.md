@@ -120,8 +120,9 @@ Delivered in this branch:
 - Schema 8 adds Light, Dark, and System appearance, command-bar visibility, and desktop window
   preferences. FlatLaf Light/Dark is packaged with System-LAF fallback, semantic theme tokens,
   shared Pocket Brew imagery, whole-window theme refresh, and updated legal inventory.
-- The main frame now has Home/Game cards, one ROM-open pipeline for every entry route, a bounded
-  recent-game card grid with asynchronously loaded autosave thumbnails, drag-and-drop guidance, a
+- The main frame now has Home/Game cards, one ROM-open pipeline for every entry route, a
+  configured recent-game card grid with asynchronously loaded autosave thumbnails, drag-and-drop
+  guidance, a
   responsive shared-action command bar, an in-window task banner, and an always-visible textual
   status region. Exact 1x packs after command chrome has adopted the new presentation, and Close
   Game leaves fullscreen before revealing Home.

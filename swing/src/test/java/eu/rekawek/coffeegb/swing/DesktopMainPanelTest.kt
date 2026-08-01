@@ -120,7 +120,7 @@ class DesktopMainPanelTest {
   }
 
   @Test
-  fun `home uses the shared open action and caps recent entries at five`() {
+  fun `home uses the shared open action for every configured recent entry`() {
     onEdt {
       val actions = actions()
       val panel = panel(actions)
@@ -130,7 +130,7 @@ class DesktopMainPanelTest {
       val buttons = descendants(home).filterIsInstance<AbstractButton>()
       assertEquals(1, buttons.count { it.action === actions[DesktopCommand.OPEN_ROM] })
       assertEquals(
-          5,
+          8,
           buttons.count {
             it.accessibleContext.accessibleName?.startsWith("Open recent ROM") == true
           },

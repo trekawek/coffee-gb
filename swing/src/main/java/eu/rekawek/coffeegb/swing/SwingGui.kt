@@ -571,7 +571,7 @@ class SwingGui private constructor(
   private fun updateRecentRoms() {
     if (::menu.isInitialized) menu.updateRecentRoms()
     if (::desktopMainPanel.isInitialized) {
-      val paths = properties.recentRoms.getPaths().take(MAXIMUM_HOME_RECENTS)
+      val paths = properties.recentRoms.getPaths()
       desktopMainPanel.updateRecentGames(paths.map(::DesktopRecentGame))
       val generation = recentGamePreviewGeneration.incrementAndGet()
       val saves = properties.applicationSettings.saves
@@ -1026,7 +1026,6 @@ class SwingGui private constructor(
   companion object {
     private val LOG = LoggerFactory.getLogger(SwingGui::class.java)
     private const val DESKTOP_SMOKE_MARKER_ENV = "COFFEE_GB_DESKTOP_SMOKE_MARKER"
-    private const val MAXIMUM_HOME_RECENTS = 5
 
     fun run(
         debug: Boolean,
