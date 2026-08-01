@@ -760,6 +760,18 @@ internal constructor(
       }
       operation.controllerDispatched = true
     }
+    // Inspection is complete at this point. Do not leave the desktop on its last filesystem
+    // progress label while the controller is crossing its asynchronous frame boundary; that
+    // boundary can legitimately wait for a previous game's mandatory autosave.
+    publish(
+        operation,
+        RomOpenUpdate.Progress(
+            operation.id,
+            operation.request.source,
+            operation.path,
+            RomOpenStage.PREPARING_CORE,
+        ),
+    )
     try {
       eventBus.post(
           Controller.LoadRomEvent(
