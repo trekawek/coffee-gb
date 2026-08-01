@@ -347,7 +347,7 @@ class DebuggerPanelTest {
       val replanned = client.inspections.last().request
       assertEquals(1, replanned.anchoredRequests().size)
       assertEquals(DebugInspectionAnchor.PROGRAM_COUNTER, replanned.anchoredRequests().single().anchor())
-      assertEquals(1, replanned.anchoredRequests().single().length())
+      assertEquals(13, replanned.anchoredRequests().single().length())
     } finally {
       onEdt(panel::close)
     }
