@@ -261,6 +261,9 @@ class MobileAdapterControllerLifecycleTest {
             val newerFailure = fixture.await(failed) { it.requestId == 7102L }
             assertEquals(StateOperation.SAVE, newerFailure.operation)
             assertNull(completed.poll(200, TimeUnit.MILLISECONDS))
+            // The test writer only fails the requested manual save. Let mandatory close autosave
+            // finish normally when the fixture tears down the live controller.
+            persistence.fail = false
           }
       assertTrue(backend.awaitTermination(2_000))
     }

@@ -1110,7 +1110,7 @@ class BasicControllerDebugPortTest {
       val result = assertNotNull(completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals(902, result.requestId)
       assertEquals(stateSession.sessionId, result.sessionId)
-      assertFalse(result.autosaved)
+      assertTrue(result.autosaved)
       assertEquals(null, result.error)
     }
   }

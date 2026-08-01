@@ -82,7 +82,7 @@ class BasicControllerTest {
           PreparedSession.Ready(config, gameboy)
         }
     val controller =
-        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 75)
+        BasicController(eventBus, testProperties(), null, preparer, closeTimeoutMillis = 500)
 
     controller.startController()
     try {
@@ -248,7 +248,7 @@ class BasicControllerTest {
           PreparedSession.Ready(config, gameboy)
         }
     val controller =
-        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 300)
+        BasicController(eventBus, testProperties(), null, preparer, closeTimeoutMillis = 300)
 
     controller.startController()
     try {
@@ -336,7 +336,7 @@ class BasicControllerTest {
           PreparedSession.Ready(config, gameboy)
         }
     val controller =
-        BasicController(eventBus, EmulatorProperties(), null, preparer, closeTimeoutMillis = 300)
+        BasicController(eventBus, testProperties(), null, preparer, closeTimeoutMillis = 300)
 
     controller.startController()
     try {
@@ -556,7 +556,7 @@ class BasicControllerTest {
               }
           PreparedSession.Ready(config, gameboy)
         }
-    val controller = BasicController(eventBus, EmulatorProperties(), console, preparer)
+    val controller = BasicController(eventBus, testProperties(), console, preparer)
 
     controller.startController()
     try {
@@ -705,8 +705,7 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
-      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
-      Files.deleteIfExists(directory)
+      deleteTree(directory)
     }
   }
 
@@ -751,8 +750,7 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
-      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
-      Files.deleteIfExists(directory)
+      deleteTree(directory)
     }
   }
 
@@ -854,8 +852,7 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
-      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
-      Files.deleteIfExists(directory)
+      deleteTree(directory)
     }
   }
 
@@ -1276,8 +1273,7 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
-      Files.list(directory).use { files -> files.forEach(Files::deleteIfExists) }
-      Files.deleteIfExists(directory)
+      deleteTree(directory)
     }
   }
 
@@ -1487,6 +1483,20 @@ class BasicControllerTest {
     title.toByteArray(Charsets.US_ASCII).copyInto(bytes, 0x0134, endIndex = title.length.coerceAtMost(15))
     return Files.createTempFile("coffee-gb-$title", ".gbc").toFile().also { it.writeBytes(bytes) }
   }
+
+  /** Controller-only tests must not wait for a desktop resume decision after an autosave. */
+  private fun testProperties(): EmulatorProperties =
+      EmulatorProperties().also { properties ->
+        properties.updateSettings { current ->
+          current.copy(
+              saves =
+                  current.saves.copy(
+                      resumePolicy =
+                          eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy
+                              .NEVER,
+                  ))
+        }
+      }
 
   private fun deleteTree(path: Path) {
     if (!Files.exists(path)) return

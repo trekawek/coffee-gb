@@ -24,6 +24,7 @@ import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterBackendPort
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import java.io.IOException
+import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -58,10 +59,22 @@ class SerialPeripheralControllerTest {
           MobileAdapterConfiguration.syntheticOffline()
         }
     val rewind = RewindManager()
+    val stateDirectory = Files.createTempDirectory("coffee-gb-serial-peripheral-state")
+    val properties = EmulatorProperties()
+    properties.updateSettings { current ->
+      current.copy(
+          saves =
+              current.saves.copy(
+                  directory = stateDirectory,
+                  resumePolicy =
+                      eu.rekawek.coffeegb.controller.properties.ApplicationSettings.ResumePolicy
+                          .NEVER,
+              ))
+    }
     val controller =
         BasicController(
             eventBus,
-            EmulatorProperties(),
+            properties,
             null,
             RomSessionPreparer(),
             SnapshotManagerFactory.DEFAULT,
@@ -114,6 +127,8 @@ class SerialPeripheralControllerTest {
     } finally {
       controller.close()
       eventBus.close()
+      properties.close()
+      stateDirectory.toFile().deleteRecursively()
     }
   }
 
