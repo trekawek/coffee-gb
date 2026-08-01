@@ -13,20 +13,25 @@ import java.awt.Component
 import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Point
+import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
+import java.awt.event.MouseWheelEvent
 import java.util.EventObject
 import java.util.Locale
+import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.DefaultCellEditor
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JComboBox
+import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTable
 import javax.swing.JTextField
+import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
@@ -68,8 +73,6 @@ internal class DebuggerMemoryPanel(
   internal val addressSpaceCombo = JComboBox(SAFE_ADDRESS_SPACES.toTypedArray())
   internal val startSpinner =
       DebuggerHexSpinner(DEFAULT_START, rangesFor(DebugAddressSpace.WORK_RAM), digits = 4)
-  internal val lengthSpinner =
-      DebuggerHexSpinner(DEFAULT_LENGTH, listOf(1..DEFAULT_MAX_SAMPLE_LENGTH), digits = 4)
   internal val followCombo =
       JComboBox(
           arrayOf(
@@ -107,16 +110,12 @@ internal class DebuggerMemoryPanel(
     startSpinner.accessibleContext.accessibleName = "Memory start address"
     startSpinner.accessibleContext.accessibleDescription =
         "Bounded hexadecimal address; arrow controls skip unavailable address ranges"
-    lengthSpinner.accessibleContext.accessibleName = "Memory sample length"
-    lengthSpinner.accessibleContext.accessibleDescription =
-        "Bounded hexadecimal count of bytes captured continuously"
     followCombo.accessibleContext.accessibleName = "Follow register"
     followCombo.accessibleContext.accessibleDescription =
         "Keep the memory range anchored to no register, the program counter, or the stack pointer"
 
     val addressLabel = controlLabel("Space", addressSpaceCombo)
     val startLabel = controlLabel("Start", startSpinner)
-    val lengthLabel = controlLabel("Length", lengthSpinner)
     val followLabel = controlLabel("Follow", followCombo)
     val controls =
         JPanel(FlowLayout(FlowLayout.LEADING, 8, 3)).apply {
@@ -125,8 +124,6 @@ internal class DebuggerMemoryPanel(
           add(addressSpaceCombo)
           add(startLabel)
           add(startSpinner)
-          add(lengthLabel)
-          add(lengthSpinner)
           add(followLabel)
           add(followCombo)
         }
@@ -144,6 +141,7 @@ internal class DebuggerMemoryPanel(
     interest = interestFromControls()
     suppressControlEvents = false
     installListeners()
+    installBrowseNavigation()
     setEmptyState("Waiting for the first live memory sample", resetIdentity = true)
   }
 
@@ -167,7 +165,8 @@ internal class DebuggerMemoryPanel(
     requireBlockMatches(sampledInterest, block)
 
     val selectedCell = pendingPositionRestore?.selectedCell ?: selectedCell()
-    val viewPosition = pendingPositionRestore?.viewPosition ?: Point(memoryScrollPane.viewport.viewPosition)
+    val viewPosition =
+        pendingPositionRestore?.viewPosition ?: Point(memoryScrollPane.viewport.viewPosition)
     val previous =
         baseline?.takeIf { sample ->
           sample.identity.sessionGeneration == identity.sessionGeneration &&
@@ -222,7 +221,7 @@ internal class DebuggerMemoryPanel(
     setEmptyState("No memory sample loaded", resetIdentity = true)
   }
 
-  /** Restricts length to the aggregate inspection budget and updates interest atomically. */
+  /** Restricts the fixed browse page to the aggregate inspection budget. */
   fun setMaximumSampleLength(maximum: Int) {
     requireMemoryPanelEdt("Memory debugger sample-length configuration")
     require(maximum in 1..DebugInspectionRequest.MAX_TOTAL_BYTES) {
@@ -272,15 +271,59 @@ internal class DebuggerMemoryPanel(
         publishInterestIfChanged()
       }
     }
-    lengthSpinner.addChangeListener {
-      if (!suppressControlEvents) reconcileBoundsAndPublish()
-    }
     followCombo.addActionListener {
       if (!suppressControlEvents) {
         updateControlEnablement()
         publishInterestIfChanged()
       }
     }
+  }
+
+  private fun installBrowseNavigation() {
+    memoryTable.addMouseWheelListener { event ->
+      if (event.isConsumed || event.scrollType != MouseWheelEvent.WHEEL_UNIT_SCROLL) {
+        return@addMouseWheelListener
+      }
+      val rows = event.unitsToScroll.takeIf { it != 0 } ?: return@addMouseWheelListener
+      if (browseByRows(rows)) event.consume()
+    }
+    bindBrowseKey(KeyEvent.VK_UP, -1)
+    bindBrowseKey(KeyEvent.VK_DOWN, 1)
+    bindBrowseKey(KeyEvent.VK_PAGE_UP, -BROWSE_ROWS_PER_PAGE)
+    bindBrowseKey(KeyEvent.VK_PAGE_DOWN, BROWSE_ROWS_PER_PAGE)
+  }
+
+  private fun bindBrowseKey(keyCode: Int, rows: Int) {
+    val action = "browse-memory-$keyCode"
+    memoryTable
+        .getInputMap(JComponent.WHEN_FOCUSED)
+        .put(KeyStroke.getKeyStroke(keyCode, 0), action)
+    memoryTable.actionMap.put(
+        action,
+        object : AbstractAction() {
+          override fun actionPerformed(event: java.awt.event.ActionEvent?) {
+            browseByRows(rows)
+          }
+        },
+    )
+  }
+
+  private fun browseByRows(rows: Int): Boolean {
+    if (selectedFollow() != DebuggerMemoryFollow.NONE || rows == 0) return false
+    val range = rangeContaining(selectedAddressSpace(), startSpinner.intValue) ?: return false
+    val delta = rows.toLong() * BYTES_PER_ROW
+    val next =
+        (startSpinner.intValue.toLong() + delta)
+            .coerceIn(range.first.toLong(), range.last.toLong())
+            .toInt()
+    if (next == startSpinner.intValue) return false
+    pendingPositionRestore = null
+    suppressControlEvents = true
+    startSpinner.intValue = next
+    suppressControlEvents = false
+    rememberPosition(activeAddressSpace)
+    publishInterestIfChanged()
+    return true
   }
 
   private fun switchAddressSpace() {
@@ -308,16 +351,7 @@ internal class DebuggerMemoryPanel(
 
   private fun reconcileBounds(preferredStart: Int = startSpinner.intValue) {
     val space = selectedAddressSpace()
-    val longestSegment = rangesFor(space).maxOf { range -> range.last - range.first + 1 }
-    val lengthLimit = minOf(maximumSampleLength, longestSegment)
-    lengthSpinner.setAllowedRanges(listOf(1..lengthLimit), lengthSpinner.intValue)
-    val length = lengthSpinner.intValue
-    val starts =
-        rangesFor(space).mapNotNull { range ->
-          val lastStart = range.last - length + 1
-          if (lastStart < range.first) null else range.first..lastStart
-        }
-    startSpinner.setAllowedRanges(starts, preferredStart)
+    startSpinner.setAllowedRanges(rangesFor(space), preferredStart)
     updateControlEnablement()
   }
 
@@ -325,7 +359,6 @@ internal class DebuggerMemoryPanel(
     val absolute = selectedFollow() == DebuggerMemoryFollow.NONE
     addressSpaceCombo.isEnabled = absolute
     startSpinner.isEnabled = absolute
-    lengthSpinner.isEnabled = true
   }
 
   private fun publishInterestIfChanged() {
@@ -343,19 +376,30 @@ internal class DebuggerMemoryPanel(
   }
 
   private fun interestFromControls(): DebuggerMemoryInterest {
-    val length = lengthSpinner.intValue
     return when (selectedFollow()) {
       DebuggerMemoryFollow.NONE ->
           DebuggerMemoryInterest.Absolute(
-              DebugMemoryRequest(selectedAddressSpace(), startSpinner.intValue, length)
+              DebugMemoryRequest(
+                  selectedAddressSpace(),
+                  startSpinner.intValue,
+                  browseLength(selectedAddressSpace(), startSpinner.intValue),
+              )
           )
       DebuggerMemoryFollow.PROGRAM_COUNTER ->
           DebuggerMemoryInterest.Anchored(
-              DebugAnchoredMemoryRequest(DebugInspectionAnchor.PROGRAM_COUNTER, 0, length)
+              DebugAnchoredMemoryRequest(
+                  DebugInspectionAnchor.PROGRAM_COUNTER,
+                  0,
+                  browseLength(DebugAddressSpace.ROM, 0),
+              )
           )
       DebuggerMemoryFollow.STACK_POINTER ->
           DebuggerMemoryInterest.Anchored(
-              DebugAnchoredMemoryRequest(DebugInspectionAnchor.STACK_POINTER, 0, length)
+              DebugAnchoredMemoryRequest(
+                  DebugInspectionAnchor.STACK_POINTER,
+                  0,
+                  browseLength(DebugAddressSpace.SYSTEM_BUS, 0xc000),
+              )
           )
     }
   }
@@ -398,6 +442,13 @@ internal class DebuggerMemoryPanel(
 
   private fun selectedFollow(): DebuggerMemoryFollow =
       followCombo.selectedItem as? DebuggerMemoryFollow ?: DebuggerMemoryFollow.NONE
+
+  private fun browseLength(space: DebugAddressSpace, address: Int): Int {
+    val range =
+        rangeContaining(space, address)
+            ?: error("Address is outside the selected memory view")
+    return minOf(BROWSE_PAGE_LENGTH, maximumSampleLength, range.last - address + 1)
+  }
 
   private fun isOlderThanLastApplied(identity: DebuggerSnapshotIdentity): Boolean {
     val last = lastAppliedIdentity ?: return false
@@ -443,7 +494,8 @@ internal class DebuggerMemoryPanel(
     memoryTable.accessibleContext.accessibleName = "Hexadecimal memory bytes"
     memoryTable.accessibleContext.accessibleDescription =
         "Rows contain an address, sixteen hexadecimal byte cells, and an ASCII rendering. " +
-            "Double-click an editable RAM byte to change it; changed bytes begin with a delta marker"
+            "Use the mouse wheel or Up, Down, Page Up, and Page Down to browse. Double-click an " +
+            "editable RAM byte to change it; changed bytes begin with a delta marker"
     memoryTable.setDefaultRenderer(Any::class.java, MemoryCellRenderer())
     memoryTable.columnModel.getColumn(ADDRESS_COLUMN).preferredWidth = 64
     for (column in BYTE_COLUMN_FIRST..BYTE_COLUMN_LAST) {
@@ -558,7 +610,8 @@ internal class DebuggerMemoryPanel(
 
   companion object {
     private const val DEFAULT_START = 0xc000
-    private const val DEFAULT_LENGTH = 0x80
+    private const val BROWSE_PAGE_LENGTH = 0x100
+    private const val BROWSE_ROWS_PER_PAGE = BROWSE_PAGE_LENGTH / BYTES_PER_ROW
     private const val DEFAULT_MAX_SAMPLE_LENGTH = DebugInspectionRequest.MAX_TOTAL_BYTES
     private const val EMPTY_ACCESSIBLE_DESCRIPTION =
         "Live, side-effect-free hexadecimal memory grid waiting for a sample"
@@ -579,6 +632,9 @@ internal class DebuggerMemoryPanel(
           DebugAddressSpace.HIGH_RAM -> listOf(0xff80..0xfffe)
           else -> error("Unsafe memory address space is not selectable: $space")
         }
+
+    private fun rangeContaining(space: DebugAddressSpace, address: Int): IntRange? =
+        rangesFor(space).firstOrNull { address in it }
 
     private fun defaultStartFor(space: DebugAddressSpace): Int = rangesFor(space).first().first
 

@@ -5,6 +5,8 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import java.awt.Component
 import java.awt.Container
+import java.awt.event.ActionEvent
+import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.util.concurrent.FutureTask
 import javax.swing.JButton
@@ -35,7 +37,7 @@ class DebuggerMemoryPanelTest {
       val initial = assertIs<DebuggerMemoryInterest.Absolute>(panel.currentInterest).request
       assertEquals(DebugAddressSpace.WORK_RAM, initial.addressSpace())
       assertEquals(0xc000, initial.address())
-      assertEquals(0x80, initial.length())
+      assertEquals(0x100, initial.length())
       assertEquals(initial, panel.currentRequest)
       assertNull(panel.currentAnchoredRequest)
       assertTrue(interests.isEmpty(), "Construction should not synthesize a user change")
@@ -51,7 +53,6 @@ class DebuggerMemoryPanelTest {
           spaces,
       )
 
-      panel.lengthSpinner.intValue = 0x10
       panel.addressSpaceCombo.selectedItem = DebugAddressSpace.SYSTEM_BUS
       panel.startSpinner.intValue = 0xfdf0
       assertEquals(0xff80, panel.startSpinner.model.nextValue)
@@ -71,7 +72,6 @@ class DebuggerMemoryPanelTest {
       assertEquals(anchored, panel.currentAnchoredRequest)
       assertFalse(panel.addressSpaceCombo.isEnabled)
       assertFalse(panel.startSpinner.isEnabled)
-      assertTrue(panel.lengthSpinner.isEnabled)
 
       panel.setFollowCapabilities(programCounter = false, stackPointer = true)
       assertEquals(DebuggerMemoryFollow.NONE, panel.followCombo.selectedItem)
@@ -83,15 +83,14 @@ class DebuggerMemoryPanelTest {
       )
 
       panel.addressSpaceCombo.selectedItem = DebugAddressSpace.HIGH_RAM
-      panel.lengthSpinner.intValue = 0x7f
-      assertEquals(listOf(0xff80..0xff80), panel.startSpinner.allowedRanges)
+      assertEquals(listOf(0xff80..0xfffe), panel.startSpinner.allowedRanges)
       panel.setMaximumSampleLength(0x40)
       assertEquals(0x40, panel.currentRequest?.length())
-      assertTrue(panel.startSpinner.allowedRanges.all { range -> range.last <= 0xffbf })
       assertFailsWith<IllegalArgumentException> { panel.setMaximumSampleLength(0x1001) }
 
       val actionButtons = descendants(panel).filterIsInstance<JButton>()
       assertTrue(actionButtons.none { button -> button.text in setOf("Read", "Refresh", "Pause") })
+      assertTrue(descendants(panel).none { it.accessibleContext?.accessibleName == "Memory sample length" })
       assertEquals("Live memory inspector", panel.accessibleContext.accessibleName)
       assertContains(panel.memoryTable.accessibleContext.accessibleDescription, "delta marker")
     }
@@ -102,7 +101,7 @@ class DebuggerMemoryPanelTest {
     val panel = onEdt { DebuggerMemoryPanel() }
 
     onEdt {
-      panel.lengthSpinner.intValue = 0x20
+      panel.setMaximumSampleLength(0x20)
       val interest = panel.currentInterest
       val firstBytes = ByteArray(0x20) { index -> (0x20 + index).toByte() }
       val firstIdentity = DebuggerSnapshotIdentity(4, 10, 100)
@@ -148,7 +147,7 @@ class DebuggerMemoryPanelTest {
       )
       assertEquals(0x7f, (panel.memoryTable.getValueAt(0, 2) as DebuggerMemoryByteCell).value)
 
-      panel.lengthSpinner.intValue = 0x10
+      panel.startSpinner.intValue = 0xc010
       val newInterest = panel.currentInterest
       assertEquals(0, panel.memoryTable.rowCount)
       assertFalse(
@@ -174,7 +173,7 @@ class DebuggerMemoryPanelTest {
     val panel = onEdt { DebuggerMemoryPanel() }
 
     onEdt {
-      panel.lengthSpinner.intValue = 0x10
+      panel.setMaximumSampleLength(0x10)
       panel.startSpinner.intValue = 0xc120
       val workInterest = panel.currentInterest
       assertTrue(
@@ -215,6 +214,40 @@ class DebuggerMemoryPanelTest {
   }
 
   @Test
+  fun `fixed memory pages browse freely with table navigation`() {
+    val interests = mutableListOf<DebuggerMemoryInterest>()
+    val panel =
+        onEdt {
+          DebuggerMemoryPanel(DebuggerMemoryPanelCallbacks(onInterestChanged = interests::add))
+        }
+
+    onEdt {
+      fun browse(keyCode: Int) {
+        val action = requireNotNull(panel.memoryTable.actionMap["browse-memory-$keyCode"])
+        action.actionPerformed(ActionEvent(panel.memoryTable, ActionEvent.ACTION_PERFORMED, ""))
+      }
+
+      assertEquals(0xc000, panel.currentRequest?.address())
+      assertEquals(0x100, panel.currentRequest?.length())
+      browse(KeyEvent.VK_DOWN)
+      assertEquals(0xc010, panel.currentRequest?.address())
+      browse(KeyEvent.VK_PAGE_DOWN)
+      assertEquals(0xc110, panel.currentRequest?.address())
+      browse(KeyEvent.VK_PAGE_UP)
+      assertEquals(0xc010, panel.currentRequest?.address())
+      browse(KeyEvent.VK_UP)
+      assertEquals(0xc000, panel.currentRequest?.address())
+      assertEquals(4, interests.size)
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.HIGH_RAM
+      assertEquals(0xff80, panel.currentRequest?.address())
+      browse(KeyEvent.VK_PAGE_DOWN)
+      assertEquals(0xfffe, panel.currentRequest?.address())
+      assertEquals(1, panel.currentRequest?.length())
+    }
+  }
+
+  @Test
   fun `RAM bytes use compact hexadecimal headers and commit only double-click edits`() {
     val writes = mutableListOf<eu.rekawek.coffeegb.core.debug.DebugMemoryWrite>()
     val panel =
@@ -223,7 +256,7 @@ class DebuggerMemoryPanelTest {
         }
 
     onEdt {
-      panel.lengthSpinner.intValue = 0x10
+      panel.setMaximumSampleLength(0x10)
       val renderedInterest = panel.currentInterest
       assertTrue(
           panel.render(
@@ -306,7 +339,7 @@ class DebuggerMemoryPanelTest {
           panel.render(
               sampled,
               interest,
-              DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc000, ByteArray(0x80)),
+              DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc000, ByteArray(0x100)),
           )
       )
       assertTrue(panel.memoryTable.rowCount > 0)
