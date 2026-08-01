@@ -3,8 +3,8 @@
 This record covers the Phase 3 scenario in issues
 [#353](https://github.com/trekawek/coffee-gb/issues/353) and
 [#399](https://github.com/trekawek/coffee-gb/issues/399). The Coffee GB comparison uses
-[`5eca1e8ae7240e8b6dc58b07966f4ad13b0c2518`](https://github.com/trekawek/coffee-gb/tree/5eca1e8ae7240e8b6dc58b07966f4ad13b0c2518)
-plus this adapter-image change set. The custom-service observation pins
+[`ab4597c1dadbdd16c94d9cd2f85370338c2a434f`](https://github.com/trekawek/coffee-gb/tree/ab4597c1dadbdd16c94d9cd2f85370338c2a434f),
+which includes the adapter-image import prerequisite. The custom-service observation pins
 [`REONTeam/reon@f7bfc0470aed561936b396ed29f2bde50ca601ab`](https://github.com/REONTeam/reon/tree/f7bfc0470aed561936b396ed29f2bde50ca601ab),
 licensed MIT.
 
@@ -26,7 +26,7 @@ hello document is reproduced below.
 | Layer | Declared input | Expected evidence | Result boundary |
 |---|---|---|---|
 | Real game | User-supplied Japanese Pokémon Crystal, synthetic adapter configuration, and no persistent battery write | Wake/poll `4b`; `10` BEGIN; `17` telephone status; valid request ACK, response packet, and response ACK | Confirms that the game recognizes the final link schedule and advances beyond the clean-master wait |
-| Real utility | User-authorized Mobile Trainer, public test-only setup-state code, synthetic account/configuration values, and no persistent battery write | Configuration read/write, dial/login, exact-alias DNS, TCP/HTTP request and response, rendered hello page, and cleanup | A complementary browser probe; it does not substitute for Crystal or a clean first-run path |
+| Real utility | User-authorized Mobile Trainer and synthetic account/configuration values; a clean first-run replay without a debugger override, plus an earlier credential attempt with a one-VBlank setup-state override; no persistent battery write | Configuration read/write, dial/login, exact-alias DNS, TCP/HTTP request and response, rendered hello page, and cleanup | The clean replay reaches Login ID and its keypad; the earlier overridden credential attempt remains incomplete. This complementary browser probe does not substitute for Crystal |
 | Deterministic integration | Synthetic configuration, raw-DNS fixture, TCP fixture mapped from guest port 8080 | `10`, `17`, `12`, `21`, `28`, `23`, repeated `15`, `24`, `22`, `13`, `11`; an HTTP reply larger than 253 bytes | Reproducibly covers the complete bounded endpoint/backend sequence, but is not ROM evidence |
 | Custom service | Pinned REON checkout isolated on loopback with both runtime gates enabled | Exact-alias DNS, mapped guest TCP/8080, HTTP reply, redacted controller status | A local supporting observation only; it is not reproducible from this repository and is not issue acceptance |
 
@@ -76,7 +76,9 @@ The separately authorized Mobile Trainer probe used Coffee GB's production contr
 destination policy, and network backend with battery persistence and rewind disabled. The
 owner's ROM was read in place and left untouched. Every temporary home, screen, and locator stayed
 local and was removed after the probe. A synthetic adapter image and only public demonstration
-registration values were used; no owner account or save data entered the run.
+registration values were used; no owner account or save data entered the run. The evidence below
+separates a clean, screen-driven replay through the Login ID keypad from the earlier
+debugger-assisted credential attempt; the latter is not used to claim clean first-run progress.
 
 The custom service used the pinned REON revision's DNS container, nginx template, and static web
 tree on loopback. Guest DNS was mapped to a loopback-only resolver and guest TCP port 80 to a
@@ -105,18 +107,28 @@ CONFIG_READ       19 -> 99 (65-byte response body)
 END               11 -> 91
 ```
 
-The endpoint then returned to `SLEEP` / `IDLE_TIMEOUT_RESET` with no protocol error. A test-only
-one-VBlank application of the public setup-state code at the reproducible white/HALT boundary
-advanced the cartridge to Login ID. The exact public demonstration Login ID and email validated,
-and the public password reached a visibly selected `OK`, but confirmation did not open. This
-cartridge-side divergence is recorded as
-[#448](https://github.com/trekawek/coffee-gb/issues/448) with a legal synthetic-fixture acceptance
-boundary; the debugger write is neither committed nor proposed as a production fix.
+The endpoint then returned to `SLEEP` / `IDLE_TIMEOUT_RESET` with no protocol error. The initial
+probe misclassified the normal transition into the Login ID editor as a white/HALT stall. A refined
+replay keyed observations to Coffee GB's presented-frame events instead of using the WRAM setup
+state as a screen oracle. Login ID was already visible before the sixth scheduled `A` press; that
+press opened the keypad, which remained visibly rendered with its first character selected. The
+guest's `02 -> 00` setup-state change, shadow copy, zero test, and HALT/VBlank loop are normal editor
+initialization rather than a lost state write.
 
-No `CONFIG_WRITE`, `DIAL`, DNS, TCP, or HTTP command followed. REON observed no ROM-originated
-query or request, and Mobile Trainer did not render `hello world`. Controller shutdown closed the
-backend and left no probe process. This is a precise failed manual result, not compatibility
-acceptance for #353 or #399.
+The same six-press sequence and synthetic serial exchange produced the same state transition and
+visible Login ID/keypad boundary in official
+[`SameBoy@213a12ce93d66b105a113debd9396306066a7cfc`](https://github.com/LIJI32/SameBoy/tree/213a12ce93d66b105a113debd9396306066a7cfc).
+Changing the synthetic image among an all-zero first-run image and valid or intentionally invalid
+`MA` images did not change that result. The earlier debugger write to setup state `06` skipped back
+to the Login ID path and was therefore not a valid localization oracle. Issue
+[#448](https://github.com/trekawek/coffee-gb/issues/448) records this corrected false-positive
+classification; no emulator fix or synthetic regression is warranted.
+
+In that earlier debugger-assisted run, no `CONFIG_WRITE`, `DIAL`, DNS, TCP, or HTTP command followed
+the retained credential-confirmation attempt. REON observed no ROM-originated query or request, and
+Mobile Trainer did not render `hello world`. Controller shutdown closed the backend and left no
+probe process. The first-run screen transition is no longer a compatibility blocker, but this
+remains a precise partial manual result rather than acceptance for #353 or #399.
 
 ## Local REON supporting observation
 
@@ -187,10 +199,12 @@ Stadium**. That private gameplay state is not repository evidence and no path, n
 content is recorded here. Obtaining and driving that owner-controlled state remains the current
 Crystal end-to-end blocker.
 
-Mobile Trainer supplies a shorter public HTTP route, but its first-run setup does not reach
-confirmation under Coffee GB even after the public test-only setup-state code advances past the
-earlier white/HALT boundary. Issue #448 owns that verified cartridge-side gap. The run therefore
-adds real-ROM configuration-read and cleanup evidence, not a ROM-to-service success.
+Mobile Trainer supplies a shorter public HTTP route. Its clean first-run path reaches Login ID and
+the keypad without a debugger write; issue #448's earlier white/HALT interpretation was a
+false-positive screen classification. The later credential-confirmation attempt still produced no
+configuration write or network command in the earlier debugger-assisted run, but that boundary
+needs a fresh clean, screen-driven trace before it can support a focused compatibility issue. The
+run therefore adds real-ROM configuration-read and cleanup evidence, not a ROM-to-service success.
 
 The bounded import removes a latent code-path prerequisite; it does not complete #399 acceptance.
 Until a real ROM completes the declared request/response, game-visible result, and cleanup path
