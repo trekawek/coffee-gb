@@ -171,6 +171,23 @@ internal data class DesktopInformationSpec<R>(
   }
 }
 
+/** A content-only owned surface for information that does not need a duplicated dialog heading. */
+internal data class DesktopContentSpec<R>(
+    val title: String,
+    val accessibleDescription: String,
+    val contentAccessibleName: String,
+    val buttons: DesktopDialogButtons<R>,
+    val modality: DesktopOwnedDialogModality = DesktopOwnedDialogModality.APPLICATION,
+) {
+  init {
+    require(title.isNotBlank()) { "A content dialog needs a title" }
+    require(accessibleDescription.isNotBlank()) {
+      "A content dialog needs an accessible description"
+    }
+    require(contentAccessibleName.isNotBlank()) { "A content dialog needs an accessible content name" }
+  }
+}
+
 internal data class DesktopDialogDetailLimits(
     val maximumCharacters: Int = 32_768,
     /** Includes the visible truncation marker when content is truncated. */
@@ -566,6 +583,29 @@ internal class DesktopInformationPanel<R>(
   }
 }
 
+/** Common owned-dialog chrome around self-contained content, without an introductory section. */
+internal class DesktopContentPanel<R>(
+    internal val spec: DesktopContentSpec<R>,
+    internal val content: JComponent,
+    tokens: DesktopThemeTokens,
+    onResult: (R) -> Unit,
+) : DesktopDialogSurface<R>(spec.buttons, tokens, onResult) {
+  init {
+    if (content.accessibleContext.accessibleName.isNullOrBlank()) {
+      content.accessibleContext.accessibleName = spec.contentAccessibleName
+    }
+    getAccessibleContext().accessibleName = spec.title
+    getAccessibleContext().accessibleDescription = spec.accessibleDescription
+    add(content, java.awt.BorderLayout.CENTER)
+    desktopThemeChanged(tokens)
+  }
+
+  override fun applySurfaceTheme(tokens: DesktopThemeTokens) {
+    content.background = tokens.surface
+    (content as? DesktopThemeRefreshHook)?.desktopThemeChanged(tokens)
+  }
+}
+
 /**
  * Creates independently testable panels and, when requested, wraps them in owned modal dialogs.
  * Call [showDecision], [showForm], [showError], and [showInformation] on the EDT; Swing's modal
@@ -600,6 +640,12 @@ internal class DesktopDialogFactory(
       onResult: (R) -> Unit,
   ): DesktopInformationPanel<R> =
       DesktopInformationPanel(spec, content, tokenProvider(), onResult)
+
+  fun <R> createContentPanel(
+      spec: DesktopContentSpec<R>,
+      content: JComponent,
+      onResult: (R) -> Unit,
+  ): DesktopContentPanel<R> = DesktopContentPanel(spec, content, tokenProvider(), onResult)
 
   fun <R> showDecision(owner: Window, spec: DesktopDecisionSpec<R>): R =
       showOwned(
@@ -644,6 +690,20 @@ internal class DesktopDialogFactory(
           resizable = true,
           cancelResult = spec.buttons.cancel.result,
       ) { complete -> createInformationPanel(spec, content, complete) }
+
+  fun <R> showContent(
+      owner: Window,
+      spec: DesktopContentSpec<R>,
+      content: JComponent,
+  ): R =
+      showOwned(
+          owner = owner,
+          title = spec.title,
+          accessibleDescription = spec.accessibleDescription,
+          modality = spec.modality,
+          resizable = true,
+          cancelResult = spec.buttons.cancel.result,
+      ) { complete -> createContentPanel(spec, content, complete) }
 
   private fun <R> showOwned(
       owner: Window,

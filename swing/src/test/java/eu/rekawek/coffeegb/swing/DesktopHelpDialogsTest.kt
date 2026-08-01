@@ -3,10 +3,10 @@ package eu.rekawek.coffeegb.swing
 import java.awt.Color
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.net.URI
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -48,17 +48,22 @@ class DesktopHelpDialogsTest {
   }
 
   @Test
-  fun `information shell and about content are literal accessible and copyable`() =
+  fun `about content is minimal accessible copyable and opens its source link`() =
       onEdt {
         val copied = mutableListOf<String>()
-        val about = DesktopAboutPanel("1.2.3", DesktopClipboardWriter(copied::add))
+        val opened = mutableListOf<URI>()
+        val about =
+            DesktopAboutPanel(
+                "1.2.3",
+                DesktopClipboardWriter(copied::add),
+                DesktopUriOpener(opened::add),
+            )
         val factory = DesktopDialogFactory(tokenProvider = ::tokens)
         val panel =
-            factory.createInformationPanel(
-                DesktopInformationSpec(
+            factory.createContentPanel(
+                DesktopContentSpec(
                     title = "About Coffee GB",
-                    heading = "About Coffee GB",
-                    description = "Application information.",
+                    accessibleDescription = "Application information.",
                     contentAccessibleName = "Application information",
                     buttons =
                         DesktopDialogButtons(
@@ -70,13 +75,14 @@ class DesktopHelpDialogsTest {
 
         assertEquals("About Coffee GB", panel.accessibleContext.accessibleName)
         assertEquals("About Coffee GB", about.accessibleContext.accessibleName)
-        assertEquals("Coffee GB Pocket Brew mark", about.mark.accessibleContext.accessibleName)
-        assertFalse(about.sourceField.isEditable)
-        assertEquals(true, about.sourceField.getClientProperty("html.disable"))
+        assertEquals("https://github.com/trekawek/coffee-gb", about.sourceLink.text)
+        assertEquals(true, about.sourceLink.getClientProperty("html.disable"))
 
         about.copyButton.doClick()
+        about.sourceLink.doClick()
 
         assertEquals(listOf(about.versionInformation), copied)
+        assertEquals(listOf(URI("https://github.com/trekawek/coffee-gb")), opened)
         assertEquals("Version info copied.", about.copyStatus.text)
         assertEquals(tokens().surface, about.background)
         assertEquals(tokens().elevatedSurface, panel.buttonBar.cancelButton.background)
@@ -94,7 +100,7 @@ class DesktopHelpDialogsTest {
         assertEquals(left, labels.getValue("Version: 1.2.3").x)
         assertEquals(left, labels.getValue("License: MIT").x)
         assertEquals(left, labels.getValue("Source:").x)
-        assertEquals(left, about.sourceField.x)
+        assertEquals(left, about.sourceLink.x)
         assertEquals(left, about.copyButton.x)
       }
 
