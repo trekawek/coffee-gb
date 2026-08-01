@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugAudioChannelInspection
 import eu.rekawek.coffeegb.core.debug.DebugAudioInspection
@@ -1409,6 +1410,27 @@ class DebuggerPanelTest {
       assertContains(onEdt { panel.executionPane.coherenceLabel.text }, "LIVE")
       assertContains(onEdt { panel.workspaceMemoryPane.statusLabel.text }, "live")
       assertFalse(onEdt { panel.refreshButton.isVisible })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
+  fun `controller resume immediately updates execution controls after a paused snapshot`() {
+    val client = RecordingDebuggerClient(117, capabilities())
+    val panel = attach(client)
+    try {
+      completeInspection(client.inspections.single(), snapshot(117, 1, paused = true))
+      flushEdt()
+      assertTrue(onEdt { panel.runButton.isEnabled })
+      assertFalse(onEdt { panel.pauseButton.isEnabled })
+
+      onEdt {
+        panel.updatePlaybackState(Controller.SessionPlaybackStateEvent(117, paused = false))
+      }
+
+      assertFalse(onEdt { panel.runButton.isEnabled })
+      assertTrue(onEdt { panel.pauseButton.isEnabled })
     } finally {
       onEdt(panel::close)
     }

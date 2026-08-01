@@ -97,6 +97,37 @@ class DesktopDebuggerControllerTest {
   }
 
   @Test
+  fun `playback state reaches an existing or later-opened debugger view`() {
+    val rootEventBus = EventBusImpl()
+    val view = RecordingDebuggerView()
+    val controller = onEdt { DesktopDebuggerController(rootEventBus) { view } }
+    val port = debugPort(8)
+
+    rootEventBus.post(Controller.SessionDebugPortEvent(8, port))
+    rootEventBus.post(Controller.SessionPlaybackStateEvent(8, paused = true))
+    flushEdt()
+    assertTrue(view.calls.isEmpty())
+
+    onEdt { controller.showTool(DebuggerWorkspaceTool.EXECUTION) }
+    assertEquals(
+        listOf("session:8:available", "playback:8:true", "tool:EXECUTION"),
+        view.calls,
+    )
+
+    rootEventBus.post(Controller.SessionPlaybackStateEvent(7, paused = false))
+    rootEventBus.post(Controller.SessionPlaybackStateEvent(8, paused = false))
+    flushEdt()
+    assertEquals(
+        listOf("playback:8:true", "playback:8:false"),
+        view.playback.map { "playback:${it.sessionGeneration}:${it.paused}" },
+    )
+    assertTrue(view.allCallsWereEdt)
+
+    onEdt { controller.close() }
+    rootEventBus.close()
+  }
+
+  @Test
   fun `controller lifecycle entry points reject non-EDT callers`() {
     val rootEventBus = EventBusImpl()
     assertFailsWith<IllegalStateException> {
@@ -158,6 +189,7 @@ class DesktopDebuggerControllerTest {
   private class RecordingDebuggerView : DesktopDebuggerView {
     val calls = mutableListOf<String>()
     val sessions = mutableListOf<Controller.SessionDebugPortEvent>()
+    val playback = mutableListOf<Controller.SessionPlaybackStateEvent>()
     var closeCalls = 0
     var allCallsWereEdt = true
 
@@ -165,6 +197,12 @@ class DesktopDebuggerControllerTest {
       recordEdt()
       sessions += event
       calls += "session:${event.generation}:${if (event.debugPort == null) "revoked" else "available"}"
+    }
+
+    override fun updatePlaybackState(event: Controller.SessionPlaybackStateEvent) {
+      recordEdt()
+      playback += event
+      calls += "playback:${event.sessionGeneration}:${event.paused}"
     }
 
     override fun showTool(tool: DebuggerWorkspaceTool) {

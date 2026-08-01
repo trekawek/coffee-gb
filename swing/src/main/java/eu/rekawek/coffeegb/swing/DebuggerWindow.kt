@@ -92,6 +92,11 @@ internal class DebuggerWindow(owner: JFrame) : DesktopDebuggerView {
     if (!closed) workspace.updateSession(event)
   }
 
+  override fun updatePlaybackState(event: Controller.SessionPlaybackStateEvent) {
+    requireDebuggerWindowEdt("Debugger playback-state update")
+    if (!closed) workspace.updatePlaybackState(event)
+  }
+
   override fun showTool(tool: DebuggerWorkspaceTool) {
     requireDebuggerWindowEdt("Debugger tool opening")
     if (closed) return
@@ -319,6 +324,7 @@ internal class DebuggerPanel(
   private var client: DebuggerClient? = null
   private var latestGeneration = NO_GENERATION
   private var snapshot: DebugSnapshot? = null
+  private var playbackPaused: Boolean? = null
   private var lastBreakpointHit: DebugBreakpointHit? = null
   private var breakpointRows: List<DebugBreakpoint> = emptyList()
   private var nextBreakpointId = 0L
@@ -817,7 +823,7 @@ internal class DebuggerPanel(
   private fun writeWorkspaceMemory(write: DebugMemoryWrite) {
     requireDebuggerWindowEdt("Debugger memory write")
     val attached = client ?: return
-    if (snapshot?.paused() != true || !attached.capabilities.memoryWrite()) {
+    if (playbackPaused != true || !attached.capabilities.memoryWrite()) {
       workspaceMemoryPane.showWriteFailure("Pause the debug session before editing memory")
       return
     }
@@ -995,6 +1001,27 @@ internal class DebuggerPanel(
     updateClient(event.generation, nextClient)
   }
 
+  /**
+   * Receives the controller's effective state even when paused snapshot polling is intentionally
+   * stopped. This lets a main-window resume immediately restart the debugger presentation.
+   */
+  fun updatePlaybackState(event: Controller.SessionPlaybackStateEvent) {
+    requireDebuggerWindowEdt("Debugger playback-state update")
+    if (closed ||
+        event.sessionGeneration != latestGeneration ||
+        client?.generation != latestGeneration) {
+      return
+    }
+    val changed = playbackPaused != event.paused
+    playbackPaused = event.paused
+    syncPollingTimer()
+    updateControlState()
+    if (changed && samplingActive()) {
+      requestRefresh()
+      requestMetadata()
+    }
+  }
+
   internal fun updateClient(generation: Long, nextClient: DebuggerClient?) {
     requireDebuggerWindowEdt("Debugger client update")
     if (closed || generation < latestGeneration) return
@@ -1013,6 +1040,7 @@ internal class DebuggerPanel(
     client = nextClient
     windowEpoch++
     snapshot = null
+    playbackPaused = null
     lastBreakpointHit = null
     breakpointRows = emptyList()
     nextBreakpointId = 0L
@@ -1129,7 +1157,7 @@ internal class DebuggerPanel(
   internal fun requestRefresh(automatic: Boolean = false) {
     requireDebuggerWindowEdt("Debugger refresh")
     val attached = client ?: return
-    if (automatic && snapshot?.paused() == true) return
+    if (automatic && playbackPaused == true) return
     if (closed || !samplingActive() || !canPollInspection(attached)) return
     if (refreshInFlight) {
       refreshAgain = true
@@ -1453,6 +1481,7 @@ internal class DebuggerPanel(
     val wasRunning = snapshot?.paused() == false
     val view = DebuggerPresentation.snapshot(result.snapshot)
     snapshot = result.snapshot
+    playbackPaused = result.snapshot.paused()
     syncPollingTimer()
     renderBreakpointHit()
     snapshotLabel.text =
@@ -2185,6 +2214,7 @@ internal class DebuggerPanel(
 
   private fun applyCommandSnapshot(value: DebugSnapshot) {
     snapshot = value
+    playbackPaused = value.paused()
     syncPollingTimer()
     val view = DebuggerPresentation.snapshot(value)
     if (workspaceMode) {
@@ -2282,11 +2312,11 @@ internal class DebuggerPanel(
   private fun updateControlState() {
     val attached = client
     val capabilities = attached?.capabilities
-    val paused = snapshot?.paused() == true
-    val running = snapshot?.paused() == false
+    val paused = playbackPaused == true
+    val running = playbackPaused == false
     val usable = !closed && attached != null && !commandInFlight
     runButton.isEnabled = usable && capabilities!!.pauseResume() && paused
-    pauseButton.isEnabled = usable && capabilities!!.pauseResume() && (running || snapshot == null)
+    pauseButton.isEnabled = usable && capabilities!!.pauseResume() && (running || playbackPaused == null)
     stepInstructionButton.isEnabled = usable && paused && capabilities!!.instructionStep()
     stepFrameButton.isEnabled = usable && paused && capabilities!!.frameStep()
 
@@ -2373,6 +2403,7 @@ internal class DebuggerPanel(
   private fun releaseRetainedSessionState() {
     client?.let { releaseTimelineOwnership(it, "Debugger hidden; timeline state released") }
     snapshot = null
+    playbackPaused = null
     lastBreakpointHit = null
     breakpointRows = emptyList()
     historyStatus = null
@@ -2420,7 +2451,7 @@ internal class DebuggerPanel(
   private fun syncPollingTimer() {
     val attached = client
     if (samplingActive() &&
-        snapshot?.paused() != true &&
+        playbackPaused != true &&
         attached != null &&
         canPollInspection(attached)) {
       pollingTimer.start()
@@ -2460,6 +2491,7 @@ internal class DebuggerPanel(
     activeRefreshRequestId = 0L
     if (ownsPeripheralExecutor) peripheralExecutor.shutdownNow()
     snapshot = null
+    playbackPaused = null
     lastBreakpointHit = null
     breakpointRows = emptyList()
     historyStatus = null

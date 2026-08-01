@@ -16,6 +16,9 @@ internal interface DesktopDebuggerView : AutoCloseable {
   /** Replaces or revokes the view's session-bound command port. */
   fun updateSession(event: Controller.SessionDebugPortEvent)
 
+  /** Updates the authoritative effective pause state for the current emulation session. */
+  fun updatePlaybackState(event: Controller.SessionPlaybackStateEvent) = Unit
+
   /** Shows or raises one retained modeless debugger window. */
   fun showTool(tool: DebuggerWorkspaceTool)
 
@@ -44,6 +47,7 @@ internal class DesktopDebuggerController(
   private val eventBus: EventBus
   private var latestGeneration = NO_GENERATION
   private var currentSession: Controller.SessionDebugPortEvent? = null
+  private var currentPlaybackState: Controller.SessionPlaybackStateEvent? = null
   private var view: DesktopDebuggerView? = null
   private var closed = false
 
@@ -60,6 +64,13 @@ internal class DesktopDebuggerController(
       dispatchSwingMutation {
         if (closed || !acceptSessionEvent(event)) return@dispatchSwingMutation
         view?.updateSession(event)
+      }
+    }
+    eventBus.register<Controller.SessionPlaybackStateEvent> { event ->
+      dispatchSwingMutation {
+        if (closed || !acceptPlaybackState(event)) return@dispatchSwingMutation
+        currentPlaybackState = event
+        view?.updatePlaybackState(event)
       }
     }
   }
@@ -80,6 +91,7 @@ internal class DesktopDebuggerController(
       view
           ?: createView().also { created ->
             currentSession?.let(created::updateSession)
+            currentPlaybackState?.let(created::updatePlaybackState)
             view = created
           }
 
@@ -98,16 +110,22 @@ internal class DesktopDebuggerController(
       if (port != null) return false
     }
 
+    val generationChanged = generation != latestGeneration
     latestGeneration = generation
     currentSession = event
+    if (generationChanged || port == null) currentPlaybackState = null
     return true
   }
+
+  private fun acceptPlaybackState(event: Controller.SessionPlaybackStateEvent): Boolean =
+      event.sessionGeneration == latestGeneration && currentSession?.debugPort != null
 
   override fun close() {
     requireDebuggerEdt("Desktop debugger controller disposal")
     if (closed) return
     closed = true
     currentSession = null
+    currentPlaybackState = null
 
     var failure: Exception? = null
     try {
