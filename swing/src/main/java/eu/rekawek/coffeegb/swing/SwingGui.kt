@@ -265,6 +265,20 @@ class SwingGui private constructor(
                 desktopUiCoordinator.stateSlotLoadAvailability(slot, available)
               }
             },
+            onRememberResumeDecision = { resume ->
+              properties.updateApplicationSettings { current ->
+                current.copy(
+                    saves =
+                        current.saves.copy(
+                            resumePolicy =
+                                if (resume) {
+                                  ApplicationSettings.ResumePolicy.ALWAYS
+                                } else {
+                                  ApplicationSettings.ResumePolicy.NEVER
+                                },
+                        ))
+              }
+            },
             dialogFactory = desktopDialogFactory,
         )
     debuggerController =
@@ -718,6 +732,14 @@ class SwingGui private constructor(
                                   QuitDecision.KEEP_OPEN,
                               ),
                           defaultButton = DesktopDialogDefaultButton.CANCEL,
+                      ),
+                  remember =
+                      DesktopDecisionRememberOption(
+                          results = setOf(QuitDecision.QUIT),
+                          onSelected = {
+                            properties.romChangeConfirmationPolicy =
+                                ApplicationSettings.RomChangeConfirmationPolicy.NEVER
+                          },
                       ),
                   modality = DesktopOwnedDialogModality.APPLICATION,
               )) == QuitDecision.QUIT

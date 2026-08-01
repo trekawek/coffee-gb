@@ -42,6 +42,32 @@ class DesktopDialogFactoryTest {
       }
 
   @Test
+  fun `decision can remember only an eligible explicit choice`() =
+      onEdt {
+        val remembered = mutableListOf<TestResult>()
+        val spec =
+            decisionSpec().copy(
+                remember =
+                    DesktopDecisionRememberOption(
+                        results = setOf(TestResult.SAVE_AND_OPEN),
+                        onSelected = remembered::add,
+                    ),
+            )
+
+        val cancelled = factory().createDecisionPanel(spec) {}
+        assertEquals("Don't ask me again", cancelled.dontAskAgain?.text)
+        assertFalse(cancelled.dontAskAgain?.accessibleContext?.accessibleDescription.isNullOrBlank())
+        cancelled.dontAskAgain?.doClick()
+        cancelled.buttonFor(TestResult.CANCEL)?.doClick()
+        assertTrue(remembered.isEmpty())
+
+        val accepted = factory().createDecisionPanel(spec) {}
+        accepted.dontAskAgain?.doClick()
+        accepted.buttonFor(TestResult.SAVE_AND_OPEN)?.doClick()
+        assertEquals(listOf(TestResult.SAVE_AND_OPEN), remembered)
+      }
+
+  @Test
   fun `Escape and decoration cancellation select the safe result while Enter uses the safe default`() =
       onEdt {
         val results = mutableListOf<TestResult>()

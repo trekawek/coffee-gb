@@ -19,6 +19,7 @@ import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JPanel
@@ -107,6 +108,7 @@ internal data class DesktopDecisionSpec<R>(
     val heading: String,
     val message: String,
     val buttons: DesktopDialogButtons<R>,
+    val remember: DesktopDecisionRememberOption<R>? = null,
     val modality: DesktopOwnedDialogModality = DesktopOwnedDialogModality.APPLICATION,
 ) {
   init {
@@ -114,6 +116,23 @@ internal data class DesktopDecisionSpec<R>(
     require(heading.isNotBlank()) { "A decision dialog needs a heading" }
     require(message.isNotBlank()) { "A decision dialog needs a consequence" }
     require(buttons.primary != null) { "A decision dialog needs an explicit outcome action" }
+  }
+}
+
+/** Optional persistent choice shown only after an explicit, eligible confirmation outcome. */
+internal data class DesktopDecisionRememberOption<R>(
+    val results: Set<R>,
+    val onSelected: (R) -> Unit,
+    val label: String = "Don't ask me again",
+    val accessibleDescription: String =
+        "Remember this choice and skip this confirmation in the future",
+) {
+  init {
+    require(results.isNotEmpty()) { "A remembered decision needs at least one outcome" }
+    require(label.isNotBlank()) { "A remembered decision needs a visible label" }
+    require(accessibleDescription.isNotBlank()) {
+      "A remembered decision needs an accessible description"
+    }
   }
 }
 
@@ -316,9 +335,12 @@ internal abstract class DesktopDialogSurface<R>(
 
   protected abstract fun applySurfaceTheme(tokens: DesktopThemeTokens)
 
+  protected open fun beforeComplete(result: R) = Unit
+
   private fun complete(result: R) {
     if (completed) return
     completed = true
+    beforeComplete(result)
     resultConsumer(result)
   }
 }
@@ -332,8 +354,26 @@ internal class DesktopDecisionPanel<R>(
       literalDialogText(spec.heading, "Decision heading", columns = BODY_COLUMNS, bold = true)
   internal val messageText =
       literalDialogText(spec.message, "Decision consequence", columns = BODY_COLUMNS)
+  internal val dontAskAgain =
+      spec.remember?.let { remember ->
+        JCheckBox(remember.label).apply {
+          isOpaque = false
+          getAccessibleContext().accessibleName = remember.label
+          getAccessibleContext().accessibleDescription = remember.accessibleDescription
+        }
+      }
 
-  private val body = verticalBody(headingText, tokens.spacing.related, messageText)
+  private val body =
+      JPanel().apply {
+        layout = BoxLayout(this, BoxLayout.Y_AXIS)
+        add(headingText)
+        add(Box.createVerticalStrut(tokens.spacing.related))
+        add(messageText)
+        dontAskAgain?.let {
+          add(Box.createVerticalStrut(tokens.spacing.related))
+          add(it)
+        }
+      }
 
   init {
     getAccessibleContext().accessibleName = spec.heading
@@ -346,6 +386,17 @@ internal class DesktopDecisionPanel<R>(
     body.background = tokens.surface
     styleLiteralText(headingText, tokens.surface, tokens.primaryText)
     styleLiteralText(messageText, tokens.surface, tokens.secondaryText)
+    dontAskAgain?.apply {
+      background = tokens.surface
+      foreground = tokens.primaryText
+    }
+  }
+
+  override fun beforeComplete(result: R) {
+    spec.remember
+        ?.takeIf { dontAskAgain?.isSelected == true && result in it.results }
+        ?.onSelected
+        ?.invoke(result)
   }
 }
 
