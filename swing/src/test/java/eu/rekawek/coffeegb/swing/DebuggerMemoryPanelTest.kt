@@ -67,7 +67,7 @@ class DebuggerMemoryPanelTest {
       val anchored = assertIs<DebuggerMemoryInterest.Anchored>(panel.currentInterest).request
       assertEquals(DebugInspectionAnchor.PROGRAM_COUNTER, anchored.anchor())
       assertEquals(0, anchored.offset())
-      assertEquals(0x10, anchored.length())
+      assertEquals(0x100, anchored.length())
       assertNull(panel.currentRequest)
       assertEquals(anchored, panel.currentAnchoredRequest)
       assertFalse(panel.addressSpaceCombo.isEnabled)
