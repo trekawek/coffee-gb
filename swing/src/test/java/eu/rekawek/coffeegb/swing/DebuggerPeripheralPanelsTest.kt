@@ -5,7 +5,6 @@ import eu.rekawek.coffeegb.core.debug.DebugAudioInspection
 import eu.rekawek.coffeegb.core.debug.DebugByteData
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsInspection
-import java.awt.Color
 import java.awt.event.KeyEvent
 import java.awt.image.BufferedImage
 import java.util.concurrent.CompletableFuture
@@ -14,7 +13,6 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JComponent
-import javax.swing.JLabel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 import kotlin.test.assertContains
@@ -22,7 +20,6 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -94,9 +91,6 @@ class DebuggerPeripheralPanelsTest {
           intArrayOf(3, 2, 1, 0, 3, 2, 1, 0),
           graphics.renderModel.tiles.first().pixels.copyOfRange(0, 8),
       )
-      assertEquals(768, graphics.tableData.tiles.size)
-      assertEquals(1024, graphics.tableData.backgroundMap.size)
-      assertEquals(1024, graphics.tableData.windowMap.size)
       assertContains(graphics.tileRows.first().colorIndexRows, "32103210")
       assertContains(graphics.objectRows.first().accessibilityText, "Object 0")
       assertContains(graphics.objectRows.first().priorityText, "master priority is off")
@@ -126,9 +120,6 @@ class DebuggerPeripheralPanelsTest {
 
     onEdt {
       panel.render(view)
-      assertEquals(768, panel.tileTable.rowCount)
-      assertEquals(40, panel.objectTable.rowCount)
-      assertEquals(76, panel.paletteTable.rowCount)
       assertEquals(384, panel.tileAtlasCanvas.itemCount)
       assertEquals(1024, panel.backgroundMapCanvas.itemCount)
       assertEquals(1024, panel.windowMapCanvas.itemCount)
@@ -142,6 +133,9 @@ class DebuggerPeripheralPanelsTest {
       )
       assertFalse(panel.tileBankSelector.isEditable)
       assertFalse(panel.tilePaletteSelector.isEditable)
+      assertEquals("0", panel.tileDetails.value("VRAM bank"))
+      assertEquals("0", panel.tileDetails.value("Tile"))
+      assertContains(panel.tileDetails.value("Color-index rows"), "32103210")
 
       panel.windowMapCanvas.selectCellIndex(0)
       assertEquals("Row 0, column 0", panel.windowMapDetails.mapCellValue.text)
@@ -159,7 +153,8 @@ class DebuggerPeripheralPanelsTest {
 
       val model = DebuggerGraphicsRenderModelFactory.create(view)
       panel.objectThumbnailCanvas.selectObject(model.objects.first(), notify = true)
-      assertEquals(0, panel.objectTable.selectedRow)
+      assertEquals("0", panel.objectDetails.value("Object"))
+      assertContains(panel.objectDetails.value("Priority"), "master priority is off")
       assertEquals(0, panel.objectPlacementCanvas.selectedObject?.index)
       assertEquals(7, panel.tileAtlasCanvas.selectedTile?.index)
       assertEquals("CGB object", panel.paletteCanvas.selectedPalette?.group)
@@ -187,59 +182,36 @@ class DebuggerPeripheralPanelsTest {
       assertTrue(sampledColors.size > 1)
       assertEquals("Graphics debugger pane", panel.accessibleContext.accessibleName)
       assertContains(panel.accessibleContext.accessibleDescription, "graphics")
-      assertEquals("Object attribute memory", panel.objectTable.accessibleContext.accessibleName)
-      assertContains(panel.objectTable.accessibleContext.accessibleDescription, "40 OAM")
-
-      val preview = assertIs<DebuggerPalettePreview>(panel.paletteTable.getValueAt(0, 8))
-      assertEquals(panel.paletteTable.getValueAt(0, 6), preview.hexColor)
-      assertTrue(panel.paletteTable.getValueAt(0, 4).toString().isNotBlank())
-      assertContains(panel.paletteTable.getValueAt(0, 5).toString(), "R ")
-      assertContains(panel.objectTable.getValueAt(0, 9).toString(), "master priority is off")
+      assertEquals("Selected object details", panel.objectDetails.accessibleContext.accessibleName)
+      assertContains(panel.objectDetails.accessibleContext.accessibleDescription, "Object 0")
       assertContains(panel.overviewArea.text, SNAPSHOT_IDENTITY.label)
 
-      val redRow =
-          (0 until panel.paletteTable.rowCount).first { row ->
-            panel.paletteTable.getValueAt(row, 6) == "#FF0000"
-          }
-      val redPreview = assertIs<DebuggerPalettePreview>(panel.paletteTable.getValueAt(redRow, 8))
-      val redCell =
-          panel.paletteTable
-              .getCellRenderer(redRow, 8)
-              .getTableCellRendererComponent(
-                  panel.paletteTable,
-                  redPreview,
-                  false,
-                  false,
-                  redRow,
-                  8,
-              ) as JLabel
-      assertEquals(Color.BLACK, redCell.foreground)
+      val (redPalette, redSwatch) =
+          model.palettes
+              .asSequence()
+              .flatMap { palette -> palette.swatches.asSequence().map { palette to it } }
+              .first { (_, swatch) -> view.paletteRows[swatch.tableRow].hexColor == "#FF0000" }
+      panel.paletteCanvas.selectSwatch(redPalette, redSwatch, notify = true)
+      assertEquals("#FF0000", panel.paletteDetails.value("Hex"))
+      assertContains(panel.paletteDetails.value("Components"), "R ")
 
-      val originalHeight = panel.objectTable.rowHeight
-      val originalWidth = panel.objectTable.columnModel.getColumn(2).preferredWidth
+      val originalSize = panel.objectDetails.font.size
       panel.applyFontScale(150)
-      assertTrue(panel.objectTable.rowHeight > originalHeight)
-      assertEquals((originalWidth * 1.5f).toInt(),
-          panel.objectTable.columnModel.getColumn(2).preferredWidth)
-      assertEquals(
-          panel.objectTable.columnModel.getColumn(2).preferredWidth,
-          panel.objectTable.columnModel.getColumn(2).width,
-      )
+      assertTrue(panel.objectDetails.font.size > originalSize)
       panel.applyFontScale(100)
-      assertEquals(originalWidth, panel.objectTable.columnModel.getColumn(2).preferredWidth)
+      assertEquals(originalSize, panel.objectDetails.font.size)
 
       panel.tabs.selectedIndex = 5
-      panel.paletteTable.setRowSelectionInterval(0, 0)
-      performCopy(panel.paletteTable)
+      performCopy(panel.paletteCanvas)
       assertContains(copied.get(), "Components")
-      assertContains(copied.get(), preview.hexColor)
+      assertContains(copied.get(), "#FF0000")
 
       panel.clear()
-      assertEquals(0, panel.tileTable.rowCount)
       assertEquals("—", panel.backgroundMapDetails.mapCellValue.text)
       assertEquals("—", panel.windowMapDetails.mapCellValue.text)
-      assertEquals(0, panel.objectTable.rowCount)
-      assertEquals(0, panel.paletteTable.rowCount)
+      assertEquals("—", panel.tileDetails.value("Tile"))
+      assertEquals("—", panel.objectDetails.value("Object"))
+      assertEquals("—", panel.paletteDetails.value("Hex"))
       assertEquals(0, panel.tileAtlasCanvas.itemCount)
       assertEquals(0, panel.backgroundMapCanvas.itemCount)
       assertEquals(0, panel.windowMapCanvas.itemCount)
