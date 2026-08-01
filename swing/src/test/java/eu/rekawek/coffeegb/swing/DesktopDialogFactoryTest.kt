@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import java.awt.Color
+import java.awt.Container
 import java.awt.Dimension
 import java.awt.Rectangle
 import java.awt.event.ActionEvent
@@ -246,6 +247,38 @@ class DesktopDialogFactoryTest {
         assertEquals(refreshed.onAccent, panel.buttonBar.primaryButton?.foreground)
       }
 
+  @Test
+  fun `information header shares the content reading column after the dialog is widened`() =
+      onEdt {
+        val content =
+            DesktopShortcutGuidePanel(
+                listOf(
+                    DesktopShortcutGuideGroup(
+                        title = "Main window",
+                        description = "Application commands while the emulator window is active.",
+                        rows = listOf(DesktopShortcutGuideRow("Open ROM", "Command+O")),
+                    )))
+        val panel =
+            factory().createInformationPanel(
+                DesktopInformationSpec(
+                    title = "Keyboard Shortcuts",
+                    heading = "Keyboard shortcuts",
+                    description = "Shortcuts are scoped to the focused window.",
+                    contentAccessibleName = "Keyboard shortcut reference",
+                    buttons = DesktopDialogButtons(cancel = DesktopDialogAction("Close", Unit)),
+                ),
+                content,
+            ) {}
+
+        panel.size = Dimension(1_600, 600)
+        layoutTree(panel)
+
+        assertEquals(content.x, panel.headingText.x)
+        assertEquals(content.x, panel.descriptionText.x)
+        assertEquals(content.width, panel.headingText.width)
+        assertEquals(content.width, panel.descriptionText.width)
+      }
+
   private fun decisionSpec(): DesktopDecisionSpec<TestResult> =
       DesktopDecisionSpec(
           title = "Open another game",
@@ -287,6 +320,11 @@ class DesktopDialogFactoryTest {
     var result: Result<T>? = null
     SwingUtilities.invokeAndWait { result = runCatching(action) }
     return checkNotNull(result).getOrThrow()
+  }
+
+  private fun layoutTree(container: Container) {
+    container.doLayout()
+    container.components.filterIsInstance<Container>().forEach(::layoutTree)
   }
 
   private enum class TestResult {

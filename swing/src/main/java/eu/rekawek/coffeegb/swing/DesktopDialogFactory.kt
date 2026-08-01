@@ -532,14 +532,18 @@ internal class DesktopInformationPanel<R>(
   internal val descriptionText =
       literalDialogText(spec.description, "Information description", columns = BODY_COLUMNS)
 
+  // Keep the introduction on the same full-width reading column as the content. BoxLayout sizes
+  // text areas from their preferred columns on Aqua, which can leave an information header adrift
+  // on the right after the dialog is widened.
+  private val header =
+      JPanel(java.awt.BorderLayout(0, tokens.spacing.related)).apply {
+        add(headingText, java.awt.BorderLayout.NORTH)
+        add(descriptionText, java.awt.BorderLayout.CENTER)
+      }
   private val body =
-      JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(headingText)
-        add(Box.createVerticalStrut(tokens.spacing.related))
-        add(descriptionText)
-        add(Box.createVerticalStrut(tokens.spacing.section))
-        add(informationContent)
+      JPanel(java.awt.BorderLayout(0, tokens.spacing.section)).apply {
+        add(header, java.awt.BorderLayout.NORTH)
+        add(informationContent, java.awt.BorderLayout.CENTER)
       }
 
   init {
@@ -554,6 +558,7 @@ internal class DesktopInformationPanel<R>(
 
   override fun applySurfaceTheme(tokens: DesktopThemeTokens) {
     body.background = tokens.surface
+    header.background = tokens.surface
     informationContent.background = tokens.surface
     styleLiteralText(headingText, tokens.surface, tokens.primaryText)
     styleLiteralText(descriptionText, tokens.surface, tokens.secondaryText)
