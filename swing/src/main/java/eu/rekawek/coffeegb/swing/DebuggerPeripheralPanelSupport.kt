@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import java.awt.Component
 import java.awt.Container
 import java.awt.Font
+import java.awt.GridLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.ActionEvent
@@ -10,9 +11,12 @@ import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import java.util.IdentityHashMap
 import javax.swing.AbstractAction
+import javax.swing.BorderFactory
 import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JPanel
 import javax.swing.JTable
-import javax.swing.JTextArea
+import javax.swing.JTextField
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
@@ -109,17 +113,77 @@ internal fun configurePeripheralTable(
   )
 }
 
-internal fun peripheralTextArea(accessibleName: String): JTextArea =
-    JTextArea(7, 70).apply {
-      isEditable = false
-      lineWrap = true
-      wrapStyleWord = true
-      font = Font(Font.MONOSPACED, Font.PLAIN, font.size)
-      getAccessibleContext().accessibleName = accessibleName
-      getAccessibleContext().accessibleDescription = "Copyable textual $accessibleName"
-      text = "No peripheral inspection loaded"
-      caretPosition = 0
+/**
+ * A compact, read-only form for a peripheral overview.
+ *
+ * Unlike a multi-line summary, each captured property has a stable labelled control. Values do
+ * not take keyboard focus, so they cannot intercept gameplay shortcuts when the debugger is not
+ * the active window.
+ */
+internal class DebuggerOverviewPropertiesPanel(
+    private val title: String,
+    private val labels: List<String>,
+    columns: Int = 2,
+) : JPanel(java.awt.BorderLayout(4, 4)) {
+  private val values = labels.associateWith { JTextField(NO_VALUE) }
+
+  init {
+    require(columns > 0) { "Overview properties must have at least one column" }
+    require(labels.distinct().size == labels.size) { "Overview property labels must be unique" }
+    border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
+    val fields = JPanel(GridLayout(0, columns, 16, 8))
+    labels.forEach { label -> fields.add(field(label, values.getValue(label))) }
+    repeat((columns - labels.size % columns) % columns) { fields.add(JPanel()) }
+    add(fields, java.awt.BorderLayout.NORTH)
+    getAccessibleContext().accessibleName = title
+    getAccessibleContext().accessibleDescription = "No properties loaded"
+  }
+
+  fun render(properties: List<DebuggerOverviewProperty>) {
+    val byLabel = properties.associateBy(DebuggerOverviewProperty::label)
+    require(byLabel.size == properties.size) { "Overview property labels must be unique" }
+    require(byLabel.keys.all(labels::contains)) {
+      "Overview properties must have a matching visible control"
     }
+    labels.forEach { label -> setValue(label, byLabel[label]?.value ?: NO_VALUE) }
+    getAccessibleContext().accessibleDescription =
+        properties.joinToString("; ") { property -> "${property.label}: ${property.value}" }
+  }
+
+  fun clear(message: String) {
+    labels.forEach { label -> setValue(label, NO_VALUE) }
+    if ("Capture status" in labels) setValue("Capture status", message)
+    getAccessibleContext().accessibleDescription = message
+  }
+
+  fun value(label: String): String = values.getValue(label).text
+
+  fun copyText(): String = labels.joinToString("\n") { label -> "$label\t${value(label)}" }
+
+  private fun setValue(label: String, value: String) {
+    values.getValue(label).text = value
+    values.getValue(label).toolTipText = value.takeUnless { it == NO_VALUE }
+  }
+
+  private fun field(label: String, value: JTextField): JPanel =
+      JPanel(java.awt.BorderLayout(4, 0)).apply {
+        val caption = JLabel("$label:")
+        caption.labelFor = value
+        add(caption, java.awt.BorderLayout.WEST)
+        value.apply {
+          isEditable = false
+          isFocusable = false
+          columns = 22
+          getAccessibleContext().accessibleName = "$title $label"
+          getAccessibleContext().accessibleDescription = "Current $label"
+        }
+        add(value, java.awt.BorderLayout.CENTER)
+      }
+
+  private companion object {
+    const val NO_VALUE = "—"
+  }
+}
 
 internal fun requirePeripheralEdt(action: String) {
   check(SwingUtilities.isEventDispatchThread()) { "$action must run on the Swing EDT" }

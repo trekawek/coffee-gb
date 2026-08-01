@@ -80,6 +80,17 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(SNAPSHOT_IDENTITY, audio.identity)
       assertContains(graphics.overviewText, SNAPSHOT_IDENTITY.label)
       assertContains(audio.overviewText, SNAPSHOT_IDENTITY.label)
+      assertEquals(SNAPSHOT_IDENTITY.label, graphics.overviewProperties.single { it.label == "Snapshot" }.value)
+      assertEquals("Captured", graphics.overviewProperties.single { it.label == "Capture status" }.value)
+      assertContains(
+          graphics.overviewProperties.single { it.label == "Window map" }.value,
+          "\$9800",
+      )
+      assertEquals(SNAPSHOT_IDENTITY.label, audio.overviewProperties.single { it.label == "Snapshot" }.value)
+      assertContains(
+          audio.overviewProperties.single { it.label == "NR50 raw value" }.value,
+          "\$FF24",
+      )
       assertEquals(768, graphics.tileRows.size)
       assertEquals(setOf(0, 1), graphics.tileRows.map { it.bank }.toSet())
       assertEquals(1024, graphics.backgroundMapRows.size)
@@ -184,7 +195,8 @@ class DebuggerPeripheralPanelsTest {
       assertContains(panel.accessibleContext.accessibleDescription, "graphics")
       assertEquals("Selected object details", panel.objectDetails.accessibleContext.accessibleName)
       assertContains(panel.objectDetails.accessibleContext.accessibleDescription, "Object 0")
-      assertContains(panel.overviewArea.text, SNAPSHOT_IDENTITY.label)
+      assertEquals(SNAPSHOT_IDENTITY.label, panel.overviewProperties.value("Snapshot"))
+      assertEquals("Captured", panel.overviewProperties.value("Capture status"))
 
       val (redPalette, redSwatch) =
           model.palettes
@@ -222,7 +234,7 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(0, panel.objectThumbnailCanvas.itemCount)
       assertEquals(0, panel.objectPlacementCanvas.itemCount)
       assertEquals(0, panel.paletteCanvas.itemCount)
-      assertContains(panel.overviewArea.text, "No graphics")
+      assertContains(panel.overviewProperties.value("Capture status"), "No graphics")
       assertContains(panel.accessibleContext.accessibleDescription, "not retained")
     }
   }
@@ -243,9 +255,10 @@ class DebuggerPeripheralPanelsTest {
       assertEquals("Audio channels and routing", panel.channelTable.accessibleContext.accessibleName)
       assertContains(panel.channelTable.getValueAt(0, 6).toString(), "left and right")
       assertContains(panel.registerTable.getValueAt(0, 4).toString(), "Left volume")
-      assertContains(panel.overviewArea.text, "gain 8 of 8")
-      assertContains(panel.overviewArea.text, "gain 3 of 8")
-      assertContains(panel.overviewArea.text, SNAPSHOT_IDENTITY.label)
+      assertContains(panel.overviewProperties.value("Left mixer volume"), "gain 8 of 8")
+      assertContains(panel.overviewProperties.value("Right mixer volume"), "gain 3 of 8")
+      assertEquals(SNAPSHOT_IDENTITY.label, panel.overviewProperties.value("Snapshot"))
+      assertEquals("Captured", panel.overviewProperties.value("Capture status"))
       assertEquals("15 of 15", panel.waveTable.getValueAt(15, 3))
       assertContains(panel.waveGraph.accessibleContext.accessibleDescription, "32 wave samples")
       assertContains(panel.waveGraph.accessibleContext.accessibleDescription, "15")
@@ -265,7 +278,7 @@ class DebuggerPeripheralPanelsTest {
       assertEquals(0, panel.registerTable.rowCount)
       assertEquals(0, panel.waveTable.rowCount)
       assertEquals(0, panel.waveGraph.sampleCount)
-      assertContains(panel.overviewArea.text, "No audio")
+      assertContains(panel.overviewProperties.value("Capture status"), "No audio")
       assertContains(panel.waveGraph.accessibleContext.accessibleDescription, "No wave samples")
       assertContains(panel.accessibleContext.accessibleDescription, "not retained")
     }

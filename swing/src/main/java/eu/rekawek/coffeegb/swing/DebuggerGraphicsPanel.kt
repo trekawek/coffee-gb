@@ -24,7 +24,8 @@ import javax.swing.SwingConstants
 internal class DebuggerGraphicsPanel(
     private val copyToClipboard: (String) -> Unit,
 ) : JPanel(BorderLayout(4, 4)) {
-  internal val overviewArea = peripheralTextArea("graphics inspection summary")
+  internal val overviewProperties =
+      DebuggerOverviewPropertiesPanel("Graphics inspection overview", OVERVIEW_FIELDS)
   internal val tabs = JTabbedPane()
   internal val tileAtlasCanvas = DebuggerTileAtlasCanvas(::selectTile)
   internal val backgroundMapCanvas =
@@ -77,7 +78,7 @@ internal class DebuggerGraphicsPanel(
   internal val windowGridCheckBox = graphicsCheckBox("Tile grid", true)
   internal val objectGridCheckBox = graphicsCheckBox("Screen grid", true)
 
-  private val overviewPane = JScrollPane(overviewArea)
+  private val overviewPane: Component = overviewProperties
   private val tilePane: Component
   private val backgroundMapPane: Component
   private val windowMapPane: Component
@@ -99,7 +100,6 @@ internal class DebuggerGraphicsPanel(
     getAccessibleContext().accessibleDescription = EMPTY_DESCRIPTION
     tabs.accessibleContext.accessibleName = "Graphics debugger sections"
 
-    overviewPane.accessibleContext.accessibleName = "Graphics inspection overview"
     configureControls()
     tilePane =
         graphicsDetailPane(
@@ -159,8 +159,7 @@ internal class DebuggerGraphicsPanel(
 
   fun render(view: DebuggerGraphicsPaneView) {
     requirePeripheralEdt("Graphics debugger rendering")
-    overviewArea.text = view.overviewText
-    overviewArea.caretPosition = 0
+    overviewProperties.render(view.overviewProperties)
     tileRows = view.tileRows
     objectRows = view.objectRows
     paletteRows = view.paletteRows
@@ -171,18 +170,22 @@ internal class DebuggerGraphicsPanel(
   fun showNotCaptured(identity: DebuggerSnapshotIdentity) {
     requirePeripheralEdt("Graphics debugger snapshot transition")
     releaseRows()
-    overviewArea.text =
-        "Snapshot: ${identity.label}\n" +
-            "Graphics inspection was not captured for this snapshot; select Graphics for the next live capture."
-    overviewArea.caretPosition = 0
+    overviewProperties.render(
+        listOf(
+            DebuggerOverviewProperty("Snapshot", identity.label),
+            DebuggerOverviewProperty(
+                "Capture status",
+                "Not captured; select Video for the next live capture.",
+            ),
+        )
+    )
     getAccessibleContext().accessibleDescription =
         "${identity.label}. Graphics inspection was not captured for this snapshot."
   }
 
   fun clear() {
     requirePeripheralEdt("Graphics debugger clearing")
-    overviewArea.text = "No graphics inspection loaded"
-    overviewArea.caretPosition = 0
+    overviewProperties.clear("No graphics inspection loaded")
     releaseRows()
     getAccessibleContext().accessibleDescription = EMPTY_DESCRIPTION
   }
@@ -227,7 +230,7 @@ internal class DebuggerGraphicsPanel(
   fun copyText(): String {
     requirePeripheralEdt("Graphics debugger copying")
     return when (tabs.selectedComponent) {
-      overviewPane -> overviewArea.text
+      overviewPane -> overviewProperties.copyText()
       tilePane -> tileDetails.copyText()
       backgroundMapPane -> backgroundMapDetails.copyText()
       windowMapPane -> windowMapDetails.copyText()
@@ -598,6 +601,25 @@ internal class DebuggerGraphicsPanel(
 
   private companion object {
     const val EMPTY_DESCRIPTION = "Graphics inspection is not retained"
+    val OVERVIEW_FIELDS =
+        listOf(
+            "Snapshot",
+            "Hardware mode",
+            "CPU-selected VRAM bank",
+            "LCDC raw value",
+            "LCD display",
+            "Window enabled",
+            "Window map",
+            "Background map",
+            "Tile data addressing",
+            "Objects enabled",
+            "Sprite size",
+            "OAM entries",
+            "Background/window enabled or priority",
+            "Background CGB palette index",
+            "Object CGB palette index",
+            "Capture status",
+        )
   }
 }
 

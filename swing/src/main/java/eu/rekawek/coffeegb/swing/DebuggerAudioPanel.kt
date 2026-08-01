@@ -23,7 +23,8 @@ internal class DebuggerAudioPanel(
     private val copyToClipboard: (String) -> Unit,
     private val onSetChannelEnabled: (Int, Boolean) -> Unit = { _, _ -> },
 ) : JPanel(BorderLayout(4, 4)) {
-  internal val overviewArea = peripheralTextArea("audio inspection summary")
+  internal val overviewProperties =
+      DebuggerOverviewPropertiesPanel("Audio inspection overview", OVERVIEW_FIELDS)
   internal val tabs = JTabbedPane()
   internal val channelTable = JTable()
   internal val registerTable = JTable()
@@ -65,7 +66,7 @@ internal class DebuggerAudioPanel(
       DebuggerPeripheralTableModel(
           listOf("Sample", "Hex", "Decimal", "Level", "Description")
       )
-  private val overviewPane = JScrollPane(overviewArea)
+  private val overviewPane: Component = overviewProperties
   private val channelPane: Component
   private val registerPane: Component
   private val wavePane: Component
@@ -106,7 +107,6 @@ internal class DebuggerAudioPanel(
     setColumnWidths(registerTable, 90, 80, 85, 80, 700)
     setColumnWidths(waveTable, 65, 55, 65, 80, 300)
 
-    overviewPane.accessibleContext.accessibleName = "Audio inspection overview"
     channelPane =
         JPanel(BorderLayout(2, 2)).apply {
           add(channelControls(), BorderLayout.NORTH)
@@ -146,8 +146,7 @@ internal class DebuggerAudioPanel(
 
   fun render(view: DebuggerAudioPaneView) {
     requirePeripheralEdt("Audio debugger rendering")
-    overviewArea.text = view.overviewText
-    overviewArea.caretPosition = 0
+    overviewProperties.render(view.overviewProperties)
     channelModel.replace(
         view.channelRows.map { row ->
           listOf<Any>(
@@ -192,18 +191,22 @@ internal class DebuggerAudioPanel(
   fun showNotCaptured(identity: DebuggerSnapshotIdentity) {
     requirePeripheralEdt("Audio debugger snapshot transition")
     releaseRows()
-    overviewArea.text =
-        "Snapshot: ${identity.label}\n" +
-            "Audio inspection was not captured for this snapshot; select Audio to refresh."
-    overviewArea.caretPosition = 0
+    overviewProperties.render(
+        listOf(
+            DebuggerOverviewProperty("Snapshot", identity.label),
+            DebuggerOverviewProperty(
+                "Capture status",
+                "Not captured; select Audio to refresh.",
+            ),
+        )
+    )
     getAccessibleContext().accessibleDescription =
         "${identity.label}. Audio inspection was not captured for this snapshot."
   }
 
   fun clear() {
     requirePeripheralEdt("Audio debugger clearing")
-    overviewArea.text = "No audio inspection loaded"
-    overviewArea.caretPosition = 0
+    overviewProperties.clear("No audio inspection loaded")
     releaseRows()
     getAccessibleContext().accessibleDescription = EMPTY_DESCRIPTION
   }
@@ -252,7 +255,7 @@ internal class DebuggerAudioPanel(
   fun copyText(): String {
     requirePeripheralEdt("Audio debugger copying")
     return when (tabs.selectedComponent) {
-      overviewPane -> overviewArea.text
+      overviewPane -> overviewProperties.copyText()
       channelPane -> channelModel.copyText(channelTable.selectedRows)
       registerPane -> registerModel.copyText(registerTable.selectedRows)
       wavePane -> waveModel.copyText(waveTable.selectedRows)
@@ -284,6 +287,20 @@ internal class DebuggerAudioPanel(
   private companion object {
     const val EMPTY_DESCRIPTION = "Audio inspection is not retained"
     const val CHANNEL_COUNT = 4
+    val OVERVIEW_FIELDS =
+        listOf(
+            "Snapshot",
+            "APU status",
+            "Frame sequencer",
+            "Left mixer volume",
+            "Right mixer volume",
+            "VIN to left",
+            "VIN to right",
+            "NR50 raw value",
+            "NR51 raw value",
+            "NR52 raw value",
+            "Capture status",
+        )
   }
 }
 
