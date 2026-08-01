@@ -1110,6 +1110,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 system);
     }
 
+    /** Applies a debugger-owned mixer override without writing an emulated APU register. */
+    public void setDebugAudioChannelEnabled(int channel, boolean enabled) {
+        if (channel < 1 || channel > 4) {
+            throw new IllegalArgumentException("Audio channel must be between 1 and 4");
+        }
+        sound.enableChannel(channel - 1, enabled);
+    }
+
     private DebugPpuMode toDebugPpuMode() {
         if (!gpu.isLcdEnabled()) {
             return DebugPpuMode.DISABLED;

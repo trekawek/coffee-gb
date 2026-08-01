@@ -1041,6 +1041,43 @@ class DebuggerPanelTest {
   }
 
   @Test
+  fun `audio output mixer controls dispatch asynchronous overrides and restore on failure`() {
+    val client =
+        RecordingDebuggerClient(
+            181,
+            capabilities(inspectionSections = setOf(DebugInspectionSection.AUDIO)),
+        )
+    val panel = attach(client)
+    try {
+      completeInspection(client.inspections.single(), snapshot(181, 1, paused = false))
+      flushEdt()
+
+      onEdt {
+        assertTrue(panel.audioPane.channelToggles[1].isEnabled)
+        panel.audioPane.channelToggles[1].doClick()
+      }
+      val muted = client.audioChannelChanges.single()
+      assertEquals(2, muted.channel)
+      assertFalse(muted.enabled)
+      assertFalse(onEdt { panel.audioPane.channelToggles[1].isSelected })
+
+      muted.completion.complete(DebugResult.success(snapshot(181, 2, paused = false)))
+      flushEdt()
+
+      onEdt { panel.audioPane.channelToggles[1].doClick() }
+      val rejected = client.audioChannelChanges.last()
+      assertTrue(rejected.enabled)
+      rejected.completion.complete(
+          DebugResult.failure(DebugErrorCode.UNSUPPORTED_TOPOLOGY, "Mixer unavailable")
+      )
+      flushEdt()
+      assertFalse(onEdt { panel.audioPane.channelToggles[1].isSelected })
+    } finally {
+      onEdt(panel::close)
+    }
+  }
+
+  @Test
   fun `stale peripheral preparation is rejected and hide releases rendered payload views`() {
     val executor = ManualExecutorService()
     val client =
@@ -1928,6 +1965,12 @@ class DebuggerPanelTest {
       val completion: CompletableFuture<DebugResult<Void>>,
   )
 
+  private data class AudioChannelChange(
+      val channel: Int,
+      val enabled: Boolean,
+      val completion: CompletableFuture<DebugResult<DebugSnapshot>>,
+  )
+
   private class RecordingDebuggerClient(
       override val generation: Long,
       override val capabilities: DebugCapabilities,
@@ -1944,6 +1987,7 @@ class DebuggerPanelTest {
         mutableListOf<CompletableFuture<DebugResult<DebugBreakpointHit>>>()
     val breakpointSets = mutableListOf<BreakpointSetCall>()
     val breakpointRemovals = mutableListOf<BreakpointRemovalCall>()
+    val audioChannelChanges = mutableListOf<AudioChannelChange>()
     var breakpointDefinitions: List<DebugBreakpoint> = emptyList()
 
     override fun inspect(
@@ -1958,6 +2002,14 @@ class DebuggerPanelTest {
 
     override fun resume(): CompletionStage<DebugResult<DebugSnapshot>> =
         CompletableFuture<DebugResult<DebugSnapshot>>().also(resumes::add)
+
+    override fun setAudioChannelEnabled(
+        channel: Int,
+        enabled: Boolean,
+    ): CompletionStage<DebugResult<DebugSnapshot>> =
+        CompletableFuture<DebugResult<DebugSnapshot>>().also { completion ->
+          audioChannelChanges += AudioChannelChange(channel, enabled, completion)
+        }
 
     override fun step(kind: DebugStepKind): CompletionStage<DebugResult<DebugStepResult>> =
         unsupported()

@@ -132,6 +132,16 @@ internal interface DebuggerClient {
               "Memory writes are unavailable for this session",
           ))
 
+  fun setAudioChannelEnabled(
+      channel: Int,
+      enabled: Boolean,
+  ): CompletionStage<DebugResult<DebugSnapshot>> =
+      CompletableFuture.completedFuture(
+          DebugResult.failure(
+              DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+              "Audio channel controls are unavailable for this session",
+          ))
+
   fun pause(): CompletionStage<DebugResult<DebugSnapshot>>
 
   fun resume(): CompletionStage<DebugResult<DebugSnapshot>>
@@ -177,6 +187,11 @@ private class DebugPortDebuggerClient(private val port: DebugPort) : DebuggerCli
   override fun writeMemory(
       write: DebugMemoryWrite
   ): CompletionStage<DebugResult<DebugSnapshot>> = port.writeMemory(write)
+
+  override fun setAudioChannelEnabled(
+      channel: Int,
+      enabled: Boolean,
+  ): CompletionStage<DebugResult<DebugSnapshot>> = port.setAudioChannelEnabled(channel, enabled)
 
   override fun pause(): CompletionStage<DebugResult<DebugSnapshot>> = port.pause()
 
@@ -287,7 +302,7 @@ internal class DebuggerPanel(
               onStatus = { message -> statusLabel.text = message },
           ))
   internal val graphicsPane = DebuggerGraphicsPanel(copyText)
-  internal val audioPane = DebuggerAudioPanel(copyText)
+  internal val audioPane = DebuggerAudioPanel(copyText, ::setAudioChannelEnabled)
   internal val timelinePane = timelinePanel()
   internal val executionPane = DebuggerExecutionPanel(copyText)
   internal val workspaceMemoryPane =
@@ -815,6 +830,23 @@ internal class DebuggerPanel(
     }
   }
 
+  private fun setAudioChannelEnabled(channel: Int, enabled: Boolean) {
+    requireDebuggerWindowEdt("Debugger audio channel override")
+    val attached = client
+    if (attached == null || !attached.capabilities.supportsInspection(DebugInspectionSection.AUDIO)) {
+      audioPane.setChannelMixerEnabled(channel, !enabled)
+      statusLabel.text = "Audio channel controls are unavailable for this session"
+      return
+    }
+    executeCommand(
+        if (enabled) "Enable audio channel $channel" else "Disable audio channel $channel",
+        { attached.setAudioChannelEnabled(channel, enabled) },
+        onFailure = { audioPane.setChannelMixerEnabled(channel, !enabled) },
+    ) { value ->
+      value?.let(::applyCommandSnapshot)
+    }
+  }
+
   private fun toolIsLive(tool: DebuggerWorkspaceTool): Boolean =
       tool in workspaceVisibleTools && tool !in workspaceHeldTools
 
@@ -999,6 +1031,8 @@ internal class DebuggerPanel(
     timelineModel.clear()
     graphicsPane.clear()
     audioPane.clear()
+    // A new Gameboy owns a fresh Sound instance, whose four mixer overrides start enabled.
+    audioPane.resetChannelMixer()
     executionPane.clear()
     workspaceMemoryPane.clear()
     hardwarePane.clear()
@@ -2276,6 +2310,9 @@ internal class DebuggerPanel(
     memoryReadButton.isEnabled = usable && paused && capabilities?.coherentInspection() == true
     workspaceMemoryPane.setMemoryWritesEnabled(
         usable && paused && capabilities?.memoryWrite() == true,
+    )
+    audioPane.setChannelControlsEnabled(
+        usable && capabilities?.supportsInspection(DebugInspectionSection.AUDIO) == true,
     )
 
     breakpointPane.setBusy(commandInFlight || metadataInFlight || closed)

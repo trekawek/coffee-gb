@@ -940,6 +940,23 @@ class BasicControllerDebugPortTest {
   }
 
   @Test
+  fun debuggerAudioMixerChannelsCanBeChangedWhileTheSessionIsRunning() {
+    withController { _, port, _, _, _ ->
+      assertTrue(port.capabilities().supportsInspection(DebugInspectionSection.AUDIO))
+
+      val muted = await(port.setAudioChannelEnabled(2, false))
+      assertTrue(muted.isSuccess)
+      assertFalse(muted.value().paused())
+
+      val enabled = await(port.setAudioChannelEnabled(2, true))
+      assertTrue(enabled.isSuccess)
+      assertFalse(enabled.value().paused())
+
+      assertError(DebugErrorCode.INVALID_ARGUMENT, await(port.setAudioChannelEnabled(5, false)))
+    }
+  }
+
+  @Test
   fun replacingSessionRevokesOldGenerationAndPublishesANewPort() {
     withController { eventBus, oldPort, ports, _, _ ->
       val paused = await(oldPort.pause())

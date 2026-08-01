@@ -955,6 +955,7 @@ class BasicController private constructor(
         is QueuedDebugCommand.StepBackward -> handleDebugStepBackward(command)
         is QueuedDebugCommand.ReadMemory -> handleDebugMemoryRead(command)
         is QueuedDebugCommand.WriteMemory -> handleDebugMemoryWrite(command)
+        is QueuedDebugCommand.SetAudioChannel -> handleDebugSetAudioChannel(command)
         is QueuedDebugCommand.SetButton -> handleDebugButton(command)
         is QueuedDebugCommand.SetBreakpoint -> handleDebugSetBreakpoint(command)
         is QueuedDebugCommand.RemoveBreakpoint -> handleDebugRemoveBreakpoint(command)
@@ -1337,6 +1338,19 @@ class BasicController private constructor(
           DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
           "The selected address is side-effectful or unavailable for debugger writes",
       )
+    }
+  }
+
+  private fun handleDebugSetAudioChannel(command: QueuedDebugCommand.SetAudioChannel) {
+    val gameboy = checkNotNull(session).gameboy
+    try {
+      // This is an output-only debugger mixer override. It intentionally remains available while
+      // running and does not invalidate rewind history because emulated registers and RAM stay
+      // untouched.
+      gameboy.setDebugAudioChannelEnabled(command.channel, command.enabled)
+      command.complete(DebugResult.success(captureDebugSnapshot()))
+    } catch (_: IllegalArgumentException) {
+      command.fail(DebugErrorCode.INVALID_ARGUMENT, "Audio channel must be between 1 and 4")
     }
   }
 

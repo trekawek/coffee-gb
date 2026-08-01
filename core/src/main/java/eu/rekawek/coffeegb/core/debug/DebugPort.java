@@ -56,6 +56,20 @@ public interface DebugPort extends AutoCloseable {
                 "Memory writes are unavailable for this session"));
     }
 
+    /**
+     * Enables or mutes one APU output channel without changing the game's sound registers.
+     *
+     * <p>Channels are numbered 1 through 4. Legacy implementations return an explicit
+     * unsupported result; callers should require audio inspection support before submitting a
+     * channel override.
+     */
+    default CompletionStage<DebugResult<DebugSnapshot>> setAudioChannelEnabled(
+            int channel, boolean enabled) {
+        return CompletableFuture.completedFuture(DebugResult.failure(
+                DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+                "Audio channel controls are unavailable for this session"));
+    }
+
     CompletionStage<DebugResult<Void>> setButton(DebugButton button, boolean pressed);
 
     /** Installs or replaces a breakpoint with the same caller-assigned id. */
