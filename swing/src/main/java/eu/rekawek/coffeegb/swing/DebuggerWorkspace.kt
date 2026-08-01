@@ -6,6 +6,7 @@ import java.awt.Dialog
 import java.awt.Dimension
 import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
+import java.awt.Window
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.event.InputEvent
@@ -32,13 +33,13 @@ internal enum class DebuggerWorkspaceTool(
     val accessibleName: String,
     val preferredSize: Dimension,
 ) {
-  EXECUTION("Execution", "CPU execution debugger", Dimension(1220, 900)),
-  MEMORY("Memory", "Live memory debugger", Dimension(1080, 800)),
-  BREAKPOINTS("Breakpoints", "Breakpoint debugger", Dimension(1180, 820)),
-  VIDEO("Video", "Graphical video debugger", Dimension(1340, 920)),
-  HARDWARE("Hardware & I/O", "Semantic hardware and I O debugger", Dimension(1600, 860)),
-  AUDIO("Audio", "Audio debugger", Dimension(1940, 900)),
-  TIMELINE("Timeline", "Trace timeline debugger", Dimension(1280, 800)),
+  EXECUTION("Execution", "CPU execution debugger", Dimension(1600, 1900)),
+  MEMORY("Memory", "Live memory debugger", Dimension(1400, 1100)),
+  BREAKPOINTS("Breakpoints", "Breakpoint debugger", Dimension(1460, 1420)),
+  VIDEO("Video", "Graphical video debugger", Dimension(1400, 1660)),
+  HARDWARE("Hardware & I/O", "Semantic hardware and I O debugger", Dimension(2060, 1200)),
+  AUDIO("Audio", "Audio debugger", Dimension(1880, 1050)),
+  TIMELINE("Timeline", "Trace timeline debugger", Dimension(1800, 1180)),
 }
 
 internal enum class DebuggerWorkspaceLayout(val title: String) {
@@ -301,7 +302,13 @@ internal class DebuggerWorkspace(
       content: Component,
       preferences: DebuggerWorkspaceToolPreferences,
   ) {
-    val dialog = JDialog(owner, "${tool.title} — Coffee GB", Dialog.ModalityType.MODELESS)
+    // Native owned dialogs stay above their owner on macOS. Debugger tools are independent normal
+    // windows, so activating the emulator can put them behind it just like any other tool window.
+    val dialog =
+        JDialog(null as Window?, "${tool.title} — Coffee GB", Dialog.ModalityType.MODELESS).apply {
+          type = Window.Type.NORMAL
+          isAlwaysOnTop = false
+        }
     val hold = JCheckBox("Hold updates", preferences.held)
     val live = JLabel("LIVE", SwingConstants.CENTER)
     val footer = JLabel("Waiting for a debugger session")
