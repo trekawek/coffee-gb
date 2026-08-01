@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.BasicController
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import java.io.BufferedOutputStream
@@ -13,6 +15,8 @@ import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -34,6 +38,86 @@ import org.junit.rules.TemporaryFolder
 class RomOpenServiceTest {
 
   @get:Rule val temporaryFolder = TemporaryFolder()
+
+  @Test
+  fun `a desktop open reaches a live controller after inspecting the ROM`() {
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
+    val controller = BasicController(eventBus, properties, null)
+    val started = CountDownLatch(1)
+    val updates = CopyOnWriteArrayList<RomOpenUpdate>()
+    val worker = Executors.newSingleThreadExecutor()
+    val service =
+        RomOpenService(
+            eventBus,
+            object : RomRecentStore {
+              override fun getPaths(): List<Path> = emptyList()
+
+              override fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path?) = Unit
+
+              override fun remove(path: Path) = Unit
+            },
+            updates::add,
+            worker,
+            Executor { task -> task.run() },
+        )
+    eventBus.register<Controller.EmulationStartedEvent> { started.countDown() }
+    controller.startController()
+
+    try {
+      service.open(RomOpenRequest(romFile("controller-handoff.gb", "HANDOFF"), RomOpenSource.RECENT))
+
+      assertTrue(started.await(5, TimeUnit.SECONDS))
+      assertTrue(updates.any { it is RomOpenUpdate.Progress && it.stage == RomOpenStage.PREPARING_CORE })
+      assertTrue(updates.any { it is RomOpenUpdate.Opened })
+    } finally {
+      service.close()
+      controller.close()
+      properties.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `a desktop open reaches the Swing emulator controller after inspecting the ROM`() {
+    val eventBus = EventBusImpl()
+    val properties = EmulatorProperties()
+    val emulator = SwingEmulator(eventBus, null, properties)
+    val started = LinkedBlockingQueue<String>()
+    val updates = CopyOnWriteArrayList<RomOpenUpdate>()
+    val worker = Executors.newSingleThreadExecutor()
+    val service =
+        RomOpenService(
+            eventBus,
+            object : RomRecentStore {
+              override fun getPaths(): List<Path> = emptyList()
+
+              override fun recordSuccessfulOpen(path: Path, recentPathToReplace: Path?) = Unit
+
+              override fun remove(path: Path) = Unit
+            },
+            updates::add,
+            worker,
+            Executor { task -> task.run() },
+        )
+    eventBus.register<Controller.EmulationStartedEvent> { started.add(it.romName) }
+
+    try {
+      service.open(RomOpenRequest(romFile("swing-first.gb", "SWING_FIRST"), RomOpenSource.RECENT))
+      assertEquals("SWING_FIRST", started.poll(5, TimeUnit.SECONDS))
+
+      service.open(RomOpenRequest(romFile("swing-next.gb", "SWING_NEXT"), RomOpenSource.RECENT))
+
+      assertEquals("SWING_NEXT", started.poll(5, TimeUnit.SECONDS))
+      assertTrue(updates.any { it is RomOpenUpdate.Progress && it.stage == RomOpenStage.PREPARING_CORE })
+      assertTrue(updates.any { it is RomOpenUpdate.Opened })
+    } finally {
+      service.close()
+      emulator.stop()
+      properties.close()
+      eventBus.close()
+    }
+  }
 
   @Test
   fun `successful controller start is the only point that records a recent ROM`() {
