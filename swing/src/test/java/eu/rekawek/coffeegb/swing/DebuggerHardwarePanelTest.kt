@@ -20,7 +20,7 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JCheckBox
 import javax.swing.JComponent
-import javax.swing.JLabel
+import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.KeyStroke
@@ -294,12 +294,13 @@ class DebuggerHardwarePanelTest {
       assertTrue(components.none { it is JCheckBox })
       assertTrue(components.none { it is JTextField })
       assertTrue(components.none { it is JTextArea })
-      val rawLabel =
-          components.filterIsInstance<JLabel>().firstOrNull {
-            it.accessibleContext.accessibleName == "IF raw value"
+      val interruptTable =
+          components.filterIsInstance<JTable>().firstOrNull {
+            it.accessibleContext.accessibleName == "Interrupts hardware values"
           }
-      assertNotNull(rawLabel)
-      assertTrue(rawLabel.isEnabled)
+      assertNotNull(interruptTable)
+      assertEquals("Raw value", interruptTable.columnModel.getColumn(1).headerValue)
+      assertFalse(interruptTable.isCellEditable(0, 1))
     }
   }
 
@@ -313,19 +314,23 @@ class DebuggerHardwarePanelTest {
       panel.render(snapshot)
       panel.selectSubsystem(DebuggerHardwareSubsystem.INTERRUPTS)
       val report = panel.copyText()
-      assertContains(report, "Field\tAddress/source\tRaw value\tDecoded meaning\tProvenance")
-      assertContains(report, "IF\t\$FF0F\t\$15")
+      assertContains(report, "Field\tRaw value\tAddress/source\tDecoded meaning\tProvenance")
+      assertContains(report, "IF\t\$15\t\$FF0F")
       assertContains(report, "CURRENT")
 
-      val rawLabel =
-          descendants(panel).filterIsInstance<JLabel>().first {
-            it.accessibleContext.accessibleName == "IF raw value"
+      val interruptTable =
+          descendants(panel).filterIsInstance<JTable>().first {
+            it.accessibleContext.accessibleName == "Interrupts hardware values"
           }
-      assertEquals("$15", rawLabel.text)
-      assertEquals(165, rawLabel.minimumSize.width)
-      val originalSize = rawLabel.font.size2D
+      val ifRow =
+          (0 until interruptTable.rowCount).first { row ->
+            interruptTable.getValueAt(row, 0) == "IF"
+          }
+      assertEquals("\$15", interruptTable.getValueAt(ifRow, 1))
+      assertEquals(135, interruptTable.columnModel.getColumn(1).minWidth)
+      val originalSize = interruptTable.font.size2D
       panel.applyFontScale(175)
-      assertTrue(rawLabel.font.size2D > originalSize)
+      assertTrue(interruptTable.font.size2D > originalSize)
 
       val key = KeyStroke.getKeyStroke(KeyEvent.VK_C, peripheralMenuShortcutMask())
       val actionKey =
