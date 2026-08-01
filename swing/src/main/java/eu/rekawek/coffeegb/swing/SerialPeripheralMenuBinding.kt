@@ -97,7 +97,6 @@ internal fun serialPeripheralTransitionPrerequisites(
 internal class SerialPeripheralMenuBinding(
     private val eventBus: EventBus,
     initialSelection: SerialPeripheralSelection = SerialPeripheralSelection.PEER_TO_PEER,
-    private val mobileAdapterVisible: Boolean = true,
     private val transitionPrerequisites:
         (SerialPeripheralSelection) -> List<SerialPeripheralTransitionPrerequisite> = {
           emptyList()
@@ -108,14 +107,11 @@ internal class SerialPeripheralMenuBinding(
   val statusItem = JMenuItem()
   val items: Map<SerialPeripheralSelection, JRadioButtonMenuItem>
 
-  private val initialVisibleSelection =
-      initialSelection.takeIf(::isVisible) ?: SerialPeripheralSelection.PEER_TO_PEER
-
   @Volatile
   private var current =
       SerialPeripheralUiSnapshot(
-          selection = initialVisibleSelection,
-          statusSelection = initialVisibleSelection,
+          selection = initialSelection,
+          statusSelection = initialSelection,
           status = SerialPeripheralStatus.DETACHED,
       )
 
@@ -124,7 +120,7 @@ internal class SerialPeripheralMenuBinding(
   init {
     val group = ButtonGroup()
     val mutableItems = EnumMap<SerialPeripheralSelection, JRadioButtonMenuItem>(SerialPeripheralSelection::class.java)
-    DISPLAY_ORDER.filter(::isVisible).forEach { selection ->
+    DISPLAY_ORDER.forEach { selection ->
       val item = JRadioButtonMenuItem(label(selection), selection == initialSelection)
       item.accessibleContext.accessibleDescription = description(selection)
       item.addActionListener {
@@ -181,7 +177,6 @@ internal class SerialPeripheralMenuBinding(
 
     eventBus.register<Controller.SerialPeripheralSelectionChangedEvent> { event ->
       dispatchSwingMutation {
-        if (!isVisible(event.selection)) return@dispatchSwingMutation
         val previous = current
         if (event.selection != SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
           mobileNetwork = null
@@ -198,7 +193,6 @@ internal class SerialPeripheralMenuBinding(
     }
     eventBus.register<Controller.SerialPeripheralStatusEvent> { event ->
       dispatchSwingMutation {
-        if (!isVisible(event.selection)) return@dispatchSwingMutation
         if (event.status == SerialPeripheralStatus.UNAVAILABLE) {
           // A failed preparation/handoff leaves the controller's prior owner committed. Swing's
           // radio model selects on click, so explicitly roll that optimistic visual state back.
@@ -215,7 +209,6 @@ internal class SerialPeripheralMenuBinding(
       }
     }
     eventBus.register<Controller.MobileAdapterNetworkStatusEvent> { event ->
-      if (!mobileAdapterVisible) return@register
       val detached = MobileAdapterNetworkUiSnapshot.from(event)
       dispatchSwingMutation {
         val previous = mobileNetwork
@@ -252,9 +245,6 @@ internal class SerialPeripheralMenuBinding(
   fun snapshot(): SerialPeripheralUiSnapshot = current
 
   fun isSelected(selection: SerialPeripheralSelection): Boolean = items[selection]?.isSelected == true
-
-  private fun isVisible(selection: SerialPeripheralSelection): Boolean =
-      mobileAdapterVisible || selection != SerialPeripheralSelection.MOBILE_ADAPTER_GB
 
   private fun postSelectionWithoutOwnershipRollback(selection: SerialPeripheralSelection) {
     try {

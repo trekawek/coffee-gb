@@ -39,6 +39,49 @@ import org.junit.Test
 class PreferencesDialogTest {
 
   @Test
+  fun `Mobile Adapter handoff preserves dirty Preferences until discard is confirmed`() {
+    val rejectedEvents = mutableListOf<String>()
+    val rejected =
+        requestMobileAdapterConfigurationHandoff(
+            isDirty = true,
+            confirmDiscard = {
+              rejectedEvents += "confirm"
+              false
+            },
+            stopBackgroundWork = { rejectedEvents += "stop" },
+            closePreferences = { rejectedEvents += "close" },
+            defer = { rejectedEvents += "defer" },
+            configureMobileAdapter = { rejectedEvents += "configure" },
+        )
+
+    assertFalse(rejected)
+    assertEquals(listOf("confirm"), rejectedEvents)
+
+    val acceptedEvents = mutableListOf<String>()
+    var deferred: (() -> Unit)? = null
+    val accepted =
+        requestMobileAdapterConfigurationHandoff(
+            isDirty = true,
+            confirmDiscard = {
+              acceptedEvents += "confirm"
+              true
+            },
+            stopBackgroundWork = { acceptedEvents += "stop" },
+            closePreferences = { acceptedEvents += "close" },
+            defer = {
+              acceptedEvents += "defer"
+              deferred = it
+            },
+            configureMobileAdapter = { acceptedEvents += "configure" },
+        )
+
+    assertTrue(accepted)
+    assertEquals(listOf("confirm", "stop", "close", "defer"), acceptedEvents)
+    deferred?.invoke()
+    assertEquals(listOf("confirm", "stop", "close", "defer", "configure"), acceptedEvents)
+  }
+
+  @Test
   fun `edit applies exposed fields to latest settings and preserves hidden settings`() {
     val defaultInput = ApplicationSettings.Input.defaults()
     val currentInput =

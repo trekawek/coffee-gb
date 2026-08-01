@@ -181,22 +181,21 @@ compatibility, production POP behavior, or general REON mail compatibility. The 
 admitted only as a configured exact guest DNS alias. Only the subsequent ROM-originated HTTP request
 observed in the pinned REON nginx access output is custom-service acceptance evidence.
 
-## Adapter-image prerequisite
+## Adapter-image workflow
 
-The retained Mobile Adapter configuration dialog now has an owner-selected import control. At the
-acceptance revision, the desktop still hid its Mobile Adapter controls, so this run does not claim
-that revision had a generally exposed workflow. The importer accepts an exact opaque 256-byte
-game-visible image, or an exact 512-byte REON/libmobile envelope only after its `MA`/`LM` magic and
-checksums plus the `LM` version and address types pass validation. It imports bytes `0..255` and
-discards the whole library region, including device, DNS, relay, token, and host metadata.
+At the acceptance revision, the desktop retained this configuration dialog but kept its controls
+hidden. The desktop now exposes the dialog and its owner-selected import control at **Peripherals →
+Configure Mobile Adapter…**. The importer accepts an exact opaque 256-byte game-visible image, or an
+exact 512-byte REON/libmobile envelope only after its `MA`/`LM` magic and checksums plus the `LM`
+version and address types pass validation. It imports bytes `0..255` and discards the whole library
+region, including device, DNS, relay, token, and host metadata.
 
 Every import attempt revokes active backend ownership and both runtime-only authorization gates,
 including stale, malformed, conflicting-source, busy, unreadable, and storage-failing attempts. An
 accepted image keeps Coffee GB's device ID and structured custom-server policy, then persists only
 the copied or extracted 256 bytes through the existing owner-only atomic store. It grants no
-network authority. This removed a latent ingestion prerequisite at the acceptance revision, but did
-not itself provide a generally exposed #399 workflow or evidence that a real game completed the
-ROM-to-REON route.
+network authority. The workflow is now manually accessible; the completed Mobile Trainer-to-REON
+result above remains the acceptance evidence rather than UI exposure alone.
 
 ## Privacy, state, and cleanup boundaries
 

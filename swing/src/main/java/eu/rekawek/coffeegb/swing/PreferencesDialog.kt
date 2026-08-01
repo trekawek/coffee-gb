@@ -260,6 +260,8 @@ internal class PreferencesPanel private constructor(
     initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
     categoryChanged: (PreferencesCategory) -> Unit = {},
     private val draftChanged: (Boolean) -> Unit = {},
+    mobileAdapterSummary: String = "Offline · networking blocked for this session",
+    configureMobileAdapter: () -> Unit = {},
     @Suppress("UNUSED_PARAMETER") edtGuard: Unit,
 ) : JPanel(BorderLayout(12, 8)), DesktopThemeRefreshHook {
   constructor(
@@ -274,6 +276,8 @@ internal class PreferencesPanel private constructor(
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       categoryChanged: (PreferencesCategory) -> Unit = {},
       draftChanged: (Boolean) -> Unit = {},
+      mobileAdapterSummary: String = "Offline · networking blocked for this session",
+      configureMobileAdapter: () -> Unit = {},
   ) : this(
       initial,
       defaults,
@@ -285,6 +289,8 @@ internal class PreferencesPanel private constructor(
       initialCategory,
       categoryChanged,
       draftChanged,
+      mobileAdapterSummary,
+      configureMobileAdapter,
       requireEdt(),
   )
 
@@ -363,6 +369,8 @@ internal class PreferencesPanel private constructor(
       PeripheralsPreferencesEditor(
           initial.peripherals,
           defaults.peripherals,
+          mobileAdapterSummary,
+          configureMobileAdapter,
       )
   internal val audioEditor =
       AudioPreferencesEditor(initial.audio, defaults.audio, audioDevices)
@@ -1128,6 +1136,21 @@ internal class PreferencesValidationException(
     val invalidComponent: Component,
 ) : IllegalArgumentException(message)
 
+internal fun requestMobileAdapterConfigurationHandoff(
+    isDirty: Boolean,
+    confirmDiscard: () -> Boolean,
+    stopBackgroundWork: () -> Unit,
+    closePreferences: () -> Unit,
+    defer: ((() -> Unit) -> Unit) = { SwingUtilities.invokeLater(it) },
+    configureMobileAdapter: () -> Unit,
+): Boolean {
+  if (isDirty && !confirmDiscard()) return false
+  stopBackgroundWork()
+  closePreferences()
+  defer(configureMobileAdapter)
+  return true
+}
+
 /** Owns only the modal window lifecycle. Persistence and runtime changes belong to [SwingGui]. */
 internal object PreferencesDialog {
   fun show(
@@ -1141,6 +1164,8 @@ internal object PreferencesDialog {
           PreferencesPersistencePresentation.PERSISTENT,
       initialCategory: PreferencesCategory = PreferencesCategory.GENERAL,
       initialBounds: Rectangle? = null,
+      mobileAdapterSummary: String = "Offline · networking blocked for this session",
+      configureMobileAdapter: () -> Unit = {},
       onCategoryChanged: (PreferencesCategory) -> Unit = {},
       onBoundsChanged: (Rectangle) -> Unit = {},
       onClosed: () -> Unit = {},
@@ -1171,6 +1196,16 @@ internal object PreferencesDialog {
             initialCategory = initialCategory,
             categoryChanged = onCategoryChanged,
             draftChanged = { refreshFooter() },
+            mobileAdapterSummary = mobileAdapterSummary,
+            configureMobileAdapter = {
+              requestMobileAdapterConfigurationHandoff(
+                  isDirty = panel.isDirty(),
+                  confirmDiscard = { confirmDiscardChanges(dialog) },
+                  stopBackgroundWork = panel::stopBackgroundWork,
+                  closePreferences = dialog::dispose,
+                  configureMobileAdapter = configureMobileAdapter,
+              )
+            },
         )
 
     refreshFooter = {

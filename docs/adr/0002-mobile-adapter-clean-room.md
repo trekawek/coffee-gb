@@ -56,9 +56,9 @@ ownership boundaries, and final close includes a bounded retry in its persistenc
 and a retry each use their own 2,000 ms deadline shared across the writer and all still-tracked
 backends.
 
-The retained Mobile Adapter configuration dialog has a bounded owner-selected image import, while
-the current desktop continues to hide Mobile Adapter controls. Its controller reader runs off the
-EDT, rejects a symbolic link in the selected final path component, and accepts only a stable regular
+The desktop exposes its retained Mobile Adapter configuration dialog and bounded owner-selected
+image import from the **Peripherals** menu. Its controller reader runs off the EDT, rejects a
+symbolic link in the selected final path component, and accepts only a stable regular
 exact 256-byte opaque image or a validated exact 512-byte `MA`/`LM` envelope. It requires a
 non-null provider file key, compares type, identity, size, and timestamps around the open/read, and
 compares the opened channel size at both checkpoints before discarding all library metadata after

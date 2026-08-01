@@ -18,8 +18,8 @@ shutdown passed the aggregate cleanup check after remote close had already relea
 ownership. Japanese Pokémon Crystal remains a narrower adapter-recognition result; the Mobile
 Trainer run is not evidence that Crystal reached a network feature.
 The retained Mobile Adapter configuration dialog also has a bounded, owner-selected adapter-image
-import path. At the acceptance revision, the desktop kept its Mobile Adapter controls hidden; the
-import control alone did not make that retained dialog a generally exposed feature.
+import path. The desktop exposes both the exclusive link-port choice and that retained dialog from
+the **Peripherals** menu.
 
 ## Implemented deterministic boundary
 
@@ -601,16 +601,13 @@ above.
 
 ## Troubleshooting
 
-- The current desktop keeps Mobile Adapter controls hidden. The following actions describe the
-  retained configuration and link-port UI when a development integration exposes it; the adapter
-  image import does not itself change that exposure boundary.
 - Select **Peripherals → Link-port device → Mobile Adapter GB**. Status changes to
   attached only after the controller commits the endpoint; selecting another radio item detaches
   and clears it.
-- Open the Mobile Adapter configuration action to choose offline or custom-server policy. A saved
-  custom policy still performs no host I/O until session consent is granted; private/LAN targets
-  require the additional development confirmation. **Cancel active network work** rotates backend
-  ownership and closes current DNS/socket work without waiting on the EDT.
+- Open **Peripherals → Configure Mobile Adapter…** to choose offline or custom-server policy. A
+  saved custom policy still performs no host I/O until session consent is granted; private/LAN
+  targets require the additional development confirmation. **Cancel active network work** rotates
+  backend ownership and closes current DNS/socket work without waiting on the EDT.
 - **Import adapter image…** accepts only an exact opaque 256-byte image or a validated exact
   512-byte REON/libmobile envelope. `IMPORT_MALFORMED_IMAGE`, `IMPORT_NON_REGULAR_SOURCE`,
   `IMPORT_READ_FAILED`, and `IMPORT_SOURCE_CONFLICT` are stable redacted failures. The last accepted

@@ -27,14 +27,14 @@ import org.junit.Test
 class SerialPeripheralMenuBindingTest {
 
   @Test
-  fun `mobile adapter is hidden when the desktop UI disables it`() {
+  fun `mobile adapter is always exposed as a link-port choice`() {
     val eventBus = EventBusImpl()
     try {
-      val binding = onEdtResult { SerialPeripheralMenuBinding(eventBus, mobileAdapterVisible = false) }
+      val binding = onEdtResult { SerialPeripheralMenuBinding(eventBus) }
 
-      assertFalse(binding.items.containsKey(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
+      assertTrue(binding.items.containsKey(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
       assertFalse(binding.isSelected(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
-      assertFalse(
+      assertTrue(
           onEdtResult {
             binding.menu.menuComponents
                 .filterIsInstance<javax.swing.JMenuItem>()
@@ -46,7 +46,8 @@ class SerialPeripheralMenuBindingTest {
           Controller.SerialPeripheralSelectionChangedEvent(
               SerialPeripheralSelection.MOBILE_ADAPTER_GB))
       flushEdt()
-      assertEquals(SerialPeripheralSelection.PEER_TO_PEER, binding.snapshot().selection)
+      assertEquals(SerialPeripheralSelection.MOBILE_ADAPTER_GB, binding.snapshot().selection)
+      assertTrue(binding.isSelected(SerialPeripheralSelection.MOBILE_ADAPTER_GB))
     } finally {
       eventBus.close()
     }
