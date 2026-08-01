@@ -1526,22 +1526,26 @@ private class DebuggerHardwareFieldComponent(
   init {
     border = BorderFactory.createMatteBorder(0, 0, 1, 0, separatorColor())
     nameLabel.font = nameLabel.font.deriveFont(Font.BOLD)
-    nameLabel.preferredSize = Dimension(190, nameLabel.preferredSize.height)
+    nameLabel.preferredSize = Dimension(FIELD_WIDTH, nameLabel.preferredSize.height)
+    nameLabel.minimumSize = nameLabel.preferredSize
     addressLabel.font = Font(Font.MONOSPACED, Font.PLAIN, addressLabel.font.size)
-    addressLabel.preferredSize = Dimension(100, addressLabel.preferredSize.height)
+    addressLabel.preferredSize = Dimension(ADDRESS_WIDTH, addressLabel.preferredSize.height)
+    addressLabel.minimumSize = addressLabel.preferredSize
     rawValueLabel.font = Font(Font.MONOSPACED, Font.PLAIN, rawValueLabel.font.size)
-    rawValueLabel.preferredSize = Dimension(165, rawValueLabel.preferredSize.height)
+    rawValueLabel.preferredSize = Dimension(RAW_VALUE_WIDTH, rawValueLabel.preferredSize.height)
+    rawValueLabel.minimumSize = rawValueLabel.preferredSize
     provenanceLabel.horizontalAlignment = SwingConstants.CENTER
     provenanceLabel.isOpaque = true
     provenanceLabel.border = BorderFactory.createCompoundBorder(
         BorderFactory.createLineBorder(separatorColor()),
         BorderFactory.createEmptyBorder(2, 5, 2, 5),
     )
-    provenanceLabel.preferredSize = Dimension(105, provenanceLabel.preferredSize.height + 4)
+    provenanceLabel.preferredSize = Dimension(PROVENANCE_WIDTH, provenanceLabel.preferredSize.height + 4)
+    provenanceLabel.minimumSize = provenanceLabel.preferredSize
 
     addCell(nameLabel, 0, 0.0, GridBagConstraints.NONE)
-    addCell(addressLabel, 1, 0.0, GridBagConstraints.NONE)
-    addCell(rawValueLabel, 2, 0.0, GridBagConstraints.NONE)
+    addCell(rawValueLabel, 1, 0.0, GridBagConstraints.NONE)
+    addCell(addressLabel, 2, 0.0, GridBagConstraints.NONE)
     addCell(decodedLabel, 3, 1.0, GridBagConstraints.HORIZONTAL)
     addCell(provenanceLabel, 4, 0.0, GridBagConstraints.NONE)
     render(view)
@@ -1593,16 +1597,23 @@ private class DebuggerHardwareFieldComponent(
         },
     )
   }
+
+  private companion object {
+    const val FIELD_WIDTH = 165
+    const val RAW_VALUE_WIDTH = 165
+    const val ADDRESS_WIDTH = 100
+    const val PROVENANCE_WIDTH = 105
+  }
 }
 
 private class DebuggerHardwareColumnHeader : JPanel(GridBagLayout()) {
   init {
     border = BorderFactory.createMatteBorder(0, 0, 1, 0, separatorColor())
-    addHeader("Field", 0, 190, 0.0)
-    addHeader("Address / source", 1, 100, 0.0)
-    addHeader("Raw value", 2, 165, 0.0)
+    addHeader("Field", 0, FIELD_WIDTH, 0.0)
+    addHeader("Raw value", 1, RAW_VALUE_WIDTH, 0.0)
+    addHeader("Address / source", 2, ADDRESS_WIDTH, 0.0)
     addHeader("Decoded meaning", 3, null, 1.0)
-    addHeader("Provenance", 4, 105, 0.0)
+    addHeader("Provenance", 4, PROVENANCE_WIDTH, 0.0)
     getAccessibleContext().accessibleName = "Hardware value column headings"
   }
 
@@ -1614,7 +1625,10 @@ private class DebuggerHardwareColumnHeader : JPanel(GridBagLayout()) {
   ) {
     val label = JLabel(text)
     label.font = label.font.deriveFont(Font.BOLD)
-    width?.let { label.preferredSize = Dimension(it, label.preferredSize.height) }
+    width?.let {
+      label.preferredSize = Dimension(it, label.preferredSize.height)
+      label.minimumSize = label.preferredSize
+    }
     add(
         label,
         GridBagConstraints().apply {
@@ -1626,6 +1640,13 @@ private class DebuggerHardwareColumnHeader : JPanel(GridBagLayout()) {
           insets = Insets(3, if (x == 0) 3 else 7, 4, if (x == 4) 3 else 7)
         },
     )
+  }
+
+  private companion object {
+    const val FIELD_WIDTH = 165
+    const val RAW_VALUE_WIDTH = 165
+    const val ADDRESS_WIDTH = 100
+    const val PROVENANCE_WIDTH = 105
   }
 }
 
