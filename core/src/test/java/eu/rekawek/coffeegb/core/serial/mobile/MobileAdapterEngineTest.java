@@ -570,8 +570,23 @@ public class MobileAdapterEngineTest {
         assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE, write.outcome());
         assertEquals(1, engine.configurationCopy()[0]);
         assertEquals(0x55, engine.configurationCopy()[1] & 0xff);
+        MobileAdapterEngine.GuestConfigurationMutation firstMutation =
+                engine.latestGuestConfigurationMutation();
+        assertNotNull(firstMutation);
+        assertEquals(1, firstMutation.revision());
+        assertArrayEquals(engine.configurationCopy(), firstMutation.configuration());
+        assertEquals(
+                "GuestConfigurationMutation[revision=1, configuration=[redacted]]",
+                firstMutation.toString());
+        byte[] detachedMutation = firstMutation.configuration();
+        detachedMutation[0] = 0;
+        assertEquals(1, engine.latestGuestConfigurationMutation().configuration()[0]);
         assertArrayEquals(new byte[]{(byte) 0x88, (byte) 0x9a}, write.acknowledgement());
         assertEquals(0x9a, write.responsePacket()[2] & 0xff);
+
+        assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE,
+                feed(engine, packet(0x1a, new byte[]{0, 1, 0x55})).outcome());
+        assertEquals(1, engine.latestGuestConfigurationMutation().revision());
 
         byte[] maximumWrite = new byte[MobileAdapterEngine.MAX_CONFIGURATION_OPERATION_BYTES + 1];
         maximumWrite[0] = (byte) 128;
@@ -581,14 +596,26 @@ public class MobileAdapterEngineTest {
         for (int i = 128; i < 256; i++) {
             assertEquals(0x6a, engine.configurationCopy()[i] & 0xff);
         }
+        assertEquals(2, engine.latestGuestConfigurationMutation().revision());
+        assertArrayEquals(engine.configurationCopy(),
+                engine.latestGuestConfigurationMutation().configuration());
         assertEquals(MobileAdapterEngine.Outcome.CONFIG_WRITE,
                 feed(engine, packet(0x1a, new byte[]{(byte) 255})).outcome());
+        assertEquals(2, engine.latestGuestConfigurationMutation().revision());
 
         byte[] afterWrite = engine.configurationCopy();
         assertUnsupported(feed(engine,
                 packet(0x1a, new byte[]{(byte) 255, 1, 2})));
         byte[] oversizedWrite = new byte[MobileAdapterEngine.MAX_CONFIGURATION_OPERATION_BYTES + 2];
         assertUnsupported(feed(engine, packet(0x1a, oversizedWrite)));
+        assertArrayEquals(afterWrite, engine.configurationCopy());
+        assertEquals(2, engine.latestGuestConfigurationMutation().revision());
+
+        byte[] invalidWriteChecksum = packet(0x1a, new byte[]{2, 0x44});
+        invalidWriteChecksum[invalidWriteChecksum.length - 1] ^= 1;
+        assertEquals(MobileAdapterEngine.Outcome.CHECKSUM_ERROR,
+                feed(engine, invalidWriteChecksum).outcome());
+        assertEquals(2, engine.latestGuestConfigurationMutation().revision());
         assertArrayEquals(afterWrite, engine.configurationCopy());
 
         assertUnsupported(feed(engine, packet(0x19, new byte[]{(byte) 200, 57})));
@@ -629,9 +656,11 @@ public class MobileAdapterEngineTest {
     public void configurationReplacementIsAtomicAndDeviceAcknowledgementIsNotFixtureSpecific() {
         MobileAdapterEngine engine = new MobileAdapterEngine(
                 ClockSpec.LEGACY, 0x21, configuration());
+        assertNull(engine.latestGuestConfigurationMutation());
         byte[] replacement = new byte[256];
         Arrays.fill(replacement, (byte) 0x5a);
         engine.replaceConfiguration(replacement);
+        assertNull(engine.latestGuestConfigurationMutation());
         replacement[0] = 0;
         assertEquals(0x5a, engine.configurationCopy()[0] & 0xff);
         assertThrows(IllegalArgumentException.class,
@@ -652,6 +681,35 @@ public class MobileAdapterEngineTest {
         restored.restoreState(engine.captureState());
         assertResultsEqual(historical, restored.snapshot());
         assertArrayEquals(newer, restored.configurationCopy());
+        assertNull(restored.latestGuestConfigurationMutation());
+    }
+
+    @Test
+    public void guestMutationSignalIsRuntimeOnlyAndSurvivesHostReplacementAndRestorePendingDrain() {
+        MobileAdapterEngine engine = engine(ClockSpec.LEGACY);
+        feed(engine, packet(0x1a, new byte[]{7, 0x55}));
+        MobileAdapterEngine.GuestConfigurationMutation mutation =
+                engine.latestGuestConfigurationMutation();
+        assertNotNull(mutation);
+        assertEquals(1, mutation.revision());
+
+        MobileAdapterEngine.MobileAdapterEngineState guestState = state(engine);
+        byte[] hostReplacement = new byte[MobileAdapterEngine.CONFIGURATION_BYTES];
+        Arrays.fill(hostReplacement, (byte) 0x33);
+        engine.replaceConfiguration(hostReplacement);
+        assertEquals(1, engine.latestGuestConfigurationMutation().revision());
+        assertArrayEquals(mutation.configuration(),
+                engine.latestGuestConfigurationMutation().configuration());
+
+        engine.restoreState(guestState);
+        assertEquals(1, engine.latestGuestConfigurationMutation().revision());
+        assertArrayEquals(mutation.configuration(),
+                engine.latestGuestConfigurationMutation().configuration());
+
+        MobileAdapterEngine restored = engine(ClockSpec.LEGACY);
+        restored.restoreState(guestState);
+        assertArrayEquals(guestState.configuration(), restored.configurationCopy());
+        assertNull(restored.latestGuestConfigurationMutation());
     }
 
     @Test

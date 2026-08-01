@@ -119,6 +119,14 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     private byte[] configuration;
 
+    /**
+     * Attachment-local guest-write sequence; runtime ownership deliberately excludes mementos.
+     */
+    private long guestConfigurationRevision;
+
+    /** Detached bytes from the latest changed guest write, retained across later state restores. */
+    private byte[] latestGuestConfiguration = EMPTY_BYTES;
+
     private int deviceId;
 
     private Phase phase = Phase.SLEEP;
@@ -371,6 +379,19 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
     public byte[] configurationCopy() {
         return configuration.clone();
+    }
+
+    /**
+     * Returns the latest changed configuration written by the guest, or {@code null} before one.
+     *
+     * <p>This runtime-only signal is attachment-local and is deliberately not captured in emulator
+     * state. Restoring a memento therefore neither publishes a guest write nor replaces an
+     * already-retained write that the controller has not observed yet.
+     */
+    public GuestConfigurationMutation latestGuestConfigurationMutation() {
+        if (guestConfigurationRevision == 0) return null;
+        return new GuestConfigurationMutation(
+                guestConfigurationRevision, latestGuestConfiguration);
     }
 
     /** Clears all deterministic request/response ownership for detach or session replacement. */
@@ -718,7 +739,12 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
 
         byte[] replacement = configuration.clone();
         System.arraycopy(data, 1, replacement, offset, writeLength);
+        boolean changed = !Arrays.equals(configuration, replacement);
         configuration = replacement;
+        if (changed) {
+            guestConfigurationRevision = Math.incrementExact(guestConfigurationRevision);
+            latestGuestConfiguration = replacement.clone();
+        }
         outcome = Outcome.CONFIG_WRITE;
         responsePacket = packet(COMMAND_CONFIG_WRITE | 0x80, new byte[]{(byte) offset});
         acknowledgement = acknowledgement(COMMAND_CONFIG_WRITE ^ 0x80);
@@ -1680,6 +1706,28 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
         @Override
         public byte[] acknowledgement() {
             return acknowledgement.clone();
+        }
+    }
+
+    /** Immutable runtime notification for one attachment's latest changed guest write. */
+    public record GuestConfigurationMutation(long revision, byte[] configuration) {
+
+        public GuestConfigurationMutation {
+            if (revision <= 0) {
+                throw new IllegalArgumentException("Guest configuration revision must be positive");
+            }
+            configuration = requireConfiguration(configuration);
+        }
+
+        @Override
+        public byte[] configuration() {
+            return configuration.clone();
+        }
+
+        @Override
+        public String toString() {
+            return "GuestConfigurationMutation[revision=" + revision
+                    + ", configuration=[redacted]]";
         }
     }
 

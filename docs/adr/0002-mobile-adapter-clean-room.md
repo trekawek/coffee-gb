@@ -47,9 +47,14 @@ development gate are process-local. Editing either gate or the policy directly a
 revokes every prepared backend under the coordinator authority lock before requesting an endpoint
 refresh through event delivery. First revocation rotates the generation; an already-revoked backend
 stays unavailable, and the owner loop closes its DNS capabilities and sockets. The event bus is
-therefore presentation and handoff, not the fail-closed authorization boundary. Configuration
-persistence has one active write and one queued write; shutdown and a retry each use their own
-2,000 ms deadline shared across the writer and all still-tracked backends.
+therefore presentation and handoff, not the fail-closed authorization boundary. Explicit
+configuration persistence has one active write and one queued write. Changed guest writes use a
+separate replaceable latest-image slot on that same writer, become the in-memory endpoint source
+immediately, and are merged with the latest durable device ID and policy. Failure retains the
+acknowledged dirty image without an automatic retry loop. The controller drains it at frame and
+ownership boundaries, and final close includes a bounded retry in its persistence barrier. Shutdown
+and a retry each use their own 2,000 ms deadline shared across the writer and all still-tracked
+backends.
 
 The retained Mobile Adapter configuration dialog has a bounded owner-selected image import, while
 the current desktop continues to hide Mobile Adapter controls. Its controller reader runs off the

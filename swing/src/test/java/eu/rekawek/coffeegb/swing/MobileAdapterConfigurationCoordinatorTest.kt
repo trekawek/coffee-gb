@@ -6,6 +6,10 @@ import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfiguration
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSaveResult
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationOfferResult
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistencePhase
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistenceStatus
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationWrite
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterNetworkPolicy
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterPortMapping
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterTransport
@@ -32,6 +36,267 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class MobileAdapterConfigurationCoordinatorTest {
+
+  @Test
+  fun `guest offer is defensively retained behind the committed attachment fence`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-guest-fence")
+    val persistence = CountingOwnerOnlyWriter()
+    val initial = customConfiguration()
+    val coordinator =
+        MobileAdapterConfigurationCoordinator(
+            initial,
+            MobileAdapterConfigurationStore(directory.resolve("adapter.bin"), persistence),
+        )
+    val eventBus = EventBusImpl()
+    try {
+      assertTrue(
+          coordinator.applyRuntimeAuthorization(
+              coordinator.snapshot().revision,
+              networkConsent = true,
+              privateLocalDevelopment = true,
+              eventBus = eventBus,
+          ))
+      val authorityRevision = coordinator.snapshot().revision
+      coordinator.attachmentCommitted(2)
+      coordinator.attachmentCommitted(1) // A delayed older commit cannot reopen attachment 1.
+      assertEquals(
+          MobileAdapterGuestConfigurationOfferResult.STALE_ATTACHMENT,
+          coordinator.offer(
+              MobileAdapterGuestConfigurationWrite(
+                  1,
+                  1,
+                  generatedConfigurationBytes(0x20),
+              )),
+      )
+
+      val source = generatedConfigurationBytes(0x61)
+      val expected = source.clone()
+      val write = MobileAdapterGuestConfigurationWrite(2, 1, source)
+      source.fill(0)
+      assertEquals(MobileAdapterGuestConfigurationOfferResult.ACCEPTED, coordinator.offer(write))
+
+      val visible = coordinator.snapshot()
+      assertEquals(authorityRevision, visible.revision)
+      assertEquals(initial.deviceId, visible.configuration.deviceId)
+      assertEquals(initial.networkPolicy, visible.configuration.networkPolicy)
+      assertTrue(visible.networkConsent)
+      assertTrue(visible.privateLocalDevelopment)
+      assertContentEquals(expected, visible.configuration.configurationBytes())
+      assertEquals(
+          MobileAdapterGuestConfigurationPersistencePhase.PENDING,
+          assertNotNull(coordinator.pollStatus()).phase,
+      )
+
+      assertTrue(coordinator.flush(5, TimeUnit.SECONDS).saved)
+      val saved = awaitGuestStatus(
+          coordinator,
+          MobileAdapterGuestConfigurationPersistencePhase.SAVED,
+      )
+      assertEquals(2, saved.attachmentId)
+      assertEquals(1, saved.mutationRevision)
+      assertFalse(saved.toString().contains(expected.copyOfRange(0, 16).decodeToString()))
+      assertContentEquals(expected, coordinator.snapshot().configuration.configurationBytes())
+      assertContentEquals(
+          expected,
+          MobileAdapterConfigurationStore(directory.resolve("adapter.bin"))
+              .load()
+              .configuration
+              .configurationBytes(),
+      )
+    } finally {
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `guest bursts coalesce to the latest constant-space image`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-guest-coalesce")
+    val persistence = BlockingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(directory.resolve("adapter.bin"), persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(customConfiguration(), store)
+    try {
+      coordinator.attachmentCommitted(7)
+      val first = generatedConfigurationBytes(0x11)
+      val middle = generatedConfigurationBytes(0x22)
+      val latest = generatedConfigurationBytes(0x33)
+      assertEquals(
+          MobileAdapterGuestConfigurationOfferResult.ACCEPTED,
+          coordinator.offer(MobileAdapterGuestConfigurationWrite(7, 1, first)),
+      )
+      assertTrue(persistence.started.await(5, TimeUnit.SECONDS))
+      assertEquals(
+          MobileAdapterGuestConfigurationOfferResult.ACCEPTED,
+          coordinator.offer(MobileAdapterGuestConfigurationWrite(7, 2, middle)),
+      )
+      assertEquals(
+          MobileAdapterGuestConfigurationOfferResult.ACCEPTED,
+          coordinator.offer(MobileAdapterGuestConfigurationWrite(7, 3, latest)),
+      )
+      assertContentEquals(latest, coordinator.snapshot().configuration.configurationBytes())
+
+      persistence.release.countDown()
+      assertTrue(coordinator.flush(5, TimeUnit.SECONDS).saved)
+      assertEquals(2, persistence.writes.get())
+      assertContentEquals(latest, store.current().configurationBytes())
+      val terminalRevisions =
+          drainGuestStatuses(coordinator)
+              .filter { it.phase == MobileAdapterGuestConfigurationPersistencePhase.SAVED }
+              .map { it.mutationRevision }
+      assertEquals(listOf(1L, 3L), terminalRevisions)
+    } finally {
+      persistence.release.countDown()
+      coordinator.close()
+    }
+  }
+
+  @Test
+  fun `failed guest image remains live and flush performs one bounded retry`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-guest-flush")
+    val persistence = FailThenSucceedOwnerOnlyWriter(failures = 1)
+    val store = MobileAdapterConfigurationStore(directory.resolve("adapter.bin"), persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(customConfiguration(), store)
+    try {
+      coordinator.attachmentCommitted(3)
+      val image = generatedConfigurationBytes(0x44)
+      coordinator.offer(MobileAdapterGuestConfigurationWrite(3, 1, image))
+      val failed = awaitGuestStatus(
+          coordinator,
+          MobileAdapterGuestConfigurationPersistencePhase.FAILED,
+      )
+      assertEquals(MobileAdapterConfigurationError.STORAGE_WRITE_FAILED, failed.error)
+      assertEquals(1, persistence.writes.get())
+      assertContentEquals(image, coordinator.snapshot().configuration.configurationBytes())
+
+      assertTrue(coordinator.flush(5, TimeUnit.SECONDS).saved)
+      assertEquals(2, persistence.writes.get())
+      assertContentEquals(image, store.current().configurationBytes())
+      assertEquals(
+          MobileAdapterGuestConfigurationPersistencePhase.SAVED,
+          awaitGuestStatus(
+                  coordinator,
+                  MobileAdapterGuestConfigurationPersistencePhase.SAVED,
+              )
+              .phase,
+      )
+    } finally {
+      coordinator.close()
+    }
+  }
+
+  @Test
+  fun `policy completion composes durable metadata without rolling back a live guest image`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-guest-policy")
+    val persistence = BlockingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(directory.resolve("adapter.bin"), persistence)
+    val initial = customConfiguration()
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      val policyCompleted = CountDownLatch(1)
+      val imageAtPolicyCompletion = AtomicReference<ByteArray>()
+      coordinator.savePolicy(
+          coordinator.snapshot().revision,
+          MobileAdapterNetworkPolicy.Offline,
+          eventBus,
+      ) {
+        imageAtPolicyCompletion.set(coordinator.snapshot().configuration.configurationBytes())
+        policyCompleted.countDown()
+      }
+      assertTrue(persistence.started.await(5, TimeUnit.SECONDS))
+
+      coordinator.attachmentCommitted(4)
+      val guestImage = generatedConfigurationBytes(0x55)
+      coordinator.offer(MobileAdapterGuestConfigurationWrite(4, 1, guestImage))
+      persistence.release.countDown()
+      assertTrue(policyCompleted.await(5, TimeUnit.SECONDS))
+      assertContentEquals(guestImage, imageAtPolicyCompletion.get())
+      assertTrue(coordinator.flush(5, TimeUnit.SECONDS).saved)
+
+      val expected = MobileAdapterConfiguration(initial.deviceId, guestImage, MobileAdapterNetworkPolicy.Offline)
+      assertEquals(expected, coordinator.snapshot().configuration)
+      assertEquals(expected, store.current())
+    } finally {
+      persistence.release.countDown()
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `successful import orders against guest images in both directions`() {
+    val firstDirectory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import-after-guest")
+    val firstSource = firstDirectory.resolve("import.bin")
+    val importedAfterGuest = generatedConfigurationBytes(0x66)
+    Files.write(firstSource, importedAfterGuest)
+    val firstPersistence = FailThenSucceedOwnerOnlyWriter(failures = 1)
+    val firstStore = MobileAdapterConfigurationStore(firstDirectory.resolve("adapter.bin"), firstPersistence)
+    val firstCoordinator = MobileAdapterConfigurationCoordinator(customConfiguration(), firstStore)
+    val firstBus = EventBusImpl()
+    try {
+      firstCoordinator.attachmentCommitted(5)
+      firstCoordinator.offer(
+          MobileAdapterGuestConfigurationWrite(5, 1, generatedConfigurationBytes(0x65)))
+      awaitGuestStatus(firstCoordinator, MobileAdapterGuestConfigurationPersistencePhase.FAILED)
+      val imported = CountDownLatch(1)
+      firstCoordinator.importConfigurationImage(
+          firstCoordinator.snapshot().revision,
+          firstSource,
+          firstBus,
+      ) { result ->
+        assertTrue(result.saved)
+        imported.countDown()
+      }
+      assertTrue(imported.await(5, TimeUnit.SECONDS))
+      assertTrue(firstCoordinator.flush(1, TimeUnit.SECONDS).saved)
+      assertEquals(2, firstPersistence.writes.get())
+      assertEquals(
+          MobileAdapterGuestConfigurationPersistencePhase.SUPERSEDED,
+          awaitGuestStatus(
+                  firstCoordinator,
+                  MobileAdapterGuestConfigurationPersistencePhase.SUPERSEDED,
+              )
+              .phase,
+      )
+      assertContentEquals(importedAfterGuest, firstCoordinator.snapshot().configuration.configurationBytes())
+      assertContentEquals(importedAfterGuest, firstStore.current().configurationBytes())
+    } finally {
+      firstCoordinator.close()
+      firstBus.close()
+    }
+
+    val secondDirectory = Files.createTempDirectory("coffee-gb-mobile-coordinator-guest-after-import")
+    val secondSource = secondDirectory.resolve("import.bin")
+    Files.write(secondSource, generatedConfigurationBytes(0x70))
+    val secondPersistence = BlockingOwnerOnlyWriter()
+    val secondStore = MobileAdapterConfigurationStore(secondDirectory.resolve("adapter.bin"), secondPersistence)
+    val secondCoordinator = MobileAdapterConfigurationCoordinator(customConfiguration(), secondStore)
+    val secondBus = EventBusImpl()
+    try {
+      val imported = CountDownLatch(1)
+      secondCoordinator.importConfigurationImage(
+          secondCoordinator.snapshot().revision,
+          secondSource,
+          secondBus,
+      ) { result ->
+        assertTrue(result.saved)
+        imported.countDown()
+      }
+      assertTrue(secondPersistence.started.await(5, TimeUnit.SECONDS))
+      secondCoordinator.attachmentCommitted(6)
+      val guestAfterImport = generatedConfigurationBytes(0x71)
+      secondCoordinator.offer(MobileAdapterGuestConfigurationWrite(6, 1, guestAfterImport))
+      secondPersistence.release.countDown()
+      assertTrue(imported.await(5, TimeUnit.SECONDS))
+      assertContentEquals(guestAfterImport, secondCoordinator.snapshot().configuration.configurationBytes())
+      assertTrue(secondCoordinator.flush(5, TimeUnit.SECONDS).saved)
+      assertContentEquals(guestAfterImport, secondStore.current().configurationBytes())
+    } finally {
+      secondPersistence.release.countDown()
+      secondCoordinator.close()
+      secondBus.close()
+    }
+  }
 
   @Test
   fun `runtime authorization starts disabled and every policy edit revokes it before commit`() {
@@ -1196,6 +1461,27 @@ class MobileAdapterConfigurationCoordinatorTest {
     assertEquals("valid", document.getText(0, document.length))
   }
 
+  private fun awaitGuestStatus(
+      coordinator: MobileAdapterConfigurationCoordinator,
+      phase: MobileAdapterGuestConfigurationPersistencePhase,
+  ): MobileAdapterGuestConfigurationPersistenceStatus {
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (System.nanoTime() < deadline) {
+      val status = coordinator.pollStatus()
+      if (status?.phase == phase) return status
+      Thread.yield()
+    }
+    throw AssertionError("Timed out waiting for redacted Mobile Adapter guest status $phase")
+  }
+
+  private fun drainGuestStatuses(
+      coordinator: MobileAdapterConfigurationCoordinator
+  ): List<MobileAdapterGuestConfigurationPersistenceStatus> {
+    val statuses = mutableListOf<MobileAdapterGuestConfigurationPersistenceStatus>()
+    while (true) statuses += coordinator.pollStatus() ?: break
+    return statuses
+  }
+
   private fun customConfiguration(): MobileAdapterConfiguration =
       MobileAdapterConfiguration(
           0x08,
@@ -1273,6 +1559,19 @@ class MobileAdapterConfigurationCoordinatorTest {
 
     override fun writeOwnerOnly(target: Path, intendedBytes: ByteArray) {
       writes.incrementAndGet()
+      AtomicFileWriter.system().writeOwnerOnly(target, intendedBytes)
+    }
+  }
+
+  private class FailThenSucceedOwnerOnlyWriter(
+      private val failures: Int,
+  ) : AtomicFileWriter() {
+    val writes = AtomicInteger()
+
+    override fun writeOwnerOnly(target: Path, intendedBytes: ByteArray) {
+      if (writes.incrementAndGet() <= failures) {
+        throw IOException("injected bounded Mobile Adapter guest write failure")
+      }
       AtomicFileWriter.system().writeOwnerOnly(target, intendedBytes)
     }
   }

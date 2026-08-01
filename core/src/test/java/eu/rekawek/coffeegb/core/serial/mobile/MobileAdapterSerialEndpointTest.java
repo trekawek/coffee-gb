@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -53,6 +55,49 @@ public class MobileAdapterSerialEndpointTest {
 
         assertEquals(0xd2, exchange(endpoint, 0x99));
         assertEquals(1, endpoint.snapshot().retainedBytes());
+    }
+
+    @Test
+    public void changedGuestWriteIsVisibleAtPacketCommitAndIsNotCapturedOrUndoneByWireAbort() {
+        MobileAdapterSerialEndpoint endpoint = endpoint();
+        byte[] writeRequest = packet(0x1a, new byte[]{7, 0x55});
+
+        assertNull(endpoint.latestGuestConfigurationMutation());
+        for (int i = 0; i < writeRequest.length - 1; i++) {
+            assertEquals(0xd2, exchange(endpoint, writeRequest[i] & 0xff));
+            assertNull(endpoint.latestGuestConfigurationMutation());
+        }
+        assertEquals(0xd2, exchange(endpoint, writeRequest[writeRequest.length - 1] & 0xff));
+
+        MobileAdapterEngine.GuestConfigurationMutation mutation =
+                endpoint.latestGuestConfigurationMutation();
+        assertNotNull(mutation);
+        assertEquals(1, mutation.revision());
+        assertArrayEquals(endpoint.configurationCopy(), mutation.configuration());
+        byte[] detached = mutation.configuration();
+        detached[7] = 0;
+        assertEquals(0x55,
+                endpoint.latestGuestConfigurationMutation().configuration()[7] & 0xff);
+
+        ComponentState<eu.rekawek.coffeegb.core.serial.SerialEndpoint> captured =
+                endpoint.captureState();
+        MobileAdapterSerialEndpoint restored = endpoint();
+        restored.restoreState(captured);
+        assertEquals(0x55, restored.configurationCopy()[7] & 0xff);
+        assertNull(restored.latestGuestConfigurationMutation());
+
+        assertEquals(DEVICE_ID | 0x80, exchange(endpoint, 0x80));
+        assertEquals(0x9a, exchange(endpoint, 0));
+        assertEquals(0xd2, exchange(endpoint, 0));
+        assertEquals(0xd2, exchange(endpoint, 0));
+        assertEquals(1, endpoint.latestGuestConfigurationMutation().revision());
+        assertArrayEquals(mutation.configuration(),
+                endpoint.latestGuestConfigurationMutation().configuration());
+
+        endpoint.disconnect();
+        assertEquals(1, endpoint.latestGuestConfigurationMutation().revision());
+        assertArrayEquals(mutation.configuration(),
+                endpoint.latestGuestConfigurationMutation().configuration());
     }
 
     @Test

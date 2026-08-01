@@ -179,6 +179,7 @@ class SwingGui private constructor(
             console,
             properties,
             mobileAdapterConfiguration.provider,
+            mobileAdapterConfiguration,
         )
   }
 

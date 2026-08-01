@@ -233,14 +233,21 @@ Cancel and refresh delivery uses one coherent constant-space controller lane: on
 order and one latest accepted policy revision/order. Bursts cannot grow the general event queue,
 and relative order determines whether cancellation applies to the old or replacement endpoint.
 
-Configuration persistence has one daemon writer. At most one write may execute and one additional
-write may wait in its bounded queue; another request is rejected without enqueueing as
-`CONFIGURATION_BUSY`. Coordinator shutdown uses one 2,000 ms deadline shared by that writer and all
-prepared network backends. The writer receives at most 1,000 ms to stop gracefully, then an
-interrupt request and only the time still remaining; backend termination checks consume that same
-remaining deadline rather than receiving a fresh timeout each. If a shutdown attempt times out, a
-later close retry re-snapshots the still-tracked backends and waits under a new shared 2,000 ms
-deadline; it never re-enables authority or starts a replacement worker.
+Configuration persistence has one daemon writer. At most one explicit owner write may execute and
+one may wait in its bounded queue; another policy/import request is rejected without enqueueing as
+`CONFIGURATION_BUSY`. Changed guest configuration writes use a separate constant-space latest-image
+slot. Accepting that slot immediately updates the coordinator's detached in-memory image, then the
+same writer merges it with the latest durable device ID and policy. A newer guest image replaces an
+unscheduled older one. A failed write leaves the acknowledged image active and dirty without
+spinning; a later guest write, explicit configuration operation, or controller-close retry attempts
+it again. A later successful owner import explicitly supersedes an older dirty guest image and
+publishes a redacted terminal status. Coordinator shutdown uses one 2,000 ms deadline shared by
+that writer and all prepared network backends. The writer receives at most 1,000 ms to stop
+gracefully, then an interrupt request
+and only the time still remaining; backend termination checks consume that same remaining deadline
+rather than receiving a fresh timeout each. If a shutdown attempt times out, a later close retry
+re-snapshots the still-tracked backends and waits under a new shared 2,000 ms deadline; it never
+re-enables authority or starts a replacement worker.
 
 DNS is a bounded raw UDP A query sent only to the configured literal IPv4 resolver; the JVM system
 resolver is never called. A guest name is only an exact alias into the saved mapping table. A named
@@ -325,14 +332,18 @@ output, records `externalIoAtCapture`, and substitutes the stable disconnected o
 load, current backend ownership is cancelled before that deterministic disconnected image is
 installed; no socket or request is restored. Backend completion is queued and at most one result is
 applied at a controller safe point; late completion from a cancelled generation is discarded.
-Configuration writes validate a detached copy and commit atomically in core memory. Filesystem
-persistence, if requested, is a separate controller operation and cannot run on the emulator
-thread. Rewind history is cleared as soon as external ownership is observed, including while the
-machine is paused, so later host-free captures cannot bridge an unrepresentable DNS/socket
-interval after that ownership ends. The desktop reports an informational notice when a capture
-receives the marker. Loading a marked capture reports the disconnected warning even if the
-currently attached endpoint is idle; loading any state while current host work is live reports the
-same non-restoration boundary.
+Configuration writes validate a detached copy and commit atomically in core memory. A changed write
+retains one runtime-only complete image and attachment-local revision; same-value, zero-length, and
+rejected packets publish no mutation. The controller pulls that image at the completed-frame safe
+point and before endpoint handoff/teardown, then offers it to the private bounded writer. Filesystem
+work never runs on the emulator thread. State capture and restore do not serialize or replay this
+runtime notification. A later real guest write after state restore publishes the complete restored
+image plus that change. Rewind history is cleared at every accepted guest write and as soon as
+external ownership is observed, including while the machine is paused, so history cannot bridge
+either a durable configuration side effect or an unrepresentable DNS/socket interval. The desktop
+reports an informational notice when a capture receives the external-I/O marker. Loading a marked
+capture reports the disconnected warning even if the currently attached endpoint is idle; loading
+any state while current host work is live reports the same non-restoration boundary.
 
 The stable engine IDs serialized by Phase 1 are append-only:
 
@@ -397,6 +408,24 @@ The exact 300-byte version-1 record remains readable and migrates to an offline 
 its original two-byte configuration-length field and digest layout. Every new save uses version 2.
 Runtime network consent and the separate private/local development gate are deliberately absent
 from both formats and reset on every application start and every policy edit.
+
+### Guest-authored configuration writes
+
+The adapter's configuration-write command changes the live 256-byte image synchronously at the
+documented wire commit point. Coffee GB durably stores only writes that actually change at least one
+byte. The controller identifies each endpoint attachment before accepting its writes, drains the old
+attachment before replacement ownership commits, and fences a late detached attachment from replacing
+the committed one. Bursts retain only their latest complete image; raw bytes never enter the event
+bus, status text, logs, exception messages, or diagnostics.
+
+The in-memory image becomes authoritative as soon as the controller accepts it, so reset, policy
+refresh, detach/reattach, and ROM replacement construct a new endpoint from the guest's latest
+configuration even while disk persistence is pending. Policy saves modify only policy; guest writes
+modify only the image. A storage failure does not roll back a command already acknowledged to the
+game. It emits only a typed redacted failure and retains the dirty image for retry. Final desktop
+close freezes the timing thread, drains the endpoint, and includes this writer in the existing
+retryable persistence barrier; failed or timed-out durability retains the session instead of
+silently discarding the guest setup.
 
 ### Bounded adapter-image import
 

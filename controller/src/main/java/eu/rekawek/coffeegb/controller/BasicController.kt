@@ -7,6 +7,11 @@ import eu.rekawek.coffeegb.controller.debug.DebugHistorySessionBusyException
 import eu.rekawek.coffeegb.controller.debug.DebugInstructionReplayer
 import eu.rekawek.coffeegb.controller.debug.QueuedDebugCommand
 import eu.rekawek.coffeegb.controller.debug.QueuedDebugPort
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationOfferResult
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistencePhase
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationSink
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationWrite
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkError as BackendNetworkError
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkPhase as BackendNetworkPhase
@@ -148,6 +153,8 @@ class BasicController private constructor(
      * an image, but the desktop injects this for the Home recent-game previews.
      */
     private val autosaveThumbnailProvider: () -> StateImage? = { null },
+    private val mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
+        MobileAdapterGuestConfigurationSink.NO_OP,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -194,6 +201,8 @@ class BasicController private constructor(
       externalActions: StateExternalActions,
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
       autosaveThumbnailProvider: () -> StateImage? = { null },
+      mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
+          MobileAdapterGuestConfigurationSink.NO_OP,
   ) : this(
       parentEventBus,
       properties,
@@ -209,6 +218,7 @@ class BasicController private constructor(
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
       mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
       autosaveThumbnailProvider = autosaveThumbnailProvider,
+      mobileAdapterGuestConfigurationSink = mobileAdapterGuestConfigurationSink,
   )
 
   internal constructor(
@@ -219,6 +229,8 @@ class BasicController private constructor(
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
           SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
       autosaveThumbnailProvider: () -> StateImage? = { null },
+      mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
+          MobileAdapterGuestConfigurationSink.NO_OP,
   ) : this(
       parentEventBus,
       properties,
@@ -232,6 +244,7 @@ class BasicController private constructor(
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
       mobileAdapterConfigurationProvider = mobileAdapterConfigurationProvider,
       autosaveThumbnailProvider = autosaveThumbnailProvider,
+      mobileAdapterGuestConfigurationSink = mobileAdapterGuestConfigurationSink,
   )
 
   internal constructor(
@@ -307,6 +320,8 @@ class BasicController private constructor(
       mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider =
           SYNTHETIC_OFFLINE_MOBILE_CONFIGURATION,
       autosaveThumbnailProvider: () -> StateImage? = { null },
+      mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
+          MobileAdapterGuestConfigurationSink.NO_OP,
   ) : this(
       parentEventBus,
       properties,
@@ -321,6 +336,7 @@ class BasicController private constructor(
       liveBatteryStorageResolver,
       mobileAdapterConfigurationProvider,
       autosaveThumbnailProvider,
+      mobileAdapterGuestConfigurationSink,
   )
 
   private val timingTicker = TimingTicker()
@@ -635,6 +651,7 @@ class BasicController private constructor(
     eventQueue.dispatch()
     drainMobileAdapterControlLane()
     pollMobileAdapterBackend()
+    pollMobileAdapterGuestConfigurationPersistence()
     // A live request or logical connection makes every earlier rewind entry discontinuous.
     // Clear even while paused; after ownership ends, recording starts a fresh history instead of
     // appending post-I/O captures to states from before the unrepresentable host interaction.
@@ -850,6 +867,8 @@ class BasicController private constructor(
 
   private fun recordCompletedFrame() {
     val currentSession = session ?: return
+    drainMobileAdapterGuestConfiguration(currentSession)
+    pollMobileAdapterGuestConfigurationPersistence()
     if (hasMobileAdapterExternalIo()) {
       rewindManager.clear()
     } else {
@@ -1610,15 +1629,31 @@ class BasicController private constructor(
     when {
       controls.hasCancel && controls.hasRefresh && controls.cancelOrder < controls.refreshOrder -> {
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
-        refreshMobileAdapterConfiguration(controls.refreshRevision)
+        if (refreshMobileAdapterConfiguration(controls.refreshRevision) ==
+            MobileAdapterRefreshResult.BLOCKED) {
+          // Cancellation preceded refresh, so retrying only the refresh preserves the requested
+          // final ordering once the guest configuration has been retained by its durable owner.
+          mobileAdapterControlLane.restoreDeferred(
+              controls.copy(cancelOrder = MobileAdapterControlLane.Pending.EMPTY.cancelOrder))
+        }
       }
       controls.hasCancel && controls.hasRefresh -> {
-        refreshMobileAdapterConfiguration(controls.refreshRevision)
+        val refreshResult = refreshMobileAdapterConfiguration(controls.refreshRevision)
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
+        if (refreshResult == MobileAdapterRefreshResult.BLOCKED) {
+          // Refresh preceded cancellation. Requeue both in that order so a deferred refresh can
+          // never make the later user cancellation appear to have been undone.
+          mobileAdapterControlLane.restoreDeferred(controls)
+        }
       }
       controls.hasCancel ->
           disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.USER_CANCELLED)
-      controls.hasRefresh -> refreshMobileAdapterConfiguration(controls.refreshRevision)
+      controls.hasRefresh -> {
+        if (refreshMobileAdapterConfiguration(controls.refreshRevision) ==
+            MobileAdapterRefreshResult.BLOCKED) {
+          mobileAdapterControlLane.restoreDeferred(controls)
+        }
+      }
     }
   }
 
@@ -2758,7 +2793,26 @@ class BasicController private constructor(
     }
 
     outcome as ReplacementAttemptResult.Ready
+    job.ready = outcome
+    continueReplacementAfterGuestConfiguration(job)
+  }
+
+  private fun continueReplacementAfterGuestConfiguration(job: ReplacementJob) {
+    val outcome = job.ready ?: return
+    val drainResult =
+        session?.let(::drainMobileAdapterGuestConfiguration)
+            ?: MobileAdapterGuestConfigurationDrainResult.SAFE
+    if (drainResult == MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      postMobileAdapterGuestConfigurationBarrierFailure(
+          job.requestId,
+          Controller.PersistenceBarrierOperation.ROM_REPLACEMENT,
+          job.event.openRequestId,
+      )
+      return
+    }
+
     job.capture.complete(outcome.persistence)
+    job.ready = null
     replacementJob = null
     activatePreparedLoad(job, outcome.gameboy)
   }
@@ -2771,16 +2825,22 @@ class BasicController private constructor(
       return
     }
     replacementJob?.let { job ->
-      if (job.requestId == requestId && job.attempt == null) {
-        val attempt = ReplacementTask(job.capture, job.prepared)
-        job.attempt = attempt
-        persistenceExecutor.execute(attempt)
+      if (job.requestId == requestId) {
+        if (job.ready != null) {
+          continueReplacementAfterGuestConfiguration(job)
+        } else if (job.attempt == null) {
+          val attempt = ReplacementTask(job.capture, job.prepared)
+          job.attempt = attempt
+          persistenceExecutor.execute(attempt)
+        }
       }
       return
     }
     stopJob?.let { job ->
       if (job.requestId == requestId && job.attempt == null) {
-        if (job.awaitingAutosaveDecision) {
+        if (job.awaitingGuestConfiguration) {
+          continueStopAfterGuestConfiguration(job)
+        } else if (job.awaitingAutosaveDecision) {
           submitStopAutosave(job)
         } else {
           beginStopPersistence(job)
@@ -2811,6 +2871,8 @@ class BasicController private constructor(
     val job = replacementJob ?: return
     replacementJob = null
     job.attempt?.cancelAndDiscard()
+    job.ready?.gameboy?.discardUnstarted()
+    job.ready = null
     job.prepared.discard()
     if (notifyCancellation) {
       eventBus.post(
@@ -2836,6 +2898,7 @@ class BasicController private constructor(
       return
     }
 
+    val guestConfigurationDrain = drainMobileAdapterGuestConfiguration(currentSession)
     setPaused(true)
     val capture = currentSession.gameboy.prepareCartridgeFlush()
     val job =
@@ -2846,7 +2909,42 @@ class BasicController private constructor(
             attempt = null,
         )
     stopJob = job
+    if (guestConfigurationDrain == MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      job.awaitingGuestConfiguration = true
+      postMobileAdapterGuestConfigurationBarrierFailure(
+          job.requestId,
+          Controller.PersistenceBarrierOperation.STOP,
+      )
+      return
+    }
     submitStopAutosave(job)
+  }
+
+  private fun continueStopAfterGuestConfiguration(job: StopJob) {
+    val currentSession = session
+    val drainResult =
+        currentSession?.let(::drainMobileAdapterGuestConfiguration)
+            ?: MobileAdapterGuestConfigurationDrainResult.SAFE
+    if (drainResult == MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      job.awaitingGuestConfiguration = true
+      postMobileAdapterGuestConfigurationBarrierFailure(
+          job.requestId,
+          Controller.PersistenceBarrierOperation.STOP,
+      )
+      return
+    }
+
+    job.awaitingGuestConfiguration = false
+    val persistence = job.completedPersistence
+    if (persistence != null) {
+      job.capture.complete(persistence)
+      job.completedPersistence = null
+      stopJob = null
+      stop(afterCartridgeFlush = true)
+      isPaused = false
+    } else {
+      submitStopAutosave(job)
+    }
   }
 
   /** Writes the terminal autosave before battery persistence can release the current machine. */
@@ -2948,10 +3046,9 @@ class BasicController private constructor(
       return
     }
 
-    job.capture.complete(result)
-    stopJob = null
-    stop(afterCartridgeFlush = true)
-    isPaused = false
+    result as BatteryPersistenceResult.Success
+    job.completedPersistence = result
+    continueStopAfterGuestConfiguration(job)
   }
 
   private fun discardStop(restorePause: Boolean) {
@@ -3058,6 +3155,7 @@ class BasicController private constructor(
     // This assignment is the ownership commit. From here on the old session is never resumed:
     // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
     session = committedSession
+    commitMobileAdapterAttachment(committedSession)
     currentRomHashes = job.prepared.romHashes
     snapshotManager = nextSnapshotManager
     nextSession = null
@@ -3364,6 +3462,16 @@ class BasicController private constructor(
       return
     }
 
+    if (drainMobileAdapterGuestConfiguration(currentSession) ==
+        MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      postSerialPeripheralStatus(
+          selection,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          Controller.SerialPeripheralError.STORAGE_FAILED,
+      )
+      return
+    }
+
     val endpoint =
         try {
           createLinkDevice(selection, currentSession.eventBus, currentSession.config.clockSpec)
@@ -3389,6 +3497,7 @@ class BasicController private constructor(
       )
       return
     }
+    commitMobileAdapterAttachment(currentSession)
     val previousSelection = serialPeripheralSelection
     // The session handoff is the ownership commit. Update the controller's internal selection
     // before invoking any presentation subscriber, because EventBus dispatch is synchronous and
@@ -3410,11 +3519,27 @@ class BasicController private constructor(
   }
 
   /** Re-prepares the same selected endpoint so a policy change is an atomic ownership handoff. */
-  private fun refreshMobileAdapterConfiguration(requestedRevision: Long) {
-    if (serialPeripheralSelection != Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB) return
-    val currentSession = session ?: return
+  private fun refreshMobileAdapterConfiguration(
+      requestedRevision: Long
+  ): MobileAdapterRefreshResult {
+    if (serialPeripheralSelection != Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB) {
+      return MobileAdapterRefreshResult.NOT_APPLICABLE
+    }
+    val currentSession = session ?: return MobileAdapterRefreshResult.NOT_APPLICABLE
     val currentLifecycle = mobileAdapterLifecycle(currentSession)
-    if (currentLifecycle != null && requestedRevision <= currentLifecycle.policyRevision) return
+    if (currentLifecycle != null && requestedRevision <= currentLifecycle.policyRevision) {
+      return MobileAdapterRefreshResult.COMPLETED
+    }
+
+    if (drainMobileAdapterGuestConfiguration(currentSession) ==
+        MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      postSerialPeripheralStatus(
+          Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB,
+          Controller.SerialPeripheralStatus.UNAVAILABLE,
+          Controller.SerialPeripheralError.STORAGE_FAILED,
+      )
+      return MobileAdapterRefreshResult.BLOCKED
+    }
 
     // A newer policy request is an authority boundary, not merely a presentation refresh. Revoke
     // the live host capability before provider/core preparation so every failure is fail-closed.
@@ -3434,7 +3559,7 @@ class BasicController private constructor(
               Controller.SerialPeripheralStatus.UNAVAILABLE,
               failure.error,
           )
-          return
+          return MobileAdapterRefreshResult.COMPLETED
         }
     val replacementLifecycle = replacement.disconnect as? MobileAdapterEndpointLifecycle
     if (replacementLifecycle == null || replacementLifecycle.policyRevision < requestedRevision) {
@@ -3444,7 +3569,7 @@ class BasicController private constructor(
           Controller.SerialPeripheralStatus.UNAVAILABLE,
           Controller.SerialPeripheralError.CONFIGURATION_INVALID,
       )
-      return
+      return MobileAdapterRefreshResult.COMPLETED
     }
     try {
       currentSession.setSerialEndpoint(replacement.endpoint, replacement.disconnect)
@@ -3454,8 +3579,9 @@ class BasicController private constructor(
           Controller.SerialPeripheralStatus.UNAVAILABLE,
           Controller.SerialPeripheralError.ENDPOINT_UNAVAILABLE,
       )
-      return
+      return MobileAdapterRefreshResult.COMPLETED
     }
+    commitMobileAdapterAttachment(currentSession)
     rewindManager.clear()
     debugCheckpointHistory.clear(DebugHistoryTruncationReason.TOPOLOGY_CHANGED)
     debugInstructionReplayer.close()
@@ -3464,6 +3590,7 @@ class BasicController private constructor(
         Controller.SerialPeripheralStatus.ATTACHED,
     )
     postInitialMobileAdapterNetworkStatus()
+    return MobileAdapterRefreshResult.COMPLETED
   }
 
   private fun pollMobileAdapterBackend() {
@@ -3475,6 +3602,107 @@ class BasicController private constructor(
     while (true) {
       val status = backend.pollStatus() ?: break
       postMobileAdapterBackendStatus(lifecycle, status)
+    }
+  }
+
+  /** Publishes the newest complete guest image at the frame owner's deterministic safe point. */
+  private fun drainMobileAdapterGuestConfiguration(
+      currentSession: Session
+  ): MobileAdapterGuestConfigurationDrainResult {
+    val endpoint =
+        currentSession.serialEndpoint as? MobileAdapterSerialEndpoint
+            ?: return MobileAdapterGuestConfigurationDrainResult.SAFE
+    val lifecycle =
+        mobileAdapterLifecycle(currentSession)
+            ?: return MobileAdapterGuestConfigurationDrainResult.SAFE
+    val mutation =
+        endpoint.latestGuestConfigurationMutation()
+            ?: return MobileAdapterGuestConfigurationDrainResult.SAFE
+
+    if (mutation.revision() > lifecycle.guestConfigurationHistoryObservedRevision) {
+      lifecycle.guestConfigurationHistoryObservedRevision = mutation.revision()
+      // History invalidation follows the emulated side effect, independently of whether private
+      // desktop persistence is currently able to retain the corresponding full image.
+      rewindManager.clear()
+      debugCheckpointHistory.clear(DebugHistoryTruncationReason.CONFIGURATION_CHANGED)
+    }
+    if (mutation.revision() <= lifecycle.guestConfigurationPersistenceAcceptedRevision) {
+      return MobileAdapterGuestConfigurationDrainResult.SAFE
+    }
+
+    val offer =
+        try {
+          mobileAdapterGuestConfigurationSink.offer(
+              MobileAdapterGuestConfigurationWrite(
+                  lifecycle.attachmentId,
+                  mutation.revision(),
+                  mutation.configuration(),
+              ))
+        } catch (_: RuntimeException) {
+          // A privileged sink is required to reject through its typed result. Contain an
+          // implementation failure without logging private configuration or attachment details.
+          LOG.warn("Mobile Adapter guest configuration sink failed")
+          MobileAdapterGuestConfigurationOfferResult.CLOSED
+        }
+    if (offer != MobileAdapterGuestConfigurationOfferResult.ACCEPTED) {
+      return MobileAdapterGuestConfigurationDrainResult.BLOCKED
+    }
+    lifecycle.guestConfigurationPersistenceAcceptedRevision = mutation.revision()
+    return MobileAdapterGuestConfigurationDrainResult.ACCEPTED
+  }
+
+  private fun postMobileAdapterGuestConfigurationBarrierFailure(
+      requestId: Long,
+      operation: Controller.PersistenceBarrierOperation,
+      openRequestId: Long? = null,
+  ) {
+    postPersistenceFailure(
+        requestId,
+        operation,
+        MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+        MOBILE_ADAPTER_CONFIGURATION_PENDING_MESSAGE,
+        openRequestId,
+    )
+  }
+
+  /** Only stable typed metadata crosses the application event tree; the image remains private. */
+  private fun pollMobileAdapterGuestConfigurationPersistence() {
+    val status =
+        try {
+          mobileAdapterGuestConfigurationSink.pollStatus()
+        } catch (_: RuntimeException) {
+          LOG.warn("Mobile Adapter guest configuration status provider failed")
+          null
+        } ?: return
+    val phase =
+        when (status.phase) {
+          MobileAdapterGuestConfigurationPersistencePhase.PENDING ->
+              Controller.MobileAdapterConfigurationPersistencePhase.PENDING
+          MobileAdapterGuestConfigurationPersistencePhase.SAVED ->
+              Controller.MobileAdapterConfigurationPersistencePhase.SAVED
+          MobileAdapterGuestConfigurationPersistencePhase.SUPERSEDED ->
+              Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED
+          MobileAdapterGuestConfigurationPersistencePhase.FAILED ->
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED
+        }
+    postSerialPeripheralEventSafely(
+        Controller.MobileAdapterConfigurationPersistenceStatusEvent(
+            status.sequence,
+            status.attachmentId,
+            status.mutationRevision,
+            phase,
+            status.error,
+        ))
+  }
+
+  /** Fences late work only after endpoint ownership has actually committed. */
+  private fun commitMobileAdapterAttachment(currentSession: Session) {
+    val lifecycle = mobileAdapterLifecycle(currentSession) ?: return
+    try {
+      mobileAdapterGuestConfigurationSink.attachmentCommitted(lifecycle.attachmentId)
+    } catch (_: RuntimeException) {
+      // Endpoint ownership is already committed and cannot be rolled back by a persistence seam.
+      LOG.warn("Mobile Adapter guest configuration attachment fence failed")
     }
   }
 
@@ -4121,6 +4349,17 @@ class BasicController private constructor(
     pauseStateBeforeResume = null
     setPaused(true)
     releaseClosedDebugPortIfNeeded(notifyLifecycle = false)
+    val guestConfigurationDrain =
+        session?.let(::drainMobileAdapterGuestConfiguration)
+            ?: MobileAdapterGuestConfigurationDrainResult.SAFE
+    if (guestConfigurationDrain == MobileAdapterGuestConfigurationDrainResult.BLOCKED) {
+      throw closeBarrierFailure(
+          "$MOBILE_ADAPTER_CONFIGURATION_PENDING_MESSAGE Close can be retried.",
+          java.io.IOException("Mobile Adapter configuration write was not accepted"),
+          MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+      )
+    }
+    flushMobileAdapterGuestConfiguration(closeDeadlineNanos)
 
     try {
       if (closeState == null) {
@@ -4453,6 +4692,50 @@ class BasicController private constructor(
     )
   }
 
+  private fun flushMobileAdapterGuestConfiguration(closeDeadlineNanos: Long) {
+    val result =
+        try {
+          mobileAdapterGuestConfigurationSink.flush(
+              remainingCloseNanos(
+                  closeDeadlineNanos,
+                  "Mobile Adapter configuration persistence",
+              ),
+              TimeUnit.NANOSECONDS,
+          )
+        } catch (_: TimeoutException) {
+          throw closeBarrierFailure(
+              "Mobile Adapter configuration persistence timed out. " +
+                  "The session remains retained and close can be retried.",
+              TimeoutException("Mobile Adapter configuration persistence timed out"),
+              MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+          )
+        } catch (_: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw closeBarrierFailure(
+              "Mobile Adapter configuration persistence was interrupted. " +
+                  "The session remains retained and close can be retried.",
+              InterruptedException("Mobile Adapter configuration persistence was interrupted"),
+              MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+          )
+        } catch (_: RuntimeException) {
+          throw closeBarrierFailure(
+              "Mobile Adapter configuration could not be saved. " +
+                  "The session remains retained and close can be retried.",
+              // A privileged sink has seen private adapter bytes. Do not retain its arbitrary
+              // exception text or cause graph in the public controller failure.
+              java.io.IOException("Mobile Adapter configuration writer failed"),
+              MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+          )
+        }
+    if (result.saved) return
+    val error = result.error ?: MobileAdapterConfigurationError.STORAGE_WRITE_FAILED
+    throw closeBarrierFailure(
+        "${error.userMessage} The session remains retained and close can be retried.",
+        java.io.IOException(error.code),
+        MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL,
+    )
+  }
+
   @Synchronized
   override fun waiveCloseAutosave(requestId: Long): Boolean {
     if (closed ||
@@ -4505,6 +4788,23 @@ class BasicController private constructor(
       val disconnect: () -> Unit = {},
   )
 
+  private enum class MobileAdapterGuestConfigurationDrainResult {
+    /** No unaccepted guest image remains for the committed attachment. */
+    SAFE,
+
+    /** The newest complete guest image was retained by the privileged sink. */
+    ACCEPTED,
+
+    /** The current image remains private in core memory and must be retried before teardown. */
+    BLOCKED,
+  }
+
+  private enum class MobileAdapterRefreshResult {
+    NOT_APPLICABLE,
+    COMPLETED,
+    BLOCKED,
+  }
+
   /** Final backend owner; endpoint.disconnect() itself remains a reusable cancellation boundary. */
   private class MobileAdapterEndpointLifecycle(
       val attachmentId: Long,
@@ -4515,6 +4815,8 @@ class BasicController private constructor(
   ) : () -> Unit {
     var disconnectReason: Controller.MobileAdapterDisconnectReason? = null
     var backendOwnershipVersion: Long = backend?.ownershipVersion() ?: 0
+    var guestConfigurationHistoryObservedRevision: Long = 0
+    var guestConfigurationPersistenceAcceptedRevision: Long = 0
 
     override fun invoke() {
       backend?.close()
@@ -4525,6 +4827,12 @@ class BasicController private constructor(
     val LOG: Logger = LoggerFactory.getLogger(BasicController::class.java)
 
     const val CONTROLLER_CLOSE_TIMEOUT_MILLIS = 8_000L
+
+    const val MOBILE_ADAPTER_CONFIGURATION_FILE_LABEL = "Mobile Adapter configuration"
+
+    const val MOBILE_ADAPTER_CONFIGURATION_PENDING_MESSAGE =
+        "Mobile Adapter configuration changes could not be queued for storage. " +
+            "The active session was preserved; retry after configuration storage is available."
 
     val STATE_SESSION_IDS = AtomicLong()
 
@@ -4630,6 +4938,7 @@ class BasicController private constructor(
       val prepared: PreparedSession,
       val capture: BatteryFlush,
       var attempt: ReplacementTask?,
+      var ready: ReplacementAttemptResult.Ready? = null,
   )
 
   private data class StopJob(
@@ -4642,6 +4951,8 @@ class BasicController private constructor(
       var thumbnail: StateImage? = null,
       var awaitingAutosaveDecision: Boolean = false,
       var attempt: PersistenceTask?,
+      var awaitingGuestConfiguration: Boolean = false,
+      var completedPersistence: BatteryPersistenceResult.Success? = null,
   )
 
   private class PersistenceTask(capture: BatteryFlush) :
@@ -4815,6 +5126,25 @@ internal class MobileAdapterControlLane {
       synchronized(lock) {
         pending.also { pending = Pending.EMPTY }
       }
+
+  /** Merges unfinished controls without moving them after controls offered while work was blocked. */
+  fun restoreDeferred(deferred: Pending) {
+    synchronized(lock) {
+      val refresh =
+          when {
+            deferred.refreshRevision > pending.refreshRevision -> deferred
+            deferred.refreshRevision < pending.refreshRevision -> pending
+            deferred.refreshOrder > pending.refreshOrder -> deferred
+            else -> pending
+          }
+      pending =
+          Pending(
+              cancelOrder = maxOf(pending.cancelOrder, deferred.cancelOrder),
+              refreshOrder = refresh.refreshOrder,
+              refreshRevision = refresh.refreshRevision,
+          )
+    }
+  }
 
   internal fun snapshot(): Pending = synchronized(lock) { pending }
 }

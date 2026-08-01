@@ -106,8 +106,11 @@ telephone call; there is no listener, relay, real dial-up, Nintendo
 production-service preset, automatic endpoint selection, or bundled service data. The public-IP
 policy cannot identify who operates an address, so users must configure only a trusted non-Nintendo
 custom service; DNS names, network metadata, and guest payloads are sent without TLS. Deterministic
-tests cover the Crystal command path and acknowledgement/response schedule without bundling a ROM;
-end-to-end gameplay validation still requires a user-supplied ROM and selected custom service. See
+tests cover the Crystal command path and acknowledgement/response schedule without bundling a ROM.
+Changed configuration bytes written by the guest are coalesced into the private owner-only adapter
+record and participate in the desktop's retryable shutdown barrier; state restore does not replay a
+filesystem write. End-to-end gameplay validation still requires a user-supplied ROM and selected
+custom service. See
 [the Mobile Adapter contract](docs/mobile-adapter-contract.md) and the
 [Japanese Crystal/REON validation record](docs/mobile-adapter-crystal-reon-validation.md).
 
