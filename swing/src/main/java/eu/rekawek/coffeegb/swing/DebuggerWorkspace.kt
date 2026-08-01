@@ -32,13 +32,13 @@ internal enum class DebuggerWorkspaceTool(
     val accessibleName: String,
     val preferredSize: Dimension,
 ) {
-  EXECUTION("Execution", "CPU execution debugger", Dimension(940, 720)),
-  MEMORY("Memory", "Live memory debugger", Dimension(900, 650)),
-  BREAKPOINTS("Breakpoints", "Breakpoint debugger", Dimension(860, 620)),
-  VIDEO("Video", "Graphical video debugger", Dimension(1040, 760)),
-  HARDWARE("Hardware & I/O", "Semantic hardware and I O debugger", Dimension(920, 700)),
-  AUDIO("Audio", "Audio debugger", Dimension(900, 680)),
-  TIMELINE("Timeline", "Trace timeline debugger", Dimension(1040, 640)),
+  EXECUTION("Execution", "CPU execution debugger", Dimension(1220, 900)),
+  MEMORY("Memory", "Live memory debugger", Dimension(1080, 800)),
+  BREAKPOINTS("Breakpoints", "Breakpoint debugger", Dimension(1180, 820)),
+  VIDEO("Video", "Graphical video debugger", Dimension(1340, 920)),
+  HARDWARE("Hardware & I/O", "Semantic hardware and I O debugger", Dimension(1600, 860)),
+  AUDIO("Audio", "Audio debugger", Dimension(1940, 900)),
+  TIMELINE("Timeline", "Trace timeline debugger", Dimension(1280, 800)),
 }
 
 internal enum class DebuggerWorkspaceLayout(val title: String) {
@@ -220,16 +220,20 @@ internal class DebuggerWorkspace(
     val rows = (tools.size + columns - 1) / columns
     val width = screen.width / columns
     val height = screen.height / rows
-    if (width < 420 || height < 320) {
-      val cascadeWidth = minOf(900, (screen.width * 0.82).toInt()).coerceAtLeast(420)
-      val cascadeHeight = minOf(700, (screen.height * 0.82).toInt()).coerceAtLeast(320)
+    val canTileWithoutReducingDefaults =
+        tools.all { tool ->
+          val defaultSize = debuggerToolDefaultSize(tool, screen)
+          width >= defaultSize.width && height >= defaultSize.height
+        }
+    if (!canTileWithoutReducingDefaults) {
       tools.forEachIndexed { index, tool ->
         val offset = (index * 28) % 196
+        val size = debuggerToolDefaultSize(tool, screen)
         windows.getValue(tool).dialog.setBounds(
-            screen.x + offset,
-            screen.y + offset,
-            minOf(cascadeWidth, screen.width),
-            minOf(cascadeHeight, screen.height),
+            (screen.x + offset).coerceAtMost(screen.x + screen.width - size.width),
+            (screen.y + offset).coerceAtMost(screen.y + screen.height - size.height),
+            size.width,
+            size.height,
         )
         windows.getValue(tool).positioned = true
       }
@@ -254,10 +258,16 @@ internal class DebuggerWorkspace(
       window.dialog.bounds = saved
     } else {
       window.dialog.pack()
-      window.dialog.size = tool.preferredSize
-      window.dialog.setLocationRelativeTo(owner)
+      val screen = usableScreenBounds()
+      val size = debuggerToolDefaultSize(tool, screen)
+      window.dialog.size = size
       val offset = tool.ordinal * 24
-      window.dialog.setLocation(window.dialog.x + offset, window.dialog.y + offset)
+      window.dialog.setLocation(
+          (screen.x + (screen.width - size.width) / 2 + offset)
+              .coerceAtMost(screen.x + screen.width - size.width),
+          (screen.y + (screen.height - size.height) / 2 + offset)
+              .coerceAtMost(screen.y + screen.height - size.height),
+      )
     }
     window.positioned = true
   }
@@ -367,7 +377,7 @@ internal class DebuggerWorkspace(
         dialog.bounds = bounds
         positioned = true
       }
-      if (savedBounds == null) dialog.size = tool.preferredSize
+      if (savedBounds == null) dialog.size = debuggerToolDefaultSize(tool, usableScreenBounds())
       updateStatus()
     }
 
@@ -487,3 +497,21 @@ internal class DebuggerWorkspace(
           Dimension(420, 320),
       )
 }
+
+/**
+ * Gives every debugger tool its full default workspace while keeping it on the current display.
+ *
+ * The margin prevents a maximally wide modeless dialog from overlapping the desktop edge or dock.
+ * If a display is genuinely smaller than a tool's complete table layout, scrolling remains the
+ * only practical fallback.
+ */
+internal fun debuggerToolDefaultSize(
+    tool: DebuggerWorkspaceTool,
+    usableScreen: Rectangle,
+): Dimension =
+    Dimension(
+        minOf(tool.preferredSize.width, (usableScreen.width - DEFAULT_WINDOW_SCREEN_MARGIN).coerceAtLeast(1)),
+        minOf(tool.preferredSize.height, (usableScreen.height - DEFAULT_WINDOW_SCREEN_MARGIN).coerceAtLeast(1)),
+    )
+
+private const val DEFAULT_WINDOW_SCREEN_MARGIN = 48
