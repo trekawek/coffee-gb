@@ -1,6 +1,5 @@
 package eu.rekawek.coffeegb.swing
 
-import java.awt.Color
 import java.awt.Component
 import java.awt.Container
 import java.awt.Font
@@ -12,15 +11,12 @@ import java.awt.event.KeyEvent
 import java.util.IdentityHashMap
 import javax.swing.AbstractAction
 import javax.swing.JComponent
-import javax.swing.JLabel
 import javax.swing.JTable
 import javax.swing.JTextArea
 import javax.swing.KeyStroke
 import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 import javax.swing.table.AbstractTableModel
-import javax.swing.table.DefaultTableCellRenderer
-import kotlin.math.pow
 
 internal class DebuggerPeripheralTableModel(
     private val columns: List<String>,
@@ -78,55 +74,6 @@ internal class DebuggerPeripheralTableModel(
           }
         }
         .trimEnd()
-  }
-}
-
-internal data class DebuggerPalettePreview(
-    val hexColor: String,
-    val rgb888: Int,
-) {
-  override fun toString(): String = hexColor
-}
-
-internal class DebuggerPalettePreviewRenderer : DefaultTableCellRenderer() {
-  override fun getTableCellRendererComponent(
-      table: JTable,
-      value: Any?,
-      isSelected: Boolean,
-      hasFocus: Boolean,
-      row: Int,
-      column: Int,
-  ): Component {
-    val component =
-        super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
-            as JLabel
-    component.toolTipText = null
-    val preview = value as? DebuggerPalettePreview
-    if (preview == null || isSelected) return component
-    val color = Color(preview.rgb888)
-    component.isOpaque = true
-    component.background = color
-    component.foreground = contrastingTextColor(color)
-    component.text = preview.hexColor
-    component.toolTipText = "Palette preview ${preview.hexColor}; textual values are in this row"
-    return component
-  }
-
-  private fun contrastingTextColor(color: Color): Color {
-    val luminance = relativeLuminance(color)
-    val blackContrast = (luminance + 0.05) / 0.05
-    val whiteContrast = 1.05 / (luminance + 0.05)
-    return if (blackContrast >= whiteContrast) Color.BLACK else Color.WHITE
-  }
-
-  private fun relativeLuminance(color: Color): Double =
-      0.2126 * linearComponent(color.red) +
-          0.7152 * linearComponent(color.green) +
-          0.0722 * linearComponent(color.blue)
-
-  private fun linearComponent(component: Int): Double {
-    val srgb = component / 255.0
-    return if (srgb <= 0.04045) srgb / 12.92 else ((srgb + 0.055) / 1.055).pow(2.4)
   }
 }
 
@@ -255,10 +202,7 @@ internal fun peripheralMenuShortcutMask(): Int =
         .getOrDefault(InputEvent.CTRL_DOWN_MASK)
 
 private fun copyableCellText(value: Any): String =
-    when (value) {
-      is DebuggerPalettePreview -> value.hexColor
-      else -> value.toString().replace('\t', ' ').replace('\n', ' ')
-    }
+    value.toString().replace('\t', ' ').replace('\n', ' ')
 
 private fun defaultPeripheralClipboard(value: String) {
   val selection = StringSelection(value)
