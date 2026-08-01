@@ -89,6 +89,9 @@ internal class DebuggerMemoryPanel(
   private var lastAppliedIdentity: DebuggerSnapshotIdentity? = null
   private var baseline: RenderedMemorySample? = null
   private var memoryWritesEnabled = false
+  private var activeAddressSpace = DebugAddressSpace.WORK_RAM
+  private val positionsByAddressSpace = mutableMapOf<DebugAddressSpace, MemorySpacePosition>()
+  private var pendingPositionRestore: MemorySpacePosition? = null
 
   init {
     requireMemoryPanelEdt("Memory debugger panel construction")
@@ -163,8 +166,8 @@ internal class DebuggerMemoryPanel(
     if (sampledInterest != interest || isOlderThanLastApplied(identity)) return false
     requireBlockMatches(sampledInterest, block)
 
-    val selectedCell = selectedCell()
-    val viewPosition = Point(memoryScrollPane.viewport.viewPosition)
+    val selectedCell = pendingPositionRestore?.selectedCell ?: selectedCell()
+    val viewPosition = pendingPositionRestore?.viewPosition ?: Point(memoryScrollPane.viewport.viewPosition)
     val previous =
         baseline?.takeIf { sample ->
           sample.identity.sessionGeneration == identity.sessionGeneration &&
@@ -176,6 +179,7 @@ internal class DebuggerMemoryPanel(
 
     baseline = RenderedMemorySample(identity, block)
     updateByteEditing()
+    pendingPositionRestore = null
     lastAppliedIdentity = identity
     val rangeEnd = block.endExclusive() - 1
     statusLabel.text =
@@ -259,10 +263,14 @@ internal class DebuggerMemoryPanel(
 
   private fun installListeners() {
     addressSpaceCombo.addActionListener {
-      if (!suppressControlEvents) reconcileBoundsAndPublish()
+      if (!suppressControlEvents) switchAddressSpace()
     }
     startSpinner.addChangeListener {
-      if (!suppressControlEvents) publishInterestIfChanged()
+      if (!suppressControlEvents) {
+        pendingPositionRestore = null
+        rememberPosition(activeAddressSpace)
+        publishInterestIfChanged()
+      }
     }
     lengthSpinner.addChangeListener {
       if (!suppressControlEvents) reconcileBoundsAndPublish()
@@ -275,14 +283,30 @@ internal class DebuggerMemoryPanel(
     }
   }
 
-  private fun reconcileBoundsAndPublish() {
+  private fun switchAddressSpace() {
+    rememberPosition(activeAddressSpace)
+    activeAddressSpace = selectedAddressSpace()
+    val restored = positionsByAddressSpace[activeAddressSpace]
+    pendingPositionRestore = restored
+    reconcileBoundsAndPublish(
+        preferredStart = restored?.startAddress ?: defaultStartFor(activeAddressSpace),
+        restoringAddressSpace = true,
+    )
+  }
+
+  private fun reconcileBoundsAndPublish(
+      preferredStart: Int = startSpinner.intValue,
+      restoringAddressSpace: Boolean = false,
+  ) {
+    if (!restoringAddressSpace) rememberPosition(activeAddressSpace)
     suppressControlEvents = true
-    reconcileBounds()
+    reconcileBounds(preferredStart)
     suppressControlEvents = false
+    updateStoredStartPosition()
     publishInterestIfChanged()
   }
 
-  private fun reconcileBounds() {
+  private fun reconcileBounds(preferredStart: Int = startSpinner.intValue) {
     val space = selectedAddressSpace()
     val longestSegment = rangesFor(space).maxOf { range -> range.last - range.first + 1 }
     val lengthLimit = minOf(maximumSampleLength, longestSegment)
@@ -293,7 +317,7 @@ internal class DebuggerMemoryPanel(
           val lastStart = range.last - length + 1
           if (lastStart < range.first) null else range.first..lastStart
         }
-    startSpinner.setAllowedRanges(starts, startSpinner.intValue)
+    startSpinner.setAllowedRanges(starts, preferredStart)
     updateControlEnablement()
   }
 
@@ -494,6 +518,31 @@ internal class DebuggerMemoryPanel(
 
   private data class SelectedMemoryCell(val address: Int, val column: Int)
 
+  private data class MemorySpacePosition(
+      val startAddress: Int,
+      val selectedCell: SelectedMemoryCell?,
+      val viewPosition: Point,
+  )
+
+  private fun rememberPosition(addressSpace: DebugAddressSpace) {
+    positionsByAddressSpace[addressSpace] =
+        MemorySpacePosition(
+            startSpinner.intValue,
+            selectedCell(),
+            Point(memoryScrollPane.viewport.viewPosition),
+        )
+  }
+
+  private fun updateStoredStartPosition() {
+    val existing = positionsByAddressSpace[activeAddressSpace]
+    positionsByAddressSpace[activeAddressSpace] =
+        if (existing == null) {
+          MemorySpacePosition(startSpinner.intValue, null, Point())
+        } else {
+          existing.copy(startAddress = startSpinner.intValue)
+        }
+  }
+
   private class AddressSpaceRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>?,
@@ -530,6 +579,8 @@ internal class DebuggerMemoryPanel(
           DebugAddressSpace.HIGH_RAM -> listOf(0xff80..0xfffe)
           else -> error("Unsafe memory address space is not selectable: $space")
         }
+
+    private fun defaultStartFor(space: DebugAddressSpace): Int = rangesFor(space).first().first
 
     private fun isSafeBlock(block: DebugMemoryBlock): Boolean {
       if (block.length() <= 0) return false
