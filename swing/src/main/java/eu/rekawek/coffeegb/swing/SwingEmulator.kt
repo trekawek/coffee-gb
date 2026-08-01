@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.link.LinkedController
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationSink
 import eu.rekawek.coffeegb.controller.network.ConnectionController
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
@@ -51,6 +52,8 @@ class SwingEmulator(
         Controller.MobileAdapterConfigurationProvider {
           Controller.MobileAdapterConfiguration.syntheticOffline()
         },
+    private val mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
+        MobileAdapterGuestConfigurationSink.NO_OP,
 ) {
   private val display: SwingDisplay
   private val joypad: SwingJoypad
@@ -112,6 +115,7 @@ class SwingEmulator(
                 DesktopStateExternalActions(),
                 mobileAdapterConfigurationProvider,
                 ::captureDisplayImage,
+                mobileAdapterGuestConfigurationSink,
             )
             .also { it.startController() }
 
@@ -149,6 +153,7 @@ class SwingEmulator(
                 DesktopStateExternalActions(),
                 mobileAdapterConfigurationProvider,
                 ::captureDisplayImage,
+                mobileAdapterGuestConfigurationSink,
             )
             .also { it.startController() }
     linkedControllerActive = false

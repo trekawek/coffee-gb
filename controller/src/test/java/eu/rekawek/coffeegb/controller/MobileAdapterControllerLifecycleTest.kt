@@ -12,6 +12,12 @@ import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralSelection
 import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralStatus
 import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralStatusEvent
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSaveResult
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationOfferResult
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistenceStatus
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationSink
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationWrite
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterDestinationPolicy
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterDestinationRule
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
@@ -74,7 +80,13 @@ class MobileAdapterControllerLifecycleTest {
       val oldBackend = backend(server.localPort, 1)
       val candidateBackend = backend(server.localPort, 2)
       val supplied = AtomicReference(configuration(1, oldBackend))
-      fixture(Controller.MobileAdapterConfigurationProvider { supplied.get() }).use { fixture ->
+      val sink = RecordingGuestConfigurationSink()
+      fixture(
+              Controller.MobileAdapterConfigurationProvider { supplied.get() },
+              guestConfigurationSink = sink,
+          )
+          .use { fixture ->
+        assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
         val oldEndpoint = fixture.openLiveUdp(oldBackend)
         val oldGeneration = oldBackend.generation()
         fixture.gameboy.get().rejectNextMobileHandoff.set(true)
@@ -110,6 +122,10 @@ class MobileAdapterControllerLifecycleTest {
         fixture.awaitCondition { !oldBackend.hasExternalWork() }
         assertTrue(candidateBackend.awaitTermination(2_000))
         assertFalse(oldBackend.isClosed(), "the rolled-back endpoint remains the session owner")
+        assertNull(
+            sink.committedAttachments.poll(100, TimeUnit.MILLISECONDS),
+            "a rejected candidate must not fence the committed attachment",
+        )
       }
       assertTrue(oldBackend.awaitTermination(2_000))
     }
@@ -458,6 +474,258 @@ class MobileAdapterControllerLifecycleTest {
   }
 
   @Test
+  fun `guest configuration is drained before an immediate endpoint handoff`() {
+    val sink = RecordingGuestConfigurationSink()
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { offline },
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          val endpoint = assertNotNull(fixture.endpoint.get())
+          val attachmentId =
+              assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          feedMobile(endpoint, packet(CONFIG_WRITE, byteArrayOf(3, 0x55)))
+          assertNull(
+              sink.writes.poll(100, TimeUnit.MILLISECONDS),
+              "paused emulation must publish only at a controller safe point",
+          )
+
+          fixture.eventBus.post(
+              Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.NONE))
+          fixture.await(fixture.serialStatuses) {
+            it.selection == SerialPeripheralSelection.NONE &&
+                it.status == SerialPeripheralStatus.ATTACHED
+          }
+
+          val write = assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(attachmentId, write.attachmentId)
+          assertEquals(1, write.mutationRevision)
+          assertEquals(0x55, write.configurationCopy()[3].toInt() and 0xff)
+          assertTrue(write.toString().contains("configuration=[redacted]"))
+        }
+  }
+
+  @Test
+  fun `closed guest configuration sink clears history and blocks handoff until retry`() {
+    val sink = RecordingGuestConfigurationSink()
+    sink.offerResults.add(MobileAdapterGuestConfigurationOfferResult.CLOSED)
+    val rewind = RewindManager(enabled = true)
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { offline },
+            rewind = rewind,
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          val endpoint = assertNotNull(fixture.endpoint.get())
+          val attachmentId =
+              assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          fixture.awaitCondition { rewind.historySize > 0 }
+          feedMobile(endpoint, packet(CONFIG_WRITE, byteArrayOf(5, 0x77)))
+
+          fixture.eventBus.post(
+              Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.NONE))
+          val blocked =
+              fixture.await(fixture.serialStatuses) {
+                it.selection == SerialPeripheralSelection.NONE &&
+                    it.status == SerialPeripheralStatus.UNAVAILABLE
+              }
+          assertEquals(SerialPeripheralError.STORAGE_FAILED, blocked.error)
+          assertEquals(0, rewind.historySize)
+          assertNull(
+              fixture.selections.poll(100, TimeUnit.MILLISECONDS),
+              "a rejected write must preserve Mobile Adapter endpoint ownership",
+          )
+
+          val rejected = assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(attachmentId, rejected.attachmentId)
+          assertEquals(1, rejected.mutationRevision)
+          assertEquals(0x77, rejected.configurationCopy()[5].toInt() and 0xff)
+
+          fixture.eventBus.post(
+              Controller.SetSerialPeripheralEvent(SerialPeripheralSelection.NONE))
+          fixture.await(fixture.serialStatuses) {
+            it.selection == SerialPeripheralSelection.NONE &&
+                it.status == SerialPeripheralStatus.ATTACHED
+          }
+          val accepted = assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(attachmentId, accepted.attachmentId)
+          assertEquals(1, accepted.mutationRevision)
+          assertEquals(0x77, accepted.configurationCopy()[5].toInt() and 0xff)
+        }
+  }
+
+  @Test
+  fun `blocked refresh keeps a later concurrent cancellation after retry`() {
+    val sink = RecordingGuestConfigurationSink()
+    val initial = MobileAdapterConfiguration.syntheticOffline()
+    val supplied = AtomicReference(initial)
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { supplied.get() },
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          val originalEndpoint = assertNotNull(fixture.endpoint.get())
+          assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          feedMobile(originalEndpoint, packet(CONFIG_WRITE, byteArrayOf(7, 0x66)))
+          sink.offerResults.add(MobileAdapterGuestConfigurationOfferResult.CLOSED)
+          sink.offerCallbacks.add {
+            val producer =
+                Thread {
+                      fixture.eventBus.post(Controller.CancelMobileAdapterNetworkEvent)
+                    }
+                    .apply {
+                      name = "mobile-adapter-later-cancel-test"
+                      start()
+                    }
+            producer.join(TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS))
+            check(!producer.isAlive) { "concurrent cancellation producer did not finish" }
+          }
+          supplied.set(
+              MobileAdapterConfiguration(
+                  initial.deviceId,
+                  initial.copyBytes(),
+                  policyRevision = 1,
+              ))
+
+          fixture.eventBus.post(Controller.RefreshMobileAdapterConfigurationEvent(1))
+
+          val blocked =
+              fixture.await(fixture.serialStatuses) {
+                it.selection == SerialPeripheralSelection.MOBILE_ADAPTER_GB &&
+                    it.status == SerialPeripheralStatus.UNAVAILABLE
+              }
+          assertEquals(SerialPeripheralError.STORAGE_FAILED, blocked.error)
+          val replacementAttachment =
+              assertNotNull(
+                  sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+              )
+          val cancelled =
+              fixture.await(fixture.networkStatuses) {
+                it.phase == MobileAdapterNetworkPhase.DISCONNECTED &&
+                    it.disconnectReason == MobileAdapterDisconnectReason.USER_CANCELLED
+              }
+          assertEquals(replacementAttachment, cancelled.attachmentId)
+          fixture.awaitCondition {
+            fixture.endpoint.get() !== originalEndpoint &&
+                fixture.endpoint.get().snapshot().outcome() == MobileAdapterEngine.Outcome.CANCELLED
+          }
+        }
+  }
+
+  @Test
+  fun `throwing guest configuration sink blocks close and retries the private snapshot`() {
+    val sink = RecordingGuestConfigurationSink()
+    sink.offerFailures.add(IllegalStateException("private-config-marker"))
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { offline },
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          val endpoint = assertNotNull(fixture.endpoint.get())
+          val attachmentId =
+              assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          feedMobile(endpoint, packet(CONFIG_WRITE, byteArrayOf(6, 0x44)))
+
+          val failure =
+              kotlin.test.assertFailsWith<Controller.PersistenceBarrierException> {
+                fixture.controller.closeWithState()
+              }
+          assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+          assertEquals("Mobile Adapter configuration", failure.fileName)
+          assertFalse(failure.message.orEmpty().contains("private-config-marker"))
+          assertEquals(0, sink.flushCalls)
+
+          val rejected = assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(attachmentId, rejected.attachmentId)
+          assertEquals(1, rejected.mutationRevision)
+          assertEquals(0x44, rejected.configurationCopy()[6].toInt() and 0xff)
+
+          assertNotNull(fixture.controller.closeWithState())
+          fixture.controllerClosed = true
+          val accepted = assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(attachmentId, accepted.attachmentId)
+          assertEquals(1, accepted.mutationRevision)
+          assertEquals(0x44, accepted.configurationCopy()[6].toInt() and 0xff)
+          assertEquals(1, sink.flushCalls)
+        }
+  }
+
+  @Test
+  fun `close retries a failed guest configuration durability barrier`() {
+    val sink = RecordingGuestConfigurationSink()
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { offline },
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          val endpoint = assertNotNull(fixture.endpoint.get())
+          assertNotNull(sink.committedAttachments.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          feedMobile(endpoint, packet(CONFIG_WRITE, byteArrayOf(4, 0x66)))
+          sink.flushResult =
+              MobileAdapterConfigurationSaveResult(
+                  saved = false,
+                  error = MobileAdapterConfigurationError.STORAGE_WRITE_FAILED,
+              )
+
+          val failure =
+              kotlin.test.assertFailsWith<Controller.PersistenceBarrierException> {
+                fixture.controller.closeWithState()
+              }
+          assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+          assertEquals("Mobile Adapter configuration", failure.fileName)
+          assertNotNull(sink.writes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+          assertEquals(1, sink.flushCalls)
+
+          sink.flushResult = MobileAdapterConfigurationSaveResult(saved = true)
+          assertNotNull(fixture.controller.closeWithState())
+          fixture.controllerClosed = true
+          assertEquals(2, sink.flushCalls)
+        }
+  }
+
+  @Test
+  fun `close strips all private guest configuration flush failure details`() {
+    val sink = RecordingGuestConfigurationSink()
+    val offline = MobileAdapterConfiguration.syntheticOffline()
+    fixture(
+            Controller.MobileAdapterConfigurationProvider { offline },
+            guestConfigurationSink = sink,
+        )
+        .use { fixture ->
+          listOf<Throwable>(
+                  java.util.concurrent.TimeoutException("private-timeout-marker"),
+                  InterruptedException("private-interrupted-marker"),
+                  IllegalStateException("private-runtime-marker"),
+              )
+              .forEach { privateFailure ->
+                sink.flushFailure = privateFailure
+                val failure =
+                    kotlin.test.assertFailsWith<Controller.PersistenceBarrierException> {
+                      fixture.controller.closeWithState()
+                    }
+                assertEquals(Controller.PersistenceBarrierOperation.CLOSE, failure.operation)
+                assertEquals("Mobile Adapter configuration", failure.fileName)
+                val publicFailureChain =
+                    generateSequence<Throwable>(failure) { it.cause }
+                        .joinToString("\n") { "${it.javaClass.name}: ${it.message}" }
+                assertFalse(publicFailureChain.contains("private-"))
+                if (privateFailure is InterruptedException) {
+                  assertTrue(Thread.interrupted(), "the controller must preserve interruption")
+                }
+              }
+
+          sink.flushFailure = null
+          assertNotNull(fixture.controller.closeWithState())
+          fixture.controllerClosed = true
+          assertEquals(4, sink.flushCalls)
+        }
+  }
+
+  @Test
   fun `shutdown publishes its terminal reason and joins live host work`() {
     udpFixture().use { server ->
       val backend = backend(server.localPort, 1)
@@ -488,6 +756,8 @@ class MobileAdapterControllerLifecycleTest {
       stateWorkspaceFactory: StateWorkspaceFactory = StateWorkspaceFactory.DEFAULT,
       stateOperationWorkerFactory: StateOperationWorkerFactory =
           StateOperationWorkerFactory.DEFAULT,
+      guestConfigurationSink: MobileAdapterGuestConfigurationSink =
+          MobileAdapterGuestConfigurationSink.NO_OP,
   ): Fixture {
     val directory = Files.createTempDirectory("coffee-gb-mobile-controller-lifecycle")
     val rom = directory.resolve("game.gb").toFile().also { it.writeBytes(ROM.readBytes()) }
@@ -525,6 +795,7 @@ class MobileAdapterControllerLifecycleTest {
             stateWorkspaceFactory,
             stateOperationWorkerFactory,
             mobileAdapterConfigurationProvider = provider,
+            mobileAdapterGuestConfigurationSink = guestConfigurationSink,
         )
     val fixture =
         Fixture(directory, properties, eventBus, controller, gameboy, endpoint)
@@ -838,6 +1109,47 @@ class MobileAdapterControllerLifecycleTest {
     override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = isTerminated
   }
 
+  private class RecordingGuestConfigurationSink : MobileAdapterGuestConfigurationSink {
+    val committedAttachments = LinkedBlockingQueue<Long>()
+    val writes = LinkedBlockingQueue<MobileAdapterGuestConfigurationWrite>()
+    val offerCallbacks = LinkedBlockingQueue<() -> Unit>()
+    val offerResults = LinkedBlockingQueue<MobileAdapterGuestConfigurationOfferResult>()
+    val offerFailures = LinkedBlockingQueue<RuntimeException>()
+    @Volatile var flushResult = MobileAdapterConfigurationSaveResult(saved = true)
+    @Volatile var flushFailure: Throwable? = null
+    @Volatile var flushCalls = 0
+
+    override fun attachmentCommitted(attachmentId: Long) {
+      committedAttachments.add(attachmentId)
+    }
+
+    override fun offer(
+        write: MobileAdapterGuestConfigurationWrite
+    ): MobileAdapterGuestConfigurationOfferResult {
+      writes.add(
+          MobileAdapterGuestConfigurationWrite(
+              write.attachmentId,
+              write.mutationRevision,
+              write.configurationCopy(),
+          ))
+      offerCallbacks.poll()?.invoke()
+      offerFailures.poll()?.let { throw it }
+      return offerResults.poll() ?: MobileAdapterGuestConfigurationOfferResult.ACCEPTED
+    }
+
+    override fun pollStatus(): MobileAdapterGuestConfigurationPersistenceStatus? = null
+
+    override fun flush(
+        timeout: Long,
+        unit: TimeUnit,
+    ): MobileAdapterConfigurationSaveResult {
+      unit.toNanos(timeout)
+      flushCalls++
+      flushFailure?.let { throw it }
+      return flushResult
+    }
+  }
+
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
     const val TIMEOUT_SECONDS = 10L
@@ -845,5 +1157,6 @@ class MobileAdapterControllerLifecycleTest {
     const val UDP_OPEN = 0x25
     const val UDP_CLOSE = 0x26
     const val DNS_QUERY = 0x28
+    const val CONFIG_WRITE = 0x1a
   }
 }

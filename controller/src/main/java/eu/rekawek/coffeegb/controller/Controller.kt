@@ -1,9 +1,10 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
+import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.SystemProperties
-import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
@@ -292,6 +293,31 @@ interface Controller : AutoCloseable {
     init {
       require(revision >= 0) { "Mobile Adapter configuration revision must not be negative" }
     }
+  }
+
+  /** Sanitized durability status for configuration bytes accepted from the emulated adapter. */
+  data class MobileAdapterConfigurationPersistenceStatusEvent(
+      val sequence: Long,
+      val attachmentId: Long,
+      val mutationRevision: Long,
+      val phase: MobileAdapterConfigurationPersistencePhase,
+      val error: MobileAdapterConfigurationError? = null,
+  ) : Event {
+    init {
+      require(sequence > 0) { "Mobile Adapter persistence sequence must be positive" }
+      require(attachmentId > 0) { "Mobile Adapter attachment ID must be positive" }
+      require(mutationRevision > 0) { "Mobile Adapter mutation revision must be positive" }
+      require((phase == MobileAdapterConfigurationPersistencePhase.FAILED) == (error != null)) {
+        "Only a failed Mobile Adapter persistence event carries an error"
+      }
+    }
+  }
+
+  enum class MobileAdapterConfigurationPersistencePhase {
+    PENDING,
+    SAVED,
+    SUPERSEDED,
+    FAILED,
   }
 
   /** Cancels current Mobile Adapter host work without detaching its serial endpoint. */

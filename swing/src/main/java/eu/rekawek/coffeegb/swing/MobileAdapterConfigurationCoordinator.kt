@@ -6,6 +6,11 @@ import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationEr
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationImageReader
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSaveResult
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationOfferResult
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistencePhase
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationPersistenceStatus
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationSink
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterGuestConfigurationWrite
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterNetworkPolicy
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterTransport
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterDestinationPolicy
@@ -24,6 +29,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
@@ -46,11 +52,12 @@ internal class MobileAdapterConfigurationCoordinator(
     private val store: MobileAdapterConfigurationStore,
     private val imageReader: MobileAdapterConfigurationImageReader =
         MobileAdapterConfigurationImageReader(),
-) : AutoCloseable {
+) : AutoCloseable, MobileAdapterGuestConfigurationSink {
   /** Orders each runtime mutation with its synchronous cancel/refresh publication. */
   private val transitionPublicationLock = Any()
   private val authorityLock = Any()
-  private var coordinatorClosed = false
+  private val guestPersistenceLock = Object()
+  @Volatile private var coordinatorClosed = false
   private val revision = AtomicLong(1)
   private val current =
       AtomicReference(
@@ -61,6 +68,16 @@ internal class MobileAdapterConfigurationCoordinator(
               privateLocalDevelopment = false,
           ))
   private val durableConfiguration = AtomicReference(initialConfiguration)
+  private var committedAttachmentId = 0L
+  private var acceptedMutationRevision = 0L
+  private var guestImageGeneration = 0L
+  private var guestPersistenceSequence = 0L
+  private var completedGuestAttempt = 0L
+  private var guestTaskScheduled = false
+  private var pendingGuestWrite: PendingGuestWrite? = null
+  private var lastGuestAttempt: CompletedGuestAttempt? = null
+  private val guestStatuses = ArrayBlockingQueue<MobileAdapterGuestConfigurationPersistenceStatus>(
+      MAX_PENDING_GUEST_STATUSES)
   private val activeBackends = ConcurrentHashMap.newKeySet<MobileAdapterNetworkBackend>()
   private val writer: ExecutorService =
       ThreadPoolExecutor(
@@ -72,6 +89,134 @@ internal class MobileAdapterConfigurationCoordinator(
           { task -> Thread(task, "mobile-adapter-configuration").apply { isDaemon = true } },
           ThreadPoolExecutor.AbortPolicy(),
       )
+
+  /**
+   * Commits the controller-owned attachment generation used to fence delayed old-endpoint writes.
+   * Attachment IDs are monotonic for one controller lifetime, so an older delayed notification
+   * cannot reopen a retired attachment.
+   */
+  override fun attachmentCommitted(attachmentId: Long) {
+    require(attachmentId > 0) { "Mobile Adapter attachment ID must be positive" }
+    synchronized(guestPersistenceLock) {
+      if (coordinatorClosed || attachmentId <= committedAttachmentId) return
+      committedAttachmentId = attachmentId
+      acceptedMutationRevision = 0
+    }
+  }
+
+  /**
+   * Retains a detached latest image without waiting for filesystem or executor capacity.
+   *
+   * The live configuration changes synchronously because the guest has already acknowledged the
+   * write. Device identity, owner policy, and both runtime authorization gates remain unchanged.
+   */
+  override fun offer(
+      write: MobileAdapterGuestConfigurationWrite
+  ): MobileAdapterGuestConfigurationOfferResult =
+      synchronized(transitionPublicationLock) {
+        if (coordinatorClosed) {
+          MobileAdapterGuestConfigurationOfferResult.CLOSED
+        } else {
+          val disposition =
+              synchronized(guestPersistenceLock) {
+                when {
+                  coordinatorClosed -> GuestOfferDisposition.CLOSED
+                  write.attachmentId != committedAttachmentId -> GuestOfferDisposition.STALE
+                  write.mutationRevision <= acceptedMutationRevision ->
+                      GuestOfferDisposition.DUPLICATE
+                  else -> {
+                    val configuration = write.configurationCopy()
+                    acceptedMutationRevision = write.mutationRevision
+                    guestImageGeneration = incrementExact(guestImageGeneration)
+                    guestPersistenceSequence = incrementExact(guestPersistenceSequence)
+                    val retained =
+                        PendingGuestWrite(
+                            sequence = guestPersistenceSequence,
+                            attachmentId = write.attachmentId,
+                            mutationRevision = write.mutationRevision,
+                            imageGeneration = guestImageGeneration,
+                            configuration = configuration,
+                        )
+                    pendingGuestWrite = retained
+                    publishGuestStatusLocked(
+                        retained,
+                        MobileAdapterGuestConfigurationPersistencePhase.PENDING,
+                    )
+                    GuestOfferDisposition.Accepted(configuration)
+                  }
+                }
+              }
+          when (disposition) {
+            GuestOfferDisposition.CLOSED -> MobileAdapterGuestConfigurationOfferResult.CLOSED
+            GuestOfferDisposition.STALE ->
+                MobileAdapterGuestConfigurationOfferResult.STALE_ATTACHMENT
+            GuestOfferDisposition.DUPLICATE -> {
+              MobileAdapterGuestConfigurationOfferResult.ACCEPTED
+            }
+            is GuestOfferDisposition.Accepted -> {
+              val configuration = disposition.configuration
+              synchronized(authorityLock) {
+                val before = current.get()
+                current.set(
+                    before.copy(
+                        configuration =
+                            MobileAdapterConfiguration(
+                                before.configuration.deviceId,
+                                configuration,
+                                before.configuration.networkPolicy,
+                            ),
+                    ))
+              }
+              kickPendingGuestWrite()
+              MobileAdapterGuestConfigurationOfferResult.ACCEPTED
+            }
+          }
+        }
+      }
+
+  override fun pollStatus(): MobileAdapterGuestConfigurationPersistenceStatus? =
+      guestStatuses.poll()
+
+  /**
+   * Waits for one retained dirty image to commit, retrying one earlier failed attempt. The caller
+   * freezes emulation before entering this close barrier, so no newer guest mutation can race its
+   * target.
+   */
+  override fun flush(
+      timeout: Long,
+      unit: TimeUnit,
+  ): MobileAdapterConfigurationSaveResult {
+    require(timeout >= 0) { "Mobile Adapter flush timeout must not be negative" }
+    val timeoutNanos = unit.toNanos(timeout)
+    val deadline = saturatedDeadline(timeoutNanos)
+    val (targetSequence, completedBeforeFlush) =
+        synchronized(guestPersistenceLock) {
+          val pending = pendingGuestWrite
+              ?: return MobileAdapterConfigurationSaveResult(saved = true)
+          pending.sequence to completedGuestAttempt
+        }
+
+    kickPendingGuestWrite()
+    synchronized(guestPersistenceLock) {
+      while (true) {
+        val pending = pendingGuestWrite
+        if (pending == null || pending.sequence != targetSequence) {
+          return MobileAdapterConfigurationSaveResult(saved = true)
+        }
+        val completed = lastGuestAttempt
+        if (!guestTaskScheduled &&
+            completedGuestAttempt > completedBeforeFlush &&
+            completed?.sequence == targetSequence) {
+          return completed.result
+        }
+        val remaining = deadline - System.nanoTime()
+        if (remaining <= 0) {
+          throw TimeoutException("Mobile Adapter configuration flush timed out")
+        }
+        TimeUnit.NANOSECONDS.timedWait(guestPersistenceLock, remaining)
+      }
+    }
+  }
 
   val provider =
       Controller.MobileAdapterConfigurationProvider {
@@ -212,10 +357,16 @@ internal class MobileAdapterConfigurationCoordinator(
                     if (coordinatorClosed) {
                       null
                     } else {
+                      val before = current.get()
                       val value =
-                          MobileAdapterRuntimeUiState(
+                          before.copy(
                               revision = nextRevision(),
-                              configuration = committedConfiguration,
+                              configuration =
+                                  MobileAdapterConfiguration(
+                                      committedConfiguration.deviceId,
+                                      before.configuration.configurationBytes(),
+                                      committedConfiguration.networkPolicy,
+                                  ),
                               networkConsent = false,
                               privateLocalDevelopment = false,
                           )
@@ -226,6 +377,7 @@ internal class MobileAdapterConfigurationCoordinator(
                   }
               reconciled?.let { postRevocationAndRefresh(eventBus, it.revision) }
             }
+            kickPendingGuestWrite()
             completeSafely(completed, result)
           }
         } catch (_: RejectedExecutionException) {
@@ -237,7 +389,10 @@ internal class MobileAdapterConfigurationCoordinator(
         }
       }
     }
-    immediateResult?.let { completeSafely(completed, it) }
+    immediateResult?.let {
+      kickPendingGuestWrite()
+      completeSafely(completed, it)
+    }
   }
 
   /**
@@ -279,6 +434,7 @@ internal class MobileAdapterConfigurationCoordinator(
                 error = MobileAdapterConfigurationError.CONFIGURATION_STALE,
             )
       } else {
+        val importImageGeneration = synchronized(guestPersistenceLock) { guestImageGeneration }
         try {
           writer.execute {
             val sourceError = store.validateImportSource(source)
@@ -317,15 +473,44 @@ internal class MobileAdapterConfigurationCoordinator(
                   durableConfiguration.get()
                 }
             synchronized(transitionPublicationLock) {
+              val importedImageWins =
+                  synchronized(guestPersistenceLock) {
+                    val wins = result.saved && guestImageGeneration <= importImageGeneration
+                    if (wins) {
+                      pendingGuestWrite?.let { pending ->
+                        if (pending.imageGeneration <= importImageGeneration) {
+                          publishGuestStatusLocked(
+                              pending,
+                              MobileAdapterGuestConfigurationPersistencePhase.SUPERSEDED,
+                          )
+                          pendingGuestWrite = null
+                        }
+                      }
+                      guestPersistenceLock.notifyAll()
+                    }
+                    wins
+                  }
               val reconciled =
                   synchronized(authorityLock) {
                     if (coordinatorClosed) {
                       null
                     } else {
+                      val before = current.get()
+                      val visibleImage =
+                          if (importedImageWins) {
+                            checkNotNull(candidate).configurationBytes()
+                          } else {
+                            before.configuration.configurationBytes()
+                          }
                       val value =
-                          MobileAdapterRuntimeUiState(
+                          before.copy(
                               revision = nextRevision(),
-                              configuration = committedConfiguration,
+                              configuration =
+                                  MobileAdapterConfiguration(
+                                      committedConfiguration.deviceId,
+                                      visibleImage,
+                                      committedConfiguration.networkPolicy,
+                                  ),
                               networkConsent = false,
                               privateLocalDevelopment = false,
                           )
@@ -336,6 +521,7 @@ internal class MobileAdapterConfigurationCoordinator(
                   }
               reconciled?.let { postRevocationAndRefresh(eventBus, it.revision) }
             }
+            kickPendingGuestWrite()
             completeSafely(completed, result)
           }
         } catch (_: RejectedExecutionException) {
@@ -347,19 +533,29 @@ internal class MobileAdapterConfigurationCoordinator(
         }
       }
     }
-    immediateResult?.let { completeSafely(completed, it) }
+    immediateResult?.let {
+      kickPendingGuestWrite()
+      completeSafely(completed, it)
+    }
   }
 
   override fun close() {
     val closeDeadlineNanos =
         System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(SHUTDOWN_TIMEOUT_MILLIS)
     val closingBackends =
-        synchronized(authorityLock) {
-          if (!coordinatorClosed) {
-            coordinatorClosed = true
-            revokePreparedBackends()
+        synchronized(transitionPublicationLock) {
+          val backends =
+              synchronized(authorityLock) {
+                if (!coordinatorClosed) {
+                  coordinatorClosed = true
+                  revokePreparedBackends()
+                }
+                activeBackends.toList()
+              }
+          synchronized(guestPersistenceLock) {
+            guestPersistenceLock.notifyAll()
           }
-          activeBackends.toList()
+          backends
         }
     closingBackends.forEach(MobileAdapterNetworkBackend::close)
     writer.shutdown()
@@ -395,6 +591,107 @@ internal class MobileAdapterConfigurationCoordinator(
     }
   }
 
+  /** Attempts to place one constant-space dirty slot on the existing bounded writer. */
+  private fun kickPendingGuestWrite() {
+    val submit =
+        synchronized(guestPersistenceLock) {
+          if (coordinatorClosed || pendingGuestWrite == null || guestTaskScheduled) {
+            false
+          } else {
+            guestTaskScheduled = true
+            true
+          }
+        }
+    if (!submit) return
+
+    try {
+      writer.execute { persistPendingGuestWrite() }
+    } catch (_: RejectedExecutionException) {
+      synchronized(guestPersistenceLock) {
+        guestTaskScheduled = false
+        guestPersistenceLock.notifyAll()
+      }
+      // Executor pressure never rejects the already acknowledged guest image. The next guest
+      // offer, explicit-operation completion, or flush barrier supplies a bounded retry trigger.
+    }
+  }
+
+  private fun persistPendingGuestWrite() {
+    val attempted =
+        synchronized(guestPersistenceLock) {
+          pendingGuestWrite
+              ?: run {
+                guestTaskScheduled = false
+                guestPersistenceLock.notifyAll()
+                return
+              }
+        }
+    val durable = durableConfiguration.get()
+    val candidate =
+        MobileAdapterConfiguration(
+            durable.deviceId,
+            attempted.configurationCopy(),
+            durable.networkPolicy,
+        )
+    val result = store.save(candidate)
+    if (result.saved) durableConfiguration.set(candidate)
+
+    var retryNewerGuest = false
+    synchronized(transitionPublicationLock) {
+      // A guest save changes only the image. If an owner operation changed metadata while the
+      // save was running, preserve the newest live image and reconcile that metadata separately
+      // when the serialized owner operation completes.
+      synchronized(guestPersistenceLock) {
+        completedGuestAttempt = incrementExact(completedGuestAttempt)
+        lastGuestAttempt = CompletedGuestAttempt(attempted.sequence, result)
+        guestTaskScheduled = false
+        publishGuestStatusLocked(
+            attempted,
+            if (result.saved) {
+              MobileAdapterGuestConfigurationPersistencePhase.SAVED
+            } else {
+              MobileAdapterGuestConfigurationPersistencePhase.FAILED
+            },
+            result.error,
+        )
+        val latest = pendingGuestWrite
+        if (result.saved && latest?.sequence == attempted.sequence) {
+          pendingGuestWrite = null
+        } else if (latest != null && latest.sequence != attempted.sequence) {
+          // A later write is itself a retry trigger even when this older attempt failed.
+          retryNewerGuest = true
+        }
+        guestPersistenceLock.notifyAll()
+      }
+    }
+    if (retryNewerGuest) kickPendingGuestWrite()
+  }
+
+  private fun publishGuestStatusLocked(
+      pending: PendingGuestWrite,
+      phase: MobileAdapterGuestConfigurationPersistencePhase,
+      error: MobileAdapterConfigurationError? = null,
+  ) {
+    val status =
+        MobileAdapterGuestConfigurationPersistenceStatus(
+            sequence = pending.sequence,
+            attachmentId = pending.attachmentId,
+            mutationRevision = pending.mutationRevision,
+            phase = phase,
+            error = error,
+        )
+    while (!guestStatuses.offer(status)) guestStatuses.poll()
+  }
+
+  private fun saturatedDeadline(timeoutNanos: Long): Long {
+    val now = System.nanoTime()
+    return try {
+      Math.addExact(now, timeoutNanos)
+    } catch (_: ArithmeticException) {
+      Long.MAX_VALUE
+    }
+  }
+
   private fun remainingShutdownMillis(deadlineNanos: Long): Long {
     val remaining = deadlineNanos - System.nanoTime()
     return if (remaining <= 0) 0 else maxOf(1, TimeUnit.NANOSECONDS.toMillis(remaining))
@@ -402,6 +699,8 @@ internal class MobileAdapterConfigurationCoordinator(
 
   private fun nextRevision(): Long =
       revision.updateAndGet { value -> Math.addExact(value, 1) }
+
+  private fun incrementExact(value: Long): Long = Math.addExact(value, 1)
 
   private fun createBackend(
       snapshot: MobileAdapterRuntimeUiState,
@@ -470,10 +769,50 @@ internal class MobileAdapterConfigurationCoordinator(
     }
   }
 
+  private sealed interface GuestOfferDisposition {
+    data object CLOSED : GuestOfferDisposition
+
+    data object STALE : GuestOfferDisposition
+
+    data object DUPLICATE : GuestOfferDisposition
+
+    class Accepted(configuration: ByteArray) : GuestOfferDisposition {
+      private val ownedConfiguration = configuration.clone()
+
+      val configuration: ByteArray
+        get() = ownedConfiguration.clone()
+
+      override fun toString(): String = "GuestOfferDisposition.Accepted(configuration=[redacted])"
+    }
+  }
+
+  private class PendingGuestWrite(
+      val sequence: Long,
+      val attachmentId: Long,
+      val mutationRevision: Long,
+      val imageGeneration: Long,
+      configuration: ByteArray,
+  ) {
+    private val ownedConfiguration = configuration.clone()
+
+    fun configurationCopy(): ByteArray = ownedConfiguration.clone()
+
+    override fun toString(): String =
+        "PendingGuestWrite(sequence=$sequence, attachmentId=$attachmentId, " +
+            "mutationRevision=$mutationRevision, imageGeneration=$imageGeneration, " +
+            "configuration=[redacted])"
+  }
+
+  private data class CompletedGuestAttempt(
+      val sequence: Long,
+      val result: MobileAdapterConfigurationSaveResult,
+  )
+
   companion object {
     const val SHUTDOWN_TIMEOUT_MILLIS = 2_000L
     const val MAX_PENDING_POLICY_WRITES = 1
     const val MAX_TRACKED_NETWORK_BACKENDS = 2
+    private const val MAX_PENDING_GUEST_STATUSES = 32
     private const val SHUTDOWN_GRACE_MILLIS = SHUTDOWN_TIMEOUT_MILLIS / 2
 
     internal fun destinationPolicy(

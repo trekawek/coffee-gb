@@ -165,6 +165,11 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
         return engine.configurationCopy();
     }
 
+    /** Returns the latest runtime-only changed guest write as a defensive snapshot, if any. */
+    public MobileAdapterEngine.GuestConfigurationMutation latestGuestConfigurationMutation() {
+        return engine.latestGuestConfigurationMutation();
+    }
+
     public void replaceConfiguration(byte[] replacement) {
         engine.replaceConfiguration(replacement);
     }
