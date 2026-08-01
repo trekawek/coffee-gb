@@ -529,7 +529,7 @@ class BasicController private constructor(
       } else if (pauseStateBeforeResume != null) {
         pauseStateBeforeResume = false
       } else {
-        setPaused(false)
+        releaseInteractivePauseOwners(releaseApplicationPause = true, releaseDebuggerPause = true)
       }
     }
     eventQueue.register<Controller.RewindEvent> {
@@ -948,11 +948,10 @@ class BasicController private constructor(
             return
           }
           debugCheckpointHistory.invalidateFuture(checkNotNull(session))
-          if (debugPaused) {
-            setDebugPaused(false)
-          } else {
-            setPaused(false)
-          }
+          releaseInteractivePauseOwners(
+              releaseApplicationPause = canReleaseApplicationPause,
+              releaseDebuggerPause = debugPaused,
+          )
           command.complete(DebugResult.success(captureDebugSnapshot()))
         }
         is QueuedDebugCommand.Snapshot ->
@@ -3190,6 +3189,28 @@ class BasicController private constructor(
     }
     val wasEffectivelyPaused = isEffectivelyPaused()
     debugPaused = paused
+    updateCartridgePause(wasEffectivelyPaused)
+    publishPlaybackState()
+  }
+
+  /**
+   * Releases pause ownership created by the main playback controls and/or debugger controls as
+   * one effective playback transition. Loading and autosave-resume workflows retain their own
+   * pause ownership and must be released by their lifecycle handlers.
+   */
+  private fun releaseInteractivePauseOwners(
+      releaseApplicationPause: Boolean,
+      releaseDebuggerPause: Boolean,
+  ) {
+    val applicationChanged = releaseApplicationPause && isPaused
+    val debuggerChanged = releaseDebuggerPause && debugPaused
+    if (!applicationChanged && !debuggerChanged) return
+    val wasEffectivelyPaused = isEffectivelyPaused()
+    if (applicationChanged) isPaused = false
+    if (debuggerChanged) {
+      debugPaused = false
+      relinquishDebugBreakpointPauseOwnership()
+    }
     updateCartridgePause(wasEffectivelyPaused)
     publishPlaybackState()
   }

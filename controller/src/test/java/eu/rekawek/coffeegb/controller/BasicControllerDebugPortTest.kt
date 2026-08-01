@@ -1015,13 +1015,15 @@ class BasicControllerDebugPortTest {
       assertTrue(await(port.snapshot()).value().paused())
       assertFalse(await(port.resume()).value().paused())
 
-      // A separate desktop pause can authorize a step; the debugger then owns the resulting
-      // pause independently until its own resume command is issued.
+      // Debugger and desktop pause requests can overlap, but either Resume control releases both
+      // interactive pause owners and returns the emulator to the same running state.
       eventBus.post(Controller.PauseEmulationEvent())
       assertTrue(await(port.step(DebugStepKind.INSTRUCTION)).isSuccess)
       val debugResume = await(port.resume())
       assertTrue(debugResume.isSuccess)
-      assertTrue(debugResume.value().paused(), "desktop pause still owns this safe point")
+      assertFalse(debugResume.value().paused())
+
+      assertTrue(await(port.pause()).isSuccess)
       eventBus.post(Controller.ResumeEmulationEvent())
       awaitCondition { !await(port.snapshot()).value().paused() }
     }
@@ -1053,12 +1055,6 @@ class BasicControllerDebugPortTest {
       assertTrue(bothOwners.paused)
 
       eventBus.post(Controller.ResumeEmulationEvent())
-      val debuggerStillOwnsPause =
-          assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      assertEquals(debugPause.sessionGeneration, debuggerStillOwnsPause.sessionGeneration)
-      assertTrue(debuggerStillOwnsPause.paused)
-
-      assertFalse(await(port.resume()).value().paused())
       val resumed = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals(debugPause.sessionGeneration, resumed.sessionGeneration)
       assertFalse(resumed.paused)
@@ -1177,16 +1173,10 @@ class BasicControllerDebugPortTest {
   }
 
   @Test
-  fun desktopPauseIntentPrecedesDebugResumeWithoutAdvancingTheMachine() {
+  fun desktopResumeReleasesADebuggerPause() {
     withController { eventBus, port, _, _, _ ->
       val paused = await(port.pause()).value()
       assertTrue(paused.framePosition() > 0)
-
-      eventBus.post(Controller.PauseEmulationEvent())
-      val resumed = await(port.resume())
-      assertTrue(resumed.isSuccess)
-      assertTrue(resumed.value().paused())
-      assertEquals(paused.masterTick(), resumed.value().masterTick())
 
       eventBus.post(Controller.ResumeEmulationEvent())
       awaitCondition { !await(port.snapshot()).value().paused() }
