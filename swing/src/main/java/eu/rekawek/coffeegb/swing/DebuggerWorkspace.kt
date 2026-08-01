@@ -151,6 +151,12 @@ internal class DebuggerWorkspace(
     windows.values.forEach(ToolWindow::sessionChanged)
   }
 
+  fun updatePlaybackState(
+      event: eu.rekawek.coffeegb.controller.Controller.SessionPlaybackStateEvent,
+  ) {
+    panel.updatePlaybackState(event)
+  }
+
   override fun close() {
     check(SwingUtilities.isEventDispatchThread()) { "Debugger workspace disposal must run on EDT" }
     if (closed) return
