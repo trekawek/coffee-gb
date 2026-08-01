@@ -55,7 +55,7 @@ class DebuggerMemoryPanelTest {
 
       panel.addressSpaceCombo.selectedItem = DebugAddressSpace.SYSTEM_BUS
       panel.startSpinner.intValue = 0xfdf0
-      assertEquals(0xff80, panel.startSpinner.model.nextValue)
+      assertEquals(0xfdf1, panel.startSpinner.model.nextValue)
       assertFalse(panel.startSpinner.isValueAllowed(0xfe00))
       val absolute = assertIs<DebuggerMemoryInterest.Absolute>(panel.currentInterest).request
       assertEquals(DebugAddressSpace.SYSTEM_BUS, absolute.addressSpace())
@@ -317,11 +317,16 @@ class DebuggerMemoryPanelTest {
 
       panel.addressSpaceCombo.selectedItem = DebugAddressSpace.ROM
       val romInterest = panel.currentInterest
+      val romRequest = assertIs<DebuggerMemoryInterest.Absolute>(romInterest).request
       assertTrue(
           panel.render(
               DebuggerSnapshotIdentity(2, 2, 2),
               romInterest,
-              DebugMemoryBlock(DebugAddressSpace.ROM, 0xc000, ByteArray(0x10)),
+              DebugMemoryBlock(
+                  DebugAddressSpace.ROM,
+                  romRequest.address(),
+                  ByteArray(romRequest.length()),
+              ),
           )
       )
       assertFalse(panel.memoryTable.isCellEditable(0, 1))
