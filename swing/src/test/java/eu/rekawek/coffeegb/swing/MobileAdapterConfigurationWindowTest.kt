@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfiguration
+import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationError
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationSource
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterNetworkMode
@@ -75,6 +76,85 @@ class MobileAdapterConfigurationWindowTest {
   }
 
   @Test
+  fun `guest image persistence presentation has literal actionable text and semantic tone`() {
+    val failure = MobileAdapterConfigurationError.STORAGE_WRITE_FAILED
+    val expected =
+        mapOf(
+            Controller.MobileAdapterConfigurationPersistencePhase.PENDING to
+                ("Changes received from the emulated Mobile Adapter are active and being saved. Keep Coffee GB open until saving finishes." to
+                    MobileAdapterStatusTone.WARNING),
+            Controller.MobileAdapterConfigurationPersistencePhase.SAVED to
+                ("Changes received from the emulated Mobile Adapter are active and saved. No action is needed." to
+                    MobileAdapterStatusTone.SUCCESS),
+            Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED to
+                ("Pending changes received from the emulated Mobile Adapter were replaced by the owner-selected adapter image. Review the imported image before continuing." to
+                    MobileAdapterStatusTone.NEUTRAL),
+            Controller.MobileAdapterConfigurationPersistencePhase.FAILED to
+                ("${failure.code}: ${failure.userMessage} Changes received from the emulated Mobile Adapter remain active for this session but could not be saved. Check private configuration storage, then retry by closing Coffee GB again." to
+                    MobileAdapterStatusTone.ERROR),
+        )
+
+    Controller.MobileAdapterConfigurationPersistencePhase.entries.forEach { phase ->
+      val presentation =
+          presentMobileAdapterGuestImagePersistence(
+              phase,
+              failure.takeIf {
+                phase == Controller.MobileAdapterConfigurationPersistencePhase.FAILED
+              },
+          )
+      assertEquals(expected.getValue(phase).first, presentation.status)
+      assertEquals(expected.getValue(phase).second, presentation.tone)
+    }
+  }
+
+  @Test
+  fun `guest image persistence ordering is global and accepts only later same-sequence phases`() {
+    val phases = Controller.MobileAdapterConfigurationPersistencePhase.entries
+    val order =
+        mapOf(
+            Controller.MobileAdapterConfigurationPersistencePhase.PENDING to 0,
+            Controller.MobileAdapterConfigurationPersistencePhase.FAILED to 1,
+            Controller.MobileAdapterConfigurationPersistencePhase.SAVED to 2,
+            Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED to 2,
+        )
+
+    phases.forEach { currentPhase ->
+      phases.forEach { nextPhase ->
+        assertEquals(
+            order.getValue(nextPhase) > order.getValue(currentPhase),
+            acceptsMobileAdapterGuestImagePersistence(
+                MobileAdapterGuestImagePersistenceCursor(7, currentPhase),
+                7,
+                nextPhase,
+            ),
+            "$currentPhase -> $nextPhase",
+        )
+      }
+    }
+    phases.forEach { phase ->
+      assertFalse(
+          acceptsMobileAdapterGuestImagePersistence(
+              MobileAdapterGuestImagePersistenceCursor(7, phase),
+              6,
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED,
+          ))
+      assertTrue(
+          acceptsMobileAdapterGuestImagePersistence(
+              MobileAdapterGuestImagePersistenceCursor(7, phase),
+              8,
+              Controller.MobileAdapterConfigurationPersistencePhase.PENDING,
+          ))
+    }
+    assertTrue(
+        acceptsMobileAdapterGuestImagePersistence(
+            MobileAdapterGuestImagePersistenceCursor(
+                7, Controller.MobileAdapterConfigurationPersistencePhase.FAILED),
+            7,
+            Controller.MobileAdapterConfigurationPersistencePhase.SAVED,
+        ))
+  }
+
+  @Test
   fun `panel uses a structured mapping table live inline validation literal text and semantic theme`() =
       onEdt {
         val edited = mutableListOf<MobileAdapterPolicyDraft>()
@@ -94,6 +174,8 @@ class MobileAdapterConfigurationWindowTest {
                 draft = draft,
                 policyStatus = "<html><b>literal policy status</b></html>",
                 policyTone = MobileAdapterStatusTone.ERROR,
+                guestImageStatus = "<html><b>literal guest image status</b></html>",
+                guestImageTone = MobileAdapterStatusTone.SUCCESS,
                 session =
                     MobileAdapterSessionPresentation(
                         "<html><b>literal session status</b></html>",
@@ -108,7 +190,10 @@ class MobileAdapterConfigurationWindowTest {
             (0 until panel.mappingModel.columnCount).map(panel.mappingModel::getColumnName),
         )
         assertEquals(true, panel.policyStatus.getClientProperty("html.disable"))
+        assertEquals(true, panel.guestImageStatus.getClientProperty("html.disable"))
         assertEquals("<html><b>literal policy status</b></html>", panel.policyStatus.text)
+        assertEquals(
+            "<html><b>literal guest image status</b></html>", panel.guestImageStatus.text)
         assertEquals("<html><b>literal session status</b></html>", panel.sessionStatus.text)
         assertTrue(
             descendants(panel)
@@ -133,6 +218,10 @@ class MobileAdapterConfigurationWindowTest {
                 draft = edited.last(),
                 validation = invalid,
                 dirty = true,
+                policyStatus = "<html><b>literal policy status</b></html>",
+                policyTone = MobileAdapterStatusTone.ERROR,
+                guestImageStatus = "<html><b>literal guest image status</b></html>",
+                guestImageTone = MobileAdapterStatusTone.SUCCESS,
             ))
         assertTrue(panel.validationStatus.isVisible)
         assertTrue(panel.validationStatus.text.contains("1..65535"))
@@ -149,6 +238,8 @@ class MobileAdapterConfigurationWindowTest {
         panel.desktopThemeChanged(dark)
         assertEquals(dark.surface, panel.background)
         assertEquals(dark.danger, panel.validationStatus.foreground)
+        assertEquals(dark.success, panel.guestImageStatus.foreground)
+        assertEquals(dark.danger, panel.policyStatus.foreground)
       }
 
   @Test
@@ -244,6 +335,119 @@ class MobileAdapterConfigurationWindowTest {
       assertTrue(current.session.summary.contains("REMOTE_CLOSED"))
       assertTrue(current.session.summary.contains("Connection slot 2"))
       assertTrue(current.session.cancelEnabled)
+    } finally {
+      onEdt { fixture.host.close() }
+      coordinator.close()
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `hidden host folds persistence on EDT redacts correlations and warns only for accepted failure`() {
+    val bus = EventBusImpl()
+    val coordinator = coordinator(customConfiguration())
+    val failures = mutableListOf<String>()
+    val callbackOnEdt = mutableListOf<Boolean>()
+    val fixture =
+        onEdt {
+          HostFixture(
+              coordinator,
+              bus,
+              RecordingDecisions(),
+              onGuestImagePersistenceFailure = { message ->
+                callbackOnEdt += SwingUtilities.isEventDispatchThread()
+                failures += message
+              },
+          )
+        }
+    try {
+      assertEquals(0, fixture.factoryCalls, "the retained window remains hidden")
+
+      bus.post(persistenceEvent(20, Controller.MobileAdapterConfigurationPersistencePhase.PENDING))
+      flushEdt()
+      var current = onEdt { fixture.host.currentPresentation() }
+      assertEquals(MobileAdapterStatusTone.WARNING, current.guestImageStatusTone)
+      assertTrue(current.guestImageStatus.contains("being saved"))
+
+      bus.post(
+          persistenceEvent(
+              19,
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED,
+              MobileAdapterConfigurationError.STORAGE_WRITE_FAILED,
+          ))
+      flushEdt()
+      assertTrue(failures.isEmpty(), "an older global sequence is ignored")
+
+      bus.post(
+          persistenceEvent(
+              20,
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED,
+              MobileAdapterConfigurationError.STORAGE_WRITE_FAILED,
+          ))
+      flushEdt()
+      current = onEdt { fixture.host.currentPresentation() }
+      assertEquals(MobileAdapterStatusTone.ERROR, current.guestImageStatusTone)
+      val acceptedError = MobileAdapterConfigurationError.STORAGE_WRITE_FAILED
+      assertEquals(
+          presentMobileAdapterGuestImagePersistence(
+                  Controller.MobileAdapterConfigurationPersistencePhase.FAILED, acceptedError)
+              .status,
+          current.guestImageStatus,
+      )
+      assertTrue(
+          current.guestImageStatus.contains(
+              "${acceptedError.code}: ${acceptedError.userMessage}"))
+      assertEquals(listOf(true), callbackOnEdt)
+      assertEquals(listOf(current.guestImageStatus), failures)
+      assertEquals(0, fixture.factoryCalls, "a failure does not open a modal or utility window")
+
+      bus.post(persistenceEvent(20, Controller.MobileAdapterConfigurationPersistencePhase.PENDING))
+      bus.post(
+          persistenceEvent(
+              20,
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED,
+              MobileAdapterConfigurationError.PERMISSION_HARDENING_FAILED,
+          ))
+      flushEdt()
+      assertEquals(1, failures.size, "phase regressions and duplicate failures are ignored")
+
+      bus.post(persistenceEvent(20, Controller.MobileAdapterConfigurationPersistencePhase.SAVED))
+      flushEdt()
+      current = onEdt { fixture.host.currentPresentation() }
+      assertEquals(MobileAdapterStatusTone.SUCCESS, current.guestImageStatusTone)
+      assertTrue(current.guestImageStatus.contains("active and saved"))
+
+      bus.post(
+          persistenceEvent(
+              20,
+              Controller.MobileAdapterConfigurationPersistencePhase.FAILED,
+              MobileAdapterConfigurationError.NON_REGULAR_FILE,
+          ))
+      bus.post(
+          persistenceEvent(21, Controller.MobileAdapterConfigurationPersistencePhase.SUPERSEDED))
+      bus.post(persistenceEvent(21, Controller.MobileAdapterConfigurationPersistencePhase.SAVED))
+      flushEdt()
+      current = onEdt { fixture.host.currentPresentation() }
+      assertEquals(MobileAdapterStatusTone.NEUTRAL, current.guestImageStatusTone)
+      assertTrue(current.guestImageStatus.contains("owner-selected adapter image"))
+      assertEquals(1, failures.size)
+
+      val renderedPersistenceText = listOf(current.guestImageStatus) + failures
+      listOf(
+              "20",
+              PERSISTENCE_ATTACHMENT_ID.toString(),
+              PERSISTENCE_MUTATION_REVISION.toString(),
+              "PERMISSION_HARDENING_FAILED",
+              "NON_REGULAR_FILE",
+              "Exception",
+              "/",
+          )
+          .forEach { forbidden ->
+            assertTrue(
+                renderedPersistenceText.none { it.contains(forbidden) },
+                "persistence presentation must redact $forbidden",
+            )
+          }
     } finally {
       onEdt { fixture.host.close() }
       coordinator.close()
@@ -470,6 +674,7 @@ class MobileAdapterConfigurationWindowTest {
       eventBus: EventBusImpl,
       decisions: RecordingDecisions,
       imageSelector: () -> Path? = { null },
+      onGuestImagePersistenceFailure: (String) -> Unit = {},
       onPresentation: (MobileAdapterConfigurationPresentation) -> Unit = {},
   ) {
     lateinit var view: RecordingView
@@ -490,6 +695,7 @@ class MobileAdapterConfigurationWindowTest {
             },
             decisions,
             onSummary = {},
+            onGuestImagePersistenceFailure = onGuestImagePersistenceFailure,
             imageSelector = MobileAdapterConfigurationImageSelector(imageSelector),
         )
   }
@@ -596,6 +802,19 @@ class MobileAdapterConfigurationWindowTest {
           mappings,
       )
 
+  private fun persistenceEvent(
+      sequence: Long,
+      phase: Controller.MobileAdapterConfigurationPersistencePhase,
+      error: MobileAdapterConfigurationError? = null,
+  ) =
+      Controller.MobileAdapterConfigurationPersistenceStatusEvent(
+          sequence = sequence,
+          attachmentId = PERSISTENCE_ATTACHMENT_ID,
+          mutationRevision = PERSISTENCE_MUTATION_REVISION,
+          phase = phase,
+          error = error,
+      )
+
   private fun presentation(
       policy: MobileAdapterNetworkPolicy,
       draft: MobileAdapterPolicyDraft,
@@ -603,6 +822,9 @@ class MobileAdapterConfigurationWindowTest {
       dirty: Boolean = false,
       policyStatus: String = "Ready.",
       policyTone: MobileAdapterStatusTone = MobileAdapterStatusTone.NEUTRAL,
+      guestImageStatus: String =
+          "No guest-authored adapter image changes have been received this session.",
+      guestImageTone: MobileAdapterStatusTone = MobileAdapterStatusTone.NEUTRAL,
       session: MobileAdapterSessionPresentation = MobileAdapterSessionPresentation("Ready.", false),
   ) =
       MobileAdapterConfigurationPresentation(
@@ -616,6 +838,8 @@ class MobileAdapterConfigurationWindowTest {
           savePhase = MobileAdapterSavePhase.IDLE,
           networkConsent = false,
           privateLocalDevelopment = false,
+          guestImageStatus = guestImageStatus,
+          guestImageStatusTone = guestImageTone,
           policyStatus = policyStatus,
           policyStatusTone = policyTone,
           session = session,
@@ -662,5 +886,10 @@ class MobileAdapterConfigurationWindowTest {
     val task = FutureTask(action)
     SwingUtilities.invokeAndWait(task)
     return task.get()
+  }
+
+  private companion object {
+    const val PERSISTENCE_ATTACHMENT_ID = 987_654_321L
+    const val PERSISTENCE_MUTATION_REVISION = 123_456_789L
   }
 }

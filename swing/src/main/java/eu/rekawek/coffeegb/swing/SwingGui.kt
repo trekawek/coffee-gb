@@ -246,6 +246,11 @@ class SwingGui private constructor(
               )
             },
             tokenProvider = { themeManager.current?.tokens ?: initialTheme.tokens },
+            onGuestImagePersistenceFailure = { message ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.warning(message)
+              }
+            },
         )
     stateUxController =
         StateUxDesktopController(

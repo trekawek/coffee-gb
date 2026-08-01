@@ -477,6 +477,15 @@ close freezes the timing thread, drains the endpoint, and includes this writer i
 retryable persistence barrier; failed or timed-out durability retains the session instead of
 silently discarding the guest setup.
 
+The retained desktop window presents guest-image durability separately from owner policy saves. It
+folds the global persistence sequence on the Swing event thread: older sequences, duplicate phases,
+and phase regressions are ignored, while a retry may advance the same sequence from failed to saved.
+Pending, saved, superseded, and failed each have literal status text and a distinct semantic tone. An
+accepted failure also raises the main desktop's persistent nonmodal warning even when the
+configuration window is hidden. Both failed surfaces include the presentation-safe stable error
+code and user message, but neither surface renders or logs configuration bytes, paths, exceptions,
+or sequence, attachment, and mutation correlation identifiers.
+
 ### Bounded adapter-image import
 
 The retained configuration dialog accepts exactly one owner-selected regular file. A 256-byte
