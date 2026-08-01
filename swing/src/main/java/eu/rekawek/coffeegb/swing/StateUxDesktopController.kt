@@ -94,6 +94,7 @@ internal class StateUxDesktopController(
     onBoundsChanged: (Rectangle) -> Unit = {},
     private val onDesktopStatus: (String, DesktopCommand?) -> Unit = { _, _ -> },
     onSlotLoadAvailability: (slot: Int, available: Boolean) -> Unit = { _, _ -> },
+    private val onRememberResumeDecision: (resume: Boolean) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
@@ -242,6 +243,17 @@ internal class StateUxDesktopController(
                                     StateResumeChoice.START_FRESH,
                                 ),
                             defaultButton = DesktopDialogDefaultButton.NONE,
+                        ),
+                    remember =
+                        DesktopDecisionRememberOption(
+                            results =
+                                setOf(
+                                    StateResumeChoice.RESUME,
+                                    StateResumeChoice.START_FRESH,
+                                ),
+                            onSelected = { selected ->
+                              onRememberResumeDecision(selected == StateResumeChoice.RESUME)
+                            },
                         ),
                 ),
             )

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.RomChangeConfirmationPolicy
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
@@ -160,6 +161,13 @@ internal class DesktopRomOpen(
                               RomOpenConfirmation.CANCEL,
                           ),
                       defaultButton = DesktopDialogDefaultButton.CANCEL,
+                  ),
+              remember =
+                  DesktopDecisionRememberOption(
+                      results = setOf(RomOpenConfirmation.OPEN),
+                      onSelected = {
+                        properties.romChangeConfirmationPolicy = RomChangeConfirmationPolicy.NEVER
+                      },
                   ),
               modality = DesktopOwnedDialogModality.DOCUMENT,
           )) == RomOpenConfirmation.OPEN

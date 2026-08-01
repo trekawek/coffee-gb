@@ -649,7 +649,15 @@ internal class SwingMenu(
                                 "Keep playing",
                                 StopGameDecision.KEEP_PLAYING,
                             ),
-                        defaultButton = DesktopDialogDefaultButton.CANCEL,
+                          defaultButton = DesktopDialogDefaultButton.CANCEL,
+                      ),
+                remember =
+                    DesktopDecisionRememberOption(
+                        results = setOf(StopGameDecision.STOP),
+                        onSelected = {
+                          properties.romChangeConfirmationPolicy =
+                              ApplicationSettings.RomChangeConfirmationPolicy.NEVER
+                        },
                     ),
                 modality = DesktopOwnedDialogModality.DOCUMENT,
             )) == StopGameDecision.STOP
