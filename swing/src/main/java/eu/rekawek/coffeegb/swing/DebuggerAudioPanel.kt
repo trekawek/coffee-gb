@@ -5,10 +5,12 @@ import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
 import java.awt.Dimension
+import java.awt.FlowLayout
 import java.awt.Graphics
 import java.awt.Graphics2D
 import java.awt.RenderingHints
 import javax.swing.BorderFactory
+import javax.swing.JCheckBox
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JScrollPane
@@ -19,6 +21,7 @@ import javax.swing.UIManager
 /** EDT-only renderer for a payload-free [DebuggerAudioPaneView]. */
 internal class DebuggerAudioPanel(
     private val copyToClipboard: (String) -> Unit,
+    private val onSetChannelEnabled: (Int, Boolean) -> Unit = { _, _ -> },
 ) : JPanel(BorderLayout(4, 4)) {
   internal val overviewArea = peripheralTextArea("audio inspection summary")
   internal val tabs = JTabbedPane()
@@ -26,6 +29,19 @@ internal class DebuggerAudioPanel(
   internal val registerTable = JTable()
   internal val waveTable = JTable()
   internal val waveGraph = DebuggerWaveGraph()
+  internal val channelToggles =
+      (1..CHANNEL_COUNT).map { channel ->
+        JCheckBox("CH $channel", true).apply {
+          isEnabled = false
+          accessibleContext.accessibleName = "Audio channel $channel output"
+          accessibleContext.accessibleDescription =
+              "Include channel $channel in emulator audio output. " +
+                  "This does not change the game's APU registers."
+        }
+      }
+
+  private val channelMixerEnabled = BooleanArray(CHANNEL_COUNT) { true }
+  private var updatingChannelToggles = false
 
   private val channelModel =
       DebuggerPeripheralTableModel(
@@ -92,10 +108,16 @@ internal class DebuggerAudioPanel(
 
     overviewPane.accessibleContext.accessibleName = "Audio inspection overview"
     channelPane =
-        tablePane(
-            "Channel state and mixer routing are always stated in text",
-            channelTable,
-        )
+        JPanel(BorderLayout(2, 2)).apply {
+          add(channelControls(), BorderLayout.NORTH)
+          add(
+              tablePane(
+                  "Channel state and mixer routing are always stated in text",
+                  channelTable,
+              ),
+              BorderLayout.CENTER,
+          )
+        }
     registerPane = tablePane("Raw audio registers with decoded fields", registerTable)
     wavePane =
         JPanel(BorderLayout(2, 4)).apply {
@@ -111,6 +133,15 @@ internal class DebuggerAudioPanel(
     tabs.addTab("Wave RAM", wavePane)
     add(tabs, BorderLayout.CENTER)
     fontScaler = DebuggerPeripheralFontScaler(this)
+
+    channelToggles.forEachIndexed { index, toggle ->
+      toggle.addActionListener {
+        if (!updatingChannelToggles) {
+          channelMixerEnabled[index] = toggle.isSelected
+          onSetChannelEnabled(index + 1, toggle.isSelected)
+        }
+      }
+    }
   }
 
   fun render(view: DebuggerAudioPaneView) {
@@ -177,6 +208,29 @@ internal class DebuggerAudioPanel(
     getAccessibleContext().accessibleDescription = EMPTY_DESCRIPTION
   }
 
+  fun setChannelControlsEnabled(enabled: Boolean) {
+    requirePeripheralEdt("Audio channel control state")
+    channelToggles.forEach { it.isEnabled = enabled }
+  }
+
+  fun setChannelMixerEnabled(channel: Int, enabled: Boolean) {
+    requirePeripheralEdt("Audio channel control update")
+    val index = channel - 1
+    require(index in channelMixerEnabled.indices) { "Audio channel must be between 1 and 4" }
+    channelMixerEnabled[index] = enabled
+    updatingChannelToggles = true
+    try {
+      channelToggles[index].isSelected = enabled
+    } finally {
+      updatingChannelToggles = false
+    }
+  }
+
+  fun resetChannelMixer() {
+    requirePeripheralEdt("Audio channel control reset")
+    channelMixerEnabled.indices.forEach { setChannelMixerEnabled(it + 1, true) }
+  }
+
   private fun releaseRows() {
     channelModel.clear()
     registerModel.clear()
@@ -214,12 +268,22 @@ internal class DebuggerAudioPanel(
         add(JScrollPane(table), BorderLayout.CENTER)
       }
 
+  private fun channelControls(): Component =
+      JPanel(FlowLayout(FlowLayout.LEADING, 8, 2)).apply {
+        val label = JLabel("Output mixer:")
+        label.labelFor = channelToggles.first()
+        label.accessibleContext.accessibleName = "Audio output mixer"
+        add(label)
+        channelToggles.forEach(::add)
+      }
+
   private fun setColumnWidths(table: JTable, vararg widths: Int) {
     widths.forEachIndexed { index, width -> table.columnModel.getColumn(index).preferredWidth = width }
   }
 
   private companion object {
     const val EMPTY_DESCRIPTION = "Audio inspection is not retained"
+    const val CHANNEL_COUNT = 4
   }
 }
 

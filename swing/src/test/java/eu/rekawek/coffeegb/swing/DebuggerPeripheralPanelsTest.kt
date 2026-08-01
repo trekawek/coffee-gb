@@ -272,12 +272,43 @@ class DebuggerPeripheralPanelsTest {
   }
 
   @Test
+  fun `audio panel provides independent output mixer controls`() {
+    val changes = mutableListOf<Pair<Int, Boolean>>()
+    val panel =
+        onEdt {
+          DebuggerAudioPanel(
+              copyToClipboard = {},
+              onSetChannelEnabled = { channel, enabled -> changes += channel to enabled },
+          )
+        }
+    val view = DebuggerPeripheralPanePreparation.audio(SNAPSHOT_IDENTITY, audioInspection())
+
+    onEdt {
+      assertTrue(panel.channelToggles.all { !it.isEnabled })
+      panel.setChannelControlsEnabled(true)
+      panel.channelToggles[1].doClick()
+      assertEquals(listOf(2 to false), changes)
+      assertFalse(panel.channelToggles[1].isSelected)
+      assertContains(
+          panel.channelToggles[1].accessibleContext.accessibleDescription,
+          "does not change the game's APU registers",
+      )
+
+      panel.render(view)
+      assertFalse(panel.channelToggles[1].isSelected)
+      panel.setChannelMixerEnabled(2, true)
+      assertTrue(panel.channelToggles[1].isSelected)
+      assertEquals(listOf(2 to false), changes)
+    }
+  }
+
+  @Test
   fun `panel mutation APIs reject non EDT callers`() {
     val graphics =
         DebuggerPeripheralPanePreparation.graphics(SNAPSHOT_IDENTITY, graphicsInspection())
     val audio = DebuggerPeripheralPanePreparation.audio(SNAPSHOT_IDENTITY, audioInspection())
     val graphicsPanel = onEdt { DebuggerGraphicsPanel {} }
-    val audioPanel = onEdt { DebuggerAudioPanel {} }
+    val audioPanel = onEdt { DebuggerAudioPanel(copyToClipboard = {}) }
 
     assertFailsWith<IllegalStateException> { graphicsPanel.render(graphics) }
     assertFailsWith<IllegalStateException> { graphicsPanel.showNotCaptured(SNAPSHOT_IDENTITY) }

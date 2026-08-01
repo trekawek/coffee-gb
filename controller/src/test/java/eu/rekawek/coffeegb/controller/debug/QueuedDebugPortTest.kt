@@ -432,6 +432,35 @@ class QueuedDebugPortTest {
   }
 
   @Test
+  fun `audio channel controls validate their range and preserve their typed FIFO envelope`() {
+    val port = QueuedDebugPort(21, advancedCapabilities(), 1)
+    val unsupported = QueuedDebugPort(22, capabilities(), 1)
+    try {
+      assertFailure(port.setAudioChannelEnabled(0, false), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(
+          unsupported.setAudioChannelEnabled(1, false),
+          DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+      )
+      assertEquals(0, port.outstandingRequestCount())
+
+      val stage = port.setAudioChannelEnabled(3, false)
+      val command = assertIs<QueuedDebugCommand.SetAudioChannel>(port.pollCommand())
+      assertEquals(1, command.requestId)
+      assertEquals(21, command.sessionGeneration)
+      assertEquals(3, command.channel)
+      assertFalse(command.enabled)
+      val snapshot = snapshot(masterTick = 42, frame = 3)
+      assertTrue(command.complete(DebugResult.success(snapshot)))
+      assertEquals(snapshot, await(stage).value())
+    } finally {
+      port.close()
+      unsupported.close()
+      assertTrue(port.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+      assertTrue(unsupported.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+    }
+  }
+
+  @Test
   fun `replacement drains queued and owner-held commands exactly once`() {
     val port = QueuedDebugPort(10, capabilities(), 2)
     val first = port.pause()
@@ -635,6 +664,8 @@ class QueuedDebugPortTest {
               120,
               DebugHistoryConfiguration.MIN_MEMORY_BUDGET_BYTES,
           ),
+          EnumSet.of(DebugInspectionSection.AUDIO),
+          0,
       )
 
   private fun snapshot(masterTick: Long, frame: Long): DebugSnapshot =

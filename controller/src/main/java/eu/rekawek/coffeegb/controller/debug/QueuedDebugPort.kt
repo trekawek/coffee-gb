@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.core.debug.DebugError
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
+import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
@@ -263,6 +264,26 @@ internal class QueuedDebugPort(
         }
     return submit(validation) { requestId, completion ->
       QueuedDebugCommand.WriteMemory(requestId, generation, requireNotNull(write), completion)
+    }
+  }
+
+  override fun setAudioChannelEnabled(
+      channel: Int,
+      enabled: Boolean,
+  ): CompletionStage<DebugResult<DebugSnapshot>> {
+    val validation =
+        when {
+          channel !in 1..4 ->
+              DebugError(DebugErrorCode.INVALID_ARGUMENT, "Audio channel must be between 1 and 4")
+          !debugCapabilities.supportsInspection(DebugInspectionSection.AUDIO) ->
+              DebugError(
+                  DebugErrorCode.UNSUPPORTED_TOPOLOGY,
+                  "Audio channel controls are unavailable for this session",
+              )
+          else -> null
+        }
+    return submit(validation) { requestId, completion ->
+      QueuedDebugCommand.SetAudioChannel(requestId, generation, channel, enabled, completion)
     }
   }
 
@@ -711,6 +732,14 @@ internal sealed class QueuedDebugCommand<T> protected constructor(
       requestId: Long,
       sessionGeneration: Long,
       val write: DebugMemoryWrite,
+      completion: (DebugResult<DebugSnapshot>) -> Boolean,
+  ) : QueuedDebugCommand<DebugSnapshot>(requestId, sessionGeneration, completion)
+
+  class SetAudioChannel internal constructor(
+      requestId: Long,
+      sessionGeneration: Long,
+      val channel: Int,
+      val enabled: Boolean,
       completion: (DebugResult<DebugSnapshot>) -> Boolean,
   ) : QueuedDebugCommand<DebugSnapshot>(requestId, sessionGeneration, completion)
 
