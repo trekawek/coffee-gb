@@ -170,6 +170,51 @@ class DebuggerMemoryPanelTest {
   }
 
   @Test
+  fun `switching memory spaces restores each space start and selected position`() {
+    val panel = onEdt { DebuggerMemoryPanel() }
+
+    onEdt {
+      panel.lengthSpinner.intValue = 0x10
+      panel.startSpinner.intValue = 0xc120
+      val workInterest = panel.currentInterest
+      assertTrue(
+          panel.render(
+              DebuggerSnapshotIdentity(5, 1, 10),
+              workInterest,
+              DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc120, ByteArray(0x10)),
+          )
+      )
+      panel.memoryTable.changeSelection(0, 3, false, false)
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.ROM
+      assertEquals(0, panel.currentRequest?.address())
+      assertEquals(0, panel.startSpinner.intValue)
+      panel.startSpinner.intValue = 0x1234
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.HIGH_RAM
+      assertEquals(0xff80, panel.currentRequest?.address())
+      assertEquals(0xff80, panel.startSpinner.intValue)
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.WORK_RAM
+      assertEquals(0xc120, panel.currentRequest?.address())
+      assertEquals(0xc120, panel.startSpinner.intValue)
+      assertTrue(
+          panel.render(
+              DebuggerSnapshotIdentity(5, 2, 20),
+              panel.currentInterest,
+              DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc120, ByteArray(0x10)),
+          )
+      )
+      assertEquals(0, panel.memoryTable.selectedRow)
+      assertEquals(3, panel.memoryTable.selectedColumn)
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.ROM
+      assertEquals(0x1234, panel.currentRequest?.address())
+      assertEquals(0x1234, panel.startSpinner.intValue)
+    }
+  }
+
+  @Test
   fun `RAM bytes use compact hexadecimal headers and commit only double-click edits`() {
     val writes = mutableListOf<eu.rekawek.coffeegb.core.debug.DebugMemoryWrite>()
     val panel =
