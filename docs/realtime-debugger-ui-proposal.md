@@ -46,7 +46,7 @@ precision, copying, and accessibility. Raster lanes and rolling audio waveforms 
 | Updates | One 50 ms timer drives a single-flight 20 Hz scalar stream; run-control and interest changes request immediate samples; no workspace Refresh action | A measured frame-ready subscription, if future profiling justifies one |
 | CPU | Structured register cells, flag indicators, execution fields, a bounded best-effort instruction context around PC, and stack table | Bank-aware scrolling disassembly, symbols/source, watches, call stack, and step-over/out |
 | Memory | Live side-effect-free hex/ASCII table, address-space combo, bounded start/length spinners, PC/SP follow, and byte-change highlighting | Generic bank selection, Follow HL, editing, and side-effectful I/O/VRAM/OAM reads |
-| Graphics | Pixel tile atlas, full background/window map canvases, OAM thumbnails and placement, palette grids, keyboard navigation, and linked selection | Viewport/window overlays, dirty-image caches, SGB border assets, and exact screen-composition provenance |
+| Graphics | Pixel tile atlas, full background/window map canvases with a compact selected-tile card, OAM thumbnails and placement, palette grids, keyboard navigation, and linked selection | Viewport/window overlays, dirty-image caches, SGB border assets, and exact screen-composition provenance |
 | Timeline | Existing bounded typed trace table and category controls in its own window | Event lanes, raster visualization, and historical pixel provenance |
 | Audio | Live channel/register tables and a graphical 32-sample Wave RAM plot | Rolling per-channel scopes, internal envelope/phase history, and mute/solo commands |
 | Hardware & I/O | Semantic tree/cards with raw values, decoded meanings, fixed inventory, and explicit provenance; owner snapshots cover joypad, serial/IR, DMA/HDMA, and system state | A hardware-profile-wide register manifest, richer mapper-specific state, links to specialist tools, and value-change filtering |
@@ -105,7 +105,7 @@ screen topology are discarded in favor of normal placement.
 | **Execution** | Run/reverse toolbar; register cells and flags; bounded best-effort instructions before/current/after PC; execution state; stack; stop and history status | Scalars and a bounded safe PC/SP capture at up to 20 Hz; immediate request after commands; Hold withdraws this window's interest | Multi-line banked disassembly, symbols, watches, and call stack need richer models |
 | **Memory** | Address-space combo; bounded hexadecimal start/length spinners; PC/SP follow; live hex/ASCII grid and change markers | Selected safe range participates in the shared 20 Hz inspection; hidden or held windows withdraw it | Safe ROM/WRAM/HRAM views exist. Generic bank selection, Follow HL, and I/O/VRAM/OAM memory-grid access are intentionally absent |
 | **Breakpoints** | Sortable table, enable toggle, typed `CardLayout` editor, dedicated PC/watchpoint ranges, bounded numeric controls, and exact stop explanation | Metadata is refreshed on session, breakpoint changes, and relevant command completion | Negotiated Stop breakpoint kinds exist. General expressions, Log/Count, and run-to need backend work |
-| **Video** | Tile atlas, background/window maps, OAM thumbnails/placement, palettes, and synchronized graphical/text selection | Coherent Graphics capture at up to 10 Hz; decoding and row construction occur off EDT; hidden or held Video withdraws demand | Both VRAM banks, OAM, LCDC, DMG palettes, and CGB palette RAM exist. Frame-ready, viewport, SGB border, and pixel provenance do not |
+| **Video** | Tile atlas, background/window maps with selected-tile details, OAM thumbnails/placement, palettes, and synchronized graphical selection | Coherent Graphics capture at up to 10 Hz; decoding and row construction occur off EDT; hidden or held Video withdraws demand | Both VRAM banks, OAM, LCDC, DMG palettes, and CGB palette RAM exist. Frame-ready, viewport, SGB border, and pixel provenance do not |
 | **Timeline** | Bounded typed event table with category controls | Requested through the shared 20 Hz inspection while visible and live | Event lanes, raster display, and prior-frame reconstruction remain open |
 | **Audio** | Channel/register tables, routing and output semantics, frame-sequencer state, and graphical Wave RAM | Audio capture participates in the shared 20 Hz inspection while Audio or Hardware needs it | Rolling scopes, internal envelope/phase history, and mute/solo need new bounded data or commands |
 | **Hardware & I/O** | Semantic tree/cards for CPU/speed, IRQ, timer, PPU/LCD, APU, joypad, serial/IR, DMA/HDMA, banking/system, and mapper | Scalar, Audio, and Hardware data update at up to 20 Hz; retained graphics-derived fields are marked **SAMPLED** between 10 Hz Video captures | The owner-side hardware DTO is complete for its defined groups. Profile-wide register manifests and richer mapper views remain open |
@@ -253,6 +253,8 @@ Graphics are authoritative visual surfaces, not decorative previews beside textu
 
 - Render the active 32×32 Background and Window maps selected by LCDC from `$9800` or `$9C00`.
 - Apply signed/unsigned tile addressing and CGB palette, bank, flip, and priority attributes.
+- Keep the canvas primary: selecting a cell updates one compact card with its row/column, map and
+  tile addresses, bank, palette, and attributes instead of rendering a second 1,024-row list.
 - Zoom and grid overlays are independently controllable. Viewport/window-origin and attribute
   overlays are not implemented because the current graphical view does not carry those overlay
   coordinates.
@@ -506,5 +508,5 @@ Prioritized remaining milestones:
 | Dedicated numeric controls | Implemented for live Memory and all numeric breakpoint fields, including inclusive PC/watchpoint ranges |
 | Snapshot coherence | Implemented through exact session/snapshot/tick identities and stale-request correlation; held windows retain their own last presentation |
 | Hidden/Held demand withdrawal | Implemented; reopening or unholding resubscribes automatically |
-| Accessible graphical equivalents | Implemented with keyboard-accessible canvases and adjacent copyable detail tables |
+| Accessible graphical equivalents | Implemented with keyboard-accessible canvases plus copyable tables or selected-item detail cards |
 | Symbols, rolling scopes, mapper-rich views, event lanes, custom layouts | Not implemented and not represented as available |

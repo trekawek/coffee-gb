@@ -29,8 +29,6 @@ internal class DebuggerGraphicsPanel(
   internal val overviewArea = peripheralTextArea("graphics inspection summary")
   internal val tabs = JTabbedPane()
   internal val tileTable = JTable()
-  internal val backgroundMapTable = JTable()
-  internal val windowMapTable = JTable()
   internal val objectTable = JTable()
   internal val paletteTable = JTable()
   internal val tileAtlasCanvas = DebuggerTileAtlasCanvas(::selectTile)
@@ -38,6 +36,8 @@ internal class DebuggerGraphicsPanel(
       DebuggerTileMapCanvas("Graphical background tile map", ::selectBackgroundCell)
   internal val windowMapCanvas =
       DebuggerTileMapCanvas("Graphical window tile map", ::selectWindowCell)
+  internal val backgroundMapDetails = DebuggerMapCellDetailsPanel("Selected background map tile")
+  internal val windowMapDetails = DebuggerMapCellDetailsPanel("Selected window map tile")
   internal val objectThumbnailCanvas = DebuggerOamThumbnailCanvas(::selectObject)
   internal val objectPlacementCanvas = DebuggerOamPlacementCanvas(::selectObject)
   internal val paletteCanvas = DebuggerPaletteCanvas(::selectPalette)
@@ -56,8 +56,6 @@ internal class DebuggerGraphicsPanel(
       DebuggerPeripheralTableModel(
           listOf("Bank", "Index", "Address", "Color-index rows", "Description")
       )
-  private val backgroundMapModel = mapModel()
-  private val windowMapModel = mapModel()
   private val objectModel =
       DebuggerPeripheralTableModel(
           listOf(
@@ -110,8 +108,6 @@ internal class DebuggerGraphicsPanel(
     tabs.accessibleContext.accessibleName = "Graphics debugger sections"
 
     tileTable.model = tileModel
-    backgroundMapTable.model = backgroundMapModel
-    windowMapTable.model = windowMapModel
     objectTable.model = objectModel
     paletteTable.model = paletteModel
 
@@ -120,20 +116,6 @@ internal class DebuggerGraphicsPanel(
         "VRAM tile banks",
         "Textual previews of every tile in each available VRAM bank",
         { tileModel.copyText(tileTable.selectedRows) },
-        copyToClipboard,
-    )
-    configurePeripheralTable(
-        backgroundMapTable,
-        "Background tile map",
-        "All 32 by 32 background map entries with tile attributes in text",
-        { backgroundMapModel.copyText(backgroundMapTable.selectedRows) },
-        copyToClipboard,
-    )
-    configurePeripheralTable(
-        windowMapTable,
-        "Window tile map",
-        "All 32 by 32 window map entries with tile attributes in text",
-        { windowMapModel.copyText(windowMapTable.selectedRows) },
         copyToClipboard,
     )
     configurePeripheralTable(
@@ -154,8 +136,6 @@ internal class DebuggerGraphicsPanel(
         DebuggerPalettePreviewRenderer()
 
     setColumnWidths(tileTable, 55, 65, 85, 560, 640)
-    setColumnWidths(backgroundMapTable, 45, 55, 90, 65, 90, 70, 60, 85, 170, 620)
-    setColumnWidths(windowMapTable, 45, 55, 90, 65, 90, 70, 60, 85, 170, 620)
     setColumnWidths(objectTable, 50, 85, 180, 65, 170, 130, 70, 75, 90, 170, 110, 700)
     setColumnWidths(paletteTable, 115, 110, 105, 50, 80, 180, 75, 80, 80, 520)
 
@@ -171,22 +151,20 @@ internal class DebuggerGraphicsPanel(
             tileTable,
         )
     backgroundMapPane =
-        graphicsDetailPane(
+        mapGraphicsDetailPane(
             "Background map",
             "The full 32 by 32 map is composed from captured tiles and palettes.",
             mapControls(backgroundZoomSlider, backgroundGridCheckBox),
             JScrollPane(backgroundMapCanvas),
-            "Selected background map entry details",
-            backgroundMapTable,
+            backgroundMapDetails,
         )
     windowMapPane =
-        graphicsDetailPane(
+        mapGraphicsDetailPane(
             "Window map",
             "The full 32 by 32 window map is composed from captured tiles and palettes.",
             mapControls(windowZoomSlider, windowGridCheckBox),
             JScrollPane(windowMapCanvas),
-            "Selected window map entry details",
-            windowMapTable,
+            windowMapDetails,
         )
     objectPane =
         graphicsDetailPane(
@@ -208,10 +186,8 @@ internal class DebuggerGraphicsPanel(
         )
     installSelectionLinks()
     installCanvasCopy(tileAtlasCanvas) { tileModel.copyText(tileTable.selectedRows) }
-    installCanvasCopy(backgroundMapCanvas) {
-      backgroundMapModel.copyText(backgroundMapTable.selectedRows)
-    }
-    installCanvasCopy(windowMapCanvas) { windowMapModel.copyText(windowMapTable.selectedRows) }
+    installCanvasCopy(backgroundMapCanvas) { backgroundMapDetails.copyText() }
+    installCanvasCopy(windowMapCanvas) { windowMapDetails.copyText() }
     installCanvasCopy(objectThumbnailCanvas) { objectModel.copyText(objectTable.selectedRows) }
     installCanvasCopy(objectPlacementCanvas) { objectModel.copyText(objectTable.selectedRows) }
     installCanvasCopy(paletteCanvas) { paletteModel.copyText(paletteTable.selectedRows) }
@@ -230,8 +206,6 @@ internal class DebuggerGraphicsPanel(
     overviewArea.text = view.overviewText
     overviewArea.caretPosition = 0
     tileModel.replacePrepared(view.tableData.tiles)
-    backgroundMapModel.replacePrepared(view.tableData.backgroundMap)
-    windowMapModel.replacePrepared(view.tableData.windowMap)
     objectModel.replacePrepared(view.tableData.objects)
     paletteModel.replacePrepared(view.tableData.palettes)
     renderGraphics(view)
@@ -274,8 +248,8 @@ internal class DebuggerGraphicsPanel(
     objectPlacementCanvas.clear()
     paletteCanvas.clear()
     tileModel.clear()
-    backgroundMapModel.clear()
-    windowMapModel.clear()
+    backgroundMapDetails.clear()
+    windowMapDetails.clear()
     objectModel.clear()
     paletteModel.clear()
   }
@@ -296,8 +270,8 @@ internal class DebuggerGraphicsPanel(
     return when (tabs.selectedComponent) {
       overviewPane -> overviewArea.text
       tilePane -> tileModel.copyText(tileTable.selectedRows)
-      backgroundMapPane -> backgroundMapModel.copyText(backgroundMapTable.selectedRows)
-      windowMapPane -> windowMapModel.copyText(windowMapTable.selectedRows)
+      backgroundMapPane -> backgroundMapDetails.copyText()
+      windowMapPane -> windowMapDetails.copyText()
       objectPane -> objectModel.copyText(objectTable.selectedRows)
       palettePane -> paletteModel.copyText(paletteTable.selectedRows)
       else -> ""
@@ -331,6 +305,8 @@ internal class DebuggerGraphicsPanel(
     tileAtlasCanvas.render(model, bank, defaultPalette)
     backgroundMapCanvas.render(model, model.backgroundCells)
     windowMapCanvas.render(model, model.windowCells)
+    backgroundMapCanvas.selectedCell?.let(backgroundMapDetails::render) ?: backgroundMapDetails.clear()
+    windowMapCanvas.selectedCell?.let(windowMapDetails::render) ?: windowMapDetails.clear()
     objectThumbnailCanvas.render(model)
     objectPlacementCanvas.render(model)
     paletteCanvas.render(model)
@@ -395,22 +371,6 @@ internal class DebuggerGraphicsPanel(
         }
       }
     }
-    backgroundMapTable.selectionModel.addListSelectionListener {
-      selectedTableRow(backgroundMapTable)?.takeIf { !updatingSelection }?.let { tableRow ->
-        graphicsModel?.backgroundCells?.firstOrNull { it.tableRow == tableRow }?.let { cell ->
-          backgroundMapCanvas.selectCell(cell)
-          selectBackgroundCell(cell)
-        }
-      }
-    }
-    windowMapTable.selectionModel.addListSelectionListener {
-      selectedTableRow(windowMapTable)?.takeIf { !updatingSelection }?.let { tableRow ->
-        graphicsModel?.windowCells?.firstOrNull { it.tableRow == tableRow }?.let { cell ->
-          windowMapCanvas.selectCell(cell)
-          selectWindowCell(cell)
-        }
-      }
-    }
     objectTable.selectionModel.addListSelectionListener {
       selectedTableRow(objectTable)?.takeIf { !updatingSelection }?.let { tableRow ->
         graphicsModel?.objects?.firstOrNull { it.tableRow == tableRow }?.let(::selectObject)
@@ -434,7 +394,8 @@ internal class DebuggerGraphicsPanel(
 
   private fun selectBackgroundCell(cell: DebuggerGraphicalMapCell) {
     withLinkedSelection {
-      selectTableRow(backgroundMapTable, cell.tableRow)
+      backgroundMapCanvas.selectCell(cell)
+      backgroundMapDetails.render(cell)
       linkTile(cell.bank, cell.tileAddress)
       graphicsModel?.backgroundPalette(cell)?.let(::linkPalette)
     }
@@ -442,7 +403,8 @@ internal class DebuggerGraphicsPanel(
 
   private fun selectWindowCell(cell: DebuggerGraphicalMapCell) {
     withLinkedSelection {
-      selectTableRow(windowMapTable, cell.tableRow)
+      windowMapCanvas.selectCell(cell)
+      windowMapDetails.render(cell)
       linkTile(cell.bank, cell.tileAddress)
       graphicsModel?.backgroundPalette(cell)?.let(::linkPalette)
     }
@@ -615,6 +577,20 @@ internal class DebuggerGraphicsPanel(
         }
   }
 
+  private fun mapGraphicsDetailPane(
+      title: String,
+      description: String,
+      controls: Component,
+      graphics: Component,
+      details: Component,
+  ): Component =
+      JPanel(BorderLayout(2, 2)).apply {
+        add(namedGraphicsPane(title, description, graphics, controls), BorderLayout.CENTER)
+        add(details, BorderLayout.SOUTH)
+        getAccessibleContext().accessibleName = "$title graphics and selected tile details"
+        getAccessibleContext().accessibleDescription = description
+      }
+
   private fun namedGraphicsPane(
       title: String,
       description: String,
@@ -660,22 +636,6 @@ internal class DebuggerGraphicsPanel(
         getAccessibleContext().accessibleDescription = "Show or hide the $text overlay"
       }
 
-  private fun mapModel(): DebuggerPeripheralTableModel =
-      DebuggerPeripheralTableModel(
-          listOf(
-              "Row",
-              "Column",
-              "Map address",
-              "Tile",
-              "Data address",
-              "VRAM bank",
-              "Palette",
-              "Attributes",
-              "Flags",
-              "Description",
-          )
-      )
-
   private fun tablePane(description: String, table: JTable): Component =
       JPanel(BorderLayout(2, 2)).apply {
         val label = JLabel(description)
@@ -691,5 +651,77 @@ internal class DebuggerGraphicsPanel(
   private companion object {
     const val PALETTE_PREVIEW_COLUMN = 8
     const val EMPTY_DESCRIPTION = "Graphics inspection is not retained"
+  }
+}
+
+/** Compact, copyable details for the one tile selected in a graphical tile map. */
+internal class DebuggerMapCellDetailsPanel(title: String) : JPanel(BorderLayout(4, 2)) {
+  internal val mapCellValue = JLabel(NO_SELECTION)
+  internal val mapAddressValue = JLabel(NO_SELECTION)
+  internal val tileValue = JLabel(NO_SELECTION)
+  internal val bankValue = JLabel(NO_SELECTION)
+  internal val paletteValue = JLabel(NO_SELECTION)
+  internal val attributesValue = JLabel(NO_SELECTION)
+
+  init {
+    border = BorderFactory.createTitledBorder(title)
+    val fields = JPanel(GridLayout(2, 3, 12, 3))
+    fields.add(field("Map cell", mapCellValue))
+    fields.add(field("Map address", mapAddressValue))
+    fields.add(field("Tile", tileValue))
+    fields.add(field("VRAM bank", bankValue))
+    fields.add(field("Palette", paletteValue))
+    fields.add(field("Attributes", attributesValue))
+    add(fields, BorderLayout.CENTER)
+    getAccessibleContext().accessibleName = title
+    clear()
+  }
+
+  fun render(cell: DebuggerGraphicalMapCell) {
+    mapCellValue.text = "Row ${cell.row}, column ${cell.column}"
+    mapAddressValue.text = cell.mapAddressText
+    tileValue.text = "${cell.tileNumberText} at ${cell.tileAddressText}"
+    bankValue.text = cell.bank.toString()
+    paletteValue.text = cell.palette.toString()
+    attributesValue.text =
+        when {
+          !cell.attributesAvailable -> "Not captured"
+          cell.xFlip && cell.yFlip -> "X flip, Y flip"
+          cell.xFlip -> "X flip"
+          cell.yFlip -> "Y flip"
+          else -> "None"
+        }
+    getAccessibleContext().accessibleDescription = cell.accessibilityText
+  }
+
+  fun clear() {
+    mapCellValue.text = NO_SELECTION
+    mapAddressValue.text = NO_SELECTION
+    tileValue.text = NO_SELECTION
+    bankValue.text = NO_SELECTION
+    paletteValue.text = NO_SELECTION
+    attributesValue.text = NO_SELECTION
+    getAccessibleContext().accessibleDescription = "No map tile selected"
+  }
+
+  fun copyText(): String =
+      listOf(
+              "Map cell\t${mapCellValue.text}",
+              "Map address\t${mapAddressValue.text}",
+              "Tile\t${tileValue.text}",
+              "VRAM bank\t${bankValue.text}",
+              "Palette\t${paletteValue.text}",
+              "Attributes\t${attributesValue.text}",
+          )
+          .joinToString("\n")
+
+  private fun field(label: String, value: JLabel): Component =
+      JPanel(BorderLayout(2, 0)).apply {
+        add(JLabel("$label:"), BorderLayout.WEST)
+        add(value, BorderLayout.CENTER)
+      }
+
+  private companion object {
+    const val NO_SELECTION = "—"
   }
 }
