@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -13,8 +14,10 @@ import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.Point
 import java.awt.event.MouseEvent
+import java.util.EventObject
 import java.util.Locale
 import javax.swing.BorderFactory
+import javax.swing.DefaultCellEditor
 import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.JComboBox
@@ -23,6 +26,7 @@ import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTable
+import javax.swing.JTextField
 import javax.swing.ListSelectionModel
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
@@ -48,13 +52,15 @@ internal enum class DebuggerMemoryFollow(private val displayName: String) {
 
 internal data class DebuggerMemoryPanelCallbacks(
     val onInterestChanged: (DebuggerMemoryInterest) -> Unit = {},
+    val onWriteByte: (DebugMemoryWrite) -> Unit = {},
 )
 
 /**
- * Live, read-only memory inspector with bounded native Swing controls and a hexadecimal grid.
+ * Live memory inspector with bounded native Swing controls and a hexadecimal grid.
  *
- * Mutations and rendering are EDT-only. There is deliberately no refresh action: the owner uses
- * [currentInterest] (or the callback) to include this pane in its continuous inspection stream.
+ * Rendering and edit requests are EDT-only. There is deliberately no refresh action: the owner
+ * uses [currentInterest] (or the callback) to include this pane in its continuous inspection
+ * stream. A negotiated, paused owner may edit the safe RAM views one byte at a time.
  */
 internal class DebuggerMemoryPanel(
     private val callbacks: DebuggerMemoryPanelCallbacks = DebuggerMemoryPanelCallbacks(),
@@ -73,7 +79,7 @@ internal class DebuggerMemoryPanel(
           )
       )
   internal val statusLabel = JLabel()
-  private val tableModel = DebuggerMemoryTableModel()
+  private val tableModel = DebuggerMemoryTableModel(::commitByteEdit)
   internal val memoryTable: JTable = DebuggerMemoryTable(tableModel)
   internal val memoryScrollPane = JScrollPane(memoryTable)
 
@@ -82,6 +88,7 @@ internal class DebuggerMemoryPanel(
   private var interest: DebuggerMemoryInterest
   private var lastAppliedIdentity: DebuggerSnapshotIdentity? = null
   private var baseline: RenderedMemorySample? = null
+  private var memoryWritesEnabled = false
 
   init {
     requireMemoryPanelEdt("Memory debugger panel construction")
@@ -168,6 +175,7 @@ internal class DebuggerMemoryPanel(
     restoreViewPosition(viewPosition)
 
     baseline = RenderedMemorySample(identity, block)
+    updateByteEditing()
     lastAppliedIdentity = identity
     val rangeEnd = block.endExclusive() - 1
     statusLabel.text =
@@ -194,6 +202,7 @@ internal class DebuggerMemoryPanel(
     tableModel.clear()
     memoryTable.clearSelection()
     baseline = null
+    updateByteEditing()
     lastAppliedIdentity = identity
     statusLabel.text = "${identity.label} · not sampled: ${reason.trim()}"
     updateAccessibleDescription(statusLabel.text)
@@ -238,6 +247,14 @@ internal class DebuggerMemoryPanel(
     suppressControlEvents = false
     updateControlEnablement()
     publishInterestIfChanged()
+  }
+
+  /** Enables byte editing only while the owner has negotiated paused memory-write support. */
+  fun setMemoryWritesEnabled(enabled: Boolean) {
+    requireMemoryPanelEdt("Memory debugger write-capability configuration")
+    if (memoryWritesEnabled == enabled) return
+    memoryWritesEnabled = enabled
+    updateByteEditing()
   }
 
   private fun installListeners() {
@@ -295,6 +312,7 @@ internal class DebuggerMemoryPanel(
     tableModel.clear()
     memoryTable.clearSelection()
     baseline = null
+    updateByteEditing()
     statusLabel.text = "Waiting for a live sample of ${interestDescription(next)}"
     updateAccessibleDescription(statusLabel.text)
     callbacks.onInterestChanged(next)
@@ -400,20 +418,58 @@ internal class DebuggerMemoryPanel(
     memoryTable.rowHeight = memoryTable.getFontMetrics(memoryTable.font).height + 6
     memoryTable.accessibleContext.accessibleName = "Hexadecimal memory bytes"
     memoryTable.accessibleContext.accessibleDescription =
-        "Rows contain an address, sixteen hexadecimal byte cells, and an ASCII rendering; " +
-            "changed bytes begin with a delta marker"
+        "Rows contain an address, sixteen hexadecimal byte cells, and an ASCII rendering. " +
+            "Double-click an editable RAM byte to change it; changed bytes begin with a delta marker"
     memoryTable.setDefaultRenderer(Any::class.java, MemoryCellRenderer())
-    memoryTable.columnModel.getColumn(ADDRESS_COLUMN).preferredWidth = 72
+    memoryTable.columnModel.getColumn(ADDRESS_COLUMN).preferredWidth = 64
     for (column in BYTE_COLUMN_FIRST..BYTE_COLUMN_LAST) {
-      memoryTable.columnModel.getColumn(column).preferredWidth = 46
+      memoryTable.columnModel.getColumn(column).preferredWidth = 38
     }
-    memoryTable.columnModel.getColumn(ASCII_COLUMN).preferredWidth = 150
+    memoryTable.columnModel.getColumn(ASCII_COLUMN).preferredWidth = 120
+  }
+
+  private fun updateByteEditing() {
+    val editable =
+        memoryWritesEnabled &&
+            baseline?.block?.addressSpace() in
+                setOf(
+                    DebugAddressSpace.SYSTEM_BUS,
+                    DebugAddressSpace.WORK_RAM,
+                    DebugAddressSpace.HIGH_RAM,
+                )
+    tableModel.setByteEditingEnabled(editable)
+  }
+
+  private fun commitByteEdit(cell: DebuggerMemoryByteCell, rawValue: String) {
+    val value = parseCellByte(rawValue)
+    if (value == null) {
+      statusLabel.text = "Enter a hexadecimal byte from 00 to FF"
+      updateAccessibleDescription(statusLabel.text)
+      return
+    }
+    val block = baseline?.block
+    if (!memoryWritesEnabled || block == null || !isWritableAddressSpace(block.addressSpace())) {
+      statusLabel.text = "Memory editing is available only while the debugger is paused"
+      updateAccessibleDescription(statusLabel.text)
+      return
+    }
+    val write = DebugMemoryWrite(block.addressSpace(), cell.address, value)
+    statusLabel.text = "Writing ${formatCellByte(value)} to ${formatCellAddress(cell.address)}…"
+    updateAccessibleDescription(statusLabel.text)
+    callbacks.onWriteByte(write)
+  }
+
+  fun showWriteFailure(message: String) {
+    requireMemoryPanelEdt("Memory debugger write failure")
+    statusLabel.text = message
+    updateAccessibleDescription(message)
   }
 
   private fun setEmptyState(message: String, resetIdentity: Boolean) {
     tableModel.clear()
     memoryTable.clearSelection()
     baseline = null
+    updateByteEditing()
     if (resetIdentity) lastAppliedIdentity = null
     statusLabel.text = message
     updateAccessibleDescription(message)
@@ -482,6 +538,11 @@ internal class DebuggerMemoryPanel(
       return rangesFor(block.addressSpace()).any { range -> start >= range.first && end <= range.last }
     }
 
+    private fun isWritableAddressSpace(addressSpace: DebugAddressSpace): Boolean =
+        addressSpace == DebugAddressSpace.SYSTEM_BUS ||
+            addressSpace == DebugAddressSpace.WORK_RAM ||
+            addressSpace == DebugAddressSpace.HIGH_RAM
+
     private fun interestDescription(interest: DebuggerMemoryInterest): String =
         when (interest) {
           is DebuggerMemoryInterest.Absolute ->
@@ -533,6 +594,38 @@ internal data class DebuggerMemoryByteCell(
 private class DebuggerMemoryTable(
     model: DebuggerMemoryTableModel,
 ) : JTable(model) {
+  init {
+    val editor =
+        object : DefaultCellEditor(JTextField()) {
+          init {
+            clickCountToStart = 2
+          }
+
+          override fun getTableCellEditorComponent(
+              table: JTable,
+              value: Any?,
+              isSelected: Boolean,
+              row: Int,
+              column: Int,
+          ): Component {
+            val component = super.getTableCellEditorComponent(table, value, isSelected, row, column)
+            if (value is DebuggerMemoryByteCell) {
+              (component as JTextField).apply {
+                text = formatCellByte(value.value)
+                selectAll()
+              }
+            }
+            return component
+          }
+        }
+    setDefaultEditor(DebuggerMemoryByteCell::class.java, editor)
+  }
+
+  override fun editCellAt(row: Int, column: Int, event: EventObject?): Boolean {
+    if (event is MouseEvent && event.clickCount < 2) return false
+    return super.editCellAt(row, column, event)
+  }
+
   override fun getToolTipText(event: MouseEvent): String? {
     val row = rowAtPoint(event.point)
     val column = columnAtPoint(event.point)
@@ -541,8 +634,11 @@ private class DebuggerMemoryTable(
   }
 }
 
-private class DebuggerMemoryTableModel : AbstractTableModel() {
+private class DebuggerMemoryTableModel(
+    private val onByteEdit: (DebuggerMemoryByteCell, String) -> Unit,
+) : AbstractTableModel() {
   private var rows = emptyList<MemoryRow>()
+  private var byteEditingEnabled = false
 
   override fun getRowCount(): Int = rows.size
 
@@ -552,7 +648,14 @@ private class DebuggerMemoryTableModel : AbstractTableModel() {
       when (column) {
         ADDRESS_COLUMN -> "Address"
         ASCII_COLUMN -> "ASCII"
-        else -> "+${Integer.toHexString(column - 1).uppercase(Locale.ROOT)}"
+        else -> Integer.toHexString(column - 1).uppercase(Locale.ROOT)
+      }
+
+  override fun getColumnClass(columnIndex: Int): Class<*> =
+      if (columnIndex in BYTE_COLUMN_FIRST..BYTE_COLUMN_LAST) {
+        DebuggerMemoryByteCell::class.java
+      } else {
+        String::class.java
       }
 
   override fun getValueAt(rowIndex: Int, columnIndex: Int): Any? {
@@ -564,7 +667,22 @@ private class DebuggerMemoryTableModel : AbstractTableModel() {
     }
   }
 
-  override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean = false
+  override fun isCellEditable(rowIndex: Int, columnIndex: Int): Boolean =
+      byteEditingEnabled &&
+          columnIndex in BYTE_COLUMN_FIRST..BYTE_COLUMN_LAST &&
+          rows.getOrNull(rowIndex)?.bytes?.get(columnIndex - BYTE_COLUMN_FIRST) != null
+
+  override fun setValueAt(value: Any?, rowIndex: Int, columnIndex: Int) {
+    if (!isCellEditable(rowIndex, columnIndex)) return
+    val cell = rows[rowIndex].bytes[columnIndex - BYTE_COLUMN_FIRST] ?: return
+    onByteEdit(cell, value?.toString().orEmpty())
+  }
+
+  fun setByteEditingEnabled(enabled: Boolean) {
+    if (byteEditingEnabled == enabled) return
+    byteEditingEnabled = enabled
+    fireTableDataChanged()
+  }
 
   fun render(block: DebugMemoryBlock, previous: DebugMemoryBlock?) {
     val previousValues =
@@ -665,6 +783,14 @@ private fun formatCellAddress(address: Int): String =
     "$" + String.format(Locale.ROOT, "%04X", address)
 
 private fun formatCellByte(value: Int): String = String.format(Locale.ROOT, "%02X", value)
+
+private fun parseCellByte(value: String): Int? {
+  val normalized =
+      value.trim().removePrefix("$").removePrefix("0x").removePrefix("0X")
+  return normalized.takeIf { it.length in 1..2 && it.all(Char::isDigitOrHex) }?.toIntOrNull(16)
+}
+
+private fun Char.isDigitOrHex(): Boolean = isDigit() || lowercaseChar() in 'a'..'f'
 
 private fun requireMemoryPanelEdt(operation: String) {
   check(SwingUtilities.isEventDispatchThread()) { "$operation must run on the EDT" }

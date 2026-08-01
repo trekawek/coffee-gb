@@ -18,6 +18,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInterruptState
 import eu.rekawek.coffeegb.core.debug.DebugMapperState
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode
 import eu.rekawek.coffeegb.core.debug.DebugPpuState
 import eu.rekawek.coffeegb.core.debug.DebugRegisters
@@ -405,6 +406,32 @@ class QueuedDebugPortTest {
   }
 
   @Test
+  fun `memory writes are capability-gated and preserve their typed FIFO envelope`() {
+    val port = QueuedDebugPort(19, capabilities(memoryWrite = true), 1)
+    val unsupported = QueuedDebugPort(20, capabilities(), 1)
+    val write = DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc123, 0x7f)
+    try {
+      assertFailure(port.writeMemory(null), DebugErrorCode.INVALID_ARGUMENT)
+      assertFailure(unsupported.writeMemory(write), DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE)
+      assertEquals(0, port.outstandingRequestCount())
+
+      val stage = port.writeMemory(write)
+      val command = assertIs<QueuedDebugCommand.WriteMemory>(port.pollCommand())
+      assertEquals(1, command.requestId)
+      assertEquals(19, command.sessionGeneration)
+      assertEquals(write, command.write)
+      val snapshot = snapshot(masterTick = 42, frame = 3)
+      assertTrue(command.complete(DebugResult.success(snapshot)))
+      assertEquals(snapshot, await(stage).value())
+    } finally {
+      port.close()
+      unsupported.close()
+      assertTrue(port.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+      assertTrue(unsupported.awaitResultDispatcherTermination(5, TimeUnit.SECONDS))
+    }
+  }
+
+  @Test
   fun `replacement drains queued and owner-held commands exactly once`() {
     val port = QueuedDebugPort(10, capabilities(), 2)
     val first = port.pause()
@@ -570,8 +597,21 @@ class QueuedDebugPortTest {
     }
   }
 
-  private fun capabilities(maxMemoryReadLength: Int = 256): DebugCapabilities =
-      DebugCapabilities(true, true, true, true, true, true, true, maxMemoryReadLength)
+  private fun capabilities(
+      maxMemoryReadLength: Int = 256,
+      memoryWrite: Boolean = false,
+  ): DebugCapabilities =
+      DebugCapabilities(
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          memoryWrite,
+          true,
+          maxMemoryReadLength,
+      )
 
   private fun advancedCapabilities(): DebugCapabilities =
       DebugCapabilities(

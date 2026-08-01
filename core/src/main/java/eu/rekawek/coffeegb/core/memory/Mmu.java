@@ -211,6 +211,13 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
         return bytes;
     }
 
+    /** Writes directly to debugger-visible RAM without entering the emulated CPU bus. */
+    public void writeDebugMemory(int address, int value) {
+        checkByteArgument("value", value);
+        validateDebugMemoryRange(address, 1);
+        setDebugMemoryByte(address, value);
+    }
+
     private void validateDebugMemoryRange(int address, int length) {
         if (address < 0 || address > 0xffff) {
             throw new IllegalArgumentException("Invalid debug memory address: "
@@ -248,6 +255,30 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
         }
         if (address >= 0xff80 && address < 0xffff) {
             return ramFF80.getByte(address);
+        }
+        throw new IllegalArgumentException("Debug memory address is not side-effect-free: "
+                + Integer.toHexString(address));
+    }
+
+    private void setDebugMemoryByte(int address, int value) {
+        if (address >= 0xe000 && address < 0xfe00) {
+            address -= 0x2000;
+        }
+        if (address >= 0xc000 && address < 0xd000) {
+            ramC000.setByte(address, value);
+            return;
+        }
+        if (address >= 0xd000 && address < 0xe000) {
+            if (gbc) {
+                gbcRam.setByte(address, value);
+            } else {
+                ramD000.setByte(address, value);
+            }
+            return;
+        }
+        if (address >= 0xff80 && address < 0xffff) {
+            ramFF80.setByte(address, value);
+            return;
         }
         throw new IllegalArgumentException("Debug memory address is not side-effect-free: "
                 + Integer.toHexString(address));

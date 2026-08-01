@@ -5,8 +5,10 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import java.awt.Component
 import java.awt.Container
+import java.awt.event.MouseEvent
 import java.util.concurrent.FutureTask
 import javax.swing.JButton
+import javax.swing.JTextField
 import javax.swing.SwingUtilities
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -164,6 +166,87 @@ class DebuggerMemoryPanelTest {
             DebugMemoryBlock(DebugAddressSpace.WORK_RAM, 0xc001, ByteArray(0x10)),
         )
       }
+    }
+  }
+
+  @Test
+  fun `RAM bytes use compact hexadecimal headers and commit only double-click edits`() {
+    val writes = mutableListOf<eu.rekawek.coffeegb.core.debug.DebugMemoryWrite>()
+    val panel =
+        onEdt {
+          DebuggerMemoryPanel(DebuggerMemoryPanelCallbacks(onWriteByte = writes::add))
+        }
+
+    onEdt {
+      panel.lengthSpinner.intValue = 0x10
+      val renderedInterest = panel.currentInterest
+      assertTrue(
+          panel.render(
+              DebuggerSnapshotIdentity(2, 1, 1),
+              renderedInterest,
+              DebugMemoryBlock(
+                  DebugAddressSpace.WORK_RAM,
+                  0xc000,
+                  ByteArray(0x10) { 0x20.toByte() },
+              ),
+          )
+      )
+      assertEquals("0", panel.memoryTable.columnModel.getColumn(1).headerValue)
+      assertEquals("F", panel.memoryTable.columnModel.getColumn(16).headerValue)
+      assertEquals(64, panel.memoryTable.columnModel.getColumn(0).preferredWidth)
+      assertEquals(38, panel.memoryTable.columnModel.getColumn(1).preferredWidth)
+      assertEquals(120, panel.memoryTable.columnModel.getColumn(17).preferredWidth)
+      assertFalse(panel.memoryTable.isCellEditable(0, 1))
+
+      panel.setMemoryWritesEnabled(true)
+      assertTrue(panel.memoryTable.isCellEditable(0, 1))
+      val singleClick =
+          MouseEvent(
+              panel.memoryTable,
+              MouseEvent.MOUSE_CLICKED,
+              0,
+              0,
+              0,
+              0,
+              1,
+              false,
+          )
+      assertFalse(panel.memoryTable.editCellAt(0, 1, singleClick))
+      val doubleClick =
+          MouseEvent(
+              panel.memoryTable,
+              MouseEvent.MOUSE_CLICKED,
+              0,
+              0,
+              0,
+              0,
+              2,
+              false,
+          )
+      assertTrue(panel.memoryTable.editCellAt(0, 1, doubleClick))
+      val editor = assertIs<JTextField>(panel.memoryTable.editorComponent)
+      assertEquals("20", editor.text)
+      editor.text = "\$7f"
+      assertTrue(panel.memoryTable.cellEditor.stopCellEditing())
+      assertEquals(
+          eu.rekawek.coffeegb.core.debug.DebugMemoryWrite(
+              DebugAddressSpace.WORK_RAM,
+              0xc000,
+              0x7f,
+          ),
+          writes.single(),
+      )
+
+      panel.addressSpaceCombo.selectedItem = DebugAddressSpace.ROM
+      val romInterest = panel.currentInterest
+      assertTrue(
+          panel.render(
+              DebuggerSnapshotIdentity(2, 2, 2),
+              romInterest,
+              DebugMemoryBlock(DebugAddressSpace.ROM, 0xc000, ByteArray(0x10)),
+          )
+      )
+      assertFalse(panel.memoryTable.isCellEditable(0, 1))
     }
   }
 

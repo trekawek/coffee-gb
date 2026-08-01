@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadRequest;
 import eu.rekawek.coffeegb.core.debug.trace.TraceReadResult;
 
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /**
@@ -42,6 +43,18 @@ public interface DebugPort extends AutoCloseable {
     CompletionStage<DebugResult<DebugReverseStepResult>> stepBackward(DebugStepKind kind);
 
     CompletionStage<DebugResult<DebugMemoryBlock>> readMemory(DebugMemoryRequest request);
+
+    /**
+     * Applies one debugger-owned byte write at a paused owner safe point.
+     *
+     * <p>Legacy implementations return an explicit unsupported result. Callers must negotiate
+     * {@link DebugCapabilities#memoryWrite()} before submitting a write.
+     */
+    default CompletionStage<DebugResult<DebugSnapshot>> writeMemory(DebugMemoryWrite write) {
+        return CompletableFuture.completedFuture(DebugResult.failure(
+                DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                "Memory writes are unavailable for this session"));
+    }
 
     CompletionStage<DebugResult<Void>> setButton(DebugButton button, boolean pressed);
 

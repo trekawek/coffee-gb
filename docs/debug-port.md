@@ -47,6 +47,7 @@ The current implementations advertise:
 | machine-cycle step | no | yes | no |
 | frame step | yes | yes | no |
 | memory read | yes, at most 4096 bytes | yes, at most 4096 bytes | no |
+| memory write | yes, one paused RAM/HRAM byte | same | no |
 | coherent inspection | yes, 16 blocks / 4096 aggregate bytes | same | no |
 | graphics/audio inspection sections | both | both | no |
 | trace page in coherent inspection | at most 1024 entries | same | no |
@@ -417,8 +418,9 @@ that count is zero. Reverse itself is not a truncation. The first accepted forwa
 into forward execution, or real button-state mutation from a historical cursor commits a new
 branch: the owner releases the retained future, rebases the branch input baseline to the currently
 held live input, and reports `BRANCH_INVALIDATED`. An idempotent input request and observation-only
-commands do not branch. The current API has no debug memory-write operation; a future mutation API
-must use the same commit rule.
+commands do not branch. A direct debugger memory write cannot be reconstructed by the current
+input-only history log, so it more conservatively clears retained rewind/reverse state with
+`BRANCH_INVALIDATED` and resets trace correlation before returning its snapshot.
 
 History is available only for an isolated desktop machine using the null serial endpoint or a
 disconnected peer-to-peer endpoint, the null infrared endpoint, and no external-I/O owner. A
@@ -483,8 +485,12 @@ the safe `SYSTEM_BUS` view elsewhere. They reject a request that crosses that se
 Disassembly is labelled as best-effort and names its source view; in particular, a ROM label says
 that bytes came from the corrected physical image rather than the mapper's live CPU window.
 
-There is no Phase 1 memory-write command. Button input is a separate typed command and is applied by
-the owner through the session input event path.
+`writeMemory(DebugMemoryWrite)` accepts one byte only while the debugger owns an effective pause.
+It supports the same safe RAM storage exposed by `SYSTEM_BUS`, `WORK_RAM`, and `HIGH_RAM`; ROM,
+cartridge RAM, VRAM, OAM, I/O registers, `FFFF`, and unsafe bus ranges return a typed failure. The
+owner writes directly to the owning RAM storage rather than issuing a CPU-bus access, so the command
+cannot trigger mapper, I/O, or code-breaker side effects. A successful write returns a new coherent
+snapshot. Button input remains a separate typed command applied through the session input event path.
 
 ## Legacy debug console and Agent migration
 

@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionAnchor
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugRegisters
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -317,6 +318,36 @@ class AgentTest {
 
       assertTrue(result.isFailure)
       assertEquals(DebugErrorCode.SIDE_EFFECTFUL_ADDRESS, result.error().code())
+    }
+  }
+
+  @Test
+  fun headlessPortWritesPausedSafeRamOnly() {
+    Agent(testRom(0x00, 0x18, 0xfd)).use { agent ->
+      assertTrue(agent.debugPort.capabilities().memoryWrite())
+      val write =
+          awaitDebug(
+              agent.debugPort.writeMemory(
+                  DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc000, 0x7f)))
+      assertTrue(write.isSuccess)
+      assertEquals(
+          0x7f,
+          agent
+              .readMemory(DebugMemoryRequest(DebugAddressSpace.SYSTEM_BUS, 0xe000, 1))
+              .unsignedByteAt(0),
+      )
+
+      assertTrue(awaitDebug(agent.debugPort.resume()).isSuccess)
+      assertDebugFailure(
+          agent.debugPort.writeMemory(
+              DebugMemoryWrite(DebugAddressSpace.WORK_RAM, 0xc000, 0x42)),
+          DebugErrorCode.NOT_PAUSED,
+      )
+      assertTrue(awaitDebug(agent.debugPort.pause()).isSuccess)
+      assertDebugFailure(
+          agent.debugPort.writeMemory(DebugMemoryWrite(DebugAddressSpace.ROM, 0x0100, 0x00)),
+          DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+      )
     }
   }
 

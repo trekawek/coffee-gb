@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.core.debug.DebugInspectionSection
 import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
@@ -124,6 +125,13 @@ internal interface DebuggerClient {
 
   fun inspect(request: DebugInspectionRequest): CompletionStage<DebugResult<DebugInspectionResult>>
 
+  fun writeMemory(write: DebugMemoryWrite): CompletionStage<DebugResult<DebugSnapshot>> =
+      CompletableFuture.completedFuture(
+          DebugResult.failure(
+              DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+              "Memory writes are unavailable for this session",
+          ))
+
   fun pause(): CompletionStage<DebugResult<DebugSnapshot>>
 
   fun resume(): CompletionStage<DebugResult<DebugSnapshot>>
@@ -165,6 +173,10 @@ private class DebugPortDebuggerClient(private val port: DebugPort) : DebuggerCli
   override fun inspect(
       request: DebugInspectionRequest
   ): CompletionStage<DebugResult<DebugInspectionResult>> = port.inspect(request)
+
+  override fun writeMemory(
+      write: DebugMemoryWrite
+  ): CompletionStage<DebugResult<DebugSnapshot>> = port.writeMemory(write)
 
   override fun pause(): CompletionStage<DebugResult<DebugSnapshot>> = port.pause()
 
@@ -282,6 +294,7 @@ internal class DebuggerPanel(
       DebuggerMemoryPanel(
           DebuggerMemoryPanelCallbacks(
               onInterestChanged = { _ -> workspaceMemoryInterestChanged() },
+              onWriteByte = ::writeWorkspaceMemory,
           ))
   internal val hardwarePane = DebuggerHardwarePanel(copyText)
 
@@ -786,6 +799,22 @@ internal class DebuggerPanel(
     }
   }
 
+  private fun writeWorkspaceMemory(write: DebugMemoryWrite) {
+    requireDebuggerWindowEdt("Debugger memory write")
+    val attached = client ?: return
+    if (snapshot?.paused() != true || !attached.capabilities.memoryWrite()) {
+      workspaceMemoryPane.showWriteFailure("Pause the debug session before editing memory")
+      return
+    }
+    executeCommand(
+        "Write memory",
+        { attached.writeMemory(write) },
+        onFailure = workspaceMemoryPane::showWriteFailure,
+    ) { value ->
+      value?.let(::applyCommandSnapshot)
+    }
+  }
+
   private fun toolIsLive(tool: DebuggerWorkspaceTool): Boolean =
       tool in workspaceVisibleTools && tool !in workspaceHeldTools
 
@@ -987,6 +1016,7 @@ internal class DebuggerPanel(
         programCounter = nextClient?.capabilities?.memoryRead() == true,
         stackPointer = nextClient?.capabilities?.memoryRead() == true,
     )
+    workspaceMemoryPane.setMemoryWritesEnabled(false)
     nextClient
         ?.capabilities
         ?.maxInspectionBytes()
@@ -2244,6 +2274,9 @@ internal class DebuggerPanel(
     memorySpace.isEnabled = usable && paused && capabilities?.coherentInspection() == true
     memoryRange.isEnabled = usable && paused && capabilities?.coherentInspection() == true
     memoryReadButton.isEnabled = usable && paused && capabilities?.coherentInspection() == true
+    workspaceMemoryPane.setMemoryWritesEnabled(
+        usable && paused && capabilities?.memoryWrite() == true,
+    )
 
     breakpointPane.setBusy(commandInFlight || metadataInFlight || closed)
 

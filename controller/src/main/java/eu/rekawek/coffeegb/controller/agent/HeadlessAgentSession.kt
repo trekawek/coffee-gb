@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.debug.DebugCpuState
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
 import eu.rekawek.coffeegb.core.debug.DebugMemoryBlock
 import eu.rekawek.coffeegb.core.debug.DebugMemoryRequest
+import eu.rekawek.coffeegb.core.debug.DebugMemoryWrite
 import eu.rekawek.coffeegb.core.debug.DebugInstrumentation
 import eu.rekawek.coffeegb.core.debug.DebugInspectionRequest
 import eu.rekawek.coffeegb.core.debug.DebugInspectionResult
@@ -353,6 +354,10 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     fun readMemory(request: DebugMemoryRequest): DebugMemoryBlock =
         machine.readDebugMemory(request)
 
+    fun writeMemory(write: DebugMemoryWrite) {
+      machine.writeDebugMemory(write)
+    }
+
     fun inspect(
         snapshot: DebugSnapshot,
         request: DebugInspectionRequest,
@@ -496,6 +501,7 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
   private inner class HeadlessDebugPort : DebugPort {
     private val capabilities =
         DebugCapabilities(
+            true,
             true,
             true,
             true,
@@ -652,6 +658,38 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
                 DebugResult.failure(
                     DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
                     failure.message ?: "Invalid debug memory request",
+                )
+              }
+            }
+          }
+        }
+
+    override fun writeMemory(
+        write: DebugMemoryWrite?
+    ): CompletionStage<DebugResult<DebugSnapshot>> =
+        if (write == null) {
+          rejectedDebugStage(
+              DebugResult.failure(DebugErrorCode.INVALID_ARGUMENT, "Memory write is required"))
+        } else {
+          enqueueDebug { state ->
+            if (!state.paused) {
+              DebugResult.failure(
+                  DebugErrorCode.NOT_PAUSED,
+                  "Pause the Agent session before editing memory",
+              )
+            } else {
+              try {
+                state.writeMemory(write)
+                DebugResult.success(state.snapshot())
+              } catch (failure: UnsupportedOperationException) {
+                DebugResult.failure(
+                    DebugErrorCode.UNSUPPORTED_ADDRESS_SPACE,
+                    failure.message ?: "Unsupported debug address space",
+                )
+              } catch (failure: IllegalArgumentException) {
+                DebugResult.failure(
+                    DebugErrorCode.SIDE_EFFECTFUL_ADDRESS,
+                    failure.message ?: "Invalid debug memory write",
                 )
               }
             }
