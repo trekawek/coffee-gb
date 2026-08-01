@@ -361,7 +361,6 @@ internal class DebuggerGraphicsPanel(
     withLinkedSelection {
       paletteCanvas.selectSwatch(palette, swatch)
       renderPaletteDetails(swatch)
-      selectTilePalette(palette)
     }
   }
 
