@@ -4101,8 +4101,6 @@ class BasicController private constructor(
       )
     }
 
-    persistCloseAutosave(closeDeadlineNanos)
-
     val capture = checkNotNull(closeCapture)
     val persistence = persistCloseCapture(capture, closeDeadlineNanos)
     if (persistence is BatteryPersistenceResult.Failure) {
@@ -4117,6 +4115,12 @@ class BasicController private constructor(
       )
     }
     capture.complete(persistence)
+
+    // The battery flush owns the persistence executor first. A close-autosave must not sit ahead
+    // of an already-admitted replacement/stop writer, or a cancelled writer can starve the final
+    // battery capture indefinitely. The portable state was captured before either write, after
+    // ordinary state work was drained, so writing it after the battery flush remains coherent.
+    persistCloseAutosave(closeDeadlineNanos)
     val state = closeState
 
     try {
@@ -4251,7 +4255,7 @@ class BasicController private constructor(
   }
 
   private fun shouldPersistCloseAutosave(): Boolean =
-      session != null &&
+      session?.config?.rom?.file != null &&
           closeAutosaveCompletedSessionId != stateSessionId &&
           closeAutosaveSkippedSessionId != stateSessionId
 
