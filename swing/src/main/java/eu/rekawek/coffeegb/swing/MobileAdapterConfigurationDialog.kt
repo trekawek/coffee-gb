@@ -27,6 +27,7 @@ import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.nio.file.Path
 import java.util.IdentityHashMap
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
@@ -36,6 +37,7 @@ import javax.swing.JCheckBox
 import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JDialog
+import javax.swing.JFileChooser
 import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JRadioButton
@@ -178,6 +180,7 @@ internal fun validateMobileAdapterPolicyDraft(
 internal enum class MobileAdapterSavePhase {
   IDLE,
   SAVING,
+  IMPORTING,
 }
 
 internal enum class MobileAdapterStatusTone {
@@ -290,6 +293,9 @@ internal data class MobileAdapterConfigurationPresentation(
     get() =
         canEditPolicy && policyDirty && !stale && validation is MobileAdapterPolicyValidation.Valid
 
+  val canImportConfigurationImage: Boolean
+    get() = canEditPolicy && !policyDirty && !stale
+
   val savedCustomPolicy: Boolean
     get() = baselinePolicy is MobileAdapterNetworkPolicy.CustomServer
 
@@ -350,6 +356,7 @@ internal fun MobileAdapterConfigurationPresentation.redactedSummary():
 internal data class MobileAdapterConfigurationWindowActions(
     val draftChanged: (MobileAdapterPolicyDraft) -> Unit,
     val savePolicy: () -> Unit,
+    val importConfigurationImage: () -> Unit,
     val reloadPolicy: () -> Unit,
     val setNetworkConsent: (Boolean) -> Unit,
     val setPrivateLocalDevelopment: (Boolean) -> Unit,
@@ -378,6 +385,10 @@ internal interface MobileAdapterConfigurationDecisionPrompter {
   fun discardPolicyChanges(): Boolean
 }
 
+internal fun interface MobileAdapterConfigurationImageSelector {
+  fun select(): Path?
+}
+
 /**
  * Owns one retained Mobile Adapter configuration/session window and its revision-aware draft.
  * Controller events are reduced to immutable, privacy-safe presentation values on the EDT.
@@ -389,6 +400,8 @@ internal class MobileAdapterConfigurationWindowHost(
     private val viewFactory: MobileAdapterConfigurationWindowViewFactory,
     private val decisions: MobileAdapterConfigurationDecisionPrompter,
     private val onSummary: (MobileAdapterConfigurationSummary) -> Unit = {},
+    private val imageSelector: MobileAdapterConfigurationImageSelector =
+        MobileAdapterConfigurationImageSelector { null },
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-mobile-adapter-configuration")
   private var runtime = coordinator.snapshot()
@@ -431,6 +444,7 @@ internal class MobileAdapterConfigurationWindowHost(
           },
       decisions = DesktopMobileAdapterConfigurationDecisionPrompter(owner, dialogFactory),
       onSummary = onSummary,
+      imageSelector = DesktopMobileAdapterConfigurationImageSelector(owner),
   )
 
   init {
@@ -470,6 +484,7 @@ internal class MobileAdapterConfigurationWindowHost(
       MobileAdapterConfigurationWindowActions(
           draftChanged = ::draftChanged,
           savePolicy = ::savePolicy,
+          importConfigurationImage = ::importConfigurationImage,
           reloadPolicy = ::reloadPolicy,
           setNetworkConsent = ::setNetworkConsent,
           setPrivateLocalDevelopment = ::setPrivateLocalDevelopment,
@@ -479,7 +494,7 @@ internal class MobileAdapterConfigurationWindowHost(
 
   private fun draftChanged(next: MobileAdapterPolicyDraft) {
     requireMobileAdapterEdt("Mobile Adapter draft editing")
-    if (closed || savePhase == MobileAdapterSavePhase.SAVING) return
+    if (closed || savePhase != MobileAdapterSavePhase.IDLE) return
     draft = next.detached()
     validation = validateMobileAdapterPolicyDraft(draft)
     if (!stale) {
@@ -533,9 +548,52 @@ internal class MobileAdapterConfigurationWindowHost(
     }
   }
 
+  private fun importConfigurationImage() {
+    requireMobileAdapterEdt("Mobile Adapter image import")
+    if (closed || !presentation().canImportConfigurationImage) return
+    val source = imageSelector.select() ?: return
+    // A native/modal chooser runs a nested EDT. Application shutdown or another presentation
+    // transition can complete while it is open, so revalidate before mutating state or calling
+    // the coordinator selected before that nested loop.
+    if (closed || !presentation().canImportConfigurationImage) return
+    savePhase = MobileAdapterSavePhase.IMPORTING
+    runtime = runtime.copy(networkConsent = false, privateLocalDevelopment = false)
+    policyStatus =
+        "Importing the owner-selected adapter image… Session permissions have been revoked."
+    policyStatusTone = MobileAdapterStatusTone.NEUTRAL
+    val generation = ++saveGeneration
+    publish()
+    coordinator.importConfigurationImage(runtime.revision, source, eventBus) { result ->
+      dispatchSwingMutation {
+        if (closed || generation != saveGeneration) return@dispatchSwingMutation
+        savePhase = MobileAdapterSavePhase.IDLE
+        runtime = coordinator.snapshot()
+        draft = MobileAdapterPolicyDraft.from(runtime.configuration.networkPolicy)
+        validation = validateMobileAdapterPolicyDraft(draft)
+        if (result.saved) {
+          stale = false
+          policyStatus =
+              "Adapter image imported. Library host metadata was ignored, the saved policy was preserved, and runtime networking remains blocked."
+          policyStatusTone = MobileAdapterStatusTone.SUCCESS
+        } else {
+          val error = MobileAdapterConfigurationCoordinator.stableSaveError(result)
+          stale = error == MobileAdapterConfigurationError.CONFIGURATION_STALE
+          policyStatus =
+              if (stale) {
+                "${error.code}: ${error.userMessage} Reload the current configuration before importing again."
+              } else {
+                "${error.code}: ${error.userMessage} The previous adapter image and saved policy remain active; session permissions are revoked."
+              }
+          policyStatusTone = MobileAdapterStatusTone.ERROR
+        }
+        publish()
+      }
+    }
+  }
+
   private fun reloadPolicy() {
     requireMobileAdapterEdt("Mobile Adapter policy reload")
-    if (closed || savePhase == MobileAdapterSavePhase.SAVING) return
+    if (closed || savePhase != MobileAdapterSavePhase.IDLE) return
     loadCurrentPolicy("Current policy reloaded. Unsaved changes were discarded.")
   }
 
@@ -628,7 +686,7 @@ internal class MobileAdapterConfigurationWindowHost(
   private fun requestHide() {
     requireMobileAdapterEdt("Mobile Adapter window hiding")
     if (closed) return
-    if (savePhase == MobileAdapterSavePhase.SAVING) {
+    if (savePhase != MobileAdapterSavePhase.IDLE) {
       view?.hide()
       return
     }
@@ -640,7 +698,7 @@ internal class MobileAdapterConfigurationWindowHost(
   }
 
   private fun refreshFromCoordinatorIfClean() {
-    if (savePhase == MobileAdapterSavePhase.SAVING || policyDirty()) return
+    if (savePhase != MobileAdapterSavePhase.IDLE || policyDirty()) return
     val current = coordinator.snapshot()
     if (current.revision != runtime.revision) {
       runtime = current
@@ -750,6 +808,26 @@ internal class MobileAdapterConfigurationWindowHost(
 
 private fun MobileAdapterPolicyDraft.detached(): MobileAdapterPolicyDraft =
     copy(portMappings = portMappings.map(MobileAdapterMappingDraft::copy))
+
+private class DesktopMobileAdapterConfigurationImageSelector(
+    private val owner: Window,
+) : MobileAdapterConfigurationImageSelector {
+  override fun select(): Path? {
+    requireMobileAdapterEdt("Mobile Adapter image selection")
+    val chooser =
+        JFileChooser().apply {
+          dialogTitle = "Import Mobile Adapter image"
+          approveButtonText = "Import"
+          fileSelectionMode = JFileChooser.FILES_ONLY
+          isMultiSelectionEnabled = false
+        }
+    return if (chooser.showOpenDialog(owner) == JFileChooser.APPROVE_OPTION) {
+      chooser.selectedFile?.toPath()
+    } else {
+      null
+    }
+  }
+}
 
 private class DesktopMobileAdapterConfigurationDecisionPrompter(
     private val owner: Window,
@@ -866,7 +944,7 @@ private class SwingMobileAdapterConfigurationWindow(
     dialog.contentPane = panel
     dialog.accessibleContext.accessibleName = "Mobile Adapter Configuration"
     dialog.accessibleContext.accessibleDescription =
-        "Saved Mobile Adapter custom-service policy, current session permissions, and network status"
+        "Private Mobile Adapter image import, saved custom-service policy, current session permissions, and network status"
     dialog.rootPane
         .getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
         .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), HIDE_ACTION)
@@ -952,6 +1030,7 @@ internal class MobileAdapterConfigurationPanel(
   internal val sessionStatus = mobileAdapterLiteralText("", 3, "Current session status")
   internal val cancelNetwork = JButton("Cancel active network work")
   internal val policyStatus = mobileAdapterLiteralText("", 3, "Mobile Adapter policy status")
+  internal val importImageButton = JButton("Import adapter image…")
   internal val reloadButton = JButton("Reload policy")
   internal val closeButton = JButton("Close")
   internal val saveButton = JButton("Save changes")
@@ -959,6 +1038,7 @@ internal class MobileAdapterConfigurationPanel(
   private val customFields = JPanel(GridBagLayout())
   private val customCardLayout = CardLayout()
   private val customCard = JPanel(customCardLayout)
+  private val imageSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
   private val policySection = JPanel(BorderLayout(0, initialTokens.spacing.related))
   private val sessionSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
   private val footer = JPanel(BorderLayout(initialTokens.spacing.related, 0))
@@ -977,6 +1057,8 @@ internal class MobileAdapterConfigurationPanel(
 
     val body = JPanel().apply { layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS) }
     body.add(createHeader())
+    body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
+    body.add(createAdapterImageSection())
     body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
     body.add(createPolicySection())
     body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
@@ -1039,6 +1121,13 @@ internal class MobileAdapterConfigurationPanel(
 
       policyStatus.text = next.policyStatus
       policyStatus.accessibleContext.accessibleDescription = next.policyStatus
+      importImageButton.text =
+          if (next.savePhase == MobileAdapterSavePhase.IMPORTING) {
+            "Importing…"
+          } else {
+            "Import adapter image…"
+          }
+      importImageButton.isEnabled = next.canImportConfigurationImage
       reloadButton.isVisible = next.stale
       reloadButton.isEnabled = next.savePhase == MobileAdapterSavePhase.IDLE
       saveButton.text =
@@ -1063,7 +1152,7 @@ internal class MobileAdapterConfigurationPanel(
             tokens.spacing.dialogEdge,
             tokens.spacing.dialogEdge,
         )
-    listOf(policySection, sessionSection).forEach { section ->
+    listOf(imageSection, policySection, sessionSection).forEach { section ->
       section.background = tokens.surface
       section.border =
           BorderFactory.createCompoundBorder(
@@ -1091,7 +1180,7 @@ internal class MobileAdapterConfigurationPanel(
     saveButton.background = tokens.accent
     saveButton.foreground = tokens.onAccent
     saveButton.isOpaque = true
-    listOf(closeButton, reloadButton).forEach { button ->
+    listOf(importImageButton, closeButton, reloadButton).forEach { button ->
       button.background = tokens.elevatedSurface
       button.foreground = tokens.primaryText
       button.isOpaque = true
@@ -1116,6 +1205,25 @@ internal class MobileAdapterConfigurationPanel(
         prose.add(startupSummary, BorderLayout.CENTER)
         add(prose, BorderLayout.CENTER)
       }
+
+  private fun createAdapterImageSection(): JPanel {
+    val heading = JLabel("Adapter image")
+    heading.font = heading.font.deriveFont(Font.BOLD)
+    val explanation =
+        mobileAdapterLiteralText(
+            "Import an exact 256-byte adapter image or a validated 512-byte REON/libmobile file. The file may contain dial-up or account data. Coffee GB stores only the 256-byte game-visible image; library DNS, relay, token, and other host metadata is ignored. Importing preserves the saved policy, revokes both session permissions, and never grants networking.",
+            4,
+            "Mobile Adapter image import explanation",
+        )
+    val buttonRow = JPanel(FlowLayout(FlowLayout.LEADING, 0, 0))
+    buttonRow.add(importImageButton)
+    val content = JPanel(BorderLayout(0, tokens.spacing.related))
+    content.add(explanation, BorderLayout.CENTER)
+    content.add(buttonRow, BorderLayout.SOUTH)
+    imageSection.add(heading, BorderLayout.NORTH)
+    imageSection.add(content, BorderLayout.CENTER)
+    return imageSection
+  }
 
   private fun createPolicySection(): JPanel {
     val heading = JLabel("Saved policy")
@@ -1248,6 +1356,7 @@ internal class MobileAdapterConfigurationPanel(
       if (!rendering) actions.setPrivateLocalDevelopment(privateLocal.isSelected)
     }
     cancelNetwork.addActionListener { actions.cancelNetwork() }
+    importImageButton.addActionListener { actions.importConfigurationImage() }
   }
 
   private fun configureMappingTable() {
@@ -1308,6 +1417,8 @@ internal class MobileAdapterConfigurationPanel(
         "Remove the selected port mapping"
     cancelNetwork.accessibleContext.accessibleDescription =
         "Cancel current Mobile Adapter host work without detaching the serial endpoint"
+    importImageButton.accessibleContext.accessibleDescription =
+        "Select and privately import a 256-byte adapter image or validated 512-byte REON/libmobile file"
     saveButton.accessibleContext.accessibleDescription =
         "Save the owner-only policy and revoke runtime network permissions"
   }

@@ -10,6 +10,9 @@ custom backend and does not emulate or select a Nintendo production service. Arc
 under `core/src/test/resources/mobile-adapter/`.
 The real-ROM and custom-service results, including their remaining boundary, are recorded in
 [mobile-adapter-crystal-reon-validation.md](mobile-adapter-crystal-reon-validation.md).
+The retained Mobile Adapter configuration dialog also has a bounded, owner-selected adapter-image
+import path. The current desktop keeps its Mobile Adapter controls hidden; the import control does
+not make that retained dialog a generally exposed feature.
 
 ## Implemented deterministic boundary
 
@@ -395,6 +398,48 @@ its original two-byte configuration-length field and digest layout. Every new sa
 Runtime network consent and the separate private/local development gate are deliberately absent
 from both formats and reset on every application start and every policy edit.
 
+### Bounded adapter-image import
+
+The retained configuration dialog accepts exactly one owner-selected regular file. A 256-byte
+source is an opaque game-visible adapter image. A 512-byte REON/libmobile envelope is accepted only
+after validating its `MA` magic and checksum and its `LM` magic, version, checksum, and address-type
+fields. Coffee GB then retains only bytes `0..255`. It discards the complete `LM` library region,
+including its device, DNS, peer-to-peer, relay, token, and host metadata. Every other length and
+every malformed envelope is rejected without partially changing durable configuration.
+
+The reader runs on the bounded configuration writer, never on the emulator thread or Swing EDT. It
+uses a 513-byte probe ceiling so an otherwise valid image with trailing data cannot be accepted,
+requires a regular file with a non-null provider file key, and disables symbolic-link following for
+the selected final path component. Before and after the read it compares the path's type, file key,
+exact size, creation time, and modification time with the initial attributes, and compares the
+opened channel size with the same exact size. A provider without stable file identity fails closed
+as `IMPORT_READ_FAILED`.
+
+Coffee GB does not intentionally change the selected source's permissions or contents or create a
+file-level copy. It retains the selected path only while the queued import runs and does not log or
+persist that path or include its path or bytes in statuses, exceptions, or diagnostics. It rejects
+observed instances of the private `CGBMACFG` target, same-file aliases, and
+conservatively case-folded names that could be atomic-write backup or temporary artifacts;
+separation is checked before read and again under the store lock before replacement. With a stable
+directory entry, the source is left unchanged. The source may contain private dial-up or account
+material. On success, only the detached 256-byte result is written through the existing owner-only
+atomic store; Coffee GB never persists the selected source as a separate file.
+
+Java 16 has no portable descriptor-bound file type/identity query or nonblocking regular-file open.
+The identity/size/timestamp checkpoints fail closed for observed substitutions, but a process that
+can rewrite the selected directory can still swap an entry entirely between checkpoints or replace
+it with a FIFO during the narrow blocking-open window. Select import input from a private directory
+that is not writable by an untrusted process.
+
+Import changes only the game-visible image. It preserves Coffee GB's durable device ID and complete
+structured custom-server policy, and it never treats any `LM` field as Coffee GB policy or network
+authority. Every owner-triggered import attempt first revokes all prepared and active backends,
+clears both runtime-only authorization gates, and requests an endpoint refresh. This applies to
+stale, malformed, non-regular, unreadable, conflicting-source, busy, and storage-failing attempts
+as well as successful ones. Failure keeps the last accepted runtime image, device ID, and policy,
+but authority remains revoked; the persistence caveat below still applies after a completed rename.
+Success likewise requires the owner to grant the runtime gates again before any host networking.
+
 The controller validates exact size, magic, version, bounds, and integrity before publishing a
 detached value. It rejects symbolic links and non-regular targets, uses `AtomicFileWriter` for
 replacement/recovery, restricts and verifies the temporary inode before either rename path, keeps
@@ -468,8 +513,17 @@ prove that it is a community server. Coffee GB supplies no Nintendo address and 
 automatically; responsibility for selecting the documented non-Nintendo custom service remains
 with the user.
 
+An owner-selected import source must be handled as private account material. Coffee GB neither
+modifies the source nor creates or retains a file-level copy, but the copied or extracted 256
+game-visible bytes become part of the owner-only configuration record and deterministic save
+states. Those outputs require the same private handling and explicit redaction boundaries described
+above.
+
 ## Troubleshooting
 
+- The current desktop keeps Mobile Adapter controls hidden. The following actions describe the
+  retained configuration and link-port UI when a development integration exposes it; the adapter
+  image import does not itself change that exposure boundary.
 - Select **Peripherals → Link-port device → Mobile Adapter GB**. Status changes to
   attached only after the controller commits the endpoint; selecting another radio item detaches
   and clears it.
@@ -477,6 +531,12 @@ with the user.
   custom policy still performs no host I/O until session consent is granted; private/LAN targets
   require the additional development confirmation. **Cancel active network work** rotates backend
   ownership and closes current DNS/socket work without waiting on the EDT.
+- **Import adapter image…** accepts only an exact opaque 256-byte image or a validated exact
+  512-byte REON/libmobile envelope. `IMPORT_MALFORMED_IMAGE`, `IMPORT_NON_REGULAR_SOURCE`,
+  `IMPORT_READ_FAILED`, and `IMPORT_SOURCE_CONFLICT` are stable redacted failures. The last accepted
+  runtime image and policy remain active after a failure, but a failure reported after a completed
+  rename may already have replaced the durable target. Every attempted import revokes active work
+  and both runtime permissions.
 - `CONFIGURATION_INVALID` means a bounded value failed validation. `STORAGE_FAILED` means the
   private record could not be loaded. Coffee GB uses a safe synthetic fallback at desktop startup
   and logs only the stable error code.

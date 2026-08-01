@@ -67,6 +67,42 @@ public class AtomicFileWriter {
     }
 
     /**
+     * Returns whether {@code candidate} names a deterministic recovery backup or temporary file
+     * that this writer may remove while recovering or replacing {@code target}.
+     *
+     * <p>This is a lexical, side-effect-free classification. Callers that accept owner-selected
+     * files can use it to reject a source before a transaction could mistake that source for one
+     * of its own artifacts.
+     */
+    public static boolean isTransactionArtifact(Path target, Path candidate) throws IOException {
+        Path normalizedTarget = normalizeTarget(target);
+        if (candidate == null) {
+            throw new NullPointerException("candidate");
+        }
+        Path normalizedCandidate = candidate.toAbsolutePath().normalize();
+        if (normalizedCandidate.getFileName() == null
+                || normalizedCandidate.getParent() == null
+                || !normalizedTarget.getParent().equals(normalizedCandidate.getParent())) {
+            return false;
+        }
+        String candidateName = normalizedCandidate.getFileName().toString();
+        String backupName = backupPath(normalizedTarget).getFileName().toString();
+        if (candidateName.equalsIgnoreCase(backupName)) {
+            return true;
+        }
+        String prefix = tempPrefix(normalizedTarget);
+        String suffix = ".part";
+        return candidateName.length() >= prefix.length() + suffix.length()
+                && candidateName.regionMatches(true, 0, prefix, 0, prefix.length())
+                && candidateName.regionMatches(
+                        true,
+                        candidateName.length() - suffix.length(),
+                        suffix,
+                        0,
+                        suffix.length());
+    }
+
+    /**
      * Replaces {@code target} with fully materialized {@code intendedBytes}.
      *
      * <p>An {@link AtomicMoveNotSupportedException} from the first replacement attempt selects the

@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.text.PlainDocument
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
@@ -539,6 +540,377 @@ class MobileAdapterConfigurationCoordinatorTest {
   }
 
   @Test
+  fun `exact adapter image import revokes runtime authority before asynchronously replacing only bytes`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import")
+    val source = directory.resolve("selected-private-source-name-must-not-escape.bin")
+    val target = directory.resolve("adapter.bin")
+    val diagnosticMarker = "TEST_ONLY_IMPORTED_IMAGE_BYTES_353"
+    val importedBytes = generatedConfigurationBytes(0x35)
+    diagnosticMarker.toByteArray().copyInto(importedBytes, destinationOffset = 48)
+    Files.write(source, importedBytes)
+    val initial =
+        MobileAdapterConfiguration(
+            0x2a,
+            generatedConfigurationBytes(0x12),
+            customConfiguration().networkPolicy,
+        )
+    val persistence = BlockingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(target, persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      assertTrue(
+          coordinator.applyRuntimeAuthorization(
+              coordinator.snapshot().revision,
+              networkConsent = true,
+              privateLocalDevelopment = true,
+              eventBus = eventBus,
+          ))
+      val backend = assertNotNull(coordinator.provider.load().networkBackend)
+      val admittedGeneration = backend.generation()
+      val completed = CountDownLatch(1)
+      val saveResult = AtomicReference<MobileAdapterConfigurationSaveResult>()
+
+      coordinator.importConfigurationImage(
+          coordinator.snapshot().revision,
+          source,
+          eventBus,
+      ) { result ->
+        saveResult.set(result)
+        completed.countDown()
+      }
+
+      val revoked = coordinator.snapshot()
+      assertFalse(revoked.networkConsent)
+      assertFalse(revoked.privateLocalDevelopment)
+      assertTrue(admittedGeneration !== backend.generation())
+      assertEquals(
+          OfferResult.UNAVAILABLE,
+          backend.offer(
+              admittedGeneration,
+              BackendRequest(1, 0x28, byteArrayOf('x'.code.toByte())),
+          ),
+      )
+      assertTrue(persistence.started.await(5, TimeUnit.SECONDS))
+      assertFalse(
+          completed.await(100, TimeUnit.MILLISECONDS),
+          "the import callback must wait for the asynchronous durable write",
+      )
+
+      persistence.release.countDown()
+      assertTrue(completed.await(5, TimeUnit.SECONDS))
+      val result = assertNotNull(saveResult.get())
+      assertTrue(result.saved)
+      assertNull(result.error)
+
+      val expected =
+          MobileAdapterConfiguration(
+              initial.deviceId,
+              importedBytes,
+              initial.networkPolicy,
+          )
+      val finalState = coordinator.snapshot()
+      assertEquals(initial.deviceId, finalState.configuration.deviceId)
+      assertEquals(initial.networkPolicy, finalState.configuration.networkPolicy)
+      assertContentEquals(importedBytes, finalState.configuration.configurationBytes())
+      assertEquals(expected, finalState.configuration)
+      assertEquals(expected, store.current())
+      assertEquals(expected, MobileAdapterConfigurationStore(target).load().configuration)
+      assertFalse(finalState.networkConsent)
+      assertFalse(finalState.privateLocalDevelopment)
+
+      val resultDiagnostic = result.toString()
+      val stateDiagnostic = finalState.toString()
+      assertFalse(resultDiagnostic.contains(source.toString()))
+      assertFalse(resultDiagnostic.contains(diagnosticMarker))
+      assertFalse(stateDiagnostic.contains(source.toString()))
+      assertFalse(stateDiagnostic.contains(diagnosticMarker))
+    } finally {
+      persistence.release.countDown()
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `policy save queued behind image import composes both orthogonal changes`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import-policy-race")
+    val source = directory.resolve("adapter-image.bin")
+    val target = directory.resolve("adapter.bin")
+    val importedBytes = generatedConfigurationBytes(0x53)
+    Files.write(source, importedBytes)
+    val initial =
+        MobileAdapterConfiguration(
+            0x3a,
+            generatedConfigurationBytes(0x17),
+            customConfiguration().networkPolicy,
+        )
+    val replacementPolicy = MobileAdapterNetworkPolicy.Offline
+    val persistence = BlockingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(target, persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      val completed = CountDownLatch(2)
+      val callbacks =
+          Collections.synchronizedList(
+              mutableListOf<Pair<String, MobileAdapterConfigurationSaveResult>>())
+
+      coordinator.importConfigurationImage(
+          coordinator.snapshot().revision,
+          source,
+          eventBus,
+      ) { result ->
+        callbacks += "import" to result
+        completed.countDown()
+      }
+      assertTrue(persistence.started.await(5, TimeUnit.SECONDS))
+
+      coordinator.savePolicy(
+          coordinator.snapshot().revision,
+          replacementPolicy,
+          eventBus,
+      ) { result ->
+        callbacks += "policy" to result
+        completed.countDown()
+      }
+      assertTrue(callbacks.isEmpty())
+      assertEquals(1, persistence.writes.get())
+
+      persistence.release.countDown()
+      assertTrue(completed.await(5, TimeUnit.SECONDS))
+      assertEquals(listOf("import", "policy"), callbacks.map { it.first })
+      assertTrue(callbacks.all { it.second.saved })
+      assertTrue(callbacks.all { it.second.error == null })
+
+      val expected =
+          MobileAdapterConfiguration(
+              initial.deviceId,
+              importedBytes,
+              replacementPolicy,
+          )
+      val finalState = coordinator.snapshot()
+      assertEquals(expected, finalState.configuration)
+      assertContentEquals(importedBytes, finalState.configuration.configurationBytes())
+      assertEquals(initial.deviceId, finalState.configuration.deviceId)
+      assertEquals(replacementPolicy, finalState.configuration.networkPolicy)
+      assertEquals(expected, store.current())
+      assertEquals(expected, MobileAdapterConfigurationStore(target).load().configuration)
+      assertEquals(2, persistence.writes.get())
+    } finally {
+      persistence.release.countDown()
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `malformed adapter image retains durable configuration with runtime authority revoked`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import-malformed")
+    val source = directory.resolve("malformed-private-source-name-must-not-escape.bin")
+    val target = directory.resolve("adapter.bin")
+    val diagnosticMarker = "TEST_ONLY_MALFORMED_IMAGE_BYTES_353"
+    val malformedBytes = generatedConfigurationBytes(0x4d).copyOf(255)
+    diagnosticMarker.toByteArray().copyInto(malformedBytes, destinationOffset = 32)
+    Files.write(source, malformedBytes)
+    val initial =
+        MobileAdapterConfiguration(
+            0x31,
+            generatedConfigurationBytes(0x21),
+            customConfiguration().networkPolicy,
+        )
+    val persistence = CountingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(target, persistence)
+    assertTrue(store.save(initial).saved)
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      assertTrue(
+          coordinator.applyRuntimeAuthorization(
+              coordinator.snapshot().revision,
+              networkConsent = true,
+              privateLocalDevelopment = true,
+              eventBus = eventBus,
+          ))
+      val backend = assertNotNull(coordinator.provider.load().networkBackend)
+      val admittedGeneration = backend.generation()
+      val completed = CountDownLatch(1)
+      val saveResult = AtomicReference<MobileAdapterConfigurationSaveResult>()
+
+      coordinator.importConfigurationImage(
+          coordinator.snapshot().revision,
+          source,
+          eventBus,
+      ) { result ->
+        saveResult.set(result)
+        completed.countDown()
+      }
+
+      assertFalse(coordinator.snapshot().networkConsent)
+      assertFalse(coordinator.snapshot().privateLocalDevelopment)
+      assertTrue(admittedGeneration !== backend.generation())
+      assertTrue(completed.await(5, TimeUnit.SECONDS))
+
+      val result = assertNotNull(saveResult.get())
+      assertFalse(result.saved)
+      assertEquals(MobileAdapterConfigurationError.IMPORT_MALFORMED_IMAGE, result.error)
+      assertEquals(1, persistence.writes.get())
+      assertEquals(initial, store.current())
+      assertEquals(initial, MobileAdapterConfigurationStore(target).load().configuration)
+      val finalState = coordinator.snapshot()
+      assertEquals(initial, finalState.configuration)
+      assertContentEquals(
+          initial.configurationBytes(),
+          finalState.configuration.configurationBytes(),
+      )
+      assertEquals(initial.deviceId, finalState.configuration.deviceId)
+      assertEquals(initial.networkPolicy, finalState.configuration.networkPolicy)
+      assertFalse(finalState.networkConsent)
+      assertFalse(finalState.privateLocalDevelopment)
+
+      val resultDiagnostic = result.toString()
+      assertFalse(resultDiagnostic.contains(source.toString()))
+      assertFalse(resultDiagnostic.contains(diagnosticMarker))
+      assertFalse(finalState.toString().contains(diagnosticMarker))
+    } finally {
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `adapter image import rejects its private target unchanged and revokes authority`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import-conflict")
+    val target = directory.resolve("adapter.bin")
+    val sourceBytes = generatedConfigurationBytes(0x4a)
+    Files.write(target, sourceBytes)
+    val initial =
+        MobileAdapterConfiguration(
+            0x32,
+            generatedConfigurationBytes(0x22),
+            customConfiguration().networkPolicy,
+        )
+    val persistence = CountingOwnerOnlyWriter()
+    val store = MobileAdapterConfigurationStore(target, persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      assertTrue(
+          coordinator.applyRuntimeAuthorization(
+              coordinator.snapshot().revision,
+              networkConsent = true,
+              privateLocalDevelopment = true,
+              eventBus = eventBus,
+          ))
+      val backend = assertNotNull(coordinator.provider.load().networkBackend)
+      val admittedGeneration = backend.generation()
+      val completed = CountDownLatch(1)
+      val saveResult = AtomicReference<MobileAdapterConfigurationSaveResult>()
+
+      coordinator.importConfigurationImage(
+          coordinator.snapshot().revision,
+          target,
+          eventBus,
+      ) { result ->
+        saveResult.set(result)
+        completed.countDown()
+      }
+
+      assertTrue(completed.await(5, TimeUnit.SECONDS))
+      val result = assertNotNull(saveResult.get())
+      assertFalse(result.saved)
+      assertEquals(MobileAdapterConfigurationError.IMPORT_SOURCE_CONFLICT, result.error)
+      assertContentEquals(sourceBytes, Files.readAllBytes(target))
+      assertEquals(0, persistence.writes.get())
+      assertEquals(initial, coordinator.snapshot().configuration)
+      assertFalse(coordinator.snapshot().networkConsent)
+      assertFalse(coordinator.snapshot().privateLocalDevelopment)
+      assertTrue(admittedGeneration !== backend.generation())
+      assertFalse(result.toString().contains(target.toString()))
+    } finally {
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
+  fun `stale adapter image import revokes runtime authority without reading or writing`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-import-stale")
+    val source = directory.resolve("missing-private-source-name-must-not-escape.bin")
+    val target = directory.resolve("adapter.bin")
+    val persistence = CountingOwnerOnlyWriter()
+    val initial =
+        MobileAdapterConfiguration(
+            0x27,
+            generatedConfigurationBytes(0x09),
+            customConfiguration().networkPolicy,
+        )
+    val store = MobileAdapterConfigurationStore(target, persistence)
+    val coordinator = MobileAdapterConfigurationCoordinator(initial, store)
+    val eventBus = EventBusImpl()
+    try {
+      val events = Collections.synchronizedList(mutableListOf<String>())
+      eventBus.register<Controller.CancelMobileAdapterNetworkEvent> { events += "cancel" }
+      eventBus.register<Controller.RefreshMobileAdapterConfigurationEvent> {
+        events += "refresh:${it.revision}"
+      }
+      val staleRevision = coordinator.snapshot().revision
+      assertTrue(
+          coordinator.applyRuntimeAuthorization(
+              staleRevision,
+              networkConsent = true,
+              privateLocalDevelopment = true,
+              eventBus = eventBus,
+          ))
+      val backend = assertNotNull(coordinator.provider.load().networkBackend)
+      val admittedGeneration = backend.generation()
+      events.clear()
+      val before = coordinator.snapshot()
+      val durableBefore = store.current()
+      val completed = CountDownLatch(1)
+      val saveResult = AtomicReference<MobileAdapterConfigurationSaveResult>()
+
+      coordinator.importConfigurationImage(staleRevision, source, eventBus) { result ->
+        saveResult.set(result)
+        completed.countDown()
+      }
+
+      assertTrue(completed.await(1, TimeUnit.SECONDS))
+      val result = assertNotNull(saveResult.get())
+      assertFalse(result.saved)
+      assertEquals(MobileAdapterConfigurationError.CONFIGURATION_STALE, result.error)
+      val revoked = coordinator.snapshot()
+      assertEquals(before.revision + 1, revoked.revision)
+      assertEquals(before.configuration, revoked.configuration)
+      assertContentEquals(
+          before.configuration.configurationBytes(),
+          revoked.configuration.configurationBytes(),
+      )
+      assertEquals(before.configuration.deviceId, revoked.configuration.deviceId)
+      assertEquals(before.configuration.networkPolicy, revoked.configuration.networkPolicy)
+      assertFalse(revoked.networkConsent)
+      assertFalse(revoked.privateLocalDevelopment)
+      assertTrue(admittedGeneration !== backend.generation())
+      assertEquals(
+          OfferResult.UNAVAILABLE,
+          backend.offer(
+              admittedGeneration,
+              BackendRequest(1, 0x28, byteArrayOf('x'.code.toByte())),
+          ),
+      )
+      assertEquals(listOf("cancel", "refresh:${revoked.revision}"), events)
+      assertEquals(durableBefore, store.current())
+      assertEquals(0, persistence.writes.get())
+      assertFalse(Files.exists(source))
+      assertFalse(Files.exists(target))
+      assertFalse(result.toString().contains(source.toString()))
+    } finally {
+      coordinator.close()
+      eventBus.close()
+    }
+  }
+
+  @Test
   fun `close interrupts and joins an in-flight policy writer within its bounded deadline`() {
     val directory = Files.createTempDirectory("coffee-gb-mobile-coordinator-close")
     val persistence = BlockingOwnerOnlyWriter()
@@ -839,6 +1211,12 @@ class MobileAdapterConfigurationCoordinatorTest {
           ),
       )
 
+  /** Deterministic test-only bytes; never sourced from a ROM, save, or external fixture. */
+  private fun generatedConfigurationBytes(seed: Int): ByteArray =
+      ByteArray(MobileAdapterConfiguration.CONFIGURATION_SIZE) { index ->
+        ((index * 37 + seed) and 0xff).toByte()
+      }
+
   private fun closePrepared(prepared: Controller.MobileAdapterConfiguration) {
     val backend = assertNotNull(prepared.networkBackend)
     backend.close()
@@ -887,6 +1265,15 @@ class MobileAdapterConfigurationCoordinatorTest {
       } else {
         throw IOException("injected later Mobile Adapter policy write failure")
       }
+    }
+  }
+
+  private class CountingOwnerOnlyWriter : AtomicFileWriter() {
+    val writes = AtomicInteger()
+
+    override fun writeOwnerOnly(target: Path, intendedBytes: ByteArray) {
+      writes.incrementAndGet()
+      AtomicFileWriter.system().writeOwnerOnly(target, intendedBytes)
     }
   }
 

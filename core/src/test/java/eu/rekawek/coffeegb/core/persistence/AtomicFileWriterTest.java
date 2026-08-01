@@ -34,6 +34,31 @@ public class AtomicFileWriterTest {
     private static final byte[] NEW = "complete-new-state-with-more-bytes".getBytes();
 
     @Test
+    public void transactionArtifactClassifierCoversEveryCleanupNameWithoutFilesystemAccess()
+            throws Exception {
+        withDirectory(directory -> {
+            Path target = directory.resolve("private.bin").toAbsolutePath().normalize();
+            Path backup = AtomicFileWriter.backupPath(target);
+            String prefix = AtomicFileWriter.tempPrefix(target);
+            Path temp = directory.resolve(prefix + "123.part");
+
+            assertTrue(AtomicFileWriter.isTransactionArtifact(target, backup));
+            assertTrue(AtomicFileWriter.isTransactionArtifact(
+                    target,
+                    directory.resolve(backup.getFileName().toString().toUpperCase())));
+            assertTrue(AtomicFileWriter.isTransactionArtifact(target, temp));
+            assertTrue(AtomicFileWriter.isTransactionArtifact(
+                    target,
+                    directory.resolve((prefix + "ABC.PART").toUpperCase())));
+            assertFalse(AtomicFileWriter.isTransactionArtifact(target, target));
+            assertFalse(AtomicFileWriter.isTransactionArtifact(
+                    target, directory.resolve(prefix + "123.part.extra")));
+            assertFalse(AtomicFileWriter.isTransactionArtifact(
+                    target, directory.resolve("other").resolve(temp.getFileName())));
+        });
+    }
+
+    @Test
     public void everyInjectedAtomicStageRecoversToOldOrNewCompleteBytes() throws Exception {
         for (AtomicFileWriter.Stage stage : List.of(
                 AtomicFileWriter.Stage.BEFORE_WRITE,
