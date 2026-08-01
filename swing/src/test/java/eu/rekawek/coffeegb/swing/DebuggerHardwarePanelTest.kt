@@ -321,6 +321,8 @@ class DebuggerHardwarePanelTest {
           descendants(panel).filterIsInstance<JLabel>().first {
             it.accessibleContext.accessibleName == "IF raw value"
           }
+      assertEquals("$15", rawLabel.text)
+      assertEquals(165, rawLabel.minimumSize.width)
       val originalSize = rawLabel.font.size2D
       panel.applyFontScale(175)
       assertTrue(rawLabel.font.size2D > originalSize)
