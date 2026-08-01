@@ -82,7 +82,9 @@ class RomOpenServiceTest {
   fun `a desktop open reaches the Swing emulator controller after inspecting the ROM`() {
     val eventBus = EventBusImpl()
     val properties = EmulatorProperties()
-    val emulator = SwingEmulator(eventBus, null, properties)
+    val emulatorRef = AtomicReference<SwingEmulator>()
+    SwingUtilities.invokeAndWait { emulatorRef.set(SwingEmulator(eventBus, null, properties)) }
+    val emulator = emulatorRef.get()
     val started = LinkedBlockingQueue<String>()
     val updates = CopyOnWriteArrayList<RomOpenUpdate>()
     val worker = Executors.newSingleThreadExecutor()
