@@ -677,7 +677,7 @@ public class MobileAdapterSerialEndpointTest {
     }
 
     @Test
-    public void crystalServiceFlowPollsUntilAnAsynchronousDnsReplyIsPublished() {
+    public void pendingWirePollConsumesAnAsynchronousDnsReplyAtTheNextByteBoundary() {
         DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
         MobileAdapterSerialEndpoint endpoint = new MobileAdapterSerialEndpoint(
                 ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
@@ -711,11 +711,11 @@ public class MobileAdapterSerialEndpointTest {
                         0,
                         MobileAdapterBackendPort.BackendStatus.SUCCESS,
                         new byte[]{127, 0, 0, 1}));
-        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
-                endpoint.pollBackendCompletion().outcome());
+        assertEquals(1, backend.completedResults());
         assertArrayEquals(
                 packet(0xa8, new byte[]{127, 0, 0, 1}),
                 readResponse(endpoint));
+        assertEquals(0, backend.completedResults());
     }
 
     @Test
@@ -741,25 +741,100 @@ public class MobileAdapterSerialEndpointTest {
                         0,
                         MobileAdapterBackendPort.BackendStatus.SUCCESS,
                         new byte[]{127, 0, 0, 1}));
-        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
-                endpoint.pollBackendCompletion().outcome());
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                endpoint.snapshot().outcome());
         for (int bit = 3; bit < 8; bit++) {
             pendingReply = pendingReply << 1 | endpoint.sendBit();
         }
         assertEquals(0xd2, pendingReply);
-        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
-                endpoint.pollBackendCompletion().outcome());
-        assertEquals(9,
-                ((MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState)
-                        endpoint.captureState()).wirePhaseId());
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_PENDING,
+                endpoint.snapshot().outcome());
 
+        // The next byte boundary, rather than a test-only controller poll, consumes the result.
         byte[] expected = packet(0xa8, new byte[]{127, 0, 0, 1});
         assertEquals(expected[0] & 0xff, exchange(endpoint, 0x4b));
+        assertEquals(MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                endpoint.snapshot().outcome());
+        MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState streaming =
+                (MobileAdapterSerialEndpoint.MobileAdapterSerialEndpointWireState)
+                        endpoint.captureState();
+        assertEquals(6, streaming.wirePhaseId());
+        assertEquals(1, streaming.responseByteIndex());
+
         for (int index = 1; index < expected.length; index++) {
             assertEquals(expected[index] & 0xff, exchange(endpoint, 0x4b));
         }
         assertEquals(DEVICE_ID | 0x80, exchange(endpoint, 0x80));
         assertEquals(0, exchange(endpoint, 0x28));
+    }
+
+    @Test
+    public void completedBackendRequestLeavesOneRuntimeOnlyHistoryFence() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterSerialEndpoint endpoint = new MobileAdapterSerialEndpoint(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        assertArrayEquals(BEGIN_RESPONSE, transaction(endpoint, BEGIN));
+        assertTrue(!endpoint.consumeExternalIoActivity());
+
+        sendRequestAndReadAcknowledgement(
+                endpoint, packet(0x28, "service.test".getBytes(StandardCharsets.US_ASCII)));
+        assertTrue(endpoint.hasExternalIo());
+        assertEquals(MobileAdapterBackendPort.CompletionResult.COMPLETED,
+                backend.complete(
+                        backend.generation(),
+                        0,
+                        MobileAdapterBackendPort.BackendStatus.SUCCESS,
+                        new byte[]{127, 0, 0, 1}));
+        assertArrayEquals(
+                packet(0xa8, new byte[]{127, 0, 0, 1}),
+                readResponse(endpoint));
+        assertTrue(!endpoint.hasExternalIo());
+        assertEquals(0, backend.completedResults());
+        assertTrue(endpoint.consumeExternalIoActivity());
+        assertTrue(!endpoint.consumeExternalIoActivity());
+
+        sendRequestAndReadAcknowledgement(
+                endpoint, packet(0x28, "service.test".getBytes(StandardCharsets.US_ASCII)));
+        endpoint.disconnect();
+        assertTrue(!endpoint.hasExternalIo());
+        assertTrue(endpoint.consumeExternalIoActivity());
+        assertTrue(!endpoint.consumeExternalIoActivity());
+    }
+
+    @Test
+    public void successfulRestoreStartsWithNoRuntimeOnlyHistoryFence() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterSerialEndpoint endpoint = new MobileAdapterSerialEndpoint(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        assertArrayEquals(BEGIN_RESPONSE, transaction(endpoint, BEGIN));
+        sendRequestAndReadAcknowledgement(
+                endpoint, packet(0x28, "service.test".getBytes(StandardCharsets.US_ASCII)));
+
+        MobileAdapterSerialEndpoint restored = new MobileAdapterSerialEndpoint(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        restored.restoreState(endpoint.captureState());
+
+        assertTrue(!restored.consumeExternalIoActivity());
+        assertTrue(endpoint.consumeExternalIoActivity());
+    }
+
+    @Test
+    public void revokedPendingGenerationAutoPollsToIdleAndAcceptsFreshMagic() {
+        DeterministicMobileAdapterBackend backend = new DeterministicMobileAdapterBackend();
+        MobileAdapterSerialEndpoint endpoint = new MobileAdapterSerialEndpoint(
+                ClockSpec.LEGACY, DEVICE_ID, configuration(), backend);
+        assertArrayEquals(BEGIN_RESPONSE, transaction(endpoint, BEGIN));
+        sendRequestAndReadAcknowledgement(
+                endpoint, packet(0x28, "service.test".getBytes(StandardCharsets.US_ASCII)));
+        assertEquals(0xd2, exchange(endpoint, 0));
+        assertEquals(0xd2, exchange(endpoint, 0x4b));
+
+        backend.cancelAll();
+
+        assertEquals(0xd2, exchange(endpoint, 0x99));
+        assertEquals(MobileAdapterEngine.Outcome.NEED_MORE, endpoint.snapshot().outcome());
+        assertEquals(1, endpoint.snapshot().retainedBytes());
+        assertEquals(0, backend.completedResults());
     }
 
     @Test

@@ -47,6 +47,15 @@ The deterministic fake linearizes this bounded ownership with an immutable snaps
 lock-free atomic reference. It creates no worker, task, future, executor, callback, or blocking
 wait; host jobs remain controller-owned and publish only at controller safe points.
 
+The controller polls an already-published backend completion at each frame boundary. While the
+serial wire is specifically waiting for that response, the endpoint also performs the same
+constant-time, nonblocking poll before latching each new reply byte. CGB fast serial can clock
+hundreds of bytes within one frame, so this byte-boundary safe point prevents a game from outrunning
+a completed DNS or socket operation. A completion never changes a reply byte already in flight.
+The endpoint also raises a runtime-only history fence whenever it admits backend work. The
+controller consumes that fence after the frame and clears rewind history even if the request and
+its logical connection both completed within that same frame; the fence is never serialized.
+
 Phase #353 supplies only a synthetic service flow for reaching a custom server. Blue-adapter dial command
 `12` accepts model prefix `00` plus the exact Mobile System GB ISP number `#9677`; it never places a
 host telephone call. Status command `17` reports disconnected `00 4d 00` before dial and connected
