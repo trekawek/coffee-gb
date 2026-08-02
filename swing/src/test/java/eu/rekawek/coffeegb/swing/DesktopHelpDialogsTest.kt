@@ -104,6 +104,28 @@ class DesktopHelpDialogsTest {
         assertEquals(left, about.copyButton.x)
       }
 
+  @Test
+  fun `about content fits above its dialog actions at packed size`() =
+      onEdt {
+        val about = DesktopAboutPanel("1.2.3")
+        val panel =
+            DesktopDialogFactory(tokenProvider = ::tokens)
+                .createContentPanel(
+                    DesktopContentSpec(
+                        title = "About Coffee GB",
+                        accessibleDescription = "Application information.",
+                        contentAccessibleName = "Application information",
+                        buttons = DesktopDialogButtons(cancel = DesktopDialogAction("Close", Unit)),
+                    ),
+                    about,
+                ) {}
+
+        panel.size = panel.preferredSize
+        layoutTree(panel)
+
+        assertTrue(about.copyButton.y + about.copyButton.height <= panel.buttonBar.y)
+      }
+
   private fun actionRegistry(): DesktopActionRegistry =
       DesktopActionRegistry(
           DesktopCommandHandlers(
