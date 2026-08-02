@@ -269,7 +269,12 @@ internal class DesktopAboutPanel(
       readOnlyHelpText(
           "Pocket Brew desktop emulator for Game Boy and Game Boy Color.",
           "Coffee GB description",
-      )
+      ).apply {
+        // The description wraps at the About dialog's reading width. Reserve both lines while
+        // packing so the copy control cannot be laid out underneath the dialog action bar.
+        columns = ABOUT_DESCRIPTION_COLUMNS
+        rows = ABOUT_DESCRIPTION_ROWS
+      }
   private val versionLabel =
       JLabel("Version: $version").apply {
         alignmentX = Component.LEFT_ALIGNMENT
@@ -426,3 +431,5 @@ private fun systemHelpUriOpener(): DesktopUriOpener =
 
 private const val COFFEE_GB_SOURCE_URL = "https://github.com/trekawek/coffee-gb"
 private val COFFEE_GB_SOURCE_URI = URI.create(COFFEE_GB_SOURCE_URL)
+private const val ABOUT_DESCRIPTION_COLUMNS = 48
+private const val ABOUT_DESCRIPTION_ROWS = 2
