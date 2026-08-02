@@ -1,31 +1,234 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
-     aria-labelledby="title description">
-  <title id="title">Coffee GB</title>
-  <desc id="description">
-    A warm coffee mug shaped like a pocket game system, with steam, a green screen,
-    a directional pad, and two action buttons.
-  </desc>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1024" height="1024" viewBox="0 0 1254 1254" fill="none">
+  <defs>
+    <!-- Warm tile and console materials -->
+    <linearGradient id="tileFill" x1="180" y1="50" x2="1060" y2="1215" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF5E3"/>
+      <stop offset="0.52" stop-color="#FFF0D9"/>
+      <stop offset="1" stop-color="#FFF1DA"/>
+    </linearGradient>
+    <radialGradient id="tileGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(622 465) rotate(90) scale(760 810)">
+      <stop offset="0" stop-color="#FFF9EE" stop-opacity="0.42"/>
+      <stop offset="0.62" stop-color="#FFF7EC" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#CDAE7C" stop-opacity="0.08"/>
+    </radialGradient>
+    <linearGradient id="shellFill" x1="330" y1="105" x2="900" y2="1110" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#302F29"/>
+      <stop offset="0.38" stop-color="#2F302A"/>
+      <stop offset="0.78" stop-color="#24251F"/>
+      <stop offset="1" stop-color="#1A1C18"/>
+    </linearGradient>
+    <linearGradient id="faceFill" x1="410" y1="125" x2="720" y2="1090" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FEF2DE"/>
+      <stop offset="0.48" stop-color="#FFF1DC"/>
+      <stop offset="1" stop-color="#FEEFD8"/>
+    </linearGradient>
+    <radialGradient id="faceGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(545 430) rotate(88) scale(740 550)">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="0.62" stop-color="#FFF7EA" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#D5B984" stop-opacity="0.06"/>
+    </radialGradient>
 
-  <!-- Transparent corners keep the mark neutral on desktop icon themes. -->
-  <rect x="24" y="24" width="464" height="464" rx="108" fill="#211410"/>
+    <!-- Screen -->
+    <linearGradient id="bezelFill" x1="410" y1="198" x2="830" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#363834"/>
+      <stop offset="0.48" stop-color="#282A27"/>
+      <stop offset="1" stop-color="#171A18"/>
+    </linearGradient>
+    <linearGradient id="bezelInner" x1="410" y1="220" x2="830" y2="625" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#242724"/>
+      <stop offset="0.55" stop-color="#181B19"/>
+      <stop offset="1" stop-color="#30322F"/>
+    </linearGradient>
+    <linearGradient id="lcdFill" x1="438" y1="244" x2="810" y2="592" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8F8C48"/>
+      <stop offset="0.45" stop-color="#858240"/>
+      <stop offset="1" stop-color="#7B7B3B"/>
+    </linearGradient>
+    <radialGradient id="lcdGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+                    gradientTransform="translate(545 355) rotate(27) scale(335 300)">
+      <stop offset="0" stop-color="#B8B566" stop-opacity="0.18"/>
+      <stop offset="0.62" stop-color="#9D9952" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#454A27" stop-opacity="0.14"/>
+    </radialGradient>
+    <linearGradient id="cupFill" x1="520" y1="404" x2="752" y2="558" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2B3A24"/>
+      <stop offset="0.48" stop-color="#263522"/>
+      <stop offset="1" stop-color="#192619"/>
+    </linearGradient>
 
-  <!-- The handle sits behind the console body so the silhouette reads as a mug. -->
-  <path fill="#e7c790" fill-rule="evenodd"
-        d="M360 205h35c47 0 83 37 83 84v41c0 47-36 84-83 84h-35V205zm35 44h-13v121h13c22 0 39-18 39-40v-41c0-22-17-40-39-40z"/>
+    <!-- Controls -->
+    <linearGradient id="dpadOuter" x1="400" y1="720" x2="520" y2="875" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151716"/>
+      <stop offset="1" stop-color="#070908"/>
+    </linearGradient>
+    <linearGradient id="dpadInner" x1="415" y1="730" x2="500" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3B3C37"/>
+      <stop offset="0.5" stop-color="#2A2C29"/>
+      <stop offset="1" stop-color="#20221F"/>
+    </linearGradient>
+    <radialGradient id="buttonOuter" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox"
+                    gradientTransform="translate(.34 .25) rotate(47) scale(.95)">
+      <stop offset="0" stop-color="#4E111D"/>
+      <stop offset="0.72" stop-color="#24070D"/>
+      <stop offset="1" stop-color="#100306"/>
+    </radialGradient>
+    <radialGradient id="buttonFace" cx="0" cy="0" r="1" gradientUnits="objectBoundingBox"
+                    gradientTransform="translate(.35 .24) rotate(48) scale(.90)">
+      <stop offset="0" stop-color="#802334"/>
+      <stop offset="0.54" stop-color="#681C29"/>
+      <stop offset="1" stop-color="#56151F"/>
+    </radialGradient>
+    <linearGradient id="pillFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2D2F2B"/>
+      <stop offset="1" stop-color="#111311"/>
+    </linearGradient>
 
-  <!-- Steam is deliberately chunky enough to survive 16 px rendering. -->
-  <path d="M219 127c-19-18 15-36-2-61" fill="none" stroke="#fff0d2"
-        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M286 127c-19-18 15-36-2-61" fill="none" stroke="#fff0d2"
-        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Shadows that preserve the source graphic -->
+    <filter id="tileShadow" x="-8%" y="-8%" width="116%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="11" result="blur"/>
+      <feOffset in="blur" dy="9" result="offset"/>
+      <feFlood flood-color="#B9894D" flood-opacity="0.20" result="color"/>
+      <feComposite in="color" in2="offset" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="consoleShadow" x="-12%" y="-10%" width="130%" height="132%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="14" result="blur"/>
+      <feOffset in="blur" dy="12" result="offset"/>
+      <feFlood flood-color="#79592F" flood-opacity="0.34" result="color"/>
+      <feComposite in="color" in2="offset" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="screenShadow" x="-12%" y="-12%" width="124%" height="130%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7" result="blur"/>
+      <feOffset in="blur" dy="5" result="offset"/>
+      <feFlood flood-color="#3D2E18" flood-opacity="0.22" result="color"/>
+      <feComposite in="color" in2="offset" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="controlShadow" x="-28%" y="-25%" width="160%" height="175%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur"/>
+      <feOffset in="blur" dy="7" result="offset"/>
+      <feFlood flood-color="#9A7543" flood-opacity="0.28" result="color"/>
+      <feComposite in="color" in2="offset" operator="in" result="shadow"/>
+      <feMerge><feMergeNode in="shadow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="steamGlow" x="-40%" y="-30%" width="180%" height="170%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+      <feFlood flood-color="#FFF6DF" flood-opacity="0.45" result="color"/>
+      <feComposite in="color" in2="blur" operator="in" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
 
-  <rect x="78" y="140" width="330" height="305" rx="72" fill="#e7c790"/>
-  <rect x="128" y="160" width="230" height="28" rx="14" fill="#4b2a1b"/>
-  <rect x="122" y="205" width="242" height="110" rx="24" fill="#a8b86c"/>
+  <!-- White canvas around the rounded tile -->
+  <rect width="1254" height="1254" fill="#FEFEFF"/>
 
-  <path d="M158 335h38v32h32v38h-32v32h-38v-32h-32v-38h32z"
-        fill="#4b2a1b"/>
-  <circle cx="315" cy="365" r="25" fill="#c45c3c"/>
-  <circle cx="362" cy="402" r="25" fill="#c45c3c"/>
+  <!-- App-icon tile -->
+  <g filter="url(#tileShadow)">
+    <rect x="23" y="8" width="1208" height="1215" rx="154" fill="url(#tileFill)"/>
+    <rect x="23" y="8" width="1208" height="1215" rx="154" fill="url(#tileGlow)"/>
+    <rect x="25.5" y="10.5" width="1203" height="1210" rx="151.5"
+          stroke="#E4C998" stroke-opacity="0.62" stroke-width="3"/>
+    <path d="M142 49C300 20 947 22 1104 51" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2" stroke-linecap="round"/>
+  </g>
+
+  <!-- Console shell and ivory face -->
+  <g filter="url(#consoleShadow)">
+    <path id="consoleOuter"
+          d="M396 108H857C911 108 954 147 954 198V975C954 1041 897 1105 827 1105H375C331 1105 298 1071 298 1025V198C298 147 340 108 396 108Z"
+          fill="url(#shellFill)" stroke="#0A0C0B" stroke-width="3"/>
+
+
+    <path id="consoleFace"
+          d="M394 130H861C900 130 932 161 932 199V973C932 1033 883 1083 823 1083H380C345 1083 320 1057 320 1020V199C320 161 352 130 394 130Z"
+          fill="url(#faceFill)" stroke="#F7E4C1" stroke-width="2"/>
+    <path d="M394 130H861C900 130 932 161 932 199V973C932 1033 883 1083 823 1083H380C345 1083 320 1057 320 1020V199C320 161 352 130 394 130Z"
+          fill="url(#faceGlow)"/>
+    <path d="M396 133H858C893 133 923 162 923 199" stroke="#FFFFFF" stroke-opacity="0.62" stroke-width="3" stroke-linecap="round"/>
+    <path d="M329 1018C329 1050 352 1074 383 1074H817C869 1066 907 1032 920 990"
+          stroke="#E6CFA7" stroke-opacity="0.48" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <!-- Display assembly -->
+  <g filter="url(#screenShadow)">
+    <rect x="379" y="196" width="493" height="443" rx="45" fill="#111311"/>
+    <rect x="388" y="205" width="475" height="425" rx="37" fill="url(#bezelFill)"/>
+    <rect x="402" y="219" width="447" height="397" rx="29" fill="url(#bezelInner)"/>
+    <rect x="413" y="230" width="425" height="375" rx="22" fill="#111512"/>
+    <rect x="422" y="240" width="405" height="356" rx="16" fill="url(#lcdFill)"/>
+    <rect x="422" y="240" width="405" height="356" rx="16" fill="url(#lcdGlow)"/>
+    <rect x="423.5" y="241.5" width="402" height="353" rx="14.5"
+          stroke="#60622E" stroke-opacity="0.74" stroke-width="3"/>
+    <path d="M440 246H807C816 246 821 250 823 256" stroke="#C3BF69" stroke-opacity="0.32" stroke-width="3" stroke-linecap="round"/>
+    <path d="M429 581C431 588 437 591 447 591H806" stroke="#4E532B" stroke-opacity="0.35" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- Pixel steam -->
+  <g filter="url(#steamGlow)" fill="#FFF3DC" stroke="#81794D" stroke-width="1.5" stroke-linejoin="round">
+    <path d="M589 278L606 279V308H595L592 311L591 322L582 321L580 323V335L582 337L592 338V349L594 351H606V379H589V358L587 356H575V345L573 343H562V318H573L575 316V304L586 303L589 300Z"/>
+    <path d="M680 278L681 315L669 316L668 330H657L655 332V349L657 351H668V379H651L650 357L636 355V331L649 330L650 312L662 311L663 279Z"/>
+  </g>
+
+  <!-- Pixel coffee cup, including the handle opening -->
+  <path d="M515 406V512L519 515L526 516V528L528 530L541 531L542 545L557 546L558 563H679L681 561V546L696 545L698 542L697 532L699 530H712L714 528V516L716 514H748L750 512V499L763 498L765 496V442L763 440L750 439V426L748 424H716L714 422V404L712 402H518L515 406Z
+           M716 445H739L742 448V489L738 493H716L714 491V447L716 445Z"
+        fill="url(#cupFill)" fill-rule="evenodd" stroke="#132117" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M520 408H708" stroke="#566044" stroke-opacity="0.36" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- D-pad -->
+  <g filter="url(#controlShadow)">
+    <path d="M439 711H482C487 711 491 716 491 721V764L493 766H535C540 766 543 771 543 776V818C543 823 539 827 534 827H492L490 829V872C490 877 487 881 482 881H439C434 881 430 877 430 872V830L428 828H386C381 828 378 823 378 818V776C378 771 382 766 388 766H428L430 764V721C430 716 434 711 439 711Z"
+          fill="url(#dpadOuter)" stroke="#0C0E0D" stroke-width="3"/>
+    <path d="M445 722H477C480 722 481 725 481 729V771C481 775 484 778 488 778H529C532 778 533 781 533 784V811C533 815 530 817 526 817H486C482 817 480 820 480 824V866C480 869 477 871 474 871H447C444 871 441 869 441 865V824C441 820 438 818 434 818H393C390 818 388 815 388 812V784C388 781 390 778 394 778H435C439 778 441 775 441 771V729C441 725 442 722 445 722Z"
+          fill="url(#dpadInner)" stroke="#454742" stroke-width="2.5"/>
+    <path d="M446 724H475" stroke="#686963" stroke-opacity="0.58" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M390 780H431" stroke="#686963" stroke-opacity="0.42" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+
+  <!-- Burgundy action buttons -->
+  <g filter="url(#controlShadow)">
+    <g>
+      <circle cx="741" cy="822" r="43" fill="url(#buttonOuter)" stroke="#0B0708" stroke-width="3"/>
+      <circle cx="741" cy="822" r="35.5" fill="url(#buttonFace)" stroke="#5A101D" stroke-width="3"/>
+      <path d="M715 807A34 34 0 0 1 766 799" stroke="#C95465" stroke-opacity="0.38" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+    <g>
+      <circle cx="840" cy="765" r="43" fill="url(#buttonOuter)" stroke="#0B0708" stroke-width="3"/>
+      <circle cx="840" cy="765" r="35.5" fill="url(#buttonFace)" stroke="#5A101D" stroke-width="3"/>
+      <path d="M814 750A34 34 0 0 1 865 742" stroke="#C95465" stroke-opacity="0.38" stroke-width="2.5" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- Start and Select -->
+  <g filter="url(#controlShadow)">
+    <g>
+      <rect x="516" y="939" width="76" height="29" rx="15" fill="#0E100F" stroke="#080A09" stroke-width="2"/>
+      <rect x="524" y="946" width="60" height="14" rx="7" fill="url(#pillFill)" stroke="#41423D" stroke-width="2"/>
+      <path d="M532 949H576" stroke="#666760" stroke-opacity="0.42" stroke-width="2" stroke-linecap="round"/>
+    </g>
+    <g>
+      <rect x="618" y="939" width="75" height="29" rx="15" fill="#0E100F" stroke="#080A09" stroke-width="2"/>
+      <rect x="626" y="946" width="59" height="14" rx="7" fill="url(#pillFill)" stroke="#41423D" stroke-width="2"/>
+      <path d="M634 949H677" stroke="#666760" stroke-opacity="0.42" stroke-width="2" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <!-- Speaker grille -->
+  <g filter="url(#controlShadow)" fill="#171A18" stroke="#090B0A" stroke-width="2">
+    <circle cx="842.5" cy="906.1" r="8.7"/>
+    <circle cx="815.8" cy="931.6" r="8.7"/>
+    <circle cx="865.5" cy="931.5" r="8.7"/>
+    <circle cx="790.2" cy="957.2" r="8.7"/>
+    <circle cx="839.5" cy="957.4" r="8.7"/>
+    <circle cx="888.2" cy="957.4" r="8.7"/>
+    <circle cx="764.4" cy="982.8" r="8.7"/>
+    <circle cx="814.1" cy="982.8" r="8.7"/>
+    <circle cx="863.4" cy="982.7" r="8.7"/>
+    <circle cx="788.6" cy="1008.2" r="8.7"/>
+    <circle cx="838.2" cy="1008.1" r="8.7"/>
+    <circle cx="811.5" cy="1033.6" r="8.7"/>
+  </g>
 </svg>
