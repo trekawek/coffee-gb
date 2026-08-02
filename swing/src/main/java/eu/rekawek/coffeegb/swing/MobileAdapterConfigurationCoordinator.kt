@@ -826,7 +826,7 @@ internal class MobileAdapterConfigurationCoordinator(
             val rules =
                 policy.portMappings.map { mapping ->
                   MobileAdapterDestinationRule(
-                      policy.dnsQueryName,
+                      listOf(policy.dnsQueryName) + policy.additionalDnsQueryNames,
                       target,
                       when (mapping.transport) {
                         MobileAdapterTransport.TCP -> MobileAdapterTransportProtocol.TCP

@@ -46,18 +46,29 @@ class MobileAdapterConfigurationStoreTest {
             MobileAdapterPortMapping(MobileAdapterTransport.UDP, 443, 8443),
             MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
         )
+    val suppliedAliases =
+        mutableListOf(
+            "Zeta.Example-Test.Org",
+            "Alt.Example-Test.Org",
+        )
     val policy =
         MobileAdapterNetworkPolicy.CustomServer(
             dnsQueryName = "Api.Example-Test.Org",
             resolverIpv4Address = "192.0.2.53",
             resolverPort = 53,
             portMappings = suppliedMappings,
+            additionalDnsQueryNames = suppliedAliases,
         )
     val configuration = MobileAdapterConfiguration(8, ByteArray(256), policy)
     suppliedMappings.clear()
+    suppliedAliases.clear()
 
     assertEquals(MobileAdapterNetworkMode.CUSTOM_SERVER, policy.mode)
     assertEquals("api.example-test.org", policy.dnsQueryName)
+    assertEquals(
+        listOf("alt.example-test.org", "zeta.example-test.org"),
+        policy.additionalDnsQueryNames,
+    )
     assertEquals("192.0.2.53", policy.resolverIpv4Address)
     assertEquals(MobileAdapterTransport.TCP, policy.portMappings[0].transport)
     assertEquals(MobileAdapterTransport.UDP, policy.portMappings[1].transport)
@@ -69,13 +80,20 @@ class MobileAdapterConfigurationStoreTest {
             "192.0.2.53",
             53,
             policy.portMappings.reversed(),
+            policy.additionalDnsQueryNames.reversed(),
         ),
     )
     assertEquals(policy.hashCode(), configuration.networkPolicy.hashCode())
     assertFalse(policy.toString().contains("api.example-test.org"))
+    assertFalse(policy.toString().contains("alt.example-test.org"))
+    assertTrue(policy.toString().contains("additionalDnsQueryNames=2"))
     assertFalse(policy.toString().contains("192.0.2.53"))
     assertFalse(policy.toString().contains("8080"))
     assertFalse(configuration.toString().contains("example-test"))
+    assertFailsWith<UnsupportedOperationException> {
+      @Suppress("UNCHECKED_CAST")
+      (policy.additionalDnsQueryNames as MutableList<String>).add("mutated.example-test.org")
+    }
     assertEquals("MobileAdapterPortMapping([redacted])", policy.portMappings.single { it.guestPort == 80 }.toString())
   }
 
@@ -144,15 +162,41 @@ class MobileAdapterConfigurationStoreTest {
             .portMappings
             .size,
     )
+    assertEquals(
+        MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES,
+        customPolicy(
+                additionalDnsQueryNames =
+                    (1..MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES)
+                        .map { "alias$it.example.test" })
+            .additionalDnsQueryNames
+            .size,
+    )
+    assertFailsWith<IllegalArgumentException> {
+      customPolicy(
+          additionalDnsQueryNames =
+              (0..MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES)
+                  .map { "alias$it.example.test" })
+    }
+    assertFailsWith<IllegalArgumentException> {
+      customPolicy(additionalDnsQueryNames = listOf("ALIAS.example.test", "alias.example.test"))
+    }
+    assertFailsWith<IllegalArgumentException> {
+      customPolicy(additionalDnsQueryNames = listOf("RESOLVER.EXAMPLE.TEST"))
+    }
+    invalidDnsNames.forEach { dnsName ->
+      assertFailsWith<IllegalArgumentException>(dnsName) {
+        customPolicy(additionalDnsQueryNames = listOf(dnsName))
+      }
+    }
   }
 
   @Test
-  fun `codec deterministically writes bounded version two records`() {
+  fun `codec deterministically writes bounded version three records`() {
     val fallback = MobileAdapterConfiguration.syntheticFallback()
     val first = MobileAdapterConfigurationCodec.encode(fallback)
     val second = MobileAdapterConfigurationCodec.encode(fallback)
 
-    assertEquals(307, first.size)
+    assertEquals(308, first.size)
     assertContentEquals(first, second)
     assertContentEquals("CGBMACFG".toByteArray(StandardCharsets.US_ASCII), first.copyOfRange(0, 8))
     assertEquals(MobileAdapterConfigurationCodec.FORMAT_VERSION, first[8].toInt() and 0xff)
@@ -163,6 +207,35 @@ class MobileAdapterConfigurationStoreTest {
     assertEquals(0x4d, fallback.configurationBytes()[0].toInt() and 0xff)
     assertEquals(0x81, fallback.configurationBytes()[2].toInt() and 0xff)
     assertEquals(127, fallback.configurationBytes()[255].toInt() and 0xff)
+  }
+
+  @Test
+  fun `codec round trips sorted exact aliases and rejects version two alias loss`() {
+    val expected =
+        configuration(
+            8,
+            0x35,
+            customPolicy(
+                portMappings =
+                    listOf(MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080)),
+                additionalDnsQueryNames =
+                    listOf("Zeta.Example.Test", "Alternate.Example.Test"),
+            ),
+        )
+
+    val encoded = MobileAdapterConfigurationCodec.encode(expected)
+    val decoded = MobileAdapterConfigurationCodec.decode(encoded)
+    val policy = decoded.networkPolicy as MobileAdapterNetworkPolicy.CustomServer
+
+    assertEquals(MobileAdapterConfigurationCodec.FORMAT_VERSION, encoded[8].toInt() and 0xff)
+    assertEquals(expected, decoded)
+    assertEquals(
+        listOf("alternate.example.test", "zeta.example.test"),
+        policy.additionalDnsQueryNames,
+    )
+    assertFailsWith<IllegalArgumentException> {
+      MobileAdapterConfigurationCodec.encodeVersion2(expected)
+    }
   }
 
   @Test
@@ -189,10 +262,55 @@ class MobileAdapterConfigurationStoreTest {
   }
 
   @Test
+  fun `codec decodes exact version two custom records and migrates them without aliases`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-config-v2")
+    val path = directory.resolve("adapter.bin")
+    val expected =
+        configuration(
+            17,
+            0x29,
+            customPolicy(
+                portMappings =
+                    listOf(MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080))),
+        )
+    val version2 = MobileAdapterConfigurationCodec.encodeVersion2(expected)
+
+    assertEquals(
+        MobileAdapterConfigurationCodec.VERSION_2_FORMAT_VERSION,
+        version2[8].toInt() and 0xff,
+    )
+    val decoded = MobileAdapterConfigurationCodec.decode(version2)
+    assertEquals(expected, decoded)
+    assertTrue(
+        (decoded.networkPolicy as MobileAdapterNetworkPolicy.CustomServer)
+            .additionalDnsQueryNames
+            .isEmpty())
+    Files.write(path, version2)
+
+    val store = MobileAdapterConfigurationStore(path)
+    val loaded = store.load()
+    assertEquals(MobileAdapterConfigurationSource.PERSISTED, loaded.source)
+    assertTrue(store.save(loaded.configuration).saved)
+    val migrated = Files.readAllBytes(path)
+    assertEquals(MobileAdapterConfigurationCodec.FORMAT_VERSION, migrated[8].toInt() and 0xff)
+    assertEquals(expected, MobileAdapterConfigurationCodec.decode(migrated))
+  }
+
+  @Test
   fun `codec accepts maximum DNS and mapping boundaries`() {
     val maximumDnsName =
         listOf("a".repeat(63), "b".repeat(63), "c".repeat(63), "d".repeat(61))
             .joinToString(".")
+    val maximumAliases =
+        ('e'..'k').map { character ->
+          listOf(
+                  character.toString().repeat(63),
+                  character.toString().repeat(63),
+                  character.toString().repeat(63),
+                  character.toString().repeat(61),
+              )
+              .joinToString(".")
+        }
     val mappings =
         (0 until MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS).map { index ->
           MobileAdapterPortMapping(
@@ -210,14 +328,41 @@ class MobileAdapterConfigurationStoreTest {
                 resolverIpv4Address = "255.255.255.255",
                 resolverPort = 65_535,
                 portMappings = mappings,
+                additionalDnsQueryNames = maximumAliases,
             ),
         )
 
     val encoded = MobileAdapterConfigurationCodec.encode(expected)
 
     assertEquals(253, maximumDnsName.length)
+    assertEquals(
+        MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES,
+        maximumAliases.size,
+    )
+    assertTrue(maximumAliases.all { it.length == 253 })
     assertEquals(MobileAdapterConfigurationCodec.MAX_ENCODED_SIZE, encoded.size)
     assertEquals(expected, MobileAdapterConfigurationCodec.decode(encoded))
+
+    val version2Maximum =
+        MobileAdapterConfigurationCodec.encodeVersion2(
+            configuration(
+                127,
+                0x43,
+                MobileAdapterNetworkPolicy.CustomServer(
+                    maximumDnsName,
+                    "255.255.255.255",
+                    65_535,
+                    mappings,
+                ),
+            ))
+    assertEquals(MobileAdapterConfigurationCodec.VERSION_2_MAX_ENCODED_SIZE, version2Maximum.size)
+    assertEquals(
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+        assertFailsWith<MobileAdapterConfigurationFormatException> {
+              MobileAdapterConfigurationCodec.decode(version2Maximum.copyOf(version2Maximum.size + 1))
+            }
+            .error,
+    )
   }
 
   @Test
@@ -233,10 +378,16 @@ class MobileAdapterConfigurationStoreTest {
                         listOf(
                             MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 8080),
                             MobileAdapterPortMapping(MobileAdapterTransport.UDP, 53, 5353),
-                        )),
+                        ),
+                    additionalDnsQueryNames = listOf("alternate.example.test"),
+                ),
             ))
     val queryNameLength = custom[273].toInt() and 0xff
-    val mappingCountOffset = 274 + queryNameLength
+    val aliasCountOffset = 274 + queryNameLength
+    val firstAliasLengthOffset = aliasCountOffset + 1
+    val firstAliasOffset = firstAliasLengthOffset + 1
+    val firstAliasLength = custom[firstAliasLengthOffset].toInt() and 0xff
+    val mappingCountOffset = firstAliasOffset + firstAliasLength
     val mappingsOffset = mappingCountOffset + 1
 
     assertDecodeError(
@@ -252,7 +403,9 @@ class MobileAdapterConfigurationStoreTest {
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
-        offline.clone().also { it[8] = 3 },
+        offline.clone().also {
+          it[8] = (MobileAdapterConfigurationCodec.FORMAT_VERSION + 1).toByte()
+        },
         MobileAdapterConfigurationError.UNSUPPORTED_VERSION,
     )
     assertDecodeError(
@@ -294,6 +447,26 @@ class MobileAdapterConfigurationStoreTest {
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
     assertDecodeError(
+        mutateAndResign(custom) {
+          it[aliasCountOffset] =
+              (MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES + 1)
+                  .toByte()
+        },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[firstAliasLengthOffset] = 0 },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[firstAliasOffset] = 0x80.toByte() },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
+        mutateAndResign(custom) { it[firstAliasOffset] = '_'.code.toByte() },
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+    assertDecodeError(
         mutateAndResign(custom) { it[mappingCountOffset] = 17 },
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
@@ -319,6 +492,33 @@ class MobileAdapterConfigurationStoreTest {
     )
     assertDecodeError(
         mutateAndResign(custom.copyOf(custom.size + 1)) {},
+        MobileAdapterConfigurationError.MALFORMED_FILE,
+    )
+
+    val duplicatePrimary =
+        MobileAdapterConfigurationCodec.encode(
+            configuration(
+                8,
+                0x24,
+                customPolicy(
+                    dnsQueryName = "primary.example.test",
+                    additionalDnsQueryNames = listOf("another.example.test"),
+                ),
+            ))
+    val duplicateQueryLength = duplicatePrimary[273].toInt() and 0xff
+    val duplicateAliasCountOffset = 274 + duplicateQueryLength
+    val duplicateAliasLengthOffset = duplicateAliasCountOffset + 1
+    val duplicateAliasOffset = duplicateAliasLengthOffset + 1
+    assertEquals(duplicateQueryLength, duplicatePrimary[duplicateAliasLengthOffset].toInt() and 0xff)
+    assertDecodeError(
+        mutateAndResign(duplicatePrimary) {
+          it.copyInto(
+              destination = it,
+              destinationOffset = duplicateAliasOffset,
+              startIndex = 274,
+              endIndex = 274 + duplicateQueryLength,
+          )
+        },
         MobileAdapterConfigurationError.MALFORMED_FILE,
     )
   }
@@ -673,12 +873,14 @@ class MobileAdapterConfigurationStoreTest {
       resolverIpv4Address: String = "192.0.2.53",
       resolverPort: Int = 53,
       portMappings: Collection<MobileAdapterPortMapping> = emptyList(),
+      additionalDnsQueryNames: Collection<String> = emptyList(),
   ): MobileAdapterNetworkPolicy.CustomServer =
       MobileAdapterNetworkPolicy.CustomServer(
           dnsQueryName,
           resolverIpv4Address,
           resolverPort,
           portMappings,
+          additionalDnsQueryNames,
       )
 
   private fun mutateAndResign(

@@ -96,10 +96,11 @@ class MobileAdapterDestinationPolicyTest {
   @Test
   fun `policy freezes exact rules rejects ambiguity and redacts every endpoint`() {
     val target = MobileAdapterTransportTarget.parse("Custom.Example")
+    val aliases = mutableListOf("Secondary.Game.Service", "Game.Service")
     val rules =
         mutableListOf(
             MobileAdapterDestinationRule(
-                "Game.Service",
+                aliases,
                 target,
                 MobileAdapterTransportProtocol.TCP,
                 80,
@@ -119,11 +120,23 @@ class MobileAdapterDestinationPolicyTest {
             MobileAdapterDnsResolver(MobileAdapterIpv4Address.parse("203.0.114.53")),
             rules,
         )
+    aliases.clear()
     rules.clear()
 
     assertEquals(2, policy.rules().size)
+    assertEquals(
+        listOf("game.service", "secondary.game.service"),
+        policy.rules().first { it.protocol == MobileAdapterTransportProtocol.TCP }.canonicalAliases,
+    )
+    assertEquals(2, policy.rulesForCanonicalAlias("game.service").size)
+    assertEquals(1, policy.rulesForCanonicalAlias("secondary.game.service").size)
+    assertFailsWith<UnsupportedOperationException> {
+      @Suppress("UNCHECKED_CAST")
+      (policy.rules().first().canonicalAliases as MutableList<String>).add("mutated.example")
+    }
     val rendered = policy.toString() + policy.rules().joinToString() + target
     assertFalse(rendered.contains("game.service", ignoreCase = true))
+    assertFalse(rendered.contains("secondary.game.service", ignoreCase = true))
     assertFalse(rendered.contains("custom.example", ignoreCase = true))
     assertFalse(rendered.contains("8080"))
     assertTrue(rendered.contains("[redacted]"))
@@ -147,14 +160,14 @@ class MobileAdapterDestinationPolicyTest {
           policy.resolver,
           listOf(
               MobileAdapterDestinationRule(
-                  "game.service",
+                  listOf("game.service", "alternate.service"),
                   target,
                   MobileAdapterTransportProtocol.TCP,
                   80,
                   8080,
               ),
               MobileAdapterDestinationRule(
-                  "game.service",
+                  "ALTERNATE.SERVICE",
                   target,
                   MobileAdapterTransportProtocol.TCP,
                   80,
@@ -175,6 +188,79 @@ class MobileAdapterDestinationPolicyTest {
                 it + 1,
             )
           },
+      )
+    }
+  }
+
+  @Test
+  fun `one rule admits eight immutable exact aliases and rejects empty duplicate or excessive sets`() {
+    val target = MobileAdapterTransportTarget.parse("203.0.114.9")
+    val aliases = (8 downTo 1).mapTo(mutableListOf()) { "Alias$it.Example" }
+    val rule =
+        MobileAdapterDestinationRule(
+            aliases,
+            target,
+            MobileAdapterTransportProtocol.TCP,
+            80,
+            8080,
+        )
+    aliases.clear()
+
+    assertEquals(MobileAdapterDestinationRule.MAX_ALIASES, rule.canonicalAliases.size)
+    assertEquals((1..8).map { "alias$it.example" }.sorted(), rule.canonicalAliases)
+    assertTrue(rule.acceptsCanonicalAlias("alias1.example"))
+    assertFalse(rule.acceptsCanonicalAlias("unconfigured.example"))
+    assertFalse(rule.toString().contains("alias1.example"))
+    assertTrue(rule.toString().contains("aliases=8"))
+    assertFailsWith<IllegalArgumentException> {
+      MobileAdapterDestinationRule(
+          emptyList(),
+          target,
+          MobileAdapterTransportProtocol.TCP,
+          80,
+      )
+    }
+    assertFailsWith<IllegalArgumentException> {
+      MobileAdapterDestinationRule(
+          listOf("Duplicate.Example", "duplicate.example"),
+          target,
+          MobileAdapterTransportProtocol.TCP,
+          80,
+      )
+    }
+    assertFailsWith<IllegalArgumentException> {
+      MobileAdapterDestinationRule(
+          (0..MobileAdapterDestinationRule.MAX_ALIASES).map { "alias$it.example" },
+          target,
+          MobileAdapterTransportProtocol.TCP,
+          80,
+      )
+    }
+  }
+
+  @Test
+  fun `overlapping aliases cannot select different targets even on different ports`() {
+    val firstTarget = MobileAdapterTransportTarget.parse("first-target.example")
+    val secondTarget = MobileAdapterTransportTarget.parse("second-target.example")
+
+    assertFailsWith<IllegalArgumentException> {
+      MobileAdapterDestinationPolicy(
+          1,
+          MobileAdapterDnsResolver(MobileAdapterIpv4Address.parse("203.0.114.53")),
+          listOf(
+              MobileAdapterDestinationRule(
+                  listOf("primary.example", "shared.example"),
+                  firstTarget,
+                  MobileAdapterTransportProtocol.TCP,
+                  80,
+              ),
+              MobileAdapterDestinationRule(
+                  listOf("SHARED.EXAMPLE", "secondary.example"),
+                  secondTarget,
+                  MobileAdapterTransportProtocol.UDP,
+                  53,
+              ),
+          ),
       )
     }
   }

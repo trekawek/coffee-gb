@@ -131,17 +131,50 @@ sealed interface MobileAdapterNetworkPolicy {
     override val mode = MobileAdapterNetworkMode.OFFLINE
   }
 
-  class CustomServer(
+  class CustomServer private constructor(
       dnsQueryName: String,
       resolverIpv4Address: String,
       val resolverPort: Int,
-      portMappings: Collection<MobileAdapterPortMapping> = emptyList(),
+      portMappings: Collection<MobileAdapterPortMapping>,
+      additionalDnsQueryNames: Collection<String>,
+      @Suppress("UNUSED_PARAMETER") constructorMarker: Unit,
   ) : MobileAdapterNetworkPolicy {
+    constructor(
+        dnsQueryName: String,
+        resolverIpv4Address: String,
+        resolverPort: Int,
+        portMappings: Collection<MobileAdapterPortMapping> = emptyList(),
+    ) : this(
+        dnsQueryName,
+        resolverIpv4Address,
+        resolverPort,
+        portMappings,
+        emptyList(),
+        Unit,
+    )
+
+    constructor(
+        dnsQueryName: String,
+        resolverIpv4Address: String,
+        resolverPort: Int,
+        portMappings: Collection<MobileAdapterPortMapping>,
+        additionalDnsQueryNames: Collection<String>,
+    ) : this(
+        dnsQueryName,
+        resolverIpv4Address,
+        resolverPort,
+        portMappings,
+        additionalDnsQueryNames,
+        Unit,
+    )
+
     override val mode = MobileAdapterNetworkMode.CUSTOM_SERVER
 
     val dnsQueryName: String = normalizeDnsQueryName(dnsQueryName)
 
     val resolverIpv4Address: String = normalizeIpv4Address(resolverIpv4Address)
+
+    val additionalDnsQueryNames: List<String>
 
     val portMappings: List<MobileAdapterPortMapping>
 
@@ -161,6 +194,24 @@ sealed interface MobileAdapterNetworkPolicy {
         "A transport and guest port may have only one target mapping"
       }
       this.portMappings = Collections.unmodifiableList(ArrayList(sorted))
+
+      val boundedAliases = ArrayList<String>(MAX_ADDITIONAL_DNS_QUERY_NAMES)
+      additionalDnsQueryNames.forEach { alias ->
+        require(boundedAliases.size < MAX_ADDITIONAL_DNS_QUERY_NAMES) {
+          "A Mobile Adapter custom server supports at most " +
+              "$MAX_ADDITIONAL_DNS_QUERY_NAMES additional DNS query names"
+        }
+        boundedAliases.add(normalizeDnsQueryName(alias))
+      }
+      val sortedAliases = boundedAliases.sorted()
+      require(sortedAliases.distinct().size == sortedAliases.size) {
+        "Additional DNS query names must be unique"
+      }
+      require(this.dnsQueryName !in sortedAliases) {
+        "An additional DNS query name must not duplicate the primary name"
+      }
+      this.additionalDnsQueryNames =
+          Collections.unmodifiableList(ArrayList(sortedAliases))
     }
 
     internal fun resolverAddressBytes(): ByteArray {
@@ -172,12 +223,14 @@ sealed interface MobileAdapterNetworkPolicy {
         this === other ||
             (other is CustomServer &&
                 dnsQueryName == other.dnsQueryName &&
+                additionalDnsQueryNames == other.additionalDnsQueryNames &&
                 resolverIpv4Address == other.resolverIpv4Address &&
                 resolverPort == other.resolverPort &&
                 portMappings == other.portMappings)
 
     override fun hashCode(): Int {
       var result = dnsQueryName.hashCode()
+      result = 31 * result + additionalDnsQueryNames.hashCode()
       result = 31 * result + resolverIpv4Address.hashCode()
       result = 31 * result + resolverPort
       result = 31 * result + portMappings.hashCode()
@@ -186,12 +239,15 @@ sealed interface MobileAdapterNetworkPolicy {
 
     override fun toString(): String =
         "MobileAdapterNetworkPolicy.CustomServer(" +
-            "dnsQueryName=[redacted], resolverIpv4Address=[redacted], " +
+            "dnsQueryName=[redacted], additionalDnsQueryNames=${additionalDnsQueryNames.size}, " +
+            "resolverIpv4Address=[redacted], " +
             "resolverPort=[redacted], portMappings=${portMappings.size})"
 
     companion object {
       const val MAX_DNS_QUERY_NAME_BYTES = 253
       const val MAX_DNS_LABEL_BYTES = 63
+      const val MAX_ADDITIONAL_DNS_QUERY_NAMES = 7
+      const val MAX_DNS_QUERY_NAMES = MAX_ADDITIONAL_DNS_QUERY_NAMES + 1
       const val MAX_PORT_MAPPINGS = 16
 
       private val DNS_LABEL = Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")

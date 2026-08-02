@@ -163,32 +163,58 @@ class MobileAdapterTransportTarget private constructor(
   }
 }
 
-/** One exact guest alias/protocol/port capability mapped to one custom transport endpoint. */
+/** One bounded set of exact guest aliases/protocol/port capabilities mapped to one endpoint. */
 class MobileAdapterDestinationRule(
-    alias: String,
+    aliases: Collection<String>,
     val target: MobileAdapterTransportTarget,
     val protocol: MobileAdapterTransportProtocol,
     val guestPort: Int,
     val targetPort: Int = guestPort,
 ) {
-  internal val canonicalAlias: String = canonicalMobileAdapterHost(alias)
+  constructor(
+      alias: String,
+      target: MobileAdapterTransportTarget,
+      protocol: MobileAdapterTransportProtocol,
+      guestPort: Int,
+      targetPort: Int = guestPort,
+  ) : this(listOf(alias), target, protocol, guestPort, targetPort)
+
+  internal val canonicalAliases: List<String>
 
   init {
     require(guestPort in 1..65535) { "Guest port must be in 1..65535" }
     require(targetPort in 1..65535) { "Target port must be in 1..65535" }
+    val boundedAliases = ArrayList<String>(MAX_ALIASES)
+    aliases.forEach { alias ->
+      require(boundedAliases.size < MAX_ALIASES) {
+        "A destination rule supports at most $MAX_ALIASES exact aliases"
+      }
+      boundedAliases.add(canonicalMobileAdapterHost(alias))
+    }
+    require(boundedAliases.isNotEmpty()) { "A destination rule requires at least one exact alias" }
+    val sortedAliases = boundedAliases.sorted()
+    require(sortedAliases.distinct().size == sortedAliases.size) {
+      "A destination rule cannot contain duplicate aliases"
+    }
+    canonicalAliases = java.util.Collections.unmodifiableList(ArrayList(sortedAliases))
   }
+
+  internal val canonicalAlias: String
+    get() = canonicalAliases.first()
+
+  internal fun acceptsCanonicalAlias(alias: String): Boolean = alias in canonicalAliases
 
   override fun equals(other: Any?): Boolean =
       this === other ||
           other is MobileAdapterDestinationRule &&
-              canonicalAlias == other.canonicalAlias &&
+              canonicalAliases == other.canonicalAliases &&
               target == other.target &&
               protocol == other.protocol &&
               guestPort == other.guestPort &&
               targetPort == other.targetPort
 
   override fun hashCode(): Int {
-    var result = canonicalAlias.hashCode()
+    var result = canonicalAliases.hashCode()
     result = 31 * result + target.hashCode()
     result = 31 * result + protocol.hashCode()
     result = 31 * result + guestPort
@@ -196,8 +222,12 @@ class MobileAdapterDestinationRule(
   }
 
   override fun toString(): String =
-      "MobileAdapterDestinationRule(alias=[redacted], target=[redacted], protocol=$protocol, " +
+      "MobileAdapterDestinationRule(aliases=${canonicalAliases.size}, target=[redacted], protocol=$protocol, " +
           "guestPort=[redacted], targetPort=[redacted])"
+
+  companion object {
+    const val MAX_ALIASES: Int = 8
+  }
 }
 
 /**
@@ -218,13 +248,19 @@ class MobileAdapterDestinationPolicy(
     require(revision >= 0) { "Destination policy revision must not be negative" }
     require(rules.size <= MAX_RULES) { "Destination policy exceeds 16 rules" }
     ownedRules = rules.toList()
-    rulesByAlias = ownedRules.groupBy { it.canonicalAlias }
+    rulesByAlias =
+        ownedRules
+            .flatMap { rule -> rule.canonicalAliases.map { alias -> alias to rule } }
+            .groupBy({ it.first }, { it.second })
     require(ownedRules.distinct().size == ownedRules.size) { "Destination policy has duplicate rules" }
+    val aliasRuleCount = ownedRules.sumOf { it.canonicalAliases.size }
     require(
         ownedRules
-            .map { Triple(it.canonicalAlias, it.protocol, it.guestPort) }
+            .flatMap { rule ->
+              rule.canonicalAliases.map { alias -> Triple(alias, rule.protocol, rule.guestPort) }
+            }
             .distinct()
-            .size == ownedRules.size) {
+            .size == aliasRuleCount) {
       "Destination policy has an ambiguous alias, transport, and guest-port mapping"
     }
     require(ownedRules.none { it.target.requiresDns } || resolver != null) {
