@@ -856,11 +856,17 @@ class MobileAdapterControllerLifecycleTest {
         it.selection == SerialPeripheralSelection.MOBILE_ADAPTER_GB
       }
       eventBus.post(Controller.LoadRomEvent(rom))
-      fixture.await(fixture.started) { true }
+      val started = fixture.await(fixture.started) { true }
       fixture.awaitCondition { endpoint.get() != null }
       fixture.awaitCondition { fixture.stateSessionId >= 0 }
+      val sessionGeneration = assertNotNull(started.sessionGeneration)
+      fixture.await(fixture.playbackStates) {
+        it.sessionGeneration == sessionGeneration && !it.paused
+      }
       eventBus.post(Controller.PauseEmulationEvent())
-      Thread.sleep(100)
+      fixture.await(fixture.playbackStates) {
+        it.sessionGeneration == sessionGeneration && it.paused
+      }
       fixture.clearPresentationQueues()
       return fixture
     } catch (failure: Throwable) {
@@ -1000,6 +1006,7 @@ class MobileAdapterControllerLifecycleTest {
       val endpoint: AtomicReference<MobileAdapterSerialEndpoint>,
   ) : AutoCloseable {
     val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
+    val playbackStates = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
     val selections =
         LinkedBlockingQueue<Controller.SerialPeripheralSelectionChangedEvent>()
     val serialStatuses = LinkedBlockingQueue<SerialPeripheralStatusEvent>()
@@ -1014,6 +1021,7 @@ class MobileAdapterControllerLifecycleTest {
 
     init {
       eventBus.register<Controller.EmulationStartedEvent>(started::add)
+      eventBus.register<Controller.SessionPlaybackStateEvent>(playbackStates::add)
       eventBus.register<Controller.SerialPeripheralSelectionChangedEvent>(selections::add)
       eventBus.register<SerialPeripheralStatusEvent>(serialStatuses::add)
       eventBus.register<MobileAdapterNetworkStatusEvent>(networkStatuses::add)
@@ -1044,6 +1052,7 @@ class MobileAdapterControllerLifecycleTest {
     }
 
     fun clearPresentationQueues() {
+      playbackStates.clear()
       selections.clear()
       serialStatuses.clear()
       networkStatuses.clear()

@@ -123,8 +123,8 @@ class DesktopUtilityDialogsTest {
   @Test
   fun `Action Replay attachment exposes Browse Remove Apply and literal current path`() =
       onEdt {
-        val initial = Path.of("/games/<html>old.gb</html>")
-        val replacement = Path.of("/games/& new.gbc")
+        val initial = Path.of("games", "old & current.gb")
+        val replacement = Path.of("games", "& new.gbc")
         val form = ActionReplaySlotForm(initial) { replacement }
         val results = mutableListOf<DesktopUtilityFormResult>()
         val shell = factory().createFormPanel(form.spec(), form, results::add)
