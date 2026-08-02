@@ -104,6 +104,13 @@ public class GambatteHwRomTest {
             parameters.add(new Object[]{test.rom(), bytes, test.gameboyType(), test.expected(),
                     currentBaseline.getOrDefault(test.key(), test.expected())});
         }
+        // A cold authentic-BIOS boot can exceed this test's per-case deadline on a
+        // busy CI runner. Prime each distinct cache entry during parameter discovery,
+        // before those deadlines begin; subsequent test instances restore its memento.
+        for (Object[] parameter : parameters) {
+            GambatteHwTestRunner.primePostBootState(
+                    (byte[]) parameter[1], (GameboyType) parameter[2]);
+        }
         return parameters;
     }
 

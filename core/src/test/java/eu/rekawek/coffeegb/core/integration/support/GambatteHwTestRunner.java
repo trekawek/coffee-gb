@@ -43,14 +43,38 @@ public final class GambatteHwTestRunner {
 
     public GambatteHwTestRunner(byte[] rom, GameboyType gameboyType) throws IOException {
         Rom parsedRom = new Rom(rom);
-        Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(parsedRom)
-                .setGameboyType(gameboyType)
-                .setSupportBatterySave(false);
+        Gameboy.GameboyConfiguration configuration = configuration(parsedRom, gameboyType);
         gameboy = buildAtPostBoot(configuration, bootHeader(parsedRom));
         // The runner is fully synchronous. The default EventBusImpl starts a polling
         // thread; using one per parameterized ROM would retain every completed emulator
         // until JVM exit and make an exhaustive run grow without bound.
         gameboy.init(new EventBusImpl(null, null, false), SerialEndpoint.NULL_ENDPOINT, null);
+    }
+
+    /**
+     * Populates the post-boot cache outside JUnit's per-ROM deadline. A first boot can
+     * take several seconds on a contended CI runner, while restoring its memento is
+     * fast and deterministic.
+     */
+    public static void primePostBootState(byte[] rom, GameboyType gameboyType)
+            throws IOException {
+        Rom parsedRom = new Rom(rom);
+        Gameboy.GameboyConfiguration configuration = configuration(parsedRom, gameboyType);
+        BootStateKey key = new BootStateKey(configuration.getGameboyType(), bootHeader(parsedRom));
+        synchronized (POST_BOOT_STATES) {
+            if (!POST_BOOT_STATES.containsKey(key)) {
+                Gameboy booted = configuration
+                        .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+                        .build();
+                POST_BOOT_STATES.put(key, booted.captureState());
+            }
+        }
+    }
+
+    private static Gameboy.GameboyConfiguration configuration(Rom rom, GameboyType gameboyType) {
+        return new Gameboy.GameboyConfiguration(rom)
+                .setGameboyType(gameboyType)
+                .setSupportBatterySave(false);
     }
 
     private static Gameboy buildAtPostBoot(
