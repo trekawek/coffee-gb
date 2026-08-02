@@ -613,10 +613,12 @@ above.
 - Select **Peripherals → Link-port device → Mobile Adapter GB**. Status changes to
   attached only after the controller commits the endpoint; selecting another radio item detaches
   and clears it.
-- Open **Peripherals → Configure Mobile Adapter…** to choose offline or custom-server policy. A
-  saved custom policy still performs no host I/O until session consent is granted; private/LAN
-  targets require the additional development confirmation. **Cancel active network work** rotates
-  backend ownership and closes current DNS/socket work without waiting on the EDT.
+- Open **Peripherals → Configure Mobile Adapter…** to choose offline or custom-server policy,
+  including one primary exact DNS name and up to seven additional exact names which share the same
+  resolver and port mappings. A saved custom policy still performs no host I/O until session
+  consent is granted; private/LAN targets require the additional development confirmation.
+  **Cancel active network work** rotates backend ownership and closes current DNS/socket work
+  without waiting on the EDT.
 - **Import adapter image…** accepts only an exact opaque 256-byte image or a validated exact
   512-byte REON/libmobile envelope. `IMPORT_MALFORMED_IMAGE`, `IMPORT_NON_REGULAR_SOURCE`,
   `IMPORT_READ_FAILED`, and `IMPORT_SOURCE_CONFLICT` are stable redacted failures. The last accepted

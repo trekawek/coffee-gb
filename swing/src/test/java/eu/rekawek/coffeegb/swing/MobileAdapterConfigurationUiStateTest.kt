@@ -71,6 +71,7 @@ class MobileAdapterConfigurationUiStateTest {
                 "192.168.10.20",
                 5353,
                 listOf(MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080)),
+                listOf("private-alias.example"),
             ),
         )
     val text =
@@ -84,6 +85,7 @@ class MobileAdapterConfigurationUiStateTest {
     assertTrue(text.contains("custom server"))
     assertTrue(text.contains("Custom-server mappings: 1"))
     assertFalse(text.contains("private-service"))
+    assertFalse(text.contains("private-alias"))
     assertFalse(text.contains("192.168"))
     assertFalse(text.contains("18080"))
   }
