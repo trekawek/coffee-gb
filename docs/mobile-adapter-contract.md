@@ -10,9 +10,16 @@ custom backend and does not emulate or select a Nintendo production service. Arc
 under `core/src/test/resources/mobile-adapter/`.
 The real-ROM and custom-service results, including their remaining boundary, are recorded in
 [mobile-adapter-crystal-reon-validation.md](mobile-adapter-crystal-reon-validation.md).
+At Coffee GB revision `97fc57b4`, one owner-authorized Mobile Trainer session completed the manual
+acceptance for a loopback custom-server HTTP request through the production controller and backend.
+Five bounded transfers delivered the 19-byte response, ended with remote close, and visibly rendered
+`hello world`; the pinned REON access output recorded exactly one expected request and controlled
+shutdown passed the aggregate cleanup check after remote close had already released backend
+ownership. Japanese Pokémon Crystal remains a narrower adapter-recognition result; the Mobile
+Trainer run is not evidence that Crystal reached a network feature.
 The retained Mobile Adapter configuration dialog also has a bounded, owner-selected adapter-image
-import path. The current desktop keeps its Mobile Adapter controls hidden; the import control does
-not make that retained dialog a generally exposed feature.
+import path. At the acceptance revision, the desktop kept its Mobile Adapter controls hidden; the
+import control alone did not make that retained dialog a generally exposed feature.
 
 ## Implemented deterministic boundary
 
@@ -56,7 +63,7 @@ The endpoint also raises a runtime-only history fence whenever it admits backend
 controller consumes that fence after the frame and clears rewind history even if the request and
 its logical connection both completed within that same frame; the fence is never serialized.
 
-Phase #353 supplies only a synthetic service flow for reaching a custom server. Blue-adapter dial command
+The implemented blue-adapter service flow reaches only a user-selected custom server. Dial command
 `12` accepts model prefix `00` plus the exact Mobile System GB ISP number `#9677`; it never places a
 host telephone call. Status command `17` reports disconnected `00 4d 00` before dial and connected
 `04 4d 00` after dial/login. ISP login command `21` validates bounded `length + ID`, `length +
@@ -137,6 +144,29 @@ the injected 3,000 ms idle reset; wake/toggle timing remains an evidence gap unt
 measurement resolves it. Phase #353 freezes only the blue-adapter Crystal outbound flow above;
 inbound calls, direct telephone numbers, other adapter colors, unmetered status, undocumented
 command effects, Nintendo service content, and GBA SIO32 behavior remain out of scope.
+
+### Manual validation boundary
+
+The owner-authorized acceptance at Coffee GB revision `97fc57b4` keeps two real-software results
+separate:
+
+- Japanese Pokémon Crystal exercises wake/poll, BEGIN, telephone status, response framing, END,
+  and its adapter-check screen. It does not dial, resolve a name, open a socket, or establish
+  Crystal networking support.
+- Mobile Trainer performs two changed guest configuration writes through persistence. Its browser
+  stage uses exact-alias DNS and five bounded TCP transfers to request
+  `http://gameboy.datacenter.ne.jp/01/CGB-B9AJ/index.html` from a loopback-only pinned REON
+  DNS/nginx service. The service recorded exactly one expected request with status 200 and 19
+  response bytes. Coffee GB delivered and drained the declared `<p>hello world</p>\n` body through
+  the utility's adapter session, converted server EOF to remote close, visibly rendered
+  `hello world`, and released backend ownership before controlled-shutdown cleanup. No screenshot
+  is retained.
+
+Mobile Trainer's first-run provider check used a loopback setup fixture built from the pinned REON
+POP parser and framing. That prerequisite neither used nor validates REON's production mail service,
+user database, provider authentication, accounts, or general POP compatibility. The acceptance
+does not emulate a Nintendo service, authorize a production endpoint, or expand the protocol subset
+beyond the commands and bounds defined here.
 
 ## Frozen GBC packet subset
 
@@ -617,10 +647,13 @@ above.
   session. Loading that state, loading another state while I/O is live, rewind, reset, detach, and
   shutdown cancel host ownership; no socket, DNS request, worker deadline, or connection ID is
   serialized or recreated. The desktop reports the saved/disconnected boundary explicitly.
-- A user-supplied Japanese Pokémon Crystal ROM confirms wake, BEGIN, telephone-status, END, and the
-  adapter-check screen. Deterministic tests cover the complete outbound service sequence without
-  committing a ROM. A ROM-generated DNS/TCP/HTTP request remains a manual gate requiring suitable
-  gameplay state and an explicitly selected non-Nintendo custom service such as REON.
+- A user-supplied Japanese Pokémon Crystal ROM confirms wake, BEGIN, telephone status, END, and the
+  adapter-check screen only. An owner-authorized Mobile Trainer run separately confirms two guest
+  configuration writes and one exact-alias DNS/TCP/HTTP session against a loopback-only pinned REON
+  service: five transfers delivered the declared 19-byte body, ended with remote close, visibly
+  rendered `hello world`, and passed controlled-shutdown cleanup. That utility result does not
+  establish Crystal networking. Crystal still requires suitable progressed gameplay state and an
+  explicitly selected non-Nintendo custom service for its own manual DNS/TCP/HTTP acceptance.
 
 ## Transcript format and legal status
 
