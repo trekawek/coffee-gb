@@ -90,7 +90,8 @@ public class ConsoleTest {
 
         assertEquals(new DebugMemoryRequest(DebugAddressSpace.ROM, 0x100, 4), port.lastMemoryRequest);
         assertEquals(1, port.memoryCalls);
-        assertTrue(harness.output().contains("ROM 0100-0103 (4 bytes)\n0100: 3E 12 3C 00"));
+        assertTrue(harness.output()
+                .contains("ROM 0100-0103 (4 bytes)" + System.lineSeparator() + "0100: 3E 12 3C 00"));
 
         harness.console.executeLine("memory read ROM 0x0200 5");
 

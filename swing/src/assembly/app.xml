@@ -22,8 +22,12 @@
             <unpack>true</unpack>
             <unpackOptions>
                 <!-- The app artifact is the target-neutral input to jlink/jpackage.
-                     Native code is supplied only by an explicit locked target bundle. -->
+                     Native code is supplied only by an explicit locked target bundle. Dependency
+                     module descriptors cannot describe the merged application and would make
+                     jdeps inspect an arbitrary overwritten descriptor instead of the complete JAR. -->
                 <excludes>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/**/module-info.class</exclude>
                     <exclude>**/*.dll</exclude>
                     <exclude>**/*.dylib</exclude>
                     <exclude>**/*.jnilib</exclude>

@@ -45,6 +45,7 @@ public final class NativePackageMetadata {
             "java.desktop",
             "java.logging",
             "java.management",
+            "java.prefs",
             "jdk.crypto.ec",
             "jdk.unsupported");
 
@@ -54,6 +55,7 @@ public final class NativePackageMetadata {
             "java.desktop",
             "java.logging",
             "java.management",
+            "java.prefs",
             "jdk.unsupported");
 
     public static final Set<String> LINKED_RUNTIME_MODULES = Set.of(

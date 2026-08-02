@@ -182,17 +182,21 @@ checksum, and compares two independent Linux stages byte-for-byte.
 `jdeps --multi-release 16 --print-module-deps` is checked against the locked static dependency set:
 
 ```text
-java.base,java.compiler,java.desktop,java.logging,java.management,jdk.unsupported
+java.base,java.compiler,java.desktop,java.logging,java.management,java.prefs,jdk.unsupported
 ```
 
 `jdk.crypto.ec` is the one deliberate dynamic addition for encrypted Java transports. `jlink`
-uses those seven roots with `--strip-debug`, `--no-header-files`, `--no-man-pages`, and
+uses those eight roots with `--strip-debug`, `--no-header-files`, `--no-man-pages`, and
 `--compress=zip-6`. The resulting ten-module transitive closure is verified before jpackage:
 
 ```text
 java.base, java.compiler, java.datatransfer, java.desktop, java.logging,
 java.management, java.prefs, java.xml, jdk.crypto.ec, jdk.unsupported
 ```
+
+The merged app JAR excludes dependency `module-info.class` entries. Those descriptors describe
+their original libraries, not the combined application, and retaining whichever descriptor was
+unpacked last would make `jdeps` inspect an incomplete dependency graph.
 
 Any new static dependency or changed linked closure fails packaging and requires an explicit module
 inventory update plus fresh host launch evidence. The tool runs `java -jar coffee-gb.jar --version`

@@ -117,6 +117,7 @@ public class NativePackageMetadataTest {
                         "java.desktop",
                         "java.logging",
                         "java.management",
+                        "java.prefs",
                         "jdk.crypto.ec",
                         "jdk.unsupported"),
                 Set.copyOf(NativePackageMetadata.RUNTIME_ROOT_MODULES));

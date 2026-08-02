@@ -75,6 +75,8 @@ public class NativeArtifactIT {
         assertTrue(removed.remove("META-INF/maven/eu.rekawek.coffeegb/swing/"));
         assertTrue(removed.remove("META-INF/maven/eu.rekawek.coffeegb/swing/pom.properties"));
         assertTrue(removed.remove("META-INF/maven/eu.rekawek.coffeegb/swing/pom.xml"));
+        assertTrue(removed.remove("module-info.class"));
+        assertTrue(removed.remove("META-INF/versions/9/module-info.class"));
         assertEquals(54, removed.size());
         assertTrue(removed.stream().allMatch(NativeArtifactPolicy::isNativeResource));
 

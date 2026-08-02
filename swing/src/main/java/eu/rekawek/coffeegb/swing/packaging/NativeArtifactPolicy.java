@@ -3,10 +3,12 @@ package eu.rekawek.coffeegb.swing.packaging;
 import java.util.List;
 import java.util.Locale;
 
-/** Shared policy describing binary-native entries forbidden in the target-neutral app JAR. */
+/** Shared policy describing dependency entries forbidden in the merged target-neutral app JAR. */
 public final class NativeArtifactPolicy {
 
     public static final List<String> ASSEMBLY_EXCLUDES = List.of(
+            "module-info.class",
+            "META-INF/versions/**/module-info.class",
             "**/*.dll",
             "**/*.dylib",
             "**/*.jnilib",

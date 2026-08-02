@@ -781,10 +781,12 @@ class BasicController private constructor(
   private fun isImmediateDebugControl(event: Event): Boolean =
       event is Controller.PauseEmulationEvent || event is Controller.ResumeEmulationEvent
 
-  /** Controls that must not be starved by a debugger-owned mid-frame pause. */
+  /**
+   * Lifecycle controls that must not be starved by a debugger-owned mid-frame pause. Immediate
+   * pause-ownership controls are handled at the next safe point instead of advancing paused state.
+   */
   private fun requiresDebugFrameBoundary(event: Event): Boolean =
-      isImmediateDebugControl(event) ||
-          event is Controller.LoadRomEvent ||
+      event is Controller.LoadRomEvent ||
           event is Controller.CancelRomOpenEvent ||
           event is Controller.RetryRomReplacementEvent ||
           event is Controller.CancelRomReplacementEvent ||

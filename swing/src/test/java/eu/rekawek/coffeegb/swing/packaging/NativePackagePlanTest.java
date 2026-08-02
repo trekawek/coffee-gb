@@ -30,7 +30,8 @@ public class NativePackagePlanTest {
         assertEquals(app.toString(), jdeps.get(jdeps.size() - 1));
 
         plan.verifyJdepsModules(
-                "java.base,java.compiler,java.desktop,java.logging,java.management,jdk.unsupported");
+                "java.base,java.compiler,java.desktop,java.logging,java.management,java.prefs,"
+                        + "jdk.unsupported");
         assertThrows(
                 IllegalArgumentException.class,
                 () -> plan.verifyJdepsModules("java.base,java.desktop"));
