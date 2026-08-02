@@ -14,6 +14,8 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import java.awt.Color
 import java.awt.Component
 import java.awt.Container
+import java.awt.Dimension
+import java.awt.Rectangle
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
@@ -22,8 +24,12 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JLabel
+import javax.swing.DefaultCellEditor
+import javax.swing.JScrollBar
+import javax.swing.JScrollPane
 import javax.swing.SwingUtilities
 import javax.swing.JTextArea
+import javax.swing.JTextField
 import javax.swing.text.AbstractDocument
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -244,7 +250,12 @@ class MobileAdapterConfigurationWindowTest {
                 importConfigurationImage = { imports.incrementAndGet() },
             )
         val initialTokens = tokens()
-        val panel = MobileAdapterConfigurationPanel(actions, initialTokens)
+        val contentMinimumChanges = AtomicInteger()
+        val panel =
+            MobileAdapterConfigurationPanel(actions, initialTokens) {
+              contentMinimumChanges.incrementAndGet()
+            }
+        val contentMinimumChangesAfterConstruction = contentMinimumChanges.get()
         val policy = customPolicy()
         val draft = MobileAdapterPolicyDraft.from(policy)
         panel.render(
@@ -264,12 +275,13 @@ class MobileAdapterConfigurationWindowTest {
             ))
 
         assertTrue(edited.isEmpty(), "rendering a retained alias draft must not publish an edit")
-        assertEquals("browser.example\ntrainer.example", panel.additionalDnsQueryNames.text)
-        assertFalse(panel.additionalDnsQueryNames.lineWrap)
-        assertEquals(3, panel.additionalDnsQueryNames.rows)
-        assertEquals(28, panel.additionalDnsQueryNames.columns)
         assertEquals(
-            panel.additionalDnsQueryNames,
+            listOf("browser.example", "trainer.example", "", "", "", "", ""),
+            panel.additionalDnsQueryNameFields.map { it.text },
+        )
+        assertTrue(panel.additionalDnsQueryNameFields.all { it.columns == 28 })
+        assertEquals(
+            panel.additionalDnsQueryNameFields.first(),
             descendants(panel)
                 .filterIsInstance<JLabel>()
                 .single { it.text == "Additional exact DNS names" }
@@ -280,7 +292,7 @@ class MobileAdapterConfigurationWindowTest {
                 .filterIsInstance<JTextArea>()
                 .single { it.accessibleContext.accessibleName == "Additional DNS names help" }
                 .text
-                .contains("one exact DNS name per line"))
+                .contains("one exact DNS name per field"))
         assertEquals(2, panel.mappingModel.rowCount)
         assertEquals(
             listOf("Transport", "Guest port", "Target port"),
@@ -306,15 +318,18 @@ class MobileAdapterConfigurationWindowTest {
         panel.importImageButton.doClick()
         assertEquals(1, imports.get())
 
-        panel.additionalDnsQueryNames.text = "store.example\n"
-        assertEquals("store.example\n", edited.last().additionalDnsQueryNamesText)
-        val boundedDocument = panel.additionalDnsQueryNames.document as AbstractDocument
-        val retained = "x".repeat(MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS)
+        panel.additionalDnsQueryNameFields.forEach { it.text = "" }
+        panel.additionalDnsQueryNameFields.first().text = "store.example"
+        assertEquals("store.example", edited.last().additionalDnsQueryNamesText)
+        val boundedAlias = panel.additionalDnsQueryNameFields.first()
+        val boundedDocument = boundedAlias.document as AbstractDocument
+        val retained =
+            "x".repeat(MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES)
         boundedDocument.replace(0, boundedDocument.length, retained, null)
-        assertEquals(retained, panel.additionalDnsQueryNames.text)
+        assertEquals(retained, boundedAlias.text)
         boundedDocument.replace(0, boundedDocument.length, retained + "x", null)
-        assertEquals(retained, panel.additionalDnsQueryNames.text)
-        panel.additionalDnsQueryNames.text = "store.example\n"
+        assertEquals(retained, boundedAlias.text)
+        boundedAlias.text = "store.example"
 
         panel.mappingModel.setValueAt("0", 0, 1)
         assertEquals("0", edited.last().portMappings.first().guestPort)
@@ -347,7 +362,342 @@ class MobileAdapterConfigurationWindowTest {
         assertEquals(dark.danger, panel.validationStatus.foreground)
         assertEquals(dark.success, panel.guestImageStatus.foreground)
         assertEquals(dark.danger, panel.policyStatus.foreground)
+        assertEquals(contentMinimumChangesAfterConstruction + 1, contentMinimumChanges.get())
       }
+
+  @Test
+  fun `panel uses four bounded categories without scrollbars`() =
+      onEdt {
+        val panel = MobileAdapterConfigurationPanel(noOpActions(), tokens())
+        val navigation = panel.categories
+        val expectedCategories =
+            listOf(
+                MobileAdapterConfigurationCategory.ADAPTER_IMAGE,
+                MobileAdapterConfigurationCategory.CUSTOM_SERVICE,
+                MobileAdapterConfigurationCategory.PORT_MAPPINGS,
+                MobileAdapterConfigurationCategory.CURRENT_SESSION,
+            )
+
+        assertEquals(
+            expectedCategories,
+            (0 until navigation.categoryList.model.size).map {
+              navigation.categoryList.model.getElementAt(it)
+            },
+        )
+        assertFalse(navigation.categoryList.accessibleContext.accessibleName.isNullOrBlank())
+        assertFalse(navigation.accessibleContext.accessibleDescription.isNullOrBlank())
+        expectedCategories.forEach { category ->
+          val page = navigation.page(category)
+          assertEquals(category.displayName, page.accessibleContext.accessibleName)
+          assertFalse(page.accessibleContext.accessibleDescription.isNullOrBlank())
+        }
+
+        val imagePage = descendants(navigation.page(MobileAdapterConfigurationCategory.ADAPTER_IMAGE))
+        val servicePage =
+            descendants(navigation.page(MobileAdapterConfigurationCategory.CUSTOM_SERVICE))
+        val mappingsPageDescendants =
+            descendants(navigation.page(MobileAdapterConfigurationCategory.PORT_MAPPINGS))
+        val sessionPage =
+            descendants(navigation.page(MobileAdapterConfigurationCategory.CURRENT_SESSION))
+        assertTrue(listOf(panel.importImageButton, panel.guestImageStatus).all { it in imagePage })
+        assertTrue(
+            (listOf(
+                        panel.offlineMode,
+                        panel.customServerMode,
+                        panel.queryName,
+                        panel.resolverAddress,
+                        panel.resolverPort,
+                    ) + panel.additionalDnsQueryNameFields)
+                .all { it in servicePage })
+        assertTrue(
+            listOf(
+                    panel.mappingsTable,
+                    panel.mappingsTable.tableHeader,
+                    panel.addMappingButton,
+                    panel.removeMappingButton,
+                    panel.mappingCount,
+                )
+                .all { it in mappingsPageDescendants })
+        assertTrue(
+            listOf(panel.networkConsent, panel.privateLocal, panel.sessionStatus, panel.cancelNetwork)
+                .all { it in sessionPage })
+        assertTrue(panel.validationStatus in descendants(panel))
+        assertTrue(panel.validationStatus.isVisible, "validation space must remain reserved")
+        assertTrue(panel.policyStatus in descendants(panel))
+        val navigationDescendants = descendants(navigation)
+        assertTrue(
+            listOf(
+                    panel.validationStatus,
+                    panel.policyStatus,
+                    panel.reloadButton,
+                    panel.closeButton,
+                    panel.saveButton,
+                )
+                .none { it in navigationDescendants },
+            "global validation, status, and actions must remain outside category pages",
+        )
+        assertTrue(descendants(panel).none { it is JScrollPane })
+        assertTrue(descendants(panel).none { it is JScrollBar })
+
+        val maximumMappings =
+            (1..MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS).map { port ->
+              MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "$port", "$port")
+            }
+        val maximumAliases =
+            (1..MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES)
+                .joinToString("\n") { alias -> "alias$alias.example" }
+        val maximumDraft =
+            customDraft(
+                maximumMappings,
+                additionalDnsQueryNamesText = maximumAliases,
+            )
+        panel.render(
+            presentation(
+                policy = customPolicy(),
+                draft = maximumDraft,
+                dirty = true,
+            ))
+        assertEquals(
+            MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS,
+            panel.mappingModel.rowCount,
+        )
+        assertTrue(panel.mappingsTable.tableHeader.parent != null)
+        navigation.selectedCategory = MobileAdapterConfigurationCategory.PORT_MAPPINGS
+        panel.size = panel.preferredSize
+        layoutRecursively(panel)
+        val finalMappingBounds =
+            panel.mappingsTable.getCellRect(panel.mappingModel.rowCount - 1, 2, true)
+        assertTrue(
+            finalMappingBounds.y + finalMappingBounds.height <= panel.mappingsTable.height,
+            "the sixteenth mapping row must fit in the laid-out table",
+        )
+        val mappingsPageBounds =
+            SwingUtilities.convertRectangle(
+                panel.mappingsTable,
+                finalMappingBounds,
+                navigation.page(MobileAdapterConfigurationCategory.PORT_MAPPINGS),
+            )
+        val mappingsPage = navigation.page(MobileAdapterConfigurationCategory.PORT_MAPPINGS)
+        assertTrue(mappingsPageBounds.x >= 0 && mappingsPageBounds.y >= 0)
+        assertTrue(mappingsPageBounds.maxX <= mappingsPage.width)
+        assertTrue(mappingsPageBounds.maxY <= mappingsPage.height)
+
+        navigation.selectedCategory = MobileAdapterConfigurationCategory.CUSTOM_SERVICE
+        layoutRecursively(panel)
+        assertEquals(
+            maximumAliases.lines(),
+            panel.additionalDnsQueryNameFields.map { it.text },
+        )
+        val lastAliasField = panel.additionalDnsQueryNameFields.last()
+        val servicePageComponent =
+            navigation.page(MobileAdapterConfigurationCategory.CUSTOM_SERVICE)
+        val finalAliasBounds =
+            SwingUtilities.convertRectangle(
+                lastAliasField.parent,
+                lastAliasField.bounds,
+                servicePageComponent,
+            )
+        assertTrue(finalAliasBounds.x >= 0 && finalAliasBounds.y >= 0)
+        assertTrue(finalAliasBounds.maxX <= servicePageComponent.width)
+        assertTrue(
+            finalAliasBounds.maxY <= servicePageComponent.height,
+            "the seventh alias field must fit in the Custom service page",
+        )
+      }
+
+  @Test
+  fun `panel rejects an over-capacity alias presentation instead of hiding aliases`() =
+      onEdt {
+        val panel = MobileAdapterConfigurationPanel(noOpActions(), tokens())
+        val excessiveAliases =
+            (1..(MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES + 1))
+                .joinToString("\n") { "alias$it.example" }
+        val draft = customDraft(additionalDnsQueryNamesText = excessiveAliases)
+
+        val failure =
+            assertFailsWith<IllegalArgumentException> {
+              panel.render(
+                  presentation(
+                      policy = customPolicy(),
+                      draft = draft,
+                      validation = validateMobileAdapterPolicyDraft(draft),
+                      dirty = true,
+                  ))
+            }
+        assertTrue(failure.message.orEmpty().contains("cannot contain more than 7"))
+      }
+
+  @Test
+  fun `panel commits mapping editors before save and category changes`() =
+      onEdt {
+        val events = mutableListOf<String>()
+        val panel =
+            MobileAdapterConfigurationPanel(
+                noOpActions().copy(
+                    draftChanged = { draft ->
+                      events += "draft:${draft.portMappings.first().guestPort}:${draft.portMappings.first().targetPort}"
+                    },
+                    savePolicy = { events += "save" },
+                ),
+                tokens(),
+            )
+        val policy = customPolicy()
+        panel.render(
+            presentation(
+                policy = policy,
+                draft = MobileAdapterPolicyDraft.from(policy),
+                dirty = true,
+            ))
+        panel.categories.selectedCategory = MobileAdapterConfigurationCategory.PORT_MAPPINGS
+
+        assertTrue(panel.mappingsTable.editCellAt(0, 1))
+        assertIs<JTextField>(panel.mappingsTable.editorComponent).text = "8080"
+        panel.saveButton.doClick()
+        assertEquals(listOf("draft:8080:18080", "save"), events)
+        assertFalse(panel.mappingsTable.isEditing)
+        assertEquals("8080", panel.mappingModel.getValueAt(0, 1))
+
+        events.clear()
+        assertTrue(panel.mappingsTable.editCellAt(0, 2))
+        assertIs<JTextField>(panel.mappingsTable.editorComponent).text = "18081"
+        panel.categories.selectedCategory = MobileAdapterConfigurationCategory.CUSTOM_SERVICE
+        assertEquals(listOf("draft:8080:18081"), events)
+        assertFalse(panel.mappingsTable.isEditing)
+        assertEquals(
+            MobileAdapterConfigurationCategory.CUSTOM_SERVICE,
+            panel.categories.selectedCategory,
+        )
+      }
+
+  @Test
+  fun `panel vetoes actions and category changes when a mapping editor refuses to commit`() =
+      onEdt {
+        val actions = mutableListOf<String>()
+        val panel =
+            MobileAdapterConfigurationPanel(
+                noOpActions().copy(
+                    savePolicy = { actions += "save" },
+                    reloadPolicy = { actions += "reload" },
+                    hide = { actions += "hide" },
+                ),
+                tokens(),
+            )
+        val policy = customPolicy()
+        panel.render(
+            presentation(
+                policy = policy,
+                draft = MobileAdapterPolicyDraft.from(policy),
+                dirty = true,
+            ))
+        panel.categories.selectedCategory = MobileAdapterConfigurationCategory.PORT_MAPPINGS
+
+        var cancelled = false
+        val editorField = JTextField()
+        val refusingEditor =
+            object : DefaultCellEditor(editorField) {
+              override fun stopCellEditing(): Boolean = false
+
+              override fun cancelCellEditing() {
+                cancelled = true
+                super.cancelCellEditing()
+              }
+            }
+        panel.mappingsTable.columnModel.getColumn(1).cellEditor = refusingEditor
+        assertTrue(panel.mappingsTable.editCellAt(0, 1))
+        editorField.text = "8080"
+
+        panel.saveButton.doClick()
+        panel.reloadButton.doClick()
+        panel.closeButton.doClick()
+        panel.requestHide()
+        panel.categories.selectedCategory = MobileAdapterConfigurationCategory.CUSTOM_SERVICE
+
+        assertTrue(actions.isEmpty())
+        assertTrue(panel.mappingsTable.isEditing)
+        assertFalse(cancelled)
+        assertEquals(
+            MobileAdapterConfigurationCategory.PORT_MAPPINGS,
+            panel.categories.selectedCategory,
+        )
+      }
+
+  @Test
+  fun `mobile adapter bounds grow and re-clamp to the usable display`() {
+    val layout =
+        ScreenLayout(
+            listOf(
+                ScreenSnapshot(
+                    "primary",
+                    DesktopBounds(0, 0, 1200, 800),
+                    DesktopBounds(0, 0, 1200, 760),
+                    1.0,
+                    1.0,
+                )),
+            primaryScreenId = "primary",
+        )
+    val minimum = Dimension(1032, 654)
+
+    assertEquals(
+        Rectangle(168, 60, 1032, 700),
+        fitMobileAdapterConfigurationBounds(Rectangle(440, 60, 760, 700), minimum, layout),
+    )
+    assertEquals(
+        Rectangle(168, 106, 1032, 654),
+        fitMobileAdapterConfigurationBounds(Rectangle(300, 300, 800, 500), minimum, layout),
+    )
+    assertEquals(
+        Rectangle(84, 53, 1032, 654),
+        fitMobileAdapterConfigurationBounds(Rectangle(5000, 5000, 800, 500), minimum, layout),
+    )
+
+    val twoScreens =
+        ScreenLayout(
+            listOf(
+                ScreenSnapshot(
+                    "left",
+                    DesktopBounds(-1200, 0, 1200, 800),
+                    DesktopBounds(-1200, 0, 1200, 760),
+                    1.0,
+                    1.0,
+                ),
+                ScreenSnapshot(
+                    "primary",
+                    DesktopBounds(0, 0, 1200, 800),
+                    DesktopBounds(0, 0, 1200, 760),
+                    1.0,
+                    1.0,
+                ),
+            ),
+            primaryScreenId = "primary",
+        )
+    assertEquals(
+        Rectangle(-800, 100, 800, 500),
+        fitMobileAdapterConfigurationBounds(
+            Rectangle(-400, 100, 320, 300),
+            Dimension(800, 500),
+            twoScreens,
+        ),
+        "growing a retained dialog must not migrate it from its original display",
+    )
+
+    val undersizedScreen =
+        ScreenLayout(
+            listOf(
+                ScreenSnapshot(
+                    "small",
+                    DesktopBounds(0, 0, 960, 540),
+                    DesktopBounds(0, 0, 960, 540),
+                    1.0,
+                    1.0,
+                )),
+            primaryScreenId = "small",
+        )
+    assertEquals(
+        Rectangle(0, 0, 1032, 654),
+        fitMobileAdapterConfigurationBounds(Rectangle(20, 20, 800, 500), minimum, undersizedScreen),
+        "no-scroll content must not be laid out below its packed minimum",
+    )
+  }
 
   @Test
   fun `host retains one view and applies the two runtime consent gates separately`() {
@@ -1031,6 +1381,12 @@ class MobileAdapterConfigurationWindowTest {
         add(component)
         if (component is Container) component.components.forEach { addAll(descendants(it)) }
       }
+
+  private fun layoutRecursively(component: Component) {
+    if (component !is Container) return
+    component.doLayout()
+    component.components.forEach(::layoutRecursively)
+  }
 
   private fun flushEdt() {
     onEdt { Unit }

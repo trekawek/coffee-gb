@@ -18,6 +18,7 @@ import java.awt.FlowLayout
 import java.awt.Font
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
+import java.awt.GridLayout
 import java.awt.Insets
 import java.awt.Rectangle
 import java.awt.Window
@@ -32,6 +33,7 @@ import java.util.IdentityHashMap
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.ButtonGroup
+import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JCheckBox
 import javax.swing.JComboBox
@@ -39,9 +41,9 @@ import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFileChooser
 import javax.swing.JLabel
+import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JRadioButton
-import javax.swing.JScrollPane
 import javax.swing.JSeparator
 import javax.swing.JTable
 import javax.swing.JTextArea
@@ -1051,17 +1053,20 @@ private class SwingMobileAdapterConfigurationWindow(
     initialBounds: Rectangle?,
     private val onBoundsChanged: (Rectangle) -> Unit,
     initialTokens: DesktopThemeTokens,
+    private val screenProvider: ScreenLayoutProvider = AwtScreenLayoutProvider(owner),
 ) : MobileAdapterConfigurationWindowView {
   private val dialog =
       JDialog(owner, "Mobile Adapter Configuration — Coffee GB", Dialog.ModalityType.MODELESS)
-  private val panel = MobileAdapterConfigurationPanel(actions, initialTokens)
+  private var initialized = false
+  private val panel =
+      MobileAdapterConfigurationPanel(actions, initialTokens) {
+        if (initialized) refreshContentMinimum()
+      }
   private var positioned = initialBounds != null
 
   init {
     requireMobileAdapterEdt("Mobile Adapter Swing window construction")
     dialog.defaultCloseOperation = JDialog.DO_NOTHING_ON_CLOSE
-    dialog.minimumSize = Dimension(680, 590)
-    dialog.preferredSize = Dimension(760, 700)
     dialog.contentPane = panel
     dialog.accessibleContext.accessibleName = "Mobile Adapter Configuration"
     dialog.accessibleContext.accessibleDescription =
@@ -1072,11 +1077,15 @@ private class SwingMobileAdapterConfigurationWindow(
     dialog.rootPane.actionMap.put(
         HIDE_ACTION,
         object : AbstractAction() {
-          override fun actionPerformed(event: ActionEvent) = actions.hide()
+          override fun actionPerformed(event: ActionEvent) = panel.requestHide()
         },
     )
     dialog.pack()
-    initialBounds?.let { dialog.bounds = Rectangle(it) }
+    dialog.minimumSize = Dimension(dialog.size)
+    initialBounds?.let {
+      dialog.bounds =
+          fitMobileAdapterConfigurationBounds(it, dialog.minimumSize, screenProvider.snapshot())
+    }
     dialog.addComponentListener(
         object : ComponentAdapter() {
           override fun componentMoved(event: ComponentEvent) = publishBounds()
@@ -1087,8 +1096,9 @@ private class SwingMobileAdapterConfigurationWindow(
         })
     dialog.addWindowListener(
         object : WindowAdapter() {
-          override fun windowClosing(event: WindowEvent) = actions.hide()
+          override fun windowClosing(event: WindowEvent) = panel.requestHide()
         })
+    initialized = true
   }
 
   override fun render(presentation: MobileAdapterConfigurationPresentation) {
@@ -1120,7 +1130,19 @@ private class SwingMobileAdapterConfigurationWindow(
   }
 
   private fun publishBounds() {
-    if (dialog.width > 0 && dialog.height > 0) onBoundsChanged(Rectangle(dialog.bounds))
+    if (positioned && dialog.width > 0 && dialog.height > 0) {
+      onBoundsChanged(Rectangle(dialog.bounds))
+    }
+  }
+
+  private fun refreshContentMinimum() {
+    dialog.invalidate()
+    val required = Dimension(dialog.preferredSize)
+    dialog.minimumSize = required
+    dialog.bounds =
+        fitMobileAdapterConfigurationBounds(dialog.bounds, required, screenProvider.snapshot())
+    dialog.validate()
+    publishBounds()
   }
 
   private companion object {
@@ -1128,20 +1150,161 @@ private class SwingMobileAdapterConfigurationWindow(
   }
 }
 
+internal fun fitMobileAdapterConfigurationBounds(
+    bounds: Rectangle,
+    minimum: Dimension,
+    layout: ScreenLayout,
+): Rectangle {
+  require(minimum.width > 0 && minimum.height > 0) {
+    "Mobile Adapter window minimum size must be positive"
+  }
+  require(bounds.width > 0 && bounds.height > 0) {
+    "Mobile Adapter window bounds must have a positive size"
+  }
+  val original = DesktopBounds(bounds.x, bounds.y, bounds.width, bounds.height)
+  val expanded =
+      Rectangle(bounds).apply {
+        width = width.coerceAtLeast(minimum.width)
+        height = height.coerceAtLeast(minimum.height)
+      }
+  val intersectsCurrentScreen = DesktopWindowPlacement.materiallyIntersectsScreen(original, layout)
+  val target =
+      if (intersectsCurrentScreen) {
+        layout.resolve(null, original)
+      } else {
+        layout.primary()
+      }
+  val usable = target.usableBounds
+  val width = expanded.width.coerceAtMost(maxOf(usable.width, minimum.width))
+  val height = expanded.height.coerceAtMost(maxOf(usable.height, minimum.height))
+  val centered = !intersectsCurrentScreen
+  val x =
+      if (width >= usable.width) {
+        usable.x
+      } else if (centered) {
+        usable.x + (usable.width - width) / 2
+      } else {
+        expanded.x.coerceIn(usable.x, usable.x + usable.width - width)
+      }
+  val y =
+      if (height >= usable.height) {
+        usable.y
+      } else if (centered) {
+        usable.y + (usable.height - height) / 2
+      } else {
+        expanded.y.coerceIn(usable.y, usable.y + usable.height - height)
+      }
+  return Rectangle(x, y, width, height)
+}
+
+internal enum class MobileAdapterConfigurationCategory(val displayName: String) {
+  ADAPTER_IMAGE("Adapter image"),
+  CUSTOM_SERVICE("Custom service"),
+  PORT_MAPPINGS("Port mappings"),
+  CURRENT_SESSION("Current session"),
+}
+
+/** Native category navigation matching the desktop Preferences window without nested scrolling. */
+internal class MobileAdapterConfigurationNavigation(
+    pages: Map<MobileAdapterConfigurationCategory, Component>,
+    initialCategory: MobileAdapterConfigurationCategory =
+        MobileAdapterConfigurationCategory.ADAPTER_IMAGE,
+    private val beforeCategoryChange: () -> Boolean = { true },
+) : JPanel(BorderLayout(12, 0)) {
+  private val categories = MobileAdapterConfigurationCategory.entries
+  private val pagesByCategory = pages.toMap()
+  private val cardLayout = CardLayout()
+  private val pageCards = JPanel(cardLayout)
+  internal val categoryRenderer =
+      object : DefaultListCellRenderer() {
+        override fun getListCellRendererComponent(
+            list: JList<*>?,
+            value: Any?,
+            index: Int,
+            isSelected: Boolean,
+            cellHasFocus: Boolean,
+        ): Component =
+            super.getListCellRendererComponent(
+                    list,
+                    (value as? MobileAdapterConfigurationCategory)?.displayName ?: value,
+                    index,
+                    isSelected,
+                    cellHasFocus,
+                )
+                .also { component ->
+                  (component as? JComponent)?.accessibleContext?.accessibleName =
+                      (value as? MobileAdapterConfigurationCategory)?.displayName
+                          ?: value?.toString()
+                }
+      }
+  internal val categoryList =
+      JList(categories.toTypedArray()).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        fixedCellWidth = 168
+        visibleRowCount = categories.size
+        cellRenderer = categoryRenderer
+        accessibleContext.accessibleName = "Mobile Adapter configuration categories"
+        accessibleContext.accessibleDescription =
+            "Choose which Mobile Adapter configuration category is shown."
+      }
+
+  init {
+    require(pagesByCategory.keys == categories.toSet()) {
+      "Every Mobile Adapter configuration category needs exactly one page"
+    }
+    getAccessibleContext().accessibleName = "Mobile Adapter configuration categories and pages"
+    getAccessibleContext().accessibleDescription =
+        "Choose Adapter image, Custom service, Port mappings, or Current session settings."
+    categories.forEach { category ->
+      pageCards.add(checkNotNull(pagesByCategory[category]), category.name)
+    }
+    var shownCategory = initialCategory
+    var restoringSelection = false
+    categoryList.addListSelectionListener { event ->
+      if (event.valueIsAdjusting || restoringSelection) return@addListSelectionListener
+      val selected = categoryList.selectedValue ?: return@addListSelectionListener
+      if (selected == shownCategory) return@addListSelectionListener
+      if (!beforeCategoryChange()) {
+        restoringSelection = true
+        categoryList.setSelectedValue(shownCategory, true)
+        restoringSelection = false
+        return@addListSelectionListener
+      }
+      shownCategory = selected
+      cardLayout.show(pageCards, selected.name)
+    }
+    add(categoryList, BorderLayout.LINE_START)
+    add(pageCards, BorderLayout.CENTER)
+    categoryList.setSelectedValue(initialCategory, true)
+    cardLayout.show(pageCards, initialCategory.name)
+  }
+
+  internal fun page(category: MobileAdapterConfigurationCategory): Component =
+      checkNotNull(pagesByCategory[category])
+
+  internal fun refreshDetachedRenderer() {
+    SwingUtilities.updateComponentTreeUI(categoryRenderer)
+  }
+
+  internal var selectedCategory: MobileAdapterConfigurationCategory
+    get() = categoryList.selectedValue ?: MobileAdapterConfigurationCategory.ADAPTER_IMAGE
+    set(value) {
+      categoryList.setSelectedValue(value, true)
+    }
+}
+
 /** Headless-testable content of the retained Mobile Adapter window. */
 internal class MobileAdapterConfigurationPanel(
     private val actions: MobileAdapterConfigurationWindowActions,
     initialTokens: DesktopThemeTokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM),
+    private val onContentMinimumChanged: () -> Unit = {},
 ) : JPanel(BorderLayout(0, initialTokens.spacing.section)), DesktopThemeRefreshHook {
   internal val startupSummary = mobileAdapterLiteralText("", 3, "Mobile Adapter startup summary")
   internal val offlineMode = JRadioButton("Offline")
   internal val customServerMode = JRadioButton("Custom Server")
   internal val queryName = JTextField(28)
-  internal val additionalDnsQueryNames =
-      JTextArea(3, 28).apply {
-        lineWrap = false
-        wrapStyleWord = false
-      }
+  internal val additionalDnsQueryNameFields =
+      List(MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES) { JTextField(28) }
   internal val resolverAddress = JTextField(16)
   internal val resolverPort = JTextField(6)
   internal val mappingModel = MobileAdapterMappingTableModel()
@@ -1162,14 +1325,44 @@ internal class MobileAdapterConfigurationPanel(
   internal val reloadButton = JButton("Reload policy")
   internal val closeButton = JButton("Close")
   internal val saveButton = JButton("Save changes")
+  internal val categories: MobileAdapterConfigurationNavigation
 
   private val customFields = JPanel(GridBagLayout())
+  private val additionalDnsQueryNamesPanel =
+      JPanel(
+          GridLayout(
+              0,
+              1,
+              0,
+              initialTokens.spacing.compact,
+          ))
   private val customCardLayout = CardLayout()
   private val customCard = JPanel(customCardLayout)
   private val imageSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
-  private val policySection = JPanel(BorderLayout(0, initialTokens.spacing.related))
+  private val serviceSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
+  private val mappingsSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
+  private val mappingTableSurface = JPanel(BorderLayout())
+  private val mappingTransportEditor = JComboBox(MobileAdapterTransport.entries.toTypedArray())
+  private val mappingGuestPortEditor = JTextField()
+  private val mappingTargetPortEditor = JTextField()
+  private val mappingLiteralRenderer =
+      object : DefaultTableCellRenderer() {
+        override fun getTableCellRendererComponent(
+            table: JTable,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int,
+        ): Component =
+            (super.getTableCellRendererComponent(
+                    table, value, isSelected, hasFocus, row, column)
+                as JLabel)
+                .apply { putClientProperty("html.disable", true) }
+      }
   private val sessionSection = JPanel(BorderLayout(0, initialTokens.spacing.related))
   private val footer = JPanel(BorderLayout(initialTokens.spacing.related, 0))
+  private val footerMessages = JPanel()
   private val buttonBar = JPanel(FlowLayout(FlowLayout.TRAILING, initialTokens.spacing.related, 0))
   private var rendering = false
   private var current = initialPresentation()
@@ -1183,24 +1376,29 @@ internal class MobileAdapterConfigurationPanel(
     configureMappingTable()
     configureListeners()
 
-    val body = JPanel().apply { layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS) }
-    body.add(createHeader())
-    body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
-    body.add(createAdapterImageSection())
-    body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
-    body.add(createPolicySection())
-    body.add(javax.swing.Box.createVerticalStrut(initialTokens.spacing.section))
-    body.add(createSessionSection())
-    val scroll = JScrollPane(body).apply { border = null }
-    add(scroll, BorderLayout.CENTER)
+    categories =
+        MobileAdapterConfigurationNavigation(
+            linkedMapOf(
+                MobileAdapterConfigurationCategory.ADAPTER_IMAGE to createAdapterImageSection(),
+                MobileAdapterConfigurationCategory.CUSTOM_SERVICE to createServiceSection(),
+                MobileAdapterConfigurationCategory.PORT_MAPPINGS to createMappingsSection(),
+                MobileAdapterConfigurationCategory.CURRENT_SESSION to createSessionSection(),
+            ),
+            beforeCategoryChange = ::commitPendingEdits,
+        )
+    add(createHeader(), BorderLayout.NORTH)
+    add(categories, BorderLayout.CENTER)
 
-    reloadButton.addActionListener { actions.reloadPolicy() }
-    closeButton.addActionListener { actions.hide() }
-    saveButton.addActionListener { actions.savePolicy() }
+    reloadButton.addActionListener { afterCommittingEdits(actions.reloadPolicy) }
+    closeButton.addActionListener { requestHide() }
+    saveButton.addActionListener { afterCommittingEdits(actions.savePolicy) }
     buttonBar.add(reloadButton)
     buttonBar.add(closeButton)
     buttonBar.add(saveButton)
-    footer.add(policyStatus, BorderLayout.CENTER)
+    footerMessages.layout = javax.swing.BoxLayout(footerMessages, javax.swing.BoxLayout.Y_AXIS)
+    footerMessages.add(validationStatus)
+    footerMessages.add(policyStatus)
+    footer.add(footerMessages, BorderLayout.CENTER)
     footer.add(buttonBar, BorderLayout.SOUTH)
     add(footer, BorderLayout.SOUTH)
 
@@ -1221,8 +1419,8 @@ internal class MobileAdapterConfigurationPanel(
       customCardLayout.show(customCard, if (custom) CUSTOM_CARD else OFFLINE_CARD)
       setPolicyFieldsEnabled(next.canEditPolicy && custom)
       val validationMessage = (next.validation as? MobileAdapterPolicyValidation.Invalid)?.message
-      validationStatus.text = validationMessage.orEmpty()
-      validationStatus.isVisible = !validationMessage.isNullOrBlank()
+      validationStatus.text = validationMessage ?: " "
+      validationStatus.isVisible = true
       validationStatus.accessibleContext.accessibleDescription = validationMessage.orEmpty()
       mappingCount.text =
           "${next.draft.portMappings.size} of ${MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS} mappings"
@@ -1282,7 +1480,7 @@ internal class MobileAdapterConfigurationPanel(
             tokens.spacing.dialogEdge,
             tokens.spacing.dialogEdge,
         )
-    listOf(imageSection, policySection, sessionSection).forEach { section ->
+    listOf(imageSection, serviceSection, mappingsSection, sessionSection).forEach { section ->
       section.background = tokens.surface
       section.border =
           BorderFactory.createCompoundBorder(
@@ -1297,11 +1495,33 @@ internal class MobileAdapterConfigurationPanel(
     }
     customFields.background = tokens.surface
     customCard.background = tokens.surface
+    categories.background = tokens.surface
+    categories.categoryList.background = tokens.elevatedSurface
+    categories.categoryList.foreground = tokens.primaryText
+    categories.categoryList.selectionBackground = tokens.focus
+    categories.categoryList.selectionForeground = contrastingMobileAdapterText(tokens.focus)
+    categories.categoryList.border =
+        BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(tokens.border),
+            BorderFactory.createEmptyBorder(
+                tokens.spacing.compact,
+                tokens.spacing.compact,
+                tokens.spacing.compact,
+                tokens.spacing.compact,
+            ),
+        )
     footer.background = tokens.surface
+    footerMessages.background = tokens.surface
     buttonBar.background = tokens.surface
+    mappingTableSurface.background = tokens.surface
+    mappingTableSurface.border = BorderFactory.createLineBorder(tokens.border)
     mappingsTable.gridColor = tokens.border
     mappingsTable.selectionBackground = tokens.focus
     mappingsTable.selectionForeground = contrastingMobileAdapterText(tokens.focus)
+    mappingsTable.tableHeader.background = tokens.elevatedSurface
+    mappingsTable.tableHeader.foreground = tokens.primaryText
+    additionalDnsQueryNamesPanel.background = tokens.surface
+    (additionalDnsQueryNamesPanel.layout as GridLayout).vgap = tokens.spacing.compact
     policyStatus.background = tokens.surface
     guestImageStatus.background = tokens.surface
     sessionStatus.background = tokens.surface
@@ -1316,7 +1536,12 @@ internal class MobileAdapterConfigurationPanel(
       button.foreground = tokens.primaryText
       button.isOpaque = true
     }
+    categories.refreshDetachedRenderer()
+    refreshDetachedMappingComponents()
+    reserveMappingTableCapacity()
     applyStatusColors()
+    revalidate()
+    onContentMinimumChanged()
   }
 
   private fun createHeader(): JPanel =
@@ -1324,20 +1549,14 @@ internal class MobileAdapterConfigurationPanel(
         val heading = JLabel("Mobile Adapter Configuration")
         heading.font = heading.font.deriveFont(Font.BOLD, heading.font.size2D + 4f)
         heading.accessibleContext.accessibleName = "Mobile Adapter Configuration"
-        val notice =
-            mobileAdapterLiteralText(
-                "The saved owner-only policy limits eligible custom services. Nintendo production services, dial-up, and listener mode are unsupported. Saving policy never grants network permission.",
-                3,
-                "Mobile Adapter policy notice",
-            )
         add(heading, BorderLayout.NORTH)
-        val prose = JPanel(BorderLayout(0, tokens.spacing.compact))
-        prose.add(notice, BorderLayout.NORTH)
-        prose.add(startupSummary, BorderLayout.CENTER)
-        add(prose, BorderLayout.CENTER)
+        add(startupSummary, BorderLayout.CENTER)
       }
 
   private fun createAdapterImageSection(): JPanel {
+    imageSection.accessibleContext.accessibleName = "Adapter image"
+    imageSection.accessibleContext.accessibleDescription =
+        "Review or import the game-visible Mobile Adapter configuration image."
     val heading = JLabel("Adapter image")
     heading.font = heading.font.deriveFont(Font.BOLD)
     val explanation =
@@ -1359,9 +1578,18 @@ internal class MobileAdapterConfigurationPanel(
     return imageSection
   }
 
-  private fun createPolicySection(): JPanel {
-    val heading = JLabel("Saved policy")
+  private fun createServiceSection(): JPanel {
+    serviceSection.accessibleContext.accessibleName = "Custom service"
+    serviceSection.accessibleContext.accessibleDescription =
+        "Choose Offline or configure the exact custom DNS service and resolver."
+    val heading = JLabel("Custom service")
     heading.font = heading.font.deriveFont(Font.BOLD)
+    val notice =
+        mobileAdapterLiteralText(
+            "The saved owner-only policy limits eligible custom services. Nintendo production services, dial-up, and listener mode are unsupported. Saving policy never grants network permission.",
+            3,
+            "Mobile Adapter policy notice",
+        )
     val modePanel = JPanel(FlowLayout(FlowLayout.LEADING, 0, 0))
     ButtonGroup().apply {
       add(offlineMode)
@@ -1375,14 +1603,15 @@ internal class MobileAdapterConfigurationPanel(
     modeRow.add(modePanel, BorderLayout.CENTER)
 
     addFormRow(customFields, 0, "Primary DNS name / service", queryName)
+    additionalDnsQueryNameFields.forEach(additionalDnsQueryNamesPanel::add)
     val aliases =
         JPanel(BorderLayout(0, tokens.spacing.compact)).apply {
-          add(JScrollPane(additionalDnsQueryNames), BorderLayout.CENTER)
+          add(additionalDnsQueryNamesPanel, BorderLayout.CENTER)
           add(
               mobileAdapterLiteralText(
-                  "Optional: one exact DNS name per line, up to " +
+                  "Optional: one exact DNS name per field, up to " +
                       "${MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES}. " +
-                      "Empty lines are ignored. All names share the resolver and port mappings below.",
+                      "Leave unused fields empty. All names share this resolver and the Port mappings category.",
                   2,
                   "Additional DNS names help",
               ),
@@ -1394,14 +1623,10 @@ internal class MobileAdapterConfigurationPanel(
         1,
         "Additional exact DNS names",
         aliases,
-        additionalDnsQueryNames,
+        additionalDnsQueryNameFields.first(),
     )
     addFormRow(customFields, 2, "Literal IPv4 DNS resolver", resolverAddress)
     addFormRow(customFields, 3, "Resolver port", resolverPort)
-    val mappings = createMappingsPanel()
-    val customContent = JPanel(BorderLayout(0, tokens.spacing.related))
-    customContent.add(customFields, BorderLayout.NORTH)
-    customContent.add(mappings, BorderLayout.CENTER)
     customCard.add(
         mobileAdapterLiteralText(
             "Offline keeps the deterministic Mobile Adapter protocol available without outbound custom-server networking.",
@@ -1410,15 +1635,37 @@ internal class MobileAdapterConfigurationPanel(
         ),
         OFFLINE_CARD,
     )
-    customCard.add(customContent, CUSTOM_CARD)
+    customCard.add(customFields, CUSTOM_CARD)
 
-    val center = JPanel(BorderLayout(0, tokens.spacing.related))
-    center.add(modeRow, BorderLayout.NORTH)
-    center.add(customCard, BorderLayout.CENTER)
-    policySection.add(heading, BorderLayout.NORTH)
-    policySection.add(center, BorderLayout.CENTER)
-    policySection.add(validationStatus, BorderLayout.SOUTH)
-    return policySection
+    val policy = JPanel(BorderLayout(0, tokens.spacing.related))
+    policy.add(modeRow, BorderLayout.NORTH)
+    policy.add(customCard, BorderLayout.CENTER)
+    val content = JPanel(BorderLayout(0, tokens.spacing.related))
+    content.add(notice, BorderLayout.NORTH)
+    content.add(policy, BorderLayout.CENTER)
+    serviceSection.add(heading, BorderLayout.NORTH)
+    serviceSection.add(content, BorderLayout.CENTER)
+    return serviceSection
+  }
+
+  private fun createMappingsSection(): JPanel {
+    mappingsSection.accessibleContext.accessibleName = "Port mappings"
+    mappingsSection.accessibleContext.accessibleDescription =
+        "Edit every bounded TCP or UDP guest-to-target port mapping."
+    val heading = JLabel("Port mappings")
+    heading.font = heading.font.deriveFont(Font.BOLD)
+    val explanation =
+        mobileAdapterLiteralText(
+            "Mappings apply only in Custom Server mode. The complete bounded mapping list is shown without scrolling.",
+            2,
+            "Port mappings explanation",
+        )
+    val content = JPanel(BorderLayout(0, tokens.spacing.related))
+    content.add(explanation, BorderLayout.NORTH)
+    content.add(createMappingsPanel(), BorderLayout.CENTER)
+    mappingsSection.add(heading, BorderLayout.NORTH)
+    mappingsSection.add(content, BorderLayout.CENTER)
+    return mappingsSection
   }
 
   private fun createMappingsPanel(): JPanel {
@@ -1429,14 +1676,19 @@ internal class MobileAdapterConfigurationPanel(
     val buttons = JPanel(FlowLayout(FlowLayout.LEADING, tokens.spacing.related, 0))
     buttons.add(addMappingButton)
     buttons.add(removeMappingButton)
+    mappingTableSurface.add(mappingsTable.tableHeader, BorderLayout.NORTH)
+    mappingTableSurface.add(mappingsTable, BorderLayout.CENTER)
     return JPanel(BorderLayout(0, tokens.spacing.compact)).apply {
       add(header, BorderLayout.NORTH)
-      add(JScrollPane(mappingsTable), BorderLayout.CENTER)
+      add(mappingTableSurface, BorderLayout.CENTER)
       add(buttons, BorderLayout.SOUTH)
     }
   }
 
   private fun createSessionSection(): JPanel {
+    sessionSection.accessibleContext.accessibleName = "Current session"
+    sessionSection.accessibleContext.accessibleDescription =
+        "Grant memory-only network permissions and review or cancel active network work."
     val heading = JLabel("Current session")
     heading.font = heading.font.deriveFont(Font.BOLD)
     val explanation =
@@ -1470,7 +1722,8 @@ internal class MobileAdapterConfigurationPanel(
   private fun configureListeners() {
     offlineMode.addActionListener { if (!rendering) publishDraft() }
     customServerMode.addActionListener { if (!rendering) publishDraft() }
-    listOf(queryName, additionalDnsQueryNames, resolverAddress, resolverPort).forEach { field ->
+    (listOf(queryName, resolverAddress, resolverPort) + additionalDnsQueryNameFields).forEach {
+        field ->
       field.document.addDocumentListener(
           object : DocumentListener {
             override fun insertUpdate(event: DocumentEvent) = publishDraft()
@@ -1490,6 +1743,7 @@ internal class MobileAdapterConfigurationPanel(
       }
     }
     addMappingButton.addActionListener {
+      if (!commitPendingEdits()) return@addActionListener
       if (mappingModel.rowCount >= MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS) {
         return@addActionListener
       }
@@ -1501,61 +1755,83 @@ internal class MobileAdapterConfigurationPanel(
       mappingsTable.editorComponent?.requestFocusInWindow()
     }
     removeMappingButton.addActionListener {
+      if (!commitPendingEdits()) return@addActionListener
       val row = mappingsTable.selectedRow
       if (row >= 0) mappingModel.remove(row)
     }
     networkConsent.addActionListener {
-      if (!rendering) actions.setNetworkConsent(networkConsent.isSelected)
+      if (!rendering && commitPendingEdits()) {
+        actions.setNetworkConsent(networkConsent.isSelected)
+      }
     }
     privateLocal.addActionListener {
-      if (!rendering) actions.setPrivateLocalDevelopment(privateLocal.isSelected)
+      if (!rendering && commitPendingEdits()) {
+        actions.setPrivateLocalDevelopment(privateLocal.isSelected)
+      }
     }
-    cancelNetwork.addActionListener { actions.cancelNetwork() }
-    importImageButton.addActionListener { actions.importConfigurationImage() }
+    cancelNetwork.addActionListener { afterCommittingEdits(actions.cancelNetwork) }
+    importImageButton.addActionListener { afterCommittingEdits(actions.importConfigurationImage) }
   }
 
   private fun configureMappingTable() {
     mappingsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
-    mappingsTable.fillsViewportHeight = true
     mappingsTable.putClientProperty("terminateEditOnFocusLost", true)
     mappingsTable.accessibleContext.accessibleName = "Mobile Adapter port mappings"
     mappingsTable.accessibleContext.accessibleDescription =
         "Transport, guest port, and target port for each allowed mapping"
     mappingsTable.columnModel.getColumn(0).cellEditor =
-        javax.swing.DefaultCellEditor(JComboBox(MobileAdapterTransport.entries.toTypedArray()))
-    val portEditor = JTextField()
-    installMobileAdapterDocumentLimit(portEditor, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
-    mappingsTable.columnModel.getColumn(1).cellEditor = javax.swing.DefaultCellEditor(portEditor)
-    val targetEditor = JTextField()
-    installMobileAdapterDocumentLimit(targetEditor, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
-    mappingsTable.columnModel.getColumn(2).cellEditor = javax.swing.DefaultCellEditor(targetEditor)
-    val literalRenderer =
-        object : DefaultTableCellRenderer() {
-          override fun getTableCellRendererComponent(
-              table: JTable,
-              value: Any?,
-              isSelected: Boolean,
-              hasFocus: Boolean,
-              row: Int,
-              column: Int,
-          ): Component =
-              (super.getTableCellRendererComponent(
-                      table, value, isSelected, hasFocus, row, column)
-                  as JLabel)
-                  .apply { putClientProperty("html.disable", true) }
-        }
+        javax.swing.DefaultCellEditor(mappingTransportEditor)
+    installMobileAdapterDocumentLimit(
+        mappingGuestPortEditor, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
+    mappingsTable.columnModel.getColumn(1).cellEditor =
+        javax.swing.DefaultCellEditor(mappingGuestPortEditor)
+    installMobileAdapterDocumentLimit(
+        mappingTargetPortEditor, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
+    mappingsTable.columnModel.getColumn(2).cellEditor =
+        javax.swing.DefaultCellEditor(mappingTargetPortEditor)
+    mappingsTable.tableHeader.reorderingAllowed = false
     (0 until mappingsTable.columnCount).forEach { column ->
-      mappingsTable.columnModel.getColumn(column).cellRenderer = literalRenderer
+      mappingsTable.columnModel.getColumn(column).cellRenderer = mappingLiteralRenderer
     }
+    reserveMappingTableCapacity()
+  }
+
+  private fun refreshDetachedMappingComponents() {
+    listOf(
+            mappingTransportEditor,
+            mappingGuestPortEditor,
+            mappingTargetPortEditor,
+            mappingLiteralRenderer,
+        )
+        .forEach(SwingUtilities::updateComponentTreeUI)
+  }
+
+  private fun reserveMappingTableCapacity() {
+    val tableHeight =
+        mappingsTable.rowHeight * MobileAdapterNetworkPolicy.CustomServer.MAX_PORT_MAPPINGS
+    val tableWidth = mappingsTable.preferredSize.width.coerceAtLeast(480)
+    mappingsTable.minimumSize = Dimension(0, tableHeight)
+    mappingsTable.preferredSize = Dimension(tableWidth, tableHeight)
+    val surfaceInsets = mappingTableSurface.insets
+    val surfaceWidth = tableWidth + surfaceInsets.left + surfaceInsets.right
+    val surfaceHeight =
+        mappingsTable.tableHeader.preferredSize.height +
+            tableHeight +
+            surfaceInsets.top +
+            surfaceInsets.bottom
+    mappingTableSurface.minimumSize = Dimension(0, surfaceHeight)
+    mappingTableSurface.preferredSize = Dimension(surfaceWidth, surfaceHeight)
   }
 
   private fun configureAccessibility() {
     queryName.accessibleContext.accessibleName = "Primary DNS name or service"
     queryName.accessibleContext.accessibleDescription =
         "The primary exact saved custom-service DNS name eligible for Mobile Adapter requests"
-    additionalDnsQueryNames.accessibleContext.accessibleName = "Additional exact DNS names"
-    additionalDnsQueryNames.accessibleContext.accessibleDescription =
-        "Optional exact saved DNS names, one per line, sharing the same resolver and port mappings"
+    additionalDnsQueryNameFields.forEachIndexed { index, field ->
+      field.accessibleContext.accessibleName = "Additional exact DNS name ${index + 1}"
+      field.accessibleContext.accessibleDescription =
+          "Optional exact saved DNS name ${index + 1}, sharing the same resolver and port mappings"
+    }
     resolverAddress.accessibleContext.accessibleName = "Literal IPv4 DNS resolver"
     resolverAddress.accessibleContext.accessibleDescription =
         "Canonical dotted-decimal IPv4 address for the saved custom DNS resolver"
@@ -1584,14 +1860,30 @@ internal class MobileAdapterConfigurationPanel(
   private fun installLimits() {
     installMobileAdapterDocumentLimit(
         queryName, MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES)
-    installMobileAdapterDocumentLimit(
-        additionalDnsQueryNames, MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS)
+    additionalDnsQueryNameFields.forEach { field ->
+      installMobileAdapterDocumentLimit(
+          field, MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES)
+    }
     installMobileAdapterDocumentLimit(resolverAddress, MAX_MOBILE_ADAPTER_IPV4_TEXT_CHARS)
     installMobileAdapterDocumentLimit(resolverPort, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
   }
 
   private fun publishDraft() {
     if (!rendering) actions.draftChanged(collectDraft())
+  }
+
+  internal fun commitPendingEdits(): Boolean {
+    if (!mappingsTable.isEditing) return true
+    val editor = mappingsTable.cellEditor ?: return false
+    if (editor.stopCellEditing()) return true
+    mappingsTable.editorComponent?.requestFocusInWindow()
+    return false
+  }
+
+  internal fun requestHide() = afterCommittingEdits(actions.hide)
+
+  private fun afterCommittingEdits(action: () -> Unit) {
+    if (commitPendingEdits()) action()
   }
 
   private fun collectDraft(): MobileAdapterPolicyDraft =
@@ -1603,21 +1895,40 @@ internal class MobileAdapterConfigurationPanel(
           resolverIpv4Address = resolverAddress.text,
           resolverPort = resolverPort.text,
           portMappings = mappingModel.snapshot(),
-          additionalDnsQueryNamesText = additionalDnsQueryNames.text,
+          additionalDnsQueryNamesText =
+              additionalDnsQueryNameFields
+                  .map { it.text }
+                  .filter { it.isNotEmpty() }
+                  .joinToString("\n"),
       )
 
   private fun applyDraft(draft: MobileAdapterPolicyDraft) {
     offlineMode.isSelected = draft.mode == MobileAdapterNetworkMode.OFFLINE
     customServerMode.isSelected = draft.mode == MobileAdapterNetworkMode.CUSTOM_SERVER
     queryName.text = draft.dnsQueryName
-    additionalDnsQueryNames.text = draft.additionalDnsQueryNamesText
+    val additionalNames =
+        draft.additionalDnsQueryNamesText
+            .lineSequence()
+            .filter { it.isNotEmpty() }
+            .toList()
+    require(
+        additionalNames.size <=
+            MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES) {
+          "Mobile Adapter presentation cannot contain more than " +
+              "${MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES} " +
+              "additional DNS query names."
+        }
+    additionalDnsQueryNameFields.forEachIndexed { index, field ->
+      field.text = additionalNames.getOrElse(index) { "" }
+    }
     resolverAddress.text = draft.resolverIpv4Address
     resolverPort.text = draft.resolverPort
     mappingModel.replace(draft.portMappings)
   }
 
   private fun setPolicyFieldsEnabled(enabled: Boolean) {
-    listOf(queryName, additionalDnsQueryNames, resolverAddress, resolverPort, mappingsTable)
+    (listOf(queryName, resolverAddress, resolverPort, mappingsTable) +
+            additionalDnsQueryNameFields)
         .forEach { it.isEnabled = enabled }
     offlineMode.isEnabled = current.savePhase == MobileAdapterSavePhase.IDLE
     customServerMode.isEnabled = current.savePhase == MobileAdapterSavePhase.IDLE

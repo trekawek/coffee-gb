@@ -228,7 +228,7 @@ private class JFrameFullscreenWindow(
 }
 
 internal class AwtScreenLayoutProvider(
-    private val frame: JFrame,
+    private val window: Window,
 ) : ScreenLayoutProvider {
   override fun snapshot(): ScreenLayout {
     val environment = GraphicsEnvironment.getLocalGraphicsEnvironment()
@@ -244,7 +244,7 @@ internal class AwtScreenLayoutProvider(
               scaleY = configuration.defaultTransform.scaleY,
           )
         }
-    val currentId = frame.graphicsConfiguration?.device?.iDstring
+    val currentId = window.graphicsConfiguration?.device?.iDstring
     return ScreenLayout(
         screens,
         primaryScreenId =
