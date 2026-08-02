@@ -919,10 +919,15 @@ changes** or **Keep editing**. Revision mismatch keeps the draft, marks it stale
 explicit Reload before another save. The window separates concerns without changing the security
 model or moving policy out of `MobileAdapterConfigurationStore`:
 
+- The visible shell follows the Preferences category grammar with four fixed pages: **Adapter
+  image**, **Custom service**, **Port mappings**, and **Current session**. Shared validation,
+  revision, and save controls remain visible from every page. Each bounded editor reserves enough
+  space for its complete supported contents, so the window, category pages, alias editor, and
+  mapping table do not display scrollbars.
 - **Mode** is exactly **Offline** or **Custom Server**. Coffee GB supplies no official/default
   endpoint; Nintendo production services, dial-up, and listener mode remain explicitly unsupported.
-- **Custom Server** contains the allowed DNS query/service name and one literal IPv4 DNS resolver
-  plus resolver port, with current bounded validation.
+- **Custom Server** contains one primary allowed DNS query/service name, up to seven optional exact
+  aliases, and one literal IPv4 DNS resolver plus resolver port, with current bounded validation.
 - **Port mappings** is a structured table with Transport (TCP/UDP), Guest port, Target port, Add,
   and Remove instead of raw lines. It retains the existing maximum count, uniqueness, and port
   bounds.
