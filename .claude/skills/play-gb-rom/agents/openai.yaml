@@ -1,0 +1,4 @@
+interface:
+  display_name: "Play GB ROM"
+  short_description: "Interactively play and record Coffee GB ROMs"
+  default_prompt: "Use $play-gb-rom to play an authorized local Game Boy ROM interactively and record a reproducible input trace."
