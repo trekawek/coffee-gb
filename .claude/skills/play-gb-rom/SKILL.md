@@ -80,5 +80,10 @@ state.
 Send `QUIT`, confirm `cleanup_buttons=true` and `session_closed=true`, then remove only the exact
 private session directory when its frames and trace are no longer needed. Prefer `QUIT` over a signal
 so the completion markers are observable; the shutdown hook still releases input and closes the
-Agent if the process is interrupted. Never commit or publish commercial screenshots, the action
-trace if it identifies private gameplay, generated class files, ROMs, saves, or local paths.
+Agent if the process is interrupted. Never commit or publish generated class files, ROMs, saves,
+local paths, or an action trace that identifies private gameplay. Prefer openly licensed or
+public-domain game imagery for screenshots that will be published. A commercial-game screenshot
+may be committed only when a project maintainer with release authority explicitly approves that
+exact image for editorial or promotional use from a lawfully available local copy. Publish no more
+than three such screenshots per release, keep them limited to demonstrating Coffee GB's UI or
+compatibility, and identify the game and rights holder without implying endorsement.

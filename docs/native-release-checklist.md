@@ -70,6 +70,13 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   data remain.
 - [ ] Reinstall the same build and confirm retained user data is still usable.
 
-Do not upload test ROMs, battery saves, states, screenshots containing copyrighted game imagery,
-logs with private paths, or signing material as release evidence. Record only the target, outcome,
-sanitized failure category, and artifact digest.
+Release notes may include up to three screenshots from lawfully obtained commercial games per
+release when a project maintainer with release authority explicitly approves the exact images for
+editorial or promotional use. Keep them narrowly focused on showing Coffee GB's UI or compatibility,
+identify the game and rights holder, state that no endorsement is implied, and prefer freely
+redistributable test ROMs for automated or conformance evidence.
+
+Do not upload test ROMs, battery saves, states, private configuration files, logs with private
+paths, or signing material as release evidence. Screenshots must not expose private paths, accounts,
+credentials, or other user data. Apart from an approved release-note screenshot, record only the
+target, outcome, sanitized failure category, and artifact digest.
