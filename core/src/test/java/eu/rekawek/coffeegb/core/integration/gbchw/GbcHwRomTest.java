@@ -30,6 +30,13 @@ public class GbcHwRomTest {
 
     private static final String ARCHIVE = "/roms/gbc-hw-tests/gbc-hw-tests-631e600.zip";
 
+    /**
+     * Optional one-based shard selection in the {@code shard/total} form. GitHub Actions runs
+     * the suite as {@code 1/2} and {@code 2/2}; local runs leave this unset and execute every
+     * verdict.
+     */
+    private static final String SHARD_PROPERTY = "gbc.hw.shard";
+
     private static final String TAC_GBC_DOCUMENTATION =
             "timers/tac_set_everything/GBC_1.txt";
 
@@ -188,7 +195,37 @@ public class GbcHwRomTest {
             throw new IOException("Expected 221 gbc-hw-tests strict verdicts, found "
                     + parameters.size());
         }
-        return parameters;
+        return selectShard(parameters, System.getProperty(SHARD_PROPERTY));
+    }
+
+    private static List<Object[]> selectShard(List<Object[]> parameters, String shard) {
+        if (shard == null || shard.isBlank()) {
+            return parameters;
+        }
+        String[] components = shard.split("/", -1);
+        if (components.length != 2) {
+            throw new IllegalArgumentException("Invalid " + SHARD_PROPERTY + ": " + shard
+                    + "; expected shard/total");
+        }
+        int shardNumber;
+        int shardCount;
+        try {
+            shardNumber = Integer.parseInt(components[0]);
+            shardCount = Integer.parseInt(components[1]);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid " + SHARD_PROPERTY + ": " + shard
+                    + "; expected numeric shard/total", e);
+        }
+        if (shardCount < 1 || shardNumber < 1 || shardNumber > shardCount) {
+            throw new IllegalArgumentException("Invalid " + SHARD_PROPERTY + ": " + shard
+                    + "; shard must be between 1 and total");
+        }
+
+        List<Object[]> selected = new ArrayList<>();
+        for (int i = shardNumber - 1; i < parameters.size(); i += shardCount) {
+            selected.add(parameters.get(i));
+        }
+        return selected;
     }
 
     private static void addReference(List<Object[]> parameters, Map<String, byte[]> entries,
