@@ -497,11 +497,12 @@ every malformed envelope is rejected without partially changing durable configur
 
 The reader runs on the bounded configuration writer, never on the emulator thread or Swing EDT. It
 uses a 513-byte probe ceiling so an otherwise valid image with trailing data cannot be accepted,
-requires a regular file with a non-null provider file key, and disables symbolic-link following for
-the selected final path component. Before and after the read it compares the path's type, file key,
-exact size, creation time, and modification time with the initial attributes, and compares the
-opened channel size with the same exact size. A provider without stable file identity fails closed
-as `IMPORT_READ_FAILED`.
+requires a regular file, and disables symbolic-link following for the selected final path
+component. Before and after the read it compares the path's type, available file key, exact size,
+creation time, and modification time with the initial attributes, and compares the opened channel
+size with the same exact size. A non-default provider without stable file identity fails closed as
+`IMPORT_READ_FAILED`; the default Windows filesystem uses the remaining metadata checks because
+its provider supplies no file key.
 
 Coffee GB does not intentionally change the selected source's permissions or contents or create a
 file-level copy. It retains the selected path only while the queued import runs and does not log or

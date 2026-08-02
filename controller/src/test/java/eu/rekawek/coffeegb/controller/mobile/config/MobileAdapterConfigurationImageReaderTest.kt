@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import java.nio.file.attribute.PosixFilePermission
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -143,13 +144,10 @@ class MobileAdapterConfigurationImageReaderTest {
     val source = Files.write(directory.resolve("selected.bin"), syntheticBytes(256))
     val replacement =
         Files.write(directory.resolve("replacement.bin"), syntheticBytes(256).reversedArray())
-    assumeTrue(
-        Files.readAttributes(
-                source,
-                BasicFileAttributes::class.java,
-                java.nio.file.LinkOption.NOFOLLOW_LINKS,
-            )
-            .fileKey() != null)
+    Files.setLastModifiedTime(
+        replacement,
+        FileTime.fromMillis(Files.getLastModifiedTime(source).toMillis() + 60_000),
+    )
     val swappingReader =
         MobileAdapterConfigurationImageReader.withOpenHookForTest {
           Files.move(replacement, source, StandardCopyOption.REPLACE_EXISTING)

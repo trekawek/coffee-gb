@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.mobile.config
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
+import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
@@ -79,9 +80,9 @@ class MobileAdapterConfigurationImageReader private constructor(
         return MobileAdapterConfigurationImageReadResult.failure(
             MobileAdapterConfigurationError.IMPORT_MALFORMED_IMAGE)
       }
-      // A null file key prevents us from detecting a replaced directory entry. Reject providers
-      // that cannot supply identity rather than weakening the source-separation contract.
-      if (initialAttributes.fileKey() == null) {
+      // The default Windows provider does not expose file keys. Keep its bounded metadata fallback
+      // usable, but reject every other provider that cannot supply stable file identity.
+      if (initialAttributes.fileKey() == null && !isWindowsDefaultFileSystem(source)) {
         return MobileAdapterConfigurationImageReadResult.failure(
             MobileAdapterConfigurationError.IMPORT_READ_FAILED)
       }
@@ -130,6 +131,11 @@ class MobileAdapterConfigurationImageReader private constructor(
           MobileAdapterConfigurationError.IMPORT_READ_FAILED)
     }
   }
+
+  private fun isWindowsDefaultFileSystem(source: Path): Boolean =
+      source.fileSystem == FileSystems.getDefault() &&
+          source.fileSystem.provider().scheme.equals("file", ignoreCase = true) &&
+          source.fileSystem.separator == "\\"
 
   private fun sourceMatchesOpenedChannel(
       source: Path,

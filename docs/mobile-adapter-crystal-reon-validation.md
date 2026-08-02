@@ -203,18 +203,21 @@ result above remains the acceptance evidence rather than UI exposure alone.
   development mode.
 - An owner-selected image may contain private dial or account material. Coffee GB reads it with a
   strict bound, off the EDT, as a stable regular file while refusing a symbolic link in the final
-  path component. It requires a non-null provider file key and rechecks identity, exact size, and
-  timestamps around the read. It does not chmod or modify the selected source, create a file-level
-  copy of it, or include its path/bytes in diagnostics. The selected path exists only for the
-  duration of the queued import operation and is not logged or persisted. Observed instances of the
-  private store target, same-file aliases, and atomic transaction-artifact names fail as
+  path component. It rechecks available identity, exact size, and timestamps around the read;
+  non-default providers must supply a file key, while the default Windows filesystem uses the
+  remaining metadata checks because none is available. It does not chmod or modify the selected
+  source, create a file-level copy of it, or include its path/bytes in diagnostics. The selected
+  path exists only for the duration of the queued import operation and is not logged or persisted.
+  Observed instances of the private store target, same-file aliases, and atomic
+  transaction-artifact names fail as
   `IMPORT_SOURCE_CONFLICT` before persistence starts; a stable source entry is left unchanged. Only
   the copied or extracted 256 bytes enter the private record and later deterministic save states.
 - Java 16 cannot portably perform a descriptor-bound type/identity query or a nonblocking
   regular-file open. A process able to rewrite the selected directory can still substitute an
   entry between checkpoints or a FIFO during the narrow open window; select input from a private
-  directory not writable by an untrusted process. Providers without a file key fail closed as
-  `IMPORT_READ_FAILED`.
+  directory not writable by an untrusted process. Non-default providers without a file key fail
+  closed as `IMPORT_READ_FAILED`; on the Windows default-filesystem fallback, a same-size
+  substitution that preserves timestamps cannot be distinguished.
 - TCP close, ISP logout, hang-up, end/reset, peripheral replacement, state load, rewind, and
   controller shutdown cancel or release backend ownership as documented in the Mobile Adapter
   contract.

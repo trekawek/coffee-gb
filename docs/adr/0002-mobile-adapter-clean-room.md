@@ -59,11 +59,13 @@ backends.
 The desktop exposes its retained Mobile Adapter configuration dialog and bounded owner-selected
 image import from the **Peripherals** menu. Its controller reader runs off the EDT, rejects a
 symbolic link in the selected final path component, and accepts only a stable regular
-exact 256-byte opaque image or a validated exact 512-byte `MA`/`LM` envelope. It requires a
-non-null provider file key, compares type, identity, size, and timestamps around the open/read, and
-compares the opened channel size at both checkpoints before discarding all library metadata after
-bytes `0..255`. Coffee GB does not chmod or modify the selected source, create a file-level copy,
-or log or persist the selected source path; the path is retained only while the queued import runs.
+exact 256-byte opaque image or a validated exact 512-byte `MA`/`LM` envelope. It compares type,
+available identity, size, and timestamps around the open/read, and compares the opened channel size
+at both checkpoints before discarding all library metadata after bytes `0..255`. Non-default
+providers must supply a file key; the default Windows filesystem uses the remaining metadata
+checks because its provider supplies none. Coffee GB does not chmod or modify the selected source,
+create a file-level copy, or log or persist the selected source path; the path is retained only while
+the queued import runs.
 The private store target, its same-file aliases, and names reserved for atomic backup/temporary
 artifacts are rejected before read and rechecked before save, so an observed conflict fails before
 persistence starts. With a stable directory entry, persistence neither replaces nor cleans up the
@@ -73,9 +75,11 @@ preserved.
 
 Java 16 exposes no portable descriptor-bound file type/identity query or nonblocking regular-file
 open. A process able to rewrite the selected directory can therefore still swap an entry between
-the identity checkpoints or substitute a FIFO during the narrow blocking-open window. Providers
-without a stable file key fail closed with `IMPORT_READ_FAILED`; owners should select private input
-from a directory not writable by an untrusted process.
+the identity checkpoints or substitute a FIFO during the narrow blocking-open window. Non-default
+providers without a stable file key fail closed with `IMPORT_READ_FAILED`. On the Windows
+default-filesystem fallback, a same-size substitution that preserves timestamps cannot be
+distinguished; owners should select private input from a directory not writable by an untrusted
+process.
 
 Every owner-triggered import attempt revokes all prepared/active backends and both process-local
 gates before reporting success or any stale, malformed, conflicting-source, busy, read, or storage
