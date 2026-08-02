@@ -85,6 +85,7 @@ class RomOpenServiceTest {
     SwingUtilities.invokeAndWait { emulatorRef.set(SwingEmulator(eventBus, null, properties)) }
     val emulator = emulatorRef.get()
     val started = LinkedBlockingQueue<String>()
+    val opened = LinkedBlockingQueue<RomOpenUpdate.Opened>()
     val updates = CopyOnWriteArrayList<RomOpenUpdate>()
     val worker = Executors.newSingleThreadExecutor()
     val service =
@@ -97,7 +98,10 @@ class RomOpenServiceTest {
 
               override fun remove(path: Path) = Unit
             },
-            updates::add,
+            { update ->
+              updates += update
+              (update as? RomOpenUpdate.Opened)?.let(opened::add)
+            },
             worker,
             Executor { task -> task.run() },
         )
@@ -106,12 +110,13 @@ class RomOpenServiceTest {
     try {
       service.open(RomOpenRequest(romFile("swing-first.gb", "SWING_FIRST"), RomOpenSource.RECENT))
       assertEquals("SWING_FIRST", started.poll(5, TimeUnit.SECONDS))
+      assertEquals("SWING_FIRST", opened.poll(5, TimeUnit.SECONDS)?.title)
 
       service.open(RomOpenRequest(romFile("swing-next.gb", "SWING_NEXT"), RomOpenSource.RECENT))
 
       assertEquals("SWING_NEXT", started.poll(5, TimeUnit.SECONDS))
+      assertEquals("SWING_NEXT", opened.poll(5, TimeUnit.SECONDS)?.title)
       assertTrue(updates.any { it is RomOpenUpdate.Progress && it.stage == RomOpenStage.PREPARING_CORE })
-      assertTrue(updates.any { it is RomOpenUpdate.Opened })
     } finally {
       service.close()
       emulator.stop()
