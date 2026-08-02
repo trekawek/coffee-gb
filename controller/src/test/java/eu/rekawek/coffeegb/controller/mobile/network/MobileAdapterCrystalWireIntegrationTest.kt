@@ -171,7 +171,6 @@ class MobileAdapterCrystalWireIntegrationTest {
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
     var first = IDLE_BYTE
     while (first == IDLE_BYTE && System.nanoTime() < deadline) {
-      endpoint.pollBackendCompletion()
       first = exchange(endpoint, POLL_BYTE)
       if (first == IDLE_BYTE) Thread.sleep(2)
     }

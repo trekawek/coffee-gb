@@ -869,8 +869,15 @@ class BasicController private constructor(
     val currentSession = session ?: return
     drainMobileAdapterGuestConfiguration(currentSession)
     pollMobileAdapterGuestConfigurationPersistence()
-    if (hasMobileAdapterExternalIo()) {
+    // A CGB can admit and finish a backend request between two controller frame boundaries. The
+    // endpoint's one-shot fence prevents rewind history from bridging that nondeterministic host
+    // effect even when no request or logical connection remains live at the end of this frame.
+    val mobileExternalIoObserved = consumeMobileAdapterExternalIoActivity()
+    if (mobileExternalIoObserved || hasMobileAdapterExternalIo()) {
       rewindManager.clear()
+      if (mobileExternalIoObserved) {
+        debugCheckpointHistory.clear(DebugHistoryTruncationReason.NONDETERMINISTIC_IO)
+      }
     } else {
       rewindManager.record(currentSession)
     }
@@ -3874,6 +3881,9 @@ class BasicController private constructor(
     val lifecycle = mobileAdapterLifecycle(currentSession)
     return endpoint.hasExternalIo() || lifecycle?.backend?.hasExternalWork() == true
   }
+
+  private fun consumeMobileAdapterExternalIoActivity(): Boolean =
+      (session?.serialEndpoint as? MobileAdapterSerialEndpoint)?.consumeExternalIoActivity() == true
 
   /** Exact predicate serialized by MobileAdapterSerialEndpoint capture normalization. */
   private fun mobileAdapterEndpointHasExternalIo(): Boolean =

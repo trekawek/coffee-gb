@@ -403,6 +403,55 @@ class MobileAdapterControllerLifecycleTest {
   }
 
   @Test
+  fun `backend request completed within one owner frame clears prior rewind history`() {
+    udpFixture().use { server ->
+      val backend = backend(server.localPort, 1)
+      val rewind = RewindManager(enabled = true)
+      fixture(
+              Controller.MobileAdapterConfigurationProvider { configuration(1, backend) },
+              rewind,
+          )
+          .use { fixture ->
+            fixture.awaitCondition { rewind.historySize > 0 }
+            val completed = AtomicBoolean()
+            val failure = AtomicReference<Throwable>()
+            fixture.gameboy.get().onNextTick.set {
+              try {
+                val endpoint = assertNotNull(fixture.endpoint.get())
+                completeMobileTransaction(
+                    endpoint,
+                    packet(BEGIN_SESSION, "NINTENDO".encodeToByteArray()),
+                )
+                completeMobileTransaction(
+                    endpoint,
+                    packet(DNS_QUERY, "game.service".encodeToByteArray()),
+                )
+                assertEquals(
+                    MobileAdapterEngine.Outcome.BACKEND_RESPONSE,
+                    endpoint.snapshot().outcome(),
+                )
+                assertFalse(endpoint.hasExternalIo())
+                fixture.awaitCondition { !backend.hasExternalWork() }
+              } catch (caught: Throwable) {
+                failure.set(caught)
+              } finally {
+                // The next controller boundary pauses before another frame can record a new state.
+                fixture.eventBus.post(Controller.PauseEmulationEvent())
+                completed.set(true)
+              }
+            }
+
+            fixture.eventBus.post(Controller.ResumeEmulationEvent())
+
+            fixture.awaitCondition { completed.get() }
+            failure.get()?.let { throw AssertionError("in-frame Mobile transaction failed", it) }
+            fixture.awaitCondition { rewind.historySize == 0 }
+          }
+      assertTrue(backend.awaitTermination(2_000))
+    }
+  }
+
+  @Test
   fun `reset cancels and joins the old backend before the replacement session owns Mobile`() {
     udpFixture().use { server ->
       val oldBackend = backend(server.localPort, 1)
@@ -887,7 +936,6 @@ class MobileAdapterControllerLifecycleTest {
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS)
     var first = 0xd2
     while (first == 0xd2 && System.nanoTime() < deadline) {
-      endpoint.pollBackendCompletion()
       first = exchangeMobileByte(endpoint, 0x4b)
       if (first == 0xd2) Thread.sleep(2)
     }
@@ -1037,6 +1085,12 @@ class MobileAdapterControllerLifecycleTest {
   ) : Gameboy(configuration) {
     val rejectNextMobileHandoff = AtomicBoolean()
     val failAfterNextPressedButtonMutation = AtomicBoolean()
+    val onNextTick = AtomicReference<(() -> Unit)?>(null)
+
+    override fun tick(): Boolean {
+      onNextTick.getAndSet(null)?.invoke()
+      return super.tick()
+    }
 
     override fun init(
         eventBus: EventBus,

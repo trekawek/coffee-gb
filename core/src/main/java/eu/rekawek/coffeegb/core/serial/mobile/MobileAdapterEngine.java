@@ -320,7 +320,8 @@ public final class MobileAdapterEngine implements StatefulComponent<MobileAdapte
      * Atomically polls and applies at most one controller completion without waiting.
      *
      * <p>The completion's generation and request identity are checked again immediately before any
-     * deterministic state changes. A controller calls this at an emulator safe point; it is not a
+     * deterministic state changes. The controller calls this at a frame safe point, and the serial
+     * endpoint may call it at a new-byte boundary while a backend response is pending. It is not a
      * host-I/O callback and never blocks.
      */
     public EngineResult pollBackendCompletion() {

@@ -55,6 +55,9 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
     /** Number of response retransmissions already scheduled for this transaction. */
     private int responseRetryCount;
 
+    /** Runtime-only history fence set when a backend request crosses the host-I/O boundary. */
+    private transient boolean externalIoActivityObserved;
+
     public MobileAdapterSerialEndpoint(ClockSpec clockSpec, int deviceId, byte[] configuration) {
         this(clockSpec, deviceId, configuration, MobileAdapterBackendPort.DISCONNECTED);
     }
@@ -96,6 +99,13 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
             byteTransferActive = false;
             legacyReplyLatched = false;
             if (wirePhase == WirePhase.NORMALIZED_DISCONNECT) resetWireState();
+        }
+        // CGB fast serial can clock hundreds of bytes before the controller's next frame safe
+        // point. Once the validated response gate is pending, consume one already-published
+        // completion at this byte boundary so the guest cannot outrun a DNS/socket reply. This
+        // atomic port poll performs no host I/O and cannot replace a reply byte already in flight.
+        if (wirePhase == WirePhase.RESPONSE_PENDING && responsePacket.length == 0) {
+            pollBackendCompletion();
         }
         sendBitIndex = 0;
         byteTransferActive = true;
@@ -159,6 +169,18 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
     /** Runtime-only ownership hint for controller warnings; it is never captured as a host handle. */
     public boolean hasExternalIo() {
         return engine.hasExternalIo();
+    }
+
+    /**
+     * Consumes the owner-thread history fence for backend work admitted since the previous
+     * controller boundary. The fence is deliberately distinct from {@link #hasExternalIo()}:
+     * a fast request can complete before the frame ends, but its host interaction cannot be
+     * replayed from a portable or rewind snapshot.
+     */
+    public boolean consumeExternalIoActivity() {
+        boolean observed = externalIoActivityObserved;
+        externalIoActivityObserved = false;
+        return observed;
     }
 
     public byte[] configurationCopy() {
@@ -271,6 +293,9 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
             }
         }
         MobileAdapterEngine.EngineResult result = engine.acceptByte(sb);
+        if (result.outcome() == MobileAdapterEngine.Outcome.BACKEND_PENDING) {
+            externalIoActivityObserved = true;
+        }
         byte[] acknowledgement = result.acknowledgement();
         if (acknowledgement.length != 2) {
             return;
@@ -394,6 +419,7 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
             resetWireState();
             currentReply = 0xff;
             legacyReplyLatched = true;
+            externalIoActivityObserved = false;
         } else if (state instanceof MobileAdapterSerialEndpointState legacyState) {
             validateLegacyEndpointState(legacyState.sb, legacyState.sendBitIndex);
             engine.restoreState(legacyState.engineState);
@@ -406,6 +432,7 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
             resetWireState();
             currentReply = 0xff;
             legacyReplyLatched = true;
+            externalIoActivityObserved = false;
         } else {
             throw new IllegalArgumentException("Invalid Mobile Adapter serial endpoint state type");
         }
@@ -428,6 +455,7 @@ public final class MobileAdapterSerialEndpoint implements SerialEndpoint {
         responseByteIndex = state.responseByteIndex;
         awaitingResponse = state.awaitingResponse;
         responseRetryCount = state.responseRetryCount;
+        externalIoActivityObserved = false;
     }
 
     private static void validateLegacyEndpointState(int restoredSb, int restoredSendBitIndex) {
