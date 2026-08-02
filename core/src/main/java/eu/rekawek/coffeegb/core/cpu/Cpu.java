@@ -422,9 +422,10 @@ public class Cpu implements StatefulComponent<Cpu> {
                         }
                     }
 
-                    if (opIndex < ops.size()) {
-                        Op op = ops.get(opIndex);
-                        boolean opAccessesMemory = op.readsMemory() || op.writesMemory();
+                    int opCount = currentOpcode.getOpCount();
+                    if (opIndex < opCount) {
+                        Op op = currentOpcode.getOp(opIndex);
+                        boolean opAccessesMemory = currentOpcode.opAccessesMemory(opIndex);
                         if (accessedMemory && opAccessesMemory) {
                             return;
                         }
@@ -438,7 +439,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         op.switchInterrupts(interruptManager);
 
                         if (!op.proceed(registers)) {
-                            opIndex = ops.size();
+                            opIndex = opCount;
                             break;
                         }
 
@@ -451,7 +452,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         }
                     }
 
-                    if (opIndex >= ops.size()) {
+                    if (opIndex >= opCount) {
                         state = State.OPCODE;
                         operandIndex = 0;
                         interruptManager.onInstructionFinished();
@@ -1100,8 +1101,9 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Whether an already-started CPU write cycle overlaps the HDMA request edge. */
     public boolean hasInFlightWriteCycleForHdma() {
-        return clockCycle >= 2 && state == State.RUNNING && ops != null
-                && opIndex < ops.size() && ops.get(opIndex).writesMemory();
+        return clockCycle >= 2 && state == State.RUNNING && currentOpcode != null
+                && opIndex < currentOpcode.getOpCount()
+                && currentOpcode.opWritesMemory(opIndex);
     }
 
     public boolean isSpeedSwitching() {

@@ -53,6 +53,14 @@ public class ClockSpecTest {
     }
 
     @Test
+    public void singleUnitHotPathMatchesBulkAccumulatorForEveryRatioShape() {
+        assertAdvanceOneMatchesBulk(new ClockSpec(4_194_304, 60, 1), 44_100, 1_000_000);
+        assertAdvanceOneMatchesBulk(new ClockSpec(32_768, 60, 1), 44_100, 100_000);
+        assertAdvanceOneMatchesBulk(new ClockSpec(44_100, 60, 1), 44_100, 100_000);
+        assertAdvanceOneMatchesBulk(ClockSpec.SGB, 44_100, 1_000_000);
+    }
+
+    @Test
     public void conversionsUseDocumentedRoundingAndCheckedArithmetic() {
         ClockSpec clock = new ClockSpec(10, 3, 1);
 
@@ -133,5 +141,25 @@ public class ClockSpecTest {
         assertEquals(dmgAudio.advance(ticks), mgbAudio.advance(ticks));
         assertEquals(dmgAudio.remainder(), mgbAudio.remainder());
         assertEquals(dmg.controllerTicksPerFrame(), mgb.controllerTicksPerFrame());
+    }
+
+    private static void assertAdvanceOneMatchesBulk(
+            ClockSpec clock, long outputRate, int inputUnits) {
+        assertAdvanceOneSequenceMatchesBulk(clock, outputRate, inputUnits, 0);
+        assertAdvanceOneSequenceMatchesBulk(
+                clock, outputRate, Math.min(inputUnits, 10_000),
+                clock.ticksPerSecondNumerator() - 1);
+    }
+
+    private static void assertAdvanceOneSequenceMatchesBulk(
+            ClockSpec clock, long outputRate, int inputUnits, long initialRemainder) {
+        ClockSpec.RateAccumulator hotPath = clock.newTickRateAccumulator(outputRate);
+        ClockSpec.RateAccumulator bulk = clock.newTickRateAccumulator(outputRate);
+        hotPath.restoreRemainder(initialRemainder);
+        bulk.restoreRemainder(initialRemainder);
+        for (int input = 0; input < inputUnits; input++) {
+            assertEquals(bulk.advance(1), hotPath.advanceOne());
+            assertEquals(bulk.remainder(), hotPath.remainder());
+        }
     }
 }

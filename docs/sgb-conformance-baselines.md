@@ -51,7 +51,7 @@ part of the contract.
 | `SGB_FLAG` | 12 | 44 |
 | `CGB0` | 10 | 44 |
 | `BOOTSTRAP` | 19 | 130 |
-| `CLOCK` | 34 | 268 |
+| `CLOCK` | 34 | 263 |
 | `SGB_BORDER` | 9 | 44 |
 | `MEALYBUG` | 11 | 51 |
 | `CODEBREAKER` | 11 | 61 |

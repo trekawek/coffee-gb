@@ -42,6 +42,82 @@ class TimingTickerTest {
   }
 
   @Test
+  fun `twenty millisecond pacing debt is repaid before pacing resumes`() {
+    val now = AtomicLong(0)
+    val parked = mutableListOf<Long>()
+    val ticker =
+        TimingTicker(
+            { now.addAndGet(1_000_000L) },
+            { duration ->
+              parked += duration
+              now.addAndGet(duration)
+            },
+        )
+    val clock = ClockSpec(6_000, 60, 1)
+
+    fun runFrame() {
+      repeat(clock.controllerTicksPerFrame()) { ticker.run(clock) }
+    }
+
+    runFrame()
+    val parksBeforeDelay = parked.size
+    assertEquals(1, parksBeforeDelay)
+
+    // One frame interval plus host delay leaves roughly 20 ms of debt after the next
+    // frame deadline is advanced. The old one-frame re-anchor discarded this debt.
+    now.addAndGet(37_000_000L)
+    repeat(2) { runFrame() }
+    assertEquals(
+        parksBeforeDelay,
+        parked.size,
+        "recoverable pacing debt must run both catch-up frames without being discarded",
+    )
+
+    repeat(3) { runFrame() }
+    kotlin.test.assertTrue(
+        parked.size > parksBeforeDelay,
+        "repaid short debt must return to ordinary pacing",
+    )
+  }
+
+  @Test
+  fun `hundred millisecond host delay retains only bounded catch-up debt`() {
+    val now = AtomicLong(0)
+    val parked = mutableListOf<Long>()
+    val ticker =
+        TimingTicker(
+            { now.addAndGet(1_000_000L) },
+            { duration ->
+              parked += duration
+              now.addAndGet(duration)
+            },
+        )
+    val clock = ClockSpec(6_000, 60, 1)
+
+    fun runFrame() {
+      repeat(clock.controllerTicksPerFrame()) { ticker.run(clock) }
+    }
+
+    runFrame()
+    val parksBeforeDelay = parked.size
+    assertEquals(1, parksBeforeDelay)
+
+    now.addAndGet(100_000_000L)
+    repeat(3) { runFrame() }
+    assertEquals(
+        parksBeforeDelay,
+        parked.size,
+        "the clamped debt must allow immediate catch-up",
+    )
+
+    repeat(3) { runFrame() }
+    kotlin.test.assertTrue(
+        parked.size > parksBeforeDelay,
+        "the 50 ms cap must return to pacing within a bounded number of frames",
+    )
+  }
+
+  @Test
   fun `host pacing and pause reanchoring never advance emulated sgb2 state`() {
     fun runWithHostStep(hostStep: Long): ByteArray {
       val configuration =

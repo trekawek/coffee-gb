@@ -72,6 +72,83 @@ public class AudioSystemSoundTest {
     }
 
     @Test
+    public void producerDelayNeverQueuesSyntheticFrameSizedSilence() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                new AudioRuntimeConfiguration(
+                        "default", 100, false,
+                        AudioRuntimeConfiguration.LatencyPreset.LOW),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+
+        sound.start();
+        try {
+            await("default output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            FakeLine line = backend.lastLine("default");
+            int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("first real PCM frame", () -> line.nonSilentWriteCount() >= 1);
+            int firstRealWrite = line.firstNonSilentWriteAfter(-1);
+
+            // The old worker converted every 20 ms timeout into a complete 16.667 ms zero frame.
+            // Keep the producer quiet across several such polls, then let the real stream resume.
+            Thread.sleep(80);
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("second real PCM frame", () -> line.nonSilentWriteCount() >= 2);
+            int secondRealWrite = line.firstNonSilentWriteAfter(firstRealWrite);
+
+            for (int write = firstRealWrite + 1; write < secondRealWrite; write++) {
+                assertFalse(
+                        "audio worker manufactured silence at write " + write,
+                        allZero(line.writes.get(write)));
+            }
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void latencyPresetPrimesItsWatermarkBeforeTheFirstWrite() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+
+        sound.start();
+        try {
+            await("default output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            FakeLine line = backend.lastLine("default");
+            int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+            int watermark = AudioRuntimeConfiguration.LatencyPreset.BALANCED.queuedFrames();
+
+            for (int frame = 1; frame < watermark; frame++) {
+                eventBus.post(new Sound.SoundSampleEvent(samples));
+            }
+            Thread.sleep(40);
+            assertTrue("partial watermark must remain staged", line.writes.isEmpty());
+
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("primed PCM batch", () -> line.nonSilentWriteCount() == watermark);
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
     public void legacySoundEventUpdatesMuteWithoutDiscardingOtherRuntimeSettings() {
         EventBusImpl eventBus = synchronousBus();
         FakeBackend backend = new FakeBackend();
@@ -168,7 +245,11 @@ public class AudioSystemSoundTest {
 
         backend.remove(DEVICE_A);
         safe.failWrites = true;
-        eventBus.post(new Sound.SoundSampleEvent(constantSamples(400, 480)));
+        for (int frame = 0;
+                frame < AudioRuntimeConfiguration.LatencyPreset.SAFE.queuedFrames();
+                frame++) {
+            eventBus.post(new Sound.SoundSampleEvent(constantSamples(400, 480)));
+        }
         await("missing configured device to fall back",
                 () -> sound.currentStatus().state() == AudioOutputStatus.State.FALLBACK);
         assertEquals("default", sound.currentStatus().activeDeviceId());
@@ -295,6 +376,25 @@ public class AudioSystemSoundTest {
         return samples;
     }
 
+    private static int[] audibleSamples(int ticks) {
+        int[] samples = new int[ticks * 2];
+        for (int tick = 0; tick < ticks; tick++) {
+            int value = ((tick / 32) & 1) == 0 ? 480 : -480;
+            samples[tick * 2] = value;
+            samples[tick * 2 + 1] = value;
+        }
+        return samples;
+    }
+
+    private static boolean allZero(byte[] bytes) {
+        for (byte value : bytes) {
+            if (value != 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static int firstNonZeroLeftSample(byte[] bytes) {
         for (int offset = 0; offset + 3 < bytes.length; offset += 4) {
             int sample = (short) ((bytes[offset] & 0xff) | (bytes[offset + 1] << 8));
@@ -400,6 +500,7 @@ public class AudioSystemSoundTest {
         private volatile boolean closed;
         private volatile boolean failWrites;
         private volatile int flushCount;
+        private final List<byte[]> writes = new CopyOnWriteArrayList<>();
 
         private FakeLine(int requestedBufferBytes, List<String> operationThreads) {
             this.requestedBufferBytes = requestedBufferBytes;
@@ -421,7 +522,27 @@ public class AudioSystemSoundTest {
             if (failWrites) {
                 throw new IllegalStateException("device disconnected");
             }
+            writes.add(Arrays.copyOfRange(bytes, offset, offset + length));
             return length;
+        }
+
+        private int nonSilentWriteCount() {
+            int count = 0;
+            for (byte[] write : writes) {
+                if (!allZero(write)) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private int firstNonSilentWriteAfter(int previous) {
+            for (int index = previous + 1; index < writes.size(); index++) {
+                if (!allZero(writes.get(index))) {
+                    return index;
+                }
+            }
+            return -1;
         }
 
         @Override

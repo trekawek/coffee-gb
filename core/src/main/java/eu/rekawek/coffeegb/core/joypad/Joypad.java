@@ -380,12 +380,23 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return 0x0f - currentPlayer;
         }
 
-        int result = applyButtons(0x0f, sampledInput.buttons(currentPlayer));
+        int result = applyButtonMask(0x0f, sampledInput.buttonMask(currentPlayer));
         // The historical event-driven API remains P1-only for controller/netplay replay.
-        if (currentPlayer == 0) {
+        if (currentPlayer == 0 && !buttons.isEmpty()) {
             result = applyButtons(result, buttons);
         }
         return result;
+    }
+
+    private int applyButtonMask(int inputLines, int pressedButtonMask) {
+        int pressedInputLines = 0;
+        if ((p1 & 0x10) == 0) {
+            pressedInputLines |= pressedButtonMask & 0x0f;
+        }
+        if ((p1 & 0x20) == 0) {
+            pressedInputLines |= (pressedButtonMask >>> 4) & 0x0f;
+        }
+        return inputLines & ~pressedInputLines & 0x0f;
     }
 
     private int applyButtons(int inputLines, Collection<Button> pressedButtons) {

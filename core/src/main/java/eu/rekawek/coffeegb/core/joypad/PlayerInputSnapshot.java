@@ -16,8 +16,16 @@ public final class PlayerInputSnapshot {
 
     private final List<Set<Button>> players;
 
+    /** Four stable eight-bit button masks packed from P1 in the low byte through P4. */
+    private final int packedButtonMasks;
+
     private PlayerInputSnapshot(List<Set<Button>> players) {
         this.players = players;
+        int masks = 0;
+        for (int player = 0; player < PlayerInputSource.PLAYER_COUNT; player++) {
+            masks |= JoypadButtonMask.fromButtons(players.get(player)) << (player * Byte.SIZE);
+        }
+        this.packedButtonMasks = masks;
     }
 
     public static PlayerInputSnapshot released() {
@@ -47,6 +55,12 @@ public final class PlayerInputSnapshot {
     public Set<Button> buttons(int player) {
         checkPlayer(player);
         return players.get(player);
+    }
+
+    /** Returns the precomputed stable mask without iterating the immutable button set. */
+    int buttonMask(int player) {
+        checkPlayer(player);
+        return (packedButtonMasks >>> (player * Byte.SIZE)) & JoypadButtonMask.ALL;
     }
 
     public List<Set<Button>> players() {

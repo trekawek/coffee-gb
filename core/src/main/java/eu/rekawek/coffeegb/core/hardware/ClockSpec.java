@@ -302,6 +302,10 @@ public final class ClockSpec {
 
         private final long denominator;
 
+        private final long wholeOutputPerInput;
+
+        private final long fractionalNumeratorPerInput;
+
         private long remainder;
 
         private RateAccumulator(long numeratorPerInput, long denominator) {
@@ -310,6 +314,29 @@ public final class ClockSpec {
             }
             this.numeratorPerInput = numeratorPerInput;
             this.denominator = denominator;
+            this.wholeOutputPerInput = numeratorPerInput / denominator;
+            this.fractionalNumeratorPerInput = numeratorPerInput % denominator;
+        }
+
+        /**
+         * Advances one input unit without division on the per-tick hot path.
+         *
+         * <p>The general bulk method below must multiply, divide, and retain an overflow fallback.
+         * Audio conversion calls this method once for every emulated master tick, where the whole
+         * quotient is constant and only the fractional carry can change. Comparing against the
+         * complement before adding also keeps the calculation overflow-free.</p>
+         */
+        public long advanceOne() {
+            if (fractionalNumeratorPerInput == 0) {
+                return wholeOutputPerInput;
+            }
+            long carryThreshold = denominator - fractionalNumeratorPerInput;
+            if (remainder >= carryThreshold) {
+                remainder -= carryThreshold;
+                return wholeOutputPerInput + 1;
+            }
+            remainder += fractionalNumeratorPerInput;
+            return wholeOutputPerInput;
         }
 
         public long advance(long inputUnits) {

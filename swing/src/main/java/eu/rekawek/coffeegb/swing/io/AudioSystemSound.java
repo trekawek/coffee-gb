@@ -9,6 +9,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.LineUnavailableException;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -31,6 +33,10 @@ import java.util.function.Consumer;
  * <p>A fractional resampling step keeps the produced rate exactly at the line's sample rate. Host
  * device, gain, mute, and latency changes deliberately leave that phase and the DC blockers intact:
  * presentation changes must not alter emulation timing or same-profile pause/restore continuity.
+ *
+ * <p>A newly opened or intentionally flushed line stages the configured frame watermark before its
+ * first write. Once playing, a late producer is allowed to drain naturally: poll timeouts never
+ * manufacture frame-sized silence or delay the next real PCM frame.
  */
 public class AudioSystemSound implements Runnable {
     private static final Logger LOG = LoggerFactory.getLogger(AudioSystemSound.class);
@@ -91,7 +97,6 @@ public class AudioSystemSound implements Runnable {
     private ClockSpec activeClock = ClockSpec.LEGACY;
     private ClockSpec.RateAccumulator sampleAccumulator =
             activeClock.newTickRateAccumulator(SAMPLE_RATE);
-    private volatile int silenceBytes = frameOutputBytes(activeClock);
 
     private long sumL, sumR, prevSumL, prevSumR;
     private int cnt, prevCnt;
@@ -252,6 +257,9 @@ public class AudioSystemSound implements Runnable {
         AudioRuntimeConfiguration applied = null;
         AudioBackend.AudioLine line = null;
         boolean usingFallback = false;
+        boolean priming = true;
+        Deque<byte[]> primingFrames = new ArrayDeque<>(MAX_QUEUED_FRAMES);
+        long appliedGeneration = configurationGeneration.get();
         long retryAtNanos = 0;
         publishStatus(new AudioOutputStatus(
                 AudioOutputStatus.State.STARTING,
@@ -260,9 +268,11 @@ public class AudioSystemSound implements Runnable {
                 "Opening audio output"));
 
         try {
+            workerLoop:
             while (!doStop) {
                 AudioRuntimeConfiguration pending = latestPendingConfiguration();
                 if (applied == null || pending != null) {
+                    long nextGeneration = configurationGeneration.get();
                     AudioRuntimeConfiguration next =
                             pending == null ? desiredConfiguration.get() : pending;
                     boolean reopen =
@@ -270,6 +280,8 @@ public class AudioSystemSound implements Runnable {
                                     || !applied.outputDeviceId().equals(next.outputDeviceId())
                                     || applied.latencyPreset() != next.latencyPreset();
                     queue.clear();
+                    primingFrames.clear();
+                    priming = true;
                     if (reopen) {
                         closeLine(line);
                         line = null;
@@ -290,10 +302,13 @@ public class AudioSystemSound implements Runnable {
                         safelyFlush(line);
                     }
                     applied = next;
+                    appliedGeneration = nextGeneration;
                 }
 
                 if (line == null) {
                     usingFallback = false;
+                    primingFrames.clear();
+                    priming = true;
                     discardOneFrameWhileUnavailable();
                     if (System.nanoTime() >= retryAtNanos && !doStop) {
                         line = openWithFallback(applied == null
@@ -309,11 +324,16 @@ public class AudioSystemSound implements Runnable {
                 }
 
                 if (usingFallback && System.nanoTime() >= retryAtNanos && !doStop) {
+                    AudioBackend.AudioLine previousLine = line;
                     FallbackRecovery recovery = tryRecoverPreferred(applied, line);
                     retryAtNanos = retryDeadline();
                     line = recovery.line();
                     activeLine = line;
                     usingFallback = recovery.usingFallback();
+                    if (line != previousLine) {
+                        primingFrames.clear();
+                        priming = true;
+                    }
                     if (line == null) continue;
                 }
 
@@ -322,6 +342,8 @@ public class AudioSystemSound implements Runnable {
                     line = null;
                     activeLine = null;
                     usingFallback = false;
+                    primingFrames.clear();
+                    priming = true;
                     retryAtNanos = 0;
                     continue;
                 }
@@ -330,11 +352,42 @@ public class AudioSystemSound implements Runnable {
                 if (doStop) {
                     break;
                 }
+                if (appliedGeneration != configurationGeneration.get()) {
+                    // applyConfiguration has already cleared the shared queue. Do not let a frame
+                    // removed just before that clear survive in this worker-local jitter buffer.
+                    primingFrames.clear();
+                    priming = true;
+                    continue;
+                }
                 try {
-                    if (buffer != null && buffer.length > 0) {
+                    if (priming) {
+                        if (buffer != null && buffer.length > 0) {
+                            primingFrames.addLast(buffer);
+                        }
+                        int watermark = applied.latencyPreset().queuedFrames();
+                        if (primingFrames.size() >= watermark) {
+                            // A running line lets a staged batch larger than its physical buffer
+                            // drain while writeFully completes. start() is an idempotent recovery
+                            // nudge for providers that stop themselves after an underrun.
+                            line.start();
+                            while (!primingFrames.isEmpty()) {
+                                if (appliedGeneration != configurationGeneration.get()) {
+                                    // A SAFE batch can span several blocking device writes. Do not
+                                    // let the worker-local tail cross a settings/device boundary.
+                                    primingFrames.clear();
+                                    priming = true;
+                                    continue workerLoop;
+                                }
+                                writeFully(line, primingFrames.removeFirst());
+                            }
+                            priming = false;
+                        }
+                    } else if (buffer != null && buffer.length > 0) {
+                        // SourceDataLine providers may stop after naturally draining. Resume the
+                        // real frame immediately; withholding it to rebuild the startup watermark
+                        // would turn a slow producer into a larger periodic burst/pause cycle.
+                        line.start();
                         writeFully(line, buffer);
-                    } else if (line.available() >= line.bufferSize() - BYTES_PER_STEREO_FRAME) {
-                        writeFully(line, new byte[silenceBytes]);
                     }
                 } catch (RuntimeException failure) {
                     LOG.warn("Audio output failed; reopening with safe fallback", failure);
@@ -342,6 +395,8 @@ public class AudioSystemSound implements Runnable {
                     line = null;
                     activeLine = null;
                     usingFallback = false;
+                    primingFrames.clear();
+                    priming = true;
                     retryAtNanos = 0;
                 }
             }
@@ -601,7 +656,7 @@ public class AudioSystemSound implements Runnable {
             sumL += source[t * 2];
             sumR += source[t * 2 + 1];
             cnt++;
-            long produced = sampleAccumulator.advance(1);
+            long produced = sampleAccumulator.advanceOne();
             if (produced > 1) {
                 throw new IllegalStateException("Audio output rate exceeds the emulated tick rate");
             }
@@ -670,19 +725,12 @@ public class AudioSystemSound implements Runnable {
         }
         activeClock = clockSpec;
         sampleAccumulator = clockSpec.newTickRateAccumulator(SAMPLE_RATE);
-        silenceBytes = frameOutputBytes(clockSpec);
         sumL = 0;
         sumR = 0;
         prevSumL = 0;
         prevSumR = 0;
         cnt = 0;
         prevCnt = 0;
-    }
-
-    private static int frameOutputBytes(ClockSpec clockSpec) {
-        long samples =
-                clockSpec.maximumOutputUnits(clockSpec.controllerTicksPerFrame(), SAMPLE_RATE);
-        return Math.toIntExact(Math.multiplyExact(samples, BYTES_PER_STEREO_FRAME));
     }
 
     static AudioFormat outputFormat() {
