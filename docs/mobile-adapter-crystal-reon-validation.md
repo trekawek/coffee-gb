@@ -213,6 +213,7 @@ Until a real ROM completes the declared request/response, game-visible result, a
 against REON, the strict result remains partial, with no additional core protocol or
 production-backend conclusion inferred from the importer.
 
-The current custom-server policy admits one exact guest DNS alias. Any future ROM trace that needs
-additional mail, time, or content aliases requires an explicit bounded multi-alias policy rather
-than wildcard or ambient DNS access.
+The custom-server policy admits one primary and at most seven additional exact guest DNS aliases
+for the same configured target. This covers a bounded service family without multiplying port
+mapping rules or allowing wildcard or ambient DNS access. A fresh ROM-to-service trace is still
+required before this document can claim complete #399 acceptance.

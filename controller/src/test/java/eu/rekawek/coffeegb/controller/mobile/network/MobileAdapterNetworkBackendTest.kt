@@ -793,6 +793,71 @@ class MobileAdapterNetworkBackendTest {
   }
 
   @Test
+  fun `additional exact alias resolves and opens through one shared destination rule`() {
+    val loopback = byteArrayOf(127, 0, 0, 1)
+    ServerSocket(0, 1, InetAddress.getByAddress(loopback)).use { server ->
+      val accepted = CountDownLatch(1)
+      thread(isDaemon = true, name = "mobile-adapter-test-additional-alias") {
+        try {
+          server.accept().use { accepted.countDown() }
+        } catch (_: Exception) {
+          // Fixture close owns termination.
+        }
+      }
+      DnsFixture(listOf(listOf(loopback), listOf(loopback))).use { dns ->
+        val target = MobileAdapterTransportTarget.parse("custom-server.example")
+        val rule =
+            MobileAdapterDestinationRule(
+                listOf("game.service", "trainer.service"),
+                target,
+                MobileAdapterTransportProtocol.TCP,
+                80,
+                server.localPort,
+            )
+        val policy =
+            MobileAdapterDestinationPolicy(
+                1,
+                MobileAdapterDnsResolver(
+                    MobileAdapterIpv4Address.parse("127.0.0.1"),
+                    dns.port,
+                ),
+                listOf(rule),
+            )
+        val backend =
+            MobileAdapterNetworkBackend(
+                policy,
+                MobileAdapterRuntimeAuthorization(true, true),
+            )
+        try {
+          val lookup = submit(backend, 1, DNS_QUERY, alias("trainer.service"))
+          assertEquals(BackendStatus.SUCCESS, lookup.status())
+          assertContentEquals(loopback, lookup.payload())
+
+          val opened = submit(backend, 2, TCP_OPEN, openPayload(127, 0, 0, 1, 80))
+          assertEquals(BackendStatus.SUCCESS, opened.status())
+          assertContentEquals(byteArrayOf(0), opened.payload())
+          assertTrue(accepted.await(2, TimeUnit.SECONDS))
+          assertEquals(1, policy.rules().size)
+          assertEquals(
+              listOf("custom-server.example", "custom-server.example"),
+              listOf(
+                  dns.queries.poll(2, TimeUnit.SECONDS),
+                  dns.queries.poll(2, TimeUnit.SECONDS),
+              ),
+          )
+          assertEquals(
+              BackendStatus.SUCCESS,
+              submit(backend, 3, TCP_CLOSE, byteArrayOf(0)).status(),
+          )
+        } finally {
+          backend.close()
+          assertTrue(backend.awaitTermination(2_000))
+        }
+      }
+    }
+  }
+
+  @Test
   fun `fresh allowed DNS answer must still contain the requested address before socket open`() {
     DnsFixture(
             listOf(

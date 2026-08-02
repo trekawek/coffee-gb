@@ -532,7 +532,7 @@ class MobileAdapterNetworkBackend(
                     rule.target.literalAddress != null -> rule.target.literalAddress == requestedAddress
                     else ->
                         capabilities.any { capability ->
-                          capability.alias == rule.canonicalAlias &&
+                          rule.acceptsCanonicalAlias(capability.alias) &&
                               capability.target == rule.target &&
                               requestedAddress in capability.addresses
                         }

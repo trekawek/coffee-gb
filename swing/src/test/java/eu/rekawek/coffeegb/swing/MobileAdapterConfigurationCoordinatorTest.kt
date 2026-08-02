@@ -368,15 +368,18 @@ class MobileAdapterConfigurationCoordinatorTest {
   }
 
   @Test
-  fun `policy conversion is exact bounded and redacted`() {
+  fun `policy conversion shares aliases without multiplying mappings and remains redacted`() {
     val configuration = customConfiguration()
     val custom = configuration.networkPolicy as MobileAdapterNetworkPolicy.CustomServer
     val policy = MobileAdapterConfigurationCoordinator.destinationPolicy(9, custom)
 
     assertEquals(9, policy.revision)
-    assertEquals(2, policy.rules().size)
+    assertEquals(custom.portMappings.size, policy.rules().size)
+    assertEquals(2, custom.additionalDnsQueryNames.size)
     assertEquals(setOf(80, 53), policy.rules().map { it.guestPort }.toSet())
+    assertTrue(policy.rules().all { it.toString().contains("aliases=3") })
     assertFalse(policy.toString().contains("service.example"))
+    assertFalse(policy.rules().joinToString().contains("trainer.example"))
     assertFalse(policy.toString().contains("127.0.0.1"))
     assertTrue(policy.toString().contains("rules=2"))
   }
@@ -1494,6 +1497,7 @@ class MobileAdapterConfigurationCoordinatorTest {
                   MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080),
                   MobileAdapterPortMapping(MobileAdapterTransport.UDP, 53, 15353),
               ),
+              listOf("trainer.example", "browser.example"),
           ),
       )
 

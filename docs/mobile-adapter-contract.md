@@ -214,6 +214,7 @@ The core engine validates before allocating or indexing:
 | runtime logical connection identifiers | 2 (`0` and `1`), never serialized |
 | transfer packet | 1-byte ID plus `0..253` data bytes |
 | DNS packet/effective ASCII name | 254 / 253 bytes |
+| exact guest DNS aliases per custom server | 8 total: 1 primary plus at most 7 additional |
 | dial body | 1-byte adapter model plus at most 32 dial-string bytes |
 | ISP ID/password | 32 bytes each; never retained after command completion |
 
@@ -227,6 +228,7 @@ waits on NIO channels. The remaining host-side limits are:
 | prepared/terminating backend owner loops | 2 total |
 | backend command payload | 254 bytes |
 | status snapshots | 16, oldest replaced on overflow |
+| destination rules / alias-rule associations | 16 / 128 |
 | raw DNS datagram | 512 bytes |
 | DNS answer/authority/additional records | 32 total |
 | DNS compression pointer jumps / CNAME hops | 16 per decoded name / 4 per selected chain |
@@ -259,11 +261,13 @@ re-snapshots the still-tracked backends and waits under a new shared 2,000 ms de
 re-enables authority or starts a replacement worker.
 
 DNS is a bounded raw UDP A query sent only to the configured literal IPv4 resolver; the JVM system
-resolver is never called. A guest name is only an exact alias into the saved mapping table. A named
-target is freshly resolved immediately before every open, every returned address is reclassified,
-and the exact address requested by the guest must still be present. A changed or newly denied
-answer fails closed. TCP and UDP are outbound and connected to the selected peer; there is no
-listener, bind service, relay, proxy, discovery, unsolicited receive, or ambient DNS path.
+resolver is never called. A guest name is only one of at most eight exact aliases into the saved
+mapping table. Every alias on a rule selects the same configured target, and aliases never multiply
+the 16-rule port-mapping limit. A named target is freshly resolved immediately before every open,
+every returned address is reclassified, and the exact address requested by the guest must still be
+present. A changed or newly denied answer fails closed. TCP and UDP are outbound and connected to
+the selected peer; there is no listener, bind service, relay, proxy, discovery, unsolicited receive,
+wildcard alias, or ambient DNS path.
 
 The two logical IDs are a runtime validation view of controller-owned TCP/UDP resources. They are
 created only by a validated successful open completion, cleared only by matching close, remote
@@ -397,28 +401,33 @@ injected backend, and never captures that backend.
 
 Desktop startup loads configuration on the launcher thread, before entering Swing, and supplies a
 cached immutable value to the controller. The emulator and EDT therefore perform no filesystem
-work. The dedicated file is separate from general preferences. Current variable-length version 2
-is `307..640` bytes:
+work. The dedicated file is separate from general preferences. Current variable-length version 3
+is `308..2419` bytes. Let `n` be the primary-name length and `a` the total bytes occupied by the
+additional length-prefixed aliases:
 
 | Offset | Width | Field |
 |---:|---:|---|
 | 0 | 8 | ASCII magic `CGBMACFG` |
-| 8 | 1 | format version `2` |
+| 8 | 1 | format version `3` |
 | 9 | 1 | device ID `0..127` |
 | 10 | 256 | private configuration bytes |
 | 266 | 1 | known flags; bit 0 means custom-server policy |
 | 267 | 4 | literal resolver IPv4 bytes; zero only in offline mode |
 | 271 | 2 | big-endian resolver port; zero only in offline mode |
 | 273 | 1 | ASCII DNS query-name length `0..253` |
-| 274 | n | canonical DNS query name; empty only in offline mode |
-| 274+n | 1 | mapping count `0..16` |
-| 275+n | 5m | mappings: transport ID, guest port, target port |
+| 274 | n | canonical target and primary guest DNS name; empty only in offline mode |
+| 274+n | 1 | additional exact guest-alias count `0..7` |
+| 275+n | a | aliases, each as a one-byte length `1..253` plus canonical ASCII bytes |
+| 275+n+a | 1 | mapping count `0..16` |
+| 276+n+a | 5m | mappings: transport ID, guest port, target port |
 | final 32 | 32 | SHA-256 of every preceding byte |
 
 The exact 300-byte version-1 record remains readable and migrates to an offline policy; it retains
-its original two-byte configuration-length field and digest layout. Every new save uses version 2.
-Runtime network consent and the separate private/local development gate are deliberately absent
-from both formats and reset on every application start and every policy edit.
+its original two-byte configuration-length field and digest layout. Version 2 remains readable only
+within its original `307..640`-byte bound and migrates with no additional aliases. Every new save
+uses version 3. Older Coffee GB versions reject version 3 rather than misreading it. Runtime network
+consent and the separate private/local development gate are deliberately absent from every format
+and reset on every application start and every policy edit.
 
 ### Guest-authored configuration writes
 
@@ -500,9 +509,10 @@ never enter status text or logs.
 The configuration view reports whether the launcher selected a validated record, recovered backup,
 last-good value, or synthetic fallback, plus the safe device ID, network mode, mapping count, and
 stable diagnostic. Its summary never receives the private byte array or renders resolver/name/port
-values. The editor may show the user's own owner-only policy while it is open. It supports offline
-or custom-server mode, one literal resolver, one canonical DNS name, and exact TCP/UDP guest-to-
-target port mappings.
+values. The editor may show the user's own owner-only policy while it is open. The persisted model
+supports offline or custom-server mode, one literal resolver, one canonical target/primary guest
+name, up to seven additional exact guest aliases, and exact TCP/UDP guest-to-target port mappings.
+UI exposure must preserve all configured aliases rather than silently dropping them.
 
 Runtime authorization is fail-closed and independent of event delivery. Every gate or policy edit
 holds the coordinator authority lock and directly revokes every prepared backend before publishing
@@ -544,7 +554,7 @@ wire; payload redaction applies only to application logs, diagnostics, status ev
 Use only a service and network you trust, and do not put credentials, tokens, or other secrets in a
 custom-service flow.
 
-The owner-only configuration file necessarily contains the configured resolver, query name, port
+The owner-only configuration file necessarily contains the configured resolver, query names, port
 mappings, and the adapter's private 256-byte configuration region. Runtime consent flags are never
 stored. The configuration editor shows the values entered by its user, but summaries and runtime
 status expose only mode, counts, slot IDs, phases, and typed errors. The policy's special-range
