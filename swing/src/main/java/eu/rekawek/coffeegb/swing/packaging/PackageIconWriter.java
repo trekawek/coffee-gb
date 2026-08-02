@@ -13,7 +13,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Generates platform raster containers from the repository's vector icon geometry. */
+/** Generates platform raster containers from the bundled SVG raster derivative. */
 final class PackageIconWriter {
 
     private PackageIconWriter() {
@@ -85,7 +85,12 @@ final class PackageIconWriter {
     }
 
     private static byte[] png(int size) throws IOException {
-        BufferedImage image = CoffeeGbIcon.image(size);
+        BufferedImage image;
+        try {
+            image = CoffeeGbIcon.image(size);
+        } catch (IllegalStateException e) {
+            throw new IOException("Cannot load the application-icon raster derivative", e);
+        }
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         if (!ImageIO.write(image, "png", bytes)) {
             throw new IOException("The JDK PNG writer is unavailable");

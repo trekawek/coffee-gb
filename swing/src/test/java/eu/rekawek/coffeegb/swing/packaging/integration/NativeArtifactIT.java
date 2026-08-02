@@ -67,6 +67,7 @@ public class NativeArtifactIT {
         assertTrue(appEntries.contains("META-INF/services/org.slf4j.spi.SLF4JServiceProvider"));
         assertTrue(appEntries.contains("META-INF/services/org/jline/terminal/provider/exec"));
         assertTrue(appEntries.contains("META-INF/services/org/jline/terminal/provider/jna"));
+        assertTrue(appEntries.contains("eu/rekawek/coffeegb/swing/coffee-gb.png"));
         assertEquals(1, universalTimestamps.size());
         assertEquals(universalTimestamps, appTimestamps);
         Set<String> removed = new HashSet<>(universalEntries);

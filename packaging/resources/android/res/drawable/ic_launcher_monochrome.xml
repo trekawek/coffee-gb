@@ -5,21 +5,33 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Single-alpha-mask version for Android 13+ themed icons. -->
-    <path
-        android:fillColor="#FF000000"
-        android:pathData="M72,48 C80,48 85,53 85,60.5 C84.5,66 81,71.5 74,72 L72,72 L72,65.5 L74,65.5 C77.5,65.3 79,63.5 79,60.5 C79,57.2 77,55 72,55 Z" />
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.8"
+        android:scaleY="0.8">
 
-    <!-- Screen, coffee, D-pad and buttons are negative space in the mug. -->
-    <path
-        android:fillColor="#FF000000"
-        android:fillType="evenOdd"
-        android:pathData="M31,34 C31,31 33.5,29.5 37,29.5 L69,29.5 C72.5,29.5 75,32 75,35 L75,69 C75,76 70,81.5 63.5,81.5 L42.5,81.5 C36,81.5 31,76 31,69 Z M34,35 C34,32.6 42.5,31.5 53,31.5 C63.5,31.5 72,32.6 72,35 C72,37.4 63.5,38.5 53,38.5 C42.5,38.5 34,37.4 34,35 Z M39,42 L67,42 C69.2,42 71,43.8 71,46 L71,54 C71,56.2 69.2,58 67,58 L39,58 C36.8,58 35,56.2 35,54 L35,46 C35,43.8 36.8,42 39,42 Z M40,62 L48,62 L48,67 L53,67 L53,75 L48,75 L48,80 L40,80 L40,75 L35,75 L35,67 L40,67 Z M67.5,65.5 A4,4 0,1 1,59.5 65.5 A4,4 0,1 1,67.5 65.5 Z M73,73 A4,4 0,1 1,65 73 A4,4 0,1 1,73 73 Z" />
+        <!-- Simplified one-color handheld for Android 13+ themed icons. -->
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M37,13 H71 A10,10 0,0 1,81 23 V85 A10,10 0,0 1,71 95 H37 A10,10 0,0 1,27 85 V23 A10,10 0,0 1,37 13 Z M39,18 H69 A7,7 0,0 1,76 25 V83 A7,7 0,0 1,69 90 H39 A7,7 0,0 1,32 83 V25 A7,7 0,0 1,39 18 Z" />
 
-    <path
-        android:fillColor="#FF000000"
-        android:pathData="M43,31 C39.5,27.5 45,26 44,23.5 C49.5,26 48,29 44.5,32 C43.8,32.6 42.7,32 43,31 Z" />
-    <path
-        android:fillColor="#FF000000"
-        android:pathData="M58,31 C54.5,27.5 60,26 59,23.5 C64.5,26 63,29 59.5,32 C58.8,32.6 57.7,32 58,31 Z" />
+        <!-- Display frame and the blocky coffee cup shown in the new artwork. -->
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M37,25 H71 V55 H37 Z M41,29 H67 V51 H41 Z M46,39 H59 V41 H64 V49 H59 V52 H48 V49 H46 Z M59,43 H62 V47 H59 Z" />
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M49,31 H51 V35 H49 V37 H52 V39 H48 V35 H47 V33 H49 Z M57,31 H59 V35 H57 V37 H60 V39 H56 V35 H55 V33 H57 Z" />
+
+        <!-- D-pad, action buttons, and start/select controls. -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M40,61 H46 V67 H52 V73 H46 V79 H40 V73 H34 V67 H40 Z" />
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M66,62 A5,5 0,1 1,56 62 A5,5 0,1 1,66 62 Z M73,72 A5,5 0,1 1,63 72 A5,5 0,1 1,73 72 Z M50,82 H58 V85 H50 Z M60,82 H68 V85 H60 Z" />
+    </group>
 </vector>

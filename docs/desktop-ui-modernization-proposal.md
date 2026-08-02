@@ -205,7 +205,7 @@ application's layout.
 | [FlatLaf overview](https://www.formdev.com/flatlaf/), [themes](https://www.formdev.com/flatlaf/themes/), and [customization](https://www.formdev.com/flatlaf/how-to-customize/) | HiDPI-aware Swing theming, Light/Dark modes, and central UI defaults | Use semantic application overrides over a reviewed core dependency; keep system-LAF fallback and OS decorations |
 | [Oracle Swing accessibility guidance](https://docs.oracle.com/javase/tutorial/uiswing/misc/access.html) and [Java focus specification](https://docs.oracle.com/en/java/javase/24/docs/api/java.desktop/java/awt/doc-files/FocusSpec.html) | Label association, accessible descriptions, predictable focus, mnemonics, and keyboard traversal | Accessibility is part of every component contract, especially after adding focusable command-bar controls |
 | [WCAG 2.2](https://www.w3.org/TR/WCAG22/) | Text/non-text contrast and state that does not depend on color alone | Apply the relevant visual guidance to Swing themes and custom renderers; do not claim web conformance for a desktop application |
-| Coffee GB's [Pocket Brew icon kit](../packaging/resources/icons/README.md) | An existing espresso, oat, sage, coffee, rust, and cream identity | Use the mark and restrained brand accents on the home/about surfaces; derive accessible semantic colors instead of applying raw brand values everywhere |
+| Coffee GB's [application icon kit](../packaging/resources/icons/README.md) | An existing cream, charcoal, olive, and burgundy identity | Use the mark and restrained brand accents on the home/about surfaces; derive accessible semantic colors instead of applying raw brand values everywhere |
 
 The intended character is warm but quiet: recognizable on first launch, unobtrusive while a game
 is running, and consistent with Windows, macOS, and Linux rather than styled like a web dashboard.
@@ -245,7 +245,7 @@ Idle:
 +------------------------------------------------------------------+
 | File  Game  View  Peripherals  Debug  Help                       |
 |                                                                  |
-|                         [Pocket Brew mark]                       |
+|                          [Coffee GB mark]                       |
 |                            Coffee GB                             |
 |                         [ Open ROM... ]                          |
 |                    or drop a ROM/archive here                    |
@@ -545,7 +545,7 @@ and then reapply the saved zoom, so a later zoom cannot restore old-theme metric
 may use a compact density token, but they use the same UI font family, spacing scale, focus ring,
 border, selection, error, warning, and status tokens as the rest of the application.
 
-The Pocket Brew mark and warm decorative accents stay on Home/About; dense engineering windows do
+The Coffee GB mark and warm decorative accents stay on Home/About; dense engineering windows do
 not receive branded backgrounds. Hardware pixels, tile/map/object colors, palettes, Wave RAM plots,
 and semantic value colors retain their data meaning and are never theme-tinted. Debugger font zoom
 continues to compose with platform DPI scaling rather than replacing it.
@@ -583,10 +583,10 @@ preserve selection, focus where possible, bounds, and model state; the Preferenc
 shows a bounded token-based sample card/swatches rather than attempting an alternate live LAF
 subtree or mutating the whole application before Save.
 
-The Pocket Brew mark appears on Home and About. Espresso, oat, sage, coffee, rust, and cream are
-source colors, not direct UI roles. `DesktopThemeTokens` derives and tests semantic values such as
+The Coffee GB mark appears on Home and About. Cream, charcoal, olive, and burgundy are source
+colors, not direct UI roles. `DesktopThemeTokens` derives and tests semantic values such as
 surface, elevated surface, primary text, secondary text, border, focus, accent, success, warning,
-and danger for both themes. Rust may identify a primary action or focus detail only when its text
+and danger for both themes. Burgundy may identify a primary action or focus detail only when its text
 and adjacent contrast pass the selected accessibility thresholds. The game letterbox color stays
 a user display setting, separate from theme surfaces.
 
@@ -903,7 +903,7 @@ redaction rules and a bounded selectable text area.
 | Netplay | Retained Host/Join/session window; never a checkbox prompt. |
 | Startup/settings recovery | Home or main-window warning banner with effective behavior, Open Settings Folder where safe, and Copy details. |
 | Keyboard Shortcuts | Simple owned grouped table of application, gameplay, rewind, and tilt commands plus inactive-conflict explanations. It becomes searchable/modeless only if the command count later justifies that complexity. |
-| About Coffee GB | Small owned dialog with Pocket Brew mark, version/build, license links, website/source, Copy version info, and no network call. |
+| About Coffee GB | Small owned dialog with the Coffee GB mark, version/build, license links, website/source, Copy version info, and no network call. |
 
 Production workflows now use the shared information/status patterns; there is no direct production
 `JOptionPane` use. Multi-field, asynchronous, repeated, and security-sensitive work uses an owned

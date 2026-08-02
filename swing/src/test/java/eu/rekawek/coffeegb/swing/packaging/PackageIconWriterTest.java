@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing.packaging;
 
+import eu.rekawek.coffeegb.swing.CoffeeGbIcon;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -20,14 +21,18 @@ public class PackageIconWriterTest {
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     @Test
-    public void writesLinuxPngFromVectorGeometry() throws Exception {
+    public void writesLinuxPngFromSvgRasterDerivative() throws Exception {
         Path icon = temporaryFolder.getRoot().toPath().resolve("coffee-gb.png");
         PackageIconWriter.write(
                 NativePackageMetadata.target(NativeTarget.LINUX_X86_64), icon);
         BufferedImage image = ImageIO.read(icon.toFile());
+        BufferedImage expected = CoffeeGbIcon.image(256);
         assertEquals(256, image.getWidth());
         assertEquals(256, image.getHeight());
-        assertTrue(((image.getRGB(128, 128) >>> 24) & 0xff) > 0);
+        assertEquals(0xff, (image.getRGB(0, 0) >>> 24) & 0xff);
+        assertArrayEquals(
+                expected.getRGB(0, 0, 256, 256, null, 0, 256),
+                image.getRGB(0, 0, 256, 256, null, 0, 256));
     }
 
     @Test
