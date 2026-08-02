@@ -24,8 +24,10 @@ import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JLabel
 import javax.swing.SwingUtilities
 import javax.swing.JTextArea
+import javax.swing.text.AbstractDocument
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
@@ -40,7 +42,8 @@ class MobileAdapterConfigurationWindowTest {
                 MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "80", "18080"),
                 MobileAdapterMappingDraft(MobileAdapterTransport.UDP, "53", "15353"),
             ))
-    val policy = assertIs<MobileAdapterPolicyValidation.Valid>(validateMobileAdapterPolicyDraft(valid))
+    val policy =
+        assertIs<MobileAdapterPolicyValidation.Valid>(validateMobileAdapterPolicyDraft(valid))
     assertEquals(
         listOf(
             MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080),
@@ -56,7 +59,8 @@ class MobileAdapterConfigurationWindowTest {
                     MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "80", "18080"),
                     MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "80", "28080"),
                 )))
-    assertTrue(assertIs<MobileAdapterPolicyValidation.Invalid>(duplicate).message.contains("only one"))
+    assertTrue(
+        assertIs<MobileAdapterPolicyValidation.Invalid>(duplicate).message.contains("only one"))
 
     val excessive =
         validateMobileAdapterPolicyDraft(
@@ -72,7 +76,82 @@ class MobileAdapterConfigurationWindowTest {
     val unicodePort =
         validateMobileAdapterPolicyDraft(
             customDraft(listOf(MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "１２", "80"))))
-    assertTrue(assertIs<MobileAdapterPolicyValidation.Invalid>(unicodePort).message.contains("decimal"))
+    assertTrue(
+        assertIs<MobileAdapterPolicyValidation.Invalid>(unicodePort).message.contains("decimal"))
+  }
+
+  @Test
+  fun `additional exact DNS names normalize sort and retain precise validation attribution`() {
+    val valid =
+        validateMobileAdapterPolicyDraft(
+            customDraft(additionalDnsQueryNamesText = "Trainer.Example\n\nbrowser.example\n"))
+    val policy =
+        assertIs<MobileAdapterNetworkPolicy.CustomServer>(
+            assertIs<MobileAdapterPolicyValidation.Valid>(valid).policy)
+    assertEquals(listOf("browser.example", "trainer.example"), policy.additionalDnsQueryNames)
+    assertEquals(
+        "browser.example\ntrainer.example",
+        MobileAdapterPolicyDraft.from(policy).additionalDnsQueryNamesText,
+    )
+
+    val primaryFirst =
+        validateMobileAdapterPolicyDraft(
+            customDraft(
+                dnsQueryName = "bad*primary.example",
+                additionalDnsQueryNamesText = "bad*alias.example",
+            ))
+    assertEquals(
+        MobileAdapterPolicyField.DNS_QUERY_NAME,
+        assertIs<MobileAdapterPolicyValidation.Invalid>(primaryFirst).field,
+    )
+    val resolverFirst =
+        validateMobileAdapterPolicyDraft(
+            customDraft(additionalDnsQueryNamesText = "bad*alias.example")
+                .copy(resolverIpv4Address = "999.0.2.53"))
+    assertEquals(
+        MobileAdapterPolicyField.RESOLVER_ADDRESS,
+        assertIs<MobileAdapterPolicyValidation.Invalid>(resolverFirst).field,
+    )
+
+    listOf(
+            "bad*alias.example",
+            " alias.example",
+            "ALIAS.example\nalias.example",
+            "service.example",
+        )
+        .forEach { aliases ->
+          val invalid =
+              assertIs<MobileAdapterPolicyValidation.Invalid>(
+                  validateMobileAdapterPolicyDraft(
+                      customDraft(additionalDnsQueryNamesText = aliases)))
+          assertEquals(MobileAdapterPolicyField.ADDITIONAL_DNS_QUERY_NAMES, invalid.field)
+        }
+  }
+
+  @Test
+  fun `additional DNS text parser bounds raw input lines and nonempty alias count`() {
+    val maximumAliases = (0 until 7).joinToString("\n") { "alias$it.example" }
+    assertEquals(7, parseMobileAdapterAdditionalDnsQueryNames(maximumAliases).size)
+    assertEquals(
+        listOf("first.example", "second.example"),
+        parseMobileAdapterAdditionalDnsQueryNames(
+            "first.example\r\n\r\nsecond.example\r\n"),
+    )
+    assertFailsWith<IllegalArgumentException> {
+      parseMobileAdapterAdditionalDnsQueryNames(maximumAliases + "\nalias7.example")
+    }
+    assertFailsWith<IllegalArgumentException> {
+      parseMobileAdapterAdditionalDnsQueryNames("a".repeat(254))
+    }
+    assertEquals(
+        emptyList(),
+        parseMobileAdapterAdditionalDnsQueryNames(
+            "\n".repeat(MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS)),
+    )
+    assertFailsWith<IllegalArgumentException> {
+      parseMobileAdapterAdditionalDnsQueryNames(
+          "\n".repeat(MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS + 1))
+    }
   }
 
   @Test
@@ -184,6 +263,24 @@ class MobileAdapterConfigurationWindowTest {
                     ),
             ))
 
+        assertTrue(edited.isEmpty(), "rendering a retained alias draft must not publish an edit")
+        assertEquals("browser.example\ntrainer.example", panel.additionalDnsQueryNames.text)
+        assertFalse(panel.additionalDnsQueryNames.lineWrap)
+        assertEquals(3, panel.additionalDnsQueryNames.rows)
+        assertEquals(28, panel.additionalDnsQueryNames.columns)
+        assertEquals(
+            panel.additionalDnsQueryNames,
+            descendants(panel)
+                .filterIsInstance<JLabel>()
+                .single { it.text == "Additional exact DNS names" }
+                .labelFor,
+        )
+        assertTrue(
+            descendants(panel)
+                .filterIsInstance<JTextArea>()
+                .single { it.accessibleContext.accessibleName == "Additional DNS names help" }
+                .text
+                .contains("one exact DNS name per line"))
         assertEquals(2, panel.mappingModel.rowCount)
         assertEquals(
             listOf("Transport", "Guest port", "Target port"),
@@ -208,6 +305,16 @@ class MobileAdapterConfigurationWindowTest {
         assertTrue(importExplanation.contains("host metadata is ignored"))
         panel.importImageButton.doClick()
         assertEquals(1, imports.get())
+
+        panel.additionalDnsQueryNames.text = "store.example\n"
+        assertEquals("store.example\n", edited.last().additionalDnsQueryNamesText)
+        val boundedDocument = panel.additionalDnsQueryNames.document as AbstractDocument
+        val retained = "x".repeat(MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS)
+        boundedDocument.replace(0, boundedDocument.length, retained, null)
+        assertEquals(retained, panel.additionalDnsQueryNames.text)
+        boundedDocument.replace(0, boundedDocument.length, retained + "x", null)
+        assertEquals(retained, panel.additionalDnsQueryNames.text)
+        panel.additionalDnsQueryNames.text = "store.example\n"
 
         panel.mappingModel.setValueAt("0", 0, 1)
         assertEquals("0", edited.last().portMappings.first().guestPort)
@@ -277,6 +384,8 @@ class MobileAdapterConfigurationWindowTest {
       assertEquals(2, summary.portMappingCount)
       assertTrue(summary.preferencesText().contains("private/LAN development allowed"))
       assertFalse(summary.preferencesText().contains("service.example"))
+      assertFalse(summary.preferencesText().contains("browser.example"))
+      assertFalse(summary.preferencesText().contains("trainer.example"))
       assertFalse(summary.preferencesText().contains("192.0.2.53"))
 
       onEdt { fixture.view.actions.setNetworkConsent(false) }
@@ -517,7 +626,11 @@ class MobileAdapterConfigurationWindowTest {
       flushEdt()
 
       val current = latest.get()
-      assertIs<MobileAdapterNetworkPolicy.CustomServer>(current.baselinePolicy)
+      val savedPolicy = assertIs<MobileAdapterNetworkPolicy.CustomServer>(current.baselinePolicy)
+      assertEquals(
+          listOf("browser.example", "trainer.example"), savedPolicy.additionalDnsQueryNames)
+      assertEquals(
+          "browser.example\ntrainer.example", current.draft.additionalDnsQueryNamesText)
       assertFalse(current.policyDirty)
       assertFalse(current.networkConsent)
       assertFalse(current.privateLocalDevelopment)
@@ -529,6 +642,44 @@ class MobileAdapterConfigurationWindowTest {
       coordinator.close()
       bus.close()
     }
+  }
+
+  @Test
+  fun `saved alias draft survives a fresh store load and draft reconstruction`() {
+    val directory = Files.createTempDirectory("coffee-gb-mobile-window-alias-reopen")
+    val path = directory.resolve("adapter.bin")
+    val store = MobileAdapterConfigurationStore(path)
+    val coordinator = MobileAdapterConfigurationCoordinator(offlineConfiguration(), store)
+    val bus = EventBusImpl()
+    val saved = CountDownLatch(1)
+    val fixture =
+        onEdt {
+          HostFixture(coordinator, bus, RecordingDecisions()) { presentation ->
+            if (presentation.policyStatusTone == MobileAdapterStatusTone.SUCCESS) saved.countDown()
+          }
+        }
+    try {
+      onEdt {
+        fixture.host.show()
+        fixture.view.actions.draftChanged(
+            customDraft(additionalDnsQueryNamesText = "Trainer.Example\n\nbrowser.example\n"))
+        fixture.view.actions.savePolicy()
+      }
+      assertTrue(saved.await(5, TimeUnit.SECONDS))
+      flushEdt()
+    } finally {
+      onEdt { fixture.host.close() }
+      coordinator.close()
+      bus.close()
+    }
+
+    val loaded = MobileAdapterConfigurationStore(path).load().configuration
+    val policy = assertIs<MobileAdapterNetworkPolicy.CustomServer>(loaded.networkPolicy)
+    assertEquals(listOf("browser.example", "trainer.example"), policy.additionalDnsQueryNames)
+    assertEquals(
+        "browser.example\ntrainer.example",
+        MobileAdapterPolicyDraft.from(policy).additionalDnsQueryNamesText,
+    )
   }
 
   @Test
@@ -788,18 +939,22 @@ class MobileAdapterConfigurationWindowTest {
               MobileAdapterPortMapping(MobileAdapterTransport.TCP, 80, 18080),
               MobileAdapterPortMapping(MobileAdapterTransport.UDP, 53, 15353),
           ),
+          listOf("trainer.example", "browser.example"),
       )
 
   private fun customDraft(
       mappings: List<MobileAdapterMappingDraft> =
-          listOf(MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "80", "18080"))
+          listOf(MobileAdapterMappingDraft(MobileAdapterTransport.TCP, "80", "18080")),
+      dnsQueryName: String = "service.example",
+      additionalDnsQueryNamesText: String = "Trainer.Example\nbrowser.example\n",
   ): MobileAdapterPolicyDraft =
       MobileAdapterPolicyDraft(
           MobileAdapterNetworkMode.CUSTOM_SERVER,
-          "service.example",
+          dnsQueryName,
           "192.0.2.53",
           "5353",
           mappings,
+          additionalDnsQueryNamesText,
       )
 
   private fun persistenceEvent(

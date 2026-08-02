@@ -89,6 +89,7 @@ internal data class MobileAdapterPolicyDraft(
     val resolverIpv4Address: String,
     val resolverPort: String,
     val portMappings: List<MobileAdapterMappingDraft>,
+    val additionalDnsQueryNamesText: String = "",
 ) {
   companion object {
     fun from(policy: MobileAdapterNetworkPolicy): MobileAdapterPolicyDraft =
@@ -115,6 +116,7 @@ internal data class MobileAdapterPolicyDraft(
                             targetPort = it.targetPort.toString(),
                         )
                       },
+                  additionalDnsQueryNamesText = policy.additionalDnsQueryNames.joinToString("\n"),
               )
         }
   }
@@ -122,6 +124,7 @@ internal data class MobileAdapterPolicyDraft(
 
 internal enum class MobileAdapterPolicyField {
   DNS_QUERY_NAME,
+  ADDITIONAL_DNS_QUERY_NAMES,
   RESOLVER_ADDRESS,
   RESOLVER_PORT,
   PORT_MAPPINGS,
@@ -147,33 +150,50 @@ internal fun validateMobileAdapterPolicyDraft(
         MobileAdapterPolicyField.PORT_MAPPINGS,
     )
   }
-  return try {
-    val mappings =
-        draft.portMappings.mapIndexed { index, mapping ->
-          MobileAdapterPortMapping(
-              mapping.transport,
-              parsePort(mapping.guestPort, "Mapping ${index + 1} guest port"),
-              parsePort(mapping.targetPort, "Mapping ${index + 1} target port"),
-          )
-        }
-    MobileAdapterPolicyValidation.Valid(
+  val basePolicy =
+      try {
+        val mappings =
+            draft.portMappings.mapIndexed { index, mapping ->
+              MobileAdapterPortMapping(
+                  mapping.transport,
+                  parsePort(mapping.guestPort, "Mapping ${index + 1} guest port"),
+                  parsePort(mapping.targetPort, "Mapping ${index + 1} target port"),
+              )
+            }
         MobileAdapterNetworkPolicy.CustomServer(
             draft.dnsQueryName,
             draft.resolverIpv4Address,
             parsePort(draft.resolverPort, "Resolver port"),
             mappings,
+        )
+      } catch (failure: IllegalArgumentException) {
+        val message = failure.message ?: "The custom-server policy is invalid."
+        val field =
+            when {
+              message.startsWith("DNS query name") -> MobileAdapterPolicyField.DNS_QUERY_NAME
+              message.startsWith("Resolver address") || message.startsWith("Resolver IPv4") ->
+                  MobileAdapterPolicyField.RESOLVER_ADDRESS
+              message.startsWith("Resolver port") -> MobileAdapterPolicyField.RESOLVER_PORT
+              else -> MobileAdapterPolicyField.PORT_MAPPINGS
+            }
+        return MobileAdapterPolicyValidation.Invalid(message, field)
+      }
+  return try {
+    val additionalNames =
+        parseMobileAdapterAdditionalDnsQueryNames(draft.additionalDnsQueryNamesText)
+    MobileAdapterPolicyValidation.Valid(
+        MobileAdapterNetworkPolicy.CustomServer(
+            basePolicy.dnsQueryName,
+            basePolicy.resolverIpv4Address,
+            basePolicy.resolverPort,
+            basePolicy.portMappings,
+            additionalNames,
         ))
   } catch (failure: IllegalArgumentException) {
-    val message = failure.message ?: "The custom-server policy is invalid."
-    val field =
-        when {
-          message.startsWith("DNS query name") -> MobileAdapterPolicyField.DNS_QUERY_NAME
-          message.startsWith("Resolver address") || message.startsWith("Resolver IPv4") ->
-              MobileAdapterPolicyField.RESOLVER_ADDRESS
-          message.startsWith("Resolver port") -> MobileAdapterPolicyField.RESOLVER_PORT
-          else -> MobileAdapterPolicyField.PORT_MAPPINGS
-        }
-    MobileAdapterPolicyValidation.Invalid(message, field)
+    MobileAdapterPolicyValidation.Invalid(
+        failure.message ?: "The additional DNS query names are invalid.",
+        MobileAdapterPolicyField.ADDITIONAL_DNS_QUERY_NAMES,
+    )
   }
 }
 
@@ -1117,6 +1137,11 @@ internal class MobileAdapterConfigurationPanel(
   internal val offlineMode = JRadioButton("Offline")
   internal val customServerMode = JRadioButton("Custom Server")
   internal val queryName = JTextField(28)
+  internal val additionalDnsQueryNames =
+      JTextArea(3, 28).apply {
+        lineWrap = false
+        wrapStyleWord = false
+      }
   internal val resolverAddress = JTextField(16)
   internal val resolverPort = JTextField(6)
   internal val mappingModel = MobileAdapterMappingTableModel()
@@ -1349,9 +1374,30 @@ internal class MobileAdapterConfigurationPanel(
     modeRow.add(modeLabel, BorderLayout.WEST)
     modeRow.add(modePanel, BorderLayout.CENTER)
 
-    addFormRow(customFields, 0, "Allowed DNS name / service", queryName)
-    addFormRow(customFields, 1, "Literal IPv4 DNS resolver", resolverAddress)
-    addFormRow(customFields, 2, "Resolver port", resolverPort)
+    addFormRow(customFields, 0, "Primary DNS name / service", queryName)
+    val aliases =
+        JPanel(BorderLayout(0, tokens.spacing.compact)).apply {
+          add(JScrollPane(additionalDnsQueryNames), BorderLayout.CENTER)
+          add(
+              mobileAdapterLiteralText(
+                  "Optional: one exact DNS name per line, up to " +
+                      "${MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES}. " +
+                      "Empty lines are ignored. All names share the resolver and port mappings below.",
+                  2,
+                  "Additional DNS names help",
+              ),
+              BorderLayout.SOUTH,
+          )
+        }
+    addFormRow(
+        customFields,
+        1,
+        "Additional exact DNS names",
+        aliases,
+        additionalDnsQueryNames,
+    )
+    addFormRow(customFields, 2, "Literal IPv4 DNS resolver", resolverAddress)
+    addFormRow(customFields, 3, "Resolver port", resolverPort)
     val mappings = createMappingsPanel()
     val customContent = JPanel(BorderLayout(0, tokens.spacing.related))
     customContent.add(customFields, BorderLayout.NORTH)
@@ -1424,7 +1470,7 @@ internal class MobileAdapterConfigurationPanel(
   private fun configureListeners() {
     offlineMode.addActionListener { if (!rendering) publishDraft() }
     customServerMode.addActionListener { if (!rendering) publishDraft() }
-    listOf(queryName, resolverAddress, resolverPort).forEach { field ->
+    listOf(queryName, additionalDnsQueryNames, resolverAddress, resolverPort).forEach { field ->
       field.document.addDocumentListener(
           object : DocumentListener {
             override fun insertUpdate(event: DocumentEvent) = publishDraft()
@@ -1504,9 +1550,12 @@ internal class MobileAdapterConfigurationPanel(
   }
 
   private fun configureAccessibility() {
-    queryName.accessibleContext.accessibleName = "Allowed DNS name or service"
+    queryName.accessibleContext.accessibleName = "Primary DNS name or service"
     queryName.accessibleContext.accessibleDescription =
-        "The exact saved custom-service DNS name eligible for Mobile Adapter requests"
+        "The primary exact saved custom-service DNS name eligible for Mobile Adapter requests"
+    additionalDnsQueryNames.accessibleContext.accessibleName = "Additional exact DNS names"
+    additionalDnsQueryNames.accessibleContext.accessibleDescription =
+        "Optional exact saved DNS names, one per line, sharing the same resolver and port mappings"
     resolverAddress.accessibleContext.accessibleName = "Literal IPv4 DNS resolver"
     resolverAddress.accessibleContext.accessibleDescription =
         "Canonical dotted-decimal IPv4 address for the saved custom DNS resolver"
@@ -1515,7 +1564,7 @@ internal class MobileAdapterConfigurationPanel(
     offlineMode.accessibleContext.accessibleDescription =
         "Disable outbound Mobile Adapter custom-server networking in the saved policy"
     customServerMode.accessibleContext.accessibleDescription =
-        "Configure one exact custom service and bounded port mappings"
+        "Configure a primary exact custom service, optional exact aliases, and bounded port mappings"
     networkConsent.accessibleContext.accessibleDescription =
         "Grant or revoke the memory-only policy-wide custom-server permission"
     privateLocal.accessibleContext.accessibleDescription =
@@ -1535,6 +1584,8 @@ internal class MobileAdapterConfigurationPanel(
   private fun installLimits() {
     installMobileAdapterDocumentLimit(
         queryName, MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES)
+    installMobileAdapterDocumentLimit(
+        additionalDnsQueryNames, MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS)
     installMobileAdapterDocumentLimit(resolverAddress, MAX_MOBILE_ADAPTER_IPV4_TEXT_CHARS)
     installMobileAdapterDocumentLimit(resolverPort, MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS)
   }
@@ -1552,28 +1603,35 @@ internal class MobileAdapterConfigurationPanel(
           resolverIpv4Address = resolverAddress.text,
           resolverPort = resolverPort.text,
           portMappings = mappingModel.snapshot(),
+          additionalDnsQueryNamesText = additionalDnsQueryNames.text,
       )
 
   private fun applyDraft(draft: MobileAdapterPolicyDraft) {
     offlineMode.isSelected = draft.mode == MobileAdapterNetworkMode.OFFLINE
     customServerMode.isSelected = draft.mode == MobileAdapterNetworkMode.CUSTOM_SERVER
     queryName.text = draft.dnsQueryName
+    additionalDnsQueryNames.text = draft.additionalDnsQueryNamesText
     resolverAddress.text = draft.resolverIpv4Address
     resolverPort.text = draft.resolverPort
     mappingModel.replace(draft.portMappings)
   }
 
   private fun setPolicyFieldsEnabled(enabled: Boolean) {
-    listOf(queryName, resolverAddress, resolverPort, mappingsTable).forEach {
-      it.isEnabled = enabled
-    }
+    listOf(queryName, additionalDnsQueryNames, resolverAddress, resolverPort, mappingsTable)
+        .forEach { it.isEnabled = enabled }
     offlineMode.isEnabled = current.savePhase == MobileAdapterSavePhase.IDLE
     customServerMode.isEnabled = current.savePhase == MobileAdapterSavePhase.IDLE
   }
 
-  private fun addFormRow(panel: JPanel, row: Int, text: String, field: JComponent) {
+  private fun addFormRow(
+      panel: JPanel,
+      row: Int,
+      text: String,
+      field: JComponent,
+      labelTarget: JComponent = field,
+  ) {
     val label = JLabel(text)
-    label.labelFor = field
+    label.labelFor = labelTarget
     panel.add(
         label,
         GridBagConstraints().apply {
@@ -1811,6 +1869,29 @@ internal fun parseMobileAdapterMappings(value: String): List<MobileAdapterPortMa
   return mappings
 }
 
+internal fun parseMobileAdapterAdditionalDnsQueryNames(value: String): List<String> {
+  require(value.length <= MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS) {
+    "Additional DNS query names must contain at most " +
+        "$MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS characters."
+  }
+  val names =
+      ArrayList<String>(MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES)
+  value.lineSequence().forEach { name ->
+    if (name.isEmpty()) return@forEach
+    require(name.length <= MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES) {
+      "Each additional DNS query name must contain at most " +
+          "${MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES} characters."
+    }
+    require(
+        names.size < MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES) {
+          "At most ${MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES} " +
+              "additional DNS query names are allowed."
+        }
+    names.add(name)
+  }
+  return names
+}
+
 private fun parsePort(value: String, label: String): Int =
     value
         .takeIf { it.length in 1..5 && it.all { character -> character in '0'..'9' } }
@@ -1822,6 +1903,9 @@ internal const val MAX_MOBILE_ADAPTER_MAPPING_TEXT_CHARS = 1_024
 internal const val MAX_MOBILE_ADAPTER_MAPPING_LINE_CHARS = 64
 internal const val MAX_MOBILE_ADAPTER_IPV4_TEXT_CHARS = 15
 internal const val MAX_MOBILE_ADAPTER_PORT_TEXT_CHARS = 5
+internal const val MAX_MOBILE_ADAPTER_ADDITIONAL_DNS_QUERY_NAMES_TEXT_CHARS =
+    MobileAdapterNetworkPolicy.CustomServer.MAX_ADDITIONAL_DNS_QUERY_NAMES *
+        (MobileAdapterNetworkPolicy.CustomServer.MAX_DNS_QUERY_NAME_BYTES + 1)
 private val MOBILE_ADAPTER_MAPPING_WHITESPACE = Regex("\\s+")
 
 internal fun installMobileAdapterDocumentLimit(component: JTextComponent, maxChars: Int) {
