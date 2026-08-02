@@ -50,11 +50,11 @@ internal constructor(
           nanoTime()
         }
     val now = nanoTime()
-    if (deadline < now - frameDurationNanos) {
-      // fell more than a frame behind (paused, breakpoint, slow host): don't try to
-      // catch up by running ahead, just re-anchor
-      deadline = now
-      return
+    if (now - deadline > MAX_CATCH_UP_NANOS) {
+      // Preserve short scheduling/GC delays so subsequent frames can repay them instead of
+      // permanently losing emulated audio time. A long pause retains only a small bounded debt:
+      // this avoids a prolonged burst of unpaced execution after a breakpoint or suspended host.
+      deadline = now - MAX_CATCH_UP_NANOS
     }
     // sleep the bulk of the wait and busy-spin only the last stretch: parkNanos wakes
     // with millisecond-ish slack depending on the OS timer, the spin gives frame-exact
@@ -74,5 +74,6 @@ internal constructor(
 
   private companion object {
     const val SPIN_THRESHOLD_NANOS = 1_500_000L
+    const val MAX_CATCH_UP_NANOS = 50_000_000L
   }
 }

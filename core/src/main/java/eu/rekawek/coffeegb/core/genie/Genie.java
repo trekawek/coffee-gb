@@ -61,11 +61,16 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
     @Override
     public int getByte(int address) {
         var value = delegate.getByte(address);
-        if (patches.containsKey(address)) {
-            for (CheatPatch p : patches.get(address)) {
-                if (p.accepts(delegate, ramBank, gbc)) {
-                    return p.getValue();
-                }
+        if (patches.isEmpty()) {
+            return value;
+        }
+        List<CheatPatch> addressPatches = patches.get(address);
+        if (addressPatches == null) {
+            return value;
+        }
+        for (CheatPatch patch : addressPatches) {
+            if (patch.accepts(delegate, ramBank, gbc)) {
+                return patch.getValue();
             }
         }
         return value;
