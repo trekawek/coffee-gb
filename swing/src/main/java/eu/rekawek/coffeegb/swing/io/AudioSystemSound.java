@@ -2,8 +2,8 @@ package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.controller.properties.SoundProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
-import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.sound.Sound;
+import eu.rekawek.coffeegb.core.sound.StereoPcmConverter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,18 +54,6 @@ public class AudioSystemSound implements Runnable {
                     SAMPLE_RATE,
                     false);
 
-    /**
-     * The mixer outputs signed DAC-modelled samples of at most 4 channels * ±15 * volume 8
-     * = ±480 per side; scale to leave a little 16-bit headroom.
-     */
-    private static final int VOLUME_SCALE = 62;
-
-    /**
-     * The console's output capacitor has a cutoff of about 28 Hz. It removes baseline steps caused
-     * by channel routing while preserving master-volume PCM.
-     */
-    private static final double HIGHPASS_CUTOFF = 28.0;
-
     private static final long RETRY_UNAVAILABLE_MILLIS = 1000;
     private static final long STOP_TIMEOUT_MILLIS = 2000;
     private static final long FORCED_CLOSE_TIMEOUT_MILLIS = 250;
@@ -94,15 +82,7 @@ public class AudioSystemSound implements Runnable {
     private volatile Thread workerThread;
     private volatile AudioBackend.AudioLine activeLine;
 
-    private ClockSpec activeClock = ClockSpec.LEGACY;
-    private ClockSpec.RateAccumulator sampleAccumulator =
-            activeClock.newTickRateAccumulator(SAMPLE_RATE);
-
-    private long sumL, sumR, prevSumL, prevSumR;
-    private int cnt, prevCnt;
-
-    private final DcBlocker dcBlockerL = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
-    private final DcBlocker dcBlockerR = new DcBlocker(SAMPLE_RATE, HIGHPASS_CUTOFF);
+    private final StereoPcmConverter pcmConverter = new StereoPcmConverter(SAMPLE_RATE);
 
     /** Existing desktop constructor; preserves the old enabled/default-device behavior. */
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
@@ -643,68 +623,14 @@ public class AudioSystemSound implements Runnable {
         AudioRuntimeConfiguration configuration = desiredConfiguration.get();
         int[] source = event.buffer();
         int ticks = source.length / 2;
-        selectClock(event.clockSpec());
-
-        int maximumSamples = Math.toIntExact(activeClock.maximumOutputUnits(ticks, SAMPLE_RATE));
-        byte[] out = new byte[Math.multiplyExact(maximumSamples, BYTES_PER_STEREO_FRAME)];
-        int j = 0;
-        // moving average over two output periods (a width-2 box filter): near-Nyquist
-        // content is attenuated ~38 dB, so games parking a channel on an ultrasonic
-        // frequency stay inaudible like on hardware instead of aliasing into a buzz
-        // (Pit-Fighter, issue #59), at the cost of ~3 dB roll-off at 10 kHz
-        for (int t = 0; t < ticks; t++) {
-            sumL += source[t * 2];
-            sumR += source[t * 2 + 1];
-            cnt++;
-            long produced = sampleAccumulator.advanceOne();
-            if (produced > 1) {
-                throw new IllegalStateException("Audio output rate exceeds the emulated tick rate");
-            }
-            if (produced == 1) {
-                int total = prevCnt + cnt;
-                double rawL = (double) (prevSumL + sumL) / total;
-                double rawR = (double) (prevSumR + sumR) / total;
-                double filteredL = dcBlockerL.filter(rawL);
-                double filteredR = dcBlockerR.filter(rawR);
-                int left = outputSample(filteredL, configuration);
-                int right = outputSample(filteredR, configuration);
-                out[j++] = (byte) left;
-                out[j++] = (byte) (left >> 8);
-                out[j++] = (byte) right;
-                out[j++] = (byte) (right >> 8);
-                prevSumL = sumL;
-                prevSumR = sumR;
-                prevCnt = cnt;
-                sumL = 0;
-                sumR = 0;
-                cnt = 0;
-            }
-        }
-
-        byte[] trimmed = new byte[j];
-        System.arraycopy(out, 0, trimmed, 0, j);
+        byte[] out = new byte[pcmConverter.maximumPcmBytes(ticks, event.clockSpec())];
+        int written = pcmConverter.render(source, event.clockSpec(),
+                configuration.masterVolume(), configuration.muted(), out);
+        byte[] trimmed = new byte[written];
+        System.arraycopy(out, 0, trimmed, 0, written);
         if (generation == configurationGeneration.get()) {
             enqueuePcm(trimmed, configuration.latencyPreset().queuedFrames());
         }
-    }
-
-    private static int outputSample(
-            double filtered, AudioRuntimeConfiguration configuration) {
-        if (configuration.muted() || configuration.masterVolume() == 0) {
-            return 0;
-        }
-        double scaled = filtered * VOLUME_SCALE;
-        if (configuration.masterVolume() != 100) {
-            scaled = scaled * configuration.masterVolume() / 100.0;
-        }
-        if (scaled >= Short.MAX_VALUE) {
-            return Short.MAX_VALUE;
-        }
-        if (scaled <= Short.MIN_VALUE) {
-            return Short.MIN_VALUE;
-        }
-        // Preserve the historical truncation at 100% volume.
-        return (int) scaled;
     }
 
     private void enqueuePcm(byte[] bytes, int maximumFrames) {
@@ -719,27 +645,13 @@ public class AudioSystemSound implements Runnable {
         }
     }
 
-    private void selectClock(ClockSpec clockSpec) {
-        if (activeClock.equals(clockSpec)) {
-            return;
-        }
-        activeClock = clockSpec;
-        sampleAccumulator = clockSpec.newTickRateAccumulator(SAMPLE_RATE);
-        sumL = 0;
-        sumR = 0;
-        prevSumL = 0;
-        prevSumR = 0;
-        cnt = 0;
-        prevCnt = 0;
-    }
-
     static AudioFormat outputFormat() {
         return FORMAT;
     }
 
     /** Package-private deterministic probe; exposes only the scalar conversion phase. */
     long samplePhaseForTesting() {
-        return sampleAccumulator.remainder();
+        return pcmConverter.samplePhase();
     }
 
     Thread workerThreadForTesting() {
