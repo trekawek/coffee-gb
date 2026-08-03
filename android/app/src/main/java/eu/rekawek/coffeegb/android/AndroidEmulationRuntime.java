@@ -68,6 +68,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final RuntimeLifecycleGate lifecycle = new RuntimeLifecycleGate();
     private final NativeFrameStore frames = new NativeFrameStore();
+    private final EmulatorProperties properties = new EmulatorProperties();
+    private final AndroidInputRouter input;
 
     private volatile RuntimeState state = RuntimeState.stopped();
 
@@ -89,6 +91,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     public AndroidEmulationRuntime(Context context) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
+        input = new AndroidInputRouter(properties.getPlayerInputSource(),
+                new AndroidControllerMappings(this.context));
         submit(this::initialize);
     }
 
@@ -99,6 +103,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
     NativeFrameStore frames() {
         return frames;
+    }
+
+    /** Service-owned source merger for transient Android touch and controller devices. */
+    AndroidInputRouter input() {
+        return input;
     }
 
     /** Registers one UI observer and immediately replays the latest immutable snapshot. */
@@ -197,6 +206,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Pauses at the controller safe point and asks for a bounded asynchronous battery flush. */
     public void onHostNotVisible() {
+        input.releaseAll();
         submit(() -> {
             if (controller == null) {
                 return;
@@ -228,6 +238,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Stops one session and recreates its controller shell for a later load without leaks. */
     public void stop() {
+        input.releaseAll();
         submit(() -> {
             clearPendingSource();
             if (!closeController()) {
@@ -312,6 +323,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 activeLayout = null;
                 activeStates = null;
                 currentSource = null;
+                input.close();
                 frames.close();
             });
         } catch (RejectedExecutionException ignored) {
@@ -416,7 +428,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     }
                 }),
                 Controller.BatteryFlushCompletedEvent.class);
-        controller = new BasicController(eventBus, new EmulatorProperties(), null);
+        controller = new BasicController(eventBus, properties, null);
         controller.startController();
     }
 
