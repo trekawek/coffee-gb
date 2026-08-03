@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.swing.io;
+package eu.rekawek.coffeegb.core.sound;
 
 import org.junit.Test;
 
@@ -7,7 +7,6 @@ import static org.junit.Assert.assertEquals;
 public class DcBlockerTest {
 
     private static final int SAMPLE_RATE = 44_100;
-
     private static final double CUTOFF = 28.0;
 
     @Test
@@ -16,7 +15,7 @@ public class DcBlockerTest {
         int timeConstantSamples = (int) Math.round(SAMPLE_RATE / (2.0 * Math.PI * CUTOFF));
 
         double output = 0;
-        for (int i = 0; i < timeConstantSamples; i++) {
+        for (int index = 0; index < timeConstantSamples; index++) {
             output = filter.filter(1.0);
         }
 
@@ -30,10 +29,10 @@ public class DcBlockerTest {
         double outputEnergy = 0;
         int warmup = SAMPLE_RATE / 10;
 
-        for (int i = 0; i < SAMPLE_RATE; i++) {
-            double input = Math.sin(2.0 * Math.PI * 200.0 * i / SAMPLE_RATE);
+        for (int index = 0; index < SAMPLE_RATE; index++) {
+            double input = Math.sin(2.0 * Math.PI * 200.0 * index / SAMPLE_RATE);
             double output = filter.filter(input);
-            if (i >= warmup) {
+            if (index >= warmup) {
                 inputEnergy += input * input;
                 outputEnergy += output * output;
             }

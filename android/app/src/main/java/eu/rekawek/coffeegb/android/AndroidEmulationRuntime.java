@@ -76,6 +76,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     // Everything below is accessed only on the owner executor.
     private EventBus eventBus;
     private BasicController controller;
+    private volatile AndroidAudioSink audio;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
@@ -108,6 +109,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Service-owned source merger for transient Android touch and controller devices. */
     AndroidInputRouter input() {
         return input;
+    }
+
+    /** Applies host-only audio controls without changing emulation timing or save state. */
+    void setAudioMuted(boolean muted) {
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.setMuted(muted);
+        }
+    }
+
+    void setAudioVolume(int volume) {
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.setVolume(volume);
+        }
     }
 
     /** Registers one UI observer and immediately replays the latest immutable snapshot. */
@@ -207,6 +223,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Pauses at the controller safe point and asks for a bounded asynchronous battery flush. */
     public void onHostNotVisible() {
         input.releaseAll();
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.pause();
+        }
         submit(() -> {
             if (controller == null) {
                 return;
@@ -230,6 +250,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         submit(() -> {
             if (controller == null || activeLayout == null) {
                 return;
+            }
+            AndroidAudioSink activeAudio = audio;
+            if (activeAudio != null) {
+                activeAudio.resume();
             }
             lifecycle.resumedByUser();
             eventBus.post(new Controller.ResumeEmulationEvent());
@@ -346,6 +370,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void createController() {
         eventBus = new EventBusImpl();
+        audio = new AndroidAudioSink(context, eventBus);
+        audio.start();
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
@@ -576,19 +602,28 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         pendingFlushRequestId = 0;
         BasicController active = controller;
         EventBus activeBus = eventBus;
+        AndroidAudioSink activeAudio = audio;
         controller = null;
         eventBus = null;
+        audio = null;
         if (active == null) {
+            if (activeAudio != null) {
+                activeAudio.close();
+            }
             return true;
         }
         try {
             active.close();
+            if (activeAudio != null) {
+                activeAudio.close();
+            }
             lifecycle.released();
             return true;
         } catch (RuntimeException failure) {
             // Retain the controller for an explicit retry; it may still own an unflushed battery.
             controller = active;
             eventBus = activeBus;
+            audio = activeAudio;
             return false;
         }
     }

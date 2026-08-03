@@ -77,6 +77,14 @@ by the controller descriptor plus vendor/product identity; the mapping dialog ca
 replaces a conflicting mapping deterministically, and can reset one controller. Focus loss,
 surface teardown, stopping, and controller removal synchronously release their input source.
 
+Android audio shares the desktop's portable resampling, two-period mixing filter, and DC blocking.
+The service writes signed 16-bit stereo PCM to an `AudioTrack` on a dedicated consumer thread at
+the initialized track rate. Its six preallocated host-frame slots bound memory and latency: a late
+producer discards old PCM rather than blocking emulation or accumulating delay. Muting, volume
+changes, focus/visibility loss, and route changes clear queued PCM; focus loss still requires the
+user to resume the game. The app declares no microphone, vibration, broad-storage, or network
+permission. See [Android audio operation and device validation](docs/android-audio.md).
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or
