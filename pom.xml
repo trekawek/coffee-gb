@@ -230,6 +230,10 @@
         </dependency>
         </dependencies>
     </dependencyManagement>
+    <!-- Keep an explicit empty dependency collection for GitHub's dependency-submission
+         action. The action currently assumes every reactor project exposes this field;
+         versions remain managed above and modules opt in explicitly. -->
+    <dependencies/>
     <profiles>
         <profile>
             <id>github</id>
