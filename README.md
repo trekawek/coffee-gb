@@ -22,17 +22,17 @@ orchestration layer use Kotlin and Java.
 
 ### Android build groundwork
 
-The Android frontend is at its initial build-boundary stage; it is **not yet a playable
-emulator**. The `android/` Gradle project builds a permission-free starter activity and consumes a
-small Java/Kotlin portability artifact installed from this exact checkout. It deliberately does
-not yet consume `core` or `controller`, whose remaining desktop APIs are recorded in the
+The Android frontend is at its portable-runtime stage; it is **not yet a playable emulator**. The
+`android/` Gradle project builds a permission-free starter activity and consumes the real
+`controller` and `core` artifacts installed from this exact checkout. Desktop image, keyboard, and
+console adapters remain outside that runtime as recorded in the
 [Android build-boundary ADR](docs/adr/0003-android-build-boundary.md).
 
 With Android SDK Platform 36 and Build Tools 36.0.0 installed, prepare the isolated artifact
 repository and run the Android checks:
 
 ```bash
-mvn -B -pl android-portable -am install -DskipTests -Dmaven.repo.local="$PWD/build/android-m2"
+mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$PWD/build/android-m2"
 ./android/gradlew -p android -PcoffeeGbMavenRepository="$PWD/build/android-m2" \
   :app:check :app:lintDebug :app:assembleDebug :app:assembleRelease
 ```

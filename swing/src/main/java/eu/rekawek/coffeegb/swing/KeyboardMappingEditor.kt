@@ -211,7 +211,7 @@ class KeyboardMappingEditor private constructor(
     }
     val key =
         try {
-          ApplicationSettings.KeyboardKey.fromKeyCode(keyCode)
+          DesktopKeyboardKeyAdapter.fromKeyCode(keyCode)
         } catch (_: IllegalArgumentException) {
           return EditResult.Unsupported(binding, keyCode).also {
             showStatus("That key cannot be stored as a keyboard binding.")
@@ -221,7 +221,7 @@ class KeyboardMappingEditor private constructor(
     val previousTargetKey = keyboard[target]
     val conflict =
         keyboard.entries.firstOrNull { (candidate, candidateKey) ->
-          candidate != target && candidateKey.code == key.code
+          candidate != target && candidateKey == key
         }
     if (conflict != null) {
       val existing = conflict.key.toBinding()
@@ -500,7 +500,8 @@ class KeyboardMappingEditor private constructor(
 
   private fun ControllerProperties.PlayerButton.toBinding() = Binding(player, button)
 
-  private fun ApplicationSettings.KeyboardKey.displayName(): String = KeyEvent.getKeyText(code)
+  private fun ApplicationSettings.KeyboardKey.displayName(): String =
+      KeyEvent.getKeyText(DesktopKeyboardKeyAdapter.keyCode(this))
 
   private companion object {
     const val PLAYER_COUNT = 4

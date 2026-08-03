@@ -8,20 +8,13 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 
-import javax.imageio.ImageIO;
-import java.awt.Graphics2D;
-import java.awt.image.BufferedImage;
-import java.io.File;
-
 /**
  * The Pocket Camera cartridge (type 0xFC): MBC5-like ROM banking, 128 KB of banked RAM,
  * and the camera's register file mapped in place of RAM when RAM-bank bit 4 is set.
  * A capture completes instantly (the busy bit always reads 0). The sensor image comes,
  * in priority order, from a live {@link CameraSource} registered by the front end (the
- * Swing UI wires a real webcam through it), then the file named by the
- * {@code coffeegb.camera.image} system property (re-read on every capture, e.g. one kept
- * fresh by {@code ffmpeg -f v4l2 -i /dev/video0 -update 1 cam.jpg}), and finally a
- * synthetic test pattern. The image is scaled to the
+ * Swing UI wires a real webcam through it), and finally a synthetic test pattern. File and image
+ * decoding are desktop adapter responsibilities. The image is scaled to the
  * sensor's 128x112, converted to luminance and dithered through the game-supplied
  * threshold matrix (registers 0x06-0x35), and the result is written as 2bpp tiles to the
  * capture buffer at RAM offset 0x100 like the real ASIC does.
@@ -54,13 +47,8 @@ public class PocketCamera implements MemoryController {
 
     private boolean cameraMapped;
 
-    private transient long sourceTimestamp;
-
-    private transient int[] sourceLuma;
-
-    // a live capture source (e.g. a webcam) registered by the front end; when present it
-    // takes priority over the image file. Static because the cartridge is created deep in
-    // the emulator and there is only ever one camera.
+    // A live capture source is registered by the front end. It is static because the cartridge is
+    // constructed beneath the front-end session boundary and only one active machine owns it.
     private static volatile CameraSource cameraSource;
 
     /** Registers (or clears, with {@code null}) the live sensor source. */
@@ -162,36 +150,16 @@ public class PocketCamera implements MemoryController {
     }
 
     private int[] sensorImage() {
-        // a registered live source (webcam) wins over the file; it is re-read every capture
+        // A registered live source is re-read for every capture and must never block the machine.
         CameraSource source = cameraSource;
         if (source != null) {
             try {
-                BufferedImage frame = source.getFrame();
+                CameraFrame frame = source.getFrame();
                 if (frame != null) {
                     return toLuma(frame);
                 }
             } catch (Exception e) {
-                // fall through to the file / test pattern
-            }
-        }
-        String path = System.getProperty("coffeegb.camera.image");
-        if (path != null) {
-            File f = new File(path);
-            if (f.isFile()) {
-                try {
-                    if (sourceLuma == null || f.lastModified() != sourceTimestamp) {
-                        BufferedImage src = ImageIO.read(f);
-                        if (src != null) {
-                            sourceLuma = toLuma(src);
-                            sourceTimestamp = f.lastModified();
-                        }
-                    }
-                    if (sourceLuma != null) {
-                        return sourceLuma;
-                    }
-                } catch (Exception e) {
-                    // fall through to the test pattern
-                }
+                // Fall through to the test pattern. Host capture failures must not affect emulation.
             }
         }
         // synthetic test pattern: diagonal gradient with circles
@@ -206,17 +174,22 @@ public class PocketCamera implements MemoryController {
         return luma;
     }
 
-    /** Scales a frame to the sensor's 128x112 and converts it to per-pixel luminance. */
-    private static int[] toLuma(BufferedImage src) {
-        BufferedImage scaled = new BufferedImage(128, 112, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = scaled.createGraphics();
-        g.drawImage(src, 0, 0, 128, 112, null);
-        g.dispose();
+    /**
+     * Scales an RGB frame to the sensor's 128x112 with deterministic nearest-neighbour sampling,
+     * then converts it to per-pixel luminance. The integer mapping is the established desktop
+     * default and avoids host-specific image interpolation.
+     */
+    private static int[] toLuma(CameraFrame src) {
+        int sourceWidth = src.getWidth();
+        int sourceHeight = src.getHeight();
+        int[] rgb = src.copyRgb();
         int[] luma = new int[128 * 112];
         for (int y = 0; y < 112; y++) {
+            int sourceY = y * sourceHeight / 112;
             for (int x = 0; x < 128; x++) {
-                int rgb = scaled.getRGB(x, y);
-                luma[y * 128 + x] = ((rgb >> 16 & 0xff) * 77 + (rgb >> 8 & 0xff) * 151 + (rgb & 0xff) * 28) >> 8;
+                int sourceX = x * sourceWidth / 128;
+                int pixel = rgb[sourceY * sourceWidth + sourceX];
+                luma[y * 128 + x] = ((pixel >> 16 & 0xff) * 77 + (pixel >> 8 & 0xff) * 151 + (pixel & 0xff) * 28) >> 8;
             }
         }
         return luma;

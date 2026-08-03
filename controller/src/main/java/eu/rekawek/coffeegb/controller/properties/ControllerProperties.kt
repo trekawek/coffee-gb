@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.core.joypad.Button
-import java.awt.event.KeyEvent
 import java.util.EnumMap
 import java.util.Locale
 import java.util.Properties
@@ -34,11 +33,11 @@ object ControllerProperties {
   }
 
   data class PlayerMapping(
-      val keyboard: Map<Int, PlayerButton>,
+      val keyboard: Map<ApplicationSettings.KeyboardKey, PlayerButton>,
       val gamepads: List<GamepadAssignment>,
   ) {
     /** Historical P1 view retained for source compatibility with existing callers. */
-    fun legacyPrimaryKeyboard(): Map<Int, Button> =
+    fun legacyPrimaryKeyboard(): Map<ApplicationSettings.KeyboardKey, Button> =
         keyboard.filterValues { it.player == 0 }.mapValues { it.value.button }
   }
 
@@ -108,13 +107,13 @@ object ControllerProperties {
     }
 
     val keyboard = linkedMapOf<PlayerButton, ApplicationSettings.KeyboardKey>()
-    val usedKeys = linkedMapOf<Int, PlayerButton>()
+    val usedKeys = linkedMapOf<ApplicationSettings.KeyboardKey, PlayerButton>()
     perPlayer.forEachIndexed { player, bindings ->
       bindings.forEach { (button, key) ->
         val binding = PlayerButton(player, button)
-        val previous = usedKeys.put(key.code, binding)
+        val previous = usedKeys.put(key, binding)
         require(previous == null) {
-          "Key ${KeyEvent.getKeyText(key.code)} is assigned to both P${previous!!.player + 1} " +
+          "Key ${key.propertyName} is assigned to both P${previous!!.player + 1} " +
               "${previous.button} and P${player + 1} $button"
         }
         keyboard[binding] = key
@@ -124,7 +123,7 @@ object ControllerProperties {
     return ApplicationSettings.Input(keyboard.toMap(), gamepads.toMap()).also { it.toPlayerMapping() }
   }
 
-  fun getControllerMapping(properties: Properties): Map<Int, Button> =
+  fun getControllerMapping(properties: Properties): Map<ApplicationSettings.KeyboardKey, Button> =
       getPlayerMapping(properties).legacyPrimaryKeyboard()
 
   private fun parsePlayer(value: String, property: String): Int {

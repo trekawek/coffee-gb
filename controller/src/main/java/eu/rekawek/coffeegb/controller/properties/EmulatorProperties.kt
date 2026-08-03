@@ -108,7 +108,7 @@ internal constructor(
   /** Shared live-input service copied into each active machine configuration. */
   val playerInputSource = PlayerInputHub()
 
-  val controllerMapping: Map<Int, eu.rekawek.coffeegb.core.joypad.Button>
+  val controllerMapping: Map<ApplicationSettings.KeyboardKey, eu.rekawek.coffeegb.core.joypad.Button>
     get() = playerInputMapping.legacyPrimaryKeyboard()
 
   init {

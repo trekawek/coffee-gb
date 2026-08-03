@@ -7,7 +7,6 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
-import java.awt.event.KeyEvent
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -25,13 +24,13 @@ class ControllerPropertiesTest {
     assertEquals(8, mapping.keyboard.size)
     assertEquals(
         ControllerProperties.PlayerButton(0, Button.A),
-        mapping.keyboard[KeyEvent.VK_Z],
+        mapping.keyboard[key("VK_Z")],
     )
     assertEquals(
         listOf(ControllerProperties.GamepadAssignment(0, "auto")),
         mapping.gamepads,
     )
-    assertEquals(Button.B, mapping.legacyPrimaryKeyboard()[KeyEvent.VK_X])
+    assertEquals(Button.B, mapping.legacyPrimaryKeyboard()[key("VK_X")])
   }
 
   @Test
@@ -48,10 +47,10 @@ class ControllerPropertiesTest {
         }
 
     val mapping = ControllerProperties.getPlayerMapping(properties)
-    assertEquals(ControllerProperties.PlayerButton(0, Button.A), mapping.keyboard[KeyEvent.VK_Q])
-    assertEquals(ControllerProperties.PlayerButton(1, Button.A), mapping.keyboard[KeyEvent.VK_W])
-    assertEquals(ControllerProperties.PlayerButton(2, Button.START), mapping.keyboard[KeyEvent.VK_E])
-    assertEquals(ControllerProperties.PlayerButton(3, Button.SELECT), mapping.keyboard[KeyEvent.VK_R])
+    assertEquals(ControllerProperties.PlayerButton(0, Button.A), mapping.keyboard[key("VK_Q")])
+    assertEquals(ControllerProperties.PlayerButton(1, Button.A), mapping.keyboard[key("VK_W")])
+    assertEquals(ControllerProperties.PlayerButton(2, Button.START), mapping.keyboard[key("VK_E")])
+    assertEquals(ControllerProperties.PlayerButton(3, Button.SELECT), mapping.keyboard[key("VK_R")])
     assertEquals(listOf(ControllerProperties.GamepadAssignment(3, id)), mapping.gamepads)
   }
 
@@ -76,6 +75,13 @@ class ControllerPropertiesTest {
     assertFailsWith<IllegalArgumentException>("duplicate key") {
       ControllerProperties.getPlayerMapping(
           Properties().apply { setProperty("input.p2.btn_a", "VK_Z") })
+    }
+    assertFailsWith<IllegalArgumentException>("duplicate keyboard aliases") {
+      ControllerProperties.getPlayerMapping(
+          Properties().apply {
+            setProperty("input.p1.btn_a", "VK_SEPARATOR")
+            setProperty("input.p2.btn_a", "VK_SEPARATER")
+          })
     }
     assertFailsWith<IllegalArgumentException>("legacy/new duplicate") {
       ControllerProperties.getPlayerMapping(
@@ -147,4 +153,7 @@ class ControllerPropertiesTest {
       assertFalse(StateIdentity.from(config).profile.displaySgbBorder)
     }
   }
+
+  private fun key(value: String): ApplicationSettings.KeyboardKey =
+      ApplicationSettings.KeyboardKey.parse(value, "test")
 }

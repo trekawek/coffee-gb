@@ -300,7 +300,7 @@ class PreferencesDialogTest {
         val changedKeyboard =
             defaults.input.keyboard +
                 (ControllerProperties.PlayerButton(0, Button.A) to
-                    ApplicationSettings.KeyboardKey.fromKeyCode(KeyEvent.VK_A))
+                    DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_A))
         val initial =
             defaults.copy(
                 general =

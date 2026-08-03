@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource;
+import eu.rekawek.coffeegb.core.memory.cart.type.CameraFrame;
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap;
 import nu.pattern.OpenCV;
 import org.opencv.core.Mat;
@@ -8,8 +9,6 @@ import org.opencv.videoio.VideoCapture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.awt.image.BufferedImage;
-import java.awt.image.DataBufferByte;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -37,7 +36,7 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
 
     private volatile boolean running = true;
 
-    private volatile BufferedImage latest;
+    private volatile CameraFrame latest;
 
     private WebcamCameraSource(VideoCapture capture) {
         this.capture = capture;
@@ -101,7 +100,7 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
         while (running) {
             try {
                 if (capture.read(mat) && !mat.empty()) {
-                    latest = matToBufferedImage(mat);
+                    latest = matToCameraFrame(mat);
                 } else {
                     Thread.sleep(50);
                 }
@@ -119,21 +118,30 @@ public class WebcamCameraSource implements CameraSource, AutoCloseable {
     }
 
     @Override
-    public BufferedImage getFrame() {
+    public CameraFrame getFrame() {
         return latest;
     }
 
-    private static BufferedImage matToBufferedImage(Mat mat) {
+    private static CameraFrame matToCameraFrame(Mat mat) {
         int width = mat.cols();
         int height = mat.rows();
         int channels = mat.channels();
-        byte[] data = new byte[width * height * channels];
+        byte[] data = new byte[Math.multiplyExact(Math.multiplyExact(width, height), channels)];
         mat.get(0, 0, data);
-        int type = channels == 1 ? BufferedImage.TYPE_BYTE_GRAY : BufferedImage.TYPE_3BYTE_BGR;
-        BufferedImage image = new BufferedImage(width, height, type);
-        byte[] target = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
-        System.arraycopy(data, 0, target, 0, Math.min(data.length, target.length));
-        return image;
+        int[] rgb = new int[Math.multiplyExact(width, height)];
+        for (int pixel = 0; pixel < rgb.length; pixel++) {
+            int offset = pixel * channels;
+            if (channels == 1) {
+                int grey = data[offset] & 0xff;
+                rgb[pixel] = (grey << 16) | (grey << 8) | grey;
+            } else {
+                int blue = data[offset] & 0xff;
+                int green = data[offset + 1] & 0xff;
+                int red = data[offset + 2] & 0xff;
+                rgb[pixel] = (red << 16) | (green << 8) | blue;
+            }
+        }
+        return new CameraFrame(width, height, rgb);
     }
 
     @Override
