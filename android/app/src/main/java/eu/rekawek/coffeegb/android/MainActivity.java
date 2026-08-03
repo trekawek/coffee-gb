@@ -5,14 +5,20 @@ import android.app.AlertDialog;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.hardware.input.InputManager;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
+import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 
@@ -43,10 +49,33 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private Button importState;
     private Button exportState;
     private Button exportScreenshot;
+    private Button touchControls;
+    private Button controllerMapping;
 
     private AndroidEmulationRuntime runtime;
     private boolean bound;
+    private InputManager inputManager;
     private long shownSelectionGeneration = -1L;
+
+    private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
+        @Override
+        public void onInputDeviceAdded(int deviceId) {
+            // The first event selects the controller; no implicit mapping is created on connect.
+        }
+
+        @Override
+        public void onInputDeviceRemoved(int deviceId) {
+            AndroidEmulationRuntime active = runtime;
+            if (active != null) {
+                active.input().disconnect(deviceId);
+            }
+        }
+
+        @Override
+        public void onInputDeviceChanged(int deviceId) {
+            // Android delivers the new axes on the next motion event.
+        }
+    };
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -54,7 +83,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime = ((EmulationService.RuntimeBinder) service).runtime();
             bound = true;
             runtime.addObserver(MainActivity.this);
-            video.attach(runtime.frames());
+            video.attach(runtime.frames(), runtime.input());
             applyState(runtime.state());
         }
 
@@ -100,6 +129,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         importState = button("Import state slot 0", this::chooseStateImport);
         exportState = button("Export state slot 0", this::chooseStateExport);
         exportScreenshot = button("Export native screenshot", this::chooseScreenshotExport);
+        touchControls = button("Touch controls", ignored -> configureTouchControls());
+        controllerMapping = button("Controller mapping", ignored -> configureController());
         content.addView(open);
         content.addView(recent);
         content.addView(resume);
@@ -109,6 +140,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(importState);
         content.addView(exportState);
         content.addView(exportScreenshot);
+        content.addView(touchControls);
+        content.addView(controllerMapping);
         setContentView(content);
         disableCommands();
     }
@@ -116,6 +149,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onStart() {
         super.onStart();
+        inputManager = getSystemService(InputManager.class);
+        inputManager.registerInputDeviceListener(inputDevices, null);
         EmulationService.start(this);
         if (!bound) {
             bindService(new Intent(this, EmulationService.class), connection, BIND_AUTO_CREATE);
@@ -124,7 +159,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     protected void onStop() {
+        if (inputManager != null) {
+            inputManager.unregisterInputDeviceListener(inputDevices);
+            inputManager = null;
+        }
         if (bound) {
+            runtime.input().releaseAll();
             video.detach();
             runtime.removeObserver(this);
             unbindService(connection);
@@ -132,6 +172,32 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime = null;
         }
         super.onStop();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        AndroidEmulationRuntime active = runtime;
+        if (active != null && active.input().onKeyEvent(event)) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        AndroidEmulationRuntime active = runtime;
+        if (active != null && active.input().onMotionEvent(event)) {
+            return true;
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus && runtime != null) {
+            runtime.input().releaseAll();
+        }
     }
 
     @Override
@@ -222,6 +288,103 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 EXPORT_SCREENSHOT_REQUEST);
     }
 
+    private void configureTouchControls() {
+        TouchControlsLayout initial = video.touchLayout();
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int padding = (int) (20 * getResources().getDisplayMetrics().density);
+        form.setPadding(padding, padding, padding, padding);
+
+        SeekBar opacity = slider(form, "Opacity", 15, 100,
+                Math.round(initial.opacity() * 100));
+        SeekBar scale = slider(form, "Size", 60, 140,
+                Math.round(initial.scale() * 100));
+        SeekBar vertical = slider(form, "Raise controls", 0, 100,
+                Math.round(initial.verticalPosition() * 100));
+        Switch leftHanded = new Switch(this);
+        leftHanded.setText("Left-handed layout");
+        leftHanded.setChecked(initial.leftHanded());
+        form.addView(leftHanded);
+        Switch haptics = new Switch(this);
+        haptics.setText("Haptic feedback");
+        haptics.setChecked(initial.haptics());
+        form.addView(haptics);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Touch controls")
+                .setView(form)
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Reset", (dialog, ignored) -> video.resetTouchLayout())
+                .setPositiveButton("Save", (dialog, ignored) -> video.updateTouchLayout(
+                        new TouchControlsLayout(opacity.getProgress() / 100f,
+                                scale.getProgress() / 100f, vertical.getProgress() / 100f,
+                                leftHanded.isChecked(), haptics.isChecked())))
+                .show();
+    }
+
+    private SeekBar slider(LinearLayout form, String label, int min, int max, int value) {
+        TextView text = new TextView(this);
+        text.setText(label);
+        form.addView(text);
+        SeekBar slider = new SeekBar(this);
+        slider.setMin(min);
+        slider.setMax(max);
+        slider.setProgress(value);
+        form.addView(slider);
+        return slider;
+    }
+
+    private void configureController() {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            return;
+        }
+        AndroidInputRouter input = active.input();
+        String name = input.activeControllerName();
+        if (name == null) {
+            Toast.makeText(this, "Connect or press a game controller first.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        eu.rekawek.coffeegb.core.joypad.Button[] targets = {
+                eu.rekawek.coffeegb.core.joypad.Button.A,
+                eu.rekawek.coffeegb.core.joypad.Button.B,
+                eu.rekawek.coffeegb.core.joypad.Button.START,
+                eu.rekawek.coffeegb.core.joypad.Button.SELECT,
+                eu.rekawek.coffeegb.core.joypad.Button.UP,
+                eu.rekawek.coffeegb.core.joypad.Button.DOWN,
+                eu.rekawek.coffeegb.core.joypad.Button.LEFT,
+                eu.rekawek.coffeegb.core.joypad.Button.RIGHT
+        };
+        String[] items = {
+                "Map A", "Map B", "Map Start", "Map Select", "Map Up", "Map Down",
+                "Map Left", "Map Right", "Horizontal axis: "
+                        + (input.horizontalInverted() ? "inverted" : "normal"),
+                "Vertical axis: " + (input.verticalInverted() ? "inverted" : "normal"),
+                "Reset this controller"
+        };
+        new AlertDialog.Builder(this)
+                .setTitle("Controller: " + name)
+                .setItems(items, (dialog, which) -> {
+                    if (which < targets.length) {
+                        if (input.beginCapture(targets[which])) {
+                            Toast.makeText(this, "Press the button to map. A conflicting mapping is replaced.",
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    } else if (which == targets.length) {
+                        if (input.toggleHorizontalInversion()) {
+                            Toast.makeText(this, "Horizontal axis toggled.", Toast.LENGTH_SHORT).show();
+                        }
+                    } else if (which == targets.length + 1) {
+                        if (input.toggleVerticalInversion()) {
+                            Toast.makeText(this, "Vertical axis toggled.", Toast.LENGTH_SHORT).show();
+                        }
+                    } else if (input.resetActiveController()) {
+                        Toast.makeText(this, "Controller mappings reset.", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .show();
+    }
+
     private void confirmImport(String title, String message, int requestCode) {
         if (runtime == null || !importBattery.isEnabled()) {
             return;
@@ -273,6 +436,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         importState.setEnabled(ready && state.transferReady() && !state.flushPending());
         exportState.setEnabled(ready && state.transferReady() && !state.flushPending());
         exportScreenshot.setEnabled(ready && state.transferReady() && !state.flushPending());
+        touchControls.setEnabled(ready);
+        controllerMapping.setEnabled(ready);
         showSelectionIfNeeded(state);
     }
 
@@ -323,6 +488,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         importState.setEnabled(false);
         exportState.setEnabled(false);
         exportScreenshot.setEnabled(false);
+        touchControls.setEnabled(false);
+        controllerMapping.setEnabled(false);
     }
 
     @FunctionalInterface

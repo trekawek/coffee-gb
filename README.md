@@ -22,10 +22,9 @@ orchestration layer use Kotlin and Java.
 
 ### Android build groundwork
 
-The Android frontend is at its portable-runtime stage; it is **not yet a playable emulator**. The
-`android/` Gradle project builds a permission-free starter activity and consumes the real
-`controller` and `core` artifacts installed from this exact checkout. Desktop image, keyboard, and
-console adapters remain outside that runtime as recorded in the
+The Android frontend provides a focused playable emulator path. Its Gradle project consumes the
+real `controller` and `core` artifacts installed from this exact checkout. Desktop image, keyboard,
+and console adapters remain outside that runtime as recorded in the
 [Android build-boundary ADR](docs/adr/0003-android-build-boundary.md).
 
 With Android SDK Platform 36 and Build Tools 36.0.0 installed, prepare the isolated artifact
@@ -69,6 +68,14 @@ three reusable ARGB buffers before a frame callback returns; the renderer draws 
 frame with nearest-neighbor integer scaling (or aspect-preserving letterboxing where an integer
 fit is impossible). Losing or recreating a surface does not affect the emulation session. Native
 PNG screenshots are exported from that frame store, never from the Android UI or its overlays.
+
+Android input sources feed the portable player-input hub, so multi-touch controls, a keyboard,
+and a game controller can hold buttons at the same time without stuck releases. The translucent
+touch overlay supports adjustable opacity, size, raised position, handedness, and haptic feedback;
+its settings stay app-private. Controller key remaps and axis inversion are app-private too, keyed
+by the controller descriptor plus vendor/product identity; the mapping dialog captures a button,
+replaces a conflicting mapping deterministically, and can reset one controller. Focus loss,
+surface teardown, stopping, and controller removal synchronously release their input source.
 
 ## Download and play
 
