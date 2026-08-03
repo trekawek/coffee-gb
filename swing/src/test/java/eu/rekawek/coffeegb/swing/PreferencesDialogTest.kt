@@ -347,7 +347,7 @@ class PreferencesDialogTest {
                 close = { closeCount++ },
             )
 
-        actions.restoreDefaults()
+        actions.restoreAllDefaults()
         val restored = panel.validatedEdit()
         actions.cancel()
 
@@ -591,13 +591,13 @@ class PreferencesDialogTest {
                 close = { closeCount++ },
             )
 
-        panel.tabs.selectedIndex = 0
+        panel.categories.selectedCategory = PreferencesCategory.GENERAL
         panel.displayEditor.letterboxColor.text = "not-a-color"
         actions.apply()
 
         assertEquals(0, applyCount)
         assertEquals(0, closeCount)
-        assertEquals("Display", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals(PreferencesCategory.DISPLAY, panel.categories.selectedCategory)
         assertEquals(
             "Enter a color in #RRGGBB form.",
             panel.displayEditor.letterboxColorError.text,
@@ -634,7 +634,7 @@ class PreferencesDialogTest {
             "Show command bar while playing",
             panel.commandBarVisible.accessibleContext.accessibleName,
         )
-        assertFalse(panel.tabs.accessibleContext.accessibleName.isNullOrBlank())
+        assertFalse(panel.categories.accessibleContext.accessibleName.isNullOrBlank())
         assertEquals(
             listOf(
                 "General",
@@ -645,7 +645,7 @@ class PreferencesDialogTest {
                 "System",
                 "Peripherals",
             ),
-            (0 until panel.tabs.tabCount).map(panel.tabs::getTitleAt),
+            PreferencesCategory.values().map { it.displayName },
         )
       }
 
@@ -740,14 +740,14 @@ class PreferencesDialogTest {
                 close = { closeCount++ },
             )
         val editor = (panel.savesEditor.rewindMemory.editor as JSpinner.DefaultEditor).textField
-        panel.tabs.selectedIndex = 0
+        panel.categories.selectedCategory = PreferencesCategory.GENERAL
         editor.text = "999"
 
         actions.apply()
 
         assertEquals(0, applyCount)
         assertEquals(0, closeCount)
-        assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals(PreferencesCategory.SAVES_AND_REWIND, panel.categories.selectedCategory)
         assertTrue(panel.validationSummary.text.contains("8 to 512"))
         assertSame(editor, panel.focusOwnerOrInvalidComponent())
       }
@@ -772,14 +772,14 @@ class PreferencesDialogTest {
                       null
                     },
             )
-        panel.tabs.selectedIndex = 0
+        panel.categories.selectedCategory = PreferencesCategory.GENERAL
         panel.savesEditor.directoryField.text = filesystemRoot.toString()
 
         actions.apply()
 
         assertEquals(0, applyCount)
         assertEquals(0, validationCount)
-        assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+        assertEquals(PreferencesCategory.SAVES_AND_REWIND, panel.categories.selectedCategory)
         assertTrue(panel.savesEditor.directoryError.text.contains("below the filesystem root"))
         assertSame(
             panel.savesEditor.directoryField,
@@ -863,7 +863,7 @@ class PreferencesDialogTest {
                 if (!applying) completed.countDown()
               },
           )
-      panel.tabs.selectedIndex = 0
+      panel.categories.selectedCategory = PreferencesCategory.GENERAL
 
       actions.apply()
     }
@@ -872,7 +872,7 @@ class PreferencesDialogTest {
     onEdt {
       assertEquals(0, applyCount)
       assertEquals(0, closeCount)
-      assertEquals("Saves & Rewind", panel.tabs.getTitleAt(panel.tabs.selectedIndex))
+      assertEquals(PreferencesCategory.SAVES_AND_REWIND, panel.categories.selectedCategory)
       assertTrue(panel.savesEditor.directoryError.text.contains("not writable"))
       assertTrue(panel.validationSummary.text.contains("not writable"))
     }
@@ -1006,7 +1006,7 @@ class PreferencesDialogTest {
   fun `leaving the Controls category cancels keyboard capture`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
-        panel.tabs.selectedIndex = 3
+        panel.categories.selectedCategory = PreferencesCategory.CONTROLS
         assertEquals(4, panel.controlsPlayerSelector.itemCount)
         assertEquals(2, panel.controlsSubpages.tabCount)
         assertEquals(
@@ -1034,7 +1034,7 @@ class PreferencesDialogTest {
         panel.controlsSubpages.selectedIndex = 0
         capture.doClick()
         assertTrue(panel.keyboardEditor.isCaptureActive())
-        panel.tabs.selectedIndex = 0
+        panel.categories.selectedCategory = PreferencesCategory.GENERAL
 
         assertFalse(panel.keyboardEditor.isCaptureActive())
         assertFalse(

@@ -1,11 +1,10 @@
 # Audited state-record schema
 
-This is the exact captured-field inventory for all 99 production record types admitted by
+This documents the captured fields for all 99 production record types admitted by
 `StateTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
 each line names the non-serializable `ComponentState` record and every component captured by
-`captureState`. The
-executable state inventory test prevents the registry, this appendix, and the detached graph
-adapter from drifting independently.
+`captureState`. `StateTypeRegistry`, the StateFile golden/schema tests, and capture/apply behavior
+tests enforce the executable contract; this appendix explains it without mirroring source paths.
 
 Several component labels still end in `Memento`. They are frozen StateFile-v1 field identifiers,
 not Java-serialization dependencies, and changing them would change canonical v1 bytes. The local

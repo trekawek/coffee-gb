@@ -29,11 +29,9 @@ to `sgb` and `dmg`, respectively. Configuration copies for
 restore, rollback, boot templates, linked sessions, and transaction rollback retain the exact
 registered profile instance.
 
-The executable registry contract is
-[`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv).
-Its guard checks identity, capabilities, exact clocks/cadence, boot selectors, skip defaults, and
-registry order. `SgbInventoryGuardTest` separately fingerprints every production profile/clock
-decision site.
+`HardwareProfileRegistry` is the executable source of truth. Registry, construction, synthetic
+model, StateFile, and netplay tests cover identity, exact clocks/cadence, boot selectors, skip
+defaults, and ordering through behavior rather than mirroring those values in a second matrix.
 
 ## Evidence and exact SGB-family clocks
 
@@ -185,7 +183,7 @@ To add or rename a profile:
 
 1. never reuse or change an existing canonical ID;
 2. add a complete immutable registry row and a finite alias only when migration requires it;
-3. update the evidence-backed matrix and source inventory/fingerprints;
+3. update the registry, behavioral construction/state tests, and evidence documentation;
 4. prove boot/register/memory/render/timing behavior with deterministic baselines;
 5. version portable/network metadata when an existing identity cannot represent it;
 6. add mismatch-before-mutation, settings/CLI, rewind, linked, and compatibility coverage.

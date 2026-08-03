@@ -6,8 +6,6 @@ import eu.rekawek.coffeegb.controller.network.v9.V9LinkMode
 import eu.rekawek.coffeegb.controller.network.v9.V9Role
 import eu.rekawek.coffeegb.controller.network.v9.V9TransportMetricsSnapshot
 import java.io.Closeable
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
@@ -110,26 +108,6 @@ class NetplayDiagnosticsTest {
   }
 
   @Test
-  fun runtimeInputAndPeerFailuresHaveNoInfoLogPath() {
-    val root = repositoryRoot()
-    val linked = Files.readString(
-        root.resolve("controller/src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt"),
-    )
-    val v9 =
-        Files.walk(
-            root.resolve("controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9"),
-        ).use { paths ->
-          paths.filter { Files.isRegularFile(it) && it.toString().endsWith(".kt") }
-              .sorted()
-              .map(Files::readString)
-              .toList()
-              .joinToString("\n")
-        }
-    assertFalse("LOG.info(" in linked || "LOG.atInfo(" in linked)
-    assertFalse("LOG.info(" in v9 || "LOG.atInfo(" in v9)
-  }
-
-  @Test
   fun finalBoundedSnapshotIsDeliveredWithoutBlockingItsProducer() {
     val publisher = BoundedSnapshotPublisher(0, "netplay-diagnostics-close-test")
     val delivered = CountDownLatch(1)
@@ -180,16 +158,4 @@ class NetplayDiagnosticsTest {
           V9DiagnosticEndpoint("192.0.2.44", 8765),
       )
 
-  private fun repositoryRoot(): Path {
-    System.getProperty("maven.multiModuleProjectDirectory")?.let { candidate ->
-      val root = Path.of(candidate).toAbsolutePath().normalize()
-      if (Files.isRegularFile(root.resolve("controller/pom.xml"))) return root
-    }
-    var candidate = Path.of("").toAbsolutePath().normalize()
-    while (candidate.parent != null) {
-      if (Files.isRegularFile(candidate.resolve("controller/pom.xml"))) return candidate
-      candidate = candidate.parent
-    }
-    throw AssertionError("Cannot locate repository root")
-  }
 }

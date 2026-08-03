@@ -8,23 +8,14 @@ import eu.rekawek.coffeegb.core.hardware.ClockSpec
 internal fun requireCompatibleLinkedClock(
     configurations: List<GameboyConfiguration?>,
 ): ClockSpec {
-  return requireCompatibleLinkedClockIdentities(
-      configurations.filterNotNull().map { LinkedClockIdentity(it.hardwareProfile.id(), it.clockSpec) })
-}
-
-internal data class LinkedClockIdentity(val profileId: String, val clockSpec: ClockSpec)
-
-/** Testable narrow preflight also used by future registered profile additions. */
-internal fun requireCompatibleLinkedClockIdentities(
-    identities: List<LinkedClockIdentity>,
-): ClockSpec {
-  val first = identities.firstOrNull() ?: return ClockSpec.LEGACY
+  val candidates = configurations.filterNotNull()
+  val first = candidates.firstOrNull() ?: return ClockSpec.LEGACY
   val clock = first.clockSpec
-  identities.drop(1).forEach { identity ->
-    if (!clock.hasCompatibleClockIdentity(identity.clockSpec)) {
+  candidates.drop(1).forEach { candidate ->
+    if (!clock.hasCompatibleClockIdentity(candidate.clockSpec)) {
       throw StateApplyException(
-          "Linked profile ${identity.profileId} clock ${identity.clockSpec} " +
-              "is incompatible with ${first.profileId} clock $clock",
+          "Linked profile ${candidate.hardwareProfile.id()} clock ${candidate.clockSpec} " +
+              "is incompatible with ${first.hardwareProfile.id()} clock $clock",
       )
     }
   }

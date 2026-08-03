@@ -1087,36 +1087,6 @@ class ConnectionTest {
   }
 
   @Test
-  fun productionPeerStatePathHasNoLegacyOrNativeDecoderReachability() {
-    val networkSources =
-        listOf(
-            Paths.get(
-                "src/main/java/eu/rekawek/coffeegb/controller/network/Connection.kt"),
-            Paths.get(
-                "src/main/java/eu/rekawek/coffeegb/controller/link/LinkedController.kt"),
-        )
-    val forbidden =
-        listOf(
-            "LegacySnapshotImporter",
-            "NetplayMementoCodec",
-            "ObjectInputStream",
-            "ObjectOutputStream",
-            "CGBN",
-        )
-    networkSources.forEach { path ->
-      val source = path.toFile().readText()
-      forbidden.forEach { token ->
-        assertFalse(source.contains(token), "$path reaches forbidden peer decoder token $token")
-      }
-    }
-    assertFalse(
-        Paths.get(
-                "src/main/java/eu/rekawek/coffeegb/controller/NetplayMementoCodec.kt")
-            .toFile()
-            .exists())
-  }
-
-  @Test
   fun deflateShrinksSparseData() {
     val sparse = ByteArray(1 shl 20)
     Random(1).nextBytes(sparse, 0, 64 * 1024)

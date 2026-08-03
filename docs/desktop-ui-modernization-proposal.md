@@ -177,9 +177,6 @@ Automated verification completed on OpenJDK 21 with the Kotlin compiler daemon d
   contracts ran with
   `mvn -pl swing -am -Dkotlin.compiler.daemon=false -Dtest=RecentRomsTest,RomOpenServiceTest,DesktopRomOpenTest,DesktopUiCoordinatorTest,DesktopMainPanelTest,DesktopDisplayControllerTest,FullscreenControllerTest,ScreenMenuTest,DesktopDialogFactoryTest,SwingPrinterTest,DesktopPlaybackStateTest -Dsurefire.failIfNoSpecifiedTests=false test`:
   **99 tests, zero failures or errors**.
-- The reviewed hardware/model decision inventory ran with
-  `mvn -pl controller -Dkotlin.compiler.daemon=false -Dtest=SgbInventoryGuardTest test`:
-  **2 tests, zero failures or errors**.
 - The final unrestricted loopback-capable reactor ran with
   `mvn -pl swing -am -Dkotlin.compiler.daemon=false test`: core **1,080** tests (2 skipped),
   controller **869** tests (2 skipped), and Swing **628** tests, for **2,577 tests with zero failures

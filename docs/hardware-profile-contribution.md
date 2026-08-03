@@ -11,8 +11,8 @@ value: it is a permanent portable compatibility identity.
 
 Choose one lowercase ASCII, non-ordinal ID and a precise family/revision. IDs are permanent after
 release. Add an alias only for a documented persisted value that users already have; never accept
-display names, mixed case, or enum ordinals as identity. Update the authoritative registry and the
-machine-readable hardware profile matrix in the same change.
+display names, mixed case, or enum ordinals as identity. Update the authoritative registry and its
+behavioral construction/state tests in the same change.
 
 ## 2. Evidence, licenses, and uncertainty
 
@@ -68,19 +68,20 @@ For every ROM, trace, screenshot, palette, or generated fixture, record origin, 
 redistribution permission, version/commit, SHA-256, generator/capture method, and scope of evidence.
 Never commit Nintendo boot ROMs, proprietary game assets, or automatically downloaded artifacts.
 
-## 10. Tests, matrices, inventory, and verification
+## 10. Tests, documentation, and verification
 
 ### Positive, boundary, malformed, reset, and mismatch tests
 
 Cover positive, boundary, malformed, reset, deterministic continuation, and atomic mismatch paths.
 
-### Matrices, inventory, and documentation
+### Baselines and documentation
 
-Update model baselines, hardware matrix, decision inventory/fingerprints, StateFile/netplay/rewind
-docs, README/CLI/UI guidance, and provenance.
+Update model baselines, StateFile/netplay/rewind tests and docs, README/CLI/UI guidance, and
+provenance. Prefer assertions on constructed machines and serialized/wire behavior over source-token
+inventories.
 
 ### Java 16 build and compatibility CI
 
 Run the Java-16 `mvn -B clean test` reactor, downstream
 Swing compilation/tests, all affected compatibility profiles, fixture SHA checks, `git diff --check`,
-static architecture scans, and exact-head hosted CI. Report every skipped or unavailable check.
+and exact-head hosted CI. Report every skipped or unavailable check.

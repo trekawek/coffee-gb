@@ -32,16 +32,15 @@ Protocol v8 remains StateFile-v1-only and rejects MGB before linked construction
 The exact remaining compatibility surface and removal policy are documented in
 [legacy-state-retirement.md](legacy-state-retirement.md).
 
-The exact field-by-field inventory of all 99 admitted production record types is committed in
-[state-memento-schema.md](state-memento-schema.md). The independently scanned list of all 106
-production state contracts and capture owner/call-site files is committed in
-[state-originator-sites.md](state-originator-sites.md). `StateTypeRegistry` is the executable type
-allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral an
-explicit non-idle setup and compares a fixed continuation trace plus final state;
+The exact field-by-field portable schema for all 99 admitted production record types is documented
+in [state-memento-schema.md](state-memento-schema.md), while `StateTypeRegistry` is the executable
+type allowlist. `StateCoverageMatrixTest` gives every mutable mapper and stateful serial peripheral
+an explicit non-idle setup and compares a fixed continuation trace plus final state;
 `DetachedStateTest` exercises the complete root graph, deep ownership, failure atomicity, display,
 held input, endpoint runtime state, required-value null rejection, semantic cursor boundaries, and
-difficult-cycle deterministic continuation. `StateInventoryTest` independently scans production
-capture sites and proves every admitted record has a non-empty semantic-policy rationale.
+difficult-cycle deterministic continuation. Runtime semantic preflight rejects an admitted record
+that has no policy. A separate source-path inventory was retired because it duplicated the code
+layout without exercising capture or restore behavior.
 
 ## Supported safe points and thread ownership
 
@@ -147,9 +146,9 @@ types are rejected through the adapter before its live-mutation callback.
 Records whose fields are deliberately not range-constrained still have an explicit policy and
 rationale in that registry. Examples are raw bus/address/register latches, signed emulated clocks,
 documented `-1`/minimum-value sentinels, and parent records whose only relationship-bearing values
-are validated by nested records. `StateInventoryTest` requires the policy-key set to equal all 99
-admitted record types, so a new state record cannot enter the model without an audited choice. Rollback
-is retained for unexpected failures in legacy restore code; it is not the validation path for a
+are validated by nested records. Runtime semantic preflight requires the policy-key set to equal
+all 99 admitted record types, so a new state record cannot enter the model without an explicit
+choice. Rollback is retained for unexpected failures in legacy restore code; it is not the validation path for a
 deterministically malformed detached candidate.
 
 ## Compatibility and display ownership

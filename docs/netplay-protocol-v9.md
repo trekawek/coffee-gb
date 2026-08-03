@@ -93,9 +93,9 @@ fragments, or credentials and cannot poison the listener/accept loop or another 
 
 ## Message registry and payload schemas
 
-`messages.tsv` is the numeric registry and per-frame limit table. `fields.tsv` is the exhaustive
-offset/width/rule registry for the 64-byte header and every payload/entry schema named below. IDs
-are permanent. No Java or Kotlin enum ordinal, display name, or class name is a wire identity.
+`messages.tsv` is the numeric registry and per-frame limit table. The tables below define the
+offset, width, and rule for the 64-byte header and every payload/entry schema. IDs are permanent.
+No Java or Kotlin enum ordinal, display name, or class name is a wire identity.
 
 | ID | Name | Decoded payload and rule |
 |---:|---|---|

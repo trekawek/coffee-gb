@@ -54,9 +54,9 @@ assignees: ""
 
 - [ ] Before-failing regressions cover construction, reset, continuation, malformed identity, and atomic rejection.
 
-## Matrices, inventory, and documentation
+## Baselines and documentation
 
-- [ ] Profile matrix, model baselines, decision inventory/fingerprints, user docs, and contributor docs agree.
+- [ ] Construction/state behavior, model baselines, user docs, and contributor docs agree.
 
 ## Java 16 build and compatibility CI
 

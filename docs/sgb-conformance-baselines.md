@@ -8,61 +8,17 @@ clock contract. Issue #345 adds the evidence-backed `mgb` identity and an enforc
 extension process. Neither phase changes the practical SGB command set. The original 91 portable
 record IDs and every existing StateFile-v1 field remain unchanged; mapper records append after them.
 
-## Checked-in sources of truth
+## Executable sources of truth
 
-The complete command inventory is
-[`controller/src/test/resources/sgb-baselines/sgb-command-matrix.tsv`](../controller/src/test/resources/sgb-baselines/sgb-command-matrix.tsv).
-It has one row for every ID representable by the documented five-bit command field: `0x00` through
-`0x1f`. IDs `0x00` through `0x19` are the 26 classes currently recognized by
-`Commands.toCommand`; `0x1a` through `0x1f` are explicit reserved/unknown rows. Aliases are recorded
-in the row instead of creating duplicate IDs.
+Compatibility is enforced at behavior boundaries. `CommandsValidationTest` covers every practical
+and unsupported command ID plus unknown and malformed packets. The practical-command, renderer,
+state-continuation, four-player, and hardware-model tests exercise the resulting effects. The ROM
+profiles remain the primary external compatibility signal.
 
-The status breakdown is:
-
-| Status | Rows | Meaning in this matrix |
-| --- | ---: | --- |
-| `implemented` | 16 | Validated production parsing, an observable Coffee GB effect, malformed-input atomicity, and state continuation are exercised. |
-| `partial` | 1 | Safe validated behavior exists, but an SNES firmware/user service Coffee GB does not emulate is missing. |
-| `intentionally-unsupported` | 9 | The command depends on an SNES CPU/APU/PPU or firmware service Coffee GB does not emulate. The row still records packet consumption. |
-| `unknown` | 6 | Reserved IDs whose behavior is only partially known from one firmware revision. |
-
-Each row separately states documented packet count, current collector validation, command-specific
-length validation, persisted state, DMG-screen effect, border effect, multiplayer effect,
-SNES dependency, save/restore coverage, evidence, and uncertainty. `SgbInventoryGuardTest` rejects
-missing or duplicate IDs, invalid statuses, blank evidence/uncertainty cells, invalid evidence keys,
-and any drift between the matrix and the production command registry.
-
-The model/clock decision inventory is
-[`controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv`](../controller/src/test/resources/sgb-baselines/model-decision-inventory.tsv).
-Its 104 rows classify every matching production source file by stable symbol/context, current
-consumer, model set, evidence, uncertainty, and the earliest owning #317 phase. The scanner covers
-`core`, `controller`, and `swing` production Java/Kotlin sources, ignores only package/import/comment
-lines, and compares the complete `(category, path, occurrence count)` map. A new match cannot be
-hidden by preserving one global hand-count. A second committed table hashes the ordered,
-whitespace-normalized matching source contexts per file, so adding or replacing a decision while
-coincidentally preserving its count also requires a reviewed inventory update; line numbers are not
-part of the contract.
-
-| Category | Files | Normalized occurrences |
-| --- | ---: | ---: |
-| `HARDWARE_PROFILE` | 32 | 233 |
-| `GAMEBOY_TYPE` | 9 | 46 |
-| `CGB_FLAG` | 44 | 440 |
-| `SGB_FLAG` | 12 | 44 |
-| `CGB0` | 10 | 44 |
-| `BOOTSTRAP` | 19 | 130 |
-| `CLOCK` | 34 | 263 |
-| `SGB_BORDER` | 9 | 44 |
-| `MEALYBUG` | 11 | 51 |
-| `CODEBREAKER` | 11 | 61 |
-| `ROM_MODEL` | 6 | 49 |
-| `PORTABLE_PROFILE` | 10 | 62 |
-
-The 104 files comprise 41 hardware-policy, 24 compatibility-adapter, 13 configuration, 13
-portable-state-adapter, 9 platform-adapter, and 4 legacy-importer rows. Sixty-nine rows retain the
-completed profile foundation (#343), 28 consume the exact clock/timing contract established by
-issue #344, four own MGB registry/portable/network identity decisions (#345), two SGB display or
-palette rows belong to command completion (#341), and Joypad multiplayer belongs to #342.
+Source-token occurrence counts, source fingerprints, and a second command-registry spreadsheet
+were deliberately retired. They made harmless renames and refactors require fixture updates without
+running an emulated instruction or validating an SGB effect. The production parser and behavioral
+tests are now the single executable command registry.
 
 ## Public technical evidence
 
@@ -109,7 +65,7 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   no such UI/source, so the command remains `partial`: no fictitious override is invented.
 - Pan Docs says bytes without an indicated purpose are ignored, while several command tables label
   specific fields “not used (zero)”. The validator accepts arbitrary values only in the former
-  category and requires zero in the latter. This distinction is table-driven in the matrix tests.
+  category and requires zero in the latter. Direct command-validation tests cover the distinction.
 - A PCT map entry should select palette `4..6` in Pan Docs. Coffee GB retains its prior safe use of
   the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround from
   issue #174; narrowing either would break established continuation tests. The documented priority
@@ -279,17 +235,16 @@ rollback replay, keyboard mappings, and fake no-SDL devices.
 
 ## Profile ownership and deferred work
 
-The exact registry/capability/boot/clock matrix is
-[`hardware-profile-matrix.tsv`](../controller/src/test/resources/sgb-baselines/hardware-profile-matrix.tsv)
-and is enforced against production by `HardwareProfileMatrixTest`. Permanent IDs are `dmg`, `cgb`,
-`cgb0`, `sgb`, `sgb2`, and `mgb`. The full ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and
-extension contract is documented in [hardware-profiles.md](hardware-profiles.md) and
-[state-file-v2.md](state-file-v2.md). The committed synthetic SGB2 SESSION golden is 59,486 bytes
+The authoritative registry is `HardwareProfileRegistry`; its permanent IDs are `dmg`, `cgb`,
+`cgb0`, `sgb`, `sgb2`, and `mgb`. `HardwareProfileRegistryTest`, `HardwareProfileGameboyTest`, the
+model baselines, and StateFile/netplay tests cover its externally relevant behavior. The full
+ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and extension contract is documented in
+[hardware-profiles.md](hardware-profiles.md) and [state-file-v2.md](state-file-v2.md). The committed synthetic SGB2 SESSION golden is 59,486 bytes
 with SHA-256 `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
 - #345 adds MGB and the repeatable profile-extension process. The separate AGB-in-GB-mode evidence
   audit [#391](https://github.com/trekawek/coffee-gb/issues/391) remains open; it adds no production profile.
-- #315 `CGBR` v1 consumes the service-free profile identity and four-slot input seam; its exact
+- #315 `CGBR` v1 consumes the canonical profile/clock identity and four-slot input seam; its exact
   timing and privacy contract is documented in [replay-format-v1.md](replay-format-v1.md).
 
 No Phase-0 artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior
