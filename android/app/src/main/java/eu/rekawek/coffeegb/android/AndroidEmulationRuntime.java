@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.android;
 import android.content.Context;
 import android.content.Intent;
 import android.content.UriPermission;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,12 +16,15 @@ import eu.rekawek.coffeegb.controller.state.StateRepository;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.RomImage;
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter;
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -63,6 +67,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final CopyOnWriteArraySet<RuntimeObserver> observers = new CopyOnWriteArraySet<>();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final RuntimeLifecycleGate lifecycle = new RuntimeLifecycleGate();
+    private final NativeFrameStore frames = new NativeFrameStore();
 
     private volatile RuntimeState state = RuntimeState.stopped();
 
@@ -89,6 +94,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     public RuntimeState state() {
         return state;
+    }
+
+    /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
+    NativeFrameStore frames() {
+        return frames;
     }
 
     /** Registers one UI observer and immediately replays the latest immutable snapshot. */
@@ -229,6 +239,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeLayout = null;
             activeStates = null;
             currentSource = null;
+            frames.clear();
             lifecycle.released();
             createController();
             publish(RuntimeState.Phase.STOPPED,
@@ -263,6 +274,31 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         context.getContentResolver(), destination, requireStates(), new StateRef.Slot(0), true));
     }
 
+    /** Writes the latest native emulated frame as a PNG; it never captures Android UI overlays. */
+    public void exportScreenshot(Uri destination) {
+        Uri checked = Objects.requireNonNull(destination, "destination");
+        submit(() -> {
+            NativeFrameStore.Snapshot snapshot = frames.snapshot();
+            if (snapshot == null) {
+                publish(RuntimeState.Phase.FAILED,
+                        "Render one game frame before exporting a screenshot.",
+                        List.of(), activeLayout != null, state.paused(), state.flushPending());
+                return;
+            }
+            RuntimeState before = state;
+            publish(before.phase(), "Exporting native screenshot…", List.of(),
+                    before.transferReady(), before.paused(), before.flushPending());
+            try {
+                writePng(checked, snapshot);
+                publish(before.phase(), "Native screenshot exported.", List.of(),
+                        before.transferReady(), before.paused(), before.flushPending());
+            } catch (IOException failure) {
+                publish(before.phase(), "Coffee GB could not export that screenshot.", List.of(),
+                        before.transferReady(), before.paused(), before.flushPending());
+            }
+        });
+    }
+
     @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
@@ -276,6 +312,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 activeLayout = null;
                 activeStates = null;
                 currentSource = null;
+                frames.close();
             });
         } catch (RejectedExecutionException ignored) {
             // The owner is already tearing down; no new resource can have been admitted.
@@ -297,6 +334,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void createController() {
         eventBus = new EventBusImpl();
+        // Display events run synchronously on the controller thread. The bounded store must copy
+        // their producer-owned arrays before this callback returns; it never touches Android UI.
+        eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
+        eventBus.register(frames::publish, Display.GbcFrameReadyEvent.class);
+        eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
         eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
@@ -380,6 +422,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void openRom(Uri uri) {
         clearPendingSource();
+        frames.clear();
         publish(RuntimeState.Phase.OPENING, "Opening selected ROM…", List.of(), false, true, false);
         try {
             AndroidRomInput input = new AndroidRomInput(context.getContentResolver(), uri);
@@ -580,6 +623,23 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (flushDeadline != null) {
             flushDeadline.cancel(false);
             flushDeadline = null;
+        }
+    }
+
+    private void writePng(Uri destination, NativeFrameStore.Snapshot snapshot) throws IOException {
+        try (OutputStream output = context.getContentResolver().openOutputStream(destination, "wt")) {
+            if (output == null) {
+                throw new IOException("The selected screenshot document is unavailable");
+            }
+            Bitmap bitmap = Bitmap.createBitmap(
+                    snapshot.pixels(), snapshot.width(), snapshot.height(), Bitmap.Config.ARGB_8888);
+            try {
+                if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                    throw new IOException("Android could not encode the native screenshot");
+                }
+            } finally {
+                bitmap.recycle();
+            }
         }
     }
 
