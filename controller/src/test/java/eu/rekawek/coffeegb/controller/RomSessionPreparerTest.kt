@@ -3,15 +3,23 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
+import eu.rekawek.coffeegb.controller.state.BatteryStore
+import eu.rekawek.coffeegb.controller.state.FileStateStore
+import eu.rekawek.coffeegb.controller.state.RomPersistenceStore
+import eu.rekawek.coffeegb.controller.state.SessionPersistence
+import eu.rekawek.coffeegb.controller.state.StateStorageLayout
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.RomImage
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage
 import java.nio.file.Files
 import java.nio.file.Paths
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class RomSessionPreparerTest {
@@ -79,6 +87,42 @@ class RomSessionPreparerTest {
       assertEquals(bytes.toList(), prepared.config.rom.image.bytes().toList())
     } finally {
       Files.deleteIfExists(container)
+    }
+  }
+
+  @Test
+  fun pathlessRomUsesItsProvidedHostPersistenceStore() {
+    val root = Files.createTempDirectory("coffee-gb-pathless-store")
+    try {
+      val image = RomImage.memory(ROM.readBytes(), "picked.gb")
+      val store =
+          RomPersistenceStore { _, hashes ->
+            val layout = StateStorageLayout(root.resolve("games").resolve(hashes.primaryRom.hex()))
+            val battery =
+                BatteryStorage(
+                    BatteryStorage.Source.managed(layout.batteryFile, root),
+                    emptyList(),
+                )
+            SessionPersistence(
+                FileStateStore(layout),
+                BatteryStore { battery },
+                null,
+            )
+          }
+
+      val prepared =
+          RomSessionPreparer(BootStateCache(2)).prepare(
+              PROPERTIES,
+              LoadRomEvent(image, persistenceStore = store),
+          )
+
+      assertNull(prepared.config.rom.file)
+      assertTrue(prepared.config.batteryStorage.targetPath().startsWith(root))
+      assertTrue(prepared.config.batteryStorage.targetPath().fileName.toString() == "battery.sav")
+    } finally {
+      Files.walk(root).use { paths ->
+        paths.sorted(java.util.Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+      }
     }
   }
 

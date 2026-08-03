@@ -12,6 +12,7 @@ import org.junit.rules.TemporaryFolder;
 import org.tukaani.xz.LZMA2Options;
 
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -53,6 +54,80 @@ public class RomSourceSnapshotTest {
             assertEquals(RomOrigin.Kind.DIRECT_FILE, image.origin().kind());
             assertArrayEquals(bytes, image.bytes());
         }
+    }
+
+    @Test
+    public void loadsRawRomFromPathlessInputWithContentIdentity() throws Exception {
+        byte[] bytes = syntheticRom("STREAM", 0x7a);
+        RomInput input = RomInput.of("picked.GBC", () -> new ByteArrayInputStream(bytes));
+
+        try (RomSourceSnapshot snapshot = RomSourceSnapshot.open(input)) {
+            RomImage image = snapshot.loadSingle();
+
+            assertEquals(null, snapshot.sourcePath());
+            assertEquals(RomOrigin.Kind.MEMORY, image.origin().kind());
+            assertFalse(image.origin().containerPath().isPresent());
+            assertEquals("picked.GBC", image.origin().displayName());
+            assertArrayEquals(bytes, image.bytes());
+        }
+    }
+
+    @Test
+    public void selectsExactZipEntryFromPathlessInput() throws Exception {
+        File archive = temporaryFolder.newFile("stream.zip");
+        byte[] first = syntheticRom("STREAM-ONE", 0x7b);
+        byte[] second = syntheticRom("STREAM-TWO", 0x7c);
+        writeZip(archive, new Entry("one/game.gb", first), new Entry("two/game.gbc", second));
+        byte[] archiveBytes = Files.readAllBytes(archive.toPath());
+
+        try (RomSourceSnapshot snapshot =
+                RomSourceSnapshot.open(RomInput.of("picked.zip", () -> new ByteArrayInputStream(archiveBytes)))) {
+            assertTrue(snapshot.isArchive());
+            assertEquals(2, snapshot.candidates().size());
+            RomImage image = snapshot.load(snapshot.candidates().get(1).token());
+
+            assertEquals(RomOrigin.Kind.MEMORY, image.origin().kind());
+            assertEquals("game.gbc", image.origin().displayName());
+            assertArrayEquals(second, image.bytes());
+        }
+    }
+
+    @Test
+    public void pathlessInputReportsLostPermissionAsUnreadable() {
+        RomInput input = RomInput.of("lost.gb", () -> {
+            throw new java.io.FileNotFoundException("permission revoked");
+        });
+
+        RomSourceException failure = assertThrows(
+                RomSourceException.class, () -> RomSourceSnapshot.open(input));
+
+        assertEquals(RomSourceException.Reason.UNREADABLE, failure.reason());
+        assertFalse(failure.getMessage().contains("permission revoked"));
+    }
+
+    @Test
+    public void pathlessArchiveChecksTheDeclaredContainerLimitBeforeReading() {
+        RomInput input = new RomInput() {
+            @Override
+            public String displayName() {
+                return "oversized.zip";
+            }
+
+            @Override
+            public java.io.InputStream openStream() {
+                throw new AssertionError("oversized input must not be opened");
+            }
+
+            @Override
+            public long declaredSize() {
+                return Rom.MAX_ARCHIVE_CONTAINER_BYTES + 1;
+            }
+        };
+
+        RomSourceException failure = assertThrows(
+                RomSourceException.class, () -> RomSourceSnapshot.open(input));
+
+        assertEquals(RomSourceException.Reason.CONTAINER_TOO_LARGE, failure.reason());
     }
 
     @Test
