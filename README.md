@@ -20,6 +20,27 @@ cartridges and accessories, and modern homebrew, demos, and diagnostic ROMs.
 The reusable emulation core is written in Java; the desktop application and its
 orchestration layer use Kotlin and Java.
 
+### Android build groundwork
+
+The Android frontend is at its initial build-boundary stage; it is **not yet a playable
+emulator**. The `android/` Gradle project builds a permission-free starter activity and consumes a
+small Java/Kotlin portability artifact installed from this exact checkout. It deliberately does
+not yet consume `core` or `controller`, whose remaining desktop APIs are recorded in the
+[Android build-boundary ADR](docs/adr/0003-android-build-boundary.md).
+
+With Android SDK Platform 36 and Build Tools 36.0.0 installed, prepare the isolated artifact
+repository and run the Android checks:
+
+```bash
+mvn -B -pl android-portable -am install -DskipTests -Dmaven.repo.local="$PWD/build/android-m2"
+./android/gradlew -p android -PcoffeeGbMavenRepository="$PWD/build/android-m2" \
+  :app:check :app:lintDebug :app:assembleDebug :app:assembleRelease
+```
+
+The Gradle build refuses any repository other than `build/android-m2`, so it cannot silently fall
+back to a stale copy from `~/.m2`. See the ADR for the supported toolchain and the full clean-checkout
+flow.
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or
