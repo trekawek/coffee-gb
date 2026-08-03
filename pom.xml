@@ -163,7 +163,13 @@
             </plugin>
         </plugins>
     </build>
-    <dependencies>
+    <!--
+        Keep this parent as dependency-management only.  A child of this reactor must opt in to
+        every library it exposes.  In particular, a future Android-facing artifact must never
+        inherit JLine or a desktop logging binding merely because it has this parent.
+    -->
+    <dependencyManagement>
+        <dependencies>
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
@@ -212,12 +218,18 @@
             <version>${kotlin.version}</version>
         </dependency>
         <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
+            <version>13.0</version>
+        </dependency>
+        <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-test</artifactId>
             <version>${kotlin.version}</version>
             <scope>test</scope>
         </dependency>
-    </dependencies>
+        </dependencies>
+    </dependencyManagement>
     <profiles>
         <profile>
             <id>github</id>
@@ -316,6 +328,7 @@
     </profiles>
     <modules>
         <module>core</module>
+        <module>android-portable</module>
         <module>controller</module>
         <module>cli</module>
         <module>swing</module>

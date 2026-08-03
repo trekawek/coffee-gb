@@ -1,4 +1,8 @@
 target
+/build/android-m2/
+android/.gradle/
+android/build/
+android/app/build/
 .idea
 *.iml
 games
