@@ -1,7 +1,8 @@
 package eu.rekawek.coffeegb.controller
 
 import java.io.File
-import javax.imageio.ImageIO
+import eu.rekawek.coffeegb.controller.state.StatePngCodec
+import java.nio.file.Files
 
 fun main() {
     val romFile = File("core/src/test/resources/roms/blargg/cpu_instrs.gb")
@@ -23,10 +24,10 @@ fun main() {
             }
         }
 
-        val frame = agent.getFrame()
+        val frame = agent.getFrameImage()
         if (frame != null) {
             val outputFile = File("screenshot.png")
-            ImageIO.write(frame, "png", outputFile)
+            Files.write(outputFile.toPath(), StatePngCodec.encode(frame))
             println("Screenshot saved to ${outputFile.absolutePath}")
         } else {
             println("No frame captured")

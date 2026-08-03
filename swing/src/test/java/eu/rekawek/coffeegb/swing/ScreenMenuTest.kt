@@ -184,7 +184,7 @@ class ScreenMenuTest {
       assertEquals(1, fixture.settings.replacements)
 
       fixture.keyboardBindings +=
-          ApplicationSettings.KeyboardKey.fromKeyCode(KeyEvent.VK_F11)
+          DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_F11)
       onScreenMenuEdt {
         fixture.eventBus.post(DisplaySettingsChangedEvent(fixture.settings.display))
       }

@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
+import eu.rekawek.coffeegb.swing.DesktopKeyboardKeyAdapter;
 
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
@@ -28,7 +29,7 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
     @SuppressWarnings("unchecked")
     public SwingJoypad(ControllerProperties.PlayerMapping mapping, EventBus eventBus,
                        DesktopPlayerInput input) {
-        this.mapping = Map.copyOf(mapping.getKeyboard());
+        this.mapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveMapping(mapping.getKeyboard()));
         this.eventBus = eventBus;
         this.input = input;
         this.pressed = new EnumSet[4];
@@ -113,7 +114,7 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
         releaseKeyboard();
         releaseRewind();
         input.releaseAll();
-        this.mapping = Map.copyOf(mapping.getKeyboard());
+        this.mapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveMapping(mapping.getKeyboard()));
     }
 
     private void update(int player) {

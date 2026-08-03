@@ -10,31 +10,29 @@ import eu.rekawek.coffeegb.core.debug.command.ShowState;
 import eu.rekawek.coffeegb.core.debug.command.Step;
 import eu.rekawek.coffeegb.core.debug.command.cpu.ShowOpcode;
 import eu.rekawek.coffeegb.core.debug.command.cpu.ShowOpcodes;
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.UserInterruptException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
-public class Console implements Runnable {
-
-    private static final Logger LOG = LoggerFactory.getLogger(Console.class);
+/**
+ * Platform-neutral command processor for the debugger.
+ *
+ * <p>Presentation owns line editing and input blocking. Desktop front ends use their JLine
+ * adapter, while other hosts may feed complete lines directly through {@link #executeLine}.
+ */
+public class Console {
 
     private static final long DEFAULT_COMMAND_TIMEOUT_MILLIS = 5_000;
 
-    private volatile boolean doStop;
+    private volatile boolean stopped;
 
     private volatile DebugPort debugPort;
 
     private final List<Command> commands;
 
-    private final PrintStream error;
+    protected final PrintStream error;
 
     public Console() {
         this(System.out, System.err, DEFAULT_COMMAND_TIMEOUT_MILLIS);
@@ -70,27 +68,8 @@ public class Console implements Runnable {
         return debugPort;
     }
 
-    @Override
-    public void run() {
-        LineReader lineReader = LineReaderBuilder.builder().build();
-
-        while (!doStop) {
-            try {
-                String line = lineReader.readLine("coffee-gb> ");
-                executeLine(line);
-            } catch (IllegalArgumentException e) {
-                error.println(e.getMessage());
-            } catch (UserInterruptException e) {
-                stop();
-            } catch (RuntimeException e) {
-                LOG.warn("Console command failed", e);
-                error.println("Command failed.");
-            }
-        }
-    }
-
     /** Executes one parsed command on the caller thread. Machine commands still use DebugPort. */
-    void executeLine(String line) {
+    public void executeLine(String line) {
         Objects.requireNonNull(line, "line");
         for (Command cmd : commands) {
             if (cmd.getPattern().matches(line)) {
@@ -105,6 +84,11 @@ public class Console implements Runnable {
     }
 
     public void stop() {
-        doStop = true;
+        stopped = true;
+    }
+
+    /** Returns whether the host-facing command loop should stop. */
+    protected final boolean isStopped() {
+        return stopped;
     }
 }

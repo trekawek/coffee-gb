@@ -13,9 +13,12 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.debug.Console
+import eu.rekawek.coffeegb.swing.debug.JlineConsole
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.core.sound.Sound
+import eu.rekawek.coffeegb.swing.io.DesktopCameraSource
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.awt.Cursor
 import java.awt.Dimension
@@ -92,7 +95,7 @@ class SwingGui private constructor(
 
   private val emulator: SwingEmulator
 
-  private val console: Console? = if (debug) Console() else null
+  private val console: JlineConsole? = if (debug) JlineConsole() else null
 
   private lateinit var mainWindow: JFrame
 
@@ -172,6 +175,7 @@ class SwingGui private constructor(
   }
 
   init {
+    PocketCamera.setCameraSource(DesktopCameraSource.INSTANCE)
     eventBus = EventBusImpl()
     emulator =
         SwingEmulator(
@@ -390,7 +394,7 @@ class SwingGui private constructor(
             ))
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
-            properties.applicationSettings.input.keyboard.values.map { it.code }))
+            DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
     menu =
         SwingMenu(
             properties,
@@ -1000,7 +1004,7 @@ class SwingGui private constructor(
     applyEffect("controls") {
       emulator.applyKeyboardMapping(applied.input.toPlayerMapping())
       desktopActions.applyShortcuts(
-          DesktopShortcutRegistry(applied.input.keyboard.values.map { it.code }))
+          DesktopShortcutRegistry(DesktopKeyboardKeyAdapter.keyCodes(applied.input.keyboard.values)))
     }
     applyEffect("audio and game controllers") { emulator.applyDeviceSettings(applied) }
     applyEffect("camera") { menu.applyCameraSettings(applied.peripherals) }

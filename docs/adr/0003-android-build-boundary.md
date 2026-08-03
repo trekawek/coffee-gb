@@ -21,22 +21,21 @@ would make a new Android-facing artifact unsafe by default.
 
 1. `android/` is a standalone Gradle project with an `app` module. Maven remains the source of
    truth for Coffee GB artifacts; Gradle does not include, compile, or copy emulator sources.
-2. Phase 0 consumes only Maven module `android-portable`. It contains one Java record/switch probe
-   and one Kotlin class. It proves that the Android D8/R8 pipeline consumes Coffee GB's current
-   Java and Kotlin bytecode shape without falsely declaring `core` or `controller` portable.
-3. Dependencies are managed in the parent POM but declared by each child. The temporary portable
-   artifact therefore has only Kotlin's standard library in its runtime graph, rather than
-   inheriting JLine or a desktop logging binding.
+2. Phase 0 consumed only Maven module `android-portable`. Phase 1 replaces that probe with the
+   real `controller` and transitive `core` artifacts after their desktop-only image, keyboard, and
+   console contracts moved behind Swing adapters.
+3. Dependencies are managed in the parent POM but declared by each child. `core` and `controller`
+   therefore have no JLine, desktop logging binding, image toolkit, or native desktop runtime in
+   their Android graph.
 4. The Android build accepts `coffeeGbMavenRepository` only when it resolves exactly to
    `<checkout>/build/android-m2`. It has no Maven-local fallback. The documented Maven command
-   installs the parent POM and `android-portable` into that directory before Gradle resolves.
+   installs the parent POM, `core`, and `controller` into that directory before Gradle resolves.
    A clean checkout has no such directory, so Gradle fails rather than accepting stale artifacts.
-5. The Android app is Java-only in Phase 0 and has no emulator feature. It is a minimal Activity
-   that exercises both classes from the same-checkout artifact. It requests no permission.
+5. The Android app is Java-only in Phase 1 and has no emulator feature. It is a minimal Activity
+   that exercises a portable controller pixel value. It requests no permission.
 
-This boundary is intentionally temporary. Phase 1 must make real reusable contracts portable. It
-must not bypass the work by adding `core` or `controller` to `android/app` while the forbidden
-surfaces above remain.
+This boundary remains intentionally narrow. Later phases add lifecycle-owned sessions and Android
+presentation without copying emulator logic or reintroducing desktop dependencies.
 
 ## Toolchain
 
@@ -69,21 +68,21 @@ From a clean checkout:
 
 ```bash
 mvn -B test
-mvn -B -pl android-portable -am install -DskipTests -Dmaven.repo.local="$PWD/build/android-m2"
+mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$PWD/build/android-m2"
 ./android/gradlew -p android -PcoffeeGbMavenRepository="$PWD/build/android-m2" \
   :app:check :app:lintDebug :app:assembleDebug :app:assembleRelease
 ```
 
 `assembleRelease` keeps code and resource shrinking enabled, exercising R8. Device instrumentation
-and Android 26/36 emulator coverage are Phase 9 work; no Phase-0 feature needs a device runner.
+and Android 26/36 emulator coverage are Phase 9 work; no Phase-1 feature needs a device runner.
 
 ## Consequences
 
 - Desktop Maven behavior remains unchanged at runtime, but modules now declare the libraries they
   actually use instead of inheriting them from the parent.
-- The Android APK contains no Coffee GB emulator implementation yet. That is an honest portability
-  boundary, not a second emulator or a claim of playable support.
-- Phase 1 owns migration of the documented AWT/JLine APIs. Later phases own URI storage, session
+- The Android APK now validates the real portable Coffee GB runtime, but still has no emulation
+  session or playable frontend. It remains one shared implementation rather than a second emulator.
+- Phase 1 owns migration of the documented desktop APIs. Later phases own URI storage, session
   lifecycle, renderer, input, audio, UI, device integrations, and CI instrumentation.
 - No Internet, broad storage, camera, microphone, analytics, or ROM/service integration is
   introduced. ROM and persistent-data ownership remain unchanged until their dedicated phases.

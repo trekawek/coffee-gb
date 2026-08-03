@@ -116,7 +116,7 @@ android {
 }
 
 dependencies {
-  implementation("eu.rekawek.coffeegb:android-portable:$coffeeGbVersion")
+  implementation("eu.rekawek.coffeegb:controller:$coffeeGbVersion")
   testImplementation("junit:junit:4.13.2")
 }
 

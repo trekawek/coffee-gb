@@ -15,7 +15,7 @@ import eu.rekawek.coffeegb.core.genie.AddPatches
 import eu.rekawek.coffeegb.core.genie.CheatDatabase
 import eu.rekawek.coffeegb.core.genie.PatchFactory
 import eu.rekawek.coffeegb.core.ir.FullChanger
-import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
+import eu.rekawek.coffeegb.swing.io.DesktopCameraSource
 import eu.rekawek.coffeegb.swing.io.WebcamCameraSource
 import java.awt.Component
 import java.awt.event.KeyEvent
@@ -426,7 +426,7 @@ internal class SwingMenu(
             opener = WebcamCameraSource::open,
             initialDeviceIndex = cameraDeviceIndex,
             sourceCloser = WebcamCameraSource::close,
-            publisher = PocketCamera::setCameraSource,
+            publisher = DesktopCameraSource.INSTANCE::setLiveSource,
             stateConsumer = { state ->
               camera.text =
                   if (state == CameraPeripheralUiState.Opening) {
@@ -798,7 +798,7 @@ internal fun createScreenMenu(
    * delivering one physical press to two owners.
    */
   fun fullscreenAccelerator(): KeyStroke? =
-      if (keyboardBindings().none { it.code == KeyEvent.VK_F11 }) {
+      if (keyboardBindings().none { DesktopKeyboardKeyAdapter.keyCode(it) == KeyEvent.VK_F11 }) {
         KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0)
       } else {
         null

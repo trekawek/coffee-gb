@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.memory.cart.type.CameraSource
-import java.awt.image.BufferedImage
 import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -356,7 +355,7 @@ class CameraPeripheralControllerTest {
   }
 
   private class TestSource : CameraSource {
-    override fun getFrame(): BufferedImage? = null
+    override fun getFrame() = null
   }
 
   private fun awaitIgnoringInterrupt(latch: CountDownLatch) {

@@ -30,7 +30,7 @@ val expectedMavenRepository = checkoutRoot.resolve("build/android-m2").canonical
 val suppliedMavenRepository = providers.gradleProperty("coffeeGbMavenRepository").orNull
     ?: error(
         "Set -PcoffeeGbMavenRepository=${expectedMavenRepository.path} after installing " +
-            "android-portable from this checkout."
+            "core and controller from this checkout."
     )
 val coffeeGbMavenRepository = file(suppliedMavenRepository).canonicalFile
 

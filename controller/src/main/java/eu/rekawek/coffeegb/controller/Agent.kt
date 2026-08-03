@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.agent.AgentDisassembler
 import eu.rekawek.coffeegb.controller.agent.HeadlessAgentSession
+import eu.rekawek.coffeegb.controller.state.StateImage
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
@@ -13,7 +14,6 @@ import eu.rekawek.coffeegb.core.debug.DebugResult
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot
 import eu.rekawek.coffeegb.core.debug.DebugStepKind
 import eu.rekawek.coffeegb.core.joypad.Button
-import java.awt.image.BufferedImage
 import java.io.File
 import java.util.concurrent.CompletionStage
 import java.util.concurrent.ExecutionException
@@ -22,7 +22,7 @@ import java.util.concurrent.ExecutionException
  * Synchronous headless convenience adapter over a bounded, asynchronous [DebugPort].
  *
  * Each instance owns one named emulation thread. Call [close] when finished; Kotlin callers can use
- * `Agent(file).use { ... }`. The temporary [BufferedImage] adapter remains outside the debug API.
+ * `Agent(file).use { ... }`. Frame output is an immutable, toolkit-neutral pixel value.
  */
 class Agent(romFile: File) : AutoCloseable {
 
@@ -55,12 +55,10 @@ class Agent(romFile: File) : AutoCloseable {
 
   fun getLY(): Int = snapshot().ppu().line()
 
-  /** Returns a caller-owned frame without introducing AWT into [DebugPort]. */
-  fun getFrame(): BufferedImage? {
+  /** Returns a caller-owned immutable RGB frame, or null when no frame is queued. */
+  fun getFrameImage(): StateImage? {
     val pixels = getFramePixels() ?: return null
-    return BufferedImage(DISPLAY_WIDTH, DISPLAY_HEIGHT, BufferedImage.TYPE_INT_RGB).apply {
-      setRGB(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels, 0, DISPLAY_WIDTH)
-    }
+    return StateImage(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels)
   }
 
   /** Returns a caller-owned RGB frame buffer, or null when no frame is queued. */

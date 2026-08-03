@@ -4,12 +4,11 @@ import android.app.Activity;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.widget.TextView;
-import eu.rekawek.coffeegb.androidportable.AndroidPortabilityProbe;
-import eu.rekawek.coffeegb.androidportable.KotlinPortabilityProbe;
+import eu.rekawek.coffeegb.controller.state.StateImage;
 
 /**
- * Permission-free Phase 0 startup probe. It intentionally contains no ROM, storage, or emulator
- * session behavior; later phases replace this with the lifecycle-owned frontend.
+ * Permission-free Phase 1 startup probe. It validates that the real portable controller runtime
+ * reaches Android without introducing ROM, storage, or session behavior prematurely.
  */
 public final class MainActivity extends Activity {
 
@@ -17,16 +16,13 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        AndroidPortabilityProbe javaProbe = new AndroidPortabilityProbe(
-                "Coffee GB Android groundwork",
-                AndroidPortabilityProbe.BytecodeFlavor.JAVA_RECORD_AND_SWITCH
-        );
-        KotlinPortabilityProbe kotlinProbe = new KotlinPortabilityProbe("Coffee GB Android groundwork");
+        StateImage portableFrame = new StateImage(1, 1, new int[]{0x00_88_cc});
 
         TextView message = new TextView(this);
         message.setGravity(Gravity.CENTER);
-        message.setContentDescription("Coffee GB Android build groundwork");
-        message.setText(javaProbe.description() + "\n" + kotlinProbe.description());
+        message.setContentDescription("Coffee GB Android portable runtime probe");
+        message.setText("Coffee GB Android portable runtime ready: " +
+                String.format("#%06X", portableFrame.copyRgb()[0]));
         setContentView(message);
     }
 }

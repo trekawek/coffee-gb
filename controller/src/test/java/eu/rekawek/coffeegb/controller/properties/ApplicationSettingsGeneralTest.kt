@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.core.joypad.Button
-import java.awt.event.KeyEvent
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
@@ -66,21 +65,19 @@ class ApplicationSettingsGeneralTest {
   }
 
   @Test
-  fun `captured key codes resolve to stable persisted VK names`() {
-    val ordinary = ApplicationSettings.KeyboardKey.fromKeyCode(KeyEvent.VK_A)
+  fun `portable keyboard tokens preserve stable persisted names`() {
+    val ordinary = ApplicationSettings.KeyboardKey.parse("VK_A", "test")
     assertEquals("VK_A", ordinary.propertyName)
-    assertEquals(KeyEvent.VK_A, ordinary.code)
 
-    val aliased = ApplicationSettings.KeyboardKey.fromKeyCode(KeyEvent.VK_SEPARATOR)
+    val aliased = ApplicationSettings.KeyboardKey.parse("VK_SEPARATER", "test")
     assertEquals("VK_SEPARATER", aliased.propertyName)
-    assertEquals(KeyEvent.VK_SEPARATOR, aliased.code)
   }
 
   @Test
-  fun `undefined and unknown captured key codes are rejected`() {
-    listOf(KeyEvent.VK_UNDEFINED, Int.MAX_VALUE).forEach { invalid ->
+  fun `malformed portable keyboard tokens are rejected`() {
+    listOf("VK_lower", "KEY_A", "VK_").forEach { invalid ->
       assertFailsWith<IllegalArgumentException> {
-        ApplicationSettings.KeyboardKey.fromKeyCode(invalid)
+        ApplicationSettings.KeyboardKey.parse(invalid, "test")
       }
     }
   }
@@ -494,7 +491,7 @@ class ApplicationSettingsGeneralTest {
       )
       assertEquals(
           Button.A,
-          properties.controllerMapping[KeyEvent.VK_Q],
+          properties.controllerMapping[ApplicationSettings.KeyboardKey.parse("VK_Q", "test")],
       )
       properties.flush()
     }

@@ -4,8 +4,6 @@ import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
-import java.awt.event.KeyEvent
-import java.lang.reflect.Modifier
 import java.nio.file.Path
 import java.util.Collections
 import java.util.EnumMap
@@ -242,14 +240,14 @@ data class ApplicationSettings(
     }
 
     fun toPlayerMapping(): ControllerProperties.PlayerMapping {
-      val byKey = linkedMapOf<Int, ControllerProperties.PlayerButton>()
+      val byKey = linkedMapOf<KeyboardKey, ControllerProperties.PlayerButton>()
       keyboard.entries.sortedWith(
               compareBy<Map.Entry<ControllerProperties.PlayerButton, KeyboardKey>>(
                   { it.key.player }, { it.key.button.ordinal }))
           .forEach { (binding, key) ->
-            val previous = byKey.put(key.code, binding)
+            val previous = byKey.put(key, binding)
             require(previous == null) {
-              "Key ${KeyEvent.getKeyText(key.code)} is assigned to both " +
+              "Key ${key.propertyName} is assigned to both " +
                   "P${previous!!.player + 1} ${previous.button} and " +
                   "P${binding.player + 1} ${binding.button}"
             }
@@ -305,72 +303,76 @@ data class ApplicationSettings(
 
       internal fun defaultPrimaryKeyboard(): Map<Button, KeyboardKey> =
           EnumMap<Button, KeyboardKey>(Button::class.java).apply {
-            put(Button.LEFT, KeyboardKey.of("VK_LEFT", KeyEvent.VK_LEFT))
-            put(Button.RIGHT, KeyboardKey.of("VK_RIGHT", KeyEvent.VK_RIGHT))
-            put(Button.UP, KeyboardKey.of("VK_UP", KeyEvent.VK_UP))
-            put(Button.DOWN, KeyboardKey.of("VK_DOWN", KeyEvent.VK_DOWN))
-            put(Button.A, KeyboardKey.of("VK_Z", KeyEvent.VK_Z))
-            put(Button.B, KeyboardKey.of("VK_X", KeyEvent.VK_X))
-            put(Button.START, KeyboardKey.of("VK_ENTER", KeyEvent.VK_ENTER))
-            put(Button.SELECT, KeyboardKey.of("VK_SHIFT", KeyEvent.VK_SHIFT))
+            put(Button.LEFT, KeyboardKey.parse("VK_LEFT", "default left button"))
+            put(Button.RIGHT, KeyboardKey.parse("VK_RIGHT", "default right button"))
+            put(Button.UP, KeyboardKey.parse("VK_UP", "default up button"))
+            put(Button.DOWN, KeyboardKey.parse("VK_DOWN", "default down button"))
+            put(Button.A, KeyboardKey.parse("VK_Z", "default A button"))
+            put(Button.B, KeyboardKey.parse("VK_X", "default B button"))
+            put(Button.START, KeyboardKey.parse("VK_ENTER", "default start button"))
+            put(Button.SELECT, KeyboardKey.parse("VK_SHIFT", "default select button"))
           }
     }
   }
 
-  class KeyboardKey private constructor(val propertyName: String, val code: Int) {
+  /** A portable persisted keyboard token. Each frontend resolves it to its own host key code. */
+  class KeyboardKey private constructor(val propertyName: String) {
     override fun equals(other: Any?): Boolean =
-        other is KeyboardKey && propertyName == other.propertyName && code == other.code
+        other is KeyboardKey && propertyName == other.propertyName
 
-    override fun hashCode(): Int = 31 * propertyName.hashCode() + code
+    override fun hashCode(): Int = propertyName.hashCode()
 
     override fun toString(): String = propertyName
 
     companion object {
-      /**
-       * Resolves a captured AWT key code to the canonical persisted VK_* name. Some JDK constants
-       * are aliases, so lexicographic ordering makes the serialized result stable across reflection
-       * order and runs.
-       */
-      fun fromKeyCode(keyCode: Int): KeyboardKey {
-        require(keyCode != KeyEvent.VK_UNDEFINED) {
-          "VK_UNDEFINED cannot be used as a keyboard binding"
-        }
-        val propertyName =
-            canonicalPropertyNamesByCode[keyCode]
-                ?: throw IllegalArgumentException(
-                    "Key code $keyCode does not name a java.awt.event.KeyEvent VK_* constant")
-        return KeyboardKey(propertyName, keyCode)
-      }
-
       fun parse(propertyName: String, property: String): KeyboardKey {
-        require(propertyName.startsWith("VK_")) {
-          "$property must name a java.awt.event.KeyEvent VK_* constant"
-        }
-        val field =
-            try {
-              KeyEvent::class.java.getField(propertyName)
-            } catch (_: ReflectiveOperationException) {
-              throw IllegalArgumentException("Unknown keyboard key in $property: $propertyName")
+        val canonicalName =
+            when (propertyName) {
+              // The JDK exposes both spellings for the same key code. Keep the historical
+              // lexicographic canonical form so duplicate bindings remain invalid everywhere.
+              "VK_SEPARATOR" -> "VK_SEPARATER"
+              else -> propertyName
             }
-        require(field.type == Int::class.javaPrimitiveType) {
-          "Invalid keyboard key in $property: $propertyName"
+        require(canonicalName in KEY_NAMES) {
+          "$property must use a known VK_* keyboard token"
         }
-        return KeyboardKey(propertyName, field.getInt(null))
+        return KeyboardKey(canonicalName)
       }
 
-      internal fun of(propertyName: String, code: Int) = KeyboardKey(propertyName, code)
-
-      private val canonicalPropertyNamesByCode: Map<Int, String> by lazy {
-        KeyEvent::class.java.fields
-            .asSequence()
-            .filter {
-              it.name.startsWith("VK_") &&
-                  it.type == Int::class.javaPrimitiveType &&
-                  Modifier.isStatic(it.modifiers)
-            }
-            .groupBy { it.getInt(null) }
-            .mapValues { (_, fields) -> fields.minOf { it.name } }
-      }
+      /**
+       * Stable names copied from the desktop key-code contract, rather than resolving a desktop
+       * class at runtime. The desktop shell performs its own token-to-key-code resolution.
+       */
+      private val KEY_NAMES =
+          """
+          VK_ENTER VK_BACK_SPACE VK_TAB VK_CANCEL VK_CLEAR VK_SHIFT VK_CONTROL VK_ALT VK_PAUSE
+          VK_CAPS_LOCK VK_ESCAPE VK_SPACE VK_PAGE_UP VK_PAGE_DOWN VK_END VK_HOME VK_LEFT VK_UP
+          VK_RIGHT VK_DOWN VK_COMMA VK_MINUS VK_PERIOD VK_SLASH VK_0 VK_1 VK_2 VK_3 VK_4 VK_5
+          VK_6 VK_7 VK_8 VK_9 VK_SEMICOLON VK_EQUALS VK_A VK_B VK_C VK_D VK_E VK_F VK_G VK_H
+          VK_I VK_J VK_K VK_L VK_M VK_N VK_O VK_P VK_Q VK_R VK_S VK_T VK_U VK_V VK_W VK_X VK_Y
+          VK_Z VK_OPEN_BRACKET VK_BACK_SLASH VK_CLOSE_BRACKET VK_NUMPAD0 VK_NUMPAD1 VK_NUMPAD2
+          VK_NUMPAD3 VK_NUMPAD4 VK_NUMPAD5 VK_NUMPAD6 VK_NUMPAD7 VK_NUMPAD8 VK_NUMPAD9
+          VK_MULTIPLY VK_ADD VK_SEPARATER VK_SEPARATOR VK_SUBTRACT VK_DECIMAL VK_DIVIDE VK_DELETE
+          VK_NUM_LOCK VK_SCROLL_LOCK VK_F1 VK_F2 VK_F3 VK_F4 VK_F5 VK_F6 VK_F7 VK_F8 VK_F9 VK_F10
+          VK_F11 VK_F12 VK_F13 VK_F14 VK_F15 VK_F16 VK_F17 VK_F18 VK_F19 VK_F20 VK_F21 VK_F22
+          VK_F23 VK_F24 VK_PRINTSCREEN VK_INSERT VK_HELP VK_META VK_BACK_QUOTE VK_QUOTE VK_KP_UP
+          VK_KP_DOWN VK_KP_LEFT VK_KP_RIGHT VK_DEAD_GRAVE VK_DEAD_ACUTE VK_DEAD_CIRCUMFLEX
+          VK_DEAD_TILDE VK_DEAD_MACRON VK_DEAD_BREVE VK_DEAD_ABOVEDOT VK_DEAD_DIAERESIS
+          VK_DEAD_ABOVERING VK_DEAD_DOUBLEACUTE VK_DEAD_CARON VK_DEAD_CEDILLA VK_DEAD_OGONEK
+          VK_DEAD_IOTA VK_DEAD_VOICED_SOUND VK_DEAD_SEMIVOICED_SOUND VK_AMPERSAND VK_ASTERISK
+          VK_QUOTEDBL VK_LESS VK_GREATER VK_BRACELEFT VK_BRACERIGHT VK_AT VK_COLON VK_CIRCUMFLEX
+          VK_DOLLAR VK_EURO_SIGN VK_EXCLAMATION_MARK VK_INVERTED_EXCLAMATION_MARK
+          VK_LEFT_PARENTHESIS VK_NUMBER_SIGN VK_PLUS VK_RIGHT_PARENTHESIS VK_UNDERSCORE VK_WINDOWS
+          VK_CONTEXT_MENU VK_FINAL VK_CONVERT VK_NONCONVERT VK_ACCEPT VK_MODECHANGE VK_KANA VK_KANJI
+          VK_ALPHANUMERIC VK_KATAKANA VK_HIRAGANA VK_FULL_WIDTH VK_HALF_WIDTH VK_ROMAN_CHARACTERS
+          VK_ALL_CANDIDATES VK_PREVIOUS_CANDIDATE VK_CODE_INPUT VK_JAPANESE_KATAKANA
+          VK_JAPANESE_HIRAGANA VK_JAPANESE_ROMAN VK_KANA_LOCK VK_INPUT_METHOD_ON_OFF VK_CUT VK_COPY
+          VK_PASTE VK_UNDO VK_AGAIN VK_FIND VK_PROPS VK_STOP VK_COMPOSE VK_ALT_GRAPH VK_BEGIN
+          VK_UNDEFINED
+          """
+              .trimIndent()
+              .split(Regex("\\s+"))
+              .toSet()
     }
   }
 
