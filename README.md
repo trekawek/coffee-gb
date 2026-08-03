@@ -63,6 +63,13 @@ flush; returning to the app requires an explicit Resume action. The service is n
 process recreation truthfully starts stopped and offers only persisted recent-document metadata.
 There is no background playback, no foreground-service notification, and no extra permission.
 
+Android video uses a dedicated `SurfaceView` which attaches to the service-owned native-frame
+store only while its surface exists. The controller copies DMG, CGB, or SGB pixels into one of
+three reusable ARGB buffers before a frame callback returns; the renderer draws only the newest
+frame with nearest-neighbor integer scaling (or aspect-preserving letterboxing where an integer
+fit is impossible). Losing or recreating a surface does not affect the emulation session. Native
+PNG screenshots are exported from that frame store, never from the Android UI or its overlays.
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or

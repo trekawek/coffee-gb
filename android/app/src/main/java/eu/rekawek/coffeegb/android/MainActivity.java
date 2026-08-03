@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -29,8 +30,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_BATTERY_REQUEST = 3;
     private static final int IMPORT_STATE_REQUEST = 4;
     private static final int EXPORT_STATE_REQUEST = 5;
+    private static final int EXPORT_SCREENSHOT_REQUEST = 6;
 
     private TextView status;
+    private CoffeeGbSurfaceView video;
     private Button open;
     private Button recent;
     private Button resume;
@@ -39,6 +42,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private Button exportBattery;
     private Button importState;
     private Button exportState;
+    private Button exportScreenshot;
 
     private AndroidEmulationRuntime runtime;
     private boolean bound;
@@ -50,12 +54,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime = ((EmulationService.RuntimeBinder) service).runtime();
             bound = true;
             runtime.addObserver(MainActivity.this);
+            video.attach(runtime.frames());
             applyState(runtime.state());
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             if (runtime != null) {
+                video.detach();
                 runtime.removeObserver(MainActivity.this);
             }
             runtime = null;
@@ -81,6 +87,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         status.setText("Starting Coffee GB Android runtime…");
         content.addView(status);
 
+        video = new CoffeeGbSurfaceView(this);
+        content.addView(video, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
         open = button("Open ROM", this::openRomDocument);
         recent = button("Open recent ROM", ignored -> requireRuntime(AndroidEmulationRuntime::requestRecentDocuments));
         resume = button("Resume", ignored -> requireRuntime(AndroidEmulationRuntime::resume));
@@ -89,6 +99,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         exportBattery = button("Export battery save", this::chooseBatteryExport);
         importState = button("Import state slot 0", this::chooseStateImport);
         exportState = button("Export state slot 0", this::chooseStateExport);
+        exportScreenshot = button("Export native screenshot", this::chooseScreenshotExport);
         content.addView(open);
         content.addView(recent);
         content.addView(resume);
@@ -97,6 +108,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(exportBattery);
         content.addView(importState);
         content.addView(exportState);
+        content.addView(exportScreenshot);
         setContentView(content);
         disableCommands();
     }
@@ -113,6 +125,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onStop() {
         if (bound) {
+            video.detach();
             runtime.removeObserver(this);
             unbindService(connection);
             bound = false;
@@ -167,6 +180,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case EXPORT_STATE_REQUEST -> confirmExport(
                     "Export state slot 0?", "The chosen document will be replaced.",
                     () -> runtime.exportState(data.getData()));
+            case EXPORT_SCREENSHOT_REQUEST -> confirmExport(
+                    "Export native screenshot?", "The chosen document will be replaced.",
+                    () -> runtime.exportScreenshot(data.getData()));
             default -> { }
         }
     }
@@ -191,6 +207,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void chooseStateExport(View ignored) {
         chooseExport(EXPORT_STATE_REQUEST, "slot-0.cgbstate");
+    }
+
+    private void chooseScreenshotExport(View ignored) {
+        if (runtime == null || !exportScreenshot.isEnabled()) {
+            return;
+        }
+        startActivityForResult(
+                new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("image/png")
+                        .putExtra(Intent.EXTRA_TITLE, "coffee-gb.png")
+                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
+                EXPORT_SCREENSHOT_REQUEST);
     }
 
     private void confirmImport(String title, String message, int requestCode) {
@@ -243,6 +272,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         exportBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
         importState.setEnabled(ready && state.transferReady() && !state.flushPending());
         exportState.setEnabled(ready && state.transferReady() && !state.flushPending());
+        exportScreenshot.setEnabled(ready && state.transferReady() && !state.flushPending());
         showSelectionIfNeeded(state);
     }
 
@@ -292,6 +322,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         exportBattery.setEnabled(false);
         importState.setEnabled(false);
         exportState.setEnabled(false);
+        exportScreenshot.setEnabled(false);
     }
 
     @FunctionalInterface
