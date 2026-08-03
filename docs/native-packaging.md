@@ -1,7 +1,6 @@
 # Native packaging
 
-This document defines the Phase 5 packaging contract and its Phase 6 release validation for
-[the Desktop 2.0 package work](https://github.com/trekawek/coffee-gb/issues/338). Maven remains the
+This document defines the native packaging and release-validation contract. Maven remains the
 authoritative application build. Target staging, minimized runtimes, application images, and native
 installers consume Maven outputs; they never compile a second application copy or resolve a second
 dependency graph.
@@ -272,7 +271,7 @@ the result record, both short-lived validation SBOMs, any detached signature, an
 package or application-image file using sorted relative paths. The matrix gate consumes those JSON
 files, but never copies them into the final release bundle.
 
-The Phase 6 release gate accepts exactly one result for each of Linux x64, Windows x64, macOS x64,
+The release gate accepts exactly one result for each of Linux x64, Windows x64, macOS x64,
 and macOS arm64. It rejects a missing/duplicate target, non-default package type, version drift,
 invalid target-native SBOM evidence, stale checksum, or unexpected file before copying anything into the
 release bundle.

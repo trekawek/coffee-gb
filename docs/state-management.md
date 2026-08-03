@@ -171,7 +171,9 @@ decode as 64 MiB, so schema-5 files written before this feature remain valid. La
 geometry advances the current document to schema 6; schema-5 save fields retain their original
 ownership and continue to decode before the schema-6 desktop section is applied.
 Camera-device selection later advances the current document to schema 7; schemas 0-6 preserve the
-future camera key without interpreting it during migration.
+future camera key without interpreting it during migration. Desktop appearance and command-bar
+visibility advance the current document to schema 8; schemas 0-7 default those values without
+reinterpreting preserved unknown keys.
 
 For the binary format and persistence guarantees, see [StateFile v2](state-file-v2.md) and
 [atomic persistence](atomic-persistence.md).

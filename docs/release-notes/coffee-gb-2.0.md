@@ -1,10 +1,3 @@
-<!--
-Draft GitHub release body. Before publishing, confirm the final `coffee-gb-2.0.0` tag, rerun the
-release-tag compatibility matrix, preserve this custom body instead of replacing it with generated
-notes, and confirm that the immutable tag image URLs resolve. Native signing evidence is supplied
-by the release workflow and must reflect the actual package matrix.
--->
-
 <p align="center">
   <img src="https://raw.githubusercontent.com/trekawek/coffee-gb/coffee-gb-2.0.0/packaging/resources/android/play-store-icon.png" width="128" alt="Coffee GB logo">
 </p>
@@ -115,7 +108,7 @@ recovery after a remote disconnect. Held inputs now survive rollback rebases cor
 Netplay window supports both classic two-player link games and the four-player adapter.
 
 **Rewind** now reuses unchanged 4 KiB state pages rather than retaining a complete deep copy for
-every point. In the [documented 300-entry benchmark](https://github.com/trekawek/coffee-gb/blob/master/docs/rewind-machine-snapshots.md#reproducible-300-entry-measurement),
+every point. In the [documented 300-entry benchmark](https://github.com/trekawek/coffee-gb/blob/coffee-gb-2.0.0/docs/rewind-machine-snapshots.md#reproducible-300-entry-measurement),
 modeled retained memory fell by more than **96%**. Rewind duration and memory limits are
 configurable, and disabling rewind removes its capture work entirely.
 

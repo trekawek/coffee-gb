@@ -1,22 +1,14 @@
 # Mobile Adapter GB clean-room contract
 
-Phase #346 froze only evidence-backed Game Boy Color serial framing and the Coffee GB ownership
-boundary. Phase #351 implemented that conservative subset as a deterministic offline engine.
-Phase #352 adds bounded custom-server DNS/TCP/UDP ownership and a direct core response channel;
-Phase #353 adds the byte-pipelined link schedule and a minimal blue-adapter telephone/ISP state
-machine modeled for Japanese Pokémon Crystal. It connects only to the user's explicitly configured
+Coffee GB implements an evidence-backed subset of Game Boy Color serial framing as a deterministic
+offline engine, with bounded custom-server DNS/TCP/UDP ownership, a direct core response channel,
+a byte-pipelined link schedule, and a minimal blue-adapter telephone/ISP state machine modeled for
+Japanese Pokémon Crystal. It connects only to the user's explicitly configured
 custom backend and does not emulate or select a Nintendo production service. Architecture and licensing are normative in
 [ADR 0002](adr/0002-mobile-adapter-clean-room.md); machine-readable evidence and transcripts live
 under `core/src/test/resources/mobile-adapter/`.
 The real-ROM and custom-service results, including their remaining boundary, are recorded in
 [mobile-adapter-crystal-reon-validation.md](mobile-adapter-crystal-reon-validation.md).
-At Coffee GB revision `97fc57b4`, one owner-authorized Mobile Trainer session completed the manual
-acceptance for a loopback custom-server HTTP request through the production controller and backend.
-Five bounded transfers delivered the 19-byte response, ended with remote close, and visibly rendered
-`hello world`; the pinned REON access output recorded exactly one expected request and controlled
-shutdown passed the aggregate cleanup check after remote close had already released backend
-ownership. Japanese Pokémon Crystal remains a narrower adapter-recognition result; the Mobile
-Trainer run is not evidence that Crystal reached a network feature.
 The retained Mobile Adapter configuration dialog also has a bounded, owner-selected adapter-image
 import path. The desktop exposes both the exclusive link-port choice and that retained dialog from
 the **Peripherals** menu.
@@ -100,9 +92,9 @@ runtime booleans, so there are no historical disk keys to guess or reinterpret. 
 startup migration is the prior peer endpoint, and queued legacy conflicts resolve in event order.
 
 Swing presents the same enum as one radio group plus immutable attachment status and stable typed
-errors. Phase 1's read-only details action shows the cached configuration source, device ID,
-recovery status, and any typed redacted diagnostic while replacing all 256 private bytes with an
-explicit hidden marker. Phase 2 adds the separately consented custom-server controls without
+errors. The read-only details action shows the cached configuration source, device ID, recovery
+status, and any typed redacted diagnostic while replacing all 256 private bytes with an explicit
+hidden marker. Separately consented custom-server controls are available without
 exposing raw configuration, dial strings, credentials, or backend exception text. Controller
 callbacks are copied and rendered on the Swing event-dispatch thread.
 
@@ -139,9 +131,9 @@ pure phase or configuration change. Deferring that commit would require an addit
 state and remains an explicit fidelity gap rather than an inferred rollback rule.
 
 The 100 ms wake statement is approximate and therefore is not used as an exact command deadline
-or implemented as a configurable timing value in Phase #351. The deterministic engine models only
-the injected 3,000 ms idle reset; wake/toggle timing remains an evidence gap until hardware
-measurement resolves it. Phase #353 freezes only the blue-adapter Crystal outbound flow above;
+or implemented as a configurable timing value. The deterministic engine models only the injected
+3,000 ms idle reset; wake/toggle timing remains an evidence gap until hardware measurement resolves
+it. The supported scope freezes only the blue-adapter Crystal outbound flow above;
 inbound calls, direct telephone numbers, other adapter colors, unmetered status, undocumented
 command effects, Nintendo service content, and GBA SIO32 behavior remain out of scope.
 
@@ -187,43 +179,37 @@ Acknowledgement is a separate two-byte exchange. A valid receiver reply uses its
 unsupported is `f0`; bounded internal failure is `f2`. The transcripts model packet and acknowledgement channels separately rather than
 guessing undocumented per-clock garbage/wait bytes.
 
-The Phase #351 minimum remains frozen. Phase #352 adds only the pure configuration write and the
-controller-gated direct response channel:
+The implemented command subset is:
 
-| Command | Phase #352 status | Request/response contract |
+| Command | Status | Request/response contract |
 |---:|---|---|
-| `10` | supported minimum | exactly 8 ASCII `NINTENDO`; echo exactly those 8 bytes |
-| `11` | supported minimum | empty end-session request/response; enter sleep and clear slots/parser/backend |
-| `15` | custom backend, direct channel | live ID plus `0..253` bytes; reply same ID plus `0..253` bytes, or empty `9f` remote-close |
-| `16` | supported minimum | empty reset request/response; cancels jobs/connections |
-| `19` | supported minimum | 2-byte offset/length, length `0..128`, checked within 256; response offset+bytes |
-| `1a` | supported pure operation | offset plus `0..128` bytes, checked within 256; atomic in-memory write, response offset |
-| `23`, `25` | custom backend, direct channel | exactly IPv4(4)+nonzero port(2); reply one free ID in `0..1` |
-| `24`, `26` | custom backend, direct channel | exactly one matching live ID; reply the same ID |
-| `28` | custom backend, direct channel | packet `1..254`; first-NUL-truncated ASCII name `1..253`; reply exactly IPv4(4) |
-| `6e` | adapter response only | original failed command plus evidence-backed coarse error code |
-| `12`, `21`, `22` | unsupported | no dial-up, login/logout, credential, or Nintendo service emulation |
-| all others | unknown/unsupported | consume bounded packet, return `f0`, no state/backend mutation |
-
-Phase #353 preserves that historical column and appends this compatibility subset:
-
-| Command | Phase #353 status | Request/response contract |
-|---:|---|---|
+| `10` | begin session | exactly 8 ASCII `NINTENDO`; echo exactly those 8 bytes |
+| `11` | end session | empty request/response; enter sleep and clear slots/parser/backend |
 | `12` | Crystal ISP dial | exactly blue prefix `00` plus `#9677`; empty response; enter `TELEPHONE` |
 | `13` | hang up | empty; cancel backend; enter disconnected `SESSION` |
-| `17` | blue telephone status | empty; response `00 4d 00` in `SESSION`, otherwise `04 4d 00` |
+| `15` | custom backend transfer | live ID plus `0..253` bytes; reply same ID plus `0..253` bytes, or empty `9f` remote-close |
+| `16` | reset | empty request/response; cancel jobs/connections and enter `SESSION` |
+| `17` | blue telephone status | empty; response `00 4d 00` in `SESSION`, `04 4d 00` in `TELEPHONE`/`INTERNET`, and service error in `SLEEP` |
+| `19` | configuration read | 2-byte offset/length, length `0..128`, checked within 256; response offset+bytes |
+| `1a` | configuration write | offset plus `0..128` bytes, checked within 256; atomic in-memory write, response offset |
 | `21` | Crystal ISP login | ID/password length fields each `0..32`, then DNS1(4)+DNS2(4); response `127.0.0.1` plus eight zero bytes; enter `INTERNET` |
 | `22` | ISP logout | empty; cancel backend; return to `TELEPHONE` |
-| `15`, `23`–`26`, `28` | custom backend, wire channel | Phase #352 bounded request/response contract scheduled by the serial endpoint; accepted in direct `SESSION` mode or after `21` enters `INTERNET` |
+| `23`, `25` | TCP/UDP open | exactly IPv4(4)+nonzero port(2); reply one free ID in `0..1` |
+| `24`, `26` | TCP/UDP close | exactly one matching live ID; reply the same ID |
+| `28` | DNS query | packet `1..254`; first-NUL-truncated ASCII name `1..253`; reply exactly IPv4(4) |
 | `6e` | adapter response only | failed service/backend command plus stable coarse error, after the normal request acknowledgement |
+| all others | unknown/unsupported | consume bounded packet, return `f0`, no state/backend mutation |
+
+Custom backend commands are scheduled by the serial endpoint and are accepted in direct `SESSION`
+mode or after command `21` enters `INTERNET`.
 
 The direct backend commands and the emulated service transition are usable only behind the reviewed
 custom-server policy; they do not impersonate a production service or authenticate an account.
 Coffee GB ships and automatically selects no Nintendo endpoint, preset, account, or service data.
 The destination policy validates an exact configured alias/address, transport, port, address class,
 and freshly resolved answer; it cannot infer who operates an otherwise eligible public IPv4
-address. The user must therefore configure only an intended non-Nintendo custom service. Phase #352
-and #353 tests use in-process endpoints and generate no Nintendo production traffic.
+address. The user must therefore configure only an intended non-Nintendo custom service. Tests use
+in-process endpoints and generate no Nintendo production traffic.
 
 ## Deterministic core and controller bounds
 
@@ -347,8 +333,7 @@ only at the byte boundary. Timeout or generation revocation releases backend own
 immediately, finishes the already-latched byte through the normalized-disconnect phase, and then
 resets the wire. Restarting SC abandons that old byte and begins a fresh transfer.
 
-The Phase #346 executable reference receiver and the Phase #351 production engine are genuinely
-incremental: each retains at most the
+The production engine is genuinely incremental and retains at most the
 fixed 262-byte packet buffer across feed calls, decides magic after byte 2, reserved status after
 byte 4, and length after byte 6, then waits for exactly the declared data and two checksum bytes.
 Partial magic, header, data, or checksum returns `NEED_MORE` with no acknowledgement, response,
@@ -390,7 +375,7 @@ reports an informational notice when a capture receives the external-I/O marker.
 capture reports the disconnected warning even if the currently attached endpoint is idle; loading
 any state while current host work is live reports the same non-restoration boundary.
 
-The stable engine IDs serialized by Phase 1 are append-only:
+The serialized stable engine IDs are append-only:
 
 | Kind | Stable IDs |
 |---|---|
@@ -405,7 +390,7 @@ The additive endpoint wire phases are likewise stable and append-only:
 `NORMALIZED_DISCONNECT=11`. The active-wire record also persists whether a byte transfer is active
 and a response retransmission count in `0..4`.
 `RESPONSE_PENDING=10` is runtime-only: external ownership captures normalize to a disconnected
-engine/endpoint boundary and never serialize that phase. Phase 11 serializes only one already
+engine/endpoint boundary and never serialize that phase. `NORMALIZED_DISCONNECT` (11) serializes only one already
 latched reply byte with empty wire output and a normalized engine result; it resets immediately
 after that byte. Restore validates the bit and response cursors, transfer/wait ownership, retry
 count, acknowledgement, and response packet against the nested engine state before mutating the
@@ -421,8 +406,8 @@ new engine record with the current serial byte and bit index. A released mid-byt
 continues its historical `ff` reply, while a new in-flight `d2` request byte uses the additive wire
 record, including when the nested engine capture normalizes open external ownership. Any other
 external-I/O capture taken mid-byte uses phase 11 to finish only its latched reply before aborting
-the old transaction. All records defensively copy arrays. Released Phase-2 backend-error states
-with a response and no acknowledgement remain accepted; new active-wire errors retain their
+the old transaction. All records defensively copy arrays. Released legacy backend-error records with
+a response and no acknowledgement remain accepted; new active-wire errors retain their
 already-sent two-byte request acknowledgement.
 Restore accepts both generations, validates the complete graph before mutation, cancels the
 injected backend, and never captures that backend.
@@ -657,12 +642,10 @@ above.
   shutdown cancel host ownership; no socket, DNS request, worker deadline, or connection ID is
   serialized or recreated. The desktop reports the saved/disconnected boundary explicitly.
 - A user-supplied Japanese Pokémon Crystal ROM confirms wake, BEGIN, telephone status, END, and the
-  adapter-check screen only. An owner-authorized Mobile Trainer run separately confirms two guest
-  configuration writes and one exact-alias DNS/TCP/HTTP session against a loopback-only pinned REON
-  service: five transfers delivered the declared 19-byte body, ended with remote close, visibly
-  rendered `hello world`, and passed controlled-shutdown cleanup. That utility result does not
-  establish Crystal networking. Crystal still requires suitable progressed gameplay state and an
-  explicitly selected non-Nintendo custom service for its own manual DNS/TCP/HTTP acceptance.
+  adapter-check screen only. The separately documented owner-authorized Mobile Trainer run confirms
+  a loopback custom-service flow, but does not establish Crystal networking. Crystal still requires
+  suitable progressed gameplay state and an explicitly selected non-Nintendo custom service for
+  its own manual DNS/TCP/HTTP acceptance.
 
 ## Transcript format and legal status
 
@@ -671,8 +654,7 @@ packet bytes; `ack_hex` is the receiver acknowledgement/error. `fragments` is a 
 list of `emulated-ms:byte-count` steps; times are monotonic and counts consume the request exactly,
 except timeout cases ending with a zero-byte clock advance. SHA-256 values cover the concatenated
 binary fields in the order request, response, ack. Tests validate framing, checksum, limits,
-timing, result, and provenance against both the executable reference and production engine,
-without an external network.
+timing, result, and provenance against the production engine without an external network.
 
 The configuration bytes are authored synthetic values (`MA`, status `81`, zero padding), not a
 device dump or credential. `NINTENDO` appears because the public protocol requires that ASCII

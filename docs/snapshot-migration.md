@@ -45,7 +45,7 @@ sequence can enter Java native deserialization.
 ## Apply and diagnostics
 
 Portable input is decoded to detached DTOs, checked against the source identities and target
-configuration, and applied through the Phase-1 prepare/commit/rollback transaction. Failures retain
+configuration, and applied through the safe-point prepare/commit/rollback transaction. Failures retain
 their stable `StateDecodeReason`.
 
 The legacy route first uses the pinned descriptor manifest and JEP 290 bounds. It then checks the
