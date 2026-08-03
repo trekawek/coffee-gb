@@ -2,32 +2,27 @@ package eu.rekawek.coffeegb.android;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ComponentName;
 import android.content.Intent;
-import android.content.UriPermission;
-import android.net.Uri;
+import android.content.ServiceConnection;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-import eu.rekawek.coffeegb.controller.state.StateRef;
-import eu.rekawek.coffeegb.controller.state.StateRepository;
-import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
-import eu.rekawek.coffeegb.core.memory.cart.Rom;
-import eu.rekawek.coffeegb.core.memory.cart.RomImage;
-import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 
-import java.io.IOException;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
- * Permission-free SAF ROM-opening probe. ROM decoding and app-private storage work run on the
- * dedicated worker; the UI thread only launches documents and renders immutable results.
+ * Thin SAF/UI client for {@link EmulationService}.
+ *
+ * <p>The Activity owns only document-picker and dialog interactions. Its bound service owns every
+ * emulator, controller, event-bus, persistence, and lifecycle resource, so rotation never creates
+ * a second session and unbinding never directly stops the active game.
  */
-public final class MainActivity extends Activity {
+public final class MainActivity extends Activity implements RuntimeObserver {
 
     private static final int OPEN_ROM_REQUEST = 1;
     private static final int IMPORT_BATTERY_REQUEST = 2;
@@ -35,20 +30,40 @@ public final class MainActivity extends Activity {
     private static final int IMPORT_STATE_REQUEST = 4;
     private static final int EXPORT_STATE_REQUEST = 5;
 
-    private final ExecutorService romWorker = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "coffee-gb-android-rom-open");
-        thread.setDaemon(true);
-        return thread;
-    });
-
     private TextView status;
+    private Button open;
+    private Button recent;
+    private Button resume;
+    private Button stop;
     private Button importBattery;
     private Button exportBattery;
     private Button importState;
     private Button exportState;
 
-    private volatile StateStorageLayout activeLayout;
-    private volatile StateRepository activeStates;
+    private AndroidEmulationRuntime runtime;
+    private boolean bound;
+    private long shownSelectionGeneration = -1L;
+
+    private final ServiceConnection connection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            runtime = ((EmulationService.RuntimeBinder) service).runtime();
+            bound = true;
+            runtime.addObserver(MainActivity.this);
+            applyState(runtime.state());
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            if (runtime != null) {
+                runtime.removeObserver(MainActivity.this);
+            }
+            runtime = null;
+            bound = false;
+            disableCommands();
+            status.setText("Coffee GB runtime stopped. Reopen the app to choose a ROM.");
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,38 +77,66 @@ public final class MainActivity extends Activity {
 
         status = new TextView(this);
         status.setGravity(Gravity.CENTER);
-        status.setContentDescription("Coffee GB Android ROM loading status");
-        status.setText("Coffee GB Android is ready. Choose a ROM or ZIP document.");
+        status.setContentDescription("Coffee GB Android runtime status");
+        status.setText("Starting Coffee GB Android runtime…");
         content.addView(status);
 
-        Button open = new Button(this);
-        open.setText("Open ROM");
-        open.setOnClickListener(this::openRomDocument);
+        open = button("Open ROM", this::openRomDocument);
+        recent = button("Open recent ROM", ignored -> requireRuntime(AndroidEmulationRuntime::requestRecentDocuments));
+        resume = button("Resume", ignored -> requireRuntime(AndroidEmulationRuntime::resume));
+        stop = button("Stop game", ignored -> requireRuntime(AndroidEmulationRuntime::stop));
+        importBattery = button("Import battery save", this::chooseBatteryImport);
+        exportBattery = button("Export battery save", this::chooseBatteryExport);
+        importState = button("Import state slot 0", this::chooseStateImport);
+        exportState = button("Export state slot 0", this::chooseStateExport);
         content.addView(open);
-
-        Button recent = new Button(this);
-        recent.setText("Open recent ROM");
-        recent.setOnClickListener(this::openRecentRom);
         content.addView(recent);
-
-        importBattery = transferButton("Import battery save", this::chooseBatteryImport);
-        exportBattery = transferButton("Export battery save", this::chooseBatteryExport);
-        importState = transferButton("Import state slot 0", this::chooseStateImport);
-        exportState = transferButton("Export state slot 0", this::chooseStateExport);
+        content.addView(resume);
+        content.addView(stop);
         content.addView(importBattery);
         content.addView(exportBattery);
         content.addView(importState);
         content.addView(exportState);
         setContentView(content);
+        disableCommands();
     }
 
     @Override
-    protected void onDestroy() {
-        romWorker.shutdownNow();
-        super.onDestroy();
+    protected void onStart() {
+        super.onStart();
+        EmulationService.start(this);
+        if (!bound) {
+            bindService(new Intent(this, EmulationService.class), connection, BIND_AUTO_CREATE);
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        if (bound) {
+            runtime.removeObserver(this);
+            unbindService(connection);
+            bound = false;
+            runtime = null;
+        }
+        super.onStop();
+    }
+
+    @Override
+    public void onStateChanged(RuntimeState state) {
+        applyState(state);
+    }
+
+    private Button button(String label, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setOnClickListener(listener);
+        return button;
     }
 
     private void openRomDocument(View ignored) {
+        if (runtime == null) {
+            return;
+        }
         Intent request = new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .setType("application/octet-stream")
@@ -111,81 +154,28 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-            return;
-        }
-        Uri uri = data.getData();
-        if (requestCode == OPEN_ROM_REQUEST) {
-            retainReadPermission(uri, data.getFlags());
-            status.setText("Opening selected ROM…");
-            romWorker.execute(() -> inspect(uri));
+        if (resultCode != RESULT_OK || data == null || data.getData() == null || runtime == null) {
             return;
         }
         switch (requestCode) {
-            case IMPORT_BATTERY_REQUEST -> importBattery(uri);
+            case OPEN_ROM_REQUEST -> runtime.openRom(data.getData(), data.getFlags());
+            case IMPORT_BATTERY_REQUEST -> runtime.importBattery(data.getData());
             case EXPORT_BATTERY_REQUEST -> confirmExport(
-                    "Export battery save?",
-                    "The chosen document will be replaced.",
-                    () -> exportBattery(uri));
-            case IMPORT_STATE_REQUEST -> importState(uri);
+                    "Export battery save?", "The chosen document will be replaced.",
+                    () -> runtime.exportBattery(data.getData()));
+            case IMPORT_STATE_REQUEST -> runtime.importState(data.getData());
             case EXPORT_STATE_REQUEST -> confirmExport(
-                    "Export state slot 0?",
-                    "The chosen document will be replaced.",
-                    () -> exportState(uri));
+                    "Export state slot 0?", "The chosen document will be replaced.",
+                    () -> runtime.exportState(data.getData()));
             default -> { }
         }
-    }
-
-    private void retainReadPermission(Uri uri, int resultFlags) {
-        int read = resultFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION;
-        int persistable = resultFlags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
-        if (read == 0 || persistable == 0) {
-            return;
-        }
-        try {
-            getContentResolver().takePersistableUriPermission(uri, read);
-        } catch (SecurityException ignored) {
-            // Some providers lawfully grant only the activity-lifetime permission. The document
-            // can still be opened now but is not retained as a recent document.
-        }
-    }
-
-    private void openRecentRom(View ignored) {
-        status.setText("Checking recent ROM permissions…");
-        romWorker.execute(() -> {
-            List<Uri> recent = new RecentSafDocuments(getApplicationContext()).readable();
-            if (recent.isEmpty()) {
-                showFailure("No readable recent ROM document is available.");
-                return;
-            }
-            String[] labels = new String[recent.size()];
-            for (int index = 0; index < labels.length; index++) {
-                labels[index] = "Recent ROM " + (index + 1);
-            }
-            runOnUiThread(() -> new AlertDialog.Builder(this)
-                    .setTitle("Open recent ROM")
-                    .setItems(labels, (dialog, index) -> {
-                        status.setText("Opening recent ROM…");
-                        romWorker.execute(() -> inspect(recent.get(index)));
-                    })
-                    .show());
-        });
-    }
-
-    private Button transferButton(String label, View.OnClickListener listener) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setEnabled(false);
-        button.setOnClickListener(listener);
-        return button;
     }
 
     private void chooseBatteryImport(View ignored) {
         confirmImport(
                 "Import battery save?",
                 "Importing can replace this ROM's app-private battery save.",
-                IMPORT_BATTERY_REQUEST,
-                "application/octet-stream");
+                IMPORT_BATTERY_REQUEST);
     }
 
     private void chooseBatteryExport(View ignored) {
@@ -196,16 +186,15 @@ public final class MainActivity extends Activity {
         confirmImport(
                 "Import state slot 0?",
                 "Importing can replace this ROM's app-private state slot 0.",
-                IMPORT_STATE_REQUEST,
-                "application/octet-stream");
+                IMPORT_STATE_REQUEST);
     }
 
     private void chooseStateExport(View ignored) {
         chooseExport(EXPORT_STATE_REQUEST, "slot-0.cgbstate");
     }
 
-    private void confirmImport(String title, String message, int requestCode, String mimeType) {
-        if (!ensureLoaded()) {
+    private void confirmImport(String title, String message, int requestCode) {
+        if (runtime == null || !importBattery.isEnabled()) {
             return;
         }
         new AlertDialog.Builder(this)
@@ -215,14 +204,14 @@ public final class MainActivity extends Activity {
                 .setPositiveButton("Choose document", (dialog, ignored) -> startActivityForResult(
                         new Intent(Intent.ACTION_OPEN_DOCUMENT)
                                 .addCategory(Intent.CATEGORY_OPENABLE)
-                                .setType(mimeType)
+                                .setType("application/octet-stream")
                                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
                         requestCode))
                 .show();
     }
 
     private void chooseExport(int requestCode, String suggestedName) {
-        if (!ensureLoaded()) {
+        if (runtime == null || !exportBattery.isEnabled()) {
             return;
         }
         startActivityForResult(
@@ -234,80 +223,6 @@ public final class MainActivity extends Activity {
                 requestCode);
     }
 
-    private boolean ensureLoaded() {
-        if (activeLayout != null && activeStates != null) {
-            return true;
-        }
-        showFailure("Open a ROM before importing or exporting its save data.");
-        return false;
-    }
-
-    private void importBattery(Uri source) {
-        StateStorageLayout layout = activeLayout;
-        if (layout == null) return;
-        status.setText("Importing battery save…");
-        romWorker.execute(() -> {
-            try {
-                SafPersistenceExchange.importBattery(
-                        getContentResolver(),
-                        source,
-                        layout,
-                        SafPersistenceExchange.CollisionDecision.REPLACE);
-                runOnUiThread(() -> status.setText("Battery save imported."));
-            } catch (Exception failure) {
-                showFailure("Coffee GB could not import that battery save.");
-            }
-        });
-    }
-
-    private void exportBattery(Uri destination) {
-        StateStorageLayout layout = activeLayout;
-        if (layout == null) return;
-        status.setText("Exporting battery save…");
-        romWorker.execute(() -> {
-            try {
-                SafPersistenceExchange.exportBattery(getContentResolver(), destination, layout, true);
-                runOnUiThread(() -> status.setText("Battery save exported."));
-            } catch (Exception failure) {
-                showFailure("Coffee GB could not export the battery save.");
-            }
-        });
-    }
-
-    private void importState(Uri source) {
-        StateRepository states = activeStates;
-        if (states == null) return;
-        status.setText("Importing state slot 0…");
-        romWorker.execute(() -> {
-            try {
-                SafPersistenceExchange.importState(
-                        getContentResolver(),
-                        source,
-                        states,
-                        new StateRef.Slot(0),
-                        SafPersistenceExchange.CollisionDecision.REPLACE);
-                runOnUiThread(() -> status.setText("State slot 0 imported."));
-            } catch (Exception failure) {
-                showFailure("Coffee GB could not import that state file.");
-            }
-        });
-    }
-
-    private void exportState(Uri destination) {
-        StateRepository states = activeStates;
-        if (states == null) return;
-        status.setText("Exporting state slot 0…");
-        romWorker.execute(() -> {
-            try {
-                SafPersistenceExchange.exportState(
-                        getContentResolver(), destination, states, new StateRef.Slot(0), true);
-                runOnUiThread(() -> status.setText("State slot 0 exported."));
-            } catch (Exception failure) {
-                showFailure("Coffee GB could not export state slot 0.");
-            }
-        });
-    }
-
     private void confirmExport(String title, String message, Runnable action) {
         new AlertDialog.Builder(this)
                 .setTitle(title)
@@ -317,85 +232,70 @@ public final class MainActivity extends Activity {
                 .show();
     }
 
-    private void inspect(Uri uri) {
-        try {
-            AndroidRomInput input = new AndroidRomInput(getContentResolver(), uri);
-            RomSourceSnapshot snapshot = RomSourceSnapshot.open(input);
-            if (!snapshot.isArchive() || snapshot.candidates().size() == 1) {
-                load(snapshot, snapshot.isArchive()
-                        ? snapshot.candidates().get(0).token()
-                        : RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN, uri);
-                return;
-            }
-            List<RomSourceSnapshot.ArchiveCandidate> candidates = snapshot.candidates();
-            String[] names = candidates.stream()
-                    .map(RomSourceSnapshot.ArchiveCandidate::displayName)
-                    .toArray(String[]::new);
-            runOnUiThread(() -> new AlertDialog.Builder(this)
-                    .setTitle("Choose ROM from archive")
-                    .setItems(names, (dialog, index) -> romWorker.execute(
-                            () -> load(snapshot, candidates.get(index).token(), uri)))
-                    .setOnCancelListener(dialog -> closeQuietly(snapshot))
-                    .show());
-        } catch (Exception failure) {
-            // Deliberately do not expose content URIs or provider details in the UI.
-            forgetRevokedPermission(uri, failure);
-            showFailure("Coffee GB could not open this document. Check its permission and format.");
+    private void applyState(RuntimeState state) {
+        status.setText(state.message());
+        boolean ready = runtime != null;
+        open.setEnabled(ready);
+        recent.setEnabled(ready);
+        resume.setEnabled(ready && state.paused() && state.transferReady());
+        stop.setEnabled(ready && state.transferReady());
+        importBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
+        exportBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
+        importState.setEnabled(ready && state.transferReady() && !state.flushPending());
+        exportState.setEnabled(ready && state.transferReady() && !state.flushPending());
+        showSelectionIfNeeded(state);
+    }
+
+    private void showSelectionIfNeeded(RuntimeState state) {
+        if (runtime == null || state.selections().isEmpty()
+                || state.generation() == shownSelectionGeneration) {
+            return;
+        }
+        boolean archive = state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION;
+        boolean recentSelection = state.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION;
+        if (!archive && !recentSelection) {
+            return;
+        }
+        shownSelectionGeneration = state.generation();
+        List<RuntimeState.Selection> selections = state.selections();
+        String[] labels = selections.stream().map(RuntimeState.Selection::label).toArray(String[]::new);
+        new AlertDialog.Builder(this)
+                .setTitle(archive ? "Choose ROM from archive" : "Open recent ROM")
+                .setItems(labels, (dialog, index) -> {
+                    RuntimeState.Selection selection = selections.get(index);
+                    if (archive) {
+                        runtime.selectArchiveCandidate(selection.token());
+                    } else {
+                        runtime.selectRecentDocument(selection.token());
+                    }
+                })
+                .setOnCancelListener(dialog -> runtime.cancelPendingSelection())
+                .show();
+    }
+
+    private void requireRuntime(RuntimeAction action) {
+        AndroidEmulationRuntime active = runtime;
+        if (active != null) {
+            action.run(active);
         }
     }
 
-    private void load(RomSourceSnapshot snapshot, long token, Uri sourceUri) {
-        try {
-            RomImage image = token == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
-                    ? snapshot.loadSingle()
-                    : snapshot.load(token);
-            Rom rom = new Rom(image);
-            AndroidRomPersistenceStore store = new AndroidRomPersistenceStore(getApplicationContext());
-            // Construct the hash-keyed layout now so a valid document never needs a path beside
-            // the provider's source. Controller session activation consumes this same store.
-            StateStorageLayout layout = store.layout(
-                    eu.rekawek.coffeegb.controller.state.StateIdentity.INSTANCE.hash(rom).hex());
-            StateRepository states = new StateRepository(
-                    layout,
-                    eu.rekawek.coffeegb.core.persistence.AtomicFileWriter.system());
-            new RecentSafDocuments(getApplicationContext()).recordIfPersisted(sourceUri);
-            runOnUiThread(() -> {
-                activeLayout = layout;
-                activeStates = states;
-                importBattery.setEnabled(true);
-                exportBattery.setEnabled(true);
-                importState.setEnabled(true);
-                exportState.setEnabled(true);
-                status.setText("Loaded " + rom.getTitle() + ". App-private saves are ready.");
-            });
-        } catch (Exception failure) {
-            forgetRevokedPermission(sourceUri, failure);
-            showFailure("Coffee GB could not load the selected ROM.");
-        } finally {
-            closeQuietly(snapshot);
+    private void disableCommands() {
+        if (open == null) {
+            return;
         }
+        open.setEnabled(false);
+        recent.setEnabled(false);
+        resume.setEnabled(false);
+        stop.setEnabled(false);
+        importBattery.setEnabled(false);
+        exportBattery.setEnabled(false);
+        importState.setEnabled(false);
+        exportState.setEnabled(false);
     }
 
-    private void forgetRevokedPermission(Uri uri, Exception failure) {
-        if (failure instanceof SecurityException || failure instanceof IOException) {
-            for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
-                if (permission.getUri().equals(uri) && permission.isReadPermission()) {
-                    getContentResolver().releasePersistableUriPermission(
-                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                }
-            }
-        }
-    }
-
-    private void showFailure(String message) {
-        runOnUiThread(() -> status.setText(message));
-    }
-
-    private static void closeQuietly(RomSourceSnapshot snapshot) {
-        try {
-            snapshot.close();
-        } catch (IOException ignored) {
-            // Stream snapshots have no path to unlink; a close failure is not user actionable.
-        }
+    @FunctionalInterface
+    private interface RuntimeAction {
+        void run(AndroidEmulationRuntime runtime);
     }
 }

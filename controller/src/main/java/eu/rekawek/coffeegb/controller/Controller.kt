@@ -153,6 +153,20 @@ interface Controller : AutoCloseable {
 
   class ResumeEmulationEvent : Event
 
+  /**
+   * Captures the active cartridge at the controller's frame-safe point and persists it on the
+   * controller-owned worker. Hosts can request a bounded background flush without observing a
+   * live machine or blocking their UI thread.
+   */
+  data class FlushBatteryEvent(val requestId: Long) : Event
+
+  /** Terminal result for one [FlushBatteryEvent]. A failed request remains safe to retry. */
+  data class BatteryFlushCompletedEvent(
+      val requestId: Long,
+      val filesWritten: Int,
+      val succeeded: Boolean,
+  ) : Event
+
   class ResetEmulationEvent : Event
 
   class StopEmulationEvent : Event
