@@ -41,6 +41,20 @@ The Gradle build refuses any repository other than `build/android-m2`, so it can
 back to a stale copy from `~/.m2`. See the ADR for the supported toolchain and the full clean-checkout
 flow.
 
+The starter activity opens `.gb`, `.gbc`, `.rom`, and ZIP documents through Android's Storage
+Access Framework; it asks only for the selected document's read grant and retains it for Recents
+only when the provider offers a persistable grant. There are no broad storage permissions. Provider
+streams are bounded to 64 MiB per ROM, 128 MiB per ZIP container, 256 MiB after decompression, and
+4,096 archive entries. Pathless Android input deliberately supports ZIP rather than 7z because the
+bounded 7z decoder currently needs a desktop filesystem handle.
+
+Battery saves and portable StateFile saves are stored atomically under the app's no-backup private
+directory, keyed solely by the ROM's exact SHA-256 identity. This keeps duplicate document names
+separate, preserves crash recovery, and never turns a document URI into a filename. Battery and
+StateFile import/export use the Android document picker; import replacement and export destination
+replacement are confirmed explicitly. A revoked recent-document grant is removed without exposing
+the document URI in the error message.
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or

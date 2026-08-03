@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.memory.cart;
 import org.apache.commons.io.FilenameUtils;
 
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.Closeable;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -32,6 +33,7 @@ import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipInputStream;
 
 /**
  * Immutable, bounded snapshot of one untrusted desktop ROM source.
@@ -52,6 +54,9 @@ public final class RomSourceSnapshot implements Closeable {
 
     private final Path archiveSnapshot;
 
+    /** Bounded stream-only ZIP container. This is never a filesystem path. */
+    private final byte[] streamArchive;
+
     private final ArchiveFormat archiveFormat;
 
     private final List<ArchiveCandidate> candidates;
@@ -64,12 +69,14 @@ public final class RomSourceSnapshot implements Closeable {
             Path sourcePath,
             RomImage directImage,
             Path archiveSnapshot,
+            byte[] streamArchive,
             ArchiveFormat archiveFormat,
             List<ArchiveCandidate> candidates,
             int extensionCandidateCount) {
         this.sourcePath = sourcePath;
         this.directImage = directImage;
         this.archiveSnapshot = archiveSnapshot;
+        this.streamArchive = streamArchive;
         this.archiveFormat = archiveFormat;
         this.candidates = Collections.unmodifiableList(new ArrayList<>(candidates));
         this.extensionCandidateCount = extensionCandidateCount;
@@ -77,6 +84,83 @@ public final class RomSourceSnapshot implements Closeable {
 
     public static RomSourceSnapshot open(Path source) throws IOException {
         return open(source, () -> false, ignored -> {});
+    }
+
+    /**
+     * Opens a bounded, path-independent input. Raw ROMs and ZIP archives use the exact same
+     * selection model as desktop inputs; a path-only 7z decoder remains intentionally confined to
+     * the desktop compatibility overload above.
+     */
+    public static RomSourceSnapshot open(RomInput source) throws IOException {
+        return open(source, () -> false, ignored -> {});
+    }
+
+    public static RomSourceSnapshot open(
+            RomInput source,
+            BooleanSupplier cancelled,
+            LongConsumer copiedBytes) throws IOException {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(cancelled, "cancelled");
+        Objects.requireNonNull(copiedBytes, "copiedBytes");
+        String displayName = Objects.requireNonNull(source.displayName(), "source.displayName()");
+        String extension = FilenameUtils.getExtension(displayName).toLowerCase(Locale.ROOT);
+        boolean zip = "zip".equals(extension);
+        if ("7z".equals(extension)) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.UNSUPPORTED_TYPE,
+                    "7z ROM archives require a path-backed desktop input; use a ZIP or raw ROM");
+        }
+        if (!zip && !isRomExtension(extension)) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.UNSUPPORTED_TYPE,
+                    "Supported ROM inputs are .gb, .gbc, .rom, and .zip");
+        }
+        checkCancelled(cancelled);
+        if (zip && source.declaredSize() > Rom.MAX_ARCHIVE_CONTAINER_BYTES) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.CONTAINER_TOO_LARGE,
+                    "Archive exceeds the "
+                            + Rom.MAX_ARCHIVE_CONTAINER_BYTES
+                            + "-byte compressed-size safety limit");
+        }
+        try (InputStream input = source.openStream()) {
+            if (input == null) {
+                throw new IOException("The selected source returned no stream");
+            }
+            if (!zip) {
+                byte[] bytes = readRomBytes(input, source.declaredSize(), cancelled, copiedBytes);
+                return new RomSourceSnapshot(
+                        null,
+                        RomImage.memory(bytes, displayName),
+                        null,
+                        null,
+                        null,
+                        List.of(),
+                        0);
+            }
+            byte[] archive = readArchiveBytes(input, source.declaredSize(), cancelled, copiedBytes);
+            Inventory inventory = inventoryZipStream(archive, cancelled);
+            return new RomSourceSnapshot(
+                    null,
+                    null,
+                    null,
+                    archive,
+                    ArchiveFormat.ZIP,
+                    inventory.candidates,
+                    inventory.extensionCandidateCount);
+        } catch (RomSourceException e) {
+            throw e;
+        } catch (ZipException e) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The ZIP archive is invalid or unsupported",
+                    e);
+        } catch (IOException e) {
+            throw new RomSourceException(
+                    zip ? classifyArchiveFailure(e) : RomSourceException.Reason.UNREADABLE,
+                    zip ? archiveMessage(e) : "The selected source cannot be read",
+                    e);
+        }
     }
 
     public static RomSourceSnapshot open(
@@ -113,7 +197,7 @@ public final class RomSourceSnapshot implements Closeable {
                                 readRomBytes(input, declaredSize, cancelled, copiedBytes));
                 checkCancelled(cancelled);
                 return new RomSourceSnapshot(
-                        normalized, image, null, null, List.of(), 0);
+                        normalized, image, null, null, null, List.of(), 0);
             } catch (RomSourceException e) {
                 throw e;
             } catch (NoSuchFileException | FileNotFoundException e) {
@@ -156,6 +240,7 @@ public final class RomSourceSnapshot implements Closeable {
                     normalized,
                     null,
                     temporary,
+                    null,
                     archiveFormat,
                     inventory.candidates,
                     inventory.extensionCandidateCount);
@@ -194,7 +279,7 @@ public final class RomSourceSnapshot implements Closeable {
     }
 
     public boolean isArchive() {
-        return archiveSnapshot != null;
+        return archiveSnapshot != null || streamArchive != null;
     }
 
     public List<ArchiveCandidate> candidates() {
@@ -242,6 +327,9 @@ public final class RomSourceSnapshot implements Closeable {
 
     private RomImage loadZip(ArchiveCandidate selected, BooleanSupplier cancelled)
             throws IOException {
+        if (streamArchive != null) {
+            return loadStreamZip(selected, cancelled);
+        }
         try (ZipFile zip = new ZipFile(archiveSnapshot.toFile())) {
             Enumeration<? extends ZipEntry> entries = zip.entries();
             long ordinal = 0;
@@ -267,6 +355,42 @@ public final class RomSourceSnapshot implements Closeable {
                                 selected.entryOccurrence(),
                                 extensionCandidateCount == 1);
                 return new RomImage(origin, bytes);
+            }
+            throw invalidSelection();
+        } catch (RomSourceException e) {
+            throw e;
+        } catch (ZipException e) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The selected ZIP entry is corrupt",
+                    e);
+        } catch (IOException e) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_ARCHIVE,
+                    "The selected ZIP entry is corrupt or unreadable",
+                    e);
+        }
+    }
+
+    private RomImage loadStreamZip(ArchiveCandidate selected, BooleanSupplier cancelled)
+            throws IOException {
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(streamArchive))) {
+            long ordinal = 0;
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                checkCancelled(cancelled);
+                if (ordinal++ != selected.token()) {
+                    drainEntry(zip, cancelled);
+                    continue;
+                }
+                if (!entry.getName().equals(selected.entryName())) {
+                    throw invalidSelection();
+                }
+                byte[] bytes = readRomBytes(zip, entry.getSize(), cancelled, ignored -> {});
+                // ZipInputStream validates the data descriptor and CRC as the entry is consumed.
+                zip.closeEntry();
+                checkCancelled(cancelled);
+                return RomImage.memory(bytes, selected.displayName());
             }
             throw invalidSelection();
         } catch (RomSourceException e) {
@@ -405,6 +529,61 @@ public final class RomSourceSnapshot implements Closeable {
         }
     }
 
+    private static byte[] readArchiveBytes(
+            InputStream input,
+            long declaredSize,
+            BooleanSupplier cancelled,
+            LongConsumer copiedBytes) throws IOException {
+        if (declaredSize > Rom.MAX_ARCHIVE_CONTAINER_BYTES) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.CONTAINER_TOO_LARGE,
+                    "Archive exceeds the "
+                            + Rom.MAX_ARCHIVE_CONTAINER_BYTES
+                            + "-byte compressed-size safety limit");
+        }
+        int initial = declaredSize > 0
+                ? (int) Math.min(declaredSize, COPY_BUFFER_BYTES * 4L)
+                : COPY_BUFFER_BYTES;
+        ByteArrayOutputStream output = new ByteArrayOutputStream(initial);
+        byte[] buffer = new byte[COPY_BUFFER_BYTES];
+        long total = 0;
+        while (true) {
+            checkCancelled(cancelled);
+            int read = input.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            if (read == 0) {
+                int value = input.read();
+                if (value < 0) {
+                    break;
+                }
+                if (total == Rom.MAX_ARCHIVE_CONTAINER_BYTES) {
+                    throw new RomSourceException(
+                            RomSourceException.Reason.CONTAINER_TOO_LARGE,
+                            "Archive exceeds the "
+                                    + Rom.MAX_ARCHIVE_CONTAINER_BYTES
+                                    + "-byte compressed-size safety limit");
+                }
+                output.write(value);
+                total++;
+            } else {
+                if (read > Rom.MAX_ARCHIVE_CONTAINER_BYTES - total) {
+                    throw new RomSourceException(
+                            RomSourceException.Reason.CONTAINER_TOO_LARGE,
+                            "Archive exceeds the "
+                                    + Rom.MAX_ARCHIVE_CONTAINER_BYTES
+                                    + "-byte compressed-size safety limit");
+                }
+                output.write(buffer, 0, read);
+                total += read;
+            }
+            copiedBytes.accept(total);
+        }
+        checkCancelled(cancelled);
+        return output.toByteArray();
+    }
+
     private static byte[] readRomBytes(
             InputStream input,
             long declaredSize,
@@ -539,6 +718,121 @@ public final class RomSourceSnapshot implements Closeable {
         return new Inventory(candidates, extensionCandidates);
     }
 
+    /**
+     * Streaming ZIP inventory. Every entry is drained with the same aggregate decompression
+     * bound used by desktop snapshots, which prevents a provider-backed archive from bypassing
+     * the ZIP central-directory preflight.
+     */
+    private static Inventory inventoryZipStream(byte[] archive, BooleanSupplier cancelled)
+            throws IOException {
+        List<ArchiveCandidate> candidates = new ArrayList<>();
+        Map<String, Integer> occurrences = new HashMap<>();
+        int entryCount = 0;
+        int extensionCandidates = 0;
+        int oversizedRomCandidates = 0;
+        long totalSize = 0;
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(archive))) {
+            ZipEntry entry;
+            long ordinal = 0;
+            while ((entry = zip.getNextEntry()) != null) {
+                checkCancelled(cancelled);
+                if (++entryCount > Rom.MAX_ARCHIVE_ENTRIES) {
+                    throw new IOException(
+                            "Archive exceeds the " + Rom.MAX_ARCHIVE_ENTRIES + "-entry safety limit");
+                }
+                validateStreamEntryName(entry.getName());
+                int occurrence = occurrences.merge(entry.getName(), 1, Integer::sum) - 1;
+                EntryScan scan = scanEntry(zip, cancelled, totalSize);
+                totalSize = scan.totalSize();
+                if (!entry.isDirectory() && isRomEntry(entry.getName())) {
+                    extensionCandidates++;
+                    if (scan.entrySize() > RomImage.MAX_ROM_BYTES) {
+                        oversizedRomCandidates++;
+                    } else if (scan.entrySize() >= RomHeaderInspector.HEADER_LENGTH) {
+                        RomHeaderInspector.Header header = RomHeaderInspector.inspect(scan.header());
+                        candidates.add(
+                                new ArchiveCandidate(
+                                        ordinal,
+                                        entry.getName(),
+                                        occurrence,
+                                        scan.entrySize(),
+                                        header.hasCartridgeShape() ? header.title() : ""));
+                    }
+                }
+                ordinal++;
+            }
+        }
+        if (extensionCandidates == 0) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.NO_ROM_CANDIDATES,
+                    "The ZIP archive contains no .gb, .gbc, or .rom entries");
+        }
+        if (candidates.isEmpty()) {
+            if (oversizedRomCandidates > 0) {
+                throw romTooLarge(RomImage.MAX_ROM_BYTES + 1L);
+            }
+            throw new RomSourceException(
+                    RomSourceException.Reason.INVALID_HEADER,
+                    "No ROM entry in the ZIP is large enough to contain a cartridge header");
+        }
+        return new Inventory(candidates, extensionCandidates);
+    }
+
+    private static EntryScan scanEntry(
+            ZipInputStream input, BooleanSupplier cancelled, long previousTotal) throws IOException {
+        byte[] buffer = new byte[COPY_BUFFER_BYTES];
+        byte[] header = new byte[RomHeaderInspector.HEADER_LENGTH];
+        int headerBytes = 0;
+        long entrySize = 0;
+        long totalSize = previousTotal;
+        while (true) {
+            checkCancelled(cancelled);
+            int read = input.read(buffer);
+            if (read < 0) {
+                break;
+            }
+            if (read == 0) {
+                continue;
+            }
+            if (read > Rom.MAX_ARCHIVE_UNCOMPRESSED_BYTES - totalSize) {
+                throw new IOException(
+                        "Archive exceeds the "
+                                + Rom.MAX_ARCHIVE_UNCOMPRESSED_BYTES
+                                + "-byte uncompressed-size safety limit");
+            }
+            totalSize += read;
+            entrySize += read;
+            int copied = Math.min(read, header.length - headerBytes);
+            if (copied > 0) {
+                System.arraycopy(buffer, 0, header, headerBytes, copied);
+                headerBytes += copied;
+            }
+        }
+        return new EntryScan(entrySize, totalSize, header);
+    }
+
+    private static void drainEntry(ZipInputStream input, BooleanSupplier cancelled) throws IOException {
+        byte[] buffer = new byte[COPY_BUFFER_BYTES];
+        while (true) {
+            checkCancelled(cancelled);
+            int read = input.read(buffer);
+            if (read < 0) {
+                return;
+            }
+        }
+    }
+
+    private static void validateStreamEntryName(String entryName) throws RomSourceException {
+        try {
+            RomOrigin.validateArchiveEntry(entryName);
+        } catch (IllegalArgumentException e) {
+            throw new RomSourceException(
+                    RomSourceException.Reason.UNSAFE_ARCHIVE_ENTRY,
+                    "The archive contains an unsafe entry path",
+                    e);
+        }
+    }
+
     private static boolean isRomExtension(String extension) {
         return "gb".equals(extension) || "gbc".equals(extension) || "rom".equals(extension);
     }
@@ -642,6 +936,8 @@ public final class RomSourceSnapshot implements Closeable {
             return entryName.substring(slash + 1);
         }
     }
+
+    private record EntryScan(long entrySize, long totalSize, byte[] header) {}
 
     private record Inventory(
             List<ArchiveCandidate> candidates,

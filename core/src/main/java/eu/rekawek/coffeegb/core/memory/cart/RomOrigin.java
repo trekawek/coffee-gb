@@ -232,7 +232,7 @@ public final class RomOrigin {
         return normalized;
     }
 
-    private static String validateArchiveEntry(String entryName) {
+    static String validateArchiveEntry(String entryName) {
         String raw = requireText(entryName, "entryName");
         String pathForValidation = raw.replace('\\', '/');
         if (raw.indexOf('\0') >= 0

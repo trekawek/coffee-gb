@@ -317,6 +317,13 @@ class StateRepository(
     )
   }
 
+  /** Returns a defensive copy of the authoritative portable StateFile for host stream exports. */
+  fun exportBytes(ref: StateRef): ByteArray =
+      lock(ref).withLock {
+        val raw = readRaw(ref) ?: throw NoSuchFileException(layout.stateFile(ref).toString())
+        raw.bytes.clone()
+      }
+
   /**
    * Builds a bounded deterministic catalog. Supplying [targetIdentity] additionally classifies
    * wrong-ROM and wrong-profile entries without live-state access.

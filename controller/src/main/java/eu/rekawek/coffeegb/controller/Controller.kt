@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.SystemProperties
 import eu.rekawek.coffeegb.controller.state.MachineState
+import eu.rekawek.coffeegb.controller.state.RomPersistenceStore
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.debug.DebugPort
@@ -51,6 +52,8 @@ interface Controller : AutoCloseable {
       val rom: File,
       val state: MachineState? = null,
       val image: RomImage? = null,
+      /** Host-provided storage for pathless ROM inputs. Null retains the desktop adapter. */
+      val persistenceStore: RomPersistenceStore? = null,
       val openRequestId: Long? = null,
       /**
        * Whether a completed ROM activation may consult the autosave-resume policy. A Reset is a
@@ -62,12 +65,14 @@ interface Controller : AutoCloseable {
     constructor(
         image: RomImage,
         state: MachineState? = null,
+        persistenceStore: RomPersistenceStore? = null,
         openRequestId: Long? = null,
         allowAutosaveResume: Boolean = true,
     ) : this(
         image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
         state,
         image,
+        persistenceStore,
         openRequestId,
         allowAutosaveResume,
     )
