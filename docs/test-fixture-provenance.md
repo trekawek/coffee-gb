@@ -45,11 +45,11 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
 - Phase #342 replaces the test-only four-player gap fixture with production-contract tests using
   synthetic button sets and fake in-memory SDL descriptors. It adds no byte fixture or external
   device capture and changes none of the hashes listed here.
-- Phase #343 adds the reviewable ASCII `hardware-profile-matrix.tsv`, authored from the existing
-  Coffee GB constants/baselines and pinned public Pan Docs power-up evidence. It is not a ROM,
-  firmware dump, trace, screenshot, or hardware capture. No binary fixture is added or regenerated;
-  model, legacy-migration, StateFile-v1, and protocol-v8 bytes remain unchanged.
-- Phase #344 updates that matrix from pinned Pan Docs commit `37526fad`, Gekkio GBCTR revision 188
+- Phase #343 added a reviewable ASCII hardware-profile matrix, authored from the existing Coffee GB
+  constants/baselines and pinned public Pan Docs power-up evidence. That duplicate registry fixture
+  has since been retired in favor of direct construction and model tests. It was not a ROM,
+  firmware dump, trace, screenshot, or hardware capture; no binary fixture was regenerated.
+- Phase #344 updated the profile evidence from pinned Pan Docs commit `37526fad`, Gekkio GBCTR revision 188
   (download SHA-256 `b147d6c49fb27ea8e803da9956e91ac1e47fd7bdedd7742ca1ffab63c7daaf07`),
   and the cited theoretical SNES timing equation. The only new binary is
   `state-file-v2/sgb2-session-deflate.cgbstate`, generated from
@@ -60,7 +60,7 @@ GB. They contain no third-party ROM, BIOS, palette, screenshot, or game asset:
   New exact-clock SGB captures also select StateFile v2 to distinguish their RTC phase from the
   frozen v1 denominator. This changes only the reviewable synthetic SGB StateFile text hashes;
   frame hashes and all committed binary fixtures remain unchanged.
-- Phase #345 adds the reviewable MGB matrix and synthetic model-baseline rows from the same pinned
+- Phase #345 adds the MGB registry entry and synthetic model-baseline rows from the same pinned
   Pan Docs commit and GBCTR revision. It adds no binary fixture, firmware, capture, image, or ROM.
   The in-memory synthetic ROM is unchanged. Its MGB StateFile-v2 state hash is
   `7c93ea0f6f4912084e978e5f467226dbb1a7a4fd4111b8e32f253793ea55a48e`; its frame hash is the

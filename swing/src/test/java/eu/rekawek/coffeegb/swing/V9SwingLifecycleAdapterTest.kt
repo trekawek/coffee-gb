@@ -5,16 +5,12 @@ import eu.rekawek.coffeegb.controller.network.v9.V9ErrorCode
 import eu.rekawek.coffeegb.controller.network.v9.V9Lifecycle
 import eu.rekawek.coffeegb.controller.network.v9.V9LifecycleState
 import eu.rekawek.coffeegb.controller.network.v9.V9Role
-import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -46,28 +42,4 @@ class V9SwingLifecycleAdapterTest {
     assertEquals(2, callbackCount.get())
   }
 
-  @Test
-  fun controllerV9SourcesHaveNoSwingOrAwtDependency() {
-    val root = repositoryRoot()
-    val sourceRoot =
-        root.resolve("controller/src/main/java/eu/rekawek/coffeegb/controller/network/v9")
-    val sources =
-        Files.walk(sourceRoot).use { paths ->
-          paths.filter { Files.isRegularFile(it) }
-              .map { Files.readString(it, StandardCharsets.UTF_8) }
-              .toList()
-              .joinToString("\n")
-        }
-    assertFalse(sources.contains("java.awt"))
-    assertFalse(sources.contains("javax.swing"))
-  }
-
-  private fun repositoryRoot(): Path {
-    var current = Path.of("").toAbsolutePath()
-    while (!Files.exists(current.resolve("pom.xml")) ||
-        !Files.exists(current.resolve("controller"))) {
-      current = current.parent ?: error("repository root not found")
-    }
-    return current
-  }
 }

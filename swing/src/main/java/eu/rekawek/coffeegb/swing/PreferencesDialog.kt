@@ -226,18 +226,6 @@ internal class PreferencesCategoryNavigation(
       cardLayout.show(pageCards, value.name)
     }
 
-  /** Compatibility-shaped accessors retained for focused editor tests during the shell migration. */
-  var selectedIndex: Int
-    get() = categoryList.selectedIndex
-    set(value) {
-      require(value in categories.indices)
-      selectedCategory = categories[value]
-    }
-
-  val tabCount: Int
-    get() = categories.size
-
-  fun getTitleAt(index: Int): String = categories[index].displayName
 }
 
 internal fun interface RomDirectoryChooser {
@@ -421,10 +409,6 @@ internal class PreferencesPanel private constructor(
           },
       )
 
-  /** Temporary compatibility alias for existing focused editor tests. */
-  internal val tabs: PreferencesCategoryNavigation
-    get() = categories
-
   init {
     border = BorderFactory.createEmptyBorder(12, 12, 0, 12)
     getAccessibleContext().accessibleName = "Coffee GB preferences"
@@ -498,9 +482,6 @@ internal class PreferencesPanel private constructor(
     }
     publishDirtyState()
   }
-
-  /** Compatibility alias for callers that intentionally request every page. */
-  internal fun restoreDefaults() = restoreAllDefaults()
 
   internal fun isDirty(): Boolean {
     requireEdt()
@@ -1447,8 +1428,6 @@ internal class PreferencesDialogActions(
     }
   }
 
-  /** Compatibility alias for the former global restore command. */
-  fun restoreDefaults() = restoreAllDefaults()
 }
 
 private val SAVE_DIRECTORY_VALIDATION_THREAD_ID = AtomicLong()

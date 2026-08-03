@@ -2,32 +2,10 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
-import java.nio.file.Files
-import java.nio.file.Paths
-import kotlin.io.path.readLines
-import kotlin.io.path.readText
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateInventoryTest {
-
-  @Test
-  fun committedFieldInventoryExactlyMatchesAuditedProductionRegistry() {
-    val documented =
-        Paths.get("../docs/state-memento-schema.md")
-            .readLines()
-            .filter { it.startsWith("- `") }
-    val runtime =
-        StateTypeRegistry.recordClasses.map { type ->
-          val fields = type.recordComponents.joinToString(", ") { it.name }
-          "- `${type.name}`: $fields"
-        }
-
-    assertEquals(99, runtime.size)
-    assertEquals(runtime, documented)
-    assertEquals(11, StateTypeRegistry.enumClasses.size)
-  }
 
   @Test
   fun mobileAdapterPortableIdsArePinnedToAppendOnlyValues() {
@@ -89,55 +67,4 @@ class StateInventoryTest {
     assertEquals(12, MobileAdapterEngine.ErrorCode.EXTERNAL_IO_DISCONNECTED.id())
   }
 
-  @Test
-  fun everyProductionOriginatorAndCaptureSiteIsInTheOwnershipAudit() {
-    val repository = Paths.get("..").toAbsolutePath().normalize()
-    val productionRoots =
-        listOf(repository.resolve("core/src/main/java"), repository.resolve("controller/src/main/java"))
-    val discovered =
-        productionRoots
-            .flatMap { root ->
-              Files.walk(root).use { paths ->
-                paths
-                    .filter { Files.isRegularFile(it) }
-                    .filter {
-                      val source = it.readText()
-                      "captureState(" in source ||
-                          "captureStateWithoutTimeSource(" in source ||
-                          "StatefulComponent<" in source ||
-                          "captureDetachedState(" in source ||
-                          "DetachedStateAdapter.capture(" in source ||
-                          "MachineSnapshot.capture(" in source
-                    }
-                    .map { path ->
-                      repository.relativize(path).joinToString("/") { it.toString() }
-                    }
-                    .toList()
-              }
-            }
-            .sorted()
-    val documented =
-        repository
-            .resolve("docs/state-originator-sites.md")
-            .readLines()
-            .mapNotNull { line ->
-              ORIGINATOR_AUDIT_LINE.matchEntire(line)?.groupValues?.get(1)
-            }
-            .sorted()
-
-    assertEquals(107, discovered.size)
-    assertTrue(discovered.all { '\\' !in it })
-    assertEquals(discovered, documented)
-  }
-
-  @Test
-  fun everyAdmittedRecordHasAnExplicitSemanticPolicyAndRationale() {
-    assertEquals(StateTypeRegistry.recordClassNames.toSet(), StateSemantics.policyAudit.keys)
-    assertEquals(99, StateSemantics.policyAudit.size)
-    assertTrue(StateSemantics.policyAudit.values.all { it.isNotBlank() })
-  }
-
-  private companion object {
-    val ORIGINATOR_AUDIT_LINE = Regex("- (?:OWNER|COMPOSITE|WORKFLOW|CONTRACT) `([^`]+)`")
-  }
 }

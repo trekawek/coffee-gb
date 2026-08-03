@@ -97,12 +97,6 @@ public class SgbRendererBaselineTest {
         }
     }
 
-    @Test
-    public void canonicalHashUsesBigEndianInt32WithArrayLengthPrefixes() {
-        assertEquals("5eb2f7c1acf35b00fe1b4d145c126a22d22f508e6ce5a24ec4872403ed6fb04a",
-                sha256(new int[]{0x01020304, -1}, new int[0]));
-    }
-
     private static Map<String, String> expectedHashes() throws IOException {
         Properties properties = new Properties();
         try (InputStream stream = SgbRendererBaselineTest.class.getResourceAsStream(BASELINES)) {

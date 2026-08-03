@@ -20,10 +20,6 @@ import java.util.IdentityHashMap
  */
 internal object StateSemantics {
 
-  internal val policyAudit: Map<String, String> by lazy {
-    policies.mapValues { it.value.rationale }
-  }
-
   fun validate(value: Any?) {
     verifyPolicyInventory()
     visit(value, "state", IdentityHashMap(), null)

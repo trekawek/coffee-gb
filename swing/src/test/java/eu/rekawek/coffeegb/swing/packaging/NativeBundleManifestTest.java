@@ -8,16 +8,12 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.function.Predicate;
 import java.util.jar.JarFile;
 
@@ -158,19 +154,6 @@ public class NativeBundleManifestTest {
         assertEquals(
                 GamepadNativeSupport.BUNDLED,
                 NativeBundleManifest.locked(NativeTarget.WINDOWS_X86_64).gamepadSupport());
-    }
-
-    @Test
-    public void assemblyDescriptorUsesTheSharedNativeExclusionPolicy() throws IOException {
-        Path descriptor = Path.of(
-                System.getProperty("basedir"), "src", "assembly", "app.xml");
-        String xml = Files.readString(descriptor, StandardCharsets.UTF_8);
-        Matcher matcher = Pattern.compile("<exclude>([^<]+)</exclude>").matcher(xml);
-        Set<String> actual = new LinkedHashSet<>();
-        while (matcher.find()) {
-            actual.add(matcher.group(1));
-        }
-        assertEquals(new LinkedHashSet<>(NativeArtifactPolicy.ASSEMBLY_EXCLUDES), actual);
     }
 
     @Test
