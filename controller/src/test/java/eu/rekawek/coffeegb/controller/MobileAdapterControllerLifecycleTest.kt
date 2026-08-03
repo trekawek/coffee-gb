@@ -339,7 +339,7 @@ class MobileAdapterControllerLifecycleTest {
           .use { fixture ->
             val endpoint = fixture.openLiveUdp(backend)
             val liveGeneration = backend.generation()
-            rewind.clear()
+            fixture.awaitCondition { rewind.historySize == 0 }
             fixture.clearPresentationQueues()
 
             fixture.eventBus.post(Controller.RewindEvent(true))
@@ -860,6 +860,7 @@ class MobileAdapterControllerLifecycleTest {
       fixture.awaitCondition { endpoint.get() != null }
       fixture.awaitCondition { fixture.stateSessionId >= 0 }
       val sessionGeneration = assertNotNull(started.sessionGeneration)
+      fixture.sessionGeneration = sessionGeneration
       fixture.await(fixture.playbackStates) {
         it.sessionGeneration == sessionGeneration && !it.paused
       }
@@ -1017,6 +1018,7 @@ class MobileAdapterControllerLifecycleTest {
     val snapshotRestored = LinkedBlockingQueue<Controller.SnapshotRestoredEvent>()
     val snapshotLoadFailed = LinkedBlockingQueue<Controller.SnapshotLoadFailedEvent>()
     @Volatile var stateSessionId = -1L
+    @Volatile var sessionGeneration = -1L
     var controllerClosed = false
 
     init {
@@ -1035,14 +1037,34 @@ class MobileAdapterControllerLifecycleTest {
 
     fun openLiveUdp(backend: MobileAdapterNetworkBackend): MobileAdapterSerialEndpoint {
       val endpoint = assertNotNull(endpoint.get())
-      completeMobileTransaction(
-          endpoint,
-          packet(BEGIN_SESSION, "NINTENDO".encodeToByteArray()),
-      )
-      completeMobileTransaction(
-          endpoint,
-          packet(UDP_OPEN, byteArrayOf(127, 0, 0, 1, 0, 53)),
-      )
+      val completed = AtomicBoolean()
+      val failure = AtomicReference<Throwable>()
+      playbackStates.clear()
+      check(
+          gameboy
+              .get()
+              .onNextTick
+              .compareAndSet(null) {
+                try {
+                  completeMobileTransaction(
+                      endpoint,
+                      packet(BEGIN_SESSION, "NINTENDO".encodeToByteArray()),
+                  )
+                  completeMobileTransaction(
+                      endpoint,
+                      packet(UDP_OPEN, byteArrayOf(127, 0, 0, 1, 0, 53)),
+                  )
+                } catch (caught: Throwable) {
+                  failure.set(caught)
+                } finally {
+                  eventBus.post(Controller.PauseEmulationEvent())
+                  completed.set(true)
+                }
+              }) { "the controller tick hook is already occupied" }
+      eventBus.post(Controller.ResumeEmulationEvent())
+      awaitCondition { completed.get() }
+      await(playbackStates) { it.sessionGeneration == sessionGeneration && it.paused }
+      failure.get()?.let { throw AssertionError("in-frame Mobile transaction failed", it) }
       awaitCondition {
         endpoint.snapshot().outcome() == MobileAdapterEngine.Outcome.BACKEND_RESPONSE &&
             endpoint.hasExternalIo() &&
