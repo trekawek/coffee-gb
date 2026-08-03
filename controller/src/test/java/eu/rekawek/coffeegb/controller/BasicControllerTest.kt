@@ -1475,6 +1475,27 @@ class BasicControllerTest {
     }
   }
 
+  @Test
+  fun batteryFlushRequestCompletesAtTheControllerSafePointWithoutBlockingCaller() {
+    val eventBus = EventBusImpl()
+    val completions = LinkedBlockingQueue<Controller.BatteryFlushCompletedEvent>()
+    eventBus.register<Controller.BatteryFlushCompletedEvent> { completions.add(it) }
+    val controller = BasicController(eventBus, testProperties(), null)
+
+    controller.startController()
+    try {
+      eventBus.post(Controller.FlushBatteryEvent(73))
+
+      val completion = assertNotNull(completions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(73, completion.requestId)
+      assertTrue(completion.succeeded)
+      assertEquals(0, completion.filesWritten)
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+  }
+
   private fun namedRom(title: String): File {
     val bytes = ROM.readBytes()
     for (address in 0x0134 until 0x0143) {

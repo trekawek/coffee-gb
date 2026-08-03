@@ -3,6 +3,9 @@
     <application
         android:allowBackup="false"
         android:label="Coffee GB">
+        <service
+            android:name=".EmulationService"
+            android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">

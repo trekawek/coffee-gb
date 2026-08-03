@@ -55,6 +55,14 @@ StateFile import/export use the Android document picker; import replacement and 
 replacement are confirmed explicitly. A revoked recent-document grant is removed without exposing
 the document URI in the error message.
 
+The app's same-process, non-foreground `EmulationService` is the single owner of the controller,
+event bus, selected ROM, and app-private save handles. Activities only bind to immutable redacted
+runtime state and issue asynchronous commands, so a rotation cannot duplicate a session. Losing
+visibility or audio focus pauses at the controller's safe point and requests a bounded battery
+flush; returning to the app requires an explicit Resume action. The service is non-sticky, so a
+process recreation truthfully starts stopped and offers only persisted recent-document metadata.
+There is no background playback, no foreground-service notification, and no extra permission.
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or

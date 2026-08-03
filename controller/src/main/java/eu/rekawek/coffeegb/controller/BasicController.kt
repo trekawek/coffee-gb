@@ -406,6 +406,9 @@ class BasicController private constructor(
 
   private var pendingRomSwitch: PendingRomSwitch? = null
 
+  /** One explicit non-terminal battery persistence barrier, if any. */
+  private var batteryFlushJob: BatteryFlushJob? = null
+
   private var pendingCloseRequestId: Long? = null
 
   private var sessionStartedNanos: Long? = null
@@ -548,6 +551,7 @@ class BasicController private constructor(
         releaseInteractivePauseOwners(releaseApplicationPause = true, releaseDebuggerPause = true)
       }
     }
+    eventQueue.register<Controller.FlushBatteryEvent> { requestBatteryFlush(it) }
     eventQueue.register<Controller.RewindEvent> {
       // Disabled rewind is a real no-work mode: the key cannot freeze forward emulation and
       // runFrame never reaches a machine capture.
@@ -662,6 +666,7 @@ class BasicController private constructor(
     finishPreparedLoad()
     finishReplacement()
     finishStop()
+    finishBatteryFlush()
 
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
@@ -3069,6 +3074,48 @@ class BasicController private constructor(
     }
   }
 
+  private fun requestBatteryFlush(event: Controller.FlushBatteryEvent) {
+    if (batteryFlushJob != null) {
+      // A host owns request correlation, so it can retry after the current completion instead of
+      // racing a second writer against the same cartridge capture.
+      eventBus.post(Controller.BatteryFlushCompletedEvent(event.requestId, 0, false))
+      return
+    }
+    val capture = session?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
+    val attempt = PersistenceTask(capture)
+    batteryFlushJob = BatteryFlushJob(event.requestId, capture, attempt)
+    persistenceExecutor.execute(attempt)
+  }
+
+  private fun finishBatteryFlush() {
+    val job = batteryFlushJob ?: return
+    if (!job.attempt.isDone) {
+      return
+    }
+    batteryFlushJob = null
+    val result =
+        try {
+          job.attempt.get()
+        } catch (_: CancellationException) {
+          return
+        } catch (failure: Exception) {
+          unexpectedPersistenceFailure(failure)
+        }
+    job.capture.complete(result)
+    when (result) {
+      is BatteryPersistenceResult.Success ->
+          eventBus.post(Controller.BatteryFlushCompletedEvent(job.requestId, result.filesWritten(), true))
+      is BatteryPersistenceResult.Failure ->
+          eventBus.post(Controller.BatteryFlushCompletedEvent(job.requestId, 0, false))
+    }
+  }
+
+  private fun discardBatteryFlush() {
+    val job = batteryFlushJob ?: return
+    batteryFlushJob = null
+    job.attempt.cancel(true)
+  }
+
   private fun postPersistenceFailure(
       requestId: Long,
       operation: Controller.PersistenceBarrierOperation,
@@ -4357,6 +4404,7 @@ class BasicController private constructor(
     cancelPendingRomSwitch(notifyCancellation = false, restorePause = false)
     discardReplacement(restorePause = false, notifyCancellation = false)
     discardStop(restorePause = false)
+    discardBatteryFlush()
     pauseStateBeforeLoading = null
     pauseStateBeforeResume = null
     setPaused(true)
@@ -4965,6 +5013,12 @@ class BasicController private constructor(
       var attempt: PersistenceTask?,
       var awaitingGuestConfiguration: Boolean = false,
       var completedPersistence: BatteryPersistenceResult.Success? = null,
+  )
+
+  private data class BatteryFlushJob(
+      val requestId: Long,
+      val capture: BatteryFlush,
+      val attempt: PersistenceTask,
   )
 
   private class PersistenceTask(capture: BatteryFlush) :
