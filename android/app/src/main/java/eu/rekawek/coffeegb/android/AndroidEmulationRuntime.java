@@ -36,6 +36,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -124,6 +125,87 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeAudio != null) {
             activeAudio.setVolume(volume);
         }
+    }
+
+    /** Pauses one active session at its controller-owned safe point without ending it. */
+    public void pause() {
+        input.releaseAll();
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.pause();
+        }
+        submit(() -> {
+            if (controller != null && activeLayout != null) {
+                eventBus.post(new Controller.PauseEmulationEvent());
+            }
+        });
+    }
+
+    /** Resets only the active emulator session through its portable controller event. */
+    public void reset() {
+        submit(() -> {
+            if (controller != null && activeLayout != null) {
+                eventBus.post(new Controller.ResetEmulationEvent());
+            }
+        });
+    }
+
+    /** Requests a portable quick-state save at the controller's safe point. */
+    public void saveSnapshot(int slot) {
+        checkStateSlot(slot);
+        submit(() -> {
+            if (controller != null && activeLayout != null) {
+                eventBus.post(new Controller.SaveSnapshotEvent(slot));
+            }
+        });
+    }
+
+    /** Requests a portable quick-state restore; controller errors remain typed/redacted. */
+    public void restoreSnapshot(int slot) {
+        checkStateSlot(slot);
+        submit(() -> {
+            if (controller != null && activeLayout != null) {
+                eventBus.post(new Controller.RestoreSnapshotEvent(slot));
+            }
+        });
+    }
+
+    /** Reads only redacted state metadata on the runtime owner, then delivers immutable rows on UI. */
+    void listStateSlots(Consumer<List<AndroidStateSlot>> callback) {
+        Consumer<List<AndroidStateSlot>> checked = Objects.requireNonNull(callback, "callback");
+        submit(() -> {
+            List<AndroidStateSlot> slots = new ArrayList<>();
+            if (activeStates != null) {
+                var entries = activeStates.catalog(null).getEntries();
+                for (int slot = StateRef.MIN_SLOT; slot <= StateRef.MAX_SLOT; slot++) {
+                    int index = slot;
+                    var entry = entries.stream()
+                            .filter(candidate -> candidate.getRef() instanceof StateRef.Slot
+                                    && ((StateRef.Slot) candidate.getRef()).getIndex() == index)
+                            .findFirst().orElse(null);
+                    slots.add(AndroidStateSlot.from(index, entry));
+                }
+            }
+            List<AndroidStateSlot> snapshot = List.copyOf(slots);
+            mainHandler.post(() -> checked.accept(snapshot));
+        });
+    }
+
+    void deleteSnapshot(int slot) {
+        checkStateSlot(slot);
+        submit(() -> {
+            if (activeStates == null) {
+                return;
+            }
+            try {
+                activeStates.delete(new StateRef.Slot(slot));
+                publish(state.phase(), "State slot " + slot + " deleted.", List.of(),
+                        state.transferReady(), state.paused(), state.flushPending());
+            } catch (Exception failure) {
+                publish(state.phase(), "Coffee GB could not delete that state slot.", List.of(),
+                        state.transferReady(), state.paused(), state.flushPending());
+            }
+        });
     }
 
     /** Registers one UI observer and immediately replays the latest immutable snapshot. */
@@ -588,6 +670,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             throw new IllegalStateException("No active ROM state storage");
         }
         return activeStates;
+    }
+
+    private static void checkStateSlot(int slot) {
+        if (slot < StateRef.MIN_SLOT || slot > StateRef.MAX_SLOT) {
+            throw new IllegalArgumentException("State slot must be between " + StateRef.MIN_SLOT
+                    + " and " + StateRef.MAX_SLOT);
+        }
     }
 
     private EventBus controllerEventBus() {

@@ -16,6 +16,7 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
+import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -42,8 +43,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private CoffeeGbSurfaceView video;
     private Button open;
     private Button recent;
+    private Button pauseMenu;
     private Button resume;
     private Button stop;
+    private Button states;
+    private Button settings;
+    private Button about;
     private Button importBattery;
     private Button exportBattery;
     private Button importState;
@@ -84,6 +89,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             bound = true;
             runtime.addObserver(MainActivity.this);
             video.attach(runtime.frames(), runtime.input());
+            runtime.setAudioMuted(getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
+            runtime.setAudioVolume(getPreferences(MODE_PRIVATE).getInt("audio.volume", 100));
             applyState(runtime.state());
         }
 
@@ -117,13 +124,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(status);
 
         video = new CoffeeGbSurfaceView(this);
+        int videoHeight = (int) (240 * getResources().getDisplayMetrics().density);
         content.addView(video, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+                ViewGroup.LayoutParams.MATCH_PARENT, videoHeight));
 
         open = button("Open ROM", this::openRomDocument);
         recent = button("Open recent ROM", ignored -> requireRuntime(AndroidEmulationRuntime::requestRecentDocuments));
+        pauseMenu = button("Pause and menu", ignored -> showPauseMenu());
         resume = button("Resume", ignored -> requireRuntime(AndroidEmulationRuntime::resume));
         stop = button("Stop game", ignored -> requireRuntime(AndroidEmulationRuntime::stop));
+        states = button("Save states", ignored -> showStateSlots());
+        settings = button("Settings", ignored -> showSettings());
+        about = button("About, licenses, and privacy", ignored -> showAbout());
         importBattery = button("Import battery save", this::chooseBatteryImport);
         exportBattery = button("Export battery save", this::chooseBatteryExport);
         importState = button("Import state slot 0", this::chooseStateImport);
@@ -133,8 +145,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         controllerMapping = button("Controller mapping", ignored -> configureController());
         content.addView(open);
         content.addView(recent);
+        content.addView(pauseMenu);
         content.addView(resume);
         content.addView(stop);
+        content.addView(states);
+        content.addView(settings);
         content.addView(importBattery);
         content.addView(exportBattery);
         content.addView(importState);
@@ -142,7 +157,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(exportScreenshot);
         content.addView(touchControls);
         content.addView(controllerMapping);
-        setContentView(content);
+        content.addView(about);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.addView(content);
+        setContentView(scroll);
         disableCommands();
     }
 
@@ -385,6 +404,127 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 .show();
     }
 
+    private void showPauseMenu() {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null || !pauseMenu.isEnabled()) {
+            return;
+        }
+        active.pause();
+        String[] choices = {"Resume", "Reset game", "Save state (slot 0)", "Load state (slot 0)",
+                "Save states", "Settings", "Stop game"};
+        new AlertDialog.Builder(this)
+                .setTitle("Game paused")
+                .setItems(choices, (dialog, which) -> {
+                    switch (which) {
+                        case 0 -> active.resume();
+                        case 1 -> new AlertDialog.Builder(this).setTitle("Reset game?")
+                                .setMessage("Unsaved progress in the running game may be lost.")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Reset", (ignored, button) -> active.reset()).show();
+                        case 2 -> active.saveSnapshot(0);
+                        case 3 -> active.restoreSnapshot(0);
+                        case 4 -> showStateSlots();
+                        case 5 -> showSettings();
+                        case 6 -> new AlertDialog.Builder(this).setTitle("Stop game?")
+                                .setMessage("The running session will end after its safe cleanup.")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Stop", (ignored, button) -> active.stop()).show();
+                        default -> { }
+                    }
+                }).show();
+    }
+
+    private void showStateSlots() {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null || !states.isEnabled()) {
+            return;
+        }
+        active.listStateSlots(slots -> {
+            if (slots.isEmpty()) {
+                Toast.makeText(this, "Open a ROM before managing save states.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String[] labels = slots.stream().map(AndroidStateSlot::label).toArray(String[]::new);
+            new AlertDialog.Builder(this).setTitle("Save states")
+                    .setItems(labels, (dialog, which) -> showStateSlotActions(slots.get(which))).show();
+        });
+    }
+
+    private void showStateSlotActions(AndroidStateSlot slot) {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            return;
+        }
+        List<String> choices = new java.util.ArrayList<>();
+        choices.add("Save or overwrite");
+        if (slot.loadable()) {
+            choices.add("Load");
+            choices.add("Delete");
+        }
+        new AlertDialog.Builder(this).setTitle("State slot " + slot.index())
+                .setMessage(slot.detail()).setItems(choices.toArray(new String[0]), (dialog, which) -> {
+                    String choice = choices.get(which);
+                    if (choice.equals("Save or overwrite")) {
+                        active.saveSnapshot(slot.index());
+                    } else if (choice.equals("Load")) {
+                        active.restoreSnapshot(slot.index());
+                    } else {
+                        new AlertDialog.Builder(this).setTitle("Delete state slot?")
+                                .setMessage("This cannot be undone.").setNegativeButton("Cancel", null)
+                                .setPositiveButton("Delete", (ignored, button) -> active.deleteSnapshot(slot.index()))
+                                .show();
+                    }
+                }).show();
+    }
+
+    private void showSettings() {
+        String[] choices = {"Audio", "Touch controls", "Controller mapping", "Video", "System profile",
+                "Rewind and save behavior"};
+        new AlertDialog.Builder(this).setTitle("Settings").setItems(choices, (dialog, which) -> {
+            switch (which) {
+                case 0 -> configureAudio();
+                case 1 -> configureTouchControls();
+                case 2 -> configureController();
+                case 3 -> showUnavailable("Video", "Video uses native nearest-neighbor rendering with aspect-preserving fit.");
+                case 4 -> showUnavailable("System profile", "Profile selection is determined safely when the ROM opens; changing it during a session is unavailable.");
+                case 5 -> showUnavailable("Rewind and save behavior", "Rewind and battery-save behavior use the portable session defaults. Live changes are unavailable during a session.");
+                default -> { }
+            }
+        }).show();
+    }
+
+    private void configureAudio() {
+        LinearLayout form = new LinearLayout(this);
+        form.setOrientation(LinearLayout.VERTICAL);
+        int volume = getPreferences(MODE_PRIVATE).getInt("audio.volume", 100);
+        boolean muted = getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false);
+        SeekBar slider = slider(form, "Volume", 0, 100, volume);
+        Switch mute = new Switch(this);
+        mute.setText("Mute audio");
+        mute.setChecked(muted);
+        form.addView(mute);
+        new AlertDialog.Builder(this).setTitle("Audio").setView(form).setNegativeButton("Cancel", null)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    getPreferences(MODE_PRIVATE).edit().putInt("audio.volume", slider.getProgress())
+                            .putBoolean("audio.muted", mute.isChecked()).apply();
+                    requireRuntime(active -> {
+                        active.setAudioVolume(slider.getProgress());
+                        active.setAudioMuted(mute.isChecked());
+                    });
+                }).show();
+    }
+
+    private void showUnavailable(String title, String reason) {
+        new AlertDialog.Builder(this).setTitle(title).setMessage(reason)
+                .setPositiveButton("OK", null).show();
+    }
+
+    private void showAbout() {
+        new AlertDialog.Builder(this).setTitle("About Coffee GB Android")
+                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, microphone, camera, or vibration permission.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
+                .setPositiveButton("OK", null).show();
+    }
+
     private void confirmImport(String title, String message, int requestCode) {
         if (runtime == null || !importBattery.isEnabled()) {
             return;
@@ -429,8 +569,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         boolean ready = runtime != null;
         open.setEnabled(ready);
         recent.setEnabled(ready);
+        pauseMenu.setEnabled(ready && state.transferReady() && !state.paused());
         resume.setEnabled(ready && state.paused() && state.transferReady());
         stop.setEnabled(ready && state.transferReady());
+        states.setEnabled(ready && state.transferReady() && !state.flushPending());
+        settings.setEnabled(ready);
+        about.setEnabled(true);
         importBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
         exportBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
         importState.setEnabled(ready && state.transferReady() && !state.flushPending());
@@ -481,8 +625,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         open.setEnabled(false);
         recent.setEnabled(false);
+        pauseMenu.setEnabled(false);
         resume.setEnabled(false);
         stop.setEnabled(false);
+        states.setEnabled(false);
+        settings.setEnabled(false);
+        about.setEnabled(true);
         importBattery.setEnabled(false);
         exportBattery.setEnabled(false);
         importState.setEnabled(false);

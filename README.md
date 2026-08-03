@@ -85,6 +85,13 @@ changes, focus/visibility loss, and route changes clear queued PCM; focus loss s
 user to resume the game. The app declares no microphone, vibration, broad-storage, or network
 permission. See [Android audio operation and device validation](docs/android-audio.md).
 
+The Android MVP keeps its launch, game, pause, state, settings, and privacy flows in the bound
+Activity while the service remains the only emulator owner. The pause sheet offers explicit
+resume, reset, quick-state, state-slot, settings, and stop actions. State slots show only
+redacted portable metadata and require confirmation before deletion; unavailable video/profile/
+rewind changes explain why rather than silently doing nothing. Buttons carry text labels and
+standard Android keyboard/focus navigation, with status text that does not rely on color alone.
+
 ## Download and play
 
 The portable Coffee GB download is a single executable JAR. It requires a desktop **Java 16 or
