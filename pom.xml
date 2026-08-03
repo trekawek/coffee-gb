@@ -230,10 +230,15 @@
         </dependency>
         </dependencies>
     </dependencyManagement>
-    <!-- Keep an explicit empty dependency collection for GitHub's dependency-submission
-         action. The action currently assumes every reactor project exposes this field;
-         versions remain managed above and modules opt in explicitly. -->
-    <dependencies/>
+    <!-- The dependency-submission action requires the aggregator graph to have at least one
+         edge. JUnit is test-only, has no Android runtime impact, and is already managed above. -->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
     <profiles>
         <profile>
             <id>github</id>
