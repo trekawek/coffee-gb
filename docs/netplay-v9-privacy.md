@@ -1,13 +1,10 @@
 # Protocol-v9 pairing, privacy, and troubleshooting
 
-Protocol v9 has an opt-in developer transport foundation that validates CGB9 frames and negotiates
-HELLO capabilities. Part 1 of #348 adds strict invitation parsing, bounded host invitation
-ownership, and AUTH. Part 2 adds the exact bounded MANIFEST metadata exchange, then stops at an
-immutable pre-consent boundary. Part 3 optionally adds explicit two-sided item consent and bounded
-ROM/battery preparation, then stops before START. Issue #349 optionally adds direct StateFile-v2
-checkpoints, START/READY, and bounded ACTIVE traffic behind another caller-owned plan. This is a
-playable developer foundation, not an end-user path: callers that do not opt into an explicit
-prepared manifest, Part-3 plan, and play plan retain the earlier boundaries. Current user netplay
+Protocol v9 is an opt-in developer transport that validates CGB9 frames and negotiates HELLO
+capabilities. Caller-owned plans add strict invitation/AUTH handling, bounded MANIFEST exchange,
+two-sided item consent, ROM/battery preparation, direct StateFile-v2 checkpoints, START/READY, and
+bounded ACTIVE traffic. Callers that do not supply a plan retain its earlier immutable boundary.
+This is a playable developer foundation, not an end-user path. Current user netplay
 remains protocol v8 with
 the compatibility restrictions in
 [netplay-protocol-v8.md](netplay-protocol-v8.md). A v8/v9 mismatch is intentional and has no
@@ -15,7 +12,7 @@ downgrade, fallback, or compatibility probe.
 
 ## What an invitation does—and does not do
 
-The Part-1 host creates random, one-use, short-lived 128-bit invitations. Possession proves only
+The invitation host creates random, one-use, short-lived 128-bit invitations. Possession proves only
 that the peer received that invitation. Token material stays in bounded session memory, is never
 logged or persisted, and wrong, expired, reused, stopped-host, wrong-slot, and rate-limited
 attempts all receive the same generic failure. Host expiry uses an injected monotonic deadline;
@@ -61,7 +58,7 @@ item IDs, stable classes/assets, direction, bounded byte counts, and sanitized s
 ## Diagnosing a failed pairing
 
 The opt-in foundation exposes only typed, sanitized protocol/timeout/cancellation diagnostics.
-The minimal Part-1 Swing adapter parses pasted invitations away from the EDT, returns presentation
+The minimal invitation Swing adapter parses pasted invitations away from the EDT, returns presentation
 events on the EDT, and accesses the clipboard only through an explicit copy action. It is not
 wired into the normal netplay menu.
 
@@ -115,7 +112,7 @@ Internet scan, matchmaking, NAT traversal, UPnP, relay, automatic connection, or
 flow. Discovery failure is isolated from direct invitation hosting. Plaintext TCP remains visible
 and mutable to an on-path attacker even when a host was discovered locally.
 
-## Explicit #349 play boundary
+## Explicit play boundary
 
 After successful AUTH, explicitly prepared peers exchange bounded MANIFEST metadata. An exact pair
 with no proposals reaches `SYNCHRONIZING` without private traffic. Valid advanced proposals require
@@ -158,7 +155,6 @@ retained rollback history instead terminates with a typed sequence failure befor
 that terminal boundary a fresh authenticated generation is required rather than an implicit
 checkpoint retry.
 
-#350 implements only the bounded diagnostics and address-only trusted-LAN discovery described
-above. The stale nonce-comparison roadmap checkbox is not a tokenless/manual-address bypass: v9
-has no such flow. A different invitation or authentication mechanism still requires a separately
-reviewed capability and threat-model change.
+Only the bounded diagnostics and address-only trusted-LAN discovery described above are available.
+V9 has no tokenless or manual-address authentication flow. A different invitation or
+authentication mechanism requires a separately reviewed capability and threat-model change.

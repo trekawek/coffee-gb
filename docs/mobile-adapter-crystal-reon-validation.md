@@ -1,8 +1,8 @@
 # Japanese Pokémon Crystal and REON validation
 
-This record covers the Phase 3 scenario in issues
-[#353](https://github.com/trekawek/coffee-gb/issues/353) and
-[#399](https://github.com/trekawek/coffee-gb/issues/399). The Coffee GB acceptance run uses
+This is a point-in-time compatibility evidence record, not an implementation plan. It is retained
+because the owner-authorized ROM observations cannot be reproduced by the normal offline test suite.
+The Coffee GB acceptance run uses
 [`97fc57b4`](https://github.com/trekawek/coffee-gb/tree/97fc57b4e1c88923c8c479a49d9bbc9763e284c6),
 which includes the adapter-image import, guest-write persistence, transfer timing, completion
 cadence, history fencing, and bounded exact-alias prerequisites. The custom-service observation pins
@@ -64,7 +64,7 @@ scenario.
 The clean-master baseline returned idle-high `ff` for every transfer. Crystal sent a valid BEGIN
 request, received no acknowledgement or response, and did not issue telephone status.
 
-With this Phase 3 endpoint, Crystal sent its leading `4b` wake/poll and completed these redacted
+With the production endpoint, Crystal sent its leading `4b` wake/poll and completed these redacted
 exchanges using one skipped `d2` turnaround transfer followed by one validated `4b`/`d2` response
 gate:
 
@@ -183,9 +183,8 @@ observed in the pinned REON nginx access output is custom-service acceptance evi
 
 ## Adapter-image workflow
 
-At the acceptance revision, the desktop retained this configuration dialog but kept its controls
-hidden. The desktop now exposes the dialog and its owner-selected import control at **Peripherals →
-Configure Mobile Adapter…**. The importer accepts an exact opaque 256-byte game-visible image, or an
+The desktop exposes the configuration dialog and its owner-selected import control at **Peripherals
+→ Configure Mobile Adapter…**. The importer accepts an exact opaque 256-byte game-visible image, or an
 exact 512-byte REON/libmobile envelope only after its `MA`/`LM` magic and checksums plus the `LM`
 version and address types pass validation. It imports bytes `0..255` and discards the whole library
 region, including device, DNS, relay, token, and host metadata.
@@ -194,7 +193,7 @@ Every import attempt revokes active backend ownership and both runtime-only auth
 including stale, malformed, conflicting-source, busy, unreadable, and storage-failing attempts. An
 accepted image keeps Coffee GB's device ID and structured custom-server policy, then persists only
 the copied or extracted 256 bytes through the existing owner-only atomic store. It grants no
-network authority. The workflow is now manually accessible; the completed Mobile Trainer-to-REON
+network authority. The workflow is manually accessible; the completed Mobile Trainer-to-REON
 result above remains the acceptance evidence rather than UI exposure alone.
 
 ## Privacy, state, and cleanup boundaries
@@ -242,8 +241,8 @@ Stadium**. That private gameplay state is not repository evidence and no path, n
 content is recorded here. Obtaining and driving that owner-controlled state remains the current
 Crystal end-to-end blocker.
 
-Mobile Trainer supplies the shorter public HTTP route used above. Its clean first-run path no longer
-depends on the debugger-assisted setup-state experiment from issue #448. The exact request/response
+Mobile Trainer supplies the shorter public HTTP route used above. Its clean first-run path is fully
+screen-driven and does not depend on a debugger-assisted setup state. The exact request/response
 and controlled-shutdown cleanup demonstrate one complete owner-authorized
 utility-to-custom-service flow. They do not expand the implemented packet subset or establish
 compatibility with another title, provider, production account system, or service.

@@ -1,12 +1,9 @@
 # SGB conformance baselines and practical-command contract
 
-Issue #340 established the observational Phase 0 evidence and deterministic fixtures. Issue #341
-used those artifacts to complete the platform-neutral practical command set, issue #342 added
-independent local SGB P1-P4 host input, and issue #343 established immutable per-session hardware
-profiles and clocks. Issue #344 added the evidence-backed `sgb2` identity and exact SGB-family
-clock contract. Issue #345 adds the evidence-backed `mgb` identity and an enforceable contributor
-extension process. Neither phase changes the practical SGB command set. The original 91 portable
-record IDs and every existing StateFile-v1 field remain unchanged; mapper records append after them.
+Coffee GB's practical SGB command set, independent local P1-P4 input, immutable hardware profiles,
+and exact SGB-family clocks are covered by deterministic behavior tests and external ROM suites.
+The original 91 portable record IDs and every existing StateFile-v1 field remain unchanged; mapper
+records append after them.
 
 ## Executable sources of truth
 
@@ -15,10 +12,10 @@ and unsupported command ID plus unknown and malformed packets. The practical-com
 state-continuation, four-player, and hardware-model tests exercise the resulting effects. The ROM
 profiles remain the primary external compatibility signal.
 
-Source-token occurrence counts, source fingerprints, and a second command-registry spreadsheet
-were deliberately retired. They made harmless renames and refactors require fixture updates without
-running an emulated instruction or validating an SGB effect. The production parser and behavioral
-tests are now the single executable command registry.
+Compatibility is not enforced through source-token occurrence counts, source fingerprints, or a
+second command-registry spreadsheet. Those checks make harmless refactors require fixture updates
+without running an emulated instruction or validating an SGB effect. The production parser and
+behavioral tests are the single executable command registry.
 
 ## Public technical evidence
 
@@ -35,7 +32,7 @@ The command sources below were accessed on 2026-07-25. Links are pinned to immut
 | `PANDOCS_MULTIPLAYER` | [multiplayer command](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/SGB_Command_Multiplayer.md) | `MLT_REQ`, player-count modes, and selected-player feedback. |
 | `PANDOCS_BORDER` | [border commands](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/SGB_Command_Border.md) | Character, picture, attribute, and object transfers. |
 | `PANDOCS_UNDOCUMENTED` | [undocumented commands](https://github.com/gbdev/pandocs/blob/fe246067b695b5404a4a6a47efb4fd6d921ececb/src/SGB_Command_Undocumented.md) | SGB1v2 disassembly observations for `0x1a..0x1f`; not generalized to other revisions. |
-| `COFFEEGB_BASELINE` | This PR's real JOYP, renderer, input, model, and StateFile tests | What the current implementation actually consumes, stores, renders, and resumes. |
+| `COFFEEGB_BASELINE` | Coffee GB's real JOYP, renderer, input, model, and StateFile tests | What the current implementation actually consumes, stores, renders, and resumes. |
 
 The profile/timing evidence was accessed on 2026-07-26 and is pinned in
 [hardware-profiles.md](hardware-profiles.md). Pan Docs commit
@@ -54,7 +51,7 @@ licensed under Expat outside its documented exceptions. SameBoy labels the measu
 allows approximately two frames of uncertainty. It is evidence for the origin of Coffee GB's
 current approximation, not proof that SGB and SGB2 are identical.
 
-The Phase 1 interpretations and remaining disagreements are deliberately visible:
+The current interpretations and remaining disagreements are deliberately visible:
 
 - `ATTR_LIN` implements Pan Docs' x `0..19`, y `0..17`, and last-entry-wins rules. `ATTR_DIV`
   assigns lower coordinates to above/left, the named coordinate to the line palette, and higher
@@ -67,8 +64,8 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   specific fields “not used (zero)”. The validator accepts arbitrary values only in the former
   category and requires zero in the latter. Direct command-validation tests cover the distinction.
 - A PCT map entry should select palette `4..6` in Pan Docs. Coffee GB retains its prior safe use of
-  the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround from
-  issue #174; narrowing either would break established continuation tests. The documented priority
+  the complete three-bit palette field and the real-game `0x2ff` transparent-tile workaround;
+  narrowing either would break established continuation tests. The documented priority
   bit must be zero and is rejected before a new or restored border transfer changes state.
 - `MLT_REQ` controls `0`, `1`, and `3` select P1, rotating P1/P2, and rotating P1-P4 respectively,
   with both JOYP selector lines high returning IDs `0xf..0xc`. Reducing the mode masks the selected
@@ -88,7 +85,7 @@ The Phase 1 interpretations and remaining disagreements are deliberately visible
   adapters throw for a rational rate rather than report a false rounded value. Protocol v8 remains
   StateFile-v1-only and rejects current exact-clock SGB/SGB2 before payload transmission.
 
-## Phase 1 framing, mutation, and state contract
+## Framing, mutation, and state contract
 
 The production path is still `JOYP -> Joypad -> SuperGameboy -> Commands -> component event`.
 `Commands.parse` is total and side-effect-free. It accepts only one to seven complete 16-byte rows,
@@ -137,7 +134,7 @@ actual fade stays in its original low-byte range `0..32`. This is a compatible v
 not a StateFile schema or record-ID change: old values decode with priority disabled, and legacy
 Java descriptors are unchanged.
 
-## Phase 2 independent-input contract
+## Independent-input contract
 
 `PlayerInputSource` is a platform-neutral core service returning one deeply owned immutable sample
 for exactly zero-based slots `0..3` (P1-P4). Invalid indices are rejected. Joypad samples the whole
@@ -228,12 +225,12 @@ the exact portable bytes and continuation:
 | continuation StateFile v2 | `bb170bafca8e074e59dfc18d41229e3331c802710c9aef1778d50b3197434f51` |
 | continuation frame | `51dd2ed6cf24f04a64ea81af4e9768056ea48074445476c96d6dca015fd2e342` |
 
-The Phase 0 fake source has been removed. The reusable production `PlayerInputSource`, immutable
+The obsolete fake input source has been removed. The reusable production `PlayerInputSource`, immutable
 snapshot, and source-union hub are exercised directly with four non-overlapping patterns, invalid
 indices, alias attempts, disconnects, mode transitions, tick sampling, rewind/StateFile restore,
 rollback replay, keyboard mappings, and fake no-SDL devices.
 
-## Profile ownership and deferred work
+## Profile ownership and compatibility limits
 
 The authoritative registry is `HardwareProfileRegistry`; its permanent IDs are `dmg`, `cgb`,
 `cgb0`, `sgb`, `sgb2`, and `mgb`. `HardwareProfileRegistryTest`, `HardwareProfileGameboyTest`, the
@@ -242,11 +239,10 @@ ownership, CLI, StateFile-v1/v2, protocol-v8, evidence, and extension contract i
 [hardware-profiles.md](hardware-profiles.md) and [state-file-v2.md](state-file-v2.md). The committed synthetic SGB2 SESSION golden is 59,486 bytes
 with SHA-256 `2d2178e6eba26a8debdacf84be144cccd1b42e50bf0dbce5c41612bcb16aa226`.
 
-- #345 adds MGB and the repeatable profile-extension process. The separate AGB-in-GB-mode evidence
-  audit [#391](https://github.com/trekawek/coffee-gb/issues/391) remains open; it adds no production profile.
-- #315 `CGBR` v1 consumes the canonical profile/clock identity and four-slot input seam; its exact
-  timing and privacy contract is documented in [replay-format-v1.md](replay-format-v1.md).
+- Available AGB-in-GB-mode evidence does not justify a production profile.
+- `CGBR` v1 consumes the canonical profile/clock identity and four-slot input seam; its exact timing
+  and privacy contract is documented in [replay-format-v1.md](replay-format-v1.md).
 
-No Phase-0 artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior
+No synthetic artifact is real-hardware proof by itself. Synthetic hashes are implementation behavior
 locks; external technical references and redistributable conformance inputs remain separately
 identified under [test-fixture-provenance.md](test-fixture-provenance.md).

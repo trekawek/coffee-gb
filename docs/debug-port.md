@@ -2,24 +2,22 @@
 
 ## Scope
 
-This document pins the Phase 1 debugger foundation, the Phase 2 CPU breakpoint/trace contract, the
-Phase 3 peripheral event contract, the Phase 5/6 bounded reverse-execution contract, and the Phase
-7/8 coherent inspection seam implemented by `DebugPort`. The API is platform-neutral and exposes
+This document specifies the debugger foundation, CPU and peripheral breakpoint/trace contracts,
+bounded reverse execution, and coherent inspection seam implemented by `DebugPort`. The API is
+platform-neutral and exposes
 immutable values only. It does not expose a mutable core component, an AWT/Swing type, a live
 array, or a reflection escape hatch. The model is still an internal Coffee GB API until a later
 change explicitly versions it for third-party use.
 
-Phase 1 supplies pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
-memory reads, and deterministic button input. Phase 2 adds negotiated breakpoints/watchpoints and
-bounded CPU, memory, and interrupt tracing. Phase 3 adds exact PPU-state and serial breakpoints,
-all ten typed trace categories with producer provenance, selective peripheral instrumentation, and
-the debug-port-backed console described below. The separate Phase 4 deterministic recorder/player
-and `CGBR` v1 contract are documented in [replay-format-v1.md](replay-format-v1.md). Phase 5 adds
-the explicitly enabled checkpoint ring and direct reverse-frame operation described below. Phase
-6 adds deterministic replay-forward reverse-instruction, a retained-future cursor, and explicit
-branch invalidation. Phase 7 binds PC/SP-relative and explicit memory copies to one snapshot for
-desktop debugger panes. Phase 8 adds optional physical graphics/APU payloads and a bounded trace
-page to that same owner-safe-point inspection.
+The port supplies pause/resume, coherent snapshots, negotiated stepping, bounded side-effect-free
+memory reads, one-byte paused RAM writes, deterministic button input, negotiated breakpoints,
+all ten typed trace categories, selective peripheral instrumentation, and the debug-port-backed
+console described below. The separate deterministic recorder/player and `CGBR` v1 contract are
+documented in [replay-format-v1.md](replay-format-v1.md). Explicitly enabled checkpoint history
+supports reverse-frame and replay-forward reverse-instruction operation with a retained-future
+cursor and branch invalidation. PC/SP-relative and explicit memory copies, optional physical
+graphics/APU payloads, semantic hardware/I/O state, and bounded trace pages share one
+owner-safe-point inspection.
 
 The Swing user interface built on this contract is documented separately in
 [desktop-debugger.md](desktop-debugger.md), including pane identity, keyboard controls, trace
@@ -36,8 +34,8 @@ port with no capabilities; every operation returns `UNSUPPORTED_TOPOLOGY` becaus
 mutation can safely represent the linked owner. A client must retain the generation with every
 view and discard a port as soon as its revocation event arrives.
 
-Capabilities are immutable for one generation and must be negotiated before submitting a command.
-The current implementations advertise:
+Capabilities are immutable for one generation and must be negotiated before submitting the
+commands they cover. Current implementation availability is:
 
 | Operation | Desktop `BasicController` | Headless Agent | Linked rollback |
 |---|---:|---:|---:|
@@ -49,7 +47,8 @@ The current implementations advertise:
 | memory read | yes, at most 4096 bytes | yes, at most 4096 bytes | no |
 | memory write | yes, one paused RAM/HRAM byte | same | no |
 | coherent inspection | yes, 16 blocks / 4096 aggregate bytes | same | no |
-| graphics/audio inspection sections | both | both | no |
+| graphics/audio/hardware inspection sections | all three | all three | no |
+| audio channel enable/mute | yes, output-only | no | no |
 | trace page in coherent inspection | at most 1024 entries | same | no |
 | button input | yes | yes | no |
 | breakpoints | yes, 7 kinds / at most 128 | yes, 7 kinds / at most 128 | no |
@@ -58,6 +57,10 @@ The current implementations advertise:
 | checkpoint history | yes, 1-7200 frames / 8-512 MiB | no | no |
 | reverse frame | yes | no | no |
 | reverse instruction | yes, for eligible isolated topologies | no | no |
+
+`setAudioChannelEnabled` is a `BasicController`-only extension without its own
+`DebugCapabilities` flag. Audio inspection support does not imply channel-control support; the
+Headless Agent and linked ports return a typed unsupported result.
 
 `DebugStepKind.MACHINE_CYCLE` is part of the shared model, but the desktop controller returns
 `UNSUPPORTED_STEP` for it. A client must not emulate an unsupported granularity by issuing direct
@@ -213,7 +216,7 @@ covers actual opcode and operand fetches; side-effect-free debugger reads and sp
 disassembly are deliberately invisible. The current memory condition has no producer or named
 address-space field, so watchpoints deliberately remain scoped to the CPU's logical `SYSTEM_BUS`
 observations. Physical DMA and PPU accesses are available through `MEMORY` trace with explicit
-source and address-space provenance, but they cannot trigger a memory watchpoint in this phase.
+source and address-space provenance, but the API does not expose them as memory-watchpoint inputs.
 
 `DebugPpuCondition` uses the same controller-owned `frame` counter returned by `DebugSnapshot`, not
 the physical `PpuTrace.ppuFrame` counter. `ANY_FRAME`, `ANY_LY`, and a null mode are explicit
@@ -265,7 +268,7 @@ be a subset of the session's advertised category set; otherwise it returns
 `UNSUPPORTED_TRACE_CATEGORY`.
 
 Every `TraceEntry` owns a typed immutable payload and separately records the component that
-produced it in `source`. Producer provenance is not duplicated in the payload. The Phase 3 payload
+produced it in `source`. Producer provenance is not duplicated in the payload. The payload
 and ordering contract is:
 
 | Category | Payload and source | Observation and deterministic order |
@@ -289,7 +292,7 @@ component type or payload timestamp, is the authoritative cross-category orderin
 interrupt sets. Filtering occurs on the producer path before an immutable event or entry is
 constructed. A filter affects the categories for which it has fields; it does not disable an
 enabled category by itself. The memory predicate applies to CPU, DMA, and PPU trace observations
-using each event's reported 16-bit address, but it has no source/address-space selector. Phase 3
+using each event's reported 16-bit address, but it has no source/address-space selector. Typed
 peripheral categories other than interrupts are unfiltered once enabled. Category selection and
 filter replacement are cold-path operations.
 
@@ -445,7 +448,7 @@ the per-tick path performs no reverse-history work or allocation. If another det
 already owns the exclusive input-timeline observer, enabling history fails with `SESSION_BUSY`
 without changing the current configuration.
 
-## Side-effect-free memory
+## Side-effect-free memory reads and bounded writes
 
 Every read is a bounded copy. The current core exposes a parser-corrected loaded-ROM-image view and
 MMU-owned RAM without invoking mapper logic or the ordinary CPU-bus read path:
@@ -470,7 +473,7 @@ submitted.
 | Address-space ID | Accepted range | Notes |
 |---|---|---|
 | `SYSTEM_BUS` | `C000-FDFF`, `FF80-FFFE` | The whole request must remain within one contiguous safe range. |
-| `ROM` | `0000-FFFF` | Image offsets in the first 64 KiB of the parser-corrected loaded ROM, not CPU addresses or the mapper's current CPU window; missing image bytes read as `FF`. ROM bytes after offset `FFFF` are not addressable by the Phase 1 16-bit request model. |
+| `ROM` | `0000-FFFF` | Image offsets in the first 64 KiB of the parser-corrected loaded ROM, not CPU addresses or the mapper's current CPU window; missing image bytes read as `FF`. ROM bytes after offset `FFFF` are not addressable by the 16-bit request model. |
 | `WORK_RAM` | `C000-FDFF` | Includes the `E000-FDFF` echo; CGB banked WRAM follows the selected bank. |
 | `HIGH_RAM` | `FF80-FFFE` | Excludes interrupt enable at `FFFF`. |
 
@@ -485,7 +488,7 @@ the safe `SYSTEM_BUS` view elsewhere. They reject a request that crosses that se
 Disassembly is labelled as best-effort and names its source view; in particular, a ROM label says
 that bytes came from the corrected physical image rather than the mapper's live CPU window.
 
-`writeMemory(DebugMemoryWrite)` accepts one byte only while the debugger owns an effective pause.
+`writeMemory(DebugMemoryWrite)` accepts one byte only while the session is effectively paused.
 It supports the same safe RAM storage exposed by `SYSTEM_BUS`, `WORK_RAM`, and `HIGH_RAM`; ROM,
 cartridge RAM, VRAM, OAM, I/O registers, `FFFF`, and unsafe bus ranges return a typed failure. The
 owner writes directly to the owning RAM storage rather than issuing a CPU-bus access, so the command
@@ -522,12 +525,15 @@ memory and best-effort disassembly use named memory blocks; stepping and button 
 commands. Frame pixels and audio samples remain detached host adapters outside `DebugPort`, since
 they are presentation data rather than private core access.
 
-Two historical mutations are intentionally not preserved. `Agent.writeMemory` was a direct bus
-write, and the never-registered `apu chan` console command directly changed `Sound` channel state.
-Both were removed because the current port has no timeline-aware memory/APU mutation operation.
-Silently routing either through private core state would bypass safe-point ownership and future
-replay-history invalidation. A later mutation API must model those effects explicitly before such
-commands can return.
+Historical direct core mutation is not preserved, and the old `Agent.writeMemory` helper remains
+absent. Headless callers use `agent.debugPort.writeMemory`, which requires a pause and performs the
+one-byte safe-memory write above; Headless does not support rewind or reverse history. The desktop
+`BasicController` command additionally clears rewind, reverse, and timeline correlation because its
+input-only history cannot reconstruct the mutation. The never-registered `apu chan` console syntax
+remains absent. `BasicController` debugger clients may use `setAudioChannelEnabled` instead; it
+changes only host output for channels 1 through 4, is available while running, leaves game APU
+registers and deterministic history untouched, and returns a coherent snapshot from the owner safe
+point.
 
 ## Typed errors
 
@@ -660,54 +666,17 @@ Collect at least three fresh-fork results per revision and compare the median
 100 * (baseline ticks/second - candidate ticks/second) / baseline ticks/second
 ```
 
-The issue budget passes when the candidate median regression is at most 1%. For allocation, record
+The disabled-path budget passes when the candidate median regression is at most 1%. For allocation, record
 all raw per-sample values. The candidate must add no allocation proportional to instruction count;
 compare its measured totals and per-million-tick rate with the baseline instead of assuming the
 pre-existing emulator loop allocates zero. Timing and allocation remain report-time decisions
 rather than assertions in the test so scheduler, thermal, VM, and host variation cannot make the
 normal suite flaky.
 
-### Phase 1 checked-in report
-
-The following comparison was run on 2026-07-30. The candidate was the complete uncommitted Phase 1
-working tree based on the recorded base revision; its final commit SHA did not yet exist when the
-measurement was made. Both sides used Java 21.0.1 HotSpot, Maven 3.8.6, Linux 7.0.0-28, and an
-Intel Core i7-1165G7 with 8 available processors under the `powersave` governor. Each number below
-comes from a separate Maven test JVM with the benchmark flags shown above.
-
-| Field | Baseline | Candidate |
-|---|---|---|
-| Git revision | `6edb35a1f19238611b74b68fdf9c2fd74a126562` | Phase 1 working tree on that base (final SHA pending) |
-| Java / VM | 21.0.1 / HotSpot | same |
-| Maven / benchmark flags | 3.8.6 / `coffeegb.debug.benchmark=true` | same |
-| OS / kernel | Linux 7.0.0-28 | same |
-| CPU / governor / available processors | i7-1165G7 / powersave / 8 | same |
-| Fresh-fork median ticks/s, run 1 | 16,501,826.947 | 16,832,362.762 |
-| Fresh-fork median ticks/s, run 2 | 16,093,173.449 | 16,428,177.446 |
-| Fresh-fork median ticks/s, run 3 | 16,390,386.917 | 16,912,168.496 |
-| Median of fresh-fork medians | 16,390,386.917 | 16,832,362.762 |
-| Raw allocated bytes in every fork | `[133347544,133347728,133347528,133347744,133347528,133347728,133347544,133347728,133347528]` | identical |
-| Allocated bytes per million ticks | 26,669,524.444 | 26,669,524.444 |
-
-The calculated throughput regression is **-2.6966%** (the candidate was faster), so the `<= 1%`
-budget passes. All six allocation vectors were byte-identical: 1,200,128,600 bytes across 45
-million measured ticks per fork, giving zero candidate allocation delta.
-
-Raw sample times in nanoseconds, retained so the medians can be independently recalculated:
-
-```text
-BASE1 [295978248,301630741,324893139,330585338,301914809,302996754,308376488,303410884,301298389]
-BASE2 [305416634,311156799,312385981,312198521,312921376,308696507,310690742,305787990,307809726]
-BASE3 [307842862,306073174,305056862,302711127,304940496,302485111,306046863,321039565,304150993]
-CAND1 [290677912,293098447,301474726,298556573,297046830,310254318,290274075,292914842,300119478]
-CAND2 [297017300,304355125,298326050,304470051,310511426,304722702,300290046,302669316,306510243]
-CAND3 [295645115,291396092,305735179,296932139,315209558,294213686,295712315,295606281,293423504]
-```
-
-## Phase 2/3 breakpoint and trace benchmark
+## Instrumentation benchmark
 
 `core/src/test/java/eu/rekawek/coffeegb/core/DebugInstrumentationBenchmarkTest.java` is the
-companion opt-in benchmark for attached Phase 2/3 producer paths. Run the unchanged,
+companion opt-in benchmark for attached producer paths. Run the unchanged,
 baseline-portable disabled test and the companion in adjacent fresh Maven test JVMs:
 
 ```text
@@ -728,7 +697,7 @@ It uses the same deterministic `JR -2` machine and reports four modes:
 | `pc-no-hit` | One enabled exact-PC breakpoint at an address the loop never fetches; measures instruction-hook matching without a bus wrapper or hit/snapshot allocation. | Same 30,000,000-tick warmup and nine 5,000,000-tick samples as the disabled baseline. |
 | `cpu-memory-filter-rejects-all` | CPU and memory categories enabled with a filter that rejects every workload event; verifies filtering before payload construction. | Same geometry as the disabled baseline. |
 | `cpu-memory-trace-enabled` | CPU and memory events accepted into a 4096-entry overwrite ring; reports producer throughput, allocation per event, retained bounds, sequence, and drop accounting. | 5,000,000-tick warmup and seven 1,000,000-tick samples to bound the deliberately allocation-heavy run. |
-| `all-categories-trace-enabled` | All ten Phase 3 categories negotiated at once; measures the all-category dispatch/attachment configuration and captures every event produced by the same deterministic loop. It is not a stress workload for every peripheral. | Same 5,000,000-tick warmup and seven 1,000,000-tick samples as the accepted CPU/memory trace mode. |
+| `all-categories-trace-enabled` | All ten categories negotiated at once; measures the all-category dispatch/attachment configuration and captures every event produced by the same deterministic loop. It is not a stress workload for every peripheral. | Same 5,000,000-tick warmup and seven 1,000,000-tick samples as the accepted CPU/memory trace mode. |
 
 Every mode prints median/minimum/maximum throughput, raw times, thread allocation totals and rates,
 and captured-event accounting. Allocation accounting has the same HotSpot requirement as the
@@ -749,132 +718,3 @@ report is throughput and allocation per accepted event. Subtract the disabled
 `eventsPerMillionTicks` to estimate incremental instrumentation bytes per event. Fixed retained
 entry count and monotonic drop accounting establish the memory bound. Scheduler, thermal, GC, and
 host variance remain report-time considerations rather than flaky test thresholds.
-
-### Phase 2 checked-in report
-
-The following measurements were taken on 2026-07-30 after instruction hooks were separated from
-the optional memory-bus wrapper. Three adjacent disabled/instrumented fresh-fork pairs ran with no
-other Maven or Java workload observed at launch. The candidate was the complete uncommitted Phase
-2 working tree based on `8c8f0569e9daa8bcf251c97a3906f6302f212f30`; its final commit SHA did not
-yet exist. The environment matched the Phase 1 report: Java 21.0.1 HotSpot, Maven 3.8.6, Linux
-7.0.0-28, an Intel Core i7-1165G7, the `powersave` governor, and 8 available processors.
-
-| Mode | Fresh-fork median ticks/s, run 1 | Run 2 | Run 3 | Median of medians | Allocated bytes / million ticks | Accepted events / million ticks |
-|---|---:|---:|---:|---:|---:|---:|
-| disabled | 16,730,524.625 | 16,729,852.587 | 17,034,769.119 | 16,730,524.625 | 26,669,524.444 | 0 |
-| PC no-hit | 16,048,063.102 | 16,617,368.860 | 16,838,995.714 | 16,617,368.860 | 26,669,524.444 | 0 |
-| CPU/memory filter rejects all | 16,579,858.727 | 17,061,092.452 | 16,396,772.619 | 16,579,858.727 | 26,668,838.578 | 0 |
-| CPU/memory trace enabled | 16,173,657.204 | 15,933,085.375 | 16,209,527.727 | 16,173,657.204 | 42,668,836.571 gross | 250,000 |
-
-The median-of-medians PC no-hit regression against the same-revision disabled path is **0.6763%**;
-the three adjacent-pair regressions are 4.0791%, 0.6724%, and 1.1493%, so every observed pair and
-the aggregate pass the at-most-5% target. Against the pre-feature baseline median recorded in the
-Phase 1 table, the Phase 2 disabled path's observed regression is **-2.0752%** (faster), passing the
-at-most-1% disabled budget.
-
-The disabled and PC no-hit allocation vectors were byte-identical in every fork. The rejecting
-filter captured no event and allocated 30,864 fewer total bytes than disabled over each 45-million-
-tick measured workload, providing no evidence of producer allocation. Full trace captured exactly
-1,750,000 events in each 7-million-tick measured workload. Subtracting the disabled rate gives an
-estimated **63.997 incremental bytes per accepted event**. After warmup and measurement its
-4096-entry ring reported `nextSequence=3,000,000`, `droppedEventCount=2,995,904`, and
-`oldestAvailableSequence=2,995,904`, exactly matching the overwrite bound.
-
-### Phase 3 checked-in report
-
-The following measurements were taken on 2026-07-30 after the disabled infrared-observation path
-was reduced to one null-hook branch. The baseline was the Phase 2 commit; the candidate was the
-complete uncommitted Phase 3 working tree based on that commit, before its final SHA existed.
-Baseline and candidate results came from separate Maven test JVMs, with no other Maven or Java
-workload observed at launch.
-
-| Field | Value |
-|---|---|
-| Candidate revision | Phase 3 working tree on `8760c1c378932bf5159f0680775d3f28c3d7b407` (final SHA pending) |
-| Baseline/pre-feature revision | `8760c1c378932bf5159f0680775d3f28c3d7b407` |
-| Java / VM | 21.0.1 / HotSpot |
-| Maven / benchmark flags | 3.8.6 / `coffeegb.debug.benchmark=true` |
-| OS / kernel | Linux / 7.0.0-28-generic |
-| CPU / governor / available processors | i7-1165G7 / powersave / 8 |
-
-| Mode | Fresh-fork median ticks/s, run 1 | Run 2 | Run 3 | Median of medians | Allocated bytes / million ticks | Accepted events / million ticks |
-|---|---:|---:|---:|---:|---:|---:|
-| Phase 2 disabled baseline | 16,623,939.485 | 16,799,301.859 | 16,411,383.547 | 16,623,939.485 | 26,669,524.444 | 0 |
-| Phase 3 disabled candidate | 16,398,312.653 | 17,114,584.670 | 16,487,212.264 | 16,487,212.264 | 26,669,524.444 | 0 |
-| PC no-hit | 16,067,463.500 | 16,262,456.163 | 16,326,324.781 | 16,262,456.163 | 26,669,524.444 | 0 |
-| CPU/memory filter rejects all | 16,632,648.078 | 16,569,949.034 | 16,409,071.376 | 16,569,949.034 | 26,668,838.578 | 0 |
-| CPU/memory trace enabled | 15,686,192.819 | 15,934,634.599 | 14,947,867.220 | 15,686,192.819 | 44,002,169.143 gross | 250,000 |
-| all categories trace enabled | 15,593,706.841 | 15,752,579.402 | 15,354,655.617 | 15,593,706.841 | 44,002,169.143 gross | 250,000 |
-
-The median-of-medians disabled regression is **0.8225%**, passing the at-most-1% budget. The
-PC-no-hit regression against the Phase 3 disabled candidate is **1.3632%**, passing the at-most-5%
-target. Every disabled and PC-no-hit fork has the same allocation vector and total; the rejecting
-filter again captured nothing and provides no evidence of producer allocation. Both accepted
-trace modes retained exactly 4096 entries and ended at `nextSequence=3,000,000`,
-`droppedEventCount=2,995,904`, and `oldestAvailableSequence=2,995,904`. Each captured 1,750,000
-events over its measured workload. Subtracting the disabled allocation rate gives an estimated
-**69.331 incremental bytes per accepted event** in either mode. The all-category workload produces
-the same CPU/memory events as the narrower mode because LCD/APU are disabled and the synthetic ROM
-does not exercise the other peripherals; it measures negotiation and inactive-category dispatch,
-not a peripheral event storm.
-
-Raw sample times in nanoseconds, retained so the medians can be independently recalculated:
-
-```text
-BASE1 [295357899,297055260,300336978,301937356,300771066,299995533,301579942,302492007,302238521]
-BASE2 [315576638,298250764,297631416,303821343,293206866,294755605,303882058,294566662,296405838]
-BASE3 [310155543,310131664,304666574,297413277,307192896,307667432,301843176,300135523,300269233]
-CAND1 [300841149,359274296,336205246,305246656,302760077,302761698,300057521,309918221,304909420]
-CAND2 [289676868,289202432,290746086,292148486,291448152,342526927,303840916,292268556,294792882]
-CAND3 [297463875,296515029,296192235,303265338,307673285,338016489,311531113,324505199,303201563]
-PC1 [311187886,313941282,311375780,308657165,310304939,315198540,311850332,310454071,310464610]
-PC2 [307641771,306170533,305590339,305763917,315972174,314054909,307456632,307344370,313910706]
-PC3 [308725007,304258755,305258329,306253861,309023891,307085376,306335695,304648387,301323956]
-REJECT1 [299858775,299847441,297812652,303581397,301663477,300270423,313377172,304371015,300613587]
-REJECT2 [301751079,300311893,300181879,302878576,301184307,301934467,301599624,302430348,306901073]
-REJECT3 [311539469,306544197,304060487,305134501,302498547,303583659,304709504,303588531,309960413]
-TRACE1 [64887559,63750332,63762863,63394213,62352748,64758761,63003370]
-TRACE2 [63581467,62138228,62871375,62504147,62756381,63407734,62240062]
-TRACE3 [65414177,66026973,66206732,78676048,88771658,74038058,66899176]
-ALL1 [63413915,64196124,64467500,64003376,64319357,64128434,63824540]
-ALL2 [63481667,64172608,63428782,63038757,66162782,63948948,63092891]
-ALL3 [63794785,65321560,63531912,65126827,63834290,67567770,65774085]
-```
-
-### Phase 6 headless capture checked-in report
-
-Phase 6 adds one transient exact-sound-output observer for deterministic WAV capture. With no
-observer attached, `Sound.play()` executes one null branch and constructs no callback or sample
-object. The disabled benchmark above still reaches that branch on every tick even after it turns
-NR52 off, so it directly measures the new normal-run cost.
-
-The following adjacent baseline/candidate comparison was taken on 2026-07-30. The baseline is
-`5ae76d881106524a1483a987a3bacdad35da5e1c`; the candidate is the complete Phase 6 working tree on
-that commit before its final SHA existed. Both sides used Java 21.0.1 HotSpot, Maven 3.8.6, Linux
-7.0.0-28-generic, an Intel Core i7-1165G7, the `powersave` governor, and 8 available processors.
-
-| Field | Baseline | Candidate |
-|---|---:|---:|
-| Fresh-fork median ticks/s, run 1 | 16,551,162.613 | 16,572,071.075 |
-| Fresh-fork median ticks/s, run 2 | 16,671,198.843 | 16,508,682.700 |
-| Fresh-fork median ticks/s, run 3 | 16,470,507.751 | 16,439,523.037 |
-| Median of fresh-fork medians | 16,551,162.613 | 16,508,682.700 |
-| Allocated bytes in every fork | 1,200,128,600 | 1,200,128,600 |
-| Allocated bytes per million ticks | 26,669,524.444 | 26,669,524.444 |
-
-The median-of-medians throughput regression is **0.2567%**, passing the at-most-1% disabled-path
-budget. Every baseline and candidate fork reported the identical nine-sample allocation vector,
-so the observer branch adds zero allocation proportional to tick or instruction count. The
-focused `SoundOutputObserverTest` separately measures the isolated warmed `play()` branch and
-requires a zero-byte sample.
-
-Raw sample times in nanoseconds:
-
-```text
-BASE1 [306008601,306299119,302093582,301898490,303343167,298940624,299810727,299492907,303339843]
-BASE2 [296663825,298175036,299918443,307425906,303923970,300138547,300373551,299133296,299787213]
-BASE3 [299154148,307680942,310846054,303211458,303572912,301703448,298763295,305006732,310361514]
-CAND1 [292902628,294893470,305606117,301078595,301712440,311006412,305760553,302529926,300768294]
-CAND2 [298371504,304882509,300448513,303596417,300619384,303765044,305246746,302870925,302451490]
-CAND3 [319535447,314441654,296733445,298833935,301084559,304145077,299551448,305553592,307173116]
-```

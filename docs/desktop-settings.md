@@ -32,9 +32,8 @@ other. Profiles without a bundled model-specific boot ROM cannot be combined wit
 Every effective option is selected independently in this order:
 
 1. an explicit command-line override;
-2. a per-game override, once that feature exists;
-3. the persisted user setting;
-4. the built-in default.
+2. the persisted user setting;
+3. the built-in default.
 
 Command-line overrides are process-local and are never written into the settings file. In
 particular, `--use-bootstrap` and `--disable-battery-saves` do not change the next launch.
@@ -46,12 +45,12 @@ The application owns one immutable `ApplicationSettings` value with typed `gener
 `EmulatorProperties` class is a compatibility facade over that model while older menu code is
 migrated.
 
-Schema 7 continues to use `${user.home}/.coffeegb.properties`; schemas 0–6 are migrated in place
+Schema 8 continues to use `${user.home}/.coffeegb.properties`; schemas 0–7 are migrated in place
 so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `7` |
+| `settings.schemaVersion` | exact supported schema version | `8` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -65,12 +64,20 @@ so the portable JAR remains compatible during the migration window.
 | `display.colorCorrection` | boolean | `true` |
 | `display.showSgbBorder` | boolean | `false` |
 | `desktop.windowWidth`, `desktop.windowHeight` | optional positive outer-frame dimensions; both or neither | absent |
+| `desktop.appearance` | `LIGHT`, `DARK`, or `SYSTEM` | `LIGHT` |
+| `desktop.commandBarVisible` | boolean | `true` |
 | `sound.enabled` | boolean | `true` |
 | `audio.outputDevice` | `default` or stable Java Sound device ID | `default` |
 | `audio.masterVolume` | integer percentage in `0..100` | `100` |
 | `audio.latencyPreset` | `LOW`, `BALANCED`, or `SAFE` | `BALANCED` |
 | `saves.batteryEnabled` | boolean | `true` |
+| `saves.directory` | optional managed save root | absent |
+| `saves.previousDirectory.<index>` | up to four previous managed save roots | empty |
+| `saves.rewindEnabled` | boolean | `true` |
+| `saves.rewindSeconds` | integer seconds in `5..120` | `30` |
+| `saves.rewindMemoryMiB` | integer MiB in `8..512` | `64` |
 | `saves.autosavePolicy` | legacy value, always normalized to `ON_CLOSE_AND_ROM_SWITCH` | `ON_CLOSE_AND_ROM_SWITCH` |
+| `saves.resumePolicy` | `NEVER`, `ASK`, or `ALWAYS` | `ASK` |
 | `rom.directory` | optional local path | absent |
 | `general.recentFileCapacity` | integer in `0..50` | `10` |
 | `general.romChangeConfirmationPolicy` | `ALWAYS`, `WHEN_RUNNING`, or `NEVER` | `WHEN_RUNNING` |
@@ -96,14 +103,14 @@ does not partially update the active settings.
 application may close without a redundant prompt. `ALWAYS` also confirms an idle application
 close, and `NEVER` suppresses this ordinary confirmation. A battery/autosave flush failure remains
 actionable regardless of this preference. Setting recent-file capacity to zero disables history;
-reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 7
+reducing it removes the oldest excess entries. Coffee GB has no update-check mechanism, so schema 8
 does not invent or persist an update-check preference.
 
 Unrecognized legacy keys are retained losslessly when the current schema is saved. Keys in a reserved grammar,
 such as an unknown `input.*` key, remain errors so a misspelled control binding is not silently
 ignored. The current schema stores active history under `general.recent.*`, so a numeric `rom.recent.*` legacy
 key beyond Coffee GB's old ten-entry history remains untouched even if capacity later grows. Schema
-7 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
+8 writes every active keyboard binding and the explicit P1 gamepad selection; an absent versioned
 binding is therefore unbound rather than silently restored to a default. If an older unknown key
 occupies a name reserved by a later schema, Coffee GB keeps its original key/value in bounded
 internal migration metadata rather than overwriting or reinterpreting it. At most 32 per-device
@@ -111,23 +118,22 @@ gamepad tuning profiles are retained.
 
 ## Preferences
 
-Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change the
-default ROM directory, recent-file capacity, ROM-change confirmation policy, system profile,
-display behavior, and keyboard controls without editing the properties file. The System tab owns
-the DMG/CGB hardware-profile and bootstrap choices formerly exposed as a top-level menu. The Display
-tab exposes 1×/2×/4× window sizing, letterboxing, fullscreen, rotation, DMG grayscale, frame
-blending, CGB color correction, and the Super Game Boy border. The Input tab arranges all eight
-bindings for each of Players 1–4 like a Game Boy pad. Choose **Capture** and press a key, including
-Enter or Escape. Tab remains reserved for focus navigation and Backspace remains reserved for
-Rewind. Assigning an occupied key swaps the two bindings (or moves it when the destination was
-unassigned); one **Reset keyboard defaults** action restores the complete keyboard layout. The
-Gamepads tab lists up to four logical assignments without calling SDL on the EDT. It keeps an
-unavailable configured controller visible, prevents duplicate explicit or automatic assignments,
-and exposes independent movement/tilt dead zones and X/Y inversion for each stable device. A
-mapping change releases all held input and waits for a neutral physical sample before accepting new
-presses.
+Open **File → Preferences…** (or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>,</kbd>) to change settings without
+editing the properties file. The category list contains **General**, **Display**, **Audio**,
+**Controls**, **Saves & Rewind**, **System**, and **Peripherals**. System owns hardware-profile and
+bootstrap choices; General owns ROM-opening policy, appearance, and command-bar visibility; Display
+owns sizing, letterboxing, fullscreen, rotation, color, blending, and the Super Game Boy border.
 
-The Peripherals tab selects Camera 1 (Coffee GB's default and the first OpenCV camera slot) or
+Controls combines keyboard and gamepad subpages for a selected player. Keyboard presents all eight
+buttons like a Game Boy pad; choose **Capture** and press a key, including Enter or Escape. Tab
+remains reserved for focus navigation and Backspace for Rewind. Assigning an occupied key swaps the
+two bindings, or moves it when the destination was unassigned. Gamepad lists up to four logical
+assignments without calling SDL on the EDT, keeps an unavailable configured controller visible,
+prevents duplicate explicit or automatic assignments, and exposes independent movement/tilt dead
+zones and X/Y inversion for each stable device. A mapping change releases held input and waits for
+a neutral physical sample before accepting new presses.
+
+The Peripherals page selects Camera 1 (Coffee GB's default and the first OpenCV camera slot) or
 another numbered camera for the webcam-backed Game Boy Camera. OpenCV exposes portable numeric
 device slots but not stable cross-platform camera names, so reconnecting hardware can change their
 order. Merely opening Preferences never probes or opens a camera. Applying a different choice
@@ -135,7 +141,7 @@ reopens the source asynchronously only when **Peripherals → Enable Game Boy Ca
 enabled; otherwise the choice is remembered for the next enable request. A failed explicit choice
 remains selected and is never silently replaced with a different camera.
 
-The Audio tab enumerates Java Sound outputs on a cancellable background worker. It supports system
+The Audio page enumerates Java Sound outputs on a cancellable background worker. It supports system
 default or an explicit descriptor-hashed output, a 0–100 master-volume slider, mute, and
 LOW/BALANCED/SAFE bounded-latency presets. If an explicit output disappears, playback retains the configured ID,
 falls back to System Default, records a diagnostic, and stays silent without blocking emulation if
@@ -143,10 +149,14 @@ no output can be opened. While fallback remains active, Coffee GB periodically r
 configured output after it reappears. Device, volume, mute, and latency changes do not reset emulated
 audio clock or DC-filter phase.
 
-**Apply** validates the complete draft, writes one settings update, and switches the live keyboard,
-camera, and display settings only after persistence accepts it. **Cancel**, the window close button, and
-Escape discard unapplied edits. **Restore Defaults** only changes the visible draft until Apply is
-chosen.
+**Save changes** validates the complete draft, replaces the in-memory settings, schedules a
+coalesced background write, and then applies the live keyboard, camera, display, and shell effects.
+A later disk failure leaves the validated settings live for the current session and is reported
+separately. When persistence is unavailable, the primary action is explicitly labelled **Apply for
+this session**. **Cancel**, the window close button, and Escape close a clean draft; a dirty draft is
+discarded only after explicit confirmation. **Restore page defaults** affects only the current
+category; **Restore all Preferences defaults…** requires confirmation. Both change only the draft
+until the primary action is chosen.
 
 ## Display scaling and fullscreen
 
@@ -167,19 +177,20 @@ Unused space is letterboxed or pillarboxed with the configured RGB color. The vi
 half-open geometry and conservative paint bounds, so odd device-pixel margins put the extra pixel
 on the right or bottom without stretching or cropping the final source pixel.
 
-The main window is resizable and has a base 160×144 minimum content area. **Screen → Fullscreen**
+The main window is resizable and has a base 160×144 minimum content area. **View → Fullscreen**
 enters borderless fullscreen; <kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated
 button, in which case the accelerator is automatically disabled and the menu command remains
 available. <kbd>Escape</kbd> always leaves fullscreen when the main game window owns focus, while
 remaining available to windowed emulation and dialogs. Menu radio items, Preferences, persisted
 settings, and the live renderer are synchronized through one EDT-owned coordinator.
 
-Coffee GB stores the last normal, windowed outer-frame width and height. On the next launch that
-size is clamped to the current frame minimum and primary usable work area, then centered as before.
-Fullscreen, maximized, and iconified dimensions never replace the saved normal size; window
-position and maximized state are intentionally not persisted. Live-resize updates are coalesced,
-while a final normal size is captured before a successful settings close. If settings are read-only,
-window geometry remains session-only and the existing file is untouched.
+The typed `.coffeegb.properties` model retains an optional legacy outer-frame width and height as a
+startup fallback. A separate, deliberately harmless desktop UI-state store records the main
+window's validated normal x/y/width/height and maximized state. It also records validated bounds for
+Preferences, Netplay, States, Mobile Adapter, and Printer windows plus the last Preferences
+category; it never records window visibility, drafts, paths, or window contents. Restored bounds are
+clamped to the available displays, and fullscreen or transient maximized geometry never replaces
+the saved normal bounds. Move/resize writes are coalesced and a final state is captured on close.
 
 Entering fullscreen remembers window placement relative to the monitor's stable AWT device ID and
 current scale transform. Exiting converts through the latest per-monitor transform and clamps the
@@ -198,12 +209,13 @@ after it can report and test that capability, with this repaint path remaining t
 
 ## Migration and recovery
 
-A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 6 migration is a
-pure conversion into schema 7, preserves unknown keys, retains absent profile mappings as Auto, and
+A file without `settings.schemaVersion` is legacy schema 0. Schema 0 through schema 7 migration is a
+pure conversion into schema 8, preserves unknown keys, retains absent profile mappings as Auto, and
 canonicalizes the finite historical uppercase profile aliases. Existing display scales migrate to
 explicit scale with a black letterbox and windowed startup; no previous launch is unexpectedly
-forced fullscreen. Older schemas have no saved desktop size and retain the existing packed,
-centered startup. Repeating load/migrate/save produces the same normalized settings. Legacy text
+forced fullscreen. Schemas before 6 have no legacy outer-frame size; schemas before 8 start with
+the light appearance and visible command bar. Repeating load/migrate/save produces the same
+normalized settings. Legacy text
 is decoded with the platform-default charset used by the former `FileReader`; versioned files use
 strict UTF-8 with deterministic ASCII escapes.
 

@@ -120,14 +120,12 @@ Candidate construction failures leave the old session recoverable: all candidate
 are staged first, discarded children are closed, subscriber exceptions are isolated, and the
 console remains attached to the old machine until ownership commits.
 
-This transaction currently describes `BasicController`. `LinkedController` rejects an oversized or
-unreadable adjacent battery before replacing its retained payload/session. At its queued frame-safe
-load boundary it persists the old session's current RAM/RTC capture, re-reads the resulting bounded
-sidecar, and sends those exact bytes; a typed write/read failure retains old ownership and publishes
-no new lifecycle. Its local ROM parse and initial battery preflight still run synchronously on the
-event caller (which may be the EDT or timing thread). Linked worker-based prepare/persist/activate,
-reset, stop, and close parity remains a required follow-up before issue #336 is complete. The
-unified open service and desktop entry-point routing also belong to that follow-up.
+`LinkedController` uses the same unified open and persistence boundaries. It rejects an oversized
+or unreadable adjacent battery before replacing its retained payload/session. At its queued
+frame-safe load boundary it persists the old session's current RAM/RTC capture, re-reads the
+resulting bounded sidecar, and sends those exact bytes; a typed write/read failure retains old
+ownership and publishes no new lifecycle. ROM parsing and battery preflight stay on the worker path,
+outside the event caller and Swing EDT.
 
 When the user keeps a session open after quit persistence fails, the desktop leaves its glass pane
 and wait cursor active with explicit “paused; close again to retry” wording. The controller has

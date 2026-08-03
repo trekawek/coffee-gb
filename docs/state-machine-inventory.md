@@ -1,6 +1,6 @@
 # Machine/session state inventory and ownership contract
 
-## Invariant established by Phase 1
+## Capture and apply invariant
 
 `MachineState`, `SessionState`, and `LinkedSessionState` are the service-free capture/apply boundary
 used by the portable StateFile v1/v2 codec. A capture owns every array and collection it exposes.
@@ -39,7 +39,7 @@ an explicit non-idle setup and compares a fixed continuation trace plus final st
 `DetachedStateTest` exercises the complete root graph, deep ownership, failure atomicity, display,
 held input, endpoint runtime state, required-value null rejection, semantic cursor boundaries, and
 difficult-cycle deterministic continuation. Runtime semantic preflight rejects an admitted record
-that has no policy. A separate source-path inventory was retired because it duplicated the code
+that has no policy. Coverage is behavior-based; a source-path inventory would duplicate the code
 layout without exercising capture or restore behavior.
 
 ## Supported safe points and thread ownership

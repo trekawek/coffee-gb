@@ -257,8 +257,8 @@ Identity diagnostics may include SHA-256/profile values, never ROM content.
 
 ## Decode, validation, and atomic application
 
-`StateCodec.decode` and `StateFileInspector` never mutate or construct an emulator. The smallest
-Phase-2 orchestration seam is `StateCodec.decodeAndApply` for an explicit Gameboy/configuration,
+`StateCodec.decode` and `StateFileInspector` never mutate or construct an emulator. The
+`StateCodec.decodeAndApply` orchestration seam accepts an explicit Gameboy/configuration,
 Session, or LinkedController. It performs, in order:
 
 1. bounded envelope/checksum/decompression/section parsing;
@@ -266,9 +266,9 @@ Session, or LinkedController. It performs, in order:
 3. primary/slot ROM and canonical profile plus full behavior-flag comparison for every active machine;
 4. for a v1 canonical SGB target, checked detached conversion of every primary/slot MBC3 phase
    from the frozen `4,194,304` denominator to the exact registered `sgb` phase domain;
-5. Phase-1 target-aware graph, nullability, mapper, endpoint, hardware, and semantic validation,
+5. target-aware graph, nullability, mapper, endpoint, hardware, and semantic validation,
    including Sound capacity and MBC3 subsecond phase derived from the exact target `ClockSpec`;
-6. the Phase-1 safe-point prepare-and-commit transaction.
+6. the safe-point prepare-and-commit transaction.
 
 The conversion is exact rational nearest rounding with ties upward:
 
@@ -312,7 +312,7 @@ Local reads use exactly four prefix bytes:
 
 The selected limit is enforced by the streaming read count and by explicitly capped buffer growth,
 not only by file metadata. Portable bytes never reach `ObjectInputStream`. After the complete
-portable decode, identity/profile validation and detached preflight, apply uses the Phase-1
+portable decode, identity/profile validation and detached preflight, apply uses the safe-point
 transaction. Rewind history is cleared only after `SnapshotManager` returns success.
 
 The detailed local migration policy, diagnostics, and compatibility window are documented in

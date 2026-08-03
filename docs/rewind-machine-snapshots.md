@@ -31,7 +31,7 @@ freeze forward emulation.
 
 ## Immutable graph and page generations
 
-The snapshot graph covers the complete Phase-1 machine inventory, including the primary and Datel
+The snapshot graph covers the complete machine inventory, including the primary and Datel
 slot RTC runtime and the two compatibility DMG FIFO runtime records. It contains only immutable
 scalars, enum/type IDs, immutable record/container nodes, and private primitive-array pages. It
 never retains an event bus, callback, console, file, time source, thread, ROM byte array, Mobile
@@ -98,7 +98,7 @@ remains held. Linked rollback replays P1 from its established frame-owned input 
 P2-P4, so those desktop slots are masked for linked sessions rather than sampled during a rebase.
 
 Before live mutation, restore reconstructs the complete registered machine record, checks hardware
-and mapper/battery ownership, runs the Phase-1 semantic validation, and validates both primitive
+and mapper/battery ownership, runs semantic validation, and validates both primitive
 runtime supplements. It retains a rollback capture for unexpected failures while applying the
 machine, FIFO runtime, and RTC runtime. Snapshot pages are private and the test/benchmark probe
 returns only opaque page-identity tokens.
@@ -130,8 +130,8 @@ Presentation data is retained only where it affects current output or determinis
 - The APU output buffer/index and channel phases determine the post-restore audio stream.
 - SGB border, mask, palette, and animation buffers determine the presented SGB frame.
 
-Host render listeners, audio sinks, and UI buffers are services and are not retained. Phase 1's
-single display-owner rule remains intact; the historical duplicate root display record stays null
+Host render listeners, audio sinks, and UI buffers are services and are not retained. The single
+display-owner rule remains intact; the historical duplicate root display record stays null
 for new captures.
 
 ## Reproducible 300-entry measurement
@@ -160,29 +160,3 @@ HotSpot's `ThreadMXBean`; capture/restore times use `System.nanoTime`. Allocatio
 reported for diagnosis only and have no flaky CI threshold. The normal deterministic guard repeats
 the final 1800-frame MachineSnapshot workload and compares retained bytes to the recorded legacy
 baseline; it does not assert time or allocation.
-
-Environment: Coffee GB master `195d9172f27d707934f631fa64c08803b18776a4`, final Phase-5 branch,
-Oracle HotSpot 21.0.1, Maven 3.8.6, Linux 6.17.0-41 x86-64, Intel i7-1165G7 (4 cores/8 threads),
-38 GiB RAM. The exact pre-change master run and final run produced:
-
-| Measurement | Legacy master | MachineSnapshot final |
-|---|---:|---:|
-| entries | 300 | 300 |
-| retained primitive bytes | 337,665,600 | 8,036,600 |
-| modeled retained bytes | not measured (object graph excluded) | 12,672,880 |
-| retained arrays/pages | 194,400 arrays | 4,331 pages |
-| unique immutable value nodes | n/a | 36,202 |
-| copied retained page bytes | n/a | 7,967,292 |
-| identity-verified dominant source bytes (cumulative) | n/a | 333,717,600 |
-| capture allocated bytes | 340,432,880 | 318,594,760 |
-| capture time | 90,746,351 ns | 777,744,061 ns |
-| restore time | 43,962,026 ns | 1,525,814,700 ns |
-
-Exact retained primitive payload fell by 97.62%; even the final modeled total is 96.25% below the
-baseline's primitive arrays alone. Capture allocation is 6.41% below the identical legacy
-baseline and 56.19% below the rejected transitional implementation's 727,215,224 bytes. The
-deterministic ownership tests prove the no-full-clone property by making a copied dominant
-registration fail; no synthetic "zero clone" counter is reported. Capture and restore remain
-slower than the legacy graph; these honest timing costs come primarily from exact page comparison
-and reflection-based immutable graph conversion/reconstruction. They are not hidden by copied-page
-accounting and do not form a normal-test performance threshold.

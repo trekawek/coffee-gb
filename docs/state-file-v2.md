@@ -109,18 +109,17 @@ session construction, and outgoing state rejects before a payload is written. A 
 SGB header rejects before held-input/ROM/state payload reads; a coarse incoming DMG header remains
 canonical `dmg`, never MGB. Support requires a separately negotiated profile-aware protocol.
 StateFile v2 remains the local exact-profile format and is also the only peer-state format on the
-explicit protocol-v9 #349 play path. That path carries complete CGBS bytes directly, rejects
+explicit protocol-v9 play path. That path carries complete CGBS bytes directly, rejects
 v1/legacy/native/CGBN input before graph reconstruction, validates exact target identity and root,
 and commits only through the controller's two-stage frame-safe transaction.
 
-The protocol-v9 contract in [netplay-protocol-v9.md](netplay-protocol-v9.md) allocates a new wire
-major and requires direct bounded StateFile v2 checkpoints with exact profile identities. The
-Phase #347 production foundation implements framing and HELLO. Phase #349 adds checkpoint
-admission and atomic application only when its explicit play plan is installed; earlier opt-in
-boundaries and the default v8 path still reject CHECKPOINT before proportional payload allocation.
-No v8 byte or behavior changes.
+The protocol-v9 contract in [netplay-protocol-v9.md](netplay-protocol-v9.md) allocates a separate
+wire major and requires direct bounded StateFile v2 checkpoints with exact profile identities.
+Checkpoint admission and atomic application are available only when its explicit play plan is
+installed; earlier opt-in boundaries and the default v8 path reject CHECKPOINT before proportional
+payload allocation. No v8 byte or behavior changes.
 
-The #315 `CGBR` v1 replay format uses StateFile v2 for explicitly consented embedded session
+The `CGBR` v1 replay format uses StateFile v2 for explicitly consented embedded session
 initial state. Its separate identity section carries the exact canonical profile ID (including
 `mgb` or `sgb2`) and both reduced `ClockSpec` rationals. See
 [replay-format-v1.md](replay-format-v1.md).

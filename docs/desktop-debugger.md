@@ -16,22 +16,29 @@ come from that same coherent safe point. A run-control or CPU-only refresh immed
 older Graphics and Audio rows and labels those panes as not captured for the new identity; they do
 not remain visible under a newer header while their selected-pane refresh is prepared.
 
-Only the selected Graphics or Audio section is requested. The detached payload is decoded on one
-bounded worker and only payload-free table rows reach Swing's event thread. Changing session,
-hiding, or closing the debugger cancels that work and releases its snapshot and raw bytes.
+Inspection sections are limited to visible, non-held tools. Video adds cadence-gated Graphics;
+Audio adds Audio; Hardware & I/O adds Hardware, Audio, and cadence-gated Graphics. Detached payloads
+are decoded on one bounded worker and only payload-free table rows reach Swing's event thread.
+Changing session, hiding, or closing the debugger cancels that work and releases its snapshots and
+raw bytes.
 
 | Pane | Contents |
 | --- | --- |
 | **CPU** | Registers and flags, execution/interrupt/timer/PPU/APU scalars, mapper banks, stack, and side-effect-free disassembly. |
-| **Memory** | One validated ROM, work-RAM, or high-RAM address/range, read only while paused. |
+| **Memory** | Live side-effect-free ROM, work-RAM, or high-RAM ranges. While paused, one safe RAM/HRAM byte may be edited at a time. |
 | **Breakpoints** | Searchable, sortable Breakpoint Center for PC, memory, opcode, interrupt, PPU, serial, master-tick, and frame conditions. Definitions can be added, edited, duplicated, enabled/disabled, or removed without blocking the UI. |
 | **Graphics** | Hardware mode, VRAM tile banks, background/window maps, all 40 OAM objects, DMG registers, and CGB RGB555 palettes. |
-| **Audio** | Mixer/frame-sequencer state, four APU channels, raw/decoded registers, and all 32 wave samples in text plus a supplemental graph. |
+| **Hardware & I/O** | Semantic owner-captured joypad, serial/IR, DMA/HDMA, banking, and system state with explicit unavailable/unknown provenance. |
+| **Audio** | Mixer/frame-sequencer state, four APU channels, raw/decoded registers, all 32 wave samples, and output-only channel enable/mute controls. |
 | **Timeline** | Sequence-ordered typed events, including serial and input activity when those categories are selected. |
 
 Address fields accept hexadecimal forms such as `$C000`, `0xC000`, or `C000`; ranges use a hyphen.
-Invalid, side-effectful, oversized, or unsupported requests are reported in the status line and do
-not mutate the machine. Table and color-preview information is also available as text.
+Invalid, side-effectful, oversized, or unsupported requests are reported in the status line. A
+successful memory edit requires an application/user or debugger pause, writes one safe RAM/HRAM byte
+without a bus side effect, and clears rewind/reverse history plus timeline correlation because the
+input-only history cannot reconstruct it. Audio channel controls are output-only, work while running, do not
+change emulated APU registers, and do not invalidate history. Table and color-preview information
+is also available as text.
 
 ## Run control and keyboard access
 
@@ -69,14 +76,15 @@ disable, retries are bounded and the abandoned port cannot block timeline captur
 
 ## Persistence and privacy
 
-Coffee GB persists only this allow-list of presentation settings: window bounds, three divider
-positions, selected pane, font scale, timeline categories, and timeline capacity. It does **not**
+Coffee GB persists only this allow-list of presentation settings: tool-window bounds and Hold
+state, the selected built-in layout and legacy pane, internal divider positions, font scale,
+timeline categories, and timeline capacity. It does **not**
 persist ROM or boot-ROM bytes, memory/stack/disassembly contents, graphics/audio payloads, trace
 rows, breakpoint state, replay data, paths, or clipboard contents.
 
-Hiding the retained window clears snapshots, tables, cursors, breakpoints, and reverse-history
-status before it can be reopened. Closing additionally shuts down its worker and listeners. Copy is
-an explicit local clipboard action; the debugger does not upload or automatically export data.
+Hiding or holding a tool withdraws its live inspection interest and releases payloads it no longer
+needs. Closing the workspace shuts down its worker and listeners. Copy is an explicit local
+clipboard action; the debugger does not upload or automatically export data.
 
 The platform-neutral safe-point, bounds, DTO, and hot-path contract is specified in
 [debug-port.md](debug-port.md).

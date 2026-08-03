@@ -2,18 +2,13 @@
 
 This is the authoritative normative contract for protocol v9. The machine-readable registries in
 `controller/src/test/resources/netplay-v9/` are part of this contract and are checked against this
-document. RFC 2119 words are normative. Phase #347 implements the CGB9 frame, HELLO negotiation,
-bounded transport ownership, and lifecycle representation beside the frozen v8 implementation.
-Without an invitation owner that foundation stops at `AWAITING_PAIRING`. Part 1 of #348 implements
-the already-frozen invitation and AUTH contract. Part 2 adds the exact MANIFEST-v1 exchange and
-stops at an immutable pre-consent boundary: `SYNCHRONIZING` for an exact pair with no proposals,
-or `EXCHANGE_CONSENT` when validated metadata contains one or more proposals. Part 3 implements
-the exact item-scoped CONSENT exchange plus bounded one-use ROM and battery transactions, then
-stops at an immutable preparation-complete `SYNCHRONIZING` boundary before START. Callers must
-explicitly supply both prepared manifest metadata and a Part-3 plan; omitting either retains the
-corresponding Part-1 or Part-2 boundary. Issue #349 implements the already-frozen direct-v2
-checkpoint, START/READY, ACTIVE traffic, and frame-safe atomic target contracts only when an
-additional play plan is supplied; omitting it preserves the Part-3 pre-START boundary.
+document. RFC 2119 words are normative. The implementation provides CGB9 framing, HELLO
+negotiation, bounded transport ownership, and lifecycle representation beside frozen protocol v8.
+Without an invitation owner it stops at `AWAITING_PAIRING`. Optional plans add invitation/AUTH,
+MANIFEST-v1 exchange, item-scoped CONSENT, and bounded one-use ROM or battery transactions. Callers
+that omit a plan retain its preceding immutable boundary. Direct-v2 checkpoints, START/READY,
+ACTIVE traffic, and frame-safe atomic target application additionally require an explicit play
+plan; without it the connection remains at the preparation-complete pre-START boundary.
 
 Protocol v8 is frozen separately in [netplay-protocol-v8.md](netplay-protocol-v8.md). V9 never
 downgrades to, probes, or parses v8/v7 on the same connection. The version decision and the stale
@@ -415,7 +410,7 @@ the peer prefix is not parsed as v9; if both sides parsed v9 and later disagree,
 
 ## StateFile v2, topology, and atomic application
 
-V9 network state uses only the merged #314 detached model and **StateFile v2**. Java native
+V9 network state uses only the detached state model and **StateFile v2**. Java native
 serialization, `ObjectInputStream`, local legacy import, `Memento`, `CGBN`, and StateFile v1 are
 forbidden. Network limits are tighter than portable-file limits: one direct StateFile is at most
 32 MiB encoded and 32 MiB decoded; the whole decoded session aggregate is 128 MiB. Both layers'
@@ -441,7 +436,7 @@ It is decoded and target-validated off the emulator thread, then prepared and ap
 existing frame safe point as one transaction. ROM/slot hashes, profiles, bootstrap/accessory
 flags, root kind, slots, local owner, endpoint/topology, and integrity must agree before mutation.
 Any member failure rejects only the source and leaves live sessions, history, inputs, frame,
-configuration, and topology unchanged. The #349 implementation captures the controller's current
+configuration, and topology unchanged. The implementation captures the controller's current
 machine/session/history/input/frame floor before its first commit callback and restores all of it
 on failure. Target-dependent construction is a separate no-mutation prepare phase; the
 directional grant is consumed only after the frame-safe commit reports success. Production capture
@@ -519,7 +514,7 @@ coffeegb://HOST:PORT/join?v=9&mode=MODE&slot=SLOT&exp=EXP&token=TOKEN
 - Parsing is strict: a noncanonical spelling is rejected, never normalized. Rendering always emits
   this form. `invitation-vectors.tsv` freezes success and typed failure behavior.
 
-V9 has no tokenless/manual-address authentication path. #350's separately reviewed trusted-LAN
+V9 has no tokenless/manual-address authentication path. The optional trusted-LAN
 discovery advertises only an untrusted numeric endpoint and the fixed public fields below; it
 cannot bypass AUTH/MANIFEST/CONSENT. Adding nonce comparison or a different invitation mechanism
 still requires a separately reviewed capability and threat-model change.
@@ -544,23 +539,9 @@ freezes precedence when one string violates more than one rule. User text is san
 
 Invitation possession authenticates only possession of that one invitation. Protocol v9 runs over
 plaintext TCP: it provides **no encryption, confidentiality, forward secrecy, server identity, or
-protection against an on-path attacker**. It is not a claim of safe Internet exposure. This phase
+protection against an on-path attacker**. It is not a claim of safe Internet exposure. The protocol
 does not provide TLS, matchmaking, rendezvous, NAT traversal, relay, or public inbound service.
 
-## Phase consumption matrix
-
-| Phase | Consumes this frozen artifact | Production behavior still blocked before it |
-|---|---|---|
-| #347 | v9 header/registries/state machines and hostile wire corpus | implemented as an opt-in transport foundation; no invitation, authentication, consent, private transfer, checkpoint, or playable flow |
-| #348 Part 1 | invitation/auth vectors, AUTH ordering, token/slot ownership, privacy limits | implemented; callers without an explicit manifest plan retain the immutable pre-MANIFEST boundary |
-| #348 Part 2 | MANIFEST ordering, exact roster/identity comparison, and item proposals | implemented through an immutable pre-consent boundary; manifests are caller-prepared metadata and no private content is opened or hashed on transport threads |
-| #348 Part 3 | CONSENT ordering and ROM/battery transactions | implemented through immutable preparation completion; lazy sources open only after two exact approvals and verified receivers deliver only whole detached candidates; callers without a play plan remain blocked before START |
-| #349 | CHECKPOINT schema, StateFile-v2 identity, atomic group/history rules | implemented behind an explicit play plan: initial MACHINE or full-roster LINKED_SESSION, normal ACTIVE SESSION resync, START/READY, bounded INPUT/RESET/STOP, and two-stage frame-safe atomic commit; default v8/UI remain isolated |
-| #350 | PING/PONG transport metrics, rollback/history snapshots, sanitized Swing diagnostics, and separately reviewed trusted-LAN endpoint discovery | implemented as bounded opt-ins; no hardening rollout, v8 retirement, central service, or nonce/manual-address bypass exists |
-| #351 | Mobile clean-room ADR/source inventory/transcripts | no production Mobile engine exists in #346 |
-| #352 | bounded async backend/status/cancellation contract | no DNS/socket/backend work exists in #346 |
-| #353 | desktop adapter/configuration/privacy documentation | no Mobile UI or external-service preset exists in #346 |
-
 Changing a stable field, ID, limit, timeout, transition, invitation grammar, or transcript requires
-a reviewed ADR and, where bytes become incompatible, a new protocol/schema version. Later phases
+a reviewed ADR and, where bytes become incompatible, a new protocol/schema version. Extensions
 consume these artifacts; they do not silently rewrite them.

@@ -97,7 +97,7 @@ The MGB evidence was accessed 2026-07-26. No MGB boot ROM or proprietary capture
 - GBCTR revision 188 separately identifies the MGB boot ROM by hashes and records its distinct
   origin, but the copyrighted bytes are neither bundled nor downloaded here.
 
-The evidence supports no generic MGB PPU, APU, timer, mapper, or serial quirk in this phase. MGB
+The available evidence supports no generic MGB PPU, APU, timer, mapper, or serial quirk. MGB
 therefore shares immutable DMG capabilities, clock, and all skip-boot fields except `A`; that
 sharing is deliberate composition, not a claim that unknown silicon differences do not exist.
 
@@ -150,7 +150,8 @@ Coffee GB includes DMG/SGB1/CGB bootstrap resources but does not bundle MGB or S
 must never run the DMG image under MGB identity or SGB1 under SGB2 identity. Consequently `NORMAL`
 and `FAST_FORWARD` with `mgb` or `sgb2` fail before component construction with an actionable “use
 skip bootstrap” error. `SKIP` is fully supported. A future user-supplied model-specific boot path
-requires separate legal/provenance and image validation; this phase downloads or embeds nothing.
+requires separate legal/provenance and image validation; Coffee GB downloads or embeds no such
+image.
 
 ## Selection, state, rewind, and netplay
 
@@ -171,7 +172,7 @@ first mutation; decoding and re-encoding preserves the exact old bytes. See
 Protocol v8 negotiates StateFile v1 and remains byte-for-byte frozen. It cannot distinguish MGB
 from coarse DMG, the historical SGB RTC scalar from current exact-clock state, or SGB2 from SGB.
 Coffee GB rejects MGB and both SGB-family linked loads before constructing a session or writing
-state. A received coarse DMG remains canonical DMG. The #315 `CGBR` v1 replay identity separately
+state. A received coarse DMG remains canonical DMG. The `CGBR` v1 replay identity separately
 carries the exact canonical ID and both reduced clock rationals; see
 [replay-format-v1.md](replay-format-v1.md).
 Headless `run`/`replay` profile and bootstrap selection is documented in
@@ -189,6 +190,6 @@ To add or rename a profile:
 6. add mismatch-before-mutation, settings/CLI, rewind, linked, and compatibility coverage.
 
 The enforceable extension checklist is [hardware-profile-contribution.md](hardware-profile-contribution.md).
-AGB-in-GB-mode remains an evidence-only audit in
-[#391](https://github.com/trekawek/coffee-gb/issues/391); no AGB profile is implemented. Replay
-recording remains deferred to #315.
+Available AGB-in-GB-mode evidence does not justify a production profile, so no AGB profile is
+implemented. Replay recording preserves the exact profile and clock identity as documented in
+[replay-format-v1.md](replay-format-v1.md).

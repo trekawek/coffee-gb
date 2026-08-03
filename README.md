@@ -82,7 +82,7 @@ item-scoped consent and one bounded ROM or battery transaction per approved prop
 an immutable pre-START boundary. Content providers are opened only after both exact approvals;
 verified receivers deliver only complete detached candidates. Callers without these opt-ins retain
 their earlier boundary. Own-ROM exact match remains the default and performs no transfer.
-An additional #349 developer plan enables direct StateFile-v2 checkpoints, atomic frame-safe
+An additional developer play plan enables direct StateFile-v2 checkpoints, atomic frame-safe
 restore, START/READY, and bounded ACTIVE input/reset/stop. It remains opt-in and is not wired to the
 default UI. Explicit v9 callers may enable bounded PING/rollback metrics and an EDT-safe sanitized
 diagnostics panel. A separate trusted-LAN discovery service is off by default and advertises only
@@ -94,8 +94,8 @@ does not interoperate or
 downgrade to v8. Its TCP transport is plaintext—not confidential or secure against an on-path
 attacker. See
 [the v9 privacy/troubleshooting guide](docs/netplay-v9-privacy.md) and the
-[normative v9 contract](docs/netplay-protocol-v9.md). The implemented foundation boundary is
-documented in [netplay-v9-foundation.md](docs/netplay-v9-foundation.md).
+[normative v9 contract](docs/netplay-protocol-v9.md), which also documents the implemented opt-in
+boundaries.
 
 Mobile Adapter GB support includes a deterministic engine, a byte-pipelined link-port endpoint,
 a blue-adapter dial/status/ISP lifecycle modeled for Japanese Pokémon Crystal, and an optional bounded
