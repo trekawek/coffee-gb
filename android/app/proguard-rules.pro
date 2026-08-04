@@ -4,3 +4,9 @@
 # equivalent class; suppress only this unreachable legacy-import warning, not arbitrary missing
 # desktop APIs.
 -dontwarn java.io.ObjectInputFilter
+
+# Portable save states reflect over every ComponentState record's canonical constructor and
+# component fields. Keep their names and Java parameter metadata stable after R8 so a state file
+# created by a release build has the same schema as a debug or desktop build.
+-keepattributes MethodParameters,Signature
+-keep class * implements eu.rekawek.coffeegb.core.state.ComponentState { <fields>; <init>(...); }
