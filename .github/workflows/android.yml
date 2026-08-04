@@ -81,5 +81,13 @@ jobs:
             -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2"
             :app:connectedDebugAndroidTest;
             test_status=$?;
-            if [ "$test_status" -ne 0 ]; then adb logcat -d -v threadtime; fi;
+            if [ "$test_status" -ne 0 ]; then
+              test_failure=$(grep -R -h -m 1 '<failure ' android/app/build/outputs/androidTest-results/connected 2>/dev/null | cut -c1-3500 || true);
+              if [ -n "$test_failure" ]; then
+                printf '%s\n' "$test_failure" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' | sed '1s/^/::error title=Android instrumentation failure::/';
+              else
+                echo '::error title=Android instrumentation failure::connectedDebugAndroidTest failed but no XML failure report was found';
+              fi;
+              adb logcat -d -v threadtime;
+            fi;
             exit "$test_status"
