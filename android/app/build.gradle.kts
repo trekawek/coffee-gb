@@ -18,6 +18,8 @@ private val forbiddenSourceReferences = linkedMapOf(
     "org.opencv." to "OpenCV",
     "io.github.libsdl" to "SDL",
     ".readAllBytes()" to "Java 9 InputStream.readAllBytes()",
+    ".readNBytes(" to "Java 9 InputStream.readNBytes()",
+    "Thread.onSpinWait()" to "Java 9 Thread.onSpinWait()",
 )
 private val forbiddenBytecodeReferences = linkedMapOf(
     "java/awt/" to "java.awt",

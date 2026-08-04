@@ -56,9 +56,9 @@ internal constructor(
       // this avoids a prolonged burst of unpaced execution after a breakpoint or suspended host.
       deadline = now - MAX_CATCH_UP_NANOS
     }
-    // sleep the bulk of the wait and busy-spin only the last stretch: parkNanos wakes
-    // with millisecond-ish slack depending on the OS timer, the spin gives frame-exact
-    // pacing without pegging a core for the whole frame
+    // Sleep the bulk of the wait and yield only the last stretch: parkNanos wakes with
+    // millisecond-ish slack depending on the OS timer, and yielding keeps fine-grained pacing
+    // without relying on Java 9's unavailable spin-wait hint or pegging a core for the whole frame.
     while (true) {
       val remaining = deadline - nanoTime()
       if (remaining <= 0) {
@@ -67,7 +67,7 @@ internal constructor(
       if (remaining > SPIN_THRESHOLD_NANOS) {
         parkNanos(remaining - SPIN_THRESHOLD_NANOS)
       } else {
-        Thread.onSpinWait()
+        Thread.yield()
       }
     }
   }
