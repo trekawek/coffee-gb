@@ -42,15 +42,15 @@ public class AndroidRuntimeEndToEndSmokeTest {
             // GitHub-hosted emulators are not a performance target. A valid native frame before
             // input, after input, and after state restoration proves the rendering path without
             // coupling this smoke test to the runner's callback cadence.
-            assertFrame(runtime);
+            assertFrame(runtime, "before input");
             runtime.input().onKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BUTTON_A));
             runtime.input().onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BUTTON_A));
-            assertFrame(runtime);
+            assertFrame(runtime, "after input");
 
             runtime.saveSnapshot(0);
             awaitSavedState(runtime, 0);
             runtime.restoreSnapshot(0);
-            assertFrame(runtime);
+            assertFrame(runtime, "after state restore");
 
             runtime.onHostNotVisible();
             await("background pause", () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
@@ -105,8 +105,8 @@ public class AndroidRuntimeEndToEndSmokeTest {
         fail("timed out waiting for fixture start: " + runtime.state().message());
     }
 
-    private static void assertFrame(AndroidEmulationRuntime runtime) throws Exception {
-        NativeFrameStore.Frame frame = awaitValue(runtime.frames()::takeLatest);
+    private static void assertFrame(AndroidEmulationRuntime runtime, String checkpoint) throws Exception {
+        NativeFrameStore.Frame frame = awaitValue(runtime.frames()::takeLatest, checkpoint);
         try {
             assertNotNull(frame);
             assertEquals(160, frame.width());
@@ -142,14 +142,14 @@ public class AndroidRuntimeEndToEndSmokeTest {
     }
 
     private static NativeFrameStore.Frame awaitValue(
-            java.util.function.Supplier<NativeFrameStore.Frame> supplier) throws Exception {
+            java.util.function.Supplier<NativeFrameStore.Frame> supplier, String checkpoint) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + TIMEOUT_MILLIS;
         NativeFrameStore.Frame value;
         while ((value = supplier.get()) == null && SystemClock.elapsedRealtime() < deadline) {
             Thread.sleep(50L);
         }
         if (value == null) {
-            fail("timed out waiting for a rendered frame");
+            fail("timed out waiting for a rendered frame " + checkpoint);
         }
         return value;
     }
