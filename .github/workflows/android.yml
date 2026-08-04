@@ -74,6 +74,7 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           arch: ${{ matrix.arch }}
+          emulator-options: -no-window -noaudio -gpu swiftshader_indirect -no-snapshot -no-boot-anim
           script: >-
             set +e;
             ./android/gradlew -p android --no-daemon
