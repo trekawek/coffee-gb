@@ -517,10 +517,21 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void configureOptionalDevices() {
+        LinearLayout options = new LinearLayout(this);
+        options.setOrientation(LinearLayout.VERTICAL);
         Switch rumble = new Switch(this);
         rumble.setText("Rumble when supported by the game and device");
         rumble.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
-        new AlertDialog.Builder(this).setTitle("Optional devices").setView(rumble)
+        options.addView(rumble);
+        Button calibrateTilt = new Button(this);
+        calibrateTilt.setText("Set current position as tilt neutral");
+        calibrateTilt.setOnClickListener(ignored -> {
+            requireRuntime(AndroidEmulationRuntime::calibrateTilt);
+            Toast.makeText(this, "Tilt will calibrate using the next sensor sample.",
+                    Toast.LENGTH_SHORT).show();
+        });
+        options.addView(calibrateTilt);
+        new AlertDialog.Builder(this).setTitle("Optional devices").setView(options)
                 .setMessage("Tilt, camera, and printer integrations require a compatible cartridge and are configured only when available.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                     getPreferences(MODE_PRIVATE).edit().putBoolean("devices.rumble", rumble.isChecked()).apply();
@@ -535,7 +546,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void showAbout() {
         new AlertDialog.Builder(this).setTitle("About Coffee GB Android")
-                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, microphone, camera, or vibration permission.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
+                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, microphone, or camera permission. Optional rumble uses Android's normal vibration permission only when enabled.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
                 .setPositiveButton("OK", null).show();
     }
 

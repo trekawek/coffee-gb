@@ -79,6 +79,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private BasicController controller;
     private volatile AndroidAudioSink audio;
     private volatile AndroidRumbleSink rumble;
+    private volatile AndroidTiltSink tilt;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
@@ -88,6 +89,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private StateRepository activeStates;
     private long nextOpenRequestId;
     private long activeOpenRequestId;
+    private long tiltOpenRequestId;
+    private boolean tiltRequiredForOpenRequest;
     private long nextFlushRequestId;
     private long pendingFlushRequestId;
     private ScheduledFuture<?> flushDeadline;
@@ -136,6 +139,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
+    /** Calibrates an active MBC7 cartridge to the device's current resting position. */
+    void calibrateTilt() {
+        AndroidTiltSink activeTilt = tilt;
+        if (activeTilt != null) {
+            activeTilt.calibrate();
+        }
+    }
+
     /** Pauses one active session at its controller-owned safe point without ending it. */
     public void pause() {
         input.releaseAll();
@@ -146,6 +157,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         AndroidRumbleSink activeRumble = rumble;
         if (activeRumble != null) {
             activeRumble.pause();
+        }
+        AndroidTiltSink activeTilt = tilt;
+        if (activeTilt != null) {
+            activeTilt.pause();
         }
         submit(() -> {
             if (controller != null && activeLayout != null) {
@@ -326,6 +341,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeRumble != null) {
             activeRumble.pause();
         }
+        AndroidTiltSink activeTilt = tilt;
+        if (activeTilt != null) {
+            activeTilt.pause();
+        }
         submit(() -> {
             if (controller == null) {
                 return;
@@ -357,6 +376,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             AndroidRumbleSink activeRumble = rumble;
             if (activeRumble != null) {
                 activeRumble.resume();
+            }
+            AndroidTiltSink activeTilt = tilt;
+            if (activeTilt != null) {
+                activeTilt.resume();
             }
             lifecycle.resumedByUser();
             eventBus.post(new Controller.ResumeEmulationEvent());
@@ -476,6 +499,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         audio = new AndroidAudioSink(context, eventBus);
         audio.start();
         rumble = new AndroidRumbleSink(context, eventBus, false);
+        tilt = new AndroidTiltSink(context, eventBus);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
@@ -494,6 +518,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.EmulationStartedEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
+                        AndroidTiltSink activeTilt = tilt;
+                        if (activeTilt != null) {
+                            activeTilt.setCartridgeActive(tiltOpenRequestId
+                                    == activeOpenRequestId && tiltRequiredForOpenRequest);
+                        }
                         if (currentSource != null) {
                             new RecentSafDocuments(context).recordIfPersisted(currentSource);
                         }
@@ -604,6 +633,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeStates = new StateRepository(layout, AtomicFileWriter.system());
             currentSource = source;
             activeOpenRequestId = ++nextOpenRequestId;
+            tiltOpenRequestId = activeOpenRequestId;
+            tiltRequiredForOpenRequest = rom.getType().isMbc7();
             publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
                     false, true, false);
             controllerEventBus().post(new Controller.LoadRomEvent(
@@ -715,16 +746,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         EventBus activeBus = eventBus;
         AndroidAudioSink activeAudio = audio;
         AndroidRumbleSink activeRumble = rumble;
+        AndroidTiltSink activeTilt = tilt;
         controller = null;
         eventBus = null;
         audio = null;
         rumble = null;
+        tilt = null;
         if (active == null) {
             if (activeAudio != null) {
                 activeAudio.close();
             }
             if (activeRumble != null) {
                 activeRumble.close();
+            }
+            if (activeTilt != null) {
+                activeTilt.close();
             }
             return true;
         }
@@ -736,6 +772,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (activeRumble != null) {
                 activeRumble.close();
             }
+            if (activeTilt != null) {
+                activeTilt.close();
+            }
             lifecycle.released();
             return true;
         } catch (RuntimeException failure) {
@@ -744,6 +783,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             eventBus = activeBus;
             audio = activeAudio;
             rumble = activeRumble;
+            tilt = activeTilt;
             return false;
         }
     }

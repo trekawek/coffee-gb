@@ -77,6 +77,10 @@ by the controller descriptor plus vendor/product identity; the mapping dialog ca
 replaces a conflicting mapping deterministically, and can reset one controller. Focus loss,
 surface teardown, stopping, and controller removal synchronously release their input source.
 
+MBC7 games use the Android accelerometer only while their session is active. The next reading
+establishes a neutral position, the optional-device settings can recalibrate it, and the axes follow
+the display rotation. Devices without an accelerometer safely retain neutral tilt input.
+
 Android audio shares the desktop's portable resampling, two-period mixing filter, and DC blocking.
 The service writes signed 16-bit stereo PCM to an `AudioTrack` on a dedicated consumer thread at
 the initialized track rate. Its six preallocated host-frame slots bound memory and latency: a late
