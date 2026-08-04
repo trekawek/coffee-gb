@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.controller.state.StateOperation;
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
+import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -30,9 +31,10 @@ import static org.junit.Assert.fail;
 @RunWith(AndroidJUnit4.class)
 public class AndroidRuntimeEndToEndSmokeTest {
 
-    // GitHub's API-26 emulator runs without KVM. State serialization is correct but may take
-    // longer than the ordinary UI/lifecycle checks, so this remains a functional—not timing—test.
+    // GitHub's API-26 emulator runs without KVM. State serialization may take longer than the
+    // ordinary UI/lifecycle checks, so this remains a functional—not timing—test.
     private static final long TIMEOUT_MILLIS = 60_000L;
+    private static final long STATE_OPERATION_TIMEOUT_MILLIS = 180_000L;
 
     @Test
     public void playsGeneratedContentFixtureThroughSaveAndLifecycleTransitions() throws Exception {
@@ -45,7 +47,14 @@ public class AndroidRuntimeEndToEndSmokeTest {
             events.register(loadFailure::set, Controller.LoadRomFailedEvent.class);
             CountDownLatch stateSaved = new CountDownLatch(1);
             CountDownLatch stateRestored = new CountDownLatch(1);
+            CountDownLatch stateSaveRequested = new CountDownLatch(1);
             AtomicReference<StateOperationFailedEvent> stateFailure = new AtomicReference<>();
+            events.register(event -> {
+                if (event.getRef() instanceof StateRef.Slot
+                        && ((StateRef.Slot) event.getRef()).getIndex() == 0) {
+                    stateSaveRequested.countDown();
+                }
+            }, StateSaveRequestEvent.class);
             events.register(event -> {
                 if (!(event.getRef() instanceof StateRef.Slot)
                         || ((StateRef.Slot) event.getRef()).getIndex() != 0) {
@@ -77,6 +86,8 @@ public class AndroidRuntimeEndToEndSmokeTest {
             assertFrame(runtime, "after input");
 
             runtime.saveSnapshot(0);
+            assertTrue("state save request", stateSaveRequested.await(
+                    TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             awaitStateOperation("state save", stateSaved, stateFailure);
             awaitSavedState(runtime, 0);
             runtime.restoreSnapshot(0);
@@ -151,7 +162,8 @@ public class AndroidRuntimeEndToEndSmokeTest {
             String operation,
             CountDownLatch completed,
             AtomicReference<StateOperationFailedEvent> failure) throws Exception {
-        assertTrue(operation + " event", completed.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+        assertTrue(operation + " event", completed.await(
+                STATE_OPERATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
         StateOperationFailedEvent stateFailure = failure.get();
         if (stateFailure != null) {
             fail(operation + " failed: " + stateFailure.getError().getDetail());
