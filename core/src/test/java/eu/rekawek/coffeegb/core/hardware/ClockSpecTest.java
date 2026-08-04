@@ -72,6 +72,8 @@ public class ClockSpecTest {
 
         assertThrows(ArithmeticException.class, () -> clock.ticksForSeconds(Long.MAX_VALUE));
         assertThrows(ArithmeticException.class,
+                () -> ClockSpec.multiplyDivide(Long.MAX_VALUE, 2, 1, ClockSpec.Rounding.FLOOR));
+        assertThrows(ArithmeticException.class,
                 () -> clock.newTickRateAccumulator(Long.MAX_VALUE).advance(Long.MAX_VALUE));
         assertThrows(IllegalArgumentException.class, () -> new ClockSpec(0, 60, 1));
         assertThrows(IllegalArgumentException.class, () -> new ClockSpec(1, 2, 1));
