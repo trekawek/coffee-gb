@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -14,6 +15,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.ScrollView;
@@ -38,6 +40,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int IMPORT_STATE_REQUEST = 4;
     private static final int EXPORT_STATE_REQUEST = 5;
     private static final int EXPORT_SCREENSHOT_REQUEST = 6;
+    private static final int EXPORT_PRINTER_REQUEST = 7;
 
     private TextView status;
     private CoffeeGbSurfaceView video;
@@ -92,6 +95,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime.setAudioMuted(getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
             runtime.setAudioVolume(getPreferences(MODE_PRIVATE).getInt("audio.volume", 100));
             runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
+            runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
             applyState(runtime.state());
         }
 
@@ -269,6 +273,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case EXPORT_SCREENSHOT_REQUEST -> confirmExport(
                     "Export native screenshot?", "The chosen document will be replaced.",
                     () -> runtime.exportScreenshot(data.getData()));
+            case EXPORT_PRINTER_REQUEST -> confirmExport(
+                    "Export printer paper?", "The chosen document will be replaced.",
+                    () -> runtime.exportPrinter(data.getData(), () -> sharePrinter(data.getData())));
             default -> { }
         }
     }
@@ -306,6 +313,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         .putExtra(Intent.EXTRA_TITLE, "coffee-gb.png")
                         .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
                 EXPORT_SCREENSHOT_REQUEST);
+    }
+
+    private void choosePrinterExport() {
+        if (runtime == null) {
+            return;
+        }
+        startActivityForResult(
+                new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                        .addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("image/png")
+                        .putExtra(Intent.EXTRA_TITLE, "coffee-gb-printer.png")
+                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                EXPORT_PRINTER_REQUEST);
     }
 
     private void configureTouchControls() {
@@ -523,6 +544,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         rumble.setText("Rumble when supported by the game and device");
         rumble.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
         options.addView(rumble);
+        Switch printer = new Switch(this);
+        printer.setText("Emulate the Game Boy Printer");
+        printer.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
+        options.addView(printer);
         Button calibrateTilt = new Button(this);
         calibrateTilt.setText("Set current position as tilt neutral");
         calibrateTilt.setOnClickListener(ignored -> {
@@ -531,12 +556,51 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     Toast.LENGTH_SHORT).show();
         });
         options.addView(calibrateTilt);
+        Button previewPrinter = new Button(this);
+        previewPrinter.setText("Preview printer paper");
+        previewPrinter.setOnClickListener(ignored -> requireRuntime(this::showPrinterPreview));
+        options.addView(previewPrinter);
+        Button exportPrinter = new Button(this);
+        exportPrinter.setText("Export and share printer paper");
+        exportPrinter.setOnClickListener(ignored -> choosePrinterExport());
+        options.addView(exportPrinter);
         new AlertDialog.Builder(this).setTitle("Optional devices").setView(options)
                 .setMessage("Tilt, camera, and printer integrations require a compatible cartridge and are configured only when available.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                     getPreferences(MODE_PRIVATE).edit().putBoolean("devices.rumble", rumble.isChecked()).apply();
-                    requireRuntime(active -> active.setRumbleEnabled(rumble.isChecked()));
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.printer", printer.isChecked()).apply();
+                    requireRuntime(active -> {
+                        active.setRumbleEnabled(rumble.isChecked());
+                        active.setPrinterEnabled(printer.isChecked());
+                    });
                 }).show();
+    }
+
+    private void showPrinterPreview(AndroidEmulationRuntime active) {
+        active.previewPrinter(bitmap -> {
+            if (bitmap == null) {
+                Toast.makeText(this, "Nothing has been printed yet.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            ImageView image = new ImageView(this);
+            image.setImageBitmap(bitmap);
+            image.setAdjustViewBounds(true);
+            ScrollView scroll = new ScrollView(this);
+            scroll.addView(image);
+            new AlertDialog.Builder(this).setTitle("Game Boy Printer paper").setView(scroll)
+                    .setNegativeButton("Close", null)
+                    .setNeutralButton("Clear", (dialog, which) -> active.clearPrinter())
+                    .setPositiveButton("Export", (dialog, which) -> choosePrinterExport()).show();
+        });
+    }
+
+    private void sharePrinter(android.net.Uri uri) {
+        Intent share = new Intent(Intent.ACTION_SEND)
+                .setType("image/png")
+                .putExtra(Intent.EXTRA_STREAM, uri)
+                .setClipData(ClipData.newRawUri("Game Boy Printer paper", uri))
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(Intent.createChooser(share, "Share printer paper"));
     }
 
     private void showUnavailable(String title, String reason) {
