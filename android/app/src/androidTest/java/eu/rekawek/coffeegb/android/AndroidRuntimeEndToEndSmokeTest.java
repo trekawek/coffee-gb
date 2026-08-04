@@ -30,7 +30,9 @@ import static org.junit.Assert.fail;
 @RunWith(AndroidJUnit4.class)
 public class AndroidRuntimeEndToEndSmokeTest {
 
-    private static final long TIMEOUT_MILLIS = 20_000L;
+    // GitHub's API-26 emulator runs without KVM. State serialization is correct but may take
+    // longer than the ordinary UI/lifecycle checks, so this remains a functional—not timing—test.
+    private static final long TIMEOUT_MILLIS = 60_000L;
 
     @Test
     public void playsGeneratedContentFixtureThroughSaveAndLifecycleTransitions() throws Exception {
