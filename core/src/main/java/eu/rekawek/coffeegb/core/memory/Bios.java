@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.GameboyType;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.core.io.InputStreams;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -20,7 +21,7 @@ public class Bios implements AddressSpace {
                 if (is == null) {
                     throw new IllegalArgumentException("No bios found for " + bootRomId);
                 }
-                var rom = is.readAllBytes();
+                var rom = InputStreams.readAllBytes(is);
                 var result = new int[rom.length];
                 for (int i = 0; i < rom.length; i++) {
                     result[i] = rom[i] & 0xff;
