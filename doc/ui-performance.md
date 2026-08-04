@@ -22,8 +22,8 @@ also re-read from `System.nanoTime()` *after* the spin, so scheduling jitter
 accumulated instead of averaging out.
 
 **Fix:** absolute deadlines (`deadline += FRAME_DURATION`), sleep the bulk of
-the wait with `LockSupport.parkNanos` and busy-spin only the last 1.5 ms for
-frame-exact wakeup (`Thread.onSpinWait` in the hot loop). If the emulator falls
+the wait with `LockSupport.parkNanos` and yield only the last 1.5 ms for
+frame-exact wakeup (`Thread.yield` in the hot loop). If the emulator falls
 more than a frame behind, the deadline re-anchors instead of fast-forwarding.
 
 Measured (2 s synthetic run, 3 ms of work per frame): thread CPU 2000 ms →

@@ -285,13 +285,26 @@ class ApplicationSettingsStore(
   private fun remainingNanos(started: Long, timeoutNanos: Long): Long =
       (timeoutNanos - (System.nanoTime() - started)).coerceAtLeast(0)
 
+  /** Reads through the supplied bound without relying on the Java 9 bulk-read method. */
+  @Throws(IOException::class)
+  private fun java.io.InputStream.readAtMost(limit: Int): ByteArray {
+    val bytes = ByteArray(limit)
+    var size = 0
+    while (size < limit) {
+      val count = read(bytes, size, limit - size)
+      if (count == -1) break
+      size += count
+    }
+    return if (size == limit) bytes else bytes.copyOf(size)
+  }
+
   private fun load(): Loaded {
     val bytes =
         try {
           persistence.read(path) { recovered ->
             if (Files.notExists(recovered, LinkOption.NOFOLLOW_LINKS)) return@read null
             Files.newInputStream(recovered).use { input ->
-              input.readNBytes(MAX_SETTINGS_BYTES + 1).also {
+              input.readAtMost(MAX_SETTINGS_BYTES + 1).also {
                 if (it.size > MAX_SETTINGS_BYTES) {
                   throw OversizedSettingsException(
                       "Settings file exceeds the $MAX_SETTINGS_BYTES-byte limit")
