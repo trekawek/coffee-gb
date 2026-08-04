@@ -4335,7 +4335,18 @@ class BasicController private constructor(
 
   private fun saveSnapshot(slot: Int) {
     val currentSession = session ?: return
-    val manager = snapshotManager ?: return
+    val manager = snapshotManager
+    if (manager == null) {
+      requestStateSave(
+          StateSaveRequestEvent(
+              nextInternalStateRequestId(),
+              stateSessionId,
+              StateRef.Slot(slot),
+              null,
+              null,
+          ))
+      return
+    }
     val mobileExternalIo = mobileAdapterEndpointHasExternalIo()
     try {
       manager.saveSnapshot(slot, currentSession)
@@ -4367,7 +4378,16 @@ class BasicController private constructor(
           ))
       return
     }
-    val manager = snapshotManager ?: return
+    val manager = snapshotManager
+    if (manager == null) {
+      requestStateLoadRef(
+          StateLoadRefRequestEvent(
+              nextInternalStateRequestId(),
+              stateSessionId,
+              StateRef.Slot(slot),
+          ))
+      return
+    }
     val mobileExternalIo = hasMobileAdapterExternalIo()
     val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
