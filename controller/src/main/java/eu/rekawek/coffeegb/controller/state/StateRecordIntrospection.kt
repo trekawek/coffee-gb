@@ -14,27 +14,39 @@ import java.util.concurrent.ConcurrentHashMap
  */
 internal object StateRecordIntrospection {
 
-  private val componentsByClass = ConcurrentHashMap<Class<*>, List<StateRecordComponent>>()
+  private val metadataByClass = ConcurrentHashMap<Class<*>, StateRecordMetadata>()
 
   fun components(type: Class<*>): List<StateRecordComponent> =
-      componentsByClass.computeIfAbsent(type, ::readComponents)
+      metadataByClass.computeIfAbsent(type, ::readMetadata).components
 
   fun requireConstructible(type: Class<*>) {
-    val components = components(type)
-    try {
-      type.getDeclaredConstructor(*components.map(StateRecordComponent::type).toTypedArray())
-    } catch (failure: ReflectiveOperationException) {
-      throw IllegalArgumentException("Audited state type has no canonical constructor: $type", failure)
-    }
+    metadataByClass.computeIfAbsent(type, ::readMetadata)
   }
 
-  private fun readComponents(type: Class<*>): List<StateRecordComponent> =
-      type.declaredFields
+  private fun readMetadata(type: Class<*>): StateRecordMetadata {
+    val fields =
+        type.declaredFields
           .asSequence()
           .filterNot { Modifier.isStatic(it.modifiers) || it.isSynthetic }
-          .map(::StateRecordComponent)
           .toList()
+    val constructor =
+        type.declaredConstructors.singleOrNull { candidate ->
+          candidate.parameterCount == fields.size &&
+              candidate.parameterTypes.toList().groupingBy { it }.eachCount() ==
+                  fields.groupingBy(Field::getType).eachCount()
+        } ?: throw IllegalArgumentException("Audited state type has no canonical constructor: $type")
+    val remaining = fields.toMutableList()
+    val components =
+        constructor.parameterTypes.map { parameterType ->
+          val index = remaining.indexOfFirst { it.type == parameterType }
+          if (index < 0) throw IllegalArgumentException("Invalid canonical constructor for $type")
+          StateRecordComponent(remaining.removeAt(index))
+        }
+    return StateRecordMetadata(components)
+  }
 }
+
+private class StateRecordMetadata(val components: List<StateRecordComponent>)
 
 internal class StateRecordComponent(private val javaField: Field) {
 
