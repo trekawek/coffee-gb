@@ -30,11 +30,7 @@ private val forbiddenBytecodeReferences = linkedMapOf(
 // broader JVM internal names; APK inspection must not mistake an unrelated string for a class.
 private val forbiddenApkReferences = forbiddenBytecodeReferences.mapKeys { (reference, _) ->
   "L$reference"
-} + mapOf(
-    "java.awt." to "java.awt",
-    "javax.swing." to "javax.swing",
-    "javax.sound." to "javax.sound",
-)
+}
 private val forbiddenApkEntrySuffixes = listOf(
     ".gb",
     ".gbc",
