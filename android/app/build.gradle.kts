@@ -132,6 +132,7 @@ android {
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
+    isCoreLibraryDesugaringEnabled = true
   }
 
   lint {
@@ -141,6 +142,7 @@ android {
 }
 
 dependencies {
+  coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
   implementation("eu.rekawek.coffeegb:controller:$coffeeGbVersion")
   implementation("androidx.camera:camera-camera2:1.6.1")
   implementation("androidx.camera:camera-core:1.6.1")

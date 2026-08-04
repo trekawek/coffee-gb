@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import java.nio.file.Path
+import java.nio.file.Paths
 
 class RecentRoms(private val emulatorProperties: EmulatorProperties) {
   fun getRoms(): List<String> =
@@ -52,7 +53,7 @@ class RecentRoms(private val emulatorProperties: EmulatorProperties) {
   }
 
   /** Compatibility wrapper retained for existing menu and Java-adapter call sites. */
-  fun addRom(rom: String) = recordSuccessfulOpen(Path.of(rom))
+  fun addRom(rom: String) = recordSuccessfulOpen(Paths.get(rom))
 
   private fun normalize(path: Path): Path = path.toAbsolutePath().normalize()
 }
