@@ -35,13 +35,22 @@ internal object StateRecordIntrospection {
               candidate.parameterTypes.toList().groupingBy { it }.eachCount() ==
                   fields.groupingBy(Field::getType).eachCount()
         } ?: throw IllegalArgumentException("Audited state type has no canonical constructor: $type")
-    val remaining = fields.toMutableList()
+    val fieldsByName = fields.associateBy(Field::getName).toMutableMap()
     val components =
-        constructor.parameterTypes.map { parameterType ->
-          val index = remaining.indexOfFirst { it.type == parameterType }
-          if (index < 0) throw IllegalArgumentException("Invalid canonical constructor for $type")
-          StateRecordComponent(remaining.removeAt(index))
+        constructor.parameters.map { parameter ->
+          require(parameter.isNamePresent) {
+            "Audited state type has no canonical constructor parameter names: $type"
+          }
+          val field =
+              fieldsByName.remove(parameter.name)
+                  ?: throw IllegalArgumentException(
+                      "Invalid canonical constructor parameter ${parameter.name} for $type")
+          require(field.type == parameter.type) {
+            "Invalid canonical constructor parameter ${parameter.name} for $type"
+          }
+          StateRecordComponent(field)
         }
+    require(fieldsByName.isEmpty()) { "Invalid canonical constructor for $type" }
     return StateRecordMetadata(components)
   }
 }
