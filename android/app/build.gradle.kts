@@ -159,6 +159,9 @@ dependencies {
 val debugRuntimeClasspath = providers.provider {
   configurations.getByName("debugRuntimeClasspath")
 }
+val coreLibraryDesugaringClasspath = providers.provider {
+  configurations.getByName("coreLibraryDesugaring")
+}
 val verifyAndroidPortability = tasks.register("verifyAndroidPortability") {
   group = "verification"
   description = "Rejects desktop APIs and libraries from Android production code and runtime."
@@ -187,7 +190,7 @@ val reportAndroidDependencyGraph = tasks.register("reportAndroidDependencyGraph"
   group = "verification"
   description = "Writes the Android debug runtime graph after portability validation."
   val report = layout.buildDirectory.file("reports/android-dependencies.txt")
-  inputs.files(debugRuntimeClasspath)
+  inputs.files(debugRuntimeClasspath, coreLibraryDesugaringClasspath)
   outputs.file(report)
   doLast {
     val resolved = debugRuntimeClasspath.get().files.sortedBy { it.name }
@@ -200,6 +203,9 @@ val reportAndroidDependencyGraph = tasks.register("reportAndroidDependencyGraph"
             appendLine("Coffee GB Android debug runtime dependency graph")
             appendLine("Forbidden desktop API scan: clean")
             resolved.forEach { appendLine(it.absolutePath) }
+            appendLine("Android core-library desugaring:")
+            coreLibraryDesugaringClasspath.get().files.sortedBy { it.name }
+                .forEach { appendLine(it.absolutePath) }
           }
       )
     }
@@ -209,10 +215,12 @@ val reportAndroidLicenseInventory = tasks.register("reportAndroidLicenseInventor
   group = "verification"
   description = "Writes the resolved Android runtime component inventory for release review."
   val report = layout.buildDirectory.file("reports/android-license-inventory.txt")
-  inputs.files(debugRuntimeClasspath)
+  inputs.files(debugRuntimeClasspath, coreLibraryDesugaringClasspath)
   outputs.file(report)
   doLast {
-    val artifacts = debugRuntimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+    val artifacts = (debugRuntimeClasspath.get().resolvedConfiguration.resolvedArtifacts +
+        coreLibraryDesugaringClasspath.get().resolvedConfiguration.resolvedArtifacts)
+        .distinctBy { it.moduleVersion.id.toString() }
         .sortedBy { it.moduleVersion.id.toString() }
     report.get().asFile.apply {
       parentFile.mkdirs()
