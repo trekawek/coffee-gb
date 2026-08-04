@@ -721,16 +721,26 @@ class StateRepository(
     return NamedRefs(refs, entries)
   }
 
-  /** Refuses traversal through symlinked or non-directory components, including the game root. */
+  /**
+   * Refuses traversal through symlinked or non-directory components at and below the caller-owned
+   * game root. Ancestors are the host's trust boundary and may be Android framework paths that do
+   * not expose POSIX link attributes through API-26 NIO.
+   */
   private fun ensureSafeParent(target: Path) {
     val normalized = target.toAbsolutePath().normalize()
     require(normalized.startsWith(layout.gameDirectory)) {
       "State repository target escapes the configured game directory"
     }
     val parent = requireNotNull(normalized.parent)
-    var cursor = parent.root
-    parent.forEach { component ->
-      cursor = if (cursor == null) component else cursor.resolve(component)
+    var cursor = layout.gameDirectory
+    if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS) &&
+        (Files.isSymbolicLink(cursor) ||
+            !Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS))) {
+      throw IOException(
+          "State repository path component is not a safe directory: ${cursor.fileName}")
+    }
+    layout.gameDirectory.relativize(parent).forEach { component ->
+      cursor = cursor.resolve(component)
       if (Files.exists(cursor, LinkOption.NOFOLLOW_LINKS) &&
           (Files.isSymbolicLink(cursor) ||
               !Files.isDirectory(cursor, LinkOption.NOFOLLOW_LINKS))) {
