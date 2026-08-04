@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
+import android.content.Context;
 import android.database.Cursor;
 import android.database.MatrixCursor;
 import android.net.Uri;
@@ -55,7 +56,11 @@ public final class FixtureRomProvider extends ContentProvider {
             throw new FileNotFoundException("The CI fixture is read-only");
         }
         try {
-            File fixture = new File(requireContext().getCacheDir(), DISPLAY_NAME);
+            Context context = getContext();
+            if (context == null) {
+                throw new FileNotFoundException("The CI fixture provider is not initialized");
+            }
+            File fixture = new File(context.getCacheDir(), DISPLAY_NAME);
             if (!fixture.isFile() || fixture.length() != ROM_SIZE) {
                 try (FileOutputStream output = new FileOutputStream(fixture)) {
                     output.write(fixtureBytes());
