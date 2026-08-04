@@ -68,7 +68,6 @@ private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Coll
 
 private val forbiddenPermissions = listOf(
     "android.permission.INTERNET",
-    "android.permission.CAMERA",
     "android.permission.RECORD_AUDIO",
     "android.permission.MANAGE_EXTERNAL_STORAGE",
     "android.permission.READ_EXTERNAL_STORAGE",
@@ -116,6 +115,10 @@ android {
 
 dependencies {
   implementation("eu.rekawek.coffeegb:controller:$coffeeGbVersion")
+  implementation("androidx.camera:camera-camera2:1.6.1")
+  implementation("androidx.camera:camera-core:1.6.1")
+  implementation("androidx.camera:camera-lifecycle:1.6.1")
+  implementation("androidx.lifecycle:lifecycle-process:2.11.0")
   testImplementation("junit:junit:4.13.2")
 }
 

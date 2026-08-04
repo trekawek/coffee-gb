@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb.android;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
 import android.os.Bundle;
 import android.os.IBinder;
@@ -41,6 +43,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_STATE_REQUEST = 5;
     private static final int EXPORT_SCREENSHOT_REQUEST = 6;
     private static final int EXPORT_PRINTER_REQUEST = 7;
+    private static final int CAMERA_PERMISSION_REQUEST = 8;
 
     private TextView status;
     private CoffeeGbSurfaceView video;
@@ -96,6 +99,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime.setAudioVolume(getPreferences(MODE_PRIVATE).getInt("audio.volume", 100));
             runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
             runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
+            if (getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false)
+                    && checkSelfPermission(Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED) {
+                runtime.setCameraEnabled(true);
+            }
             applyState(runtime.state());
         }
 
@@ -277,6 +285,21 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     "Export printer paper?", "The chosen document will be replaced.",
                     () -> runtime.exportPrinter(data.getData(), () -> sharePrinter(data.getData())));
             default -> { }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION_REQUEST || runtime == null) {
+            return;
+        }
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            runtime.setCameraEnabled(true);
+        } else {
+            runtime.setCameraEnabled(false);
+            Toast.makeText(this, "Pocket Camera will use its test pattern until camera access is allowed.",
+                    Toast.LENGTH_LONG).show();
         }
     }
 
@@ -544,6 +567,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         rumble.setText("Rumble when supported by the game and device");
         rumble.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
         options.addView(rumble);
+        Switch camera = new Switch(this);
+        camera.setText("Use live camera for Pocket Camera cartridges");
+        camera.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false));
+        options.addView(camera);
         Switch printer = new Switch(this);
         printer.setText("Emulate the Game Boy Printer");
         printer.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
@@ -568,12 +595,30 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 .setMessage("Tilt, camera, and printer integrations require a compatible cartridge and are configured only when available.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
                     getPreferences(MODE_PRIVATE).edit().putBoolean("devices.rumble", rumble.isChecked()).apply();
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.camera", camera.isChecked()).apply();
                     getPreferences(MODE_PRIVATE).edit().putBoolean("devices.printer", printer.isChecked()).apply();
                     requireRuntime(active -> {
                         active.setRumbleEnabled(rumble.isChecked());
                         active.setPrinterEnabled(printer.isChecked());
                     });
+                    if (camera.isChecked()) {
+                        enableCameraIfPermitted();
+                    } else {
+                        requireRuntime(active -> active.setCameraEnabled(false));
+                    }
                 }).show();
+    }
+
+    private void enableCameraIfPermitted() {
+        if (runtime == null) {
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            runtime.setCameraEnabled(true);
+            return;
+        }
+        runtime.setCameraEnabled(false);
+        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
     }
 
     private void showPrinterPreview(AndroidEmulationRuntime active) {
@@ -610,7 +655,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void showAbout() {
         new AlertDialog.Builder(this).setTitle("About Coffee GB Android")
-                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, microphone, or camera permission. Optional rumble uses Android's normal vibration permission only when enabled.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
+                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, or microphone permission. Camera access is requested only after you enable live Pocket Camera capture; optional rumble uses Android's normal vibration permission only when enabled.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
                 .setPositiveButton("OK", null).show();
     }
 
