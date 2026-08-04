@@ -95,6 +95,7 @@ class RomSessionPreparerTest {
     val root = Files.createTempDirectory("coffee-gb-pathless-store")
     try {
       val image = RomImage.memory(ROM.readBytes(), "picked.gb")
+      lateinit var stateStore: FileStateStore
       val store =
           RomPersistenceStore { _, hashes ->
             val layout = StateStorageLayout(root.resolve("games").resolve(hashes.primaryRom.hex()))
@@ -103,8 +104,9 @@ class RomSessionPreparerTest {
                     BatteryStorage.Source.managed(layout.batteryFile, root),
                     emptyList(),
                 )
+            stateStore = FileStateStore(layout)
             SessionPersistence(
-                FileStateStore(layout),
+                stateStore,
                 BatteryStore { battery },
                 null,
             )
@@ -117,6 +119,7 @@ class RomSessionPreparerTest {
           )
 
       assertNull(prepared.config.rom.file)
+      assertSame(stateStore, prepared.stateStore)
       assertTrue(prepared.config.batteryStorage.targetPath().startsWith(root))
       assertTrue(prepared.config.batteryStorage.targetPath().fileName.toString() == "battery.sav")
     } finally {

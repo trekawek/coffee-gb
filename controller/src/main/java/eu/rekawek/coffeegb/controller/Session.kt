@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.SessionState
+import eu.rekawek.coffeegb.controller.state.StateStore
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -21,6 +22,8 @@ class Session(
     infraredEndpoint: InfraredEndpoint = InfraredEndpoint.NULL_ENDPOINT,
     prebuiltGameboy: Gameboy? = null,
     serialEndpointDisconnect: () -> Unit = {},
+    /** Host-owned state store, when the ROM source itself has no writable filesystem path. */
+    internal val stateStore: StateStore? = null,
 ) : AutoCloseable {
 
   internal val gameboy: Gameboy = prebuiltGameboy ?: config.build()
