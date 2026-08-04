@@ -11,6 +11,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.time.Clock
 import java.time.ZoneOffset
@@ -410,7 +411,7 @@ class ApplicationSettingsStore(
     private val CORRUPT_TIME_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")
 
     fun defaultPath(): Path =
-        Path.of(System.getProperty("user.home")).resolve(".coffeegb.properties")
+        Paths.get(System.getProperty("user.home")).resolve(".coffeegb.properties")
 
     internal fun decodeProperties(
         bytes: ByteArray,

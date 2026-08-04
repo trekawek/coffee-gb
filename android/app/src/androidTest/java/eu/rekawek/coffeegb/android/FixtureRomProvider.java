@@ -10,9 +10,9 @@ import android.provider.OpenableColumns;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 
 /**
  * Source-generated public-domain Game Boy fixture exposed only through a content URI.
@@ -57,7 +57,9 @@ public final class FixtureRomProvider extends ContentProvider {
         try {
             File fixture = new File(requireContext().getCacheDir(), DISPLAY_NAME);
             if (!fixture.isFile() || fixture.length() != ROM_SIZE) {
-                Files.write(fixture.toPath(), fixtureBytes());
+                try (FileOutputStream output = new FileOutputStream(fixture)) {
+                    output.write(fixtureBytes());
+                }
             }
             return ParcelFileDescriptor.open(fixture, ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (IOException failure) {

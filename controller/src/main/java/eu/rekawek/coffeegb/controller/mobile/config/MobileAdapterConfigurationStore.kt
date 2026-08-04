@@ -7,6 +7,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
 import java.nio.file.attribute.PosixFilePermission
@@ -394,7 +395,7 @@ class MobileAdapterConfigurationStore(
     /** Default private adapter record, deliberately separate from general desktop preferences. */
     @JvmStatic
     fun defaultPath(): Path =
-        Path.of(System.getProperty("user.home")).resolve(".coffeegb-mobile-adapter.bin")
+        Paths.get(System.getProperty("user.home")).resolve(".coffeegb-mobile-adapter.bin")
 
     private const val MAX_ZERO_READS = 1_024
     private val PRIVATE_FILE_PERMISSIONS: Set<PosixFilePermission> =

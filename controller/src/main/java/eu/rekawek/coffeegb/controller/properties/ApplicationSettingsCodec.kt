@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.properties
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.Locale
 import java.util.Properties
 
@@ -752,7 +753,7 @@ object ApplicationSettingsCodec {
 
   private fun parsePath(value: String): Path =
       try {
-        Path.of(value)
+        Paths.get(value)
       } catch (failure: RuntimeException) {
         throw IllegalArgumentException("Invalid settings path: $value", failure)
       }

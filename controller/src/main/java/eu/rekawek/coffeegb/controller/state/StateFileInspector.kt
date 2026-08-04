@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.state
 import eu.rekawek.coffeegb.controller.StateLimits
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /** Headless inspection facade and command-line utility for portable StateFile metadata. */
 object StateFileInspector {
@@ -11,7 +12,7 @@ object StateFileInspector {
   @JvmStatic
   fun main(arguments: Array<String>) {
     require(arguments.size == 1) { "usage: StateFileInspector <state-file>" }
-    val path = Path.of(arguments[0])
+    val path = Paths.get(arguments[0])
     val declared = Files.size(path)
     if (declared !in 0..StateLimits.PORTABLE_MAX_FILE_BYTES.toLong()) {
       PortableBounds.limit(

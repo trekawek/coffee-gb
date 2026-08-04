@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -128,8 +129,8 @@ public final class SevenZArchiveWorker {
             throw new IOException("Missing 7z worker arguments");
         }
         Action action = Action.fromId(args[0]);
-        Path snapshot = Path.of(args[1]);
-        Path report = Path.of(args[2]);
+        Path snapshot = Paths.get(args[1]);
+        Path report = Paths.get(args[2]);
         requireExistingWorkerFile(snapshot, "snapshot");
         requireExistingWorkerFile(report, "report");
 
@@ -140,7 +141,7 @@ public final class SevenZArchiveWorker {
                     if (args.length != 5) {
                         throw new IOException("Invalid 7z extraction arguments");
                     }
-                    Path output = Path.of(args[3]);
+                    Path output = Paths.get(args[3]);
                     requireExistingWorkerFile(output, "output");
                     long candidateToken = Long.parseLong(args[4]);
                     Entry extracted = extractInProcess(snapshot, output, candidateToken);
@@ -370,7 +371,7 @@ public final class SevenZArchiveWorker {
     }
 
     private static Path javaExecutable() {
-        Path bin = Path.of(System.getProperty("java.home"), "bin");
+        Path bin = Paths.get(System.getProperty("java.home"), "bin");
         if (isWindows()) {
             Path windowless = bin.resolve("javaw.exe");
             if (Files.isRegularFile(windowless)) {
@@ -478,7 +479,7 @@ public final class SevenZArchiveWorker {
             throw invalidWorkerReport("entry metadata is invalid");
         }
         try {
-            RomOrigin.archiveEntry(Path.of("worker-report.7z"), entryName);
+            RomOrigin.archiveEntry(Paths.get("worker-report.7z"), entryName);
         } catch (IllegalArgumentException failure) {
             throw invalidWorkerReport("entry path is invalid");
         }
