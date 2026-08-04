@@ -2,6 +2,7 @@ import com.android.build.api.artifact.SingleArtifact
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 plugins {
   id("com.android.application")
@@ -35,13 +36,20 @@ private val forbiddenApkEntrySuffixes = listOf(
     ".gbc",
     ".sgb",
     ".rom",
-    ".zip",
     ".7z",
     ".rar",
     ".sav",
     ".cgbstate",
     ".jks",
     ".keystore",
+)
+private val forbiddenZipEntrySuffixes = listOf(
+    ".gb",
+    ".gbc",
+    ".sgb",
+    ".rom",
+    ".sav",
+    ".cgbstate",
 )
 
 private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Collection<File>): List<String> {
@@ -228,9 +236,24 @@ val verifyDebugApkContents = tasks.register("verifyDebugApkContents") {
     val packageFile = apk.get().asFile
     val entries = mutableListOf<String>()
     val forbiddenPayload = mutableListOf<String>()
+    val forbiddenZipEntries = mutableListOf<String>()
     ZipFile(packageFile).use { archive ->
       archive.entries().asSequence().forEach { entry ->
         entries += entry.name
+        if (!entry.isDirectory && entry.name.lowercase().endsWith(".zip")) {
+          ZipInputStream(archive.getInputStream(entry)).use { nested ->
+            var nestedEntry = nested.nextEntry
+            while (nestedEntry != null) {
+              if (!nestedEntry.isDirectory && forbiddenZipEntrySuffixes.any { suffix ->
+                    nestedEntry.name.lowercase().endsWith(suffix)
+                  }) {
+                forbiddenZipEntries += "${entry.name}!/${nestedEntry.name}"
+              }
+              nested.closeEntry()
+              nestedEntry = nested.nextEntry
+            }
+          }
+        }
         if (!entry.isDirectory) {
           val payload = String(archive.getInputStream(entry).readBytes(), StandardCharsets.ISO_8859_1)
           forbiddenApkReferences.forEach { (needle, label) ->
@@ -252,6 +275,9 @@ val verifyDebugApkContents = tasks.register("verifyDebugApkContents") {
     }
     check(forbiddenEntries.isEmpty()) {
       "Debug APK contains forbidden game data or signing material: $forbiddenEntries"
+    }
+    check(forbiddenZipEntries.isEmpty()) {
+      "Debug APK contains a ZIP resource with forbidden game data: $forbiddenZipEntries"
     }
     check(forbiddenPayload.isEmpty()) {
       "Debug APK contains forbidden desktop APIs, developer paths, or signing material: $forbiddenPayload"
