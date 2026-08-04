@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.android;
 
 import android.content.Context;
-import android.graphics.ImageFormat;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Size;
@@ -123,8 +122,10 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
 
         private void onImage(ImageProxy image) {
             try {
-                if (!running || image.getFormat() != ImageFormat.RGBA_8888
-                        || image.getPlanes().length != 1) {
+                // OUTPUT_IMAGE_FORMAT_RGBA_8888 guarantees one RGBA plane. Do not inspect an
+                // Android framework format constant here: CameraX owns that compatibility layer
+                // across our API 26+ range.
+                if (!running || image.getPlanes().length != 1) {
                     return;
                 }
                 ImageProxy.PlaneProxy plane = image.getPlanes()[0];
