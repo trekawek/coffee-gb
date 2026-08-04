@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <!-- A test-only content provider proves that the runtime accepts a SAF-style URI, not a path. -->
+    <provider
+        android:name=".FixtureRomProvider"
+        android:authorities="eu.rekawek.coffeegb.android.test.fixture"
+        android:exported="true" />
+  </application>
+</manifest>
