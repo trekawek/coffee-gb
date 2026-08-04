@@ -11,7 +11,6 @@ import org.junit.runner.RunWith;
 
 import java.io.InputStream;
 import java.lang.reflect.Field;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -35,7 +34,36 @@ public class AndroidRuntimeEndToEndSmokeTest {
             await("runtime initialization", () -> runtime.state().phase() == RuntimeState.Phase.STOPPED);
             assertFixtureReadable();
             AtomicReference<Controller.LoadRomFailedEvent> loadFailure = new AtomicReference<>();
-            runtimeEvents(runtime).register(loadFailure::set, Controller.LoadRomFailedEvent.class);
+            EventBus events = runtimeEvents(runtime);
+            events.register(loadFailure::set, Controller.LoadRomFailedEvent.class);
+            CountDownLatch snapshotSaved = new CountDownLatch(1);
+            AtomicReference<Controller.SnapshotSaveFailedEvent> snapshotSaveFailure =
+                    new AtomicReference<>();
+            events.register(event -> {
+                if (event.getSlot() == 0) {
+                    snapshotSaved.countDown();
+                }
+            }, Controller.SnapshotSavedEvent.class);
+            events.register(event -> {
+                if (event.getSlot() == 0) {
+                    snapshotSaveFailure.set(event);
+                    snapshotSaved.countDown();
+                }
+            }, Controller.SnapshotSaveFailedEvent.class);
+            CountDownLatch snapshotRestored = new CountDownLatch(1);
+            AtomicReference<Controller.SnapshotLoadFailedEvent> snapshotLoadFailure =
+                    new AtomicReference<>();
+            events.register(event -> {
+                if (event.getSlot() == 0) {
+                    snapshotRestored.countDown();
+                }
+            }, Controller.SnapshotRestoredEvent.class);
+            events.register(event -> {
+                if (event.getSlot() == 0) {
+                    snapshotLoadFailure.set(event);
+                    snapshotRestored.countDown();
+                }
+            }, Controller.SnapshotLoadFailedEvent.class);
             runtime.openRom(FixtureRomProvider.URI, 0);
             awaitFixtureStart(runtime, loadFailure);
 
@@ -48,8 +76,9 @@ public class AndroidRuntimeEndToEndSmokeTest {
             assertFrame(runtime, "after input");
 
             runtime.saveSnapshot(0);
-            awaitSavedState(runtime, 0);
+            awaitSnapshotSaved(snapshotSaved, snapshotSaveFailure);
             runtime.restoreSnapshot(0);
+            awaitSnapshotRestored(snapshotRestored, snapshotLoadFailure);
             assertFrame(runtime, "after state restore");
 
             runtime.onHostNotVisible();
@@ -116,29 +145,24 @@ public class AndroidRuntimeEndToEndSmokeTest {
         }
     }
 
-    private static AndroidStateSlot stateSlot(AndroidEmulationRuntime runtime, int index) throws Exception {
-        CountDownLatch callback = new CountDownLatch(1);
-        @SuppressWarnings("unchecked")
-        List<AndroidStateSlot>[] result = new List[1];
-        runtime.listStateSlots(slots -> {
-            result[0] = slots;
-            callback.countDown();
-        });
-        assertTrue("state catalog callback", callback.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
-        assertNotNull(result[0]);
-        return result[0].stream().filter(slot -> slot.index() == index).findFirst()
-                .orElseThrow(() -> new AssertionError("missing state slot " + index));
+    private static void awaitSnapshotSaved(
+            CountDownLatch completed,
+            AtomicReference<Controller.SnapshotSaveFailedEvent> failure) throws Exception {
+        assertTrue("snapshot save event", completed.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+        Controller.SnapshotSaveFailedEvent saveFailure = failure.get();
+        if (saveFailure != null) {
+            fail("snapshot save failed: " + saveFailure.getMessage());
+        }
     }
 
-    private static void awaitSavedState(AndroidEmulationRuntime runtime, int index) throws Exception {
-        long deadline = SystemClock.elapsedRealtime() + TIMEOUT_MILLIS;
-        while (SystemClock.elapsedRealtime() < deadline) {
-            if (stateSlot(runtime, index).loadable()) {
-                return;
-            }
-            Thread.sleep(50L);
+    private static void awaitSnapshotRestored(
+            CountDownLatch completed,
+            AtomicReference<Controller.SnapshotLoadFailedEvent> failure) throws Exception {
+        assertTrue("snapshot restore event", completed.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+        Controller.SnapshotLoadFailedEvent loadFailure = failure.get();
+        if (loadFailure != null) {
+            fail("snapshot restore failed: " + loadFailure.getMessage());
         }
-        fail("timed out waiting for state slot " + index + " to become loadable");
     }
 
     private static NativeFrameStore.Frame awaitValue(
