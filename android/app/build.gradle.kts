@@ -26,7 +26,11 @@ private val forbiddenBytecodeReferences = linkedMapOf(
     "org/opencv/" to "OpenCV",
     "io/github/libsdl" to "SDL",
 )
-private val forbiddenApkReferences = forbiddenBytecodeReferences + mapOf(
+// DEX type descriptors start with L. The source/classpath verifier above intentionally scans
+// broader JVM internal names; APK inspection must not mistake an unrelated string for a class.
+private val forbiddenApkReferences = forbiddenBytecodeReferences.mapKeys { (reference, _) ->
+  "L$reference"
+} + mapOf(
     "java.awt." to "java.awt",
     "javax.swing." to "javax.swing",
     "javax.sound." to "javax.sound",
