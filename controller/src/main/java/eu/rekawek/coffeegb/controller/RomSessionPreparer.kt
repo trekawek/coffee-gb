@@ -40,24 +40,28 @@ internal class RomSessionPreparer(
     ensureActive()
     val romHashes = StateIdentity.hashes(config)
     ensureActive()
+    val hostPersistenceStore = event.persistenceStore
     val persistence =
-        (event.persistenceStore ?: DesktopRomPersistenceStore(properties.applicationSettings.saves))
+        (hostPersistenceStore ?: DesktopRomPersistenceStore(properties.applicationSettings.saves))
             .resolve(config, romHashes)
     persistence.applyTo(config)
+    // The desktop controller retains its configurable workspace (and its bounded fallbacks).
+    // A supplied host store is the only authoritative destination for a pathless source.
+    val stateStore = hostPersistenceStore?.let { persistence.stateStore }
     ensureActive()
 
     event.state?.let {
-      return PreparedSession.FromDetachedState(config, it, romHashes, persistence.stateStore)
+      return PreparedSession.FromDetachedState(config, it, romHashes, stateStore)
     }
 
     bootStateCache.getOrCreate(config)?.let {
-      return PreparedSession.FromBootState(config, it, romHashes, persistence.stateStore)
+      return PreparedSession.FromBootState(config, it, romHashes, stateStore)
     }
 
     // Exotic/RTC cartridges cannot use a battery-free boot template. Defer their real machine
     // construction until after the outgoing session's persistence barrier, when the worker can
     // load the just-committed RAM/RTC bytes without touching the controller timing thread.
-    return PreparedSession.Deferred(config, romHashes, persistence.stateStore)
+    return PreparedSession.Deferred(config, romHashes, stateStore)
   }
 
   private fun ensureActive() {
