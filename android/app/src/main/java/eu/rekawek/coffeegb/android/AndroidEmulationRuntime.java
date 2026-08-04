@@ -80,6 +80,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private volatile AndroidAudioSink audio;
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
+    private AndroidPrinterStore printer;
+    private boolean printerEnabled;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
@@ -145,6 +147,34 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeTilt != null) {
             activeTilt.calibrate();
         }
+    }
+
+    /** Connects or disconnects the portable Game Boy Printer at the controller-safe boundary. */
+    void setPrinterEnabled(boolean enabled) {
+        submit(() -> {
+            printerEnabled = enabled;
+            if (controller != null && activeLayout != null) {
+                eventBus.post(new Controller.SetPrinterEvent(enabled));
+            }
+        });
+    }
+
+    /** Creates a preview bitmap away from the main thread, then returns it to the UI. */
+    void previewPrinter(Consumer<Bitmap> callback) {
+        Consumer<Bitmap> checked = Objects.requireNonNull(callback, "callback");
+        submit(() -> {
+            AndroidPrinterStore.Snapshot snapshot = printer == null ? null : printer.snapshot();
+            Bitmap bitmap = snapshot == null ? null : snapshot.toBitmap();
+            mainHandler.post(() -> checked.accept(bitmap));
+        });
+    }
+
+    void clearPrinter() {
+        submit(() -> {
+            if (printer != null) {
+                printer.clear();
+            }
+        });
     }
 
     /** Pauses one active session at its controller-owned safe point without ending it. */
@@ -435,6 +465,43 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         context.getContentResolver(), destination, requireStates(), new StateRef.Slot(0), true));
     }
 
+    /** Exports the retained Game Boy Printer paper as PNG through a user-selected SAF document. */
+    void exportPrinter(Uri destination, Runnable completed) {
+        Uri checked = Objects.requireNonNull(destination, "destination");
+        Runnable callback = Objects.requireNonNull(completed, "completed");
+        submit(() -> {
+            AndroidPrinterStore.Snapshot snapshot = printer == null ? null : printer.snapshot();
+            if (snapshot == null) {
+                publish(state.phase(), "Nothing has been printed yet.", List.of(),
+                        state.transferReady(), state.paused(), state.flushPending());
+                return;
+            }
+            RuntimeState before = state;
+            publish(before.phase(), "Exporting printer paper…", List.of(), before.transferReady(),
+                    before.paused(), before.flushPending());
+            Bitmap bitmap = null;
+            try {
+                bitmap = snapshot.toBitmap();
+                try (OutputStream output = context.getContentResolver().openOutputStream(checked, "wt")) {
+                    if (output == null || !bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw new IOException("Printer paper could not be encoded");
+                    }
+                    output.flush();
+                }
+                publish(before.phase(), "Printer paper exported.", List.of(), before.transferReady(),
+                        before.paused(), before.flushPending());
+                mainHandler.post(callback);
+            } catch (IOException failure) {
+                publish(before.phase(), "Coffee GB could not export printer paper.", List.of(),
+                        before.transferReady(), before.paused(), before.flushPending());
+            } finally {
+                if (bitmap != null) {
+                    bitmap.recycle();
+                }
+            }
+        });
+    }
+
     /** Writes the latest native emulated frame as a PNG; it never captures Android UI overlays. */
     public void exportScreenshot(Uri destination) {
         Uri checked = Objects.requireNonNull(destination, "destination");
@@ -500,11 +567,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         audio.start();
         rumble = new AndroidRumbleSink(context, eventBus, false);
         tilt = new AndroidTiltSink(context, eventBus);
+        printer = new AndroidPrinterStore();
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
         eventBus.register(frames::publish, Display.GbcFrameReadyEvent.class);
         eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
+        eventBus.register(printer::append, Controller.PrinterPrintEvent.class);
         eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
@@ -527,6 +596,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                             new RecentSafDocuments(context).recordIfPersisted(currentSource);
                         }
                         lifecycle.activated(lifecycleCommands());
+                        if (printerEnabled) {
+                            eventBus.post(new Controller.SetPrinterEvent(true));
+                        }
                         publish(RuntimeState.Phase.RUNNING,
                                 "Loaded " + event.getRomName() + ". App-private saves are ready.",
                                 List.of(), true, false, false);
@@ -747,11 +819,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         AndroidAudioSink activeAudio = audio;
         AndroidRumbleSink activeRumble = rumble;
         AndroidTiltSink activeTilt = tilt;
+        AndroidPrinterStore activePrinter = printer;
         controller = null;
         eventBus = null;
         audio = null;
         rumble = null;
         tilt = null;
+        printer = null;
         if (active == null) {
             if (activeAudio != null) {
                 activeAudio.close();
@@ -784,6 +858,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             audio = activeAudio;
             rumble = activeRumble;
             tilt = activeTilt;
+            printer = activePrinter;
             return false;
         }
     }

@@ -81,6 +81,10 @@ MBC7 games use the Android accelerometer only while their session is active. The
 establishes a neutral position, the optional-device settings can recalibrate it, and the axes follow
 the display rotation. Devices without an accelerometer safely retain neutral tilt input.
 
+The optional Game Boy Printer connects through the existing portable serial endpoint. Printed
+paper stays in a bounded app-memory roll, can be previewed, and exports as PNG only through a
+user-selected SAF document; the export can then be shared with a temporary read grant.
+
 Android audio shares the desktop's portable resampling, two-period mixing filter, and DC blocking.
 The service writes signed 16-bit stereo PCM to an `AudioTrack` on a dedicated consumer thread at
 the initialized track rate. Its six preallocated host-frame slots bound memory and latency: a late
