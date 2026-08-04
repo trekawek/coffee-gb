@@ -4084,7 +4084,7 @@ class BasicController private constructor(
         ))
     publishPlaybackState()
     val context = stateContext
-    postStateUxSessionEvent(
+    postSessionEventSafely(
         session,
         StateUxSessionEvent(
             stateSessionId,
@@ -4272,7 +4272,7 @@ class BasicController private constructor(
     latestStateRequests.clear()
     latestSaveRequests.clear()
     mobileAdapterExternalIoSaveRequests.clear()
-    postStateUxSessionEvent(
+    postSessionEventSafely(
         currentSession,
         StateUxSessionEvent(
             stateSessionId,
@@ -4294,7 +4294,7 @@ class BasicController private constructor(
         Controller.SerialPeripheralStatus.DETACHED,
     )
     if (notifyLifecycle) {
-      postStateUxSessionEvent(session, StateUxSessionEvent(stateSessionId, false, null))
+      postSessionEventSafely(session, StateUxSessionEvent(stateSessionId, false, null))
       postSessionEventSafely(session, Controller.EmulationStoppedEvent())
     }
     playbackSessionGeneration = null
@@ -4330,16 +4330,6 @@ class BasicController private constructor(
       session.eventBus.post(event)
     } catch (subscriberFailure: RuntimeException) {
       LOG.warn("Session lifecycle event subscriber failed for {}", event.javaClass.simpleName, subscriberFailure)
-    }
-  }
-
-  /** State requests are owned by the root controller bus, while desktop presentation is per session. */
-  private fun postStateUxSessionEvent(session: Session, event: StateUxSessionEvent) {
-    postSessionEventSafely(session, event)
-    try {
-      eventBus.post(event)
-    } catch (subscriberFailure: RuntimeException) {
-      LOG.warn("State lifecycle event subscriber failed", subscriberFailure)
     }
   }
 
@@ -4527,7 +4517,7 @@ class BasicController private constructor(
     try {
       shutdownExecutors(closeDeadlineNanos)
       session?.let {
-        postStateUxSessionEvent(it, StateUxSessionEvent(stateSessionId, false, null))
+        postSessionEventSafely(it, StateUxSessionEvent(stateSessionId, false, null))
       }
       eventBus.close(
           remainingCloseNanos(closeDeadlineNanos, "controller event-bus teardown"),

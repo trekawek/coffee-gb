@@ -96,7 +96,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private Uri currentSource;
     private StateStorageLayout activeLayout;
     private StateRepository activeStates;
-    private long activeStateSessionId;
+    private volatile long activeStateSessionId;
     private long nextStateRequestId;
     private long nextOpenRequestId;
     private long activeOpenRequestId;
@@ -614,13 +614,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
         eventBus.register(printer::append, Controller.PrinterPrintEvent.class);
         eventBus.register(
-                (StateUxSessionEvent event) -> submit(() -> {
+                (StateUxSessionEvent event) -> {
                     if (event.getAvailable()) {
                         activeStateSessionId = event.getSessionId();
                     } else if (activeStateSessionId == event.getSessionId()) {
                         activeStateSessionId = 0;
                     }
-                }),
+                },
                 StateUxSessionEvent.class);
         eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
