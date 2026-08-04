@@ -91,6 +91,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             video.attach(runtime.frames(), runtime.input());
             runtime.setAudioMuted(getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
             runtime.setAudioVolume(getPreferences(MODE_PRIVATE).getInt("audio.volume", 100));
+            runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
             applyState(runtime.state());
         }
 
@@ -478,16 +479,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void showSettings() {
-        String[] choices = {"Audio", "Touch controls", "Controller mapping", "Video", "System profile",
+        String[] choices = {"Audio", "Touch controls", "Controller mapping", "Optional devices", "Video", "System profile",
                 "Rewind and save behavior"};
         new AlertDialog.Builder(this).setTitle("Settings").setItems(choices, (dialog, which) -> {
             switch (which) {
                 case 0 -> configureAudio();
                 case 1 -> configureTouchControls();
                 case 2 -> configureController();
-                case 3 -> showUnavailable("Video", "Video uses native nearest-neighbor rendering with aspect-preserving fit.");
-                case 4 -> showUnavailable("System profile", "Profile selection is determined safely when the ROM opens; changing it during a session is unavailable.");
-                case 5 -> showUnavailable("Rewind and save behavior", "Rewind and battery-save behavior use the portable session defaults. Live changes are unavailable during a session.");
+                case 3 -> configureOptionalDevices();
+                case 4 -> showUnavailable("Video", "Video uses native nearest-neighbor rendering with aspect-preserving fit.");
+                case 5 -> showUnavailable("System profile", "Profile selection is determined safely when the ROM opens; changing it during a session is unavailable.");
+                case 6 -> showUnavailable("Rewind and save behavior", "Rewind and battery-save behavior use the portable session defaults. Live changes are unavailable during a session.");
                 default -> { }
             }
         }).show();
@@ -511,6 +513,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         active.setAudioVolume(slider.getProgress());
                         active.setAudioMuted(mute.isChecked());
                     });
+                }).show();
+    }
+
+    private void configureOptionalDevices() {
+        Switch rumble = new Switch(this);
+        rumble.setText("Rumble when supported by the game and device");
+        rumble.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
+        new AlertDialog.Builder(this).setTitle("Optional devices").setView(rumble)
+                .setMessage("Tilt, camera, and printer integrations require a compatible cartridge and are configured only when available.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.rumble", rumble.isChecked()).apply();
+                    requireRuntime(active -> active.setRumbleEnabled(rumble.isChecked()));
                 }).show();
     }
 
