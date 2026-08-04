@@ -85,6 +85,11 @@ The optional Game Boy Printer connects through the existing portable serial endp
 paper stays in a bounded app-memory roll, can be previewed, and exports as PNG only through a
 user-selected SAF document; the export can then be shared with a temporary read grant.
 
+For Pocket Camera cartridges, choosing live capture requests Android camera access only at that
+point. CameraX supplies bounded latest-frame analysis while the compatible game is active and the
+app is visible; before permission, without a camera, or after capture stops, the portable core
+uses its deterministic synthetic camera pattern.
+
 Android audio shares the desktop's portable resampling, two-period mixing filter, and DC blocking.
 The service writes signed 16-bit stereo PCM to an `AudioTrack` on a dedicated consumer thread at
 the initialized track rate. Its six preallocated host-frame slots bound memory and latency: a late

@@ -17,9 +17,11 @@ import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.RomImage;
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
+import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera;
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 
@@ -80,8 +82,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private volatile AndroidAudioSink audio;
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
+    private volatile AndroidCameraSource camera;
     private AndroidPrinterStore printer;
     private boolean printerEnabled;
+    private boolean cameraEnabled;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
@@ -93,6 +97,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private long activeOpenRequestId;
     private long tiltOpenRequestId;
     private boolean tiltRequiredForOpenRequest;
+    private long cameraOpenRequestId;
+    private boolean cameraRequiredForOpenRequest;
     private long nextFlushRequestId;
     private long pendingFlushRequestId;
     private ScheduledFuture<?> flushDeadline;
@@ -149,6 +155,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
+    /** Enables live Pocket Camera capture after the user grants the optional camera permission. */
+    void setCameraEnabled(boolean enabled) {
+        submit(() -> {
+            cameraEnabled = enabled;
+            AndroidCameraSource activeCamera = camera;
+            if (activeCamera != null) {
+                activeCamera.setEnabled(enabled);
+            }
+        });
+    }
+
     /** Connects or disconnects the portable Game Boy Printer at the controller-safe boundary. */
     void setPrinterEnabled(boolean enabled) {
         submit(() -> {
@@ -191,6 +208,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         AndroidTiltSink activeTilt = tilt;
         if (activeTilt != null) {
             activeTilt.pause();
+        }
+        AndroidCameraSource activeCamera = camera;
+        if (activeCamera != null) {
+            activeCamera.pause();
         }
         submit(() -> {
             if (controller != null && activeLayout != null) {
@@ -375,6 +396,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeTilt != null) {
             activeTilt.pause();
         }
+        AndroidCameraSource activeCamera = camera;
+        if (activeCamera != null) {
+            activeCamera.pause();
+        }
         submit(() -> {
             if (controller == null) {
                 return;
@@ -410,6 +435,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             AndroidTiltSink activeTilt = tilt;
             if (activeTilt != null) {
                 activeTilt.resume();
+            }
+            AndroidCameraSource activeCamera = camera;
+            if (activeCamera != null) {
+                activeCamera.resume();
             }
             lifecycle.resumedByUser();
             eventBus.post(new Controller.ResumeEmulationEvent());
@@ -567,6 +596,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         audio.start();
         rumble = new AndroidRumbleSink(context, eventBus, false);
         tilt = new AndroidTiltSink(context, eventBus);
+        camera = new AndroidCameraSource(context);
+        camera.setEnabled(cameraEnabled);
+        PocketCamera.setCameraSource(camera);
         printer = new AndroidPrinterStore();
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
@@ -591,6 +623,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         if (activeTilt != null) {
                             activeTilt.setCartridgeActive(tiltOpenRequestId
                                     == activeOpenRequestId && tiltRequiredForOpenRequest);
+                        }
+                        AndroidCameraSource activeCamera = camera;
+                        if (activeCamera != null) {
+                            activeCamera.setCartridgeActive(cameraOpenRequestId
+                                    == activeOpenRequestId && cameraRequiredForOpenRequest);
                         }
                         if (currentSource != null) {
                             new RecentSafDocuments(context).recordIfPersisted(currentSource);
@@ -707,6 +744,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeOpenRequestId = ++nextOpenRequestId;
             tiltOpenRequestId = activeOpenRequestId;
             tiltRequiredForOpenRequest = rom.getType().isMbc7();
+            cameraOpenRequestId = activeOpenRequestId;
+            cameraRequiredForOpenRequest = rom.getType().isPocketCamera()
+                    || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA;
             publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
                     false, true, false);
             controllerEventBus().post(new Controller.LoadRomEvent(
@@ -819,12 +859,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         AndroidAudioSink activeAudio = audio;
         AndroidRumbleSink activeRumble = rumble;
         AndroidTiltSink activeTilt = tilt;
+        AndroidCameraSource activeCamera = camera;
         AndroidPrinterStore activePrinter = printer;
         controller = null;
         eventBus = null;
         audio = null;
         rumble = null;
         tilt = null;
+        camera = null;
         printer = null;
         if (active == null) {
             if (activeAudio != null) {
@@ -836,6 +878,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (activeTilt != null) {
                 activeTilt.close();
             }
+            if (activeCamera != null) {
+                activeCamera.close();
+            }
+            PocketCamera.setCameraSource(null);
             return true;
         }
         try {
@@ -849,6 +895,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (activeTilt != null) {
                 activeTilt.close();
             }
+            if (activeCamera != null) {
+                activeCamera.close();
+            }
+            PocketCamera.setCameraSource(null);
             lifecycle.released();
             return true;
         } catch (RuntimeException failure) {
@@ -858,6 +908,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             audio = activeAudio;
             rumble = activeRumble;
             tilt = activeTilt;
+            camera = activeCamera;
             printer = activePrinter;
             return false;
         }
