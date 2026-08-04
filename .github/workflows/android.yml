@@ -1,0 +1,80 @@
+name: Android CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Android build, lint, and APK review
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.1
+      - name: Install Android 36 SDK packages
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Install same-checkout portable artifacts
+        run: mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
+      - name: Test, lint, and assemble debug and R8 release APKs
+        run: >-
+          ./android/gradlew -p android --no-daemon
+          -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2"
+          :app:check :app:lintDebug :app:assembleDebug :app:assembleRelease
+          :app:verifyDebugApkContents
+      - name: Upload unsigned Android APKs and review reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a # v7.0.1
+        with:
+          name: android-unsigned-apks-and-reports
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+            android/app/build/reports/android-dependencies.txt
+            android/app/build/reports/android-license-inventory.txt
+            android/app/build/reports/android-apk-contents.txt
+          if-no-files-found: error
+
+  instrumentation:
+    name: Android instrumentation (API ${{ matrix.api-level }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 26
+            arch: x86
+          - api-level: 36
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.1
+      - name: Install Android 36 SDK packages
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Install same-checkout portable artifacts
+        run: mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
+      - name: Run lifecycle smoke on an Android emulator
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2.35.0
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: ${{ matrix.arch }}
+          script: >-
+            ./android/gradlew -p android --no-daemon
+            -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2"
+            :app:connectedDebugAndroidTest
