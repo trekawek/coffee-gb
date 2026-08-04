@@ -642,9 +642,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void sharePrinter(android.net.Uri uri) {
         Intent share = new Intent(Intent.ACTION_SEND)
                 .setType("image/png")
-                .putExtra(Intent.EXTRA_STREAM, uri)
-                .setClipData(ClipData.newRawUri("Game Boy Printer paper", uri))
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                .putExtra(Intent.EXTRA_STREAM, uri);
+        share.setClipData(ClipData.newRawUri("Game Boy Printer paper", uri));
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         startActivity(Intent.createChooser(share, "Share printer paper"));
     }
 
