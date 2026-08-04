@@ -30,6 +30,8 @@ private val forbiddenBytecodeReferences = linkedMapOf(
     "org/jline/" to "JLine",
     "org/opencv/" to "OpenCV",
     "io/github/libsdl" to "SDL",
+)
+private val forbiddenCoffeeGbBytecodeReferences = linkedMapOf(
     "isRecord" to "Java 16 Class.isRecord()",
     "getRecordComponents" to "Java 16 Class.getRecordComponents()",
 )
@@ -70,10 +72,16 @@ private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Coll
     }
   }
   classpath.filter(File::exists).sorted().forEach { entry ->
+    val references =
+        if (entry.name.startsWith("core-") || entry.name.startsWith("controller-")) {
+          forbiddenBytecodeReferences + forbiddenCoffeeGbBytecodeReferences
+        } else {
+          forbiddenBytecodeReferences
+        }
     if (entry.isDirectory) {
       entry.walkTopDown().filter { it.isFile && it.extension == "class" }.forEach { classFile ->
         val contents = String(classFile.readBytes(), StandardCharsets.ISO_8859_1)
-        forbiddenBytecodeReferences.forEach { (needle, label) ->
+        references.forEach { (needle, label) ->
           if (contents.contains(needle)) {
             violations += "${classFile.path} references forbidden $label API"
           }
@@ -86,7 +94,7 @@ private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Coll
           val classEntry = entries.nextElement()
           if (!classEntry.isDirectory && classEntry.name.endsWith(".class")) {
             val contents = String(jar.getInputStream(classEntry).readBytes(), StandardCharsets.ISO_8859_1)
-            forbiddenBytecodeReferences.forEach { (needle, label) ->
+            references.forEach { (needle, label) ->
               if (contents.contains(needle)) {
                 violations += "${entry.name}!/${classEntry.name} references forbidden $label API"
               }
