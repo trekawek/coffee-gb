@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.sgb;
 
+import eu.rekawek.coffeegb.core.io.InputStreams;
 import eu.rekawek.coffeegb.core.memory.Bios;
 
 import java.io.IOException;
@@ -52,7 +53,7 @@ public class DefinedPalettes {
             if (is == null) {
                 throw new IllegalArgumentException("No palette data found");
             }
-            var bytes = is.readAllBytes();
+            var bytes = InputStreams.readAllBytes(is);
             DATA = new int[bytes.length];
             for (int i = 0; i < bytes.length; i++) {
                 DATA[i] = bytes[i] & 0xff;

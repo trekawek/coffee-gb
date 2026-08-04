@@ -17,6 +17,7 @@ private val forbiddenSourceReferences = linkedMapOf(
     "org.jline." to "JLine",
     "org.opencv." to "OpenCV",
     "io.github.libsdl" to "SDL",
+    ".readAllBytes()" to "Java 9 InputStream.readAllBytes()",
 )
 private val forbiddenBytecodeReferences = linkedMapOf(
     "java/awt/" to "java.awt",

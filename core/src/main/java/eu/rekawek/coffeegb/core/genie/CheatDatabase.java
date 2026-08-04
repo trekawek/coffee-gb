@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.genie;
 
+import eu.rekawek.coffeegb.core.io.InputStreams;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,7 +54,7 @@ public final class CheatDatabase {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
                 if (!entry.isDirectory() && entry.getName().toLowerCase(Locale.ROOT).endsWith(".cht")) {
-                    CheatList list = parse(entry.getName(), new ByteArrayInputStream(zip.readAllBytes()));
+                    CheatList list = parse(entry.getName(), new ByteArrayInputStream(InputStreams.readAllBytes(zip)));
                     if (!list.cheats().isEmpty()) {
                         lists.add(list);
                     }
@@ -66,7 +68,7 @@ public final class CheatDatabase {
 
     static CheatList parse(String entryName, InputStream input) throws IOException {
         Map<Integer, Map<String, String>> properties = new LinkedHashMap<>();
-        String text = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+        String text = new String(InputStreams.readAllBytes(input), StandardCharsets.UTF_8);
         for (String line : text.split("\\R")) {
             Matcher matcher = CHEAT_PROPERTY.matcher(line.trim());
             if (matcher.matches()) {
