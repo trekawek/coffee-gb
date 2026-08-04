@@ -975,11 +975,10 @@ internal object StateGraph {
       val type = value.javaClass
       val id = admittedRecordIds[type]
           ?: throw StateCaptureException("Unregistered state record ${type.name}")
-      val fields = type.recordComponents.map { component ->
-        component.accessor.trySetAccessible()
+      val fields = StateRecordIntrospection.components(type).map { component ->
         val componentValue =
             try {
-              component.accessor.invoke(value)
+              component.value(value)
             } catch (failure: ReflectiveOperationException) {
               throw StateCaptureException("State field ${type.name}.${component.name} failed", failure)
             }
@@ -1044,7 +1043,7 @@ internal object StateGraph {
 
     private fun restoreRecord(value: RecordState, depth: Int): Any {
       val type = recordClass(value)
-      val components = type.recordComponents
+      val components = StateRecordIntrospection.components(type)
       if (value.fields.size != components.size ||
           value.fields.indices.any { value.fields[it].name != components[it].name }) {
         throw StateApplyException("Invalid ${type.name} field inventory")
@@ -1054,7 +1053,7 @@ internal object StateGraph {
             this.value(value.fields[index].value, components[index].genericType, depth + 1)
           }.toTypedArray()
       val constructor = type.getDeclaredConstructor(*components.map { it.type }.toTypedArray())
-      constructor.trySetAccessible()
+      constructor.isAccessible = true
       try {
         return constructor.newInstance(*args)
       } catch (failure: InvocationTargetException) {

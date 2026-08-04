@@ -67,7 +67,7 @@ internal object StateSemantics {
           value.forEachIndexed { index, item -> visit(item, "$path[$index]", visited, clockSpec) }
       value is Map<*, *> ->
           value.forEach { (key, item) -> visit(item, "$path[$key]", visited, clockSpec) }
-      value.javaClass.isRecord -> {
+      StateTypeRegistry.isAuditedStateType(value.javaClass) -> {
         val type = value.javaClass.name
         val policy = policies[type]
             ?: throw StateApplyException("No semantic state policy for $type")
@@ -85,14 +85,13 @@ internal object StateSemantics {
       private val record: Any,
       private val path: String,
   ) {
-    val components = record.javaClass.recordComponents.toList()
+    val components = StateRecordIntrospection.components(record.javaClass)
 
     fun value(name: String): Any? {
       val component = components.singleOrNull { it.name == name }
           ?: throw StateApplyException("$path has no field $name")
-      component.accessor.trySetAccessible()
       return try {
-        component.accessor.invoke(record)
+        component.value(record)
       } catch (failure: ReflectiveOperationException) {
         throw StateApplyException("Could not inspect $path.$name", failure)
       }

@@ -667,13 +667,12 @@ private object SnapshotGraph {
     fun visit(value: Any?) {
       if (value == null) return
       when {
-        value.javaClass.isRecord -> {
+        StateTypeRegistry.isAuditedStateType(value.javaClass) -> {
           val typeId = recordIds[value.javaClass]
               ?: throw StateApplyException("Unregistered internal record ${value.javaClass.name}")
           if (isOwnershipRecord(value.javaClass.name)) signature += typeId
-          value.javaClass.recordComponents.forEach { component ->
-            component.accessor.trySetAccessible()
-            visit(component.accessor.invoke(value))
+          StateRecordIntrospection.components(value.javaClass).forEach { component ->
+            visit(component.value(value))
           }
         }
         value.javaClass.isArray && !value.javaClass.componentType.isPrimitive ->
@@ -746,7 +745,7 @@ private object SnapshotGraph {
       val type =
           StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
               ?: throw StateApplyException("Unknown internal record type ID ${value.typeId}")
-      val components = type.recordComponents
+      val components = StateRecordIntrospection.components(type)
       if (components.size != value.fields.size ||
           components.indices.any { components[it].name != value.fields[it].name }) {
         throw StateApplyException("Invalid internal ${type.name} field inventory")
@@ -758,7 +757,7 @@ private object SnapshotGraph {
               }
               .toTypedArray()
       val constructor = type.getDeclaredConstructor(*components.map { it.type }.toTypedArray())
-      constructor.trySetAccessible()
+      constructor.isAccessible = true
       try {
         return constructor.newInstance(*arguments)
       } catch (failure: InvocationTargetException) {
@@ -1063,8 +1062,7 @@ private object SnapshotGraph {
       val typeId = recordIds[type] ?: error("Unregistered snapshot record ${type.name}")
       val sameType = previous?.takeIf { it.typeId == typeId }
       val fields =
-          type.recordComponents.mapIndexed { index, component ->
-            component.accessor.trySetAccessible()
+          StateRecordIntrospection.components(type).mapIndexed { index, component ->
             val old =
                 sameType
                     ?.fields
@@ -1074,7 +1072,7 @@ private object SnapshotGraph {
             try {
               SnapshotField(
                   component.name,
-                  value(component.accessor.invoke(source), old, depth + 1),
+                  value(component.value(source), old, depth + 1),
               )
             } catch (failure: IllegalStateException) {
               throw IllegalStateException(
