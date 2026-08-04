@@ -33,8 +33,8 @@ public class AndroidRuntimeEndToEndSmokeTest {
 
     // GitHub's API-26 emulator runs without KVM. State serialization may take longer than the
     // ordinary UI/lifecycle checks, so this remains a functional—not timing—test.
-    private static final long TIMEOUT_MILLIS = 60_000L;
-    private static final long STATE_OPERATION_TIMEOUT_MILLIS = 180_000L;
+    private static final long TIMEOUT_MILLIS = 180_000L;
+    private static final long STATE_REQUEST_TIMEOUT_MILLIS = 60_000L;
 
     @Test
     public void playsGeneratedContentFixtureThroughSaveAndLifecycleTransitions() throws Exception {
@@ -87,7 +87,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
 
             runtime.saveSnapshot(0);
             assertTrue("state save request", stateSaveRequested.await(
-                    TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+                    STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             awaitStateOperation("state save", stateSaved, stateFailure);
             awaitSavedState(runtime, 0);
             runtime.restoreSnapshot(0);
@@ -162,8 +162,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
             String operation,
             CountDownLatch completed,
             AtomicReference<StateOperationFailedEvent> failure) throws Exception {
-        assertTrue(operation + " event", completed.await(
-                STATE_OPERATION_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
+        assertTrue(operation + " event", completed.await(TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
         StateOperationFailedEvent stateFailure = failure.get();
         if (stateFailure != null) {
             fail(operation + " failed: " + stateFailure.getError().getDetail());
