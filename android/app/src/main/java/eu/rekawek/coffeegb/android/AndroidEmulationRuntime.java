@@ -11,9 +11,12 @@ import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.controller.state.StateIdentity;
+import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 import eu.rekawek.coffeegb.controller.state.StateRepository;
+import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
@@ -75,6 +78,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final AndroidInputRouter input;
 
     private volatile RuntimeState state = RuntimeState.stopped();
+    // Updated directly from controller event dispatch; the owner queues requests until it exists.
+    private volatile long activeStateSessionId;
 
     // Everything below is accessed only on the owner executor.
     private EventBus eventBus;
@@ -94,6 +99,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private StateStorageLayout activeLayout;
     private StateRepository activeStates;
     private long nextOpenRequestId;
+    private long nextStateRequestId;
+    private final List<PendingStateRequest> pendingStateRequests = new ArrayList<>();
     private long activeOpenRequestId;
     private long tiltOpenRequestId;
     private boolean tiltRequiredForOpenRequest;
@@ -232,21 +239,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Requests a portable quick-state save at the controller's safe point. */
     public void saveSnapshot(int slot) {
         checkStateSlot(slot);
-        submit(() -> {
-            if (controller != null && activeLayout != null) {
-                eventBus.post(new Controller.SaveSnapshotEvent(slot));
-            }
-        });
+        submit(() -> requestStateSave(slot));
     }
 
     /** Requests a portable quick-state restore; controller errors remain typed/redacted. */
     public void restoreSnapshot(int slot) {
         checkStateSlot(slot);
-        submit(() -> {
-            if (controller != null && activeLayout != null) {
-                eventBus.post(new Controller.RestoreSnapshotEvent(slot));
-            }
-        });
+        submit(() -> requestStateLoad(slot));
     }
 
     /** Reads only redacted state metadata on the runtime owner, then delivers immutable rows on UI. */
@@ -592,6 +591,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void createController() {
         eventBus = new EventBusImpl();
+        eventBus.register(
+                (StateUxSessionEvent event) -> {
+                    activeStateSessionId = event.getAvailable() ? event.getSessionId() : 0L;
+                    submit(this::drainPendingStateRequests);
+                },
+                StateUxSessionEvent.class);
         audio = new AndroidAudioSink(context, eventBus);
         audio.start();
         rumble = new AndroidRumbleSink(context, eventBus, false);
@@ -778,6 +783,54 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 TimeUnit.MILLISECONDS);
     }
 
+    private void requestStateSave(int slot) {
+        requestState(new PendingStateRequest(slot, true));
+    }
+
+    private void requestStateLoad(int slot) {
+        requestState(new PendingStateRequest(slot, false));
+    }
+
+    private void requestState(PendingStateRequest request) {
+        if (controller == null || activeLayout == null) {
+            return;
+        }
+        if (activeStateSessionId == 0L) {
+            // Emulation-start notification reaches the owner before the controller publishes the
+            // authoritative State UX session identifier. Preserve an immediate button press.
+            pendingStateRequests.add(request);
+            return;
+        }
+        postStateRequest(request);
+    }
+
+    private void drainPendingStateRequests() {
+        if (activeStateSessionId == 0L || controller == null || activeLayout == null) {
+            pendingStateRequests.clear();
+            return;
+        }
+        List<PendingStateRequest> pending = List.copyOf(pendingStateRequests);
+        pendingStateRequests.clear();
+        for (PendingStateRequest request : pending) {
+            postStateRequest(request);
+        }
+    }
+
+    private void postStateRequest(PendingStateRequest request) {
+        long stateSessionId = activeStateSessionId;
+        if (stateSessionId == 0L || controller == null || activeLayout == null) {
+            pendingStateRequests.add(request);
+            return;
+        }
+        long requestId = ++nextStateRequestId;
+        StateRef.Slot ref = new StateRef.Slot(request.slot);
+        if (request.save) {
+            eventBus.post(new StateSaveRequestEvent(requestId, stateSessionId, ref, null, null));
+        } else {
+            eventBus.post(new StateLoadRefRequestEvent(requestId, stateSessionId, ref));
+        }
+    }
+
     private RuntimeLifecycleGate.SessionCommands lifecycleCommands() {
         return new RuntimeLifecycleGate.SessionCommands() {
             @Override
@@ -882,6 +935,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 activeCamera.close();
             }
             PocketCamera.setCameraSource(null);
+            activeStateSessionId = 0L;
+            pendingStateRequests.clear();
             return true;
         }
         try {
@@ -900,6 +955,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             }
             PocketCamera.setCameraSource(null);
             lifecycle.released();
+            activeStateSessionId = 0L;
+            pendingStateRequests.clear();
             return true;
         } catch (RuntimeException failure) {
             // Retain the controller for an explicit retry; it may still own an unflushed battery.
@@ -1013,6 +1070,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             snapshot.close();
         } catch (IOException ignored) {
             // Stream snapshots own no visible path. The next process startup cannot reopen one.
+        }
+    }
+
+    private static final class PendingStateRequest {
+        private final int slot;
+        private final boolean save;
+
+        private PendingStateRequest(int slot, boolean save) {
+            this.slot = slot;
+            this.save = save;
         }
     }
 
