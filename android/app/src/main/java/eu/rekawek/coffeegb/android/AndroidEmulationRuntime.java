@@ -692,12 +692,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     cancelFlushDeadline();
                     pendingFlushRequestId = 0;
                     lifecycle.flushCompleted();
+                    // A user may explicitly resume while the asynchronous battery write is still
+                    // completing. Its completion is not another pause request, so preserve the
+                    // controller's most recently published playback state instead of regressing
+                    // a resumed session back to PAUSED.
+                    boolean paused = state.paused();
                     if (event.getSucceeded()) {
-                        publish(RuntimeState.Phase.PAUSED,
-                                "Game paused. Battery data saved.", List.of(), true, true, false);
+                        publish(paused ? RuntimeState.Phase.PAUSED : RuntimeState.Phase.RUNNING,
+                                paused ? "Game paused. Battery data saved."
+                                        : "Game running. Battery data saved.",
+                                List.of(), true, paused, false);
                     } else {
-                        publish(RuntimeState.Phase.PAUSED,
-                                "Game paused. Battery save needs retrying.", List.of(), true, true, false);
+                        publish(paused ? RuntimeState.Phase.PAUSED : RuntimeState.Phase.RUNNING,
+                                paused ? "Game paused. Battery save needs retrying."
+                                        : "Game running. Battery save needs retrying.",
+                                List.of(), true, paused, false);
                     }
                 }),
                 Controller.BatteryFlushCompletedEvent.class);
