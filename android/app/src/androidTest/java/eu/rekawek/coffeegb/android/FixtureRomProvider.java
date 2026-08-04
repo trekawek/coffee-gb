@@ -19,8 +19,8 @@ import java.nio.charset.StandardCharsets;
  * Source-generated public-domain Game Boy fixture exposed only through a content URI.
  *
  * <p>The CI test deliberately does not package a ROM blob or provide a filesystem path. The
- * generated ROM-only program loops after boot, which is enough to drive display, input, state,
- * and lifecycle coverage without relying on copyrighted game data.
+ * generated ROM-only program enables the LCD and loops after boot, which is enough to drive
+ * display, input, state, and lifecycle coverage without relying on copyrighted game data.
  */
 public final class FixtureRomProvider extends ContentProvider {
 
@@ -108,8 +108,13 @@ public final class FixtureRomProvider extends ContentProvider {
             checksum = (checksum - (rom[address] & 0xff) - 1) & 0xff;
         }
         rom[0x014d] = (byte) checksum;
-        rom[0x0150] = 0x18; // JR -2
-        rom[0x0151] = (byte) 0xfe;
+        rom[0x0150] = 0x3e; // LD A, 0x91 (LCD and background enabled)
+        rom[0x0151] = (byte) 0x91;
+        rom[0x0152] = (byte) 0xea; // LD (0xff40), A
+        rom[0x0153] = 0x40;
+        rom[0x0154] = (byte) 0xff;
+        rom[0x0155] = 0x18; // JR -2
+        rom[0x0156] = (byte) 0xfe;
         return rom;
     }
 }
