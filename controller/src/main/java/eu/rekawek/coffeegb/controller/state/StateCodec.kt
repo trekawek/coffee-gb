@@ -921,7 +921,16 @@ object StateCodec {
         .multiply(BigInteger.valueOf(destinationLimit))
         .add(BigInteger.valueOf(LEGACY_V1_SGB_RTC_PHASE_LIMIT / 2))
         .divide(BigInteger.valueOf(LEGACY_V1_SGB_RTC_PHASE_LIMIT))
-        .longValueExact()
+        .longValueExactForAndroid()
+  }
+
+  /** Android API 26 lacks BigInteger.longValueExact(), used by the JVM implementation. */
+  private fun BigInteger.longValueExactForAndroid(): Long {
+    if (compareTo(BigInteger.valueOf(Long.MIN_VALUE)) < 0 ||
+        compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+      throw ArithmeticException("BigInteger does not fit in a Long")
+    }
+    return toLong()
   }
 
   private fun malformedLegacyRtc(message: String): Nothing =

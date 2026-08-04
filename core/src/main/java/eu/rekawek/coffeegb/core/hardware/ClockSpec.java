@@ -191,7 +191,7 @@ public final class ClockSpec {
                 .multiply(BigInteger.valueOf(outputUnitsPerSecond))
                 .multiply(BigInteger.valueOf(ticksPerSecondDenominator))
                 .add(BigInteger.valueOf(ticksPerSecondNumerator - 1));
-        return numerator.divide(BigInteger.valueOf(ticksPerSecondNumerator)).longValueExact();
+        return longValueExact(numerator.divide(BigInteger.valueOf(ticksPerSecondNumerator)));
     }
 
     /** Complete exact clock/cadence identity used before linked execution. */
@@ -275,7 +275,16 @@ public final class ClockSpec {
                 result = result.add(BigInteger.ONE);
             }
         }
-        return result.longValueExact();
+        return longValueExact(result);
+    }
+
+    /** Android API 26 exposes {@code BigInteger.longValue()} but not Java 8's exact variant. */
+    private static long longValueExact(BigInteger value) {
+        if (value.compareTo(BigInteger.valueOf(Long.MIN_VALUE)) < 0
+                || value.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+            throw new ArithmeticException("BigInteger does not fit in a long");
+        }
+        return value.longValue();
     }
 
     private static long divide(long value, long divisor, Rounding rounding) {
@@ -356,8 +365,8 @@ public final class ClockSpec {
                         .multiply(BigInteger.valueOf(numeratorPerInput))
                         .add(BigInteger.valueOf(remainder));
                 BigInteger[] result = total.divideAndRemainder(BigInteger.valueOf(denominator));
-                remainder = result[1].longValueExact();
-                return result[0].longValueExact();
+                remainder = longValueExact(result[1]);
+                return longValueExact(result[0]);
             }
         }
 
