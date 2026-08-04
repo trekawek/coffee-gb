@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.controller.state.DesktopRomPersistenceStore
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateRomHashes
+import eu.rekawek.coffeegb.controller.state.StateStore
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Mapper
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeType
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -39,21 +40,24 @@ internal class RomSessionPreparer(
     ensureActive()
     val romHashes = StateIdentity.hashes(config)
     ensureActive()
-    (event.persistenceStore ?: DesktopRomPersistenceStore(properties.applicationSettings.saves))
-        .resolve(config, romHashes)
-        .applyTo(config)
+    val persistence =
+        (event.persistenceStore ?: DesktopRomPersistenceStore(properties.applicationSettings.saves))
+            .resolve(config, romHashes)
+    persistence.applyTo(config)
     ensureActive()
 
-    event.state?.let { return PreparedSession.FromDetachedState(config, it, romHashes) }
+    event.state?.let {
+      return PreparedSession.FromDetachedState(config, it, romHashes, persistence.stateStore)
+    }
 
     bootStateCache.getOrCreate(config)?.let {
-      return PreparedSession.FromBootState(config, it, romHashes)
+      return PreparedSession.FromBootState(config, it, romHashes, persistence.stateStore)
     }
 
     // Exotic/RTC cartridges cannot use a battery-free boot template. Defer their real machine
     // construction until after the outgoing session's persistence barrier, when the worker can
     // load the just-committed RAM/RTC bytes without touching the controller timing thread.
-    return PreparedSession.Deferred(config, romHashes)
+    return PreparedSession.Deferred(config, romHashes, persistence.stateStore)
   }
 
   private fun ensureActive() {
@@ -163,6 +167,8 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
 internal sealed class PreparedSession(
     open val config: GameboyConfiguration,
     open val romHashes: StateRomHashes,
+    /** Host-owned state destination resolved with the session's battery storage. */
+    open val stateStore: StateStore? = null,
 ) {
 
   abstract fun materialize(): Gameboy
@@ -173,7 +179,8 @@ internal sealed class PreparedSession(
       override val config: GameboyConfiguration,
       val bootState: BootState,
       override val romHashes: StateRomHashes = StateIdentity.hashes(config),
-  ) : PreparedSession(config, romHashes) {
+      override val stateStore: StateStore? = null,
+  ) : PreparedSession(config, romHashes, stateStore) {
     override fun materialize(): Gameboy = materializeRestored { it.restoreBootState(bootState) }
   }
 
@@ -181,14 +188,16 @@ internal sealed class PreparedSession(
       override val config: GameboyConfiguration,
       val state: MachineState,
       override val romHashes: StateRomHashes = StateIdentity.hashes(config),
-  ) : PreparedSession(config, romHashes) {
+      override val stateStore: StateStore? = null,
+  ) : PreparedSession(config, romHashes, stateStore) {
     override fun materialize(): Gameboy = materializeRestored { DetachedStateAdapter.apply(it, state) }
   }
 
   data class Deferred(
       override val config: GameboyConfiguration,
       override val romHashes: StateRomHashes = StateIdentity.hashes(config),
-  ) : PreparedSession(config, romHashes) {
+      override val stateStore: StateStore? = null,
+  ) : PreparedSession(config, romHashes, stateStore) {
     override fun materialize(): Gameboy = config.build()
   }
 
@@ -196,7 +205,8 @@ internal sealed class PreparedSession(
       override val config: GameboyConfiguration,
       gameboy: Gameboy,
       override val romHashes: StateRomHashes = StateIdentity.hashes(config),
-  ) : PreparedSession(config, romHashes) {
+      override val stateStore: StateStore? = null,
+  ) : PreparedSession(config, romHashes, stateStore) {
     private val owned = java.util.concurrent.atomic.AtomicReference(gameboy)
 
     override fun materialize(): Gameboy =

@@ -37,6 +37,7 @@ import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateLoadRequestEvent
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
+import eu.rekawek.coffeegb.controller.state.MachineIdentity
 import eu.rekawek.coffeegb.controller.state.SessionStateRoot
 import eu.rekawek.coffeegb.controller.state.StateOpenFolderRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperation
@@ -60,6 +61,7 @@ import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityEvent
 import eu.rekawek.coffeegb.controller.state.StateSlotLoadAvailabilityRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateStoragePaths
 import eu.rekawek.coffeegb.controller.state.StateStorageResolver
+import eu.rekawek.coffeegb.controller.state.StateStore
 import eu.rekawek.coffeegb.controller.state.StateUserError
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.controller.state.StateWorkerCompletedEvent
@@ -1674,6 +1676,7 @@ class BasicController private constructor(
   private fun createSession(
       config: Gameboy.GameboyConfiguration,
       prebuiltGameboy: Gameboy? = null,
+      stateStore: StateStore? = null,
   ): Session {
     val sessionBus = StagedEventBus(eventBus.fork("main"))
     try {
@@ -1686,6 +1689,7 @@ class BasicController private constructor(
           serialEndpoint.endpoint,
           prebuiltGameboy = prebuiltGameboy,
           serialEndpointDisconnect = serialEndpoint.disconnect,
+          stateStore = stateStore,
       )
     } catch (failure: Controller.SerialPeripheralPreparationException) {
       postSerialPeripheralStatus(
@@ -3174,7 +3178,7 @@ class BasicController private constructor(
     try {
       // Finish constructing and initializing the candidate before releasing the current session.
       // A core-startup failure must leave the old game available for resume/cancel semantics.
-      nextSession = createSession(job.prepared.config, nextGameboy)
+      nextSession = createSession(job.prepared.config, nextGameboy, job.prepared.stateStore)
       nextGameboy = null
       nextSnapshotManager =
           if (job.prepared.config.rom.origin.persistencePath(".sn0").isPresent) {
@@ -4038,15 +4042,9 @@ class BasicController private constructor(
                     "Activated session has no precomputed ROM identity"
                   },
               )
-          val paths =
-              StateStorageResolver.resolve(
-                  properties.applicationSettings.saves,
-                  session.config,
-                  identity,
-              )
           StateWorkerContext(
               stateSessionId,
-              stateWorkspaceFactory.create(paths),
+              stateWorkspace(session, identity, properties.applicationSettings.saves),
               identity,
               session.config.hardwareProfile.id(),
           )
@@ -4110,6 +4108,27 @@ class BasicController private constructor(
         Controller.SerialPeripheralStatus.ATTACHED,
     )
     postInitialMobileAdapterNetworkStatus()
+  }
+
+  /**
+   * Keeps pathless host sessions on the state store resolved together with their battery storage.
+   * Desktop sessions retain their configured writable root and read fallbacks.
+   */
+  private fun stateWorkspace(
+      session: Session,
+      identity: MachineIdentity,
+      saves: ApplicationSettings.Saves,
+  ): StateWorkspace {
+    val hostStore = session.stateStore
+    if (hostStore != null) {
+      val layout = hostStore.layout
+      return StateWorkspace(
+          StateStoragePaths(layout, layout.screenshotsDirectory, emptyList()),
+      ) { hostStore.repository() }
+    }
+    return stateWorkspaceFactory.create(
+        StateStorageResolver.resolve(saves, session.config, identity),
+    )
   }
 
   private fun installDebugPort(session: Session) {
@@ -4231,10 +4250,9 @@ class BasicController private constructor(
                   currentSession.config,
                   romHashes,
               )
-          val paths = StateStorageResolver.resolve(saves, currentSession.config, identity)
           StateWorkerContext(
               stateSessionId,
-              stateWorkspaceFactory.create(paths),
+              stateWorkspace(currentSession, identity, saves),
               identity,
               currentSession.config.hardwareProfile.id(),
           )

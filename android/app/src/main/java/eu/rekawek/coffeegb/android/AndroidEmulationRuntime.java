@@ -11,9 +11,12 @@ import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.controller.state.StateIdentity;
+import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
+import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 import eu.rekawek.coffeegb.controller.state.StateRepository;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
@@ -93,6 +96,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private Uri currentSource;
     private StateStorageLayout activeLayout;
     private StateRepository activeStates;
+    private long activeStateSessionId;
+    private long nextStateRequestId;
     private long nextOpenRequestId;
     private long activeOpenRequestId;
     private long tiltOpenRequestId;
@@ -233,8 +238,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void saveSnapshot(int slot) {
         checkStateSlot(slot);
         submit(() -> {
-            if (controller != null && activeLayout != null) {
-                eventBus.post(new Controller.SaveSnapshotEvent(slot));
+            if (controller != null && activeLayout != null && activeStateSessionId > 0) {
+                eventBus.post(new StateSaveRequestEvent(++nextStateRequestId,
+                        activeStateSessionId, new StateRef.Slot(slot), null, null));
             }
         });
     }
@@ -243,8 +249,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void restoreSnapshot(int slot) {
         checkStateSlot(slot);
         submit(() -> {
-            if (controller != null && activeLayout != null) {
-                eventBus.post(new Controller.RestoreSnapshotEvent(slot));
+            if (controller != null && activeLayout != null && activeStateSessionId > 0) {
+                eventBus.post(new StateLoadRefRequestEvent(++nextStateRequestId,
+                        activeStateSessionId, new StateRef.Slot(slot)));
             }
         });
     }
@@ -607,6 +614,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
         eventBus.register(printer::append, Controller.PrinterPrintEvent.class);
         eventBus.register(
+                (StateUxSessionEvent event) -> submit(() -> {
+                    if (event.getAvailable()) {
+                        activeStateSessionId = event.getSessionId();
+                    } else if (activeStateSessionId == event.getSessionId()) {
+                        activeStateSessionId = 0;
+                    }
+                }),
+                StateUxSessionEvent.class);
+        eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
@@ -740,6 +756,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             StateStorageLayout layout = persistenceStore.layout(hash);
             activeLayout = layout;
             activeStates = new StateRepository(layout, AtomicFileWriter.system());
+            activeStateSessionId = 0;
             currentSource = source;
             activeOpenRequestId = ++nextOpenRequestId;
             tiltOpenRequestId = activeOpenRequestId;
@@ -755,6 +772,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             forgetRevokedPermission(source);
             activeLayout = null;
             activeStates = null;
+            activeStateSessionId = 0;
             currentSource = null;
             publish(RuntimeState.Phase.FAILED,
                     "Coffee GB could not load the selected ROM.", List.of(), false, true, false);
@@ -854,6 +872,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private boolean closeController() {
         cancelFlushDeadline();
         pendingFlushRequestId = 0;
+        activeStateSessionId = 0;
         BasicController active = controller;
         EventBus activeBus = eventBus;
         AndroidAudioSink activeAudio = audio;
