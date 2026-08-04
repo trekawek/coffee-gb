@@ -25,6 +25,24 @@ private val forbiddenBytecodeReferences = linkedMapOf(
     "org/opencv/" to "OpenCV",
     "io/github/libsdl" to "SDL",
 )
+private val forbiddenApkReferences = forbiddenBytecodeReferences + mapOf(
+    "java.awt." to "java.awt",
+    "javax.swing." to "javax.swing",
+    "javax.sound." to "javax.sound",
+)
+private val forbiddenApkEntrySuffixes = listOf(
+    ".gb",
+    ".gbc",
+    ".sgb",
+    ".rom",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".sav",
+    ".cgbstate",
+    ".jks",
+    ".keystore",
+)
 
 private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Collection<File>): List<String> {
   val violations = mutableListOf<String>()
@@ -92,6 +110,7 @@ android {
     targetSdk = 36
     versionCode = 1
     versionName = coffeeGbVersion
+    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
   buildTypes {
@@ -120,6 +139,9 @@ dependencies {
   implementation("androidx.camera:camera-lifecycle:1.6.1")
   implementation("androidx.lifecycle:lifecycle-process:2.11.0")
   testImplementation("junit:junit:4.13.2")
+  androidTestImplementation("androidx.test:core:1.7.0")
+  androidTestImplementation("androidx.test.ext:junit:1.3.0")
+  androidTestImplementation("androidx.test:runner:1.7.0")
 }
 
 // AGP creates variant configurations after this script is evaluated. Keep the lookup lazy so the
@@ -173,12 +195,84 @@ val reportAndroidDependencyGraph = tasks.register("reportAndroidDependencyGraph"
     }
   }
 }
+val reportAndroidLicenseInventory = tasks.register("reportAndroidLicenseInventory") {
+  group = "verification"
+  description = "Writes the resolved Android runtime component inventory for release review."
+  val report = layout.buildDirectory.file("reports/android-license-inventory.txt")
+  inputs.files(debugRuntimeClasspath)
+  outputs.file(report)
+  doLast {
+    val artifacts = debugRuntimeClasspath.get().resolvedConfiguration.resolvedArtifacts
+        .sortedBy { it.moduleVersion.id.toString() }
+    report.get().asFile.apply {
+      parentFile.mkdirs()
+      writeText(
+          buildString {
+            appendLine("Coffee GB Android runtime component inventory")
+            appendLine("Review each component's upstream license before a distribution release.")
+            artifacts.forEach { appendLine("${it.moduleVersion.id} (${it.file.name})") }
+          }
+      )
+    }
+  }
+}
+val verifyDebugApkContents = tasks.register("verifyDebugApkContents") {
+  group = "verification"
+  description = "Rejects desktop APIs, game data, developer paths, and signing material from the debug APK."
+  val apk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+  val report = layout.buildDirectory.file("reports/android-apk-contents.txt")
+  dependsOn("assembleDebug")
+  inputs.file(apk)
+  outputs.file(report)
+  doLast {
+    val packageFile = apk.get().asFile
+    val entries = mutableListOf<String>()
+    val forbiddenPayload = mutableListOf<String>()
+    ZipFile(packageFile).use { archive ->
+      archive.entries().asSequence().forEach { entry ->
+        entries += entry.name
+        if (!entry.isDirectory) {
+          val payload = String(archive.getInputStream(entry).readBytes(), StandardCharsets.ISO_8859_1)
+          forbiddenApkReferences.forEach { (needle, label) ->
+            if (payload.contains(needle)) {
+              forbiddenPayload += "${entry.name}: $label"
+            }
+          }
+          listOf("/home/", "/Users/", "C:\\Users\\", "/tmp/", ".keystore", ".jks").forEach { needle ->
+            if (payload.contains(needle)) {
+              forbiddenPayload += "${entry.name}: $needle"
+            }
+          }
+        }
+      }
+    }
+    entries.sort()
+    val forbiddenEntries = entries.filter { entry ->
+      forbiddenApkEntrySuffixes.any { suffix -> entry.lowercase().endsWith(suffix) }
+    }
+    check(forbiddenEntries.isEmpty()) {
+      "Debug APK contains forbidden game data or signing material: $forbiddenEntries"
+    }
+    check(forbiddenPayload.isEmpty()) {
+      "Debug APK contains forbidden desktop APIs, developer paths, or signing material: $forbiddenPayload"
+    }
+    report.get().asFile.apply {
+      parentFile.mkdirs()
+      writeText(buildString {
+        appendLine("Coffee GB Android debug APK content verification")
+        appendLine("Desktop APIs, game data, developer paths, and signing material: clean")
+        entries.forEach(::appendLine)
+      })
+    }
+  }
+}
 
 tasks.named("preBuild") {
-  dependsOn(verifyAndroidPortability, reportAndroidDependencyGraph)
+  dependsOn(verifyAndroidPortability, reportAndroidDependencyGraph, reportAndroidLicenseInventory)
 }
 tasks.named("check") {
-  dependsOn(verifyAndroidPortability, verifyPortabilityFixture, reportAndroidDependencyGraph)
+  dependsOn(verifyAndroidPortability, verifyPortabilityFixture, reportAndroidDependencyGraph,
+      reportAndroidLicenseInventory, verifyDebugApkContents)
 }
 
 androidComponents {
