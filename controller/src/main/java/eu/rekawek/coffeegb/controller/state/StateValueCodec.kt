@@ -107,7 +107,7 @@ internal object StateValueCodec {
       val type =
           StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
               ?: throw StateEncodeException("Unknown detached record type ID ${value.typeId}")
-      val components = type.recordComponents
+      val components = StateRecordIntrospection.components(type)
       if (value.fields.size != components.size ||
           value.fields.indices.any { value.fields[it].name != components[it].name }) {
         throw StateEncodeException("Detached record ${type.name} has an invalid field inventory")
@@ -220,7 +220,7 @@ internal object StateValueCodec {
 
     private fun readRecord(depth: Int): RecordState {
       val typeId = requireTypeId(reader.readU32(), StateTypeRegistry.recordClasses.size, "record")
-      val components = StateTypeRegistry.recordClasses[typeId - 1].recordComponents
+      val components = StateRecordIntrospection.components(StateTypeRegistry.recordClasses[typeId - 1])
       val count =
           PortableBounds.requireCount(
               reader.readU32(),

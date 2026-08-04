@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.state.StateRecordIntrospection
+
 /**
  * Audited explicit component-state types and Coffee GB 1.7.14 compatibility records. The two
  * class inventories are deliberately disjoint. Newly appended portable types do not acquire
@@ -230,13 +232,13 @@ internal object StateTypeRegistry {
 
   val recordClasses: List<Class<*>> by lazy {
     recordClassNames.map(::loadAuditedClass).also { classes ->
-      classes.forEach { require(it.isRecord) { "Audited portable type is no longer a record: $it" } }
+      classes.forEach(StateRecordIntrospection::requireConstructible)
     }
   }
 
   val legacyRecordClasses: List<Class<*>> by lazy {
     legacyRecordClassNames.map(::loadAuditedClass).also { classes ->
-      classes.forEach { require(it.isRecord) { "Audited legacy type is no longer a record: $it" } }
+      classes.forEach(StateRecordIntrospection::requireConstructible)
     }
   }
 
@@ -247,4 +249,7 @@ internal object StateTypeRegistry {
   }
 
   private fun loadAuditedClass(name: String): Class<*> = Class.forName(name, false, javaClass.classLoader)
+
+  fun isAuditedStateType(type: Class<*>): Boolean =
+      type in recordClasses || type in legacyRecordClasses
 }

@@ -20,6 +20,8 @@ private val forbiddenSourceReferences = linkedMapOf(
     ".readAllBytes()" to "Java 9 InputStream.readAllBytes()",
     ".readNBytes(" to "Java 9 InputStream.readNBytes()",
     "Thread.onSpinWait()" to "Java 9 Thread.onSpinWait()",
+    ".isRecord" to "Java 16 Class.isRecord()",
+    ".recordComponents" to "Java 16 Class.getRecordComponents()",
 )
 private val forbiddenBytecodeReferences = linkedMapOf(
     "java/awt/" to "java.awt",
@@ -28,6 +30,8 @@ private val forbiddenBytecodeReferences = linkedMapOf(
     "org/jline/" to "JLine",
     "org/opencv/" to "OpenCV",
     "io/github/libsdl" to "SDL",
+    "isRecord" to "Java 16 Class.isRecord()",
+    "getRecordComponents" to "Java 16 Class.getRecordComponents()",
 )
 // DEX type descriptors start with L. The source/classpath verifier above intentionally scans
 // broader JVM internal names; APK inspection must not mistake an unrelated string for a class.
