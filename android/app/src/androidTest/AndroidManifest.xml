@@ -2,7 +2,7 @@
   <application>
     <!-- A test-only content provider proves that the runtime accepts a SAF-style URI, not a path. -->
     <provider
-        android:name=".FixtureRomProvider"
+        android:name="eu.rekawek.coffeegb.android.FixtureRomProvider"
         android:authorities="eu.rekawek.coffeegb.android.test.fixture"
         android:exported="true" />
   </application>
