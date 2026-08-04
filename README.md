@@ -82,8 +82,11 @@ The service writes signed 16-bit stereo PCM to an `AudioTrack` on a dedicated co
 the initialized track rate. Its six preallocated host-frame slots bound memory and latency: a late
 producer discards old PCM rather than blocking emulation or accumulating delay. Muting, volume
 changes, focus/visibility loss, and route changes clear queued PCM; focus loss still requires the
-user to resume the game. The app declares no microphone, vibration, broad-storage, or network
-permission. See [Android audio operation and device validation](docs/android-audio.md).
+user to resume the game. The app declares no microphone, broad-storage, or network permission.
+It declares Android's normal vibration permission solely for the optional rumble setting: a
+supported cartridge event reaches the platform vibrator (through Android 12+'s `VibratorManager`,
+with an API 26–30 fallback) only while that setting and the app session are active. See
+[Android audio operation and device validation](docs/android-audio.md).
 
 The Android MVP keeps its launch, game, pause, state, settings, and privacy flows in the bound
 Activity while the service remains the only emulator owner. The pause sheet offers explicit

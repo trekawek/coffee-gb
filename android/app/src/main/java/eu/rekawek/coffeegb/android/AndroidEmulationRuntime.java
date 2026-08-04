@@ -78,6 +78,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private EventBus eventBus;
     private BasicController controller;
     private volatile AndroidAudioSink audio;
+    private volatile AndroidRumbleSink rumble;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
@@ -127,12 +128,24 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
+    /** Applies the user’s host-only rumble preference without changing the portable cartridge. */
+    void setRumbleEnabled(boolean enabled) {
+        AndroidRumbleSink activeRumble = rumble;
+        if (activeRumble != null) {
+            activeRumble.setEnabled(enabled);
+        }
+    }
+
     /** Pauses one active session at its controller-owned safe point without ending it. */
     public void pause() {
         input.releaseAll();
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
             activeAudio.pause();
+        }
+        AndroidRumbleSink activeRumble = rumble;
+        if (activeRumble != null) {
+            activeRumble.pause();
         }
         submit(() -> {
             if (controller != null && activeLayout != null) {
@@ -309,6 +322,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeAudio != null) {
             activeAudio.pause();
         }
+        AndroidRumbleSink activeRumble = rumble;
+        if (activeRumble != null) {
+            activeRumble.pause();
+        }
         submit(() -> {
             if (controller == null) {
                 return;
@@ -336,6 +353,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             AndroidAudioSink activeAudio = audio;
             if (activeAudio != null) {
                 activeAudio.resume();
+            }
+            AndroidRumbleSink activeRumble = rumble;
+            if (activeRumble != null) {
+                activeRumble.resume();
             }
             lifecycle.resumedByUser();
             eventBus.post(new Controller.ResumeEmulationEvent());
@@ -454,6 +475,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus = new EventBusImpl();
         audio = new AndroidAudioSink(context, eventBus);
         audio.start();
+        rumble = new AndroidRumbleSink(context, eventBus, false);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
@@ -692,12 +714,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         BasicController active = controller;
         EventBus activeBus = eventBus;
         AndroidAudioSink activeAudio = audio;
+        AndroidRumbleSink activeRumble = rumble;
         controller = null;
         eventBus = null;
         audio = null;
+        rumble = null;
         if (active == null) {
             if (activeAudio != null) {
                 activeAudio.close();
+            }
+            if (activeRumble != null) {
+                activeRumble.close();
             }
             return true;
         }
@@ -706,6 +733,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (activeAudio != null) {
                 activeAudio.close();
             }
+            if (activeRumble != null) {
+                activeRumble.close();
+            }
             lifecycle.released();
             return true;
         } catch (RuntimeException failure) {
@@ -713,6 +743,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             controller = active;
             eventBus = activeBus;
             audio = activeAudio;
+            rumble = activeRumble;
             return false;
         }
     }

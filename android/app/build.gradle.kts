@@ -76,7 +76,6 @@ private val forbiddenPermissions = listOf(
     "android.permission.READ_MEDIA_AUDIO",
     "android.permission.READ_MEDIA_IMAGES",
     "android.permission.READ_MEDIA_VIDEO",
-    "android.permission.VIBRATE",
 )
 
 private fun sensitivePermissions(contents: String): List<String> = forbiddenPermissions.filter { permission ->
