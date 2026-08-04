@@ -74,7 +74,11 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           arch: ${{ matrix.arch }}
-          script: >-
-            ./android/gradlew -p android --no-daemon
-            -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2"
-            :app:connectedDebugAndroidTest
+          script: |
+            set +e
+            ./android/gradlew -p android --no-daemon \
+              -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2" \
+              :app:connectedDebugAndroidTest
+            test_status=$?
+            adb logcat -d -v threadtime
+            exit "$test_status"
