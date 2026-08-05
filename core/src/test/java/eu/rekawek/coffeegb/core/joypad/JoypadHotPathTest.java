@@ -11,6 +11,7 @@ import org.junit.Assume;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class JoypadHotPathTest {
@@ -75,6 +76,19 @@ public class JoypadHotPathTest {
 
         assertTrue(checksum != 0);
         assertEquals("stable physical joypad path allocated", 0L, minimumAllocated);
+    }
+
+    @Test
+    public void adoptsAnEqualReplacementSnapshotAfterOneComparison() {
+        PlayerInputSnapshot replacement = PlayerInputSnapshot.of(List.of(
+                Set.of(), Set.of(), Set.of(), Set.of()));
+        AtomicReference<PlayerInputSnapshot> input = new AtomicReference<>(replacement);
+        Joypad joypad = new Joypad(
+                new InterruptManager(false), EventBus.NULL_EVENT_BUS, false, input::get);
+
+        joypad.tick();
+
+        assertSame(replacement, joypad.getSampledInput());
     }
 
     private static int expectedInputLines(int selector, Set<Button> buttons) {

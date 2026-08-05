@@ -224,11 +224,14 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         tick++;
         PlayerInputSnapshot nextInput = Objects.requireNonNull(
                 playerInputSource.sample(), "PlayerInputSource returned null");
-        if (!sampledInput.equals(nextInput)) {
+        if (sampledInput != nextInput) {
+            boolean changed = !sampledInput.equals(nextInput);
             sampledInput = nextInput;
-            inputChangedSinceLastTick = true;
-            notifyDebugInputChange();
-            notifyPhysicalInputChanges();
+            if (changed) {
+                inputChangedSinceLastTick = true;
+                notifyDebugInputChange();
+                notifyPhysicalInputChanges();
+            }
         }
         // JOYP writes happen after the joypad clock edge represented by this emulator
         // tick. Start sampling a changed input on the following tick, then require four

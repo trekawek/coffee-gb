@@ -570,46 +570,47 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         cpuInterruptFlagReadMaskTicks = interruptFlagReadMaskTicks;
         cpuMode0InterruptDispatchPhased = mode0InterruptDispatchPhased;
         cpuMode0InstructionWinsAcceptance = mode0InstructionWinsAcceptance;
-        boolean dmgMode0 = gpu.isDmgTerminalWindowMode0ReadPreviewPhase()
-                && mode0EventArmed
-                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
+        boolean mode0Enabled = mode0EventArmed
+                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0;
+        boolean dmgMode0 = mode0Enabled
+                && gpu.isDmgTerminalWindowMode0ReadPreviewPhase()
                 && !((mode0IrqStatLatch & 0x40) != 0
                 && gpu.getLine() == mode0IrqLycLatch);
-        boolean nativeNormalRephased = gpu.isGbc() && !gpu.isDmgCompatMode()
+        boolean nativeNormalRephased = (pendingCgbMode2Interrupt || enableBits == 0x20)
+                && gpu.isGbc() && !gpu.isDmgCompatMode()
                 && !isDoubleSpeed() && gpu.isStatModeLatchRephasedBySpeedSwitch();
-        boolean doubleSpeedMode0 = isNativeDoubleSpeed()
+        boolean doubleSpeedMode0 = mode0Enabled
+                && enableBits == 0x48
+                && isNativeDoubleSpeed()
                 && gpu.getLine() < 144
                 && gpu.getTicksInLine() == gpu.getMode0InterruptTick() - 2
-                && enableBits == 0x48
-                && mode0EventArmed
-                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
                 && !((mode0IrqStatLatch & 0x40) != 0
                 && gpu.getLine() == mode0IrqLycLatch);
-        boolean earlyVisibleMode2 = nativeNormalRephased
-                && gpu.getLine() < 144 && gpu.getTicksInLine() == 450
-                && pendingCgbMode2Interrupt;
+        boolean earlyVisibleMode2 = pendingCgbMode2Interrupt && nativeNormalRephased
+                && gpu.getLine() < 144 && gpu.getTicksInLine() == 450;
         // The rephased normal-speed CPU bus completes an IF read against the
         // upcoming PPU edge. Keep this read-only: the stored IF and interrupt
         // acceptance paths still settle at their ordinary MSTAT/VBlank clocks.
-        boolean frameMode2 = nativeNormalRephased
+        boolean frameMode2 = enableBits == 0x20 && nativeNormalRephased
                 && gpu.getLine() == 153 && gpu.getTicksInLine() >= 452
-                && gpu.getTicksInLine() <= 455 && enableBits == 0x20;
+                && gpu.getTicksInLine() <= 455;
         interruptManager.setCpuReadInterruptPreview(
                 InterruptType.LCDC,
                 dmgMode0 || doubleSpeedMode0 || earlyVisibleMode2 || frameMode2);
-        boolean frameVBlank = nativeNormalRephased
+        boolean frameVBlank = enableBits == 0x20 && nativeNormalRephased
                 && gpu.getLine() == 143 && gpu.getTicksInLine() >= 452
-                && gpu.getTicksInLine() <= 455 && enableBits == 0x20;
+                && gpu.getTicksInLine() <= 455;
         interruptManager.setCpuReadInterruptPreview(InterruptType.VBlank, frameVBlank);
     }
 
     /** Returns whether this scheduler tick will publish the delayed mode-0 edge. */
     public boolean isMode0InterruptEdgeNextTick() {
-        return gpu != null && gpu.isGbc() && !gpu.isDmgCompatMode()
-                && gpu.getLine() < 144
-                && gpu.getTicksInLine() + 1 == gpu.getMode0InterruptTick()
+        return gpu != null
                 && mode0EventArmed
                 && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
+                && gpu.isGbc() && !gpu.isDmgCompatMode()
+                && gpu.getLine() < 144
+                && gpu.getTicksInLine() + 1 == gpu.getMode0InterruptTick()
                 && !interruptManager.isInterruptFlagSet(InterruptType.LCDC)
                 && !((mode0IrqStatLatch & 0x40) != 0
                 && gpu.getLine() == mode0IrqLycLatch);
@@ -714,50 +715,55 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private boolean computeIntLine(int enable) {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
-        if (gpu.isLcdEnabled()) {
-            boolean holdCgbFrameLycToMode2Handoff = gpu.isGbc()
+        if (gpu.isLcdEnabled() && (enable & 0x38) != 0) {
+            boolean holdCgbFrameLycToMode2Handoff = (enable & 0x60) == 0x20
+                    && gpu.isGbc()
                     && !gpu.isDmgCompatMode()
                     && gpu.getLine() == 153
                     && intCoincidence
                     && lycIrqValueSource == 0
                     && (lastModeIrqStatWriteOld & 0x40) != 0
-                    && (enable & 0x60) == 0x20
                     && lastModeIrqStatWriteLineTick >= 0
                     && gpu.getTicksInLine() >= lastModeIrqStatWriteLineTick
                     && cpuCyclesSince(lastModeIrqStatWriteClock) <= 4;
             line |= holdCgbFrameLycToMode2Handoff;
-            boolean suppressTailCgbMode0Enable = gpu.isGbc()
-                    && gpu.getLine() < 144
-                    && (lastModeIrqStatWriteOld & 0x08) == 0
-                    && (enable & 0x08) != 0
-                    && lastModeIrqStatWriteLineTick >= 0
-                    && gpu.getTicksInLine() >= lastModeIrqStatWriteLineTick
-                    && 456 - lastModeIrqStatWriteLineTick <= 6
-                    && lycIrqClock - lastModeIrqStatWriteClock <= 6
-                    && !lycComparatorSignal;
-            boolean suppressLateCgbModeEnable = gpu.isGbc()
-                    && gpu.getLine() == 143
-                    && lastModeIrqStatWriteLineTick >= 453
-                    && lycIrqClock - lastModeIrqStatWriteClock <= 2
-                    && (enable & 0x28) != 0;
-            line |= !suppressLateCgbModeEnable && !suppressTailCgbMode0Enable
-                    && (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
-            boolean suppressLateCgbMode1Enable = gpu.isGbc()
-                    && gpu.getLine() == 153
-                    && lastModeIrqStatWriteLineTick >= (isDoubleSpeed() ? 453 : 452)
-                    && lycIrqClock - lastModeIrqStatWriteClock <= 4
-                    && (lastModeIrqStatWriteOld & 0x20) == 0
-                    && (enable & 0x10) != 0;
-            line |= !suppressLateCgbMode1Enable
-                    && (enable & 0b00010000) != 0 && isMode1IrqLineActive();
-            boolean suppressLateDmgLine0Mode2Enable = !gpu.isGbc()
-                    && gpu.getLine() == 0 && gpu.getTicksInLine() < 4
-                    && lastModeIrqStatWriteLineTick >= 0
-                    && lastModeIrqStatWriteLineTick < 4
-                    && lycIrqClock - lastModeIrqStatWriteClock <= 4
-                    && (lastModeIrqStatWriteOld & 0x20) == 0;
-            line |= !suppressLateCgbModeEnable && !suppressLateDmgLine0Mode2Enable
-                    && (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
+            boolean suppressLateCgbModeEnable = false;
+            if ((enable & 0x28) != 0) {
+                suppressLateCgbModeEnable = gpu.isGbc()
+                        && gpu.getLine() == 143
+                        && lastModeIrqStatWriteLineTick >= 453
+                        && lycIrqClock - lastModeIrqStatWriteClock <= 2;
+            }
+            if ((enable & 0x08) != 0) {
+                boolean suppressTailCgbMode0Enable = gpu.isGbc()
+                        && gpu.getLine() < 144
+                        && (lastModeIrqStatWriteOld & 0x08) == 0
+                        && lastModeIrqStatWriteLineTick >= 0
+                        && gpu.getTicksInLine() >= lastModeIrqStatWriteLineTick
+                        && 456 - lastModeIrqStatWriteLineTick <= 6
+                        && lycIrqClock - lastModeIrqStatWriteClock <= 6
+                        && !lycComparatorSignal;
+                line |= !suppressLateCgbModeEnable && !suppressTailCgbMode0Enable
+                        && gpu.isMode0IntWindow();
+            }
+            if ((enable & 0x10) != 0) {
+                boolean suppressLateCgbMode1Enable = gpu.isGbc()
+                        && gpu.getLine() == 153
+                        && lastModeIrqStatWriteLineTick >= (isDoubleSpeed() ? 453 : 452)
+                        && lycIrqClock - lastModeIrqStatWriteClock <= 4
+                        && (lastModeIrqStatWriteOld & 0x20) == 0;
+                line |= !suppressLateCgbMode1Enable && isMode1IrqLineActive();
+            }
+            if ((enable & 0x20) != 0) {
+                boolean suppressLateDmgLine0Mode2Enable = !gpu.isGbc()
+                        && gpu.getLine() == 0 && gpu.getTicksInLine() < 4
+                        && lastModeIrqStatWriteLineTick >= 0
+                        && lastModeIrqStatWriteLineTick < 4
+                        && lycIrqClock - lastModeIrqStatWriteClock <= 4
+                        && (lastModeIrqStatWriteOld & 0x20) == 0;
+                line |= !suppressLateCgbModeEnable && !suppressLateDmgLine0Mode2Enable
+                        && gpu.isMode2IntWindow();
+            }
         }
         return line;
     }
