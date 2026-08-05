@@ -256,8 +256,11 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
                             frame.width(), frame.height());
                     source.set(0, 0, frame.width(), frame.height());
-                    VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(
-                            frame.width(), frame.height(), canvas.getWidth(), canvas.getHeight());
+                    VideoGeometry.Viewport viewport = canvas.getHeight() >= canvas.getWidth()
+                            ? VideoGeometry.nearestFitTop(
+                                    frame.width(), frame.height(), canvas.getWidth(), canvas.getHeight())
+                            : VideoGeometry.nearestFit(
+                                    frame.width(), frame.height(), canvas.getWidth(), canvas.getHeight());
                     destination.set(viewport.left(), viewport.top(),
                             viewport.left() + viewport.width(), viewport.top() + viewport.height());
                     canvas.drawBitmap(bitmap, source, destination, paint);

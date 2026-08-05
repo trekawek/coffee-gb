@@ -17,6 +17,16 @@ public class VideoGeometryTest {
     }
 
     @Test
+    public void nearestFitTopLeavesTheLowerPortraitSpaceForControls() {
+        VideoGeometry.Viewport viewport = VideoGeometry.nearestFitTop(160, 144, 1080, 1920);
+
+        assertEquals(60, viewport.left());
+        assertEquals(0, viewport.top());
+        assertEquals(960, viewport.width());
+        assertEquals(864, viewport.height());
+    }
+
+    @Test
     public void nearestFitFallsBackToAspectFitWhenTheSurfaceIsSmallerThanTheFrame() {
         VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(256, 224, 200, 100);
 

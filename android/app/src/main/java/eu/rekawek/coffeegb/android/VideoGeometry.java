@@ -26,6 +26,12 @@ final class VideoGeometry {
         return new Viewport((targetWidth - width) / 2, (targetHeight - height) / 2, width, height);
     }
 
+    /** Fits the frame at the top of a portrait play surface, leaving the lower half for controls. */
+    static Viewport nearestFitTop(int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        Viewport viewport = nearestFit(sourceWidth, sourceHeight, targetWidth, targetHeight);
+        return new Viewport(viewport.left(), 0, viewport.width(), viewport.height());
+    }
+
     record Viewport(int left, int top, int width, int height) {
     }
 }
