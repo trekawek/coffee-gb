@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:pivotX="54"
+        android:pivotY="54"
+        android:scaleX="0.8"
+        android:scaleY="0.8">
+
+        <!-- Simplified one-color handheld for Android 13+ themed icons. -->
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M37,13 H71 A10,10 0,0 1,81 23 V85 A10,10 0,0 1,71 95 H37 A10,10 0,0 1,27 85 V23 A10,10 0,0 1,37 13 Z M39,18 H69 A7,7 0,0 1,76 25 V83 A7,7 0,0 1,69 90 H39 A7,7 0,0 1,32 83 V25 A7,7 0,0 1,39 18 Z" />
+
+        <!-- Display frame and the blocky coffee cup shown in the new artwork. -->
+        <path
+            android:fillColor="#FF000000"
+            android:fillType="evenOdd"
+            android:pathData="M37,25 H71 V55 H37 Z M41,29 H67 V51 H41 Z M46,39 H59 V41 H64 V49 H59 V52 H48 V49 H46 Z M59,43 H62 V47 H59 Z" />
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M49,31 H51 V35 H49 V37 H52 V39 H48 V35 H47 V33 H49 Z M57,31 H59 V35 H57 V37 H60 V39 H56 V35 H55 V33 H57 Z" />
+
+        <!-- D-pad, action buttons, and start/select controls. -->
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M40,61 H46 V67 H52 V73 H46 V79 H40 V73 H34 V67 H40 Z" />
+        <path
+            android:fillColor="#FF000000"
+            android:pathData="M66,62 A5,5 0,1 1,56 62 A5,5 0,1 1,66 62 Z M73,72 A5,5 0,1 1,63 72 A5,5 0,1 1,73 72 Z M50,82 H58 V85 H50 Z M60,82 H68 V85 H60 Z" />
+    </group>
+</vector>

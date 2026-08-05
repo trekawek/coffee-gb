@@ -6,9 +6,11 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.net.Uri;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.Gravity;
@@ -17,6 +19,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -47,6 +50,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private TextView status;
     private CoffeeGbSurfaceView video;
+    private Button menuButton;
+    private ScrollView menu;
     private Button open;
     private Button recent;
     private Button pauseMenu;
@@ -67,6 +72,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private boolean bound;
     private InputManager inputManager;
     private long shownSelectionGeneration = -1L;
+    private PendingDocumentResult pendingDocumentResult;
+    private int systemBottomInset;
+    private int rootScreenTop;
 
     private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
         @Override
@@ -105,6 +113,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 runtime.setCameraEnabled(true);
             }
             applyState(runtime.state());
+            dispatchPendingDocumentResult();
         }
 
         @Override
@@ -124,22 +133,36 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        FrameLayout root = new FrameLayout(this);
+
+        video = new CoffeeGbSurfaceView(this);
+        root.addView(video, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        menuButton = new Button(this);
+        menuButton.setText("Menu");
+        menuButton.setContentDescription("Open Coffee GB menu");
+        menuButton.setOnClickListener(ignored -> toggleMenu());
+        root.addView(menuButton, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        menu = new ScrollView(this);
+        menu.setFillViewport(false);
+        menu.setBackgroundColor(android.graphics.Color.WHITE);
+        menu.setVisibility(View.GONE);
+
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setGravity(Gravity.CENTER);
+        content.setGravity(Gravity.CENTER_HORIZONTAL);
         int padding = (int) (24 * getResources().getDisplayMetrics().density);
-        content.setPadding(padding, padding, padding, padding);
+        int bottomPadding = padding + (int) (48 * getResources().getDisplayMetrics().density);
+        content.setPadding(padding, padding, padding, bottomPadding);
 
         status = new TextView(this);
         status.setGravity(Gravity.CENTER);
         status.setContentDescription("Coffee GB Android runtime status");
         status.setText("Starting Coffee GB Android runtime…");
         content.addView(status);
-
-        video = new CoffeeGbSurfaceView(this);
-        int videoHeight = (int) (240 * getResources().getDisplayMetrics().density);
-        content.addView(video, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, videoHeight));
 
         open = button("Open ROM", this::openRomDocument);
         recent = button("Open recent ROM", ignored -> requireRuntime(AndroidEmulationRuntime::requestRecentDocuments));
@@ -171,10 +194,30 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(touchControls);
         content.addView(controllerMapping);
         content.addView(about);
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.addView(content);
-        setContentView(scroll);
+        menu.addView(content);
+        root.addView(menu, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                        oldLeft, oldTop, oldRight, oldBottom) -> {
+            int[] location = new int[2];
+            view.getLocationOnScreen(location);
+            rootScreenTop = location[1];
+            positionMenuOverlay(right - left, bottom - top);
+        });
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+            systemBottomInset = insets.getSystemWindowInsetBottom();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                systemBottomInset = Math.max(systemBottomInset, insets.getSystemGestureInsets().bottom);
+            }
+            int[] location = new int[2];
+            view.getLocationOnScreen(location);
+            rootScreenTop = location[1];
+            positionMenuOverlay(view.getWidth(), view.getHeight());
+            return insets;
+        });
+        setContentView(root);
         disableCommands();
     }
 
@@ -240,8 +283,80 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private Button button(String label, View.OnClickListener listener) {
         Button button = new Button(this);
         button.setText(label);
-        button.setOnClickListener(listener);
+        button.setOnClickListener(view -> {
+            hideMenu();
+            listener.onClick(view);
+        });
         return button;
+    }
+
+    private void toggleMenu() {
+        if (menu.getVisibility() == View.VISIBLE) {
+            hideMenu();
+        } else {
+            menu.setVisibility(View.VISIBLE);
+            menuButton.setText("Close");
+        }
+    }
+
+    private void hideMenu() {
+        if (menu != null) {
+            menu.setVisibility(View.GONE);
+        }
+        if (menuButton != null) {
+            menuButton.setText("Menu");
+        }
+    }
+
+    private void positionMenuOverlay(int width, int height) {
+        if (width <= 0 || height <= 0 || menuButton == null || menu == null) {
+            return;
+        }
+        int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
+        int minimumMargin = Math.max(1, 12 * density);
+        int buttonHeight = menuButton.getHeight() > 0 ? menuButton.getHeight() : 48 * density;
+        int menuWidth = Math.min(320 * density, Math.max(1, width - minimumMargin * 2));
+        int bottomMargin = rootScreenTop + Math.max(48 * density,
+                Math.max(systemBottomInset, navigationBarHeight()) + minimumMargin);
+        int maximumMenuHeight = 160 * density;
+        boolean portrait = height >= width;
+
+        FrameLayout.LayoutParams buttonLayout =
+                (FrameLayout.LayoutParams) menuButton.getLayoutParams();
+        FrameLayout.LayoutParams menuLayout = (FrameLayout.LayoutParams) menu.getLayoutParams();
+        if (portrait) {
+            int top = Math.round(height * 0.48f);
+            buttonLayout.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            buttonLayout.leftMargin = 0;
+            buttonLayout.rightMargin = 0;
+            buttonLayout.topMargin = top;
+            menuLayout.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+            menuLayout.leftMargin = 0;
+            menuLayout.rightMargin = 0;
+            menuLayout.topMargin = top + buttonHeight;
+            menuLayout.width = menuWidth;
+            menuLayout.height = Math.max(1, Math.min(maximumMenuHeight,
+                    height - menuLayout.topMargin - bottomMargin));
+        } else {
+            buttonLayout.gravity = Gravity.TOP | Gravity.START;
+            buttonLayout.leftMargin = minimumMargin;
+            buttonLayout.rightMargin = 0;
+            buttonLayout.topMargin = minimumMargin;
+            menuLayout.gravity = Gravity.TOP | Gravity.START;
+            menuLayout.leftMargin = minimumMargin;
+            menuLayout.rightMargin = 0;
+            menuLayout.topMargin = minimumMargin + buttonHeight;
+            menuLayout.width = menuWidth;
+            menuLayout.height = Math.max(1, Math.min(maximumMenuHeight,
+                    height - menuLayout.topMargin - bottomMargin));
+        }
+        menuButton.setLayoutParams(buttonLayout);
+        menu.setLayoutParams(menuLayout);
+    }
+
+    private int navigationBarHeight() {
+        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
+        return id == 0 ? 0 : getResources().getDimensionPixelSize(id);
     }
 
     private void openRomDocument(View ignored) {
@@ -265,25 +380,48 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null || runtime == null) {
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             return;
         }
-        switch (requestCode) {
-            case OPEN_ROM_REQUEST -> runtime.openRom(data.getData(), data.getFlags());
-            case IMPORT_BATTERY_REQUEST -> runtime.importBattery(data.getData());
+        PendingDocumentResult result = new PendingDocumentResult(
+                requestCode, data.getData(), data.getFlags());
+        if (runtime == null) {
+            pendingDocumentResult = result;
+            return;
+        }
+        dispatchDocumentResult(result);
+    }
+
+    private void dispatchPendingDocumentResult() {
+        PendingDocumentResult result = pendingDocumentResult;
+        pendingDocumentResult = null;
+        if (result != null && runtime != null) {
+            dispatchDocumentResult(result);
+        }
+    }
+
+    private void dispatchDocumentResult(PendingDocumentResult result) {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            pendingDocumentResult = result;
+            return;
+        }
+        switch (result.requestCode()) {
+            case OPEN_ROM_REQUEST -> active.openRom(result.uri(), result.flags());
+            case IMPORT_BATTERY_REQUEST -> active.importBattery(result.uri());
             case EXPORT_BATTERY_REQUEST -> confirmExport(
                     "Export battery save?", "The chosen document will be replaced.",
-                    () -> runtime.exportBattery(data.getData()));
-            case IMPORT_STATE_REQUEST -> runtime.importState(data.getData());
+                    () -> active.exportBattery(result.uri()));
+            case IMPORT_STATE_REQUEST -> active.importState(result.uri());
             case EXPORT_STATE_REQUEST -> confirmExport(
                     "Export state slot 0?", "The chosen document will be replaced.",
-                    () -> runtime.exportState(data.getData()));
+                    () -> active.exportState(result.uri()));
             case EXPORT_SCREENSHOT_REQUEST -> confirmExport(
                     "Export native screenshot?", "The chosen document will be replaced.",
-                    () -> runtime.exportScreenshot(data.getData()));
+                    () -> active.exportScreenshot(result.uri()));
             case EXPORT_PRINTER_REQUEST -> confirmExport(
                     "Export printer paper?", "The chosen document will be replaced.",
-                    () -> runtime.exportPrinter(data.getData(), () -> sharePrinter(data.getData())));
+                    () -> active.exportPrinter(result.uri(), () -> sharePrinter(result.uri())));
             default -> { }
         }
     }
@@ -506,8 +644,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             choices.add("Load");
             choices.add("Delete");
         }
-        new AlertDialog.Builder(this).setTitle("State slot " + slot.index())
-                .setMessage(slot.detail()).setItems(choices.toArray(new String[0]), (dialog, which) -> {
+        new AlertDialog.Builder(this).setTitle("State slot " + slot.index() + ": " + slot.detail())
+                .setItems(choices.toArray(new String[0]), (dialog, which) -> {
                     String choice = choices.get(which);
                     if (choice.equals("Save or overwrite")) {
                         active.saveSnapshot(slot.index());
@@ -778,4 +916,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private interface RuntimeAction {
         void run(AndroidEmulationRuntime runtime);
     }
+
+    private record PendingDocumentResult(int requestCode, Uri uri, int flags) { }
 }

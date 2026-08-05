@@ -6,7 +6,9 @@
 
     <application
         android:allowBackup="false"
-        android:label="Coffee GB">
+        android:icon="@mipmap/ic_launcher"
+        android:label="Coffee GB"
+        android:roundIcon="@mipmap/ic_launcher_round">
         <service
             android:name=".EmulationService"
             android:exported="false" />
