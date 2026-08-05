@@ -42,6 +42,34 @@ class TimingTickerTest {
   }
 
   @Test
+  fun `whole frame pacing shares deadlines with tick pacing`() {
+    fun parks(useWholeFrameCall: Boolean): List<Long> {
+      val now = AtomicLong(0)
+      val parked = mutableListOf<Long>()
+      val ticker =
+          TimingTicker(
+              { now.addAndGet(100_000L) },
+              { duration ->
+                parked += duration
+                now.addAndGet(duration)
+              },
+          )
+      val clock = ClockSpec(6_000, 60, 1)
+      repeat(4) {
+        if (useWholeFrameCall) {
+          ticker.runFrame(clock)
+        } else {
+          repeat(clock.controllerTicksPerFrame()) { ticker.run(clock) }
+        }
+      }
+      assertEquals(4, ticker.completedFrames)
+      return parked
+    }
+
+    assertEquals(parks(false), parks(true))
+  }
+
+  @Test
   fun `twenty millisecond pacing debt is repaid before pacing resumes`() {
     val now = AtomicLong(0)
     val parked = mutableListOf<Long>()

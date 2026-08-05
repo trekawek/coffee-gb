@@ -31,16 +31,35 @@ internal constructor(
     if (disabled) {
       return
     }
-    if (activeClock != clockSpec) {
-      activeClock = clockSpec
-      frameNanos = clockSpec.newFrameNanosecondAccumulator()
-      ticks = 0
-      deadline = nanoTime()
-    }
+    selectClock(clockSpec)
     if (++ticks < clockSpec.controllerTicksPerFrame()) {
       return
     }
     ticks = 0
+    paceFrame()
+  }
+
+  /** Paces a controller loop that has already completed one whole emulated frame. */
+  fun runFrame(clockSpec: ClockSpec) {
+    if (disabled) {
+      return
+    }
+    selectClock(clockSpec)
+    ticks = 0
+    paceFrame()
+  }
+
+  private fun selectClock(clockSpec: ClockSpec) {
+    if (activeClock == clockSpec) {
+      return
+    }
+    activeClock = clockSpec
+    frameNanos = clockSpec.newFrameNanosecondAccumulator()
+    ticks = 0
+    deadline = nanoTime()
+  }
+
+  private fun paceFrame() {
     val frameDurationNanos = frameNanos.advance(1)
     completedFrames++
     deadline =

@@ -225,7 +225,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
 
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
+        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1,
+                ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(),
+                null, speedMode, 0, false);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
         this.pixelMachine.setOamReaderBus(oamSearchPhase);
 

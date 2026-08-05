@@ -14,6 +14,8 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
 
     private final Display display;
 
+    private final boolean renderOutput;
+
     private final Lcdc lcdc;
 
     private final GpuRegisterValues registers;
@@ -21,7 +23,13 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
     private final VRamTransfer vRamTransfer;
 
     public DmgPixelFifo(Display display, Lcdc lcdc, GpuRegisterValues registers, VRamTransfer vRamTransfer) {
+        this(display, lcdc, registers, vRamTransfer, true);
+    }
+
+    public DmgPixelFifo(Display display, Lcdc lcdc, GpuRegisterValues registers,
+                        VRamTransfer vRamTransfer, boolean renderOutput) {
         this.display = display;
+        this.renderOutput = renderOutput;
         this.lcdc = lcdc;
         this.registers = registers;
         this.vRamTransfer = vRamTransfer;
@@ -103,7 +111,9 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
         if (firstEntry >= 0) {
             // second phase of the first pixel: mux with the current LCDC, palettes from
             // the previous tick
-            display.putDmgPixel(resolveSplit(firstEntry, firstBgp, firstObp0, firstObp1));
+            if (renderOutput) {
+                display.putDmgPixel(resolveSplit(firstEntry, firstBgp, firstObp0, firstObp1));
+            }
             firstEntry = -1;
         }
         while (delaySize > 0 && delayStamp[delayHead] + OUTPUT_DELAY <= outputTicks) {
@@ -120,7 +130,9 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
                 break;
             }
             outCount++;
-            display.putDmgPixel(resolvePixel(entry));
+            if (renderOutput) {
+                display.putDmgPixel(resolvePixel(entry));
+            }
         }
     }
 

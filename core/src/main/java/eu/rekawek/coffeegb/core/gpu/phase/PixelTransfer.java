@@ -252,6 +252,25 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             VRamTransfer vRamTransfer,
             SpeedMode speedMode,
             int entryDelay) {
+        this(display, videoRam0, videoRam1, oemRam, lcdc, r, gbc, bgPalette, oamPalette,
+                sprites, vRamTransfer, speedMode, entryDelay, true);
+    }
+
+    public PixelTransfer(
+            Display display,
+            AddressSpace videoRam0,
+            AddressSpace videoRam1,
+            AddressSpace oemRam,
+            Lcdc lcdc,
+            GpuRegisterValues r,
+            boolean gbc,
+            ColorPalette bgPalette,
+            ColorPalette oamPalette,
+            SpritePosition[] sprites,
+            VRamTransfer vRamTransfer,
+            SpeedMode speedMode,
+            int entryDelay,
+            boolean renderOutput) {
         this.entryDelay = entryDelay;
 
         this.r = r;
@@ -259,9 +278,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         this.gbc = gbc;
         this.speedMode = speedMode;
         if (gbc) {
-            this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
+            this.fifo = new ColorPixelFifo(
+                    display, lcdc, bgPalette, oamPalette, r, speedMode, renderOutput);
         } else {
-            this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
+            this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer, renderOutput);
         }
         this.fetcher = new Fetcher(
                 fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc, entryDelay);
@@ -537,6 +557,13 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      * on line 153 dot 454, while double-speed CGB samples it on line zero dot 1.
      */
     public void checkWindowY(int line, int ticksInLine) {
+        // With no delayed WY write, the comparators sample only at the end of a line plus
+        // native CGB line-zero dot 1. Avoid re-reading registers and speed state on every other
+        // PPU dot; a desktop session calls this for both the timing and output pixel machines.
+        if (windowWyDelay < 0 && windowWyOldOnWriteTick < 0
+                && ticksInLine != 1 && ticksInLine < 446) {
+            return;
+        }
         advanceWindowWy();
         int primaryWy = windowWyOldOnWriteTick >= 0
                 ? windowWyOldOnWriteTick : r.get(WY);

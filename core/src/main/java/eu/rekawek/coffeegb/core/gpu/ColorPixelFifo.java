@@ -35,6 +35,8 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     private final Display display;
 
+    private final boolean renderOutput;
+
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
@@ -58,7 +60,14 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     public ColorPixelFifo(
             Display display, Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette,
             GpuRegisterValues r, SpeedMode speedMode) {
+        this(display, lcdc, bgPalette, oamPalette, r, speedMode, true);
+    }
+
+    public ColorPixelFifo(
+            Display display, Lcdc lcdc, ColorPalette bgPalette, ColorPalette oamPalette,
+            GpuRegisterValues r, SpeedMode speedMode, boolean renderOutput) {
         this.display = display;
+        this.renderOutput = renderOutput;
         this.lcdc = lcdc;
         this.bgPalette = bgPalette;
         this.oamPalette = oamPalette;
@@ -130,7 +139,9 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
             int entry = delayEntry[delayHead];
             delayHead = (delayHead + 1) & 7;
             delaySize--;
-            display.putColorPixel(resolvePixel(entry));
+            if (renderOutput) {
+                display.putColorPixel(resolvePixel(entry));
+            }
         }
     }
 

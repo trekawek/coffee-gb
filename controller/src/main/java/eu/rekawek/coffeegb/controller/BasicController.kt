@@ -720,8 +720,8 @@ class BasicController private constructor(
           emulated = true
         }
       }
-      timingTicker.run(clockSpec)
     }
+    timingTicker.runFrame(clockSpec)
     if (emulated) {
       debugMasterTick = Math.addExact(debugMasterTick, frameTicks.toLong())
       debugFrame = Math.addExact(debugFrame, 1L)

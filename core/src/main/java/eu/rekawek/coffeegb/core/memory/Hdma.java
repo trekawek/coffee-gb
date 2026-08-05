@@ -451,6 +451,11 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         }
     }
 
+    /** Whether advancing the request synchronizer can mutate state on this master tick. */
+    public boolean requiresHblankRequestAdvance() {
+        return hblankRequestTicks >= 0 || nextHblankRequestTicks >= 0;
+    }
+
     /**
      * HALT acknowledges the asynchronous HDMA request and remembers whether the
      * request line was low, high, or already latched. On wake, a low-to-high request

@@ -24,8 +24,6 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private static final int CGB_BOOT_DIV_APU_OFFSET = 2;
 
-    private static final boolean[] ENABLED = {true, true, true, true};
-
     private static final int[] MASKS =
             new int[]{
                     0x80, 0x3f, 0x00, 0xff, 0xbf, 0xff, 0x3f, 0x00, 0xff, 0xbf, 0x7f, 0xff, 0x9f, 0xff, 0xbf,
@@ -38,9 +36,24 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private final AbstractSoundMode[] allModes = new AbstractSoundMode[4];
 
+    private final SoundMode1 mode1;
+
+    private final SoundMode2 mode2;
+
+    private final SoundMode3 mode3;
+
+    private final SoundMode4 mode4;
+
     private final Ram r = new Ram(0xff24, 0x03);
 
     private final int[] channels = new int[4];
+
+    /** Derived mixer state; recomputed only when a channel or routing register changes. */
+    private transient boolean mixerDirty = true;
+
+    private transient int mixerLeft;
+
+    private transient int mixerRight;
 
     private boolean enabled = true;
 
@@ -95,10 +108,14 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         this.clockSpec = clockSpec;
         this.buffer = new int[Math.multiplyExact(clockSpec.controllerTicksPerFrame(), 2)];
         frameSequencerDivOffset = gbc ? CGB_BOOT_DIV_APU_OFFSET : 0;
-        allModes[0] = new SoundMode1(frameSequencer, gbc);
-        allModes[1] = new SoundMode2(frameSequencer, gbc);
-        allModes[2] = new SoundMode3(frameSequencer, timer, gbc);
-        allModes[3] = new SoundMode4(frameSequencer, gbc);
+        mode1 = new SoundMode1(frameSequencer, gbc);
+        mode2 = new SoundMode2(frameSequencer, gbc);
+        mode3 = new SoundMode3(frameSequencer, timer, gbc);
+        mode4 = new SoundMode4(frameSequencer, gbc);
+        allModes[0] = mode1;
+        allModes[1] = mode2;
+        allModes[2] = mode3;
+        allModes[3] = mode4;
         // Initial volume
         r.setByte(0xFF24, 0x77);
     }
@@ -116,39 +133,61 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
         int enabledBefore = getDebugEnabledChannelMask();
 
-        channels[0] = allModes[0].tick(divReset);
-        channels[1] = allModes[1].tick(divReset);
-        channels[2] = allModes[2].tick(divReset);
-        channels[3] = allModes[3].tick(divReset);
+        int channel0 = mode1.tick(divReset);
+        int channel1 = mode2.tick(divReset);
+        int channel2 = mode3.tick(divReset);
+        int channel3 = mode4.tick(divReset);
+        mixerDirty |= channel0 != channels[0]
+                || channel1 != channels[1]
+                || channel2 != channels[2]
+                || channel3 != channels[3];
+        channels[0] = channel0;
+        channels[1] = channel1;
+        channels[2] = channel2;
+        channels[3] = channel3;
         notifyDebugChannelDisables(enabledBefore);
 
+        if (mixerDirty) {
+            mixChannels();
+        }
+        play(mixerLeft, mixerRight);
+    }
+
+    private void mixChannels() {
         int selection = r.getByte(0xff25);
         int left = 0;
         int right = 0;
-        for (int i = 0; i < 4; i++) {
-            if (!overriddenEnabled[i] || !ENABLED[i]) {
-                continue;
-            }
-            // the DAC maps the digital 0-15 to analog +15..-15 (0 = the highest level);
-            // a DAC that is enabled while its channel is inactive therefore outputs a
-            // constant positive offset. Games play PCM speech by parking such a DC and
-            // modulating the master volume (Perfect Dark's intro voice, issue #56); a
-            // disabled DAC outputs true analog zero.
-            int analog = allModes[i].isDacEnabled() ? 15 - 2 * channels[i] : 0;
-            if ((selection & (1 << i + 4)) != 0) {
-                left += analog;
-            }
-            if ((selection & (1 << i)) != 0) {
-                right += analog;
-            }
+        // The DAC maps digital 0-15 to analog +15..-15. Keep the four concrete call sites
+        // monomorphic so HotSpot can inline this 4.2 MHz mixer instead of dispatching through
+        // AbstractSoundMode[] for every channel and sample.
+        if (overriddenEnabled[0]) {
+            int analog = mode1.isDacEnabled() ? 15 - 2 * channels[0] : 0;
+            if ((selection & 0x10) != 0) left += analog;
+            if ((selection & 0x01) != 0) right += analog;
+        }
+        if (overriddenEnabled[1]) {
+            int analog = mode2.isDacEnabled() ? 15 - 2 * channels[1] : 0;
+            if ((selection & 0x20) != 0) left += analog;
+            if ((selection & 0x02) != 0) right += analog;
+        }
+        if (overriddenEnabled[2]) {
+            int analog = mode3.isDacEnabled() ? 15 - 2 * channels[2] : 0;
+            if ((selection & 0x40) != 0) left += analog;
+            if ((selection & 0x04) != 0) right += analog;
+        }
+        if (overriddenEnabled[3]) {
+            int analog = mode4.isDacEnabled() ? 15 - 2 * channels[3] : 0;
+            if ((selection & 0x80) != 0) left += analog;
+            if ((selection & 0x08) != 0) right += analog;
         }
 
         // NR50 volume 0 means "very quiet", not silence: the scale factor is volume+1
         int volumes = r.getByte(0xff24);
         left *= ((volumes >> 4) & 0b111) + 1;
         right *= (volumes & 0b111) + 1;
-
-        play(left, right);
+        mixerLeft = left;
+        mixerRight = right;
+        mixerDirty = false;
     }
 
     /**
@@ -253,6 +292,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             }
             notifyDebugRegisterWrite(-1, address, value);
             notifyDebugChannelDisables(enabledBefore);
+            mixerDirty = true;
             return;
         }
 
@@ -297,6 +337,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (!accepted) {
             return;
         }
+        mixerDirty = true;
         int channel = getDebugChannel(address);
         notifyDebugRegisterWrite(channel, address, value);
         if (isTriggerRegister(address) && (value & 0x80) != 0) {
@@ -477,6 +518,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     public void enableChannel(int i, boolean enabled) {
         overriddenEnabled[i] = enabled;
+        mixerDirty = true;
     }
 
     @Override
@@ -548,6 +590,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         this.pendingFrameSequencerStep = mem.pendingFrameSequencerStep;
         this.frameSequencerClockPhase = mem.frameSequencerClockPhase;
         this.frameSequencerDivOffset = mem.frameSequencerDivOffset;
+        this.mixerDirty = true;
 
     }
 
