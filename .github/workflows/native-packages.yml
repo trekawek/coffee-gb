@@ -137,18 +137,20 @@ jobs:
               ;;
           esac
 
-      - name: Prove Windows target runner architecture and WiX
+      - name: Prove Windows target runner architecture and portable-EXE tooling
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
             throw "windows-x86-64 requires an X64 runner"
           }
-          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
-            throw "The Windows runner has no WiX candle.exe required by JDK 21 jpackage"
+          $SevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
+          if (-not $SevenZip) {
+            throw "windows-x86-64 requires 7z.exe to build the portable EXE"
           }
-          if (-not (Get-Command light.exe -ErrorAction SilentlyContinue)) {
-            throw "The Windows runner has no WiX light.exe required by JDK 21 jpackage"
+          $SfxModule = Join-Path (Split-Path -Parent $SevenZip.Source) "7z.sfx"
+          if (-not (Test-Path -LiteralPath $SfxModule -PathType Leaf)) {
+            throw "windows-x86-64 requires the 7-Zip SFX module: $SfxModule"
           }
 
       - name: Install Linux package validation prerequisites
@@ -207,7 +209,7 @@ jobs:
               "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
           fi
 
-      - name: Install final package and repeat strict launch smokes
+      - name: Run the portable EXE and repeat strict launch smokes
         if: runner.os == 'Windows'
         shell: pwsh
         env:

@@ -58,6 +58,8 @@ public class NativePackagingScriptTest {
         assertTrue(attributes.lines().anyMatch("* text=auto eol=lf"::equals));
         assertTrue(sh.contains("COFFEE_GB_MAVEN_COMMAND:-mvn"));
         assertTrue(ps.contains("COFFEE_GB_MAVEN_COMMAND"));
+        assertTrue(ps.contains("COFFEE_GB_7ZIP_COMMAND"));
+        assertTrue(ps.contains("7z.sfx"));
         assertFalse(sh.contains("/opt/maven"));
 
         for (String contents :
@@ -76,13 +78,13 @@ public class NativePackagingScriptTest {
         assertTrue(verifyPs.contains("Start-Process"));
         assertTrue(verifyPs.contains("-Filter \"*.exe\""));
         assertTrue(verifyPs.contains("-FilePath $Packages[0].FullName"));
-        assertTrue(verifyPs.contains("[ValidateSet(\"install\", \"uninstall\")]"));
-        assertTrue(verifyPs.contains("$Arguments += \"uninstall\""));
-        assertTrue(verifyPs.contains("INSTALLDIR=`\"$InstalledRoot`\""));
+        assertTrue(verifyPs.contains("Get-Command \"7z.exe\""));
+        assertTrue(verifyPs.contains("portable-exe-ready.marker"));
+        assertTrue(verifyPs.contains("x \"-o$UnpackedRoot\" \"-y\" $Packages[0].FullName"));
         assertTrue(verifyPs.contains("\"--type\", \"exe\""));
-        assertTrue(verifyPs.contains("-Wait"));
         assertTrue(verifyPs.contains("-PassThru"));
-        assertTrue(verifyPs.contains("$Process.ExitCode"));
+        assertTrue(verifyPs.contains("$Process.WaitForExit(45000)"));
+        assertTrue(verifyPs.contains("\"--root\", $UnpackedRoot"));
         assertFalse(verifyPs.contains("msiexec.exe"));
 
         int normalization = verifyPs.indexOf(
@@ -95,20 +97,8 @@ public class NativePackagingScriptTest {
         assertTrue(normalizationBlock.contains(
                 "[System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $BuildRoot))"));
 
-        int failureStart = verifyPs.indexOf("function Invoke-Package {");
-        int failureEnd = verifyPs.indexOf("$Installed = $false", failureStart);
-        assertTrue(failureStart >= 0);
-        assertTrue(failureEnd > failureStart);
-        String failureBlock = verifyPs.substring(failureStart, failureEnd);
-        int logGuard = failureBlock.indexOf("Test-Path -LiteralPath $Log -PathType Leaf");
-        int logTail = failureBlock.indexOf("Get-Content -LiteralPath $Log -Tail 250");
-        int failureThrow = failureBlock.indexOf(
-                "throw \"Windows EXE package $Action failed");
-        assertTrue(logGuard >= 0);
-        assertTrue(logTail > logGuard);
-        assertTrue(failureThrow > logTail);
-        assertTrue(failureBlock.contains("$($Process.ExitCode)"));
-        assertTrue(failureBlock.contains("see $Log"));
+        assertFalse(verifyPs.contains("function Invoke-Package"));
+        assertFalse(verifyPs.contains("INSTALLDIR="));
         assertTrue(verifySh.contains("grep -Eq '^MimeType='"));
         assertTrue(verifySh.contains("CFBundleDocumentTypes"));
         assertTrue(verifySh.contains("UTExportedTypeDeclarations"));

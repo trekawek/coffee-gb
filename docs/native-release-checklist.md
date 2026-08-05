@@ -14,14 +14,14 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 - [ ] The Maven release tag is exactly `coffee-gb-VERSION`, is non-SNAPSHOT, and matches every
   package manifest and `--version`; its fully qualified ref peels to the full `source.commit`
   recorded in `NATIVE-PACKAGE-MATRIX.properties`.
-- [ ] All four required targets passed their unit/integration build, pre-installer inspection,
-  final installer unpack/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
+- [ ] All four required targets passed their unit/integration build, pre-package inspection,
+  final package extract/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
   production desktop launches, no-registration checks for `.gb`, `.gbc`, and `.rom`, bounded
-  shutdown, and uninstall cleanup. Each package smoke named the exact configured target after
+  shutdown, and portable-EXE cleanup where applicable. Each package smoke named the exact configured target after
   starting from its own empty extraction cache.
 - [ ] If protected signing was requested, every target was rebuilt from the same immutable source
-  after the unsigned gate. Windows app-image executables and the EXE, macOS app bundles and DMGs,
-  and Linux detached signatures all passed their independent platform verification. The installed
+  after the unsigned gate. Windows app-image executables and the portable EXE, macOS app bundles and DMGs,
+  and Linux detached signatures all passed their independent platform verification. The extracted
   macOS app retained `com.apple.security.cs.disable-library-validation=true`, passed Gatekeeper,
   and launched with its extracted locked natives; checksums were generated afterward.
 - [ ] The release bundle contains the portable JAR, Linux x64 DEB, Windows x64 EXE, macOS x64 DMG,
@@ -40,9 +40,9 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 
 ## Manual behavior on each target
 
-- [ ] Install or copy the package in a clean standard-user account without a system Java runtime.
-- [ ] In the installer license UI and installed legal file, confirm `Tomasz Rękawek` is displayed
-  exactly, with no replacement characters or mojibake.
+- [ ] Install, copy, or run the package in a clean standard-user account without a system Java runtime.
+- [ ] In the installer license UI where applicable and packaged legal file, confirm `Tomasz Rękawek`
+  is displayed exactly, with no replacement characters or mojibake.
 - [ ] Launch with no ROM; confirm the window opens, remains responsive, and quits cleanly.
 - [ ] Run packaged `--version`; compare the complete Maven version with the release tag and
   portable JAR. On Windows use `Coffee GB Console.exe --version` and confirm normal GUI launches do
@@ -65,10 +65,11 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 - [ ] Launch through the packaged `--debug` path (the secondary console launcher on Windows) and
   confirm the production window starts and package-native fallback diagnostics contain no ROM,
   state, credential, or private path.
-- [ ] Uninstall/remove the application. Confirm launchers and shortcuts are removed, no Coffee GB
-  ROM association was created, and ROMs, batteries, states, settings, screenshots, and other user
-  data remain.
-- [ ] Reinstall the same build and confirm retained user data is still usable.
+- [ ] For the Windows portable EXE, confirm it starts directly without an installer, creates no
+  shortcuts or Installed Apps entry, and leaves no Coffee GB ROM association. For installable
+  packages, uninstall/remove the application and confirm launchers and shortcuts are removed.
+- [ ] Confirm ROMs, batteries, states, settings, screenshots, and other user data remain usable
+  after closing and relaunching the package.
 
 Release notes may include up to three screenshots from lawfully obtained commercial games per
 release when a project maintainer with release authority explicitly approves the exact images for

@@ -43,6 +43,10 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("cache: maven"));
         assertTrue(packages.contains("cache-dependency-path: \"**/pom.xml\""));
         assertTrue(packages.contains("persist-credentials: false"));
+        assertTrue(packages.contains("7z.exe"));
+        assertTrue(packages.contains("7z.sfx"));
+        assertFalse(packages.contains("candle.exe"));
+        assertFalse(packages.contains("light.exe"));
         assertEquals(2, occurrences(packages, "package_type: exe"));
         assertFalse(packages.contains("package_type: msi"));
         assertTrue(packages.contains("verify-native-package.sh"));
