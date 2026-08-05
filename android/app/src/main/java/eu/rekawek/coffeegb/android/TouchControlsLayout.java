@@ -6,15 +6,14 @@ import java.util.EnumSet;
 import java.util.List;
 
 /**
- * Persistable geometry for the translucent touch controls.
+ * Persisted touch settings and hit geometry for the Coffee GB raster skins.
  *
- * <p>The layout deliberately turns every pointer into a snapshot of logical buttons instead of
- * synthesising key events. That makes an Android touch chord equivalent to a physical controller
- * chord and keeps the control geometry independently testable.
+ * <p>The visual controls are part of the portrait and landscape images, so the default hit zones
+ * deliberately use the same normalized coordinates as those assets.
  */
 final class TouchControlsLayout {
 
-    static final float DEFAULT_OPACITY = 0.38f;
+    static final float DEFAULT_OPACITY = 0.85f;
     static final float DEFAULT_SCALE = 1f;
     static final float DEFAULT_VERTICAL_POSITION = 0f;
 
@@ -57,62 +56,84 @@ final class TouchControlsLayout {
         if (width <= 0 || height <= 0) {
             return List.of();
         }
-        float radius = controlRadius(width, height);
-        float dpadX = dpadCenterX(width);
-        float actionsX = actionsCenterX(width);
-        float controlsY = controlsCenterY(height, radius);
-
-        if (inCircle(x, y, dpadX, controlsY, radius * 1.35f)) {
+        Geometry geometry = geometry(width, height);
+        if (inCircle(x, y, geometry.dpadX, geometry.dpadY, geometry.dpadRadius)) {
             EnumSet<Button> pressed = EnumSet.noneOf(Button.class);
-            if (x < dpadX - radius * 0.30f) {
+            if (x < geometry.dpadX - geometry.dpadRadius * 0.30f) {
                 pressed.add(Button.LEFT);
-            } else if (x > dpadX + radius * 0.30f) {
+            } else if (x > geometry.dpadX + geometry.dpadRadius * 0.30f) {
                 pressed.add(Button.RIGHT);
             }
-            if (y < controlsY - radius * 0.30f) {
+            if (y < geometry.dpadY - geometry.dpadRadius * 0.30f) {
                 pressed.add(Button.UP);
-            } else if (y > controlsY + radius * 0.30f) {
+            } else if (y > geometry.dpadY + geometry.dpadRadius * 0.30f) {
                 pressed.add(Button.DOWN);
             }
             return List.copyOf(pressed);
         }
-
-        float bX = actionsX - radius * 0.70f;
-        float aX = actionsX + radius * 0.70f;
-        if (inCircle(x, y, bX, controlsY, radius * 0.72f)) {
+        if (inCircle(x, y, geometry.bX, geometry.bY, geometry.actionRadius)) {
             return List.of(Button.B);
         }
-        if (inCircle(x, y, aX, controlsY, radius * 0.72f)) {
+        if (inCircle(x, y, geometry.aX, geometry.aY, geometry.actionRadius)) {
             return List.of(Button.A);
         }
-
-        float utilityY = controlsY - radius * 1.75f;
-        if (inRect(x, y, width * 0.38f, utilityY - radius * 0.35f,
-                width * 0.12f, radius * 0.70f)) {
+        if (inRect(x, y, geometry.selectX, geometry.utilityY,
+                geometry.utilityWidth, geometry.utilityHeight)) {
             return List.of(Button.SELECT);
         }
-        if (inRect(x, y, width * 0.50f, utilityY - radius * 0.35f,
-                width * 0.12f, radius * 0.70f)) {
+        if (inRect(x, y, geometry.startX, geometry.utilityY,
+                geometry.utilityWidth, geometry.utilityHeight)) {
             return List.of(Button.START);
         }
         return List.of();
     }
 
+    float dpadCenterX(int width, int height) {
+        return geometry(width, height).dpadX;
+    }
+
+    float dpadCenterY(int width, int height) {
+        return geometry(width, height).dpadY;
+    }
+
     float controlRadius(int width, int height) {
-        return Math.max(22f, Math.min(width, height) * 0.13f * scale);
+        return geometry(width, height).dpadRadius;
     }
 
-    float dpadCenterX(int width) {
-        return width * (leftHanded ? 0.76f : 0.24f);
+    float actionCenterX(int width, int height, boolean a) {
+        Geometry geometry = geometry(width, height);
+        return a ? geometry.aX : geometry.bX;
     }
 
-    float actionsCenterX(int width) {
-        return width * (leftHanded ? 0.24f : 0.76f);
+    float actionCenterY(int width, int height, boolean a) {
+        Geometry geometry = geometry(width, height);
+        return a ? geometry.aY : geometry.bY;
     }
 
-    float controlsCenterY(int height, float radius) {
-        return Math.max(radius * 2.2f,
-                height - radius * 2.0f - verticalPosition * height * 0.38f);
+    float utilityCenterX(int width, int height, boolean start) {
+        Geometry geometry = geometry(width, height);
+        return start ? geometry.startX : geometry.selectX;
+    }
+
+    float utilityCenterY(int width, int height) {
+        return geometry(width, height).utilityY;
+    }
+
+    private static Geometry geometry(int width, int height) {
+        if (height >= width) {
+            return new Geometry(
+                    width * .207f, height * .704f, width * .151f,
+                    width * .707f, height * .727f,
+                    width * .861f, height * .689f, width * .065f,
+                    width * .394f, width * .574f, height * .838f,
+                    width * .140f, height * .050f);
+        }
+        return new Geometry(
+                width * .106f, height * .505f, height * .146f,
+                width * .858f, height * .548f,
+                width * .938f, height * .468f, height * .060f,
+                width * .105f, width * .907f, height * .871f,
+                width * .090f, height * .080f);
     }
 
     private static boolean inCircle(float x, float y, float centerX, float centerY, float radius) {
@@ -121,8 +142,10 @@ final class TouchControlsLayout {
         return dx * dx + dy * dy <= radius * radius;
     }
 
-    private static boolean inRect(float x, float y, float left, float top, float width, float height) {
-        return x >= left && x <= left + width && y >= top && y <= top + height;
+    private static boolean inRect(float x, float y, float centerX, float centerY,
+                                  float width, float height) {
+        return x >= centerX - width / 2f && x <= centerX + width / 2f
+                && y >= centerY - height / 2f && y <= centerY + height / 2f;
     }
 
     private static float clamp(float value, float lower, float upper) {
@@ -130,5 +153,11 @@ final class TouchControlsLayout {
             return lower;
         }
         return Math.max(lower, Math.min(upper, value));
+    }
+
+    private record Geometry(float dpadX, float dpadY, float dpadRadius,
+                            float bX, float bY, float aX, float aY, float actionRadius,
+                            float selectX, float startX, float utilityY,
+                            float utilityWidth, float utilityHeight) {
     }
 }

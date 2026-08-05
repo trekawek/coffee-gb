@@ -11,27 +11,36 @@ import static org.junit.Assert.assertTrue;
 public class TouchControlsLayoutTest {
 
     @Test
-    public void dpadAllowsDiagonalWhileSeparatePointersCanUseActionButtons() {
+    public void portraitDpadAllowsDiagonalWhileActionButtonsUseTheRasterLocations() {
         TouchControlsLayout layout = new TouchControlsLayout(.5f, 1f, 0f, false, true);
-        float radius = layout.controlRadius(1_000, 600);
-        float x = layout.dpadCenterX(1_000) - radius * .70f;
-        float y = layout.controlsCenterY(600, radius) - radius * .70f;
+        int width = 1_080;
+        int height = 1_920;
+        float radius = layout.controlRadius(width, height);
+        float x = layout.dpadCenterX(width, height) - radius * .70f;
+        float y = layout.dpadCenterY(width, height) - radius * .70f;
 
-        assertTrue(layout.buttonsAt(x, y, 1_000, 600).containsAll(List.of(Button.LEFT, Button.UP)));
-        assertEquals(List.of(Button.A), layout.buttonsAt(layout.actionsCenterX(1_000) + radius * .7f,
-                layout.controlsCenterY(600, radius), 1_000, 600));
+        assertTrue(layout.buttonsAt(x, y, width, height).containsAll(List.of(Button.LEFT, Button.UP)));
+        assertEquals(List.of(Button.A), layout.buttonsAt(
+                layout.actionCenterX(width, height, true),
+                layout.actionCenterY(width, height, true), width, height));
     }
 
     @Test
-    public void handednessMovesDpadAndActionsWithoutChangingButtonMeaning() {
-        TouchControlsLayout layout = new TouchControlsLayout(.5f, 1f, .2f, true, false);
-        float radius = layout.controlRadius(1_000, 600);
-        float y = layout.controlsCenterY(600, radius);
+    public void landscapeControlsStayInTheSideBays() {
+        TouchControlsLayout layout = new TouchControlsLayout(.5f, 1f, 0f, false, false);
+        int width = 1_920;
+        int height = 1_080;
 
-        assertTrue(layout.dpadCenterX(1_000) > layout.actionsCenterX(1_000));
-        assertEquals(List.of(Button.RIGHT), layout.buttonsAt(layout.dpadCenterX(1_000) + radius,
-                y, 1_000, 600));
-        assertEquals(List.of(Button.START), layout.buttonsAt(560, y - radius * 1.75f,
-                1_000, 600));
+        assertTrue(layout.dpadCenterX(width, height) < width * .20f);
+        assertTrue(layout.actionCenterX(width, height, false) > width * .80f);
+        assertEquals(List.of(Button.B), layout.buttonsAt(
+                layout.actionCenterX(width, height, false),
+                layout.actionCenterY(width, height, false), width, height));
+        assertEquals(List.of(Button.SELECT), layout.buttonsAt(
+                layout.utilityCenterX(width, height, false), layout.utilityCenterY(width, height),
+                width, height));
+        assertEquals(List.of(Button.START), layout.buttonsAt(
+                layout.utilityCenterX(width, height, true), layout.utilityCenterY(width, height),
+                width, height));
     }
 }

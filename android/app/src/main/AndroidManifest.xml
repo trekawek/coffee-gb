@@ -8,7 +8,8 @@
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="Coffee GB"
-        android:roundIcon="@mipmap/ic_launcher_round">
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/Theme.CoffeeGb">
         <service
             android:name=".EmulationService"
             android:exported="false" />

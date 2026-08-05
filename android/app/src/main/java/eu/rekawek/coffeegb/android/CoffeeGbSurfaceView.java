@@ -6,6 +6,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
@@ -25,12 +26,14 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         implements SurfaceHolder.Callback, NativeFrameStore.Listener {
 
     private final Object renderLock = new Object();
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint controlPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint skinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Rect source = new Rect();
     private final Rect destination = new Rect();
     private final Bitmap bitmap = Bitmap.createBitmap(
             NativeFrameStore.MAX_WIDTH, NativeFrameStore.MAX_HEIGHT, Bitmap.Config.ARGB_8888);
+    private final RasterSkin portraitSkin;
+    private final RasterSkin landscapeSkin;
 
     private volatile NativeFrameStore frames;
     private final TouchControlsPreferences touchPreferences;
@@ -41,10 +44,14 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     public CoffeeGbSurfaceView(Context context) {
         super(context);
-        paint.setFilterBitmap(false);
+        videoPaint.setFilterBitmap(false);
+        skinPaint.setFilterBitmap(true);
+        portraitSkin = RasterSkin.load(context, R.drawable.coffee_gb_skin_portrait);
+        landscapeSkin = RasterSkin.load(context, R.drawable.coffee_gb_skin_landscape);
         touchPreferences = new TouchControlsPreferences(context);
         touchLayout = touchPreferences.load();
-        controlPaint.setTextAlign(Paint.Align.CENTER);
+        setZOrderOnTop(false);
+        setZOrderMediaOverlay(false);
         getHolder().addCallback(this);
         setContentDescription("Coffee GB emulated video output");
     }
@@ -201,6 +208,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
     }
 
+    private RasterSkin skinFor(int width, int height) {
+        return height >= width ? portraitSkin : landscapeSkin;
+    }
+
     private final class RenderThread extends Thread {
         private boolean running = true;
         private boolean frameAvailable;
@@ -252,52 +263,22 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     return;
                 }
                 canvas.drawColor(Color.BLACK);
+                RasterSkin skin = skinFor(canvas.getWidth(), canvas.getHeight());
+                RectF display = skin.displayBounds(canvas.getWidth(), canvas.getHeight());
                 if (frame != null) {
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
                             frame.width(), frame.height());
                     source.set(0, 0, frame.width(), frame.height());
-                    VideoGeometry.Viewport viewport = canvas.getHeight() >= canvas.getWidth()
-                            ? VideoGeometry.nearestFitTop(
-                                    frame.width(), frame.height(), canvas.getWidth(), canvas.getHeight())
-                            : VideoGeometry.nearestFit(
-                                    frame.width(), frame.height(), canvas.getWidth(), canvas.getHeight());
-                    destination.set(viewport.left(), viewport.top(),
-                            viewport.left() + viewport.width(), viewport.top() + viewport.height());
-                    canvas.drawBitmap(bitmap, source, destination, paint);
+                    destination.set(Math.round(display.left), Math.round(display.top),
+                            Math.round(display.right), Math.round(display.bottom));
+                    canvas.drawBitmap(bitmap, source, destination, videoPaint);
                 }
-                drawTouchControls(canvas, touchLayout);
+                skin.draw(canvas, skinPaint);
             } finally {
                 if (canvas != null) {
                     getHolder().unlockCanvasAndPost(canvas);
                 }
             }
         }
-    }
-
-    private void drawTouchControls(Canvas canvas, TouchControlsLayout layout) {
-        float radius = layout.controlRadius(canvas.getWidth(), canvas.getHeight());
-        float y = layout.controlsCenterY(canvas.getHeight(), radius);
-        float dpadX = layout.dpadCenterX(canvas.getWidth());
-        float actionsX = layout.actionsCenterX(canvas.getWidth());
-        controlPaint.setColor(Color.argb(Math.round(layout.opacity() * 255), 230, 230, 230));
-        controlPaint.setStyle(Paint.Style.FILL);
-        canvas.drawCircle(dpadX, y, radius * 1.35f, controlPaint);
-        canvas.drawCircle(actionsX - radius * 0.70f, y, radius * 0.72f, controlPaint);
-        canvas.drawCircle(actionsX + radius * 0.70f, y, radius * 0.72f, controlPaint);
-        canvas.drawRoundRect(canvas.getWidth() * 0.38f, y - radius * 2.10f,
-                canvas.getWidth() * 0.50f, y - radius * 1.40f, radius * 0.22f,
-                radius * 0.22f, controlPaint);
-        canvas.drawRoundRect(canvas.getWidth() * 0.50f, y - radius * 2.10f,
-                canvas.getWidth() * 0.62f, y - radius * 1.40f, radius * 0.22f,
-                radius * 0.22f, controlPaint);
-
-        controlPaint.setColor(Color.argb(Math.round(layout.opacity() * 255), 20, 20, 20));
-        controlPaint.setTextSize(radius * 0.45f);
-        canvas.drawText("+", dpadX, y + radius * 0.16f, controlPaint);
-        canvas.drawText("B", actionsX - radius * 0.70f, y + radius * 0.16f, controlPaint);
-        canvas.drawText("A", actionsX + radius * 0.70f, y + radius * 0.16f, controlPaint);
-        controlPaint.setTextSize(radius * 0.20f);
-        canvas.drawText("SELECT", canvas.getWidth() * 0.44f, y - radius * 1.65f, controlPaint);
-        canvas.drawText("START", canvas.getWidth() * 0.56f, y - radius * 1.65f, controlPaint);
     }
 }

@@ -10,7 +10,6 @@ import android.net.Uri;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.Gravity;
@@ -18,6 +17,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -52,6 +52,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private CoffeeGbSurfaceView video;
     private Button menuButton;
     private ScrollView menu;
+    private AlertDialog menuDialog;
     private Button open;
     private Button recent;
     private Button pauseMenu;
@@ -73,8 +74,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private InputManager inputManager;
     private long shownSelectionGeneration = -1L;
     private PendingDocumentResult pendingDocumentResult;
-    private int systemBottomInset;
-    private int rootScreenTop;
 
     private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
         @Override
@@ -140,7 +139,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         menuButton = new Button(this);
-        menuButton.setText("Menu");
+        styleMenuButton();
         menuButton.setContentDescription("Open Coffee GB menu");
         menuButton.setOnClickListener(ignored -> toggleMenu());
         root.addView(menuButton, new FrameLayout.LayoutParams(
@@ -148,8 +147,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
         menu = new ScrollView(this);
         menu.setFillViewport(false);
-        menu.setBackgroundColor(android.graphics.Color.WHITE);
-        menu.setVisibility(View.GONE);
+        menu.setBackgroundColor(android.graphics.Color.rgb(239, 232, 216));
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
@@ -195,25 +193,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         content.addView(controllerMapping);
         content.addView(about);
         menu.addView(content);
-        root.addView(menu, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        menuDialog = new AlertDialog.Builder(this)
+                .setTitle("Coffee GB")
+                .setView(menu)
+                .create();
+        menuDialog.setOnDismissListener(ignored ->
+                menuButton.setContentDescription("Open Coffee GB menu"));
         root.addOnLayoutChangeListener((view, left, top, right, bottom,
                                         oldLeft, oldTop, oldRight, oldBottom) -> {
-            int[] location = new int[2];
-            view.getLocationOnScreen(location);
-            rootScreenTop = location[1];
             positionMenuOverlay(right - left, bottom - top);
         });
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            systemBottomInset = insets.getSystemWindowInsetBottom();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                systemBottomInset = Math.max(systemBottomInset, insets.getSystemGestureInsets().bottom);
-            }
-            int[] location = new int[2];
-            view.getLocationOnScreen(location);
-            rootScreenTop = location[1];
             positionMenuOverlay(view.getWidth(), view.getHeight());
             return insets;
         });
@@ -291,72 +283,56 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void toggleMenu() {
-        if (menu.getVisibility() == View.VISIBLE) {
+        if (menuDialog.isShowing()) {
             hideMenu();
         } else {
-            menu.setVisibility(View.VISIBLE);
-            menuButton.setText("Close");
+            menuDialog.show();
+            Window window = menuDialog.getWindow();
+            if (window != null) {
+                int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
+                int width = Math.max(1, video.getWidth() - 32 * density);
+                int height = Math.max(1, video.getHeight() - 32 * density);
+                window.setLayout(Math.min(360 * density, width), Math.min(640 * density, height));
+            }
+            menuButton.setContentDescription("Close Coffee GB menu");
         }
     }
 
     private void hideMenu() {
-        if (menu != null) {
-            menu.setVisibility(View.GONE);
+        if (menuDialog != null && menuDialog.isShowing()) {
+            menuDialog.dismiss();
         }
         if (menuButton != null) {
-            menuButton.setText("Menu");
+            menuButton.setContentDescription("Open Coffee GB menu");
         }
+    }
+
+    private void styleMenuButton() {
+        int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
+        // The raster skin supplies the visible menu glyph; this is its accessible tap target.
+        menuButton.setBackgroundColor(android.graphics.Color.TRANSPARENT);
+        menuButton.setText(null);
+        menuButton.setMinWidth(48 * density);
+        menuButton.setMinHeight(48 * density);
+        menuButton.setPadding(0, 0, 0, 0);
     }
 
     private void positionMenuOverlay(int width, int height) {
-        if (width <= 0 || height <= 0 || menuButton == null || menu == null) {
+        if (width <= 0 || height <= 0 || menuButton == null) {
             return;
         }
         int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
-        int minimumMargin = Math.max(1, 12 * density);
-        int buttonHeight = menuButton.getHeight() > 0 ? menuButton.getHeight() : 48 * density;
-        int menuWidth = Math.min(320 * density, Math.max(1, width - minimumMargin * 2));
-        int bottomMargin = rootScreenTop + Math.max(48 * density,
-                Math.max(systemBottomInset, navigationBarHeight()) + minimumMargin);
-        int maximumMenuHeight = 160 * density;
-        boolean portrait = height >= width;
-
+        int buttonTarget = 48 * density;
         FrameLayout.LayoutParams buttonLayout =
                 (FrameLayout.LayoutParams) menuButton.getLayoutParams();
-        FrameLayout.LayoutParams menuLayout = (FrameLayout.LayoutParams) menu.getLayoutParams();
-        if (portrait) {
-            int top = Math.round(height * 0.48f);
-            buttonLayout.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-            buttonLayout.leftMargin = 0;
-            buttonLayout.rightMargin = 0;
-            buttonLayout.topMargin = top;
-            menuLayout.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-            menuLayout.leftMargin = 0;
-            menuLayout.rightMargin = 0;
-            menuLayout.topMargin = top + buttonHeight;
-            menuLayout.width = menuWidth;
-            menuLayout.height = Math.max(1, Math.min(maximumMenuHeight,
-                    height - menuLayout.topMargin - bottomMargin));
-        } else {
-            buttonLayout.gravity = Gravity.TOP | Gravity.START;
-            buttonLayout.leftMargin = minimumMargin;
-            buttonLayout.rightMargin = 0;
-            buttonLayout.topMargin = minimumMargin;
-            menuLayout.gravity = Gravity.TOP | Gravity.START;
-            menuLayout.leftMargin = minimumMargin;
-            menuLayout.rightMargin = 0;
-            menuLayout.topMargin = minimumMargin + buttonHeight;
-            menuLayout.width = menuWidth;
-            menuLayout.height = Math.max(1, Math.min(maximumMenuHeight,
-                    height - menuLayout.topMargin - bottomMargin));
-        }
+        boolean portrait = height >= width;
+        int skinMenuCenterX = Math.round(width * (portrait ? .125f : .059f));
+        int skinMenuCenterY = Math.round(height * (portrait ? .050f : .085f));
+        buttonLayout.gravity = Gravity.TOP | Gravity.START;
+        buttonLayout.leftMargin = Math.max(0, skinMenuCenterX - buttonTarget / 2);
+        buttonLayout.rightMargin = 0;
+        buttonLayout.topMargin = Math.max(0, skinMenuCenterY - buttonTarget / 2);
         menuButton.setLayoutParams(buttonLayout);
-        menu.setLayoutParams(menuLayout);
-    }
-
-    private int navigationBarHeight() {
-        int id = getResources().getIdentifier("navigation_bar_height", "dimen", "android");
-        return id == 0 ? 0 : getResources().getDimensionPixelSize(id);
     }
 
     private void openRomDocument(View ignored) {
@@ -497,16 +473,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         int padding = (int) (20 * getResources().getDisplayMetrics().density);
         form.setPadding(padding, padding, padding, padding);
 
-        SeekBar opacity = slider(form, "Opacity", 15, 100,
-                Math.round(initial.opacity() * 100));
-        SeekBar scale = slider(form, "Size", 60, 140,
-                Math.round(initial.scale() * 100));
-        SeekBar vertical = slider(form, "Raise controls", 0, 100,
-                Math.round(initial.verticalPosition() * 100));
-        Switch leftHanded = new Switch(this);
-        leftHanded.setText("Left-handed layout");
-        leftHanded.setChecked(initial.leftHanded());
-        form.addView(leftHanded);
+        TextView fixedSkin = new TextView(this);
+        fixedSkin.setText("The Coffee GB skin fixes the visible control positions.");
+        form.addView(fixedSkin);
         Switch haptics = new Switch(this);
         haptics.setText("Haptic feedback");
         haptics.setChecked(initial.haptics());
@@ -516,11 +485,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 .setTitle("Touch controls")
                 .setView(form)
                 .setNegativeButton("Cancel", null)
-                .setNeutralButton("Reset", (dialog, ignored) -> video.resetTouchLayout())
+                .setNeutralButton("Reset", (dialog, ignored) -> video.updateTouchLayout(
+                        new TouchControlsLayout(TouchControlsLayout.DEFAULT_OPACITY,
+                                TouchControlsLayout.DEFAULT_SCALE,
+                                TouchControlsLayout.DEFAULT_VERTICAL_POSITION, false, false)))
                 .setPositiveButton("Save", (dialog, ignored) -> video.updateTouchLayout(
-                        new TouchControlsLayout(opacity.getProgress() / 100f,
-                                scale.getProgress() / 100f, vertical.getProgress() / 100f,
-                                leftHanded.isChecked(), haptics.isChecked())))
+                        new TouchControlsLayout(TouchControlsLayout.DEFAULT_OPACITY,
+                                TouchControlsLayout.DEFAULT_SCALE,
+                                TouchControlsLayout.DEFAULT_VERTICAL_POSITION, false,
+                                haptics.isChecked())))
                 .show();
     }
 
