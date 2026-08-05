@@ -130,7 +130,48 @@ public final class NativePackageTool {
         Path temporary = Files.createDirectory(buildRoot.resolve("jpackage-temp"));
         List<String> signingOptions =
                 signing == null ? List.of() : signing.jpackageOptions();
-        if (signing == null) {
+        boolean portableWindowsExe =
+                targetMetadata.hostOs() == NativePackageMetadata.HostOs.WINDOWS
+                        && packageType == NativePackageMetadata.PackageType.EXE;
+        Path portableWindowsAppImage = null;
+        if (portableWindowsExe) {
+            portableWindowsAppImage = Files.createDirectory(
+                    buildRoot.resolve(signing == null
+                            ? "portable-app-image"
+                            : "signed-portable-app-image"));
+            Path appImageTemporary = Files.createDirectory(
+                    buildRoot.resolve(signing == null
+                            ? "jpackage-portable-app-image-temp"
+                            : "jpackage-signed-portable-app-image-temp"));
+            runInherited(
+                    plan.jpackageCommand(
+                            javaHome,
+                            stage,
+                            runtime,
+                            portableWindowsAppImage,
+                            appImageTemporary,
+                            NativePackageMetadata.PackageType.APP_IMAGE,
+                            signingOptions),
+                    stage.root());
+            Path appImage = plan.expectedAppImage(portableWindowsAppImage, targetMetadata);
+            NativePackageVerifier.verify(new NativePackageVerifier.VerificationRequest(
+                    target,
+                    NativePackageMetadata.PackageType.APP_IMAGE,
+                    portableWindowsAppImage,
+                    stage.appJar(),
+                    stage.sbom(),
+                    resources.resolve("legal")));
+            if (signing != null) {
+                for (List<String> command : signing.appImagePostPackageCommands(appImage)) {
+                    runInherited(command);
+                }
+                for (List<String> command : signing.appImageVerificationCommands(appImage)) {
+                    runInherited(command);
+                }
+            }
+            verifyAppImageLaunchers(
+                    plan, portableWindowsAppImage, targetMetadata, stage.appVersion());
+        } else if (signing == null) {
             runInherited(
                     plan.jpackageCommand(
                             javaHome,
@@ -185,7 +226,10 @@ public final class NativePackageTool {
         }
 
         Path primaryArtifact;
-        if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
+        if (portableWindowsExe) {
+            primaryArtifact = buildPortableWindowsExe(
+                    buildRoot, destination, portableWindowsAppImage, environment);
+        } else if (packageType == NativePackageMetadata.PackageType.APP_IMAGE) {
             verifyAppImageLaunchers(plan, destination, targetMetadata, stage.appVersion());
             primaryArtifact = plan.expectedAppImage(destination, targetMetadata);
         } else {
@@ -214,9 +258,11 @@ public final class NativePackageTool {
                         "Verified detached signature is missing: " + signatureArtifact);
             }
         }
-        Path packagedPayload = packageType == NativePackageMetadata.PackageType.APP_IMAGE
-                ? primaryArtifact
-                : temporary.resolve("images");
+        Path packagedPayload = portableWindowsExe
+                ? portableWindowsAppImage
+                : packageType == NativePackageMetadata.PackageType.APP_IMAGE
+                        ? primaryArtifact
+                        : temporary.resolve("images");
         NativePackageVerifier.VerificationResult verification =
                 NativePackageVerifier.verify(new NativePackageVerifier.VerificationRequest(
                         target,
@@ -376,6 +422,34 @@ public final class NativePackageTool {
         if (Files.exists(runtime.resolve("include")) || Files.exists(runtime.resolve("man"))) {
             throw new IOException("jlink runtime unexpectedly contains headers or man pages");
         }
+    }
+
+    private static Path buildPortableWindowsExe(
+            Path buildRoot,
+            Path destination,
+            Path appImageDestination,
+            Map<String, String> environment)
+            throws IOException, InterruptedException {
+        PortableWindowsExe.SevenZip sevenZip = PortableWindowsExe.requireSevenZip(environment);
+        Path appImage = appImageDestination.resolve(NativePackageMetadata.APPLICATION_NAME);
+        if (!Files.isDirectory(appImage, LinkOption.NOFOLLOW_LINKS)
+                || Files.isSymbolicLink(appImage)) {
+            throw new IOException("Windows portable app image is missing: " + appImage);
+        }
+        Path archive = buildRoot.resolve("coffee-gb-portable.7z");
+        runInherited(
+                List.of(
+                        sevenZip.executable().toString(),
+                        "a",
+                        "-t7z",
+                        "-mx=9",
+                        "-bd",
+                        archive.toString(),
+                        NativePackageMetadata.APPLICATION_NAME),
+                appImageDestination);
+        Path portableExe = destination.resolve("Coffee GB.exe");
+        PortableWindowsExe.assemble(sevenZip.sfxModule(), archive, portableExe);
+        return portableExe;
     }
 
     private static Path findInstaller(

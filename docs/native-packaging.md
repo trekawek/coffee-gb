@@ -3,7 +3,8 @@
 This document defines the native packaging and release-validation contract. Maven remains the
 authoritative application build. Target staging, minimized runtimes, application images, and native
 installers consume Maven outputs; they never compile a second application copy or resolve a second
-dependency graph.
+dependency graph. Windows release EXEs are self-extracting portable application images, not
+installers.
 
 ## Desktop artifacts
 
@@ -126,7 +127,7 @@ neutral JAR, universal JAR, and CycloneDX SBOM, and then invoke the same Java pa
 ```
 
 ```powershell
-# Windows x86-64 EXE (the target's default package)
+# Windows x86-64 portable EXE (the target's default package)
 .\packaging\package-native.ps1 windows-x86-64 exe
 ```
 
@@ -137,10 +138,10 @@ dependencies, JDKs, native libraries, or signing tools themselves.
 `jpackage` cannot generate a foreign platform image. The selected target is never inferred from
 the host; after selection, the tool rejects a mismatched host OS or architecture:
 
-| Target | Host | Default installer | Other validated type | Host prerequisites |
+| Target | Host | Default package | Other validated type | Host prerequisites |
 | --- | --- | --- | --- | --- |
 | `linux-x86-64` | Linux x86-64 | DEB | RPM, app-image | JDK 21+, `dpkg-deb` and `desktop-file-validate` for DEB, or `rpmbuild` for RPM |
-| `windows-x86-64` | Windows x86-64 | EXE | MSI, app-image | JDK 21+, WiX supported by that JDK |
+| `windows-x86-64` | Windows x86-64 | Portable EXE | MSI, app-image | JDK 21+, 7-Zip with `7z.sfx` |
 | `macos-x86-64` | macOS x86-64 | DMG | PKG, app-image | JDK 21+, Xcode command-line packaging tools |
 | `macos-aarch64` | macOS arm64 | DMG | PKG, app-image | arm64 JDK 21+, Xcode command-line packaging tools |
 
@@ -220,7 +221,7 @@ code unit; the macOS resource override uses an RTF resource rather than the lega
 This keeps the installed legal copy byte-identical while avoiding locale-dependent installer
 decoding.
 
-Installers do not register `.gb`, `.gbc`, or `.rom` with Coffee GB and do not request default- or
+Packages do not register `.gb`, `.gbc`, or `.rom` with Coffee GB and do not request default- or
 optional-handler status. Staging creates no jpackage association files, Linux desktop metadata has
 no `MimeType`, macOS bundles declare no document or exported/imported type keys, and Windows
 installation must not add Coffee GB to extension class or `OpenWith` registrations. Users can
@@ -230,9 +231,9 @@ type. Linux packages install a freedesktop `Game;` menu shortcut while retaining
 section `games`. A DEB build extracts the package-owned
 `/opt/coffee-gb/lib/coffee-gb-Coffee_GB.desktop` payload, runs `desktop-file-validate`, and proves
 the bounded `postinst` script registers that exact file. It also verifies the section and expected
-`libasound2t64` dependency; Windows packages request
-Start-menu and desktop shortcuts, retain a fixed upgrade UUID for upgrade/uninstall identity,
-expose help/update URLs, and provide an install-directory chooser. macOS packages set the Games
+`libasound2t64` dependency. The Windows portable EXE extracts to a temporary directory, launches
+Coffee GB, and creates no shortcut, uninstall identity, or registry entry; the optional MSI retains
+the fixed upgrade UUID, help/update URLs, and install-directory chooser. macOS packages set the Games
 application category and bundle identifier. The desktop ROM-open service remains available for
 explicit application-directed open-file events; packaging never claims those file types.
 
@@ -295,16 +296,16 @@ Protected release signing uses a two-stage image flow before any digest is final
 
 1. build and structurally inspect a prebuilt application image;
 2. sign and verify its executable content;
-3. build the default installer from that exact signed image;
-4. sign and independently verify the outer installer;
-5. inspect the installer payload and reverify the copied/installed executable content; and
+3. build the default package from that exact signed image;
+4. sign and independently verify the outer package;
+5. inspect the package payload and reverify the extracted executable content; and
 6. only then copy the verified Maven dependency SBOM and target-native SBOM and write the result
    manifest and checksums.
 
 On Windows the policy is deliberately EXE-only. It deterministically Authenticode-signs every
 visible executable/DLL in the app image with SHA-256 and an RFC 3161 HTTPS timestamp, appending
 rather than replacing an existing vendor signature, and requires `/pa /all /tw` verification
-before EXE creation, in jpackage's package image, and after installation. Digest-locked
+before portable-EXE creation, in jpackage's app image, and after extraction. Digest-locked
 third-party native-source binaries are stored rather than compressed inside a deterministic ZIP;
 platform signing seals that resource without rewriting the upstream bytes later checked during
 runtime extraction. The policy then signs and verifies the outer EXE. On macOS the protected path
@@ -336,7 +337,8 @@ libraries have additional ABI and package requirements. Windows 10 x86-64 or new
 newer on the packaged architecture remain the other project release floors. These are conservative
 tested floors, not a claim that every older machine fails. Each native package bundles its Java
 runtime, so users do not install Java separately. Linux desktop integration depends on the
-distribution's ordinary menu/MIME tools, Windows MSI/EXE creation depends on WiX, and macOS
+distribution's ordinary menu/MIME tools, Windows portable-EXE creation depends on 7-Zip's SFX
+module, and macOS
 Gatekeeper warns for unsigned local/PR builds; only protected release builds may be signed and
 notarized.
 
@@ -433,8 +435,8 @@ keyed by the POMs; `target/`, native caches, settings, ROMs, batteries, and stat
 never cached. Target artifacts expire after seven days and the complete gated bundle after
 fourteen.
 
-Every host verifies jpackage's pre-installer payload, then unpacks or installs the actual DEB/EXE or mounts the
-actual DMG and repeats the checks. Inspection requires:
+Every host verifies jpackage's pre-package payload, then extracts the actual DEB/portable EXE or
+mounts the actual DMG and repeats the checks. Inspection requires:
 
 - exactly one linked runtime and the locked ten-module closure;
 - the exact target-native allowlist and digests, with no foreign native;
@@ -460,7 +462,7 @@ actual DMG and repeats the checks. Inspection requires:
   that prove a visible frame, menu, display content, off-EDT readiness evidence, and bounded normal
   shutdown; and
 - final-package checks proving the DEB desktop entry has no `MimeType`, the DMG application has no
-  document or exported/imported type declarations, and the installed Windows EXE creates no Coffee
+  document or exported/imported type declarations, and the portable Windows EXE creates no Coffee
   GB `.gb`, `.gbc`, or `.rom` class/`OpenWith` registration.
 
 The headless package smoke constructs its reviewable 32 KiB loop ROM, writes it into a private

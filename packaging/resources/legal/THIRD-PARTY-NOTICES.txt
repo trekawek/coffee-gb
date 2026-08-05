@@ -13,6 +13,18 @@ Copyright (c) 2017 Tomasz Rękawek and contributors.
 Source: https://github.com/trekawek/coffee-gb
 License: MIT. See LICENSE.txt.
 
+7-Zip SFX module (Windows portable EXE only)
+--------------------------------------------
+The Windows release EXE prepends the standard 7-Zip self-extracting module to its Coffee GB
+application-image archive. It runs Coffee GB from a temporary extraction directory and is not an
+installer. The module comes from the LZMA SDK, which includes SFX modules and is in the public
+domain.
+
+Source: https://www.7-zip.org/sdk.html
+License: public domain.
+
+The build-time 7z.exe archiver is not distributed in Coffee GB.
+
 OpenPnP OpenCV 4.9.0-0 / OpenCV 4.9.0
 -------------------------------------
 The four packaged OpenCV binaries come from Maven artifact org.openpnp:opencv:4.9.0-0:

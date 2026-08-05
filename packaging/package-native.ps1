@@ -52,6 +52,18 @@ if (-not (Test-Path -LiteralPath $Sbom -PathType Leaf)) {
     throw "CycloneDX SBOM is missing: $Sbom"
 }
 
+if ($Target -eq "windows-x86-64" -and (-not $Type -or $Type -eq "exe")) {
+    $SevenZip = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+    if (-not $SevenZip) {
+        throw "Windows portable EXE packaging requires 7z.exe"
+    }
+    $SevenZipSfx = Join-Path (Split-Path -Parent $SevenZip.Source) "7z.sfx"
+    if (-not (Test-Path -LiteralPath $SevenZipSfx -PathType Leaf)) {
+        throw "Windows portable EXE packaging requires the 7-Zip SFX module: $SevenZipSfx"
+    }
+    $env:COFFEE_GB_7ZIP_COMMAND = $SevenZip.Source
+}
+
 $OutputSuffix = if ($Type) { "-$Type" } else { "" }
 $Output = Join-Path `
     $RepositoryRoot `

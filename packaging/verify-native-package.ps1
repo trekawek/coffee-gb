@@ -16,11 +16,11 @@ $BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {
     [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $BuildRoot))
 }
 $Dist = Join-Path $BuildRoot "dist"
-$InstalledRoot = Join-Path $BuildRoot "installed-package"
+$UnpackedRoot = Join-Path $BuildRoot "unpacked-portable-exe"
 $SmokeHome = Join-Path $BuildRoot "unpacked-smoke-home"
 
-if (Test-Path -LiteralPath $InstalledRoot) {
-    throw "Installation output already exists: $InstalledRoot"
+if (Test-Path -LiteralPath $UnpackedRoot) {
+    throw "Portable EXE extraction output already exists: $UnpackedRoot"
 }
 
 $AppJars = @(Get-ChildItem -Path $SwingTarget -Filter "coffee-gb-*-app.jar" -File)
@@ -33,49 +33,7 @@ if ($Sboms.Count -ne 1) {
     throw "Expected exactly one Maven SBOM, found $($Sboms.Count)"
 }
 if ($Packages.Count -ne 1) {
-    throw "Expected exactly one Windows EXE package, found $($Packages.Count)"
-}
-
-function Invoke-Package {
-    param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("install", "uninstall")]
-        [string] $Action,
-        [Parameter(Mandatory = $true)]
-        [string] $Log
-    )
-    $Arguments = @()
-    if ($Action -eq "uninstall") {
-        $Arguments += "uninstall"
-    }
-    $Arguments += @(
-        "/qn",
-        "/norestart",
-        "/L*V",
-        "`"$Log`""
-    )
-    if ($Action -eq "install") {
-        $Arguments += "INSTALLDIR=`"$InstalledRoot`""
-    }
-    $Process = Start-Process `
-        -FilePath $Packages[0].FullName `
-        -ArgumentList $Arguments `
-        -Wait `
-        -PassThru
-    if ($Process.ExitCode -in @(0, 3010)) {
-        return
-    }
-    try {
-        if (Test-Path -LiteralPath $Log -PathType Leaf) {
-            Write-Host "Windows EXE package $Action log tail:"
-            Get-Content -LiteralPath $Log -Tail 250
-        } else {
-            Write-Warning "Windows EXE package $Action log was not created: $Log"
-        }
-    } catch {
-        Write-Warning "Unable to read Windows EXE package $Action log ${Log}: $($_.Exception.Message)"
-    }
-    throw "Windows EXE package $Action failed with exit code $($Process.ExitCode); see $Log"
+    throw "Expected exactly one Windows portable EXE, found $($Packages.Count)"
 }
 
 function Assert-NoRomAssociations {
@@ -94,7 +52,7 @@ function Assert-NoRomAssociations {
         if (Test-Path -LiteralPath $OpenWithList) {
             foreach ($Application in (Get-Item -LiteralPath $OpenWithList).GetValueNames()) {
                 if ($Application -match '(?i)Coffee GB(?: Console)?\.exe') {
-                    throw "The installed EXE registered $Application for $Extension"
+                    throw "The portable EXE registered $Application for $Extension"
                 }
             }
         }
@@ -105,38 +63,64 @@ function Assert-NoRomAssociations {
             }
             $Command = (Get-Item -LiteralPath $CommandKey).GetValue("")
             if ($Command -match '(?i)Coffee GB(?: Console)?\.exe' -or
-                $Command -like "*$InstalledRoot*") {
-                throw "The installed EXE registered $Extension through $ProgId`: $Command"
+                $Command -like "*$UnpackedRoot*") {
+                throw "The portable EXE registered $Extension through $ProgId`: $Command"
             }
         }
     }
 }
 
-$Installed = $false
+$SevenZip = Get-Command "7z.exe" -ErrorAction SilentlyContinue
+if (-not $SevenZip) {
+    throw "7z.exe is required to inspect the Windows portable EXE"
+}
+
+$PortableMarker = Join-Path $BuildRoot "portable-exe-ready.marker"
+$PreviousMarker = $env:COFFEE_GB_DESKTOP_SMOKE_MARKER
 try {
-    Invoke-Package -Action "install" -Log (Join-Path $BuildRoot "exe-install.log")
-    $Installed = $true
-    Assert-NoRomAssociations
-    $Arguments = @(
-        "-cp", $AppJars[0].FullName,
-        "eu.rekawek.coffeegb.swing.packaging.NativePackageVerifier",
-        "verify",
-        "--target", $Target,
-        "--type", "exe",
-        "--root", $InstalledRoot,
-        "--source-app-jar", $AppJars[0].FullName,
-        "--source-sbom", $Sboms[0].FullName,
-        "--source-legal", (Join-Path $RepositoryRoot "packaging/resources/legal"),
-        "--dist", $Dist,
-        "--run-smoke",
-        "--smoke-home", $SmokeHome
-    )
-    & java @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Installed EXE verification failed with exit code $LASTEXITCODE"
+    $env:COFFEE_GB_DESKTOP_SMOKE_MARKER = $PortableMarker
+    $Process = Start-Process -FilePath $Packages[0].FullName -PassThru
+    $Deadline = [DateTime]::UtcNow.AddSeconds(45)
+    while (-not (Test-Path -LiteralPath $PortableMarker -PathType Leaf) -and
+            [DateTime]::UtcNow -lt $Deadline) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not (Test-Path -LiteralPath $PortableMarker -PathType Leaf)) {
+        throw "Windows portable EXE did not start Coffee GB"
+    }
+    $Evidence = Get-Content -LiteralPath $PortableMarker -Raw
+    if ($Evidence -notmatch "Coffee GB desktop ready OK:") {
+        throw "Windows portable EXE produced invalid startup evidence: $Evidence"
+    }
+    $Process.WaitForExit(45000) | Out-Null
+    if (-not $Process.HasExited) {
+        $Process.Kill()
+        throw "Windows portable EXE did not exit after the desktop smoke"
     }
 } finally {
-    if ($Installed) {
-        Invoke-Package -Action "uninstall" -Log (Join-Path $BuildRoot "exe-uninstall.log")
-    }
+    $env:COFFEE_GB_DESKTOP_SMOKE_MARKER = $PreviousMarker
+}
+
+& $SevenZip.Source x "-o$UnpackedRoot" "-y" $Packages[0].FullName
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to unpack Windows portable EXE with exit code $LASTEXITCODE"
+}
+Assert-NoRomAssociations
+$Arguments = @(
+    "-cp", $AppJars[0].FullName,
+    "eu.rekawek.coffeegb.swing.packaging.NativePackageVerifier",
+    "verify",
+    "--target", $Target,
+    "--type", "exe",
+    "--root", $UnpackedRoot,
+    "--source-app-jar", $AppJars[0].FullName,
+    "--source-sbom", $Sboms[0].FullName,
+    "--source-legal", (Join-Path $RepositoryRoot "packaging/resources/legal"),
+    "--dist", $Dist,
+    "--run-smoke",
+    "--smoke-home", $SmokeHome
+)
+& java @Arguments
+if ($LASTEXITCODE -ne 0) {
+    throw "Portable EXE verification failed with exit code $LASTEXITCODE"
 }

@@ -6,32 +6,32 @@ Linux. Each jpackage invocation runs on its target architecture:
 | Target | GitHub-hosted runner | Deliverable | Final-package check |
 | --- | --- | --- | --- |
 | Linux x64 | `ubuntu-24.04` | DEB | `dpkg-deb --extract` |
-| Windows x64 | `windows-2025` | EXE | silent install into an isolated verification directory |
+| Windows x64 | `windows-2025` | Portable EXE | run the EXE, then extract into an isolated verification directory |
 | macOS x64 | `macos-15-intel` | DMG | read-only `hdiutil` mount |
 | macOS arm64 | `macos-15` | DMG | read-only `hdiutil` mount |
 
-JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image must also expose WiX
-`candle.exe` and `light.exe`; each job fails before building if its architecture or required host
+JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image must also expose 7-Zip's
+`7z.exe` and `7z.sfx` module; each job fails before building if its architecture or required host
 tool is wrong. Oracle jpackage cannot cross-build these formats, so a missing target runner is a
 release blocker rather than permission to relabel another architecture.
 
 ## What CI proves
 
 The wrapper runs the Maven-authoritative `clean verify` reactor, including unit tests and the
-target-neutral staging integration tests, before building one unsigned installer. The package tool
+target-neutral staging integration tests, before building one unsigned target package. The package tool
 then:
 
 1. verifies the minimized runtime module closure and launches the neutral JAR with that runtime;
 2. validates the canonical NFC UTF-8 license and exact `Tomasz Rękawek` author name, generates the
-   platform-safe installer license, and builds the host installer without a signing request;
+   platform-safe installer license where needed, and builds the host package without a signing request;
 3. inspects jpackage's exact payload image and runs packaged `--version`, `--package-smoke`, and
    production desktop launches both normally and with `--debug`;
 4. writes `PACKAGE-RESULT.properties`, one canonical byte-identical Maven dependency CycloneDX
    SBOM, one exact target-native CycloneDX SBOM generated from the locked inventory, and exhaustive
    `SHA256SUMS`;
-5. unpacks or mounts the final installer and repeats strict inspection and both launch smokes from
+5. unpacks, extracts, or mounts the final package and repeats strict inspection and both launch smokes from
    an isolated temporary home; and
-6. proves the final DEB desktop entry, installed EXE registry state, and DMG application metadata
+6. proves the final DEB desktop entry, portable-EXE registry state, and DMG application metadata
    do not register `.gb`, `.gbc`, or `.rom` with Coffee GB; and
 7. uploads the short-lived target validation inputs, including both SBOMs, checksums, result
    manifest, and (once, from Linux) the unchanged portable Maven JAR. The final gated release
@@ -57,9 +57,9 @@ Windows keeps the primary `Coffee GB.exe` GUI launcher console-free and uses the
 The no-registration gate inspects the exact final artifacts. Linux rejects any `MimeType` in the
 packaged Coffee GB desktop entry. macOS rejects `CFBundleDocumentTypes`,
 `UTExportedTypeDeclarations`, and `UTImportedTypeDeclarations` in the mounted application. Windows
-silently installs the EXE into an isolated directory and rejects any `.gb`, `.gbc`, or `.rom`
-extension class, `OpenWithProgids`, or `OpenWithList` entry that resolves to Coffee GB. These checks
-run again for protected signed builds.
+runs the portable EXE, extracts it into an isolated directory, and rejects any `.gb`, `.gbc`, or
+`.rom` extension class, `OpenWithProgids`, or `OpenWithList` entry that resolves to Coffee GB.
+These checks run again for protected signed builds.
 
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped
@@ -102,7 +102,7 @@ commit ID; every matrix and gate checkout uses that ID and verifies `HEAD`, and 
 re-fetched and re-peeled before each promotion. A moved tag therefore fails closed. The release
 matrix records the bound source commit.
 
-Publication waits for the unsigned build, installer inspection, desktop/debug launch, and
+Publication waits for the unsigned build, package inspection, desktop/debug launch, and
 no-registration gates on all four targets. A Linux release-gate job independently downloads the
 results, requires one default package, one canonical byte-identical Maven dependency SBOM, and
 one exact target-native SBOM per target, renames packages with explicit architecture, records the
@@ -133,9 +133,9 @@ the release notes together; never silently omit it.
 Normal and pull-request artifacts are unsigned and the matrix records that fact. The release
 dispatch can request `sign_native_packages`; only then, after the unsigned four-target gate, does
 the protected `native-release` matrix import ephemeral credentials and invoke `--release-sign`.
-The Windows path signs and verifies every visible executable/DLL in a prebuilt app image, creates
-an EXE from that signed image, signs and verifies the EXE, then verifies the installed executable
-payload. Digest-locked third-party native-source bytes live in a deterministic stored ZIP, so
+The Windows path signs and verifies every visible executable/DLL in a prebuilt app image, wraps
+that signed image in a portable self-extracting EXE, signs and verifies the outer EXE, then
+verifies the extracted executable payload. Digest-locked third-party native-source bytes live in a deterministic stored ZIP, so
 platform signing seals the archive without changing the upstream sizes or SHA-256 values that the
 runtime verifies while extracting.
 The macOS path signs and verifies the app image, explicitly requires the JDK default
@@ -169,8 +169,8 @@ must update the adjacent version comment and revalidate all workflow tests befor
 
 - Linux: verify `SHA256SUMS`, install the DEB with the distribution package tool, and remove the
   `coffee-gb` package with that same tool.
-- Windows: verify `SHA256SUMS`, open the EXE, and remove Coffee GB through Installed Apps or the
-  same EXE product identity.
+- Windows: verify `SHA256SUMS`, open the EXE, and close Coffee GB when finished. It extracts only
+  to its temporary run directory and creates no Installed Apps entry.
 - macOS: verify the checksum, open the DMG, copy Coffee GB to Applications, eject the image, and
   remove the application by moving it to Trash.
 
