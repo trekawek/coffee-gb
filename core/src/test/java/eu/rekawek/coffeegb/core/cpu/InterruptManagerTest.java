@@ -33,6 +33,23 @@ public class InterruptManagerTest {
     }
 
     @Test
+    public void firstLcdLineMode2ClassificationSurvivesMementoRestore() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestMode2InterruptBeforeCpuAcceptance(true);
+
+        var memento = interrupts.saveToMemento();
+        interrupts.releaseCpuAcceptance(LCDC);
+        assertTrue(interrupts.isPhasedMode2InterruptRequested());
+        assertTrue(interrupts.isFirstLineMode2InterruptRequested());
+
+        interrupts.restoreFromMemento(memento);
+        assertFalse(interrupts.isPhasedMode2InterruptRequested());
+        interrupts.releaseCpuAcceptance(LCDC);
+        assertTrue(interrupts.isPhasedMode2InterruptRequested());
+        assertTrue(interrupts.isFirstLineMode2InterruptRequested());
+    }
+
+    @Test
     public void directPpuEdgeCanRemainBlockedUntilCpuAcceptance() {
         InterruptManager interrupts = enabledInterrupt(LCDC);
 
@@ -113,6 +130,18 @@ public class InterruptManagerTest {
 
         assertTrue(interrupts.isInterruptRequested());
         assertFalse(interrupts.isUnphasedPpuInterruptRequested());
+    }
+
+    @Test
+    public void repeatedMode2RequestDoesNotReclassifyAssertedIfLatch() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestInterrupt(LCDC);
+
+        interrupts.requestMode2InterruptBeforeCpuAcceptance(true);
+
+        assertTrue(interrupts.isUnphasedPpuInterruptRequested());
+        assertFalse(interrupts.isPhasedMode2InterruptRequested());
+        assertFalse(interrupts.isFirstLineMode2InterruptRequested());
     }
 
     @Test

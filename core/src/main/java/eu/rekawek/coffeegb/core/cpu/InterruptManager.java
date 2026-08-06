@@ -48,12 +48,27 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     // apply the direct-edge timing adjustment a second time.
     private int cpuPhasedPpuInterrupts = interruptFlag & PPU_INTERRUPT_MASK;
 
+    private int cpuPhasedMode2Interrupts;
+
+    private int cpuFirstLineMode2Interrupts;
+
     private int pendingEnableInterrupts = -1;
 
     // At the first visible-line latch the DMG's retiring VBlank request and a
     // simultaneous STAT write can overlap the IF read gate. The stored IF bit stays
     // asserted, but that one bus read sees VBlank low.
     private boolean maskVBlankOnNextRead;
+
+    // The CPU acknowledges an interrupt near the middle of its final dispatch
+    // machine cycle. Serial events in the remaining part of that cycle are
+    // evaluated before the acknowledge clears IF.
+    private boolean serialInterruptAcknowledge;
+
+    // TIMA events in the peripheral look-ahead portion of the CPU acknowledge
+    // cycle are evaluated before the acknowledge clears IF.
+    private boolean timerInterruptAcknowledge;
+
+    private boolean lcdcInterruptAcknowledge;
 
     public InterruptManager(boolean gbc) {
     }
@@ -122,6 +137,18 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         interruptFlag |= mask;
     }
 
+    public void requestMode2InterruptBeforeCpuAcceptance(boolean firstLine) {
+        int mask = 1 << InterruptType.LCDC.ordinal();
+        boolean newlyAsserted = (interruptFlag & mask) == 0;
+        requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+        if (newlyAsserted) {
+            cpuPhasedMode2Interrupts |= mask;
+            if (firstLine) {
+                cpuFirstLineMode2Interrupts |= mask;
+            }
+        }
+    }
+
     /**
      * Exposes an interrupt in IF before either CPU input may accept it, while
      * preserving the direct PPU-edge classification used after the block is released.
@@ -150,6 +177,17 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     }
 
     public void clearInterrupt(InterruptType type) {
+        if (type == InterruptType.Serial) {
+            serialInterruptAcknowledge = true;
+        } else if (type == InterruptType.Timer) {
+            timerInterruptAcknowledge = true;
+        } else if (type == InterruptType.LCDC) {
+            lcdcInterruptAcknowledge = true;
+        }
+        clearInterruptState(type);
+    }
+
+    private void clearInterruptState(InterruptType type) {
         interruptFlag = interruptFlag & ~(1 << type.ordinal());
         if (type == InterruptType.VBlank) {
             maskVBlankOnNextRead = false;
@@ -157,6 +195,34 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         haltBlockedInterrupts &= ~(1 << type.ordinal());
         cpuBlockedInterrupts &= ~(1 << type.ordinal());
         cpuPhasedPpuInterrupts &= ~(1 << type.ordinal());
+        cpuPhasedMode2Interrupts &= ~(1 << type.ordinal());
+        cpuFirstLineMode2Interrupts &= ~(1 << type.ordinal());
+    }
+
+    public boolean consumeSerialInterruptAcknowledge() {
+        boolean result = serialInterruptAcknowledge;
+        serialInterruptAcknowledge = false;
+        return result;
+    }
+
+    public void finishSerialInterruptAcknowledge() {
+        clearInterruptState(InterruptType.Serial);
+    }
+
+    public boolean consumeTimerInterruptAcknowledge() {
+        boolean result = timerInterruptAcknowledge;
+        timerInterruptAcknowledge = false;
+        return result;
+    }
+
+    public boolean consumeLcdcInterruptAcknowledge() {
+        boolean result = lcdcInterruptAcknowledge;
+        lcdcInterruptAcknowledge = false;
+        return result;
+    }
+
+    public void finishTimerInterruptAcknowledge() {
+        clearInterruptState(InterruptType.Timer);
     }
 
     public void onInstructionFinished() {
@@ -185,6 +251,16 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                 & ~cpuPhasedPpuInterrupts & PPU_INTERRUPT_MASK) != 0;
     }
 
+    public boolean isPhasedMode2InterruptRequested() {
+        return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & cpuPhasedMode2Interrupts) != 0;
+    }
+
+    public boolean isFirstLineMode2InterruptRequested() {
+        return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
+                & cpuFirstLineMode2Interrupts) != 0;
+    }
+
     public boolean isHaltBug() {
         return isInterruptRequestedForHalt() && !ime;
     }
@@ -210,6 +286,8 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                 haltBlockedInterrupts = 0;
                 cpuBlockedInterrupts = 0;
                 cpuPhasedPpuInterrupts = interruptFlag & PPU_INTERRUPT_MASK;
+                cpuPhasedMode2Interrupts = 0;
+                cpuFirstLineMode2Interrupts = 0;
                 maskVBlankOnNextRead = false;
                 break;
 
@@ -241,7 +319,9 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
     public Memento<InterruptManager> saveToMemento() {
         return new InterruptManagerMemento(ime, interruptFlag, interruptEnabled, pendingEnableInterrupts,
                 haltBlockedInterrupts, cpuBlockedInterrupts, cpuPhasedPpuInterrupts,
-                maskVBlankOnNextRead);
+                cpuPhasedMode2Interrupts, cpuFirstLineMode2Interrupts,
+                maskVBlankOnNextRead, serialInterruptAcknowledge,
+                timerInterruptAcknowledge, lcdcInterruptAcknowledge);
     }
 
     @Override
@@ -256,7 +336,12 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
         this.haltBlockedInterrupts = mem.haltBlockedInterrupts;
         this.cpuBlockedInterrupts = mem.cpuBlockedInterrupts;
         this.cpuPhasedPpuInterrupts = mem.cpuPhasedPpuInterrupts;
+        this.cpuPhasedMode2Interrupts = mem.cpuPhasedMode2Interrupts;
+        this.cpuFirstLineMode2Interrupts = mem.cpuFirstLineMode2Interrupts;
         this.maskVBlankOnNextRead = mem.maskVBlankOnNextRead;
+        this.serialInterruptAcknowledge = mem.serialInterruptAcknowledge;
+        this.timerInterruptAcknowledge = mem.timerInterruptAcknowledge;
+        this.lcdcInterruptAcknowledge = mem.lcdcInterruptAcknowledge;
     }
 
     private record InterruptManagerMemento(boolean ime, int interruptFlag, int interruptEnabled,
@@ -264,7 +349,12 @@ public class InterruptManager implements AddressSpace, Serializable, Originator<
                                            int haltBlockedInterrupts,
                                            int cpuBlockedInterrupts,
                                            int cpuPhasedPpuInterrupts,
-                                           boolean maskVBlankOnNextRead) implements Memento<InterruptManager> {
+                                           int cpuPhasedMode2Interrupts,
+                                           int cpuFirstLineMode2Interrupts,
+                                           boolean maskVBlankOnNextRead,
+                                           boolean serialInterruptAcknowledge,
+                                           boolean timerInterruptAcknowledge,
+                                           boolean lcdcInterruptAcknowledge) implements Memento<InterruptManager> {
     }
 
 }
