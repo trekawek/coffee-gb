@@ -207,9 +207,7 @@
                                     <includes>
                                         <include>**/integration/gambatte/*</include>
                                     </includes>
-                                    <parallel>methods</parallel>
-                                    <threadCount>${integration.test.threadCount}</threadCount>
-                                    <perCoreThreadCount>false</perCoreThreadCount>
+                                    <argLine>-Xmx1024m</argLine>
                                 </configuration>
                             </execution>
                         </executions>
