@@ -52,6 +52,119 @@ public class SerialPortTest {
     }
 
     @Test
+    public void divResetRephasesIdleInternalClock() {
+        SpeedMode speedMode = new SpeedMode(false);
+        InterruptManager interruptManager = new InterruptManager(false);
+        SerialPort serialPort = new SerialPort(interruptManager, false, speedMode);
+        CountingEndpoint endpoint = new CountingEndpoint();
+        serialPort.init(endpoint);
+
+        for (int i = 0; i < 37; i++) {
+            serialPort.tick();
+        }
+        serialPort.onDivReset();
+        serialPort.setByte(0xff02, 0x81);
+
+        for (int i = 0; i < 511; i++) {
+            serialPort.tick();
+        }
+        assertEquals(0, endpoint.sentBits);
+        serialPort.tick();
+        assertEquals(1, endpoint.sentBits);
+    }
+
+    @Test
+    public void divResetCanSupplyImmediateFastSerialFallingEdge() {
+        SpeedMode speedMode = new SpeedMode(true);
+        InterruptManager interruptManager = new InterruptManager(true);
+        SerialPort serialPort = new SerialPort(interruptManager, true, speedMode);
+        CountingEndpoint endpoint = new CountingEndpoint();
+        serialPort.init(endpoint);
+        serialPort.setByte(0xff02, 0x83);
+
+        for (int i = 0; i < 13; i++) {
+            serialPort.tick();
+        }
+        serialPort.onDivReset();
+
+        assertEquals(1, endpoint.sentBits);
+    }
+
+    @Test
+    public void divResetCanDeferFastSerialFallingEdgeByHalfPeriod() {
+        SpeedMode speedMode = new SpeedMode(true);
+        InterruptManager interruptManager = new InterruptManager(true);
+        SerialPort serialPort = new SerialPort(interruptManager, true, speedMode);
+        CountingEndpoint endpoint = new CountingEndpoint();
+        serialPort.init(endpoint);
+        serialPort.setByte(0xff02, 0x83);
+
+        for (int i = 0; i < 11; i++) {
+            serialPort.tick();
+        }
+        serialPort.onDivReset();
+
+        for (int i = 0; i < 7; i++) {
+            serialPort.tick();
+        }
+        assertEquals(0, endpoint.sentBits);
+        serialPort.tick();
+        assertEquals(1, endpoint.sentBits);
+    }
+
+    @Test
+    public void cgbInterruptAcknowledgeClearsSerialCompletionEightClocksAhead() {
+        SpeedMode speedMode = new SpeedMode(true);
+        InterruptManager interruptManager = new InterruptManager(true);
+        SerialPort serialPort = new SerialPort(interruptManager, true, speedMode);
+        CountingEndpoint endpoint = new CountingEndpoint();
+        serialPort.init(endpoint);
+        interruptManager.setByte(0xff0f, 0);
+        serialPort.setByte(0xff02, 0x83);
+
+        for (int i = 0; i < 120; i++) {
+            serialPort.tick();
+        }
+        assertEquals(7, endpoint.sentBits);
+        interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+        interruptManager.clearInterrupt(InterruptManager.InterruptType.Serial);
+
+        serialPort.tick();
+
+        assertEquals(8, endpoint.sentBits);
+        assertEquals(0, serialPort.getByte(0xff02) & 0x80);
+        assertFalse(interruptManager.isInterruptFlagSet(InterruptManager.InterruptType.Serial));
+    }
+
+    @Test
+    public void cgbInterruptAcknowledgeDoesNotClearSerialCompletionNineClocksAhead() {
+        SpeedMode speedMode = new SpeedMode(true);
+        InterruptManager interruptManager = new InterruptManager(true);
+        SerialPort serialPort = new SerialPort(interruptManager, true, speedMode);
+        CountingEndpoint endpoint = new CountingEndpoint();
+        serialPort.init(endpoint);
+        interruptManager.setByte(0xff0f, 0);
+        serialPort.setByte(0xff02, 0x83);
+
+        for (int i = 0; i < 119; i++) {
+            serialPort.tick();
+        }
+        assertEquals(7, endpoint.sentBits);
+        interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+        interruptManager.clearInterrupt(InterruptManager.InterruptType.Serial);
+
+        for (int i = 0; i < 8; i++) {
+            serialPort.tick();
+        }
+        assertEquals(7, endpoint.sentBits);
+        assertFalse(interruptManager.isInterruptFlagSet(InterruptManager.InterruptType.Serial));
+        serialPort.tick();
+
+        assertEquals(8, endpoint.sentBits);
+        assertTrue(interruptManager.isInterruptFlagSet(InterruptManager.InterruptType.Serial));
+    }
+
+    @Test
     public void eighthBitReachesRunningCpuBeforeHaltWakeInput() {
         SpeedMode speedMode = new SpeedMode(false);
         InterruptManager interruptManager = new InterruptManager(false);

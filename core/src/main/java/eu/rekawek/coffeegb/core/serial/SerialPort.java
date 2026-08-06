@@ -28,7 +28,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     // the CGB clock-speed bit (bit 1) reads 1 at power-on (mooneye boot_hwio-C)
     private int sc = 0x02;
 
-    /** Free-running 8-bit link clock, independent of the CPU's DIV register. */
+    /** Free-running 8-bit link clock whose phase is reset by writes to DIV. */
     private int serialClocks;
 
     private boolean serialClockSignal;
@@ -54,8 +54,70 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
     }
 
     public void tick() {
+        acknowledgeInterruptIfNeeded();
         for (int i = 0; i < speedMode.getSpeedMode(); i++) {
             tickCpuClock();
+        }
+    }
+
+    private void acknowledgeInterruptIfNeeded() {
+        if (!interruptManager.consumeSerialInterruptAcknowledge()) {
+            return;
+        }
+
+        boolean internalTransfer = (sc & 0x81) == 0x81;
+        if (internalTransfer) {
+            int halfPeriod = getInternalClockHalfPeriod();
+            int clocksToNextToggle = halfPeriod - (serialClocks & (halfPeriod - 1));
+            int clocksToNextBit = clocksToNextToggle + (serialClockSignal ? 0 : halfPeriod);
+            int clocksToCompletion = clocksToNextBit
+                    + 2 * halfPeriod * (7 - receivedBits);
+            // Coffee GB reaches IRQ_PUSH_2 four clocks before Gambatte's
+            // event-based acknowledge point on CGB, so include that dispatch
+            // lead in addition to Gambatte's four-clock peripheral window.
+            int acknowledgeWindow = gbc ? 8 : 3;
+            if (clocksToCompletion <= acknowledgeWindow) {
+                shiftBit(serialEndpoint.sendBit());
+            }
+        }
+
+        // Any completion pulled into the CPU's acknowledge window happened
+        // before the acknowledge edge, so that edge wins and leaves IF clear.
+        interruptManager.finishSerialInterruptAcknowledge();
+    }
+
+    /**
+     * Rephases the internal serial clock after a write to DIV. If a transfer is
+     * already running, hardware rounds its next falling edge around the reset
+     * point. Depending on the old phase, that edge is either immediate or one
+     * or two half-periods after the reset.
+     */
+    public void onDivReset() {
+        boolean internalTransfer = (sc & 0x81) == 0x81;
+        if (!internalTransfer) {
+            serialClocks = 0;
+            serialClockSignal = false;
+            return;
+        }
+
+        int halfPeriod = getInternalClockHalfPeriod();
+        int clocksToNextToggle = halfPeriod - (serialClocks & (halfPeriod - 1));
+        int clocksToNextBit = clocksToNextToggle + (serialClockSignal ? 0 : halfPeriod);
+
+        // Gambatte's event-time formulation, applied to the next bit rather
+        // than the transfer-completion event (all later bits are a whole
+        // period apart, so they receive the same adjustment).
+        int phaseAdjustment = Math.floorMod(-clocksToNextBit, halfPeriod);
+        int adjustedClocksToNextBit = clocksToNextBit + phaseAdjustment
+                - 2 * (phaseAdjustment & (halfPeriod >> 1));
+
+        serialClocks = 0;
+        if (adjustedClocksToNextBit == 0) {
+            // The reset itself supplies the falling edge.
+            serialClockSignal = false;
+            shiftBit(serialEndpoint.sendBit());
+        } else {
+            serialClockSignal = adjustedClocksToNextBit == halfPeriod;
         }
     }
 
@@ -71,7 +133,7 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
                 shiftBit(incomingBit);
             }
         } else if (transferInProgress) {
-            int flipClocks = isColorMode() && (sc & (1 << 1)) != 0 ? 8 : 256;
+            int flipClocks = getInternalClockHalfPeriod();
             int oldPhase = serialClocks & (flipClocks - 1);
             if (oldPhase == flipClocks - 1) {
                 serialClockSignal = !serialClockSignal;
@@ -97,6 +159,10 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     private boolean isColorMode() {
         return gbc && !speedMode.isDmgCompat();
+    }
+
+    private int getInternalClockHalfPeriod() {
+        return isColorMode() && (sc & (1 << 1)) != 0 ? 8 : 256;
     }
 
     @Override
