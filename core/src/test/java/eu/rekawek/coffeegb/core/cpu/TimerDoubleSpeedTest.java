@@ -32,7 +32,7 @@ public class TimerDoubleSpeedTest {
         assertFalse(isTimerInterruptSet(interrupts));
 
         timer.tick();
-        assertEquals(0x00, timer.getByte(0xff05));
+        assertEquals(0x42, timer.getByte(0xff05));
         assertTrue(isTimerInterruptSet(interrupts));
 
         timer.tick();

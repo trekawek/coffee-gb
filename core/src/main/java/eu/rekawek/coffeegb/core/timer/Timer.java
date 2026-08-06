@@ -18,8 +18,8 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     // the divider has already counted a few cycles when the CPU fetches its first opcode
     // (reset release), which makes the internal counter reach exactly 0xABCC when the DMG
-    // boot ROM hands over at 0x0100 (boot_div-dmgABCmgb); when the bootstrap is skipped,
-    // Gameboy presets the counter to that post-boot-ROM value directly
+    // boot ROM hands over at 0x0100 (boot_div-dmgABCmgb); model-specific authentic-boot
+    // phases and skipped-boot post-ROM values are preset by Gameboy
     private int div = 4, tac, tma, tima;
 
     private boolean previousBit;
@@ -42,6 +42,11 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
 
     private boolean haltBugDivRippleVisible;
 
+    // The CPU acknowledge gate can see a timer event a few clocks ahead. When
+    // that event falls inside the gate, its future IF assertion has already been
+    // consumed by the acknowledge and must not reassert when time catches up.
+    private boolean suppressNextInterruptRequest;
+
     public Timer(InterruptManager interruptManager, SpeedMode speedMode) {
         this.speedMode = speedMode;
         this.interruptManager = interruptManager;
@@ -59,10 +64,42 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     }
 
     public void tick() {
+        acknowledgeInterruptIfNeeded();
         divReset = false;
         for (int i = 0; i < speedMode.getSpeedMode(); i++) {
             tickCpuClock();
         }
+    }
+
+    private void acknowledgeInterruptIfNeeded() {
+        if (!interruptManager.consumeTimerInterruptAcknowledge()) {
+            return;
+        }
+
+        int acknowledgeWindow = speedMode.isGbc() ? 8 : 3;
+        if (clocksToNextInterrupt() <= acknowledgeWindow) {
+            suppressNextInterruptRequest = true;
+        }
+        interruptManager.finishTimerInterruptAcknowledge();
+    }
+
+    private long clocksToNextInterrupt() {
+        if ((tac & 0x04) == 0) {
+            return Long.MAX_VALUE;
+        }
+        if (overflow) {
+            return ticksSinceOverflow < 4
+                    ? 4L - ticksSinceOverflow
+                    : Long.MAX_VALUE;
+        }
+
+        int bitPos = FREQ_TO_BIT[tac & 0x03];
+        int period = 1 << (bitPos + 1);
+        int clocksToFirstFallingEdge = period - (div & (period - 1));
+        int fallingEdgesToOverflow = 0x100 - tima;
+        return clocksToFirstFallingEdge
+                + (long) (fallingEdgesToOverflow - 1) * period
+                + 3;
     }
 
     private void tickCpuClock() {
@@ -81,15 +118,22 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         }
         if (overflow) {
             ticksSinceOverflow++;
+            // The reload/IRQ gate opens three clocks after the falling edge
+            // (the edge tick itself is count 1). TMA then owns TIMA for four
+            // clocks; writes before that window cancel the overflow, while
+            // writes inside it are overwritten by the reload bus.
             if (ticksSinceOverflow == 4) {
-                interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Timer);
-                haltWakeDelay = 4;
+                if (suppressNextInterruptRequest) {
+                    suppressNextInterruptRequest = false;
+                } else {
+                    interruptManager.requestInterruptBeforeHaltWake(InterruptManager.InterruptType.Timer);
+                    haltWakeDelay = 4;
+                }
             }
-            if (ticksSinceOverflow == 5) {
+            if (ticksSinceOverflow >= 4) {
                 tima = tma;
             }
-            if (ticksSinceOverflow == 6) {
-                tima = tma;
+            if (ticksSinceOverflow == 8) {
                 overflow = false;
                 ticksSinceOverflow = 0;
             }
@@ -136,7 +180,7 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
                 break;
 
             case 0xff05:
-                if (ticksSinceOverflow < 5) {
+                if (ticksSinceOverflow < 4) {
                     tima = value;
                     overflow = false;
                     ticksSinceOverflow = 0;
@@ -186,6 +230,16 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         }
     }
 
+    /**
+     * Applies the CGB timer-divider phase adjustment performed by the speed
+     * switch clock mux before STOP resets DIV.
+     */
+    public void onSpeedSwitch() {
+        if ((tac & 0x07) >= 0x05) {
+            updateDiv((div + 4) & 0xffff);
+        }
+    }
+
     @Override
     public int getByte(int address) {
         switch (address) {
@@ -207,7 +261,8 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
     @Override
     public Memento<Timer> saveToMemento() {
         return new TimerMemento(div, tac, tma, tima, previousBit, overflow, ticksSinceOverflow, divReset,
-                haltWakeDelay, ticksSinceDivReset, haltBugDivRipplePending, haltBugDivRippleVisible);
+                haltWakeDelay, ticksSinceDivReset, haltBugDivRipplePending, haltBugDivRippleVisible,
+                suppressNextInterruptRequest);
     }
 
     @Override
@@ -227,13 +282,15 @@ public class Timer implements AddressSpace, Serializable, Originator<Timer> {
         this.ticksSinceDivReset = mem.ticksSinceDivReset;
         this.haltBugDivRipplePending = mem.haltBugDivRipplePending;
         this.haltBugDivRippleVisible = mem.haltBugDivRippleVisible;
+        this.suppressNextInterruptRequest = mem.suppressNextInterruptRequest;
     }
 
     public record TimerMemento(int div, int tac, int tma, int tima, boolean previousBit, boolean overflow,
                                int ticksSinceOverflow, boolean divReset,
                                int haltWakeDelay, int ticksSinceDivReset,
                                boolean haltBugDivRipplePending,
-                               boolean haltBugDivRippleVisible) implements Memento<Timer> {
+                               boolean haltBugDivRippleVisible,
+                               boolean suppressNextInterruptRequest) implements Memento<Timer> {
     }
 
 }
