@@ -13,6 +13,8 @@ import java.io.Serializable;
 
 public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
+    private static final int CGB_BOOT_DIV_APU_OFFSET = 2;
+
     private static final boolean[] ENABLED = {true, true, true, true};
 
     private static final int[] MASKS =
@@ -47,10 +49,28 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
 
     private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
 
+    private int pendingFrameSequencerStep = -1;
+
+    /**
+     * Position of the APU clock relative to the CPU clock mux. Gambatte's PSG keeps
+     * this as the low two bits of its last-update timestamp: each speed switch moves
+     * it by one sub-clock, and phase 1 makes a natural DIV-APU clock visible after the
+     * CPU bus access in the same master tick.
+     */
+    private int frameSequencerClockPhase;
+
+    /**
+     * The later-revision CGB boot starts the CPU divider ten clocks into its period,
+     * while the PSG tap starts at absolute phase twelve. Their relative offset is
+     * therefore two clocks. A write to DIV resets both domains and removes it.
+     */
+    private int frameSequencerDivOffset;
+
     public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc) {
         this.timer = timer;
         this.speedMode = speedMode;
         this.gbc = gbc;
+        frameSequencerDivOffset = gbc ? CGB_BOOT_DIV_APU_OFFSET : 0;
         allModes[0] = new SoundMode1(frameSequencer, gbc);
         allModes[1] = new SoundMode2(frameSequencer, gbc);
         allModes[2] = new SoundMode3(frameSequencer, timer, gbc);
@@ -109,19 +129,45 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
      * CPU (for natural DIV edges) and after it (for an edge caused by an FF04 write).
      */
     public void tickFrameSequencer() {
-        int firedStep = frameSequencer.tick(timer.getDivCounter(), enabled, speedMode.getSpeedMode() == 2);
+        int divCounter = (timer.getDivCounter() + frameSequencerDivOffset) & 0xffff;
+        int firedStep = frameSequencer.tick(divCounter, enabled, speedMode.getSpeedMode() == 2);
         if (firedStep >= 0) {
-            for (AbstractSoundMode m : allModes) m.tickEnvelopeClock(firedStep);
-            if ((firedStep & 1) == 0) {
-                for (AbstractSoundMode m : allModes) m.tickLength();
-            }
-            if (firedStep == 2 || firedStep == 6) {
-                for (AbstractSoundMode m : allModes) m.tickSweep();
-            }
-            if (firedStep == 7) {
-                for (AbstractSoundMode m : allModes) m.tickEnvelope();
-            }
+            pendingFrameSequencerStep = firedStep;
         }
+        if (timer.isDivResetPending()) {
+            frameSequencerDivOffset = 0;
+        }
+    }
+
+    /**
+     * Commits clocks selected by the DIV-APU edge sampled earlier in this master tick.
+     * The sequencer phase changes before the CPU access, while length/status side effects
+     * become visible immediately after it.
+     */
+    public void commitFrameSequencerClock() {
+        int firedStep = pendingFrameSequencerStep;
+        pendingFrameSequencerStep = -1;
+        if (firedStep < 0) {
+            return;
+        }
+        for (AbstractSoundMode m : allModes) m.tickEnvelopeClock(firedStep);
+        if ((firedStep & 1) == 0) {
+            for (AbstractSoundMode m : allModes) m.tickLength();
+        }
+        if (firedStep == 2 || firedStep == 6) {
+            for (AbstractSoundMode m : allModes) m.tickSweep();
+        }
+        if (firedStep == 7) {
+            for (AbstractSoundMode m : allModes) m.tickEnvelope();
+        }
+    }
+
+    public boolean isFrameSequencerClockAfterCpu() {
+        return frameSequencerClockPhase == 1;
+    }
+
+    public void onSpeedSwitch() {
+        frameSequencerClockPhase = (frameSequencerClockPhase + 1) & 3;
     }
 
     private void play(int left, int right) {
@@ -237,6 +283,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
             m.start();
         }
         frameSequencer.reset(timer.getDivCounter(), speedMode.getSpeedMode() == 2);
+        // Power-on re-synchronizes the PSG to the selected CPU clock. In double
+        // speed, its last-update timestamp starts one sub-clock before phase zero.
+        frameSequencerClockPhase = speedMode.getSpeedMode() == 2 ? 3 : 0;
     }
 
     private void stop() {
@@ -257,7 +306,7 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = allModes[i].saveToMemento();
         }
-        return new SoundMemento(allModeMementos, r.saveToMemento(), frameSequencer.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i);
+        return new SoundMemento(allModeMementos, r.saveToMemento(), frameSequencer.saveToMemento(), channels.clone(), enabled, overriddenEnabled.clone(), buffer.clone(), i, pendingFrameSequencerStep, frameSequencerClockPhase, frameSequencerDivOffset);
     }
 
     @Override
@@ -287,6 +336,9 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
         System.arraycopy(mem.buffer, 0, this.buffer, 0, this.buffer.length);
         this.i = mem.i;
+        this.pendingFrameSequencerStep = mem.pendingFrameSequencerStep;
+        this.frameSequencerClockPhase = mem.frameSequencerClockPhase;
+        this.frameSequencerDivOffset = mem.frameSequencerDivOffset;
 
     }
 
@@ -299,6 +351,8 @@ public class Sound implements AddressSpace, Serializable, Originator<Sound> {
     private record SoundMemento(Memento<AbstractSoundMode>[] allModeMementos, Memento<Ram> ramMemento,
                                 Memento<FrameSequencer> frameSequencerMemento, int[] channels,
                                 boolean enabled, boolean[] overriddenEnabled, int[] buffer,
-                                int i) implements Memento<Sound> {
+                                int i, int pendingFrameSequencerStep,
+                                int frameSequencerClockPhase,
+                                int frameSequencerDivOffset) implements Memento<Sound> {
     }
 }
