@@ -20,6 +20,14 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
 
     private final IntQueue priorities = new IntQueue(16); // bg attribute priority flag
 
+    // StartWindowDraw keeps the old background shift register beside the fresh window
+    // fetch. On CGB, disabling LCDC.5 during its six startup states plots these pixels.
+    private final IntQueue clearedPixels = new IntQueue(16);
+
+    private final IntQueue clearedPalettes = new IntQueue(16);
+
+    private final IntQueue clearedPriorities = new IntQueue(16);
+
     private final SpriteFifo spriteFifo = new SpriteFifo();
 
     private final Lcdc lcdc;
@@ -87,6 +95,7 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
             return;
         }
         linePixels--;
+        spriteFifo.rewind();
         if (delaySize > 0) {
             delaySize--;
         } else {
@@ -97,9 +106,13 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
     // pack bg pixel (2b), bg palette (3b), bg priority (1b), sprite pixel (2b),
     // sprite palette (3b), sprite bg-priority (1b)
     private int popEntry() {
-        int bgPixel = pixels.dequeue();
-        int bgPaletteIndex = palettes.dequeue();
-        int bgAttrPriority = priorities.dequeue();
+        return popEntry(pixels, palettes, priorities);
+    }
+
+    private int popEntry(IntQueue bgPixels, IntQueue bgPalettes, IntQueue bgPriorities) {
+        int bgPixel = bgPixels.dequeue();
+        int bgPaletteIndex = bgPalettes.dequeue();
+        int bgAttrPriority = bgPriorities.dequeue();
         spriteFifo.pop();
         return bgPixel
                 | (bgPaletteIndex << 2)
@@ -204,13 +217,50 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         palettes.clear();
         priorities.clear();
         spriteFifo.clear();
+        discardClearedBg();
     }
 
     @Override
     public void clearBg() {
+        discardClearedBg();
+        for (int i = 0; i < pixels.size(); i++) {
+            clearedPixels.enqueue(pixels.get(i));
+            clearedPalettes.enqueue(palettes.get(i));
+            clearedPriorities.enqueue(priorities.get(i));
+        }
         pixels.clear();
         palettes.clear();
         priorities.clear();
+    }
+
+    @Override
+    public int getClearedBgLength() {
+        return clearedPixels.size();
+    }
+
+    @Override
+    public void putClearedBgToScreen() {
+        linePixels++;
+        int entry = popEntry(clearedPixels, clearedPalettes, clearedPriorities);
+        int tail = (delayHead + delaySize) & 7;
+        delayEntry[tail] = entry;
+        delayStamp[tail] = outputTicks;
+        delaySize++;
+    }
+
+    @Override
+    public void dropClearedBgPixel() {
+        clearedPixels.dequeue();
+        clearedPalettes.dequeue();
+        clearedPriorities.dequeue();
+        spriteFifo.pop();
+    }
+
+    @Override
+    public void discardClearedBg() {
+        clearedPixels.clear();
+        clearedPalettes.clear();
+        clearedPriorities.clear();
     }
 
     @Override
@@ -230,7 +280,10 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
                 delayHead,
                 delaySize,
                 outputTicks,
-                linePixels);
+                linePixels,
+                clearedPixels.saveToMemento(),
+                clearedPalettes.saveToMemento(),
+                clearedPriorities.saveToMemento());
     }
 
     @Override
@@ -242,6 +295,15 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
         palettes.restoreFromMemento(mem.palettes);
         priorities.restoreFromMemento(mem.priorities);
         spriteFifo.restoreFromMemento(mem.spriteFifo);
+        if (mem.clearedPixels != null
+                && mem.clearedPalettes != null
+                && mem.clearedPriorities != null) {
+            clearedPixels.restoreFromMemento(mem.clearedPixels);
+            clearedPalettes.restoreFromMemento(mem.clearedPalettes);
+            clearedPriorities.restoreFromMemento(mem.clearedPriorities);
+        } else {
+            discardClearedBg();
+        }
         // mementos serialized by older versions lack the delay-line fields
         if (mem.delayEntry != null && mem.delayStamp != null) {
             System.arraycopy(mem.delayEntry, 0, delayEntry, 0, delayEntry.length);
@@ -266,7 +328,10 @@ public class ColorPixelFifo implements PixelFifo, Serializable, Originator<Color
             int delayHead,
             int delaySize,
             long outputTicks,
-            int linePixels)
+            int linePixels,
+            Memento<IntQueue> clearedPixels,
+            Memento<IntQueue> clearedPalettes,
+            Memento<IntQueue> clearedPriorities)
             implements Memento<ColorPixelFifo> {
     }
 }
