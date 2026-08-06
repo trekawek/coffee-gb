@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu.phase;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.*;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.core.memento.Memento;
@@ -38,10 +39,17 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
 
     private final boolean gbc;
 
+    private final SpeedMode speedMode;
+
     private final SpritePosition[] sprites;
 
     // ticks before the first dot of the line (mode-3 entry padding)
     private int entryTicks;
+
+    // The shortened line immediately following LCD enable has a distinct fine-SCX
+    // startup latch. Capture the line identity at mode-3 entry; LY alone cannot
+    // distinguish it from an ordinary frame's line zero.
+    private boolean lcdEnableFirstLine;
 
     // 0 for the timing-skeleton instance; 4 for the pixel-generating instance, whose
     // dot machine runs one machine cycle behind the mode/STAT skeleton so that its
@@ -65,6 +73,23 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // activation and for the disabled-window insertion glitch.
     private boolean windowYTriggered;
 
+    // The PPU has two distinct vertical window signals: a frame-persistent master
+    // sampled near the LY edge (windowYTriggered above), and a delayed copy of WY used
+    // by the live mode-3 comparator. A WY write can therefore race the first WX match
+    // without retroactively changing the persistent master.
+    private int windowWy;
+
+    private int pendingWindowWy;
+
+    // -1 means that no secondary-latch update is pending. A value reaching zero is
+    // committed on the following PPU tick, matching the GPU's before-edge call order.
+    private int windowWyDelay = -1;
+
+    // A CGB WY write first advances the PPU through the write edge and only then
+    // replaces the primary WY register. Preserve the old primary value for a master
+    // checkpoint that collides with that CPU tick.
+    private int windowWyOldOnWriteTick = -1;
+
     // a WX comparator match holds the activation pending for one tick: the comparator
     // on hardware sees register writes one machine cycle before our CPU commits them,
     // so a WX write landing within the skew means the window never triggered. The
@@ -87,6 +112,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // mid-line window drop, e.g. an LCDC.5 toggle) restarts its fetch one T-cycle
     // later than the line's first activation (m3_lcdc_win_en_change_multiple)
     private boolean windowActivatedThisLine;
+
+    // Normal-speed CGB applies an LCDC.5 rising edge after updating the PPU through
+    // the edge's comparator dot, so that same tick cannot start the window.
+    private boolean previousWindowDisplay;
+
+    // The CGB retains the old background shift register throughout StartWindowDraw's
+    // six states. If LCDC.5 is cleared, the remaining states plot that register while
+    // the fetcher changes back to the background source.
+    private int cgbWindowStartTicks;
 
     // a WX re-match while the window is already active and its fetch has settled
     // inserts one synthetic blank pixel at the FIFO's read end (SameBoy's
@@ -158,6 +192,27 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     // for the DMG LCDC.1 write conflict)
     private boolean objWaiting;
 
+    // Net number of output dots contributed by object timing on this line. Ordinary
+    // wait/load states add one; the DMG's mid-fetch abort subtracts each pipeline dot
+    // it catches up. The timing skeleton and shifted pixel machine can therefore expose
+    // whether an LCDC write made their object paths diverge without inspecting a ROM.
+    private int objectTimingPenalty;
+
+    // In CGB double speed, an SCX write can share a PPU output tick. The LCD side
+    // consumes the value sampled on the preceding tick (SameBoy's
+    // GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE). This matters at mode-3 entry: a write just
+    // before the shifted pixel machine starts either does or does not change the first
+    // tile's phase, and therefore the first object's fetch penalty.
+    private int previousScx;
+
+    private int outputScx;
+
+    // Once the startup fine-scroll equality has been crossed, moving SCX backwards
+    // makes the pixel counter traverse the skipped phases again. Keep this history
+    // separate from the transient stall so the CPU-visible mode latch can follow the
+    // dynamically extended transfer instead of its steady-line fixed-dot shortcut.
+    private boolean fineScxRephasedThisLine;
+
     public PixelTransfer(
             Display display,
             AddressSpace videoRam0,
@@ -170,13 +225,14 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             ColorPalette oamPalette,
             SpritePosition[] sprites,
             VRamTransfer vRamTransfer,
-            eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
+            SpeedMode speedMode,
             int entryDelay) {
         this.entryDelay = entryDelay;
 
         this.r = r;
         this.lcdc = lcdc;
         this.gbc = gbc;
+        this.speedMode = speedMode;
         if (gbc) {
             this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
         } else {
@@ -187,10 +243,15 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     public PixelTransfer start() {
-        return start(0);
+        return start(0, false);
     }
 
     public PixelTransfer start(int extraEntryDelay) {
+        return start(extraEntryDelay, false);
+    }
+
+    public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {
+        this.lcdEnableFirstLine = lcdEnableFirstLine;
         entryTicks = entryDelay + extraEntryDelay;
         machineActive = true;
         position = -16;
@@ -199,6 +260,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // any cancelled/serialized pending match from jumping the next line to X=159.
         windowPendingTicks = 0;
         windowActivatedThisLine = false;
+        previousWindowDisplay = lcdc.isWindowDisplay();
+        cgbWindowStartTicks = 0;
+        fifo.discardClearedBg();
         windowCatchUpPos = -1;
         insertBgPixel = false;
         machineStall = 0;
@@ -208,6 +272,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         objStep = -1;
         objData1Pending = false;
         objWaiting = false;
+        objectTimingPenalty = 0;
+        previousScx = outputScx = r.get(SCX);
+        fineScxRephasedThisLine = false;
         objRefreshAge = -1;
         wdwRefreshAge = -1;
 
@@ -259,8 +326,27 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return objStep >= 0 || objWaiting;
     }
 
+    public int getObjectTimingPenalty() {
+        return objectTimingPenalty;
+    }
+
     public boolean hasObjectsOnLine() {
         return spriteCount > 0;
+    }
+
+    /**
+     * Whether a selected object can extend the physical transfer beyond the independently
+     * predicted mode-0 STAT edge at PPU X=166. Objects at X=166 are included in that
+     * prediction; objects at X=167 are fetched after it, but both need the separate latch.
+     */
+    public boolean hasSpriteAtMode0PredictionEdge() {
+        for (int i = 0; i < spriteCount; i++) {
+            int x = sprites[spriteOrder[i]].getX();
+            if (x >= 166 && x < 168) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public boolean isWindowBeingFetched() {
@@ -279,16 +365,82 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     public void resetWindowLineCounter() {
         // pre-incremented at window activation: the first activated line renders row 0
         windowLineCounter = -1;
-        windowYTriggered = false;
-        fetcher.setWindowYTriggered(false);
+        setWindowYTriggered(false);
     }
 
-    /** Samples the DMG/CGB WY comparator. Called every PPU tick, including mode 2. */
+    /** Legacy/direct sampler used by focused phase tests that do not own a GPU clock. */
     public void checkWindowY() {
+        windowWy = r.get(WY);
         if (!windowYTriggered && lcdc.isWindowDisplay() && r.get(LY) == r.get(WY)) {
-            windowYTriggered = true;
-            fetcher.setWindowYTriggered(true);
+            setWindowYTriggered(true);
         }
+    }
+
+    /**
+     * Advances the delayed WY copy and samples the persistent window master at the
+     * PPU's line-edge checkpoints. Gambatte's CGB checkpoints at 450/454 map to
+     * Coffee's normal-speed skeleton at 446/450; double speed observes them at
+     * 449/453, and DMG uses 450/454. Normal-speed CGB and DMG sample frame line zero
+     * on line 153 dot 454, while double-speed CGB samples it on line zero dot 1.
+     */
+    public void checkWindowY(int line, int ticksInLine) {
+        advanceWindowWy();
+        int primaryWy = windowWyOldOnWriteTick >= 0
+                ? windowWyOldOnWriteTick : r.get(WY);
+        windowWyOldOnWriteTick = -1;
+
+        boolean earlyFrameCheckpoint = !gbc || speedMode.getSpeedMode() == 1;
+        if (earlyFrameCheckpoint && line == 153 && ticksInLine == 454) {
+            setWindowYTriggered(lcdc.isWindowDisplay() && primaryWy == 0);
+        } else if (!earlyFrameCheckpoint && line == 0 && ticksInLine == 1) {
+            setWindowYTriggered(lcdc.isWindowDisplay() && primaryWy == 0);
+        }
+        int currentLineCheckpoint = gbc
+                ? speedMode.getSpeedMode() == 1 ? 446 : 449
+                : 450;
+        if (line < 143 && ticksInLine == currentLineCheckpoint
+                && lcdc.isWindowDisplay() && r.get(LY) == primaryWy) {
+            setWindowYTriggered(true);
+        }
+        int upcomingLineCheckpoint = gbc
+                ? speedMode.getSpeedMode() == 1 ? 450 : 453
+                : 454;
+        if (line < 143 && ticksInLine == upcomingLineCheckpoint
+                && lcdc.isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
+            setWindowYTriggered(true);
+        }
+    }
+
+    /** Schedules the secondary WY comparator latch after a WY write. */
+    public void scheduleWindowYWrite(int value, int delayDots) {
+        pendingWindowWy = value & 0xff;
+        if (gbc && delayDots > 0) {
+            windowWyOldOnWriteTick = r.get(WY);
+        }
+        if (delayDots <= 0) {
+            windowWy = pendingWindowWy;
+            windowWyDelay = -1;
+        } else {
+            windowWyDelay = delayDots;
+        }
+    }
+
+    private void advanceWindowWy() {
+        if (windowWyDelay == 0) {
+            windowWy = pendingWindowWy;
+            windowWyDelay = -1;
+        } else if (windowWyDelay > 0) {
+            windowWyDelay--;
+        }
+    }
+
+    private void setWindowYTriggered(boolean triggered) {
+        windowYTriggered = triggered;
+        fetcher.setWindowYTriggered(triggered);
+    }
+
+    boolean isWindowYMatch() {
+        return windowYTriggered || windowWy == r.get(LY);
     }
 
     boolean isWindowYTriggered() {
@@ -303,11 +455,55 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         return windowLineCounter;
     }
 
+    public boolean isCgbWindowStartActive() {
+        return cgbWindowStartTicks > 0;
+    }
+
+    public boolean isWindowActive() {
+        return window;
+    }
+
+    /** Whether this line has paid the window activation/startup cost. */
+    public boolean hasActivatedWindowOnLine() {
+        return windowActivatedThisLine;
+    }
+
+    public boolean hasFineScxRephaseOnLine() {
+        return fineScxRephasedThisLine;
+    }
+
     @Override
     public boolean tick() {
+        boolean windowDisplayRising = gbc
+                && lcdc.isWindowDisplay() && !previousWindowDisplay;
+        boolean windowEnabledOnThisTick = windowDisplayRising
+                && speedMode.getSpeedMode() == 1;
+        previousWindowDisplay = lcdc.isWindowDisplay();
+        int currentScx = r.get(SCX);
+        int fineScxAdvance = (currentScx & 7) - (previousScx & 7);
+        if (lcdEnableFirstLine
+                && fineScxAdvance > 0
+                && position >= -8
+                && position < (gbc ? -4 : -3)) {
+            // Crossing the startup comparator restarts its two-dot sampler before
+            // traversing the newly exposed fine-scroll phases.
+            machineStall += fineScxAdvance + 2;
+            fineScxRephasedThisLine = true;
+        }
+        int fineScxRewind = (previousScx & 7) - (currentScx & 7);
+        if (position >= -8 && position < 160 && fineScxRewind > 0) {
+            machineStall += fineScxRewind + 6;
+            fineScxRephasedThisLine = true;
+        }
+        outputScx = gbc && speedMode.getSpeedMode() == 2 ? previousScx : currentScx;
+        previousScx = currentScx;
+
+        if (cgbWindowStartTicks > 0 && --cgbWindowStartTicks == 0) {
+            fifo.discardClearedBg();
+        }
         if (machineStall > 0) {
             machineStall--;
-            return true;
+            return machineStall > 0 || position != 160;
         }
         if (entryTicks > 0) {
             entryTicks--;
@@ -391,6 +587,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 windowBeingFetched = true;
                 windowLineCounter++;
                 fifo.clearBg();
+                cgbWindowStartTicks = gbc ? 6 : 0;
                 fetcher.startWindow();
                 if (windowPendingWx == 0 && (r.get(SCX) & 7) != 0) {
                     // the WX=0 activation costs the extra dot only with fractional
@@ -408,10 +605,26 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             }
         }
 
-        // the fetcher drops back to the background at its next tile fetch when the
-        // window gets disabled mid-line (SameBoy clears wx_triggered at GET_TILE_T1);
-        // a later WX match with the window re-enabled can activate it again
-        if (window
+        // Clearing LCDC.5 clears Gambatte's win_draw_started bit. On CGB this happens
+        // immediately even inside StartWindowDraw: the six-state sequence continues,
+        // plotting its retained background, while subsequent fetch states use the BG
+        // source. DMG changes source at its next early tile-fetch state and retains its
+        // separate restart/catch-up behaviour below.
+        if (gbc && window && !lcdc.isWindowDisplay()) {
+            if (speedMode.getSpeedMode() == 2 && (r.get(SCX) & 7) == 5
+                    && ((entryDelay == 0 && fetcher.getState() == Fetcher.PUSH)
+                    || (entryDelay == 4
+                    && fetcher.getState() == Fetcher.GET_TILE_DATA_LOW_T2
+                    && position == 2))) {
+                // Gambatte's StartWindowDraw::f5 is the last pure startup state.
+                // Disabling after it leaves one final predicted X cycle; the +4
+                // output copy sees that same edge at its LOW_T2 state.
+                machineStall++;
+            }
+            window = false;
+            windowBeingFetched = false;
+        } else if (!gbc
+                && window
                 && !lcdc.isWindowDisplay()
                 && objStep < 0
                 && fetcher.getState() <= Fetcher.GET_TILE_DATA_LOW_T2) {
@@ -447,8 +660,9 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         // activation itself, once per line (mealybug m3_wx_*_change)
         if (!window
                 && lcdc.isWindowDisplay()
+                && !windowEnabledOnThisTick
                 && (gbc || lcdc.isBgAndWindowDisplay())
-                && windowYTriggered) {
+                && isWindowYMatch()) {
             int wx = r.get(WX);
             boolean activate;
             if (wx == 0) {
@@ -456,6 +670,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                         || (position == -16 && (r.get(SCX) & 7) != 0);
             } else if (wx < (gbc ? 167 : 166)) {
                 activate = wx == ((position + 7) & 0xff);
+                if (!activate && gbc && speedMode.getSpeedMode() == 2
+                        && windowDisplayRising && (r.get(SCX) & 7) == 5) {
+                    // Fine SCX=5 holds X=WX across Tile::f4. The shifted output
+                    // machine's public position has advanced, but the comparator
+                    // still consumes the newly enabled window on this dot.
+                    activate = wx == ((position + 6) & 0xff);
+                }
             } else {
                 activate = false;
             }
@@ -477,6 +698,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 position = windowCatchUpPos;
                 windowCatchUpPos = -1;
                 fifo.clearBg();
+                cgbWindowStartTicks = gbc ? 6 : 0;
                 fetcher.startWindow();
                 fetcher.advance(position, true, windowLineCounter, false);
                 windowActivatedThisLine = true;
@@ -510,12 +732,16 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 // already aborted 3 dots of pipeline progress ago, so the machine catches
                 // up those dots at once (m3_lcdc_obj_en_change_variant, the BGP band edge
                 // on the rows whose object fetch the pulse truncates)
+                int catchUpDots = 0;
                 for (int i = 0; i < 3 && position != 160; i++) {
                     renderPixelIfPossible();
                     fetcher.advance(position, window, windowLineCounter, false);
+                    catchUpDots++;
                 }
+                objectTimingPenalty -= catchUpDots;
             } else {
                 objTick();
+                objectTimingPenalty++;
                 return true;
             }
         }
@@ -541,11 +767,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 // already counts as "during object fetch" for the LCDC.1 conflict special
                 objWaiting = true;
                 fetcher.advance(position, window, windowLineCounter, true);
+                objectTimingPenalty++;
                 return true;
             }
             objWaiting = false;
             objStep = 0;
             objTick();
+            objectTimingPenalty++;
             return true;
         }
         objWaiting = false;
@@ -565,6 +793,13 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             // next scanline would instead skip that line to X=159 (Cardcaptor Sakura).
             windowLineCounter++;
             windowPendingTicks = 0;
+            // The terminal CGB comparator enters the ordinary six-state window-start
+            // machine even though no pixel can be drawn. Four of those states still
+            // occupy the physical transfer; the final two belong to the independently
+            // readable STAT latch in HBlank.
+            cgbWindowStartTicks = 6;
+            machineStall = 4;
+            return true;
         }
         return active;
     }
@@ -601,23 +836,40 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
     }
 
     private void renderPixelIfPossible() {
+        renderOnePixelIfPossible();
+    }
+
+    private void renderOnePixelIfPossible() {
         // rendering does not occur as long as an object at X=0 is pending
         if (spriteHead < spriteCount
                 && sprites[spriteOrder[spriteHead]].getX() == 0
                 && (lcdc.isObjDisplay() || gbc)) {
             return;
         }
-        if (fifo.getLength() == 0) {
+        boolean useClearedCgbBackground = gbc
+                && cgbWindowStartTicks > 0
+                && !lcdc.isWindowDisplay();
+        if (gbc && cgbWindowStartTicks > 0 && !useClearedCgbBackground) {
+            return;
+        }
+        int sourceLength = useClearedCgbBackground
+                ? fifo.getClearedBgLength()
+                : fifo.getLength();
+        if (sourceLength == 0) {
             return;
         }
 
         if (position >= -16 && position <= -9) {
-            if ((position & 7) == (r.get(SCX) & 7)) {
+            if ((position & 7) == (outputScx & 7)) {
                 position = -8;
-            } else if (windowBeingFetched && (position & 7) == 6 && (r.get(SCX) & 7) == 7) {
+            } else if (windowBeingFetched && (position & 7) == 6 && (outputScx & 7) == 7) {
                 position = -8;
             } else if (position == -9) {
-                fifo.dropPixel();
+                if (useClearedCgbBackground) {
+                    fifo.dropClearedBgPixel();
+                } else {
+                    fifo.dropPixel();
+                }
                 if (objRefreshAge >= 0) {
                     objRefreshPops++;
                 }
@@ -634,7 +886,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             if (insertBgPixel) {
                 insertBgPixel = false;
             } else {
-                fifo.dropPixel();
+                if (useClearedCgbBackground) {
+                    fifo.dropClearedBgPixel();
+                } else {
+                    fifo.dropPixel();
+                }
                 if (objRefreshAge >= 0) {
                     objRefreshPops++;
                 }
@@ -650,7 +906,11 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             insertBgPixel = false;
             fifo.putInsertedPixel();
         } else {
-            fifo.putPixelToScreen();
+            if (useClearedCgbBackground) {
+                fifo.putClearedBgToScreen();
+            } else {
+                fifo.putPixelToScreen();
+            }
             if (objRefreshAge >= 0) {
                 objRefreshPops++;
             }
@@ -674,6 +934,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 fetcher.saveToMemento(),
                 fifoMemento,
                 entryTicks,
+                lcdEnableFirstLine,
                 position,
                 window,
                 windowBeingFetched,
@@ -686,14 +947,32 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
                 objAttributes == null ? -1 : objAttributes.getValue(),
                 objData0,
                 objTileLine,
+                objData1Pending,
+                objRefreshAge,
+                objRefreshPops,
+                objRefreshD0,
+                objRefreshTileId,
+                objRefreshLine,
+                objRefreshAttrs == null ? -1 : objRefreshAttrs.getValue(),
+                objRefreshZip.clone(),
+                objWaiting,
+                objectTimingPenalty,
+                previousScx,
+                fineScxRephasedThisLine,
                 machineActive,
                 windowPendingTicks,
                 windowPendingWx,
                 windowPendingPos,
                 windowActivatedThisLine,
+                previousWindowDisplay,
+                cgbWindowStartTicks,
                 insertBgPixel,
                 machineStall,
-                windowYTriggered);
+                windowYTriggered,
+                windowWy,
+                pendingWindowWy,
+                windowWyDelay,
+                windowWyOldOnWriteTick);
     }
 
     @Override
@@ -701,10 +980,6 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         if (!(memento instanceof PixelTransferMemento mem)) {
             throw new IllegalArgumentException("Invalid memento type");
         }
-
-        // transient intra-fetch state (like objData1Pending, not part of the memento):
-        // never let a pre-restore refresh window leak into the restored timeline
-        objRefreshAge = -1;
 
         fetcher.restoreFromMemento(mem.fetcherMemento);
 
@@ -715,6 +990,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
 
         this.entryTicks = mem.entryTicks;
+        this.lcdEnableFirstLine = mem.lcdEnableFirstLine;
         this.position = mem.position;
         this.window = mem.window;
         this.windowBeingFetched = mem.windowBeingFetched;
@@ -731,14 +1007,38 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
         }
         this.objData0 = mem.objData0;
         this.objTileLine = mem.objTileLine;
+        this.objData1Pending = mem.objData1Pending;
+        this.objRefreshAge = mem.objRefreshAge;
+        this.objRefreshPops = mem.objRefreshPops;
+        this.objRefreshD0 = mem.objRefreshD0;
+        this.objRefreshTileId = mem.objRefreshTileId;
+        this.objRefreshLine = mem.objRefreshLine;
+        if (mem.objRefreshAttrsValue != -1) {
+            this.objRefreshAttrs = TileAttributes.valueOf(mem.objRefreshAttrsValue);
+        } else {
+            this.objRefreshAttrs = TileAttributes.EMPTY;
+        }
+        System.arraycopy(mem.objRefreshZip, 0, this.objRefreshZip, 0,
+                this.objRefreshZip.length);
+        this.objWaiting = mem.objWaiting;
+        this.objectTimingPenalty = mem.objectTimingPenalty;
+        this.previousScx = mem.previousScx;
+        this.outputScx = previousScx;
+        this.fineScxRephasedThisLine = mem.fineScxRephasedThisLine;
         this.machineActive = mem.machineActive;
         this.windowPendingTicks = mem.windowPendingTicks;
         this.windowPendingWx = mem.windowPendingWx;
         this.windowPendingPos = mem.windowPendingPos;
         this.windowActivatedThisLine = mem.windowActivatedThisLine;
+        this.previousWindowDisplay = mem.previousWindowDisplay;
+        this.cgbWindowStartTicks = mem.cgbWindowStartTicks;
         this.insertBgPixel = mem.insertBgPixel;
         this.machineStall = mem.machineStall;
         this.windowYTriggered = mem.windowYTriggered;
+        this.windowWy = mem.windowWy;
+        this.pendingWindowWy = mem.pendingWindowWy;
+        this.windowWyDelay = mem.windowWyDelay;
+        this.windowWyOldOnWriteTick = mem.windowWyOldOnWriteTick;
         fetcher.setWindowYTriggered(windowYTriggered);
     }
 
@@ -746,6 +1046,7 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             Memento<Fetcher> fetcherMemento,
             Memento<?> fifoMemento,
             int entryTicks,
+            boolean lcdEnableFirstLine,
             int position,
             boolean window,
             boolean windowBeingFetched,
@@ -758,14 +1059,32 @@ public class PixelTransfer implements GpuPhase, Serializable, Originator<PixelTr
             int objAttributesValue,
             int objData0,
             int objTileLine,
+            boolean objData1Pending,
+            int objRefreshAge,
+            int objRefreshPops,
+            int objRefreshD0,
+            int objRefreshTileId,
+            int objRefreshLine,
+            int objRefreshAttrsValue,
+            int[] objRefreshZip,
+            boolean objWaiting,
+            int objectTimingPenalty,
+            int previousScx,
+            boolean fineScxRephasedThisLine,
             boolean machineActive,
             int windowPendingTicks,
             int windowPendingWx,
             int windowPendingPos,
             boolean windowActivatedThisLine,
+            boolean previousWindowDisplay,
+            int cgbWindowStartTicks,
             boolean insertBgPixel,
             int machineStall,
-            boolean windowYTriggered)
+            boolean windowYTriggered,
+            int windowWy,
+            int pendingWindowWy,
+            int windowWyDelay,
+            int windowWyOldOnWriteTick)
             implements Memento<PixelTransfer> {
     }
 }
