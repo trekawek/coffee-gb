@@ -7,8 +7,10 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.util.Set;
 
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.P10_13;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -149,6 +151,20 @@ public class JoypadInterruptTest {
         joypad.tick();
 
         assertTrue(interrupts.isInterruptFlagSet(P10_13));
+    }
+
+    @Test
+    public void compactPressedMaskPreservesBothInputRows() {
+        joypad.setPressedButtons(Set.of(Button.RIGHT, Button.B));
+
+        joypad.setByte(0xff00, 0x20);
+        assertEquals(0x0e, joypad.getByte(0xff00) & 0x0f);
+
+        joypad.setByte(0xff00, 0x10);
+        assertEquals(0x0d, joypad.getByte(0xff00) & 0x0f);
+
+        joypad.setByte(0xff00, 0x00);
+        assertEquals(0x0c, joypad.getByte(0xff00) & 0x0f);
     }
 
     private void tickThroughInputFilter() {

@@ -201,6 +201,22 @@ public class SerialPortTest {
         assertTrue(interruptManager.isInterruptRequestedForHalt());
     }
 
+    @Test
+    public void idleFastPathStillFinishesPendingInterruptAcknowledge() {
+        SpeedMode speedMode = new SpeedMode(true);
+        InterruptManager interruptManager = new InterruptManager(true);
+        SerialPort serialPort = new SerialPort(interruptManager, true, speedMode);
+        serialPort.init(SerialEndpoint.NULL_ENDPOINT);
+        interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+        interruptManager.clearInterrupt(InterruptManager.InterruptType.Serial);
+        interruptManager.requestInterrupt(InterruptManager.InterruptType.Serial);
+
+        serialPort.tick();
+
+        assertFalse(interruptManager.isInterruptFlagSet(
+                InterruptManager.InterruptType.Serial));
+    }
+
     private static int clockFastSerialEdge(boolean dmgCompat) {
         SpeedMode speedMode = new SpeedMode(true);
         speedMode.setDmgCompat(dmgCompat);

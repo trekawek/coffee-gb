@@ -55,7 +55,15 @@ public class SerialPort implements AddressSpace, Serializable, Originator<Serial
 
     public void tick() {
         acknowledgeInterruptIfNeeded();
-        for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+        int cpuClocks = speedMode.getSpeedMode();
+        boolean idleInternalClock = (sc & 0x81) == 0x01;
+        boolean idleNullExternalClock = (sc & 0x80) == 0
+                && serialEndpoint == SerialEndpoint.NULL_ENDPOINT;
+        if (haltWakeDelay == 0 && (idleInternalClock || idleNullExternalClock)) {
+            serialClocks = (serialClocks + cpuClocks) & 0xff;
+            return;
+        }
+        for (int i = 0; i < cpuClocks; i++) {
             tickCpuClock();
         }
     }

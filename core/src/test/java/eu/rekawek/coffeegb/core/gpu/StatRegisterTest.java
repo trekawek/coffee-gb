@@ -16,6 +16,66 @@ import static org.junit.Assert.assertTrue;
 public class StatRegisterTest {
 
     @Test
+    public void modeIrqCheckpointsCoverEveryWindowTransition() {
+        for (Fixture fixture : new Fixture[] {
+                new Fixture(), new Fixture(true), new Fixture(true, true)}) {
+            int previousWindows = fixture.modeIrqWindows();
+            for (int i = 0; i < 154 * 456; i++) {
+                fixture.gpu.tick();
+                int currentWindows = fixture.modeIrqWindows();
+                if (currentWindows != previousWindows) {
+                    assertTrue("missing mode-window checkpoint at line "
+                                    + fixture.gpu.getLine() + ", dot "
+                                    + fixture.gpu.getTicksInLine(),
+                            fixture.gpu.isModeIrqEventCheckpoint());
+                }
+                fixture.stat.tick();
+                previousWindows = currentWindows;
+            }
+        }
+    }
+
+    @Test
+    public void modeIrqCheckpointsCoverFirstLcdLineWindowTiming() {
+        Fixture fixture = new Fixture(true);
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.gpu.setByte(GpuRegister.WY.getAddress(), 0);
+        fixture.gpu.setByte(GpuRegister.WX.getAddress(), 7);
+        fixture.gpu.setByte(GpuRegister.SCX.getAddress(), 5);
+        fixture.gpu.setByte(0xff40, 0xb1);
+
+        fixture.assertModeIrqCheckpointsCoverTicks(456);
+    }
+
+    @Test
+    public void frameTailSpeedSwitchChangesMode2OnlyAtCheckpoints() {
+        MutableSpeedMode speedMode = new MutableSpeedMode();
+        Fixture fixture = new Fixture(true, speedMode);
+        fixture.advanceTo(153, 453);
+        int previousWindows = fixture.modeIrqWindows();
+
+        speedMode.speed = 2;
+        fixture.tick();
+        assertTrue(previousWindows != fixture.modeIrqWindows());
+        assertTrue(fixture.gpu.isModeIrqEventCheckpoint());
+
+        previousWindows = fixture.modeIrqWindows();
+        speedMode.speed = 1;
+        fixture.tick();
+        assertTrue(previousWindows != fixture.modeIrqWindows());
+        assertTrue(fixture.gpu.isModeIrqEventCheckpoint());
+    }
+
+    @Test
+    public void coincidenceCannotReleaseBeforeDot451() {
+        for (Fixture fixture : new Fixture[] {
+                new Fixture(), new Fixture(true), new Fixture(true, true)}) {
+            fixture.advanceTo(0, 450);
+            assertEquals(0x04, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
+        }
+    }
+
+    @Test
     public void hblankEnableMasksStatWriteGlitchAtOamBoundary() {
         Fixture fixture = new Fixture();
         fixture.advanceToHBlank();
@@ -675,14 +735,18 @@ public class StatRegisterTest {
         }
 
         private Fixture(boolean gbc, boolean doubleSpeed) {
-            interrupts = new InterruptManager(gbc);
-            stat = new StatRegister(interrupts);
-            speedMode = doubleSpeed ? new SpeedMode(gbc) {
+            this(gbc, doubleSpeed ? new SpeedMode(gbc) {
                 @Override
                 public int getSpeedMode() {
                     return 2;
                 }
-            } : new SpeedMode(gbc);
+            } : new SpeedMode(gbc));
+        }
+
+        private Fixture(boolean gbc, SpeedMode speedMode) {
+            interrupts = new InterruptManager(gbc);
+            stat = new StatRegister(interrupts);
+            this.speedMode = speedMode;
             gpu = new Gpu(
                     new Display(gbc),
                     new Dma(new Ram(0, 0x10000), oam, speedMode),
@@ -732,6 +796,41 @@ public class StatRegisterTest {
 
         private int readStatMode() {
             return stat.getByte(StatRegister.ADDRESS) & 0x03;
+        }
+
+        private int modeIrqWindows() {
+            return (gpu.isMode0IntWindow() ? 1 : 0)
+                    | (gpu.isMode1IntWindow() ? 2 : 0)
+                    | (gpu.isMode2IntWindow() ? 4 : 0);
+        }
+
+        private void assertModeIrqCheckpointsCoverTicks(int ticks) {
+            int previousWindows = modeIrqWindows();
+            for (int i = 0; i < ticks; i++) {
+                gpu.tick();
+                int currentWindows = modeIrqWindows();
+                if (currentWindows != previousWindows) {
+                    assertTrue("missing mode-window checkpoint at line "
+                                    + gpu.getLine() + ", dot " + gpu.getTicksInLine(),
+                            gpu.isModeIrqEventCheckpoint());
+                }
+                stat.tick();
+                previousWindows = currentWindows;
+            }
+        }
+    }
+
+    private static class MutableSpeedMode extends SpeedMode {
+
+        private int speed = 1;
+
+        private MutableSpeedMode() {
+            super(true);
+        }
+
+        @Override
+        public int getSpeedMode() {
+            return speed;
         }
     }
 }

@@ -27,6 +27,10 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
     private static final int INPUT_FILTER_MASK = (1 << INPUT_FILTER_SAMPLES) - 1;
 
     private final Set<Button> buttons = new CopyOnWriteArraySet<>();
+
+    // Low nibble: directions; high nibble: buttons. Input is sampled every master tick,
+    // so keep a compact volatile projection instead of allocating a COW iterator there.
+    private volatile int pressedButtonMask;
     private final InterruptManager interruptManager;
     private final boolean isSgb;
     private final EventBus sgbBus;
@@ -83,15 +87,21 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
             eventBus.post(new JoypadPressEvent(button, tick));
         }
         LOG.atDebug().log("Pressed button {} at tick {}", button, tick);
-        if (buttons.add(button)) {
-            inputChangedSinceLastTick = true;
+        synchronized (this) {
+            if (buttons.add(button)) {
+                pressedButtonMask |= toPressedButtonMask(button);
+                inputChangedSinceLastTick = true;
+            }
         }
     }
 
     private void onRelease(Button button) {
         LOG.atDebug().log("Released button {} at tick {}", button, tick);
-        if (buttons.remove(button)) {
-            inputChangedSinceLastTick = true;
+        synchronized (this) {
+            if (buttons.remove(button)) {
+                pressedButtonMask &= ~toPressedButtonMask(button);
+                inputChangedSinceLastTick = true;
+            }
         }
     }
 
@@ -100,16 +110,22 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
      * {@link #saveToMemento()}); rollback netplay snapshots and restores it separately so a
      * held button survives a rebase whose base frame is past the original press.
      */
-    public Set<Button> getPressedButtons() {
+    public synchronized Set<Button> getPressedButtons() {
         return new java.util.HashSet<>(buttons);
     }
 
-    public void setPressedButtons(java.util.Collection<Button> pressed) {
-        if (buttons.equals(Set.copyOf(pressed))) {
+    public synchronized void setPressedButtons(java.util.Collection<Button> pressed) {
+        Set<Button> pressedSet = Set.copyOf(pressed);
+        if (buttons.equals(pressedSet)) {
             return;
         }
         buttons.clear();
-        buttons.addAll(pressed);
+        buttons.addAll(pressedSet);
+        int newPressedButtonMask = 0;
+        for (Button button : pressedSet) {
+            newPressedButtonMask |= toPressedButtonMask(button);
+        }
+        pressedButtonMask = newPressedButtonMask;
         inputChangedSinceLastTick = true;
     }
 
@@ -240,18 +256,24 @@ public class Joypad implements AddressSpace, Serializable, Originator<Joypad> {
             return 0x0f - currentPlayer;
         }
 
-        int result = 0x0f;
         if (currentPlayer > 0) {
             // Only support controller for player 0
-            return result;
+            return 0x0f;
         }
 
-        for (Button b : buttons) {
-            if ((b.getLine() & p1) == 0) {
-                result &= 0xff & ~b.getMask();
-            }
+        int pressed = pressedButtonMask;
+        int selected = 0;
+        if ((p1 & 0x10) == 0) {
+            selected |= pressed & 0x0f;
         }
-        return result;
+        if ((p1 & 0x20) == 0) {
+            selected |= pressed >>> 4;
+        }
+        return 0x0f & ~selected;
+    }
+
+    private static int toPressedButtonMask(Button button) {
+        return button.getMask() << (button.getLine() == 0x20 ? 4 : 0);
     }
 
     @Override

@@ -957,6 +957,31 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return lcdEnabled && line < 144 && ticksInLine >= mode0IntFrom;
     }
 
+    /**
+     * Whether this dot can change one of the three internal STAT mode-source windows or
+     * owns a CGB mode-event capture. The windows are piecewise constant between these
+     * checkpoints, so the STAT edge detector does not need to resample them on every dot.
+     */
+    boolean isModeIrqEventCheckpoint() {
+        if (!lcdEnabled) {
+            return false;
+        }
+        if (ticksInLine == 0 || (line == 0 && ticksInLine == 4)) {
+            return true;
+        }
+        if (line < 144
+                && (ticksInLine == mode0IntFrom
+                || ticksInLine == getEarlyLineEdgeTick())) {
+            return true;
+        }
+        if (gbc && line == 143 && (ticksInLine == 454 || ticksInLine == 455)) {
+            return true;
+        }
+        // Native double speed exposes its frame-tail mode-2 window on line 153. Check
+        // both tail dots so a speed switch there can also retire the window correctly.
+        return gbc && line == 153 && ticksInLine >= 454;
+    }
+
     boolean hasObjectsOnLine() {
         return pixelTransferPhase.hasObjectsOnLine();
     }

@@ -212,14 +212,14 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
                 pendingLycComparatorIrq = NO_LYC_IRQ_EVENT;
             }
-            boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
-                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH
-                    && gpu.getLine() != 153;
+            boolean nativeDoubleTailLycLatch = ticksInLine == CGB_DOUBLE_TAIL_LATCH
+                    && gpu.getLine() != 153
+                    && isNativeDoubleSpeed();
             // In double-speed mode the PPU's line-144 request is readable during
             // the last two dots of line 143. CPU acceptance remains synchronized
             // to the internal rollover, preserving ordinary VBlank dispatch timing.
-            if (isNativeDoubleSpeed() && gpu.getLine() == 143
-                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH) {
+            if (gpu.getLine() == 143 && ticksInLine == CGB_DOUBLE_TAIL_LATCH
+                    && isNativeDoubleSpeed()) {
                 interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
                         InterruptType.VBlank);
             }
@@ -256,7 +256,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             // The normal comparison uses LY registered at the line start. Native
             // double speed has a separate tail latch at dot 454; the extra speed-scaled
             // latch handles the LY=153 -> 0 transition during line 153.
-            if (ticksInLine == 0 || ticksInLine == getNewFrameLycEdgeTick()
+            if (ticksInLine == 0
+                    || (gpu.getLine() == 153 && ticksInLine == getNewFrameLycEdgeTick())
                     || nativeDoubleTailLycLatch) {
                 // On monochrome hardware LY has already returned to 0 when line 153
                 // starts, but the comparator still samples the short-lived 153 value.
@@ -265,25 +266,33 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                         : gpu.getVisibleLy();
             }
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
-            int coincidenceReleaseTick = gpu.getCoincidenceReleaseTick();
-            boolean coincidenceRelease = gpu.isGbc()
-                    && !(gpu.isFirstLine() && !isDoubleSpeed())
-                    ? ticksInLine > coincidenceReleaseTick
-                    : ticksInLine >= coincidenceReleaseTick;
-            boolean nativeDoubleTailComparison = isNativeDoubleSpeed()
-                    && ticksInLine >= CGB_DOUBLE_TAIL_LATCH
-                    && gpu.getLine() != 153;
-            if ((coincidenceRelease && !nativeDoubleTailComparison
-                    && gpu.getLine() != 153)
-                    || ((!gpu.isGbc() || !isDoubleSpeed()) && gpu.getLine() == 153
-                    && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
-                    || lycWriteSuppressed) {
-                // when LY changes, the comparison result reads 0 until the new value
-                // is registered at the beginning of the next line (lcdon_timing-GS);
-                // at the end of line 153 the comparison stays valid: LY already flipped
-                // to 0 at tick 8 and keeps that value into line 0, so an LYC=0
-                // interrupt fires only once per frame there
-                coincidence = false;
+            if (coincidence) {
+                boolean coincidenceRelease = false;
+                // Every hardware variant retains the comparison through at least dot 450.
+                // Avoid resolving the model-specific release edge on the other ~99% of dots.
+                if (ticksInLine >= 451) {
+                    int coincidenceReleaseTick = gpu.getCoincidenceReleaseTick();
+                    coincidenceRelease = gpu.isGbc()
+                            && !(gpu.isFirstLine() && !isDoubleSpeed())
+                            ? ticksInLine > coincidenceReleaseTick
+                            : ticksInLine >= coincidenceReleaseTick;
+                }
+                boolean nativeDoubleTailComparison = ticksInLine >= CGB_DOUBLE_TAIL_LATCH
+                        && gpu.getLine() != 153
+                        && isNativeDoubleSpeed();
+                if ((coincidenceRelease && !nativeDoubleTailComparison
+                        && gpu.getLine() != 153)
+                        || (gpu.getLine() == 153
+                        && (!gpu.isGbc() || !isDoubleSpeed())
+                        && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
+                        || lycWriteSuppressed) {
+                    // when LY changes, the comparison result reads 0 until the new value
+                    // is registered at the beginning of the next line (lcdon_timing-GS);
+                    // at the end of line 153 the comparison stays valid: LY already flipped
+                    // to 0 at tick 8 and keeps that value into line 0, so an LYC=0
+                    // interrupt fires only once per frame there
+                    coincidence = false;
+                }
             }
 
             intCoincidence = coincidence;
@@ -546,6 +555,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             previousMode0Window = false;
             previousMode1Window = false;
             previousMode2Window = false;
+            return false;
+        }
+        if (!gpu.isModeIrqEventCheckpoint()) {
             return false;
         }
 
