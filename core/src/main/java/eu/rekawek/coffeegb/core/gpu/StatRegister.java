@@ -138,6 +138,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     // separate from the readable latch used by direct PPU observers.
     private int cpuStatModeOverride = -1;
 
+    // Register writes and LCD enable transitions are the only ways STAT state can
+    // change away from a fixed PPU checkpoint. The flag lets ordinary dots advance
+    // the event clock without reevaluating the complete comparator and interrupt model.
+    private boolean registerStateChanged;
+
     public StatRegister(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
     }
@@ -157,19 +162,28 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     public void tick() {
         lycIrqClock++;
         cpuStatModeOverride = -1;
+        boolean statEventCheckpoint = gpu.isStatEventCheckpoint();
         if (interruptManager.consumeLcdcInterruptAcknowledge()) {
             lastLcdcInterruptAcknowledgeClock = lycIrqClock;
         }
         if (pendingCgbMode0Interrupt) {
             interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
             pendingCgbMode0Interrupt = false;
+            registerStateChanged = true;
         }
         commitPendingModeIrqRegisters();
-        boolean suppressNaturalModeEdge = updateModeIrqEvents();
+        boolean suppressNaturalModeEdge = statEventCheckpoint && updateModeIrqEvents();
         if (pendingCgbMode2Interrupt && gpu.getTicksInLine() == 452) {
             interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
             pendingCgbMode2Interrupt = false;
         }
+        boolean scheduledEvent = nextLycIrqEvent == lycIrqClock
+                || pendingLycWriteIrq == lycIrqClock
+                || pendingLycComparatorIrq == lycIrqClock;
+        if (!registerStateChanged && !scheduledEvent && !statEventCheckpoint) {
+            return;
+        }
+        registerStateChanged = false;
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
@@ -351,6 +365,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public void onLcdEnabled() {
         cpuStatModeOverride = -1;
+        registerStateChanged = true;
         registeredLy = 0;
         lycWriteSuppressed = false;
         lycIrqStatLatch = lycIrqStatSource;
@@ -388,9 +403,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     public void onLcdDisabled() {
         cpuStatModeOverride = -1;
+        registerStateChanged = true;
         pendingCgbMode1Interrupt = false;
         pendingCgbMode0Interrupt = false;
         pendingCgbMode2Interrupt = false;
+        previousMode0Window = false;
+        previousMode1Window = false;
+        previousMode2Window = false;
         interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
     }
 
@@ -398,6 +417,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
      * Models the CGB's LYC write conflicts around the LY latch points.
      */
     public void onLycWrite(int oldValue, int newValue) {
+        registerStateChanged = true;
         int writtenLyc = newValue & 0xff;
         long writtenValueEvent = scheduleLycIrqEvent(enableBits, writtenLyc);
         if (gpu.isGbc() && gpu.isLcdEnabled()
@@ -536,11 +556,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             modeIrqStatLatch = pendingModeIrqStat;
             pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
         }
-        int lycCaptureDelay = gpu.isGbc() ? (isDoubleSpeed() ? 5 : 6) : 1;
-        if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
-                && cpuCyclesSince(pendingModeIrqLycClock) > lycCaptureDelay) {
-            modeIrqLycLatch = pendingModeIrqLyc;
-            pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+        if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT) {
+            int lycCaptureDelay = gpu.isGbc() ? (isDoubleSpeed() ? 5 : 6) : 1;
+            if (cpuCyclesSince(pendingModeIrqLycClock) > lycCaptureDelay) {
+                modeIrqLycLatch = pendingModeIrqLyc;
+                pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+            }
         }
     }
 
@@ -1015,6 +1036,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public void setByte(int address, int value) {
+        registerStateChanged = true;
         if (!gpu.isGbc()) {
             if ((value & 0b01111000) == 0
                     && gpu.isLcdEnabled()
@@ -1148,6 +1170,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.previousMode2Window = mem.previousMode2Window;
         this.pendingCgbMode0Interrupt = mem.pendingCgbMode0Interrupt;
         this.pendingCgbMode2Interrupt = mem.pendingCgbMode2Interrupt;
+        // A full evaluation on the first restored tick is harmless and avoids making
+        // this derived fast-path flag part of the serialized snapshot schema.
+        this.registerStateChanged = true;
     }
 
     private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,

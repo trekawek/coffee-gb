@@ -199,6 +199,43 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbNormalSpeedNewFrameLycEdgeReachesHaltAtDot12() {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(152, 400);
+        fixture.interrupts.setByte(0xffff, 1 << LCDC.ordinal());
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.clearInterrupts();
+        fixture.advanceTo(153, 6);
+
+        assertEquals(0, fixture.lcdInterruptFlag());
+        fixture.tick();
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+        assertTrue(fixture.interrupts.isInterruptRequested());
+        assertFalse(fixture.interrupts.isInterruptRequestedForHalt());
+
+        fixture.advanceTo(153, 12);
+        assertTrue(fixture.interrupts.isInterruptRequestedForHalt());
+    }
+
+    @Test
+    public void lcdDisableRetiresModeLineBeforeLycEdgeOnReenable() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceToHBlank();
+        fixture.clearInterrupts();
+
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.tick();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.tick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
     public void cgbStatProjectsNextLineModeAtDot454() {
         Fixture fixture = new Fixture(true);
         fixture.advanceTo(0, 453);

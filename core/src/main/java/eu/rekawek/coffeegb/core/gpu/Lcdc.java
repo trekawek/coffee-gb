@@ -5,7 +5,6 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
 import java.io.Serializable;
-import java.util.Arrays;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
@@ -27,11 +26,10 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     // LCDC.2 reaches the OAM reader through its own clock-domain latch. Keep this
     // history running for the complete scanline, including HBlank, because writes at
     // the end of one line can still be pending when entry 0 is read on the next line.
-    private final int[] oamSizeHistory = new int[OAM_SIZE_HISTORY_LENGTH];
-
-    public Lcdc() {
-        Arrays.fill(oamSizeHistory, value);
-    }
+    // Bit 0 is the current dot and bit N is the LCDC.2 value N dots ago. Only
+    // the sprite-size bit is consumed from this history, so a packed shift
+    // register avoids copying seven integers on every master tick.
+    private int oamSizeHistory;
 
     public boolean isBgAndWindowDisplay() {
         return (value & 0x01) != 0;
@@ -55,9 +53,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     void tickConflicts() {
         mixValue = pendingMixValue;
         pendingMixValue = -1;
-        System.arraycopy(oamSizeHistory, 0, oamSizeHistory, 1,
-                oamSizeHistory.length - 1);
-        oamSizeHistory[0] = value;
+        oamSizeHistory = ((oamSizeHistory << 1) | ((value >>> 2) & 1))
+                & ((1 << OAM_SIZE_HISTORY_LENGTH) - 1);
     }
 
     public int getSpriteHeight() {
@@ -65,8 +62,8 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
     }
 
     public int getOamSpriteHeight(int dotsAgo) {
-        checkArgument(dotsAgo >= 0 && dotsAgo < oamSizeHistory.length);
-        return (oamSizeHistory[dotsAgo] & 0x04) == 0 ? 8 : 16;
+        checkArgument(dotsAgo >= 0 && dotsAgo < OAM_SIZE_HISTORY_LENGTH);
+        return ((oamSizeHistory >>> dotsAgo) & 1) == 0 ? 8 : 16;
     }
 
     public int getBgTileMapDisplay() {
@@ -144,7 +141,11 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
 
     @Override
     public Memento<Lcdc> saveToMemento() {
-        return new LcdcMemento(value, mixValue, pendingMixValue, oamSizeHistory.clone());
+        int[] history = new int[OAM_SIZE_HISTORY_LENGTH];
+        for (int i = 0; i < history.length; i++) {
+            history[i] = (oamSizeHistory >>> i & 1) << 2;
+        }
+        return new LcdcMemento(value, mixValue, pendingMixValue, history);
     }
 
     @Override
@@ -155,10 +156,13 @@ public class Lcdc implements AddressSpace, Serializable, Originator<Lcdc> {
         this.value = mem.value;
         this.mixValue = mem.mixValue;
         this.pendingMixValue = mem.pendingMixValue;
-        if (mem.oamSizeHistory.length != oamSizeHistory.length) {
+        if (mem.oamSizeHistory.length != OAM_SIZE_HISTORY_LENGTH) {
             throw new IllegalArgumentException("Memento OAM-size history length doesn't match");
         }
-        System.arraycopy(mem.oamSizeHistory, 0, oamSizeHistory, 0, oamSizeHistory.length);
+        oamSizeHistory = 0;
+        for (int i = 0; i < mem.oamSizeHistory.length; i++) {
+            oamSizeHistory |= (mem.oamSizeHistory[i] >>> 2 & 1) << i;
+        }
     }
 
     private record LcdcMemento(

@@ -451,9 +451,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         int oldPosition = pixelTransferPhase.getPosition();
                         boolean active = phase.tick();
                         if (mode0IntFrom == Integer.MAX_VALUE
-                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()
                                 && oldPosition <= 158
-                                && pixelTransferPhase.getPosition() > 158) {
+                                && pixelTransferPhase.getPosition() > 158
+                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()) {
                             mode0IntFrom = ticksInLine + 3;
                         }
                         if (active) {
@@ -980,6 +980,23 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // Native double speed exposes its frame-tail mode-2 window on line 153. Check
         // both tail dots so a speed switch there can also retire the window correctly.
         return gbc && line == 153 && ticksInLine >= 454;
+    }
+
+    /**
+     * Whether this dot can change any state maintained by the STAT timing model.
+     * Between these sparse checkpoints the readable coincidence flag and all four
+     * interrupt-source levels are stable.
+     */
+    boolean isStatEventCheckpoint() {
+        if (!lcdEnabled) {
+            return false;
+        }
+        // Normal-speed LY=0 reaches the HALT input at dot 12; native double
+        // speed reaches it at dot 8.
+        return ticksInLine < 13
+                || ticksInLine >= 448
+                || isModeIrqEventCheckpoint()
+                || (line < 144 && ticksInLine == mode0IntFrom + 2);
     }
 
     boolean hasObjectsOnLine() {

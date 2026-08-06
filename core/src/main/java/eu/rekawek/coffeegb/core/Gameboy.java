@@ -567,12 +567,15 @@ public class Gameboy implements Runnable, Serializable, Originator<Gameboy>, Clo
         }
         // OAM DMA is driven by the CPU clock domain. HALT pauses it after the
         // entry latency; STOP and a CGB speed switch pause it immediately.
-        boolean halted = cpu.getState() == Cpu.State.HALTED;
-        dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
-        dma.tick(halted || cpu.getState() == Cpu.State.STOPPED
-                        || cpu.getState() == Cpu.State.SPEED_SWITCH || speedSwitchTail
-                        || hdma.pausesOamDmaForSpeedSwitchBurst(),
-                halted);
+        Hdma.SourceBusSample vramDmaBusSample = hdma.consumeSourceBusSample();
+        if (dma.isTransferInProgress()) {
+            boolean halted = cpu.getState() == Cpu.State.HALTED;
+            dma.setVramDmaBusSample(vramDmaBusSample);
+            dma.tick(halted || cpu.getState() == Cpu.State.STOPPED
+                            || cpu.getState() == Cpu.State.SPEED_SWITCH || speedSwitchTail
+                            || hdma.pausesOamDmaForSpeedSwitchBurst(),
+                    halted);
+        }
         sound.tick();
         serialPort.tick();
         infraredPort.tick();
