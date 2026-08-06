@@ -299,6 +299,10 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         return result;
     }
 
+    public boolean isSerialInterruptAcknowledgePending() {
+        return serialInterruptAcknowledge;
+    }
+
     public void finishSerialInterruptAcknowledge() {
         clearInterruptState(InterruptType.Serial);
     }

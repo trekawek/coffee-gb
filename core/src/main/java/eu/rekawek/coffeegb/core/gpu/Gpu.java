@@ -1579,6 +1579,32 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return lcdEnabled && line < 144 && ticksInLine >= getMode0InterruptTick();
     }
 
+    /**
+     * Whether one of the three STAT mode windows can change, or a model-specific
+     * mode event can be published, on the current PPU dot.
+     */
+    public boolean isStatModeEventTick() {
+        if (!lcdEnabled) {
+            return false;
+        }
+        if (ticksInLine == 0) {
+            return true;
+        }
+        if (line < 144 && (ticksInLine == getMode0InterruptTick()
+                || ticksInLine == getEarlyLineEdgeTick())) {
+            return true;
+        }
+        if ((!gbc || speedMode.isDmgCompat()) && line == 0 && ticksInLine == 4) {
+            return true;
+        }
+        if (gbc && line == 153 && ticksInLine == 454) {
+            return true;
+        }
+        return line == 143 && (ticksInLine == 448
+                || gbc && (ticksInLine == 452 || ticksInLine == 454
+                || ticksInLine == 455));
+    }
+
     boolean hasObjectsOnLine() {
         return pixelTransferPhase.hasObjectsOnLine();
     }

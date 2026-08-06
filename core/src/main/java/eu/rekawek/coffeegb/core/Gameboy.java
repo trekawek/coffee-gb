@@ -665,6 +665,77 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private Mode tickSubsystems() {
+        if (speedSwitchTailTicks > 0 || cpu.isSpeedSwitching()
+                || hdma.isTransferInProgress()) {
+            return tickSubsystemsWithClockArbitration();
+        }
+        return tickRegularSubsystems();
+    }
+
+    /** Master-clock hot path when neither a speed switch nor VRAM DMA owns the CPU bus. */
+    private Mode tickRegularSubsystems() {
+        statRegister.captureCpuStatReadPhase(cpu.isSynchronousHaltEntryStatPhase(),
+                cpu.isAsynchronousHaltEntryStatPhase(),
+                cpu.isOrdinaryHaltWakeStatPhase(),
+                cpu.isOneCycleOrdinaryHaltWakeStatPhase());
+        boolean mode0InterruptEdgeNextTick =
+                statRegister.isMode0InterruptEdgeNextTick();
+        statRegister.captureCpuInterruptReadPhase(
+                cpu.getInterruptFlagReadMaskTicks(mode0InterruptEdgeNextTick),
+                cpu.isMode0InterruptDispatchPhased(mode0InterruptEdgeNextTick),
+                cpu.doesMode0InstructionWinInterruptAcceptance(
+                        mode0InterruptEdgeNextTick));
+        statRegister.publishFrameLyc0Mode2HandoffBeforeCpu();
+        dma.setCpuInterruptStackWrite(cpu.getState() == Cpu.State.IRQ_PUSH_1
+                || cpu.getState() == Cpu.State.IRQ_PUSH_2);
+        timer.tick();
+        sound.tickFrameSequencer();
+        boolean deferFrameSequencerClock = sound.isFrameSequencerClockAfterCpu();
+        if (!deferFrameSequencerClock) {
+            sound.commitFrameSequencerClock();
+        }
+
+        cpu.tick();
+        if (cpu.isSpeedSwitching()) {
+            sound.onSpeedSwitch();
+            gpu.onSpeedSwitch();
+            dma.onSpeedSwitch();
+            if (hdma.onSpeedSwitch()) {
+                cpu.replaySpeedSwitchPaddingByte();
+            }
+        }
+        Cpu.State cpuState = cpu.getState();
+        boolean halted = cpuState == Cpu.State.HALTED;
+        hdma.onCpuHaltState(halted);
+        if (deferFrameSequencerClock) {
+            sound.commitFrameSequencerClock();
+        }
+        if (timer.isDivResetPending()) {
+            sound.tickFrameSequencer();
+            sound.commitFrameSequencerClock();
+            serialPort.onDivReset();
+        }
+        dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
+        dma.tick(halted || cpuState == Cpu.State.STOPPED
+                        || cpuState == Cpu.State.SPEED_SWITCH
+                        || hdma.pausesOamDmaForSpeedSwitchBurst(),
+                halted);
+        sound.tick();
+        serialPort.tick();
+        infraredPort.tick();
+        joypad.tick();
+        if (hdma.requiresHblankRequestAdvance()) {
+            hdma.advanceHblankRequest(cpu.hasInFlightWriteCycleForHdma(),
+                    cpu.isCpuRequestSlotInProgressForHdma(),
+                    cpu.isInterruptClaimedAtHdmaSample());
+        }
+        Mode mode = gpu.tick();
+        statRegister.tick();
+        cpu.onPeripheralsTicked();
+        return mode;
+    }
+
+    private Mode tickSubsystemsWithClockArbitration() {
         statRegister.captureCpuStatReadPhase(cpu.isSynchronousHaltEntryStatPhase(),
                 cpu.isAsynchronousHaltEntryStatPhase(),
                 cpu.isOrdinaryHaltWakeStatPhase(),

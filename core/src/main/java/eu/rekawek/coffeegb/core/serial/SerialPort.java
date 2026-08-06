@@ -60,6 +60,13 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     public void tick() {
+        if (serialEndpoint == SerialEndpoint.NULL_ENDPOINT
+                && (sc & 0x80) == 0
+                && haltWakeDelay == 0
+                && !interruptManager.isSerialInterruptAcknowledgePending()) {
+            serialClocks = (serialClocks + speedMode.getSpeedMode()) & 0xff;
+            return;
+        }
         // Link-port peripherals such as GPS receivers have their own wall clock and keep
         // driving the input pin even when no hardware serial transfer is armed.
         serialEndpoint.tick();

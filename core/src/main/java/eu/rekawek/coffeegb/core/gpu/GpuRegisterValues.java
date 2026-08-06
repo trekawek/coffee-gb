@@ -95,9 +95,11 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
     void tickConflicts() {
         scxOldValue = pendingScxOldValue;
         pendingScxOldValue = -1;
-        for (GpuRegister reg : PALETTE_REGISTERS) {
-            mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
-            pendingMixValues[reg.ordinal()] = -1;
+        if (!gbc) {
+            for (GpuRegister reg : PALETTE_REGISTERS) {
+                mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
+                pendingMixValues[reg.ordinal()] = -1;
+            }
         }
         if (wxJustChangedTicks > 0) {
             wxJustChangedTicks--;

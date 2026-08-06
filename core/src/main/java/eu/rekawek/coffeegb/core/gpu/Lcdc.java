@@ -45,10 +45,14 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     private final boolean[] tileSelectGlitchHistory = new boolean[8];
 
+    private int tileSelectGlitchHistoryHead;
+
     // LCDC.2 reaches the OAM reader through its own clock-domain latch. Keep this
     // history running for the complete scanline, including HBlank, because writes at
     // the end of one line can still be pending when entry 0 is read on the next line.
     private final int[] oamSizeHistory = new int[OAM_SIZE_HISTORY_LENGTH];
+
+    private int oamSizeHistoryHead;
 
     public Lcdc() {
         this(false);
@@ -92,12 +96,11 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         } else if (tileSelectGlitchTicks > 0) {
             tileSelectGlitchTicks--;
         }
-        System.arraycopy(tileSelectGlitchHistory, 0, tileSelectGlitchHistory, 1,
-                tileSelectGlitchHistory.length - 1);
-        tileSelectGlitchHistory[0] = tileSelectGlitchTicks > 0;
-        System.arraycopy(oamSizeHistory, 0, oamSizeHistory, 1,
-                oamSizeHistory.length - 1);
-        oamSizeHistory[0] = value;
+        tileSelectGlitchHistoryHead = (tileSelectGlitchHistoryHead - 1)
+                & (tileSelectGlitchHistory.length - 1);
+        tileSelectGlitchHistory[tileSelectGlitchHistoryHead] = tileSelectGlitchTicks > 0;
+        oamSizeHistoryHead = (oamSizeHistoryHead - 1) & (oamSizeHistory.length - 1);
+        oamSizeHistory[oamSizeHistoryHead] = value;
     }
 
     void triggerTileSelectGlitch() {
@@ -110,7 +113,8 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     public boolean isTileSelectGlitch(int dotsAgo) {
         checkArgument(dotsAgo >= 0 && dotsAgo < tileSelectGlitchHistory.length);
-        return tileSelectGlitchHistory[dotsAgo];
+        return tileSelectGlitchHistory[(tileSelectGlitchHistoryHead + dotsAgo)
+                & (tileSelectGlitchHistory.length - 1)];
     }
 
     public int getSpriteHeight() {
@@ -119,7 +123,8 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     public int getOamSpriteHeight(int dotsAgo) {
         checkArgument(dotsAgo >= 0 && dotsAgo < oamSizeHistory.length);
-        return (oamSizeHistory[dotsAgo] & 0x04) == 0 ? 8 : 16;
+        return (oamSizeHistory[(oamSizeHistoryHead + dotsAgo)
+                & (oamSizeHistory.length - 1)] & 0x04) == 0 ? 8 : 16;
     }
 
     public int getBgTileMapDisplay() {
@@ -213,8 +218,8 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
-                tileSelectGlitchHistory.clone(),
-                oamSizeHistory.clone());
+                copyTileSelectGlitchHistory(),
+                copyOamSizeHistory());
     }
 
     @Override
@@ -222,8 +227,8 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
                 tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
-                capture.booleans(tileSelectGlitchHistory),
-                capture.ints(oamSizeHistory));
+                capture.booleans(copyTileSelectGlitchHistory()),
+                capture.ints(copyOamSizeHistory()));
     }
 
     @Override
@@ -243,10 +248,30 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         }
         System.arraycopy(mem.tileSelectGlitchHistory, 0, this.tileSelectGlitchHistory,
                 0, this.tileSelectGlitchHistory.length);
+        this.tileSelectGlitchHistoryHead = 0;
         if (mem.oamSizeHistory.length != oamSizeHistory.length) {
             throw new IllegalArgumentException("ComponentState OAM-size history length doesn't match");
         }
         System.arraycopy(mem.oamSizeHistory, 0, oamSizeHistory, 0, oamSizeHistory.length);
+        this.oamSizeHistoryHead = 0;
+    }
+
+    private boolean[] copyTileSelectGlitchHistory() {
+        boolean[] copy = new boolean[tileSelectGlitchHistory.length];
+        for (int i = 0; i < copy.length; i++) {
+            copy[i] = tileSelectGlitchHistory[(tileSelectGlitchHistoryHead + i)
+                    & (tileSelectGlitchHistory.length - 1)];
+        }
+        return copy;
+    }
+
+    private int[] copyOamSizeHistory() {
+        int[] copy = new int[oamSizeHistory.length];
+        for (int i = 0; i < copy.length; i++) {
+            copy[i] = oamSizeHistory[(oamSizeHistoryHead + i)
+                    & (oamSizeHistory.length - 1)];
+        }
+        return copy;
     }
 
     private record LcdcState(
