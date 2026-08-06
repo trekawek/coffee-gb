@@ -538,28 +538,59 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      */
     public void checkWindowY(int line, int ticksInLine) {
         advanceWindowWy();
-        int primaryWy = windowWyOldOnWriteTick >= 0
-                ? windowWyOldOnWriteTick : r.get(WY);
+        int wyOnWriteTick = windowWyOldOnWriteTick;
         windowWyOldOnWriteTick = -1;
 
-        boolean earlyFrameCheckpoint = !gbc || speedMode.getSpeedMode() == 1;
-        if (earlyFrameCheckpoint && line == 153 && ticksInLine == 454) {
-            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
-        } else if (!earlyFrameCheckpoint && line == 0 && ticksInLine == 1) {
-            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
+        // Only the PPU's three comparator checkpoints can modify the persistent
+        // window master. Keep advancing the delayed WY latch every dot, but avoid
+        // the LCDC, LY, WY, and speed-mode reads for all other dots.
+        if (!gbc) {
+            if (line == 153 && ticksInLine == 454) {
+                updateWindowYFrameCheckpoint(wyOnWriteTick);
+            } else if (line < 143 && ticksInLine == 450) {
+                updateWindowYCurrentLineCheckpoint(wyOnWriteTick);
+            } else if (line < 143 && ticksInLine == 454) {
+                updateWindowYUpcomingLineCheckpoint(wyOnWriteTick);
+            }
+            return;
         }
-        int currentLineCheckpoint = gbc
-                ? speedMode.getSpeedMode() == 1 ? 446 : 449
-                : 450;
-        if (line < 143 && ticksInLine == currentLineCheckpoint
-                && isWindowDisplay() && r.get(LY) == primaryWy) {
+
+        // Filter non-checkpoint dots before observing the double-speed bit. This
+        // method is invoked by both dot machines on every master tick.
+        if (line == 153 && ticksInLine == 454) {
+            if (speedMode.getSpeedMode() == 1) {
+                updateWindowYFrameCheckpoint(wyOnWriteTick);
+            }
+        } else if (line == 0 && ticksInLine == 1) {
+            if (speedMode.getSpeedMode() != 1) {
+                updateWindowYFrameCheckpoint(wyOnWriteTick);
+            }
+        } else if (line < 143) {
+            if ((ticksInLine == 446 && speedMode.getSpeedMode() == 1)
+                    || (ticksInLine == 449 && speedMode.getSpeedMode() != 1)) {
+                updateWindowYCurrentLineCheckpoint(wyOnWriteTick);
+            } else if ((ticksInLine == 450 && speedMode.getSpeedMode() == 1)
+                    || (ticksInLine == 453 && speedMode.getSpeedMode() != 1)) {
+                updateWindowYUpcomingLineCheckpoint(wyOnWriteTick);
+            }
+        }
+    }
+
+    private void updateWindowYFrameCheckpoint(int wyOnWriteTick) {
+        int primaryWy = wyOnWriteTick >= 0 ? wyOnWriteTick : r.get(WY);
+        setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
+    }
+
+    private void updateWindowYCurrentLineCheckpoint(int wyOnWriteTick) {
+        int primaryWy = wyOnWriteTick >= 0 ? wyOnWriteTick : r.get(WY);
+        if (isWindowDisplay() && r.get(LY) == primaryWy) {
             setWindowYTriggered(true);
         }
-        int upcomingLineCheckpoint = gbc
-                ? speedMode.getSpeedMode() == 1 ? 450 : 453
-                : 454;
-        if (line < 143 && ticksInLine == upcomingLineCheckpoint
-                && isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
+    }
+
+    private void updateWindowYUpcomingLineCheckpoint(int wyOnWriteTick) {
+        int primaryWy = wyOnWriteTick >= 0 ? wyOnWriteTick : r.get(WY);
+        if (isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
             setWindowYTriggered(true);
         }
     }

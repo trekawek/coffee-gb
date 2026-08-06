@@ -74,6 +74,41 @@ public class PixelTransferWindowTriggerTest {
     }
 
     @Test
+    public void cgbPersistentMasterUsesOnlyTheActiveSpeedCheckpoints() {
+        Harness normalSpeed = new Harness(true, 1);
+        normalSpeed.registers.put(GpuRegister.LY, 7);
+        normalSpeed.registers.put(GpuRegister.WY, 7);
+        normalSpeed.lcdc.set(0xb1);
+        normalSpeed.transfer.checkWindowY(7, 449);
+        assertFalse("normal speed must ignore the double-speed current-line dot",
+                normalSpeed.transfer.isWindowYTriggered());
+        normalSpeed.transfer.checkWindowY(7, 446);
+        assertTrue("normal speed samples the current line at dot 446",
+                normalSpeed.transfer.isWindowYTriggered());
+
+        Harness doubleSpeed = new Harness(true, 2);
+        doubleSpeed.registers.put(GpuRegister.LY, 7);
+        doubleSpeed.registers.put(GpuRegister.WY, 7);
+        doubleSpeed.lcdc.set(0xb1);
+        doubleSpeed.transfer.checkWindowY(7, 446);
+        assertFalse("double speed must ignore the normal-speed current-line dot",
+                doubleSpeed.transfer.isWindowYTriggered());
+        doubleSpeed.transfer.checkWindowY(7, 449);
+        assertTrue("double speed samples the current line at dot 449",
+                doubleSpeed.transfer.isWindowYTriggered());
+
+        Harness doubleSpeedFrame = new Harness(true, 2);
+        doubleSpeedFrame.registers.put(GpuRegister.WY, 0);
+        doubleSpeedFrame.lcdc.set(0xb1);
+        doubleSpeedFrame.transfer.checkWindowY(153, 454);
+        assertFalse("double speed must ignore the normal-speed frame checkpoint",
+                doubleSpeedFrame.transfer.isWindowYTriggered());
+        doubleSpeedFrame.transfer.checkWindowY(0, 1);
+        assertTrue("double speed samples the frame checkpoint at line zero dot one",
+                doubleSpeedFrame.transfer.isWindowYTriggered());
+    }
+
+    @Test
     public void secondaryWyComparatorUpdatesAfterItsRequestedDelay() {
         Harness h = new Harness(true);
         h.registers.put(GpuRegister.LY, 2);
