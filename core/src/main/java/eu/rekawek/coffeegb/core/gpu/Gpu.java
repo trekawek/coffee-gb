@@ -842,6 +842,19 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         } else {
             readablePixelEnd = 160;
         }
+        if (gbc && mode == Mode.HBlank
+                && (pixelMachine.getPosition() < readablePixelEnd
+                || (speedMode.getSpeedMode() == 2
+                && ticksInLine < hblankIntFrom
+                && pixelMachine.isObjectFetchInProgress()))) {
+            // Internal HBlank, its STAT interrupt source, and the CPU-readable mode
+            // latch are separate signals. Follow the shifted pixel machine's dynamic
+            // tail; once the clock mux has been switched, the CPU latch remains
+            // rephased after returning to normal speed and releases two positions
+            // earlier. At double speed a right-edge object fetch can outlive both
+            // position counters, so its active fetch state holds the latch directly.
+            return Mode.PixelTransfer.ordinal();
+        }
         if (gbc && speedMode.getSpeedMode() == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
