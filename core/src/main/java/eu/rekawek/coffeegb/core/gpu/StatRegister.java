@@ -327,6 +327,26 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 + getNormalSpeedClockPhase();
     }
 
+    private boolean lycRegChangeTriggersStatIrq(int oldValue, int newValue) {
+        if ((enableBits & 0x40) == 0 || newValue >= 154
+                || lycWriteTriggerBlockedByMode(newValue)) {
+            return false;
+        }
+
+        LycComparison comparison = getLycComparison();
+        int doubleSpeed = isDoubleSpeed() ? 1 : 0;
+        if (comparison.cpuCyclesUntilNextLy <= 4 + 4 * doubleSpeed
+                + 2 * (gpu.isGbc() ? 1 : 0)) {
+            if (oldValue == comparison.ly
+                    && comparison.cpuCyclesUntilNextLy > 2 * (gpu.isGbc() ? 1 : 0)) {
+                return false;
+            }
+            comparison = new LycComparison(incrementLy(comparison.ly),
+                    comparison.cpuCyclesUntilNextLy);
+        }
+        return newValue == comparison.ly;
+    }
+
     private boolean lycWriteTriggerBlockedByMode(int newValue) {
         int timeToNextLy = cpuCyclesToNextLy();
         if (gpu.getLine() < 144) {
