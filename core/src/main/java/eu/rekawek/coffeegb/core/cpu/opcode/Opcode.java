@@ -59,12 +59,27 @@ public class Opcode  {
         return executionOps[index];
     }
 
+    /** Internal execution view used by the CPU to avoid per-micro-op metadata calls. */
+    public Op[] getExecutionOps() {
+        return executionOps;
+    }
+
     public boolean opAccessesMemory(int index) {
         return accessesMemory[index];
     }
 
+    /** Internal execution metadata used by the CPU hot path. */
+    public boolean[] getAccessesMemory() {
+        return accessesMemory;
+    }
+
     public boolean opWritesMemory(int index) {
         return writesMemory[index];
+    }
+
+    /** Internal execution metadata used by HDMA arbitration. */
+    public boolean[] getWritesMemory() {
+        return writesMemory;
     }
 
     public String getLabel() {

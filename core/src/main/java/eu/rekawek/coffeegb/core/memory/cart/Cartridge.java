@@ -29,6 +29,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     private final Battery battery;
 
+    private final boolean clocked;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -75,6 +77,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         this.battery = battery;
         this.debugRom = rom.getRom();
         this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
+        this.clocked = addressSpace.isClocked();
     }
 
     /** Freezes the built cartridge's battery ownership independently of mutable configuration. */
@@ -201,6 +204,11 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     /** Advances cartridge hardware clocked from the Game Boy master clock. */
     public void tick() {
         addressSpace.tick();
+    }
+
+    /** Returns whether the mapper has a clocked hardware component. */
+    public boolean isClocked() {
+        return clocked;
     }
 
     public void setDebugHooks(DebugHooks hooks) {

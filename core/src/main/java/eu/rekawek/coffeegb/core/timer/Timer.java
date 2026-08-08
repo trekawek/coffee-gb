@@ -92,7 +92,8 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     public void tick() {
         acknowledgeInterruptIfNeeded();
         divReset = false;
-        for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+        int speed = speedMode.getSpeedMode();
+        for (int i = 0; i < speed; i++) {
             tickCpuClock();
         }
     }
@@ -134,7 +135,13 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
             interruptManager.releaseHaltWake(InterruptManager.InterruptType.Timer);
         }
         int oldDiv = div;
-        updateDiv((div + 1) & 0xffff);
+        div = (div + 1) & 0xffff;
+        boolean bit = (tac & 0x04) != 0
+                && (div & (1 << FREQ_TO_BIT[tac & 0x03])) != 0;
+        if (!bit && previousBit) {
+            incTima();
+        }
+        previousBit = bit;
         if (ticksSinceDivReset != Integer.MAX_VALUE) {
             ticksSinceDivReset++;
         }

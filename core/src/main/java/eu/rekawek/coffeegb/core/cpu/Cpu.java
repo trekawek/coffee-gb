@@ -61,6 +61,16 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private Opcode currentOpcode;
 
+    private Op[] currentExecutionOps;
+
+    private boolean[] currentOpAccessesMemory;
+
+    private boolean[] currentOpWritesMemory;
+
+    private int currentOpCount;
+
+    private int currentOperandLength;
+
     private List<Op> ops;
 
     private int operandIndex;
@@ -287,11 +297,11 @@ public class Cpu implements StatefulComponent<Cpu> {
                     if (opcode1 == 0xcb) {
                         state = State.EXT_OPCODE;
                     } else if (opcode1 == 0x10) {
-                        currentOpcode = Opcodes.COMMANDS.get(opcode1);
+                        setCurrentOpcode(Opcodes.COMMANDS.get(opcode1));
                         state = State.EXT_OPCODE;
                     } else {
                         state = State.OPERAND;
-                        currentOpcode = Opcodes.COMMANDS.get(opcode1);
+                        setCurrentOpcode(Opcodes.COMMANDS.get(opcode1));
                         if (currentOpcode == null) {
                             // an illegal opcode freezes the CPU on hardware; do the
                             // same instead of crashing the emulation thread
@@ -323,7 +333,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         notifyOpcodeFetched(debugInstructionPc, true, opcode2);
                     }
                     if (currentOpcode == null) {
-                        currentOpcode = Opcodes.EXT_COMMANDS.get(opcode2);
+                        setCurrentOpcode(Opcodes.EXT_COMMANDS.get(opcode2));
                     }
                     if (currentOpcode == null) {
                         state = State.LOCKED;
@@ -335,7 +345,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                     break;
 
                 case OPERAND:
-                    while (operandIndex < currentOpcode.getOperandLength()) {
+                    while (operandIndex < currentOperandLength) {
                         if (accessedMemory) {
                             return;
                         }
@@ -422,13 +432,13 @@ public class Cpu implements StatefulComponent<Cpu> {
                         }
                     }
 
-                    int opCount = currentOpcode.getOpCount();
+                    int opCount = currentOpCount;
                     if (opIndex < opCount) {
-                        Op op = currentOpcode.getOp(opIndex);
-                        boolean opAccessesMemory = currentOpcode.opAccessesMemory(opIndex);
+                        boolean opAccessesMemory = currentOpAccessesMemory[opIndex];
                         if (accessedMemory && opAccessesMemory) {
                             return;
                         }
+                        Op op = currentExecutionOps[opIndex];
                         opIndex++;
 
                         SpriteBug.CorruptionType corruptionType = op.causesOemBug(registers, opContext);
@@ -591,6 +601,11 @@ public class Cpu implements StatefulComponent<Cpu> {
         opcode1 = 0;
         opcode2 = 0;
         currentOpcode = null;
+        currentExecutionOps = null;
+        currentOpAccessesMemory = null;
+        currentOpWritesMemory = null;
+        currentOpCount = 0;
+        currentOperandLength = 0;
         ops = null;
 
         operand[0] = 0x00;
@@ -982,10 +997,10 @@ public class Cpu implements StatefulComponent<Cpu> {
         if (opcode1 == 0xcb || opcode1 == 0x10) {
             state = State.EXT_OPCODE;
             if (opcode1 == 0x10) {
-                currentOpcode = Opcodes.COMMANDS.get(opcode1);
+                setCurrentOpcode(Opcodes.COMMANDS.get(opcode1));
             }
         } else {
-            currentOpcode = Opcodes.COMMANDS.get(opcode1);
+            setCurrentOpcode(Opcodes.COMMANDS.get(opcode1));
             state = currentOpcode == null ? State.LOCKED : State.OPERAND;
         }
         if (useSpeedSwitchPadding) {
@@ -1102,8 +1117,8 @@ public class Cpu implements StatefulComponent<Cpu> {
     /** Whether an already-started CPU write cycle overlaps the HDMA request edge. */
     public boolean hasInFlightWriteCycleForHdma() {
         return clockCycle >= 2 && state == State.RUNNING && currentOpcode != null
-                && opIndex < currentOpcode.getOpCount()
-                && currentOpcode.opWritesMemory(opIndex);
+                && opIndex < currentOpCount
+                && currentOpWritesMemory[opIndex];
     }
 
     public boolean isSpeedSwitching() {
@@ -1195,8 +1210,26 @@ public class Cpu implements StatefulComponent<Cpu> {
         this.stopFrameBlankRequested = false;
         this.debugInstructionKnown = false;
 
-        this.currentOpcode = (opcode1 == 0xcb) ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1);
+        setCurrentOpcode((opcode1 == 0xcb)
+                ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1));
         this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();
+    }
+
+    private void setCurrentOpcode(Opcode opcode) {
+        currentOpcode = opcode;
+        if (opcode == null) {
+            currentExecutionOps = null;
+            currentOpAccessesMemory = null;
+            currentOpWritesMemory = null;
+            currentOpCount = 0;
+            currentOperandLength = 0;
+            return;
+        }
+        currentExecutionOps = opcode.getExecutionOps();
+        currentOpAccessesMemory = opcode.getAccessesMemory();
+        currentOpWritesMemory = opcode.getWritesMemory();
+        currentOpCount = currentExecutionOps.length;
+        currentOperandLength = opcode.getOperandLength();
     }
 
     private record CpuState(ComponentState<Registers> registersMemento, int opcode1, int opcode2, int[] operand,

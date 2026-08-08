@@ -142,6 +142,11 @@ public class Mbc3 implements MemoryController {
     }
 
     @Override
+    public boolean isClocked() {
+        return true;
+    }
+
+    @Override
     public void setClockPaused(boolean paused) {
         clock.setEmulationPaused(paused);
     }

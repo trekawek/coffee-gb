@@ -71,18 +71,23 @@ public class FullChanger implements StatefulComponent<FullChanger> {
         }
     }
 
-    void tick(int cycles) {
+    boolean tick(int cycles) {
         if (!running) {
-            return;
+            return armed;
         }
         remaining -= cycles;
         while (remaining <= 0) {
             if (++index >= schedule.length) {
                 running = false;
-                return;
+                return false;
             }
             remaining += schedule[index];
         }
+        return true;
+    }
+
+    boolean isActive() {
+        return armed || running;
     }
 
     boolean isLightOn() {

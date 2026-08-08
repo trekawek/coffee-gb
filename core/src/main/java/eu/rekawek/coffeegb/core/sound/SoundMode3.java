@@ -196,10 +196,6 @@ public class SoundMode3 extends AbstractSoundMode {
         if (!channelEnabled) {
             return lastOutput;
         }
-        if (!updateLength()) {
-            return 0;
-        }
-
         if (clock2Mhz && --freqDivider == 0) {
             resetFreqDivider();
             i = (i + 1) % 32;

@@ -224,7 +224,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         tick++;
         PlayerInputSnapshot nextInput = Objects.requireNonNull(
                 playerInputSource.sample(), "PlayerInputSource returned null");
-        if (!sampledInput.equals(nextInput)) {
+        if (sampledInput != nextInput && !sampledInput.equals(nextInput)) {
             sampledInput = nextInput;
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
@@ -238,7 +238,26 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             inputChangedSinceLastTick = false;
             return;
         }
-        int inputLines = getInputLines();
+        int inputLines;
+        if (players > 0 && (p1 & 0x30) == 0x30) {
+            LOG.atDebug().log("Returning player {} as current player", currentPlayer);
+            inputLines = 0x0f - currentPlayer;
+        } else {
+            int pressedButtonMask = (sampledInput.packedButtonMasks >>> (currentPlayer * Byte.SIZE))
+                    & JoypadButtonMask.ALL;
+            int pressedInputLines = 0;
+            if ((p1 & 0x10) == 0) {
+                pressedInputLines |= pressedButtonMask & 0x0f;
+            }
+            if ((p1 & 0x20) == 0) {
+                pressedInputLines |= (pressedButtonMask >>> 4) & 0x0f;
+            }
+            inputLines = 0x0f & ~pressedInputLines & 0x0f;
+            // The historical event-driven API remains P1-only for controller/netplay replay.
+            if (currentPlayer == 0 && !buttons.isEmpty()) {
+                inputLines = applyButtons(inputLines, buttons);
+            }
+        }
         int nextFilteredInputLines = filteredInputLines;
         for (int line = 0; line < 4; line++) {
             int shift = line * INPUT_FILTER_SAMPLES;
@@ -380,15 +399,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return 0x0f - currentPlayer;
         }
 
-        int result = applyButtonMask(0x0f, sampledInput.buttonMask(currentPlayer));
-        // The historical event-driven API remains P1-only for controller/netplay replay.
-        if (currentPlayer == 0 && !buttons.isEmpty()) {
-            result = applyButtons(result, buttons);
-        }
-        return result;
-    }
-
-    private int applyButtonMask(int inputLines, int pressedButtonMask) {
+        int pressedButtonMask = (sampledInput.packedButtonMasks >>> (currentPlayer * Byte.SIZE))
+                & JoypadButtonMask.ALL;
         int pressedInputLines = 0;
         if ((p1 & 0x10) == 0) {
             pressedInputLines |= pressedButtonMask & 0x0f;
@@ -396,7 +408,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if ((p1 & 0x20) == 0) {
             pressedInputLines |= (pressedButtonMask >>> 4) & 0x0f;
         }
-        return inputLines & ~pressedInputLines & 0x0f;
+        int result = 0x0f & ~pressedInputLines & 0x0f;
+        // The historical event-driven API remains P1-only for controller/netplay replay.
+        if (currentPlayer == 0 && !buttons.isEmpty()) {
+            result = applyButtons(result, buttons);
+        }
+        return result;
     }
 
     private int applyButtons(int inputLines, Collection<Button> pressedButtons) {

@@ -92,7 +92,7 @@ public class SoundMode2 extends AbstractSoundMode {
         }
 
         boolean e;
-        e = updateLength();
+        e = channelEnabled;
         e = dacEnabled && e;
         if (!e) {
             return 0;
