@@ -204,6 +204,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             if (nextLycIrqEvent == lycIrqClock) {
                 fireLycIrqEvent();
             }
+            if (pendingLycWriteIrq == lycIrqClock) {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+                pendingLycWriteIrq = NO_LYC_IRQ_EVENT;
+            }
             boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
                     && ticksInLine == CGB_DOUBLE_TAIL_LATCH
                     && gpu.getLine() != 153;
