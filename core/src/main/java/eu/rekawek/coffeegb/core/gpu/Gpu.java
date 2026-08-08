@@ -330,8 +330,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             line++;
             if (line == 154) {
                 line = 0;
-                pixelTransferPhase.resetWindowLineCounter();
-                pixelMachine.resetWindowLineCounter();
+                if (!earlyWindowFrameEdge) {
+                    pixelTransferPhase.resetWindowLineCounter();
+                    pixelMachine.resetWindowLineCounter();
+                }
             }
             r.put(LY, line);
             if (line == 144) {
