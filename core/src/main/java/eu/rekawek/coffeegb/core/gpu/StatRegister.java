@@ -302,6 +302,27 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private LycComparison getLycComparison() {
+        int line = gpu.getLine();
+        int timeToNextLy = cpuCyclesToNextLy();
+        int doubleSpeed = isDoubleSpeed() ? 1 : 0;
+        int lineCpuCycles = (gpu.isFirstLine() ? 455 : 456) * (1 + doubleSpeed);
+        if (line == 153) {
+            timeToNextLy -= lineCpuCycles - 6 - 6 * doubleSpeed;
+            if (timeToNextLy <= 0) {
+                line = 0;
+                timeToNextLy += lineCpuCycles;
+            }
+        } else {
+            timeToNextLy -= 2 + 2 * doubleSpeed;
+            if (timeToNextLy <= 0) {
+                line++;
+                timeToNextLy += lineCpuCycles;
+            }
+        }
+        return new LycComparison(line, timeToNextLy);
+    }
+
     private int cpuCyclesToNextLy() {
         int lineDots = gpu.isFirstLine() ? 455 : 456;
         return Math.max(0, lineDots - gpu.getTicksInLine())
