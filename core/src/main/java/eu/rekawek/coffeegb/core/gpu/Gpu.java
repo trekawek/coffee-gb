@@ -264,6 +264,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return;
         }
         if (videoRam0.accepts(address)) {
+            lastCpuVramWriteTick = ticksInLine;
             if (isVramAvailableForCpu(true)) {
                 getVideoRam().setByte(address, value);
             }
