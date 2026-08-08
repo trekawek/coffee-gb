@@ -1227,8 +1227,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // WY writes must not undo that sample (enable_display_ly0_wemaster).
         pixelTransferPhase.checkWindowY();
         pixelMachine.checkWindowY();
-        // there is no OAM scan on the first line, but running it is harmless as the CPU
-        // can still write to OAM at this point
+        // The first shortened line has no sprite-selection scan. Keep advancing the
+        // OAM phase for its timing grid, but do not expose candidates to mode 3; CPU
+        // OAM access remains open during this interval.
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start(false);
         this.lcdEnabled = true;
