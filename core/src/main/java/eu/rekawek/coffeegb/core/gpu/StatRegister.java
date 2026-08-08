@@ -280,6 +280,24 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         pendingCgbMode2Interrupt = false;
     }
 
+    /** Publishes a scheduled CGB mode-2 event before a same-timestamp CPU bus read. */
+    public void preCpuTick() {
+        cpuStatModeOverride = gpu.getCpuStatModeOverride();
+        if (pendingCgbMode2Interrupt && !isDoubleSpeed()
+                && gpu.getLine() != 0
+                && ((enableBits & 0x40) == 0 || lycIrqValueSource == 0
+                || gpu.getLine() >= 143)
+                && gpu.getTicksInLine() == 450) {
+            // A normal-speed CPU memory callback at stored dot 450 completes at
+            // the scheduled dot-452 MSTAT boundary. Resolve that boundary before
+            // the callback; CPU and HALT acceptance remain blocked until rollover.
+            // A nonzero visible-line LYC source shares this boundary and leaves
+            // mode 2 on the ordinary PPU publication phase instead.
+            interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
+            pendingCgbMode2Interrupt = false;
+        }
+    }
+
     public void onLcdDisabled() {
         cpuStatModeOverride = -1;
         pendingCgbMode1Interrupt = false;
