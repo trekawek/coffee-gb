@@ -1048,6 +1048,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     public int getCoincidenceReleaseTick() {
+        if (firstLine) {
+            // At the end of the shortened enable line Gambatte's getLycCmpLy has
+            // entered its final non-readable comparison slot: dot 451 normal speed,
+            // dot 453 double speed (the `> releaseTick` CGB rule below maps to 452).
+            return speedMode.getSpeedMode() == 2 ? 452 : getEarlyLineEdgeTick();
+        }
         if (!gbc) {
             return getEarlyLineEdgeTick();
         }
