@@ -942,7 +942,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                         InterruptType.LCDC);
             } else if (gpu.getLine() < 144 && gpu.getTicksInLine() == earlyMode2Edge) {
                 if (gpu.isGbc() || gpu.hasObjectsOnLine()) {
-                    interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+                    if (gpu.isGbc()) {
+                        interruptManager.requestMode2InterruptBeforeCpuAcceptance(
+                                gpu.isFirstLine());
+                    } else {
+                        interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+                    }
                 } else {
                     interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
                 }
