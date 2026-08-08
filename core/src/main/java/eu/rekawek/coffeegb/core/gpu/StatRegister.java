@@ -303,6 +303,28 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private boolean updateModeIrqEvents() {
+        if (!gpu.isLcdEnabled()) {
+            previousMode0Window = false;
+            previousMode1Window = false;
+            previousMode2Window = false;
+            return false;
+        }
+
+        boolean mode0Window = gpu.isMode0IntWindow();
+        boolean mode1Window = gpu.isMode1IntWindow();
+        boolean mode2Window = gpu.isMode2IntWindow();
+        boolean mode0Event = mode0Window && !previousMode0Window;
+        boolean mode1Event = mode1Window && !previousMode1Window;
+        boolean mode2Event = mode2Window && !previousMode2Window;
+        previousMode0Window = mode0Window;
+        previousMode1Window = mode1Window;
+        previousMode2Window = mode2Window;
+
+        boolean suppressNaturalModeEdge = false;
+        return suppressNaturalModeEdge;
+    }
+
     private void commitPendingModeIrqStatImmediately() {
         if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
                 && pendingModeIrqStatClock < lycIrqClock) {
