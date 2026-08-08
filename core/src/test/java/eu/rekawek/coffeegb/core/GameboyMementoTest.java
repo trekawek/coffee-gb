@@ -118,28 +118,60 @@ public class GameboyMementoTest {
                 .setGameboyType(GameboyType.CGB)
                 .setSupportBatterySave(false);
         try (Gameboy gameboy = configuration.build()) {
-            for (int i = 0; i < 70_000 && !gameboy.isSpeedSwitchTailActive(); i++) {
+            for (int i = 0; i < 70_000
+                    && (gameboy.getSpeedMode().getSpeedMode() == 1
+                    || gameboy.getCpu().isSpeedSwitching()); i++) {
                 gameboy.tick();
             }
-            assertTrue(gameboy.isSpeedSwitchTailActive());
+            assertEquals(2, gameboy.getSpeedMode().getSpeedMode());
+            assertFalse(gameboy.getCpu().isSpeedSwitching());
             assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
+            assertEquals(Gameboy.PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS,
+                    Gameboy.SPEED_SWITCH_TAIL_TICKS);
+            assertFalse(gameboy.isSpeedSwitchTailActive());
+        }
+    }
+
+    @Test
+    public void restoredClockMuxPhaseKeepsTheFollowingSingleToDoubleTail() throws IOException {
+        Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(
+                new Rom(threeSpeedSwitchRom()))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setGameboyType(GameboyType.CGB)
+                .setSupportBatterySave(false);
+        try (Gameboy gameboy = configuration.build()) {
+            advanceToSpeedSwitchTail(gameboy);
+            drainSpeedSwitchTail(gameboy);
+            advanceToSpeedSwitchTail(gameboy);
+            drainSpeedSwitchTail(gameboy);
+            assertEquals(1, gameboy.getSpeedMode().getSpeedMode());
             var memento = gameboy.saveToMemento();
 
-            for (int i = 0; i < 3; i++) {
-                gameboy.tick();
-            }
-            gameboy.restoreFromMemento(memento);
-            assertTrue(gameboy.isSpeedSwitchTailActive());
-            assertEquals(0, gameboy.getAddressSpace().getByte(0xff55) & 0x80);
+            advanceToSpeedSwitchTail(gameboy);
+            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS + 1,
+                    drainSpeedSwitchTail(gameboy));
 
-            int tailTicks = 0;
-            while (gameboy.isSpeedSwitchTailActive()) {
-                gameboy.tick();
-                tailTicks++;
-            }
-            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS
-                    - Gameboy.PENDING_HBLANK_SPEED_SWITCH_OVERLAP_TICKS, tailTicks);
+            gameboy.restoreFromMemento(memento);
+            advanceToSpeedSwitchTail(gameboy);
+            assertEquals(Gameboy.SPEED_SWITCH_TAIL_TICKS + 1,
+                    drainSpeedSwitchTail(gameboy));
         }
+    }
+
+    private static void advanceToSpeedSwitchTail(Gameboy gameboy) {
+        for (int i = 0; i < 140_000 && !gameboy.isSpeedSwitchTailActive(); i++) {
+            gameboy.tick();
+        }
+        assertTrue(gameboy.isSpeedSwitchTailActive());
+    }
+
+    private static int drainSpeedSwitchTail(Gameboy gameboy) {
+        int ticks = 0;
+        while (gameboy.isSpeedSwitchTailActive()) {
+            gameboy.tick();
+            ticks++;
+        }
+        return ticks;
     }
 
     private static byte[] cgbSpeedSwitchRom() {
@@ -179,6 +211,24 @@ public class GameboyMementoTest {
         rom[0x110] = 0x00;
         rom[0x111] = 0x18; // jr $111
         rom[0x112] = (byte) 0xfe;
+        rom[0x143] = (byte) 0x80;
+        rom[0x147] = 0;
+        return rom;
+    }
+
+    private static byte[] threeSpeedSwitchRom() {
+        byte[] rom = new byte[0x8000];
+        int p = 0x100;
+        for (int i = 0; i < 3; i++) {
+            rom[p++] = 0x3e; // ld a,1
+            rom[p++] = 0x01;
+            rom[p++] = (byte) 0xe0; // ldh [rKEY1],a
+            rom[p++] = 0x4d;
+            rom[p++] = 0x10; // stop
+            rom[p++] = 0x00;
+        }
+        rom[p++] = 0x18; // jr $
+        rom[p] = (byte) 0xfe;
         rom[0x143] = (byte) 0x80;
         rom[0x147] = 0;
         return rom;
