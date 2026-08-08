@@ -267,6 +267,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             coincidence = registeredLy == gpu.getRegisters().get(LYC);
             int coincidenceReleaseTick = gpu.getCoincidenceReleaseTick();
             boolean coincidenceRelease = gpu.isGbc()
+                    && !(gpu.isFirstLine() && !isDoubleSpeed())
                     ? ticksInLine > coincidenceReleaseTick
                     : ticksInLine >= coincidenceReleaseTick;
             boolean nativeDoubleTailComparison = isNativeDoubleSpeed()
