@@ -1100,7 +1100,26 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return ticksInLine < (speedMode.getSpeedMode() == 2 ? 79 : 80);
         }
         if (mode == Mode.PixelTransfer) {
-            return gbc && pixelTransferDone;
+            if (!gbc) {
+                return false;
+            }
+            int position = pixelTransferPhase.getPosition();
+            // The final VRAM fetch slot is returned to the CPU before the internal
+            // mode transition. Fine SCX moves that slot by the corresponding number
+            // of output dots.
+            if (speedMode.getSpeedMode() == 1
+                    && position >= 158 - (r.get(SCX) & 0x07)
+                    && (write || followsCpuVramWrite())) {
+                return true;
+            }
+            if (!statModeLatchRephasedBySpeedSwitch) {
+                return false;
+            }
+            // Around fetch start, a rephased CPU clock can land in one otherwise-idle
+            // VRAM arbitration slot. Normal and double speed expose different slots.
+            return speedMode.getSpeedMode() == 2
+                    ? position <= -16
+                    : position >= -8 && position < -4;
         }
         if (!write && !firstLine && mode == Mode.OamSearch && ticksInLine >= 76) {
             return false;
