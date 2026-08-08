@@ -303,6 +303,20 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private void commitPendingModeIrqRegisters() {
+        if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                && cpuCyclesSince(pendingModeIrqStatClock) > (gpu.isGbc() ? 2 : 0)) {
+            modeIrqStatLatch = pendingModeIrqStat;
+            pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+        }
+        int lycCaptureDelay = gpu.isGbc() ? (isDoubleSpeed() ? 5 : 6) : 1;
+        if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                && cpuCyclesSince(pendingModeIrqLycClock) > lycCaptureDelay) {
+            modeIrqLycLatch = pendingModeIrqLyc;
+            pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+        }
+    }
+
     private long cpuCyclesSince(long clock) {
         int cpuClocksPerDot = 4 / gpu.getCpuMachineCycleDots();
         return Math.max(0, lycIrqClock - clock) * cpuClocksPerDot
