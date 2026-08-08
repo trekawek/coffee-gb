@@ -49,7 +49,8 @@ The standalone Android pack contains:
 The v26 launchers combine the near-white adaptive background and full-color
 foreground. The v33 overrides also expose the simplified monochrome layer for themed
 icons. The density PNGs cover launchers on pre-adaptive-icon Android versions, while
-the Play PNG is only for the store listing. These files are not connected to an
+the Play PNG is only for the store listing. The master and raster derivatives use
+transparent corners outside the rounded tile. These files are not connected to an
 Android manifest; copy the resource tree into an Android module when one is added.
 
 ## Scaling guidance
@@ -63,7 +64,8 @@ Android manifest; copy the resource tree into an Android module when one is adde
 - Preserve the SVG's geometry, gradients, filters, and colors, and use a high-quality
   downsampling filter.
 - The legacy `ic_launcher_round.png` files use a circular alpha mask. The regular
-  launcher and Play Store images remain square and opaque like the master.
+  launcher and Play Store images remain square while inheriting the master's
+  transparent corners.
 - Inspect 16, 24, 32, 48, and 64 px previews after changing the artwork; fine texture
   and the smallest speaker holes may naturally collapse at those sizes, but the dark
   handheld outline, green screen, D-pad, and red buttons must stay distinct.

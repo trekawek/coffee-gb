@@ -123,10 +123,7 @@
     </filter>
   </defs>
 
-  <!-- White canvas around the rounded tile -->
-  <rect width="1254" height="1254" fill="#FEFEFF"/>
-
-  <!-- App-icon tile -->
+  <!-- App-icon tile; the canvas outside the rounded tile remains transparent. -->
   <g filter="url(#tileShadow)">
     <rect x="23" y="8" width="1208" height="1215" rx="154" fill="url(#tileFill)"/>
     <rect x="23" y="8" width="1208" height="1215" rx="154" fill="url(#tileGlow)"/>
