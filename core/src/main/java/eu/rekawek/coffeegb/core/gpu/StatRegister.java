@@ -287,15 +287,28 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
 
             intCoincidence = coincidence;
-            if (ticksInLine < 4 && gpu.getLine() != 0 && gpu.getLine() != 153) {
+            boolean suppressedLycComparison = registeredLy == suppressedLycIrqLine
+                    || gpu.getVisibleLy() == suppressedLycIrqLine;
+            if (suppressedLycComparison) {
                 intCoincidence = false;
-                settlingLycLine = coincidence && (enableBits & 0b01000000) != 0;
-                if (ticksInLine == 0 && settlingLycLine && !intLine) {
+            }
+            if (ticksInLine < 4 && gpu.getLine() != 0
+                    && gpu.getLine() != 144 && gpu.getLine() != 153) {
+                intCoincidence = false;
+                settlingLycLine = coincidence
+                        && !suppressedLycComparison
+                        && (enableBits & 0b01000000) != 0;
+                boolean mode0ToLycPrecedence = intLine
+                        && (enableBits & 0x08) != 0
+                        && (enableBits & 0x20) == 0;
+                if (ticksInLine == 0 && settlingLycLine
+                        && (!intLine || mode0ToLycPrecedence)) {
                     // The comparison edge reaches IF at the line-start latch,
-                    // before its level contribution to the STAT line settles. Keep the
-                    // edge detector latched across that settling window: if IRQ
-                    // dispatch clears IF before tick 4, the same comparison must not
-                    // be observed as a second edge (Army Men).
+                    // before its level contribution to the STAT line settles. A mode-0
+                    // source retiring on this boundary does not mask the higher-priority
+                    // LYC edge unless mode 2 is selected too. Keep the edge detector
+                    // latched across that settling window: if IRQ dispatch clears IF
+                    // before tick 4, the comparison must not be observed twice.
                     if (isNativeDoubleSpeed()) {
                         interruptManager.requestInterrupt(InterruptType.LCDC);
                     } else if (gpu.isGbc()) {
