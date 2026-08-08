@@ -1042,6 +1042,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             // register-change request, but must not synthesize a line-level edge.
             suppressedLycIrqLine = lycIrqValueSource;
         }
+        if (gpu.isGbc() && gpu.isLcdEnabled()
+                && (newEnableBits & ~enableBits & 0x40) != 0
+                && statChangeTriggersStatIrq(enableBits, newEnableBits)) {
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+        }
         enableBits = newEnableBits;
     }
 
