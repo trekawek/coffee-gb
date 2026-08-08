@@ -955,6 +955,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     && gpu.getTicksInLine() == getNewFrameLycEdgeTick()
                     && coincidence && (enableBits & 0b01000000) != 0) {
                 interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            } else if (gpu.isGbc() && !gpu.isDmgCompatMode()
+                    && gpu.getCpuMachineCycleDots() == 2
+                    && gpu.getLine() == 153 && gpu.getTicksInLine() == 454) {
+                // The line-zero M2 request is published in the final line's tail,
+                // but CPU acceptance remains synchronized to the line-zero rollover.
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.LCDC);
             } else if (gpu.isMode0IntWindow()) {
                 if (!gpu.isGbc() && gpu.hasObjectsOnLine()) {
                     // The object-fetch tail has already crossed the DMG's interrupt
