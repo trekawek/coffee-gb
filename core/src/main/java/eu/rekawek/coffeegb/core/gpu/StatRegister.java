@@ -310,8 +310,19 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
         }
 
-        if (!settlingLycLine) {
-            updateIntLine(computeIntLine(enableBits));
+        boolean holdModeBlockedLycLine = modeBlockedLycIrqLine >= 0
+                && (registeredLy == modeBlockedLycIrqLine
+                || gpu.getVisibleLy() == modeBlockedLycIrqLine)
+                && !intCoincidence && intLine;
+        if (!settlingLycLine && !holdModeBlockedLycLine) {
+            boolean newLine = computeIntLine(enableBits);
+            if (suppressNaturalModeEdge) {
+                // Keep the shared level latch synchronized without recreating
+                // an edge that the captured FF41/FF45 copies masked.
+                intLine = newLine;
+            } else {
+                updateIntLine(newLine);
+            }
         }
     }
 
