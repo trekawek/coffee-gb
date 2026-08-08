@@ -1121,6 +1121,20 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                     ? position <= -16
                     : position >= -8 && position < -4;
         }
+        if (gbc && !write && mode == Mode.HBlank) {
+            if (followsCpuVramWrite()) {
+                return true;
+            }
+            int handoffTick;
+            if (pixelTransferPhase.hasObjectsOnLine()) {
+                handoffTick = hblankIntFrom;
+            } else if (speedMode.getSpeedMode() == 1 && !firstLine) {
+                handoffTick = 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0);
+            } else {
+                handoffTick = hblankIntFrom + 4;
+            }
+            return ticksInLine >= handoffTick;
+        }
         if (!write && !firstLine && mode == Mode.OamSearch && ticksInLine >= 76) {
             return false;
         }
