@@ -346,6 +346,57 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 && timeToNextLy <= 2 + 2 * doubleSpeed + 2 * (gpu.isGbc() ? 1 : 0));
     }
 
+    private boolean statChangeTriggersStatIrq(int oldStat, int newStat) {
+        int newlyEnabled = newStat & ~oldStat & 0x78;
+        if (newlyEnabled == 0) {
+            return false;
+        }
+
+        int ly = gpu.getLine();
+        int timeToNextLy = cpuCyclesToNextLy();
+        int doubleSpeed = isDoubleSpeed() ? 1 : 0;
+        LycComparison comparison = getLycComparison();
+        boolean lycPeriod = comparison.ly == lycIrqValueSource
+                && comparison.cpuCyclesUntilNextLy > 2;
+        if (lycPeriod && (oldStat & 0x40) != 0) {
+            return false;
+        }
+
+        boolean m0LycOrM1;
+        if (ly < 143 || (ly == 143 && timeToNextLy > 458 * (1 + doubleSpeed))) {
+            if (gpu.isMode0IntWindow()
+                    || timeToNextLy <= (ly < 143 ? 4 + 4 * doubleSpeed
+                    : 4 + 2 * doubleSpeed)) {
+                m0LycOrM1 = lycPeriod && (newStat & 0x40) != 0;
+            } else if ((oldStat & 0x08) != 0) {
+                m0LycOrM1 = false;
+            } else {
+                m0LycOrM1 = (newStat & 0x08) != 0
+                        || (lycPeriod && (newStat & 0x40) != 0);
+            }
+        } else if ((oldStat & 0x10) != 0
+                && (ly < 153 || timeToNextLy > 3 + 3 * doubleSpeed)) {
+            m0LycOrM1 = false;
+        } else {
+            m0LycOrM1 = ((newStat & 0x10) != 0
+                    && (ly < 153 || timeToNextLy > 4 + 2 * doubleSpeed))
+                    || (lycPeriod && (newStat & 0x40) != 0);
+        }
+
+        boolean m2 = false;
+        if ((oldStat & 0x20) == 0 && (newStat & 0x28) == 0x20) {
+            if (ly < 143) {
+                m2 = timeToNextLy <= 4 * (1 + doubleSpeed) && timeToNextLy > 2;
+            } else if (ly == 143) {
+                m2 = timeToNextLy <= 4 * (1 + doubleSpeed)
+                        && timeToNextLy > 4 + 2 * doubleSpeed;
+            } else if (ly == 153) {
+                m2 = timeToNextLy <= 2 * (1 + doubleSpeed) && timeToNextLy > 2;
+            }
+        }
+        return m0LycOrM1 || m2;
+    }
+
     private LycComparison getLycComparison() {
         int line = gpu.getLine();
         int timeToNextLy = cpuCyclesToNextLy();
