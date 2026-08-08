@@ -1057,6 +1057,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!gbc) {
             return getEarlyLineEdgeTick();
         }
+        if (lcdEnableClockPhase && gbc && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 1) {
+            // The LCD-enable grid makes the CPU's stored dot 452 correspond to the
+            // non-readable tail slot in Gambatte's comparator timeline.
+            return 451;
+        }
         if (speedMode.isDmgCompat()) {
             return 452;
         }
