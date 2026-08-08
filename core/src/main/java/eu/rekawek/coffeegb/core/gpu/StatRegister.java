@@ -303,6 +303,14 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private boolean mode2EventIsScheduled() {
+        if ((enableBits & 0x20) == 0) {
+            return false;
+        }
+        boolean line0Event = gpu.getLine() == 0 && gpu.getTicksInLine() < 4;
+        return line0Event || (enableBits & 0x08) == 0;
+    }
+
     private void refreshModeIrqLatches(boolean refreshLyc) {
         modeIrqStatLatch = enableBits;
         pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
