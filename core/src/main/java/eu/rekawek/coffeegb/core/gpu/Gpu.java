@@ -920,6 +920,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
         r.put(LY, 0);
+        // Enabling the LCD samples the line-zero window master immediately. Later
+        // WY writes must not undo that sample (enable_display_ly0_wemaster).
+        pixelTransferPhase.checkWindowY();
+        pixelMachine.checkWindowY();
         // there is no OAM scan on the first line, but running it is harmless as the CPU
         // can still write to OAM at this point
         this.mode = Mode.OamSearch;
