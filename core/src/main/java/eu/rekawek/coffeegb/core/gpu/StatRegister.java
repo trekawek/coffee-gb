@@ -302,6 +302,30 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private long scheduleLycIrqEvent(int stat, int lyc) {
+        if (gpu == null || !gpu.isLcdEnabled() || (stat & 0x40) == 0 || lyc >= 154) {
+            return NO_LYC_IRQ_EVENT;
+        }
+
+        int targetLine = lyc == 0 ? 153 : lyc - 1;
+        int targetTick = lyc == 0 ? 6 : 454;
+        int currentLine = gpu.getLine();
+        int currentTick = gpu.getTicksInLine();
+        long distance;
+        if (currentLine == targetLine && currentTick < targetTick) {
+            distance = targetTick - currentTick;
+        } else {
+            distance = (gpu.isFirstLine() ? 455L : 456L) - currentTick;
+            currentLine = (currentLine + 1) % 154;
+            while (currentLine != targetLine) {
+                distance += 456;
+                currentLine = (currentLine + 1) % 154;
+            }
+            distance += targetTick;
+        }
+        return lycIrqClock + distance;
+    }
+
     private int comparedLycIrqLine() {
         if (gpu.getLine() == 153) {
             return 0;
