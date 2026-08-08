@@ -827,6 +827,21 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // latch still leads the final two pixels.
             return Mode.PixelTransfer.ordinal();
         }
+        int readablePixelEnd;
+        if (statModeLatchRephasedBySpeedSwitch) {
+            readablePixelEnd = speedMode.getSpeedMode() == 2
+                    && pixelMachine.hasActivatedWindowOnLine()
+                    ? 157
+                    : 158;
+        } else if (speedMode.getSpeedMode() == 1
+                && pixelTransferPhase.hasObjectsOnLine()) {
+            // On object lines the CPU mode latch is three pixels ahead of the shifted
+            // LCD-output machine. The timing skeleton has already handed off to
+            // HBlank when the output machine reaches position 157.
+            readablePixelEnd = 157;
+        } else {
+            readablePixelEnd = 160;
+        }
         if (gbc && speedMode.getSpeedMode() == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
