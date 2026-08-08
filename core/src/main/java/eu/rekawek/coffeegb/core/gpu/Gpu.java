@@ -1190,10 +1190,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         pixelMachine.resetWindowLineCounter();
         this.line = 0;
         this.ticksInLine = 0;
-        this.mode0IntFrom = Integer.MAX_VALUE;
         this.firstLine = false;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
+        this.mode0IntFrom = Integer.MAX_VALUE;
+        this.scxWrittenThisLine = false;
+        this.wyWrittenThisLine = false;
+        this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         this.mode = Mode.HBlank;
         this.lcdEnabled = false;
         this.displayEnabledDelay = 0;
