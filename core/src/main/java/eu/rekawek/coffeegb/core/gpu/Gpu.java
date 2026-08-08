@@ -201,7 +201,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         int immediateValue = (value & ~mask) | (current & mask);
         setByteImmediately(address, immediateValue);
         pendingPpuWrites.add(new PendingPpuWrite(
-                address, value, mask, PPU_WRITE_DELAY_DOTS));
+                address, value, mask, getPpuWriteDelayDots(address)));
     }
 
     private void setByteImmediately(int address, int value) {
@@ -416,6 +416,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         // WX is consumed by the mode-3 window comparator as a complete byte.
         return address == WX.getAddress();
+    }
+
+    private int getPpuWriteDelayDots(int address) {
+        if (gbc && address == LCDC_ADDRESS) {
+            // Pending writes are advanced before the PPU edge of the CPU write tick,
+            // so a remaining count of N reaches the PPU N+1 dots later.
+            return 2 / speedMode.getSpeedMode() - 1;
+        }
+        return PPU_WRITE_DELAY_DOTS;
     }
 
     private static int getDelayedPpuWriteMask(int address) {
