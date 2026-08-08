@@ -308,6 +308,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         r.tickConflicts();
         lcdc.tickConflicts();
         pixelTransferPhase.checkWindowY(line, ticksInLine);
+        boolean earlyWindowFrameEdge = !gbc || speedMode.getSpeedMode() == 1;
+        if (earlyWindowFrameEdge && line == 153 && ticksInLine == 454) {
+            pixelTransferPhase.resetWindowLineCounter();
+            pixelMachine.resetWindowLineCounter();
+        }
         pixelMachine.checkWindowY(line, ticksInLine);
         pixelMachine.outputTick();
         pixelMachine.machineTick();
