@@ -579,6 +579,19 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             interruptManager.requestInterrupt(InterruptType.LCDC);
             pendingCgbMode1Interrupt = false;
         }
+        if (mode0Event && mode0EventArmed) {
+            boolean enabled = ((enableBits | modeIrqStatLatch) & 0x08) != 0;
+            boolean blockedByLyc = (modeIrqStatLatch & 0x40) != 0
+                    && gpu.getLine() == modeIrqLycLatch;
+            if (!enabled || blockedByLyc) {
+                suppressNaturalModeEdge = true;
+            } else if ((enableBits & 0x08) == 0) {
+                requestMode0InterruptEvent();
+                suppressNaturalModeEdge = true;
+            }
+            refreshModeIrqLatches(true);
+            mode0EventArmed = (enableBits & 0x08) != 0;
+        }
         return suppressNaturalModeEdge;
     }
 
