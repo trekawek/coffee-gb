@@ -166,6 +166,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         }
         commitPendingModeIrqRegisters();
         boolean suppressNaturalModeEdge = updateModeIrqEvents();
+        if (pendingCgbMode2Interrupt && gpu.getTicksInLine() == 452) {
+            interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
+            pendingCgbMode2Interrupt = false;
+        }
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
