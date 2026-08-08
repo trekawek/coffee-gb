@@ -446,6 +446,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
     }
 
+    /** Rephases the CGB CPU-readable STAT latch when the CPU clock mux changes. */
+    public void onSpeedSwitch() {
+        statModeLatchRephasedBySpeedSwitch = true;
+    }
+
+    public boolean isStatModeLatchRephasedBySpeedSwitch() {
+        return statModeLatchRephasedBySpeedSwitch;
+    }
+
     private boolean shouldDelayPpuWrite(int address, int value) {
         if (gbc || !lcdEnabled || line == 0 || mode != Mode.PixelTransfer) {
         if (address == LCDC_ADDRESS) {
