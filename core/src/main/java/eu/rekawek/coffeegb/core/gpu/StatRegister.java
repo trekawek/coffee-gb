@@ -268,6 +268,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         lycIrqStatLatch = lycIrqStatSource;
         lycIrqValueLatch = lycIrqValueSource;
         nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
+        modeIrqLycLatch = lycIrqValueSource;
+        pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
     }
 
     public void onLcdDisabled() {
