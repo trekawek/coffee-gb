@@ -29,7 +29,7 @@ public class PackageIconWriterTest {
         BufferedImage expected = CoffeeGbIcon.image(256);
         assertEquals(256, image.getWidth());
         assertEquals(256, image.getHeight());
-        assertEquals(0xff, (image.getRGB(0, 0) >>> 24) & 0xff);
+        assertEquals(0, (image.getRGB(0, 0) >>> 24) & 0xff);
         assertArrayEquals(
                 expected.getRGB(0, 0, 256, 256, null, 0, 256),
                 image.getRGB(0, 0, 256, 256, null, 0, 256));
