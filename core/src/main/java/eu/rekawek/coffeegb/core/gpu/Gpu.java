@@ -393,7 +393,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                     if (pixelTransferDone) {
                         pixelTransferDone = false;
                         mode = Mode.HBlank;
-                    } else if (!phase.tick()) {
+                    } else {
+                        boolean active = phase.tick();
+                        if (active) {
+                            break;
+                        }
                         // DMG raises the internal HBlank request on the following dot.
                         // CGB exposes it immediately; VRAM DMA relies on that internal
                         // edge for its normal per-line request cadence.
