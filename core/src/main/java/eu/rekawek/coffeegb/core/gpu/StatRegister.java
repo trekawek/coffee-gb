@@ -179,6 +179,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     && !(suppressedLycIrqLine == 153 && gpu.getLine() == 153)) {
                 suppressedLycIrqLine = -1;
             }
+            if (modeBlockedLycIrqLine >= 0
+                    && registeredLy != modeBlockedLycIrqLine
+                    && gpu.getVisibleLy() != modeBlockedLycIrqLine) {
+                modeBlockedLycIrqLine = -1;
+            }
             boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
                     && ticksInLine == CGB_DOUBLE_TAIL_LATCH
                     && gpu.getLine() != 153;
