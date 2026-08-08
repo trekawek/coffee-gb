@@ -940,6 +940,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return false;
         }
         return (line < 144 && ticksInLine >= getEarlyLineEdgeTick())
+                || (gbc && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 2
+                && line == 153 && ticksInLine >= 454)
                 || (!firstLine && line == 0 && ticksInLine < 4);
     }
 
