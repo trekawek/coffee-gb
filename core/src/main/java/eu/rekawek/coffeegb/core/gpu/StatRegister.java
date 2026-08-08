@@ -1076,7 +1076,22 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     @Override
     public Memento<StatRegister> saveToMemento() {
         return new StatRegisterMemento(enableBits, registeredLy, coincidence, intCoincidence, intLine,
-                lycWriteSuppressed);
+                lycWriteSuppressed, suppressedLycIrqLine, modeBlockedLycIrqLine,
+                lycIrqStatSource, lycIrqValueSource, lycIrqStatLatch,
+                lycIrqValueLatch, lycIrqClock, nextLycIrqEvent, pendingLycWriteIrq,
+                pendingLycComparatorIrq,
+                lastLycIrqRegisterChangeClock,
+                lastLcdcInterruptAcknowledgeClock,
+                releaseTailLycCpuAcceptance, lycComparatorSignal,
+                modeIrqStatLatch, modeIrqLycLatch,
+                pendingModeIrqStat, pendingModeIrqLyc,
+                pendingModeIrqStatClock, pendingModeIrqLycClock,
+                lastModeIrqStatWriteClock, lastModeIrqStatWriteLineTick,
+                lastModeIrqStatWriteOld,
+                cgbMode1IfClearAtCapture, pendingCgbMode1Interrupt,
+                mode0EventArmed, previousMode0Window,
+                previousMode1Window, previousMode2Window,
+                pendingCgbMode0Interrupt, pendingCgbMode2Interrupt);
     }
 
     @Override
@@ -1090,11 +1105,68 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         this.intCoincidence = mem.intCoincidence;
         this.intLine = mem.intLine;
         this.lycWriteSuppressed = mem.lycWriteSuppressed;
+        this.suppressedLycIrqLine = mem.suppressedLycIrqLine;
+        this.modeBlockedLycIrqLine = mem.modeBlockedLycIrqLine;
+        this.lycIrqStatSource = mem.lycIrqStatSource;
+        this.lycIrqValueSource = mem.lycIrqValueSource;
+        this.lycIrqStatLatch = mem.lycIrqStatLatch;
+        this.lycIrqValueLatch = mem.lycIrqValueLatch;
+        this.lycIrqClock = mem.lycIrqClock;
+        this.nextLycIrqEvent = mem.nextLycIrqEvent;
+        this.pendingLycWriteIrq = mem.pendingLycWriteIrq;
+        this.pendingLycComparatorIrq = mem.pendingLycComparatorIrq;
+        this.lastLycIrqRegisterChangeClock = mem.lastLycIrqRegisterChangeClock;
+        this.lastLcdcInterruptAcknowledgeClock = mem.lastLcdcInterruptAcknowledgeClock;
+        this.releaseTailLycCpuAcceptance = mem.releaseTailLycCpuAcceptance;
+        this.lycComparatorSignal = mem.lycComparatorSignal;
+        this.modeIrqStatLatch = mem.modeIrqStatLatch;
+        this.modeIrqLycLatch = mem.modeIrqLycLatch;
+        this.pendingModeIrqStat = mem.pendingModeIrqStat;
+        this.pendingModeIrqLyc = mem.pendingModeIrqLyc;
+        this.pendingModeIrqStatClock = mem.pendingModeIrqStatClock;
+        this.pendingModeIrqLycClock = mem.pendingModeIrqLycClock;
+        this.lastModeIrqStatWriteClock = mem.lastModeIrqStatWriteClock;
+        this.lastModeIrqStatWriteLineTick = mem.lastModeIrqStatWriteLineTick;
+        this.lastModeIrqStatWriteOld = mem.lastModeIrqStatWriteOld;
+        this.cgbMode1IfClearAtCapture = mem.cgbMode1IfClearAtCapture;
+        this.pendingCgbMode1Interrupt = mem.pendingCgbMode1Interrupt;
+        this.mode0EventArmed = mem.mode0EventArmed;
+        this.previousMode0Window = mem.previousMode0Window;
+        this.previousMode1Window = mem.previousMode1Window;
+        this.previousMode2Window = mem.previousMode2Window;
+        this.pendingCgbMode0Interrupt = mem.pendingCgbMode0Interrupt;
+        this.pendingCgbMode2Interrupt = mem.pendingCgbMode2Interrupt;
     }
 
     private record StatRegisterMemento(int enableBits, int registeredLy, boolean coincidence,
                                        boolean intCoincidence, boolean intLine,
-                                       boolean lycWriteSuppressed) implements Memento<StatRegister> {
+                                       boolean lycWriteSuppressed, int suppressedLycIrqLine,
+                                       int modeBlockedLycIrqLine,
+                                       int lycIrqStatSource,
+                                       int lycIrqValueSource, int lycIrqStatLatch,
+                                       int lycIrqValueLatch, long lycIrqClock,
+                                       long nextLycIrqEvent,
+                                       long pendingLycWriteIrq,
+                                       long pendingLycComparatorIrq,
+                                       long lastLycIrqRegisterChangeClock,
+                                       long lastLcdcInterruptAcknowledgeClock,
+                                       boolean releaseTailLycCpuAcceptance,
+                                       boolean lycComparatorSignal,
+                                       int modeIrqStatLatch, int modeIrqLycLatch,
+                                       int pendingModeIrqStat, int pendingModeIrqLyc,
+                                       long pendingModeIrqStatClock,
+                                       long pendingModeIrqLycClock,
+                                       long lastModeIrqStatWriteClock,
+                                       int lastModeIrqStatWriteLineTick,
+                                       int lastModeIrqStatWriteOld,
+                                       boolean cgbMode1IfClearAtCapture,
+                                       boolean pendingCgbMode1Interrupt,
+                                       boolean mode0EventArmed,
+                                       boolean previousMode0Window,
+                                       boolean previousMode1Window,
+                                       boolean previousMode2Window,
+                                       boolean pendingCgbMode0Interrupt,
+                                       boolean pendingCgbMode2Interrupt) implements Memento<StatRegister> {
     }
 
     private record LycComparison(int ly, int cpuCyclesUntilNextLy) {
