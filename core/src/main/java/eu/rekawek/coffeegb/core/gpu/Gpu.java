@@ -72,6 +72,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // until the pixel transfer starts, and OAM/VRAM stay accessible until then
     private boolean firstLine;
 
+    // Enabling the LCD anchors the PPU grid one dot away from the power-on grid. The
+    // phase survives frame rollover until the LCD is disabled again.
+    private boolean lcdEnableClockPhase;
+
     private Mode mode;
 
     private GpuPhase phase;
