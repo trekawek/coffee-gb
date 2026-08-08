@@ -794,6 +794,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && !(firstLine && oamSearchPhase.hadSpriteCandidate())) {
             return Mode.HBlank.ordinal();
         }
+        // Gambatte's CGB STAT read tests `cc + 2 < predictedM0(X=166)`. Coffee's
+        // shifted pixel machine supplies dynamic X; fine SCX advances that edge,
+        // while the CPU read itself contributes the minimum two-dot lookahead.
         int shiftedStatX = pixelMachine.getPosition() + Math.max(2, r.get(SCX) & 7);
         boolean fixedBackgroundModeLatch = lcdc.isWindowDisplay() || firstLine
                 || (mode == Mode.PixelTransfer
