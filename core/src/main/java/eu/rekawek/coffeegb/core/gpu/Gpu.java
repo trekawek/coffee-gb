@@ -856,6 +856,19 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
+                && mode == Mode.HBlank
+                && pixelMachine.isWindowActive()
+                && ((r.get(SCX) & 7) == 5
+                ? ticksInLine <= hblankIntFrom + 2
+                + (!pixelTransferPhase.hasActivatedWindowOnLine()
+                && pixelMachine.hasActivatedWindowOnLine() ? 7 : 0)
+                : ticksInLine < hblankIntFrom)) {
+            // Window startup leaves the double-speed CPU's readable mode latch
+            // asserted through the internal HBlank edge, even after both output
+            // counters have emitted their final pixel.
+            return Mode.PixelTransfer.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
             return Mode.PixelTransfer.ordinal();
