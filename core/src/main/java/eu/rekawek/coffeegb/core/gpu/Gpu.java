@@ -359,6 +359,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             pixelTransferDone = false;
             hblankIntFrom = Integer.MAX_VALUE;
             line++;
+            mode0IntFrom = Integer.MAX_VALUE;
             if (line == 154) {
                 line = 0;
                 if (!earlyWindowFrameEdge) {
@@ -408,6 +409,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         hblankIntFrom = ticksInLine
                                 + (firstLine || (!gbc && pixelTransferPhase.hasObjectsOnLine())
                                 ? 4 : 2);
+                        if (mode0IntFrom == Integer.MAX_VALUE) {
+                            mode0IntFrom = hblankIntFrom;
+                        }
                     }
                     break;
 
@@ -725,7 +729,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * 4-tick steps of the SCX scroll delay, and stays active until the end of the line.
      */
     public boolean isMode0IntWindow() {
-        return lcdEnabled && line < 144 && ticksInLine >= hblankIntFrom;
+        return lcdEnabled && line < 144 && ticksInLine >= mode0IntFrom;
     }
 
     boolean hasObjectsOnLine() {
@@ -737,7 +741,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
      * visible in IF. A running CPU can sample IF immediately.
      */
     public boolean isMode0HaltWakeTick() {
-        return lcdEnabled && line < 144 && ticksInLine == hblankIntFrom + 2;
+        return lcdEnabled && line < 144 && ticksInLine == mode0IntFrom + 2;
     }
 
     /**
@@ -879,6 +883,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         pixelMachine.resetWindowLineCounter();
         this.line = 0;
         this.ticksInLine = 0;
+        this.mode0IntFrom = Integer.MAX_VALUE;
         this.firstLine = false;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
@@ -899,6 +904,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // the line grid is locked to the machine-cycle phase: enabling the LCD starts
         // the line one tick after the LCDC write, matching the power-on grid
         this.ticksInLine = -1;
+        this.mode0IntFrom = Integer.MAX_VALUE;
         this.firstLine = true;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
