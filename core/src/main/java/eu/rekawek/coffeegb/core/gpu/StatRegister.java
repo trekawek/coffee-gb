@@ -327,6 +327,25 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 + getNormalSpeedClockPhase();
     }
 
+    private boolean lycWriteTriggerBlockedByMode(int newValue) {
+        int timeToNextLy = cpuCyclesToNextLy();
+        if (gpu.getLine() < 144) {
+            return (enableBits & 0x08) != 0
+                    && gpu.isMode0IntWindow()
+                    && newValue == gpu.getLine();
+        }
+        if (gpu.isGbc() && !isDoubleSpeed() && gpu.getLine() == 153) {
+            // FF45 is committed near the end of its CPU write cycle. At the short
+            // LY=0 hand-off that is two clocks later than the dot timestamp used by
+            // the rest of this model (one after a normal-speed clock rephase).
+            timeToNextLy -= 2 - getNormalSpeedClockPhase();
+        }
+        int doubleSpeed = isDoubleSpeed() ? 1 : 0;
+        return (enableBits & 0x10) != 0
+                && !(gpu.getLine() == 153
+                && timeToNextLy <= 2 + 2 * doubleSpeed + 2 * (gpu.isGbc() ? 1 : 0));
+    }
+
     private LycComparison getLycComparison() {
         int line = gpu.getLine();
         int timeToNextLy = cpuCyclesToNextLy();
