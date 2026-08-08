@@ -394,12 +394,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private boolean shouldDelayPpuWrite(int address, int value) {
         if (gbc || !lcdEnabled || line == 0 || mode != Mode.PixelTransfer) {
-            return false;
-        }
         if (address == LCDC_ADDRESS) {
-            // LCD enable itself controls the timing skeleton directly. Only the window
-            // enable bit crosses through the delayed mode-3 comparator latch.
-            return (value & 0x80) != 0 && ((lcdc.get() ^ value) & 0x20) != 0;
+            // DMG applies LCDC.5 on the CPU write edge. CGB synchronizes the full LCDC
+            // value two CPU clocks later; model only the independently observable
+            // window-enable bit here, while LCD enable still controls the skeleton
+            // immediately. FF40 itself remains CPU-readable through the visible queue.
+            return gbc && lcdEnabled && (value & 0x80) != 0
+                    && ((lcdc.get() ^ value) & 0x20) != 0;
+        }
+            return false;
         }
         if (address == SCX.getAddress()) {
             // Coarse tile selection sees SCX directly; only the fine-scroll counter is
