@@ -721,6 +721,27 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return 0;
         }
+        if (gbc && !speedMode.isDmgCompat()) {
+            // Gambatte's frame-tail getStat window: native CGB exposes a one-dot
+            // mode-0 gap at normal speed, then the line-zero mode-2 latch. Double
+            // speed has no mode-0 gap.
+            if (line == 153) {
+                if (speedMode.getSpeedMode() == 1
+                        && (ticksInLine == 452
+                        || (lcdEnableClockPhase && ticksInLine >= 452
+                        && ticksInLine <= 454))) {
+                    return Mode.HBlank.ordinal();
+                }
+                if (ticksInLine >= 453) {
+                    return Mode.OamSearch.ordinal();
+                }
+            }
+            // The shortened enable line reaches that projected mode-2 latch one dot
+            // earlier at double speed.
+            if (firstLine && speedMode.getSpeedMode() == 2 && ticksInLine >= 453) {
+                return Mode.OamSearch.ordinal();
+            }
+        }
         // The CGB's CPU-readable latch projects the next line's mode during the
         // final two dots, independently of compatibility or CPU speed.
         int nextLineModeTick = 454;
