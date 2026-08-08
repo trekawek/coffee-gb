@@ -1135,8 +1135,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             }
             return ticksInLine >= handoffTick;
         }
-        if (!write && !firstLine && mode == Mode.OamSearch && ticksInLine >= 76) {
-            return false;
+        if (!write && mode == Mode.OamSearch) {
+            if (!gbc) {
+                return firstLine || ticksInLine < 76;
+            }
+            return speedMode.getSpeedMode() != 2 || ticksInLine < 79;
         }
         return true;
     }
