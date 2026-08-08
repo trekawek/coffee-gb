@@ -589,6 +589,73 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return ly == 153 ? 0 : ly + 1;
     }
 
+    private void fireLycIrqEvent() {
+        int comparedLy = comparedLycIrqLine();
+        boolean enabled = ((lycIrqStatLatch | lycIrqStatSource) & 0x40) != 0;
+        boolean blockedByMode = comparedLy > 0 && comparedLy <= 144
+                ? (lycIrqStatLatch & 0x20) != 0
+                : (lycIrqStatLatch & 0x10) != 0;
+        boolean writeSensitiveEvent = lycIrqClock - lastLycIrqRegisterChangeClock <= 32
+                || lycIrqStatLatch != lycIrqStatSource
+                || lycIrqValueLatch != lycIrqValueSource;
+        boolean capturedComparison = enabled && lycIrqValueLatch == comparedLy;
+        if (capturedComparison && blockedByMode) {
+            // A mode-1/mode-2 STAT source masks the comparator event itself. Keep
+            // that decision for the whole equality period: disabling the masking
+            // source just after the event must not recreate the missed LYC edge.
+            modeBlockedLycIrqLine = comparedLy;
+        }
+        boolean clearedByRecentAcknowledge = capturedComparison && !blockedByMode
+                && gpu.getLine() == 153 && recentLyc0AcknowledgeWins();
+        if (capturedComparison && !blockedByMode && !clearedByRecentAcknowledge
+                && (writeSensitiveEvent || gpu.getLine() == 153)) {
+            if (gpu.getLine() == 153) {
+                if (writeSensitiveEvent || isDoubleSpeed()) {
+                    interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+                } else {
+                    // The LY=0 comparator and a CPU read in the same dot use opposite
+                    // clock phases. Publish a stable event on the following dot so the
+                    // in-flight read sees the old IF value; the request still survives
+                    // an FF41/FF45 write in that intervening CPU slot.
+                    pendingLycComparatorIrq = Math.min(
+                            pendingLycComparatorIrq, lycIrqClock + 1);
+                }
+            } else if (isDoubleSpeed()) {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+            } else if (lycIrqClock - lastLycIrqRegisterChangeClock <= 16) {
+                // A source write inside the comparator's response window bypasses
+                // the ordinary line-boundary CPU synchronizer. The IF latch is the
+                // same one; only its CPU-input phase differs.
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+            } else {
+                // The comparator flag is readable in the preceding line's tail,
+                // while the CPU's interrupt input samples it on the line boundary.
+                interruptManager.requestInterruptBeforeCpuAcceptance(InterruptType.LCDC);
+                releaseTailLycCpuAcceptance = true;
+            }
+            if (gpu.getLine() != 153 || writeSensitiveEvent || isDoubleSpeed()) {
+                intLine = true;
+            }
+        } else if (clearedByRecentAcknowledge) {
+            // The acknowledge lands after the frame-tail comparison has entered
+            // the shared STAT latch. Clearing IF consumes this occurrence; retain
+            // the line level so readable LY=0 cannot manufacture a second edge.
+            suppressedLycIrqLine = comparedLy;
+            intLine = true;
+        }
+
+        if (lycIrqValueLatch != comparedLy && lycIrqValueSource == comparedLy) {
+            // The FF45 source changed in the comparator's capture window. The
+            // scheduled comparator retained the old value, so the readable LY latch
+            // must not recreate the missed edge at the following line boundary.
+            suppressedLycIrqLine = comparedLy;
+        }
+
+        lycIrqValueLatch = lycIrqValueSource;
+        lycIrqStatLatch = lycIrqStatSource;
+        nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatLatch, lycIrqValueLatch);
+    }
+
     private long scheduleLycIrqEvent(int stat, int lyc) {
         if (gpu == null || !gpu.isLcdEnabled() || (stat & 0x40) == 0 || lyc >= 154) {
             return NO_LYC_IRQ_EVENT;
