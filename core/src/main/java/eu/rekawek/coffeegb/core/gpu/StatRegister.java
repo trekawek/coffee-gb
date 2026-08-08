@@ -303,6 +303,35 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private void updateLycIrqRegisters(int stat, int lyc) {
+        if (stat != lycIrqStatSource || lyc != lycIrqValueSource) {
+            lastLycIrqRegisterChangeClock = lycIrqClock;
+        }
+        long sourceEvent = scheduleLycIrqEvent(stat, lyc);
+        long oldEvent = nextLycIrqEvent;
+        nextLycIrqEvent = Math.min(oldEvent, sourceEvent);
+        lycIrqStatSource = stat;
+        lycIrqValueSource = lyc;
+
+        long cpuCyclesToEvent = cpuCyclesUntil(nextLycIrqEvent);
+        if (gpu.isGbc()) {
+            int lycCaptureWindow = 6 + 4 * (isDoubleSpeed() ? 1 : 0);
+            if (cpuCyclesToEvent > lycCaptureWindow
+                    || (sourceEvent != nextLycIrqEvent
+                    && cpuCyclesToEvent > 2)) {
+                lycIrqValueLatch = lyc;
+            }
+            if (cpuCyclesToEvent > 2) {
+                lycIrqStatLatch = stat;
+            }
+        } else {
+            if (cpuCyclesToEvent > 4 || sourceEvent != nextLycIrqEvent) {
+                lycIrqValueLatch = lyc;
+            }
+            lycIrqStatLatch = stat;
+        }
+    }
+
     private void queueModeIrqStatChange(int stat) {
         commitPendingModeIrqRegisters();
         lastModeIrqStatWriteClock = lycIrqClock;
