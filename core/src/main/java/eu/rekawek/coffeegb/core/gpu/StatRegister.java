@@ -303,6 +303,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private boolean isMode1IrqLineActive() {
+        if (gpu.isGbc() && gpu.getLine() == 143) {
+            return gpu.getTicksInLine() >= 454;
+        }
+        return gpu.isMode1IntWindow();
+    }
+
     private void updateLycIrqRegisters(int stat, int lyc) {
         if (stat != lycIrqStatSource || lyc != lycIrqValueSource) {
             lastLycIrqRegisterChangeClock = lycIrqClock;
