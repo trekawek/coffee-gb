@@ -88,6 +88,24 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // It can rise while an object at X=167 is still extending the physical transfer.
     private int mode0IntFrom = Integer.MAX_VALUE;
 
+    // Switching the CGB CPU clock remaps the PPU timestamp and rephases the CPU-side
+    // STAT mode latch. Until that happens, the boot-time latch has its five-dot tail.
+    private boolean statModeLatchRephasedBySpeedSwitch;
+
+    // A line-scoped SCX write makes a no-window line follow the dynamic shifted
+    // pipeline instead of the steady-line fixed STAT release.
+    private boolean scxWrittenThisLine;
+
+    // Distinguish a delayed-WY comparator race from LCDC/WX changes that made only
+    // the shifted output machine start a window on this line.
+    private boolean wyWrittenThisLine;
+
+    // A CPU VRAM write holds its arbitration request through the immediately
+    // following read cycle. This matters at the mode-3/mode-0 hand-off, where a
+    // standalone read and a write-then-read sequence see different slots.
+    private int lastCpuVramWriteTick = Integer.MIN_VALUE;
+
+    /**
      * Coffee GB keeps a calibrated CPU-visible timing skeleton and a pixel-producing
      * dot machine four dots behind it. Selected DMG register slices cross into that
      * second clock domain through their own latches; CPU reads still see the bus value
