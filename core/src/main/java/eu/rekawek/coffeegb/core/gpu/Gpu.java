@@ -1001,9 +1001,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return true;
         }
         if (mode == Mode.OamSearch) {
-            // the OAM write bus is released between the end of the OAM scan and the
-            // start of the pixel transfer (lcdon_write_timing-GS)
-            return write && ticksInLine >= 76 && ticksInLine < 80;
+            // Only DMG releases the OAM write bus between the end of the scan and the
+            // start of pixel transfer (lcdon_write_timing-GS).
+            return !gbc && write && ticksInLine >= 76 && ticksInLine < 80;
         }
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
