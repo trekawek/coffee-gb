@@ -574,6 +574,11 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
             refreshModeIrqLatches(false);
         }
+        if (gpu.isGbc() && !isDoubleSpeed() && gpu.getLine() == 143
+                && gpu.getTicksInLine() == 455 && pendingCgbMode1Interrupt) {
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+            pendingCgbMode1Interrupt = false;
+        }
         return suppressNaturalModeEdge;
     }
 
