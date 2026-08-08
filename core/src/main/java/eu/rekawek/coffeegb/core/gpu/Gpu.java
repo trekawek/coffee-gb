@@ -406,11 +406,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // tick later (lcdon_timing-GS vs the steady-state line phase)
         if (ticksInLine == (firstLine ? 455 : 456)) {
             ticksInLine = 0;
+            lastCpuVramWriteTick = Integer.MIN_VALUE;
             firstLine = false;
             pixelTransferDone = false;
             hblankIntFrom = Integer.MAX_VALUE;
-            line++;
             mode0IntFrom = Integer.MAX_VALUE;
+            scxWrittenThisLine = false;
+            wyWrittenThisLine = false;
+            line++;
             if (line == 154) {
                 line = 0;
                 if (!earlyWindowFrameEdge) {
