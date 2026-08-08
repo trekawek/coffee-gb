@@ -302,6 +302,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private int cpuCyclesToNextLy() {
+        int lineDots = gpu.isFirstLine() ? 455 : 456;
+        return Math.max(0, lineDots - gpu.getTicksInLine())
+                * (isDoubleSpeed() ? 2 : 1) + getNormalSpeedClockPhase();
+    }
+
     private int getNormalSpeedClockPhase() {
         return !isDoubleSpeed() && gpu.isStatModeLatchRephasedBySpeedSwitch() ? 1 : 0;
     }
