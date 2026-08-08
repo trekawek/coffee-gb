@@ -465,4 +465,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                                        boolean intCoincidence, boolean intLine,
                                        boolean lycWriteSuppressed) implements Memento<StatRegister> {
     }
+
+    private record LycComparison(int ly, int cpuCyclesUntilNextLy) {
+    }
 }
