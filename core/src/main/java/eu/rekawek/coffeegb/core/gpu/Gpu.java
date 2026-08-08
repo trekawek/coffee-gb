@@ -1094,6 +1094,11 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return true;
         }
+        if (firstLine && gbc && ticksInLine < 84) {
+            // The display-enable VRAM latch closes one dot earlier at double speed;
+            // it is distinct from both the CPU-readable STAT and palette latches.
+            return ticksInLine < (speedMode.getSpeedMode() == 2 ? 79 : 80);
+        }
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
         }
