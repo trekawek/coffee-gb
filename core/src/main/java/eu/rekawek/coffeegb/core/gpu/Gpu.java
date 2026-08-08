@@ -869,8 +869,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
-                && ((mode == Mode.PixelTransfer && pixelTransferDone)
-                || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
+                && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.PixelTransfer.ordinal();
         }
         // A scanline containing enabled objects, combined with fractional scroll or the
