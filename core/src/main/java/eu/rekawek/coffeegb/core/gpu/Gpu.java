@@ -83,7 +83,6 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     // visible mode 0 and is quantized to 4-tick steps (hblank_ly_scx_timing-GS)
     private int hblankIntFrom = Integer.MAX_VALUE;
 
-    /**
     // The mode-0 STAT source is predicted at output X=158 (Gambatte's PPU X=166).
     // It can rise while an object at X=167 is still extending the physical transfer.
     private int mode0IntFrom = Integer.MAX_VALUE;
