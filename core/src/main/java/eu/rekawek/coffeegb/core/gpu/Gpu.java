@@ -794,6 +794,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && !(firstLine && oamSearchPhase.hadSpriteCandidate())) {
             return Mode.HBlank.ordinal();
         }
+        int shiftedStatX = pixelMachine.getPosition() + Math.max(2, r.get(SCX) & 7);
+        boolean fixedBackgroundModeLatch = lcdc.isWindowDisplay() || firstLine
+                || (mode == Mode.PixelTransfer
+                && pixelTransferPhase.getPosition() < 159
+                && pixelMachine.getPosition() >= 155
+                && (ticksInLine & 3) == 2);
         if (gbc && speedMode.getSpeedMode() == 1
                 && mode == Mode.HBlank && ticksInLine < hblankIntFrom
                 && !pixelTransferPhase.hasObjectsOnLine()) {
