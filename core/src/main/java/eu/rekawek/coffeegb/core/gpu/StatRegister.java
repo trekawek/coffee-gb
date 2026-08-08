@@ -52,6 +52,91 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private boolean lycWriteSuppressed;
 
+    private int suppressedLycIrqLine = -1;
+
+    private int modeBlockedLycIrqLine = -1;
+
+    /*
+     * The LYC interrupt comparator has its own copies of FF41 and FF45. CPU writes
+     * update the register sources immediately, but writes close to a scheduled compare
+     * can miss one or both comparator latches. This is separate from the readable
+     * coincidence bit above: for non-zero LYC values the interrupt compare happens at
+     * dot 454 of the preceding line, while LY and STAT bit 2 change later.
+     */
+    private int lycIrqStatSource;
+
+    private int lycIrqValueSource;
+
+    private int lycIrqStatLatch;
+
+    private int lycIrqValueLatch;
+
+    private long lycIrqClock;
+
+    private long nextLycIrqEvent = NO_LYC_IRQ_EVENT;
+
+    private long pendingLycWriteIrq = NO_LYC_IRQ_EVENT;
+
+    private long pendingLycComparatorIrq = NO_LYC_IRQ_EVENT;
+
+    private long lastLycIrqRegisterChangeClock = Long.MIN_VALUE;
+
+    private long lastLcdcInterruptAcknowledgeClock = Long.MIN_VALUE;
+
+    private boolean releaseTailLycCpuAcceptance;
+
+    private boolean lycComparatorSignal;
+
+    /*
+     * Mode interrupt events have separate copies of FF41 and FF45. Writes near
+     * an event remain pending until that event's capture window has passed. The
+     * event itself refreshes the copies from the live registers, even when its
+     * interrupt is blocked by another STAT source.
+     */
+    private int modeIrqStatLatch;
+
+    private int modeIrqLycLatch;
+
+    private int pendingModeIrqStat;
+
+    private int pendingModeIrqLyc;
+
+    private long pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+
+    private long pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+
+    // Mode-source FF41 writes and the CGB's line-143 mode-1 edge are captured
+    // by separate latches. Retain the write's raster position so a write in the
+    // final CPU slot cannot create a combinational mode edge retroactively.
+    private long lastModeIrqStatWriteClock = NO_LYC_IRQ_EVENT;
+
+    private int lastModeIrqStatWriteLineTick = Integer.MIN_VALUE;
+
+    private int lastModeIrqStatWriteOld;
+
+    // The CGB captures whether the shared LCDC IF latch was already asserted at
+    // the early line-143 mode event. Clearing IF later in the same capture window
+    // must not turn that already-blocked event into a second interrupt edge.
+    private boolean cgbMode1IfClearAtCapture;
+
+    private boolean pendingCgbMode1Interrupt;
+
+    private boolean mode0EventArmed;
+
+    private boolean previousMode0Window;
+
+    private boolean previousMode1Window;
+
+    private boolean previousMode2Window;
+
+    private boolean pendingCgbMode2Interrupt;
+
+    private boolean pendingCgbMode0Interrupt;
+
+    // CPU callbacks run before this dot's PPU clocks. Keep their sampled mode
+    // separate from the readable latch used by direct PPU observers.
+    private int cpuStatModeOverride = -1;
+
     public StatRegister(InterruptManager interruptManager) {
         this.interruptManager = interruptManager;
     }
