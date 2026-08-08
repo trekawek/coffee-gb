@@ -894,8 +894,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // `mode`: the lock handoff and HBlank interrupt retain their calibrated timings.
         // Vertically inactive objects and sprite-disabled lines do not produce this tail
         // (GBMicrotest), while selected objects beyond the right edge still do.
-        if (mode == Mode.HBlank
-                && ticksInLine <= hblankIntFrom
+        if (!gbc && mode == Mode.HBlank
+                && (lcdc.isWindowDisplay()
+                ? ticksInLine <= hblankIntFrom
+                : ticksInLine < hblankIntFrom - 2)
                 && lcdc.isObjDisplayEffective()
                 && pixelTransferPhase.hasObjectsOnLine()
                 && ((r.get(SCX) & 7) != 0 || lcdc.isWindowDisplay())) {
