@@ -772,6 +772,15 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // pixel latch. At double speed the CPU read latch retains mode 3 for the two
         // dots after the skeleton completes, including BG-only lines where object
         // display is disabled.
+        if (gbc && (mode == Mode.PixelTransfer
+                || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))
+                && pixelTransferPhase.getPosition() >= 160
+                && pixelTransferPhase.isCgbWindowStartActive()) {
+            // WX=166 starts the CGB window machine after the last visible pixel. Its
+            // physical transfer tail ends first; the CPU-readable mode-3 latch retains
+            // the last two startup states without delaying the mode-0 interrupt edge.
+            return Mode.PixelTransfer.ordinal();
+        }
         if (gbc && speedMode.getSpeedMode() == 1
                 && mode == Mode.PixelTransfer
                 && pixelTransferPhase.hasObjectsOnLine()
