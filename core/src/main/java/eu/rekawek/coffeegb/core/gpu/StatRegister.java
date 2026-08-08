@@ -281,6 +281,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void onLcdDisabled() {
+        cpuStatModeOverride = -1;
+        pendingCgbMode1Interrupt = false;
+        pendingCgbMode0Interrupt = false;
+        pendingCgbMode2Interrupt = false;
         interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
     }
 
