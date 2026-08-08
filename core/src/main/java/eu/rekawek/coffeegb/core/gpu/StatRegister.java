@@ -265,6 +265,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         cpuStatModeOverride = -1;
         registeredLy = 0;
         lycWriteSuppressed = false;
+        lycIrqStatLatch = lycIrqStatSource;
+        lycIrqValueLatch = lycIrqValueSource;
+        nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
     }
 
     public void onLcdDisabled() {
