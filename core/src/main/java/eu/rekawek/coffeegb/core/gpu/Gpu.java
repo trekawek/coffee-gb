@@ -825,7 +825,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // output only after the internal HBlank edge. A window that started and
             // was then disabled has paid its dynamic startup cost, but its readable
             // latch still leads the final two pixels.
-            return Mode.PixelTransfer.ordinal();
+            return Mode.HBlank.ordinal();
         }
         int readablePixelEnd;
         if (statModeLatchRephasedBySpeedSwitch) {
