@@ -68,7 +68,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public int getLength() {
-        return pixels.size();
+        return pixels.size;
     }
 
     @Override
@@ -111,10 +111,33 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     }
 
     private int popEntry(IntQueue bgPixels, IntQueue bgPalettes, IntQueue bgPriorities) {
-        int bgPixel = bgPixels.dequeue();
-        int bgPaletteIndex = bgPalettes.dequeue();
-        int bgAttrPriority = bgPriorities.dequeue();
-        spriteFifo.pop();
+        int bgPixel = bgPixels.array[bgPixels.offset++];
+        if (bgPixels.offset == bgPixels.array.length) {
+            bgPixels.offset = 0;
+        }
+        bgPixels.size--;
+        int bgPaletteIndex = bgPalettes.array[bgPalettes.offset++];
+        if (bgPalettes.offset == bgPalettes.array.length) {
+            bgPalettes.offset = 0;
+        }
+        bgPalettes.size--;
+        int bgAttrPriority = bgPriorities.array[bgPriorities.offset++];
+        if (bgPriorities.offset == bgPriorities.array.length) {
+            bgPriorities.offset = 0;
+        }
+        bgPriorities.size--;
+        if (spriteFifo.size == 0) {
+            spriteFifo.poppedPixel = 0;
+            spriteFifo.poppedPalette = 0;
+            spriteFifo.poppedBgPriority = false;
+            spriteFifo.underflow++;
+        } else {
+            spriteFifo.poppedPixel = spriteFifo.pixel[spriteFifo.head];
+            spriteFifo.poppedPalette = spriteFifo.palette[spriteFifo.head];
+            spriteFifo.poppedBgPriority = spriteFifo.bgPriority[spriteFifo.head];
+            spriteFifo.head = (spriteFifo.head + 1) & 7;
+            spriteFifo.size--;
+        }
         return bgPixel
                 | (bgPaletteIndex << 2)
                 | (bgAttrPriority << 5)
@@ -183,19 +206,33 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void dropPixel() {
-        pixels.dequeue();
-        palettes.dequeue();
-        priorities.dequeue();
-        spriteFifo.pop();
+        pixels.offset = pixels.offset + 1 == pixels.array.length ? 0 : pixels.offset + 1;
+        pixels.size--;
+        palettes.offset = palettes.offset + 1 == palettes.array.length ? 0 : palettes.offset + 1;
+        palettes.size--;
+        priorities.offset = priorities.offset + 1 == priorities.array.length ? 0 : priorities.offset + 1;
+        priorities.size--;
+        if (spriteFifo.size == 0) {
+            spriteFifo.poppedPixel = 0;
+            spriteFifo.poppedPalette = 0;
+            spriteFifo.poppedBgPriority = false;
+            spriteFifo.underflow++;
+        } else {
+            spriteFifo.poppedPixel = spriteFifo.pixel[spriteFifo.head];
+            spriteFifo.poppedPalette = spriteFifo.palette[spriteFifo.head];
+            spriteFifo.poppedBgPriority = spriteFifo.bgPriority[spriteFifo.head];
+            spriteFifo.head = (spriteFifo.head + 1) & 7;
+            spriteFifo.size--;
+        }
     }
 
     @Override
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
-        for (int p : pixelLine) {
-            pixels.enqueue(p);
-            palettes.enqueue(tileAttributes.getColorPaletteIndex());
-            priorities.enqueue(tileAttributes.isPriority() ? 1 : 0);
-        }
+        int paletteIndex = tileAttributes.getColorPaletteIndex();
+        int priority = tileAttributes.isPriority() ? 1 : 0;
+        pixels.enqueue8(pixelLine);
+        palettes.enqueue8(paletteIndex);
+        priorities.enqueue8(priority);
     }
 
     @Override
@@ -224,11 +261,9 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     @Override
     public void clearBg() {
         discardClearedBg();
-        for (int i = 0; i < pixels.size(); i++) {
-            clearedPixels.enqueue(pixels.get(i));
-            clearedPalettes.enqueue(palettes.get(i));
-            clearedPriorities.enqueue(priorities.get(i));
-        }
+        pixels.copyTo(clearedPixels);
+        palettes.copyTo(clearedPalettes);
+        priorities.copyTo(clearedPriorities);
         pixels.clear();
         palettes.clear();
         priorities.clear();
@@ -236,7 +271,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public int getClearedBgLength() {
-        return clearedPixels.size();
+        return clearedPixels.size;
     }
 
     @Override
@@ -251,10 +286,27 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void dropClearedBgPixel() {
-        clearedPixels.dequeue();
-        clearedPalettes.dequeue();
-        clearedPriorities.dequeue();
-        spriteFifo.pop();
+        clearedPixels.offset = clearedPixels.offset + 1 == clearedPixels.array.length
+                ? 0 : clearedPixels.offset + 1;
+        clearedPixels.size--;
+        clearedPalettes.offset = clearedPalettes.offset + 1 == clearedPalettes.array.length
+                ? 0 : clearedPalettes.offset + 1;
+        clearedPalettes.size--;
+        clearedPriorities.offset = clearedPriorities.offset + 1 == clearedPriorities.array.length
+                ? 0 : clearedPriorities.offset + 1;
+        clearedPriorities.size--;
+        if (spriteFifo.size == 0) {
+            spriteFifo.poppedPixel = 0;
+            spriteFifo.poppedPalette = 0;
+            spriteFifo.poppedBgPriority = false;
+            spriteFifo.underflow++;
+        } else {
+            spriteFifo.poppedPixel = spriteFifo.pixel[spriteFifo.head];
+            spriteFifo.poppedPalette = spriteFifo.palette[spriteFifo.head];
+            spriteFifo.poppedBgPriority = spriteFifo.bgPriority[spriteFifo.head];
+            spriteFifo.head = (spriteFifo.head + 1) & 7;
+            spriteFifo.size--;
+        }
     }
 
     @Override

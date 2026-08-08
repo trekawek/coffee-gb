@@ -281,6 +281,15 @@ public class Fetcher implements StatefulComponent<Fetcher> {
     }
 
     public void advance(int position, boolean window, int windowY, boolean duringObjectFetch) {
+        advance(position, window, windowY, duringObjectFetch,
+                windowXView >= 0 ? windowXView : r.get(GpuRegister.WX),
+                windowDisplayView >= 0 ? windowDisplayView != 0 : lcdc.isWindowDisplay());
+    }
+
+    public void advance(int position, boolean window, int windowY, boolean duringObjectFetch,
+                        int windowX, boolean windowDisplay) {
+        windowXView = windowX & 0xff;
+        windowDisplayView = windowDisplay ? 1 : 0;
         if (data2Pending && gbc && isTileSelectGlitch()) {
             data2TileSelectGlitch = true;
         }

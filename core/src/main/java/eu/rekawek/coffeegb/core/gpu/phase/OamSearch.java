@@ -177,7 +177,9 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         int spriteAddress = 0xfe00 + 4 * i;
         switch (state) {
             case READING_Y:
-                initializeOamReader();
+                if (!oamReaderInitialized) {
+                    initializeOamReader();
+                }
                 spriteY = oamReaderY[i];
                 spriteX = oamReaderX[i];
                 if (registers.isGbc()) {
@@ -210,7 +212,9 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
      * at the line boundary; positions 1-79 then precede Coffee GB's mode-2 ticks.
      */
     public void trackDmaSource(int readerPosition) {
-        initializeOamReader();
+        if (!oamReaderInitialized) {
+            initializeOamReader();
+        }
         boolean sourceBeforeTick = dma.ownedOamForPpuBeforeTick();
         boolean sourceAfterTick = dma.ownsOamForPpu();
         boolean sourceChanged = sourceBeforeTick != sourceAfterTick;
@@ -278,7 +282,9 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
 
     /** Object tile-ID reads in mode 3 share the mode-2 reader's Y-data bus. */
     void latchObjectTileId(int tileId) {
-        initializeOamReader();
+        if (!oamReaderInitialized) {
+            initializeOamReader();
+        }
         oamReaderBusY = tileId & 0xff;
     }
 

@@ -42,6 +42,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private Gpu gpu;
 
+    private GpuRegisterValues registers;
+
     // bits 3-6: interrupt enable flags
     private int enableBits;
 
@@ -220,8 +222,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     // TODO remove circular dependency
     public void init(Gpu gpu) {
         this.gpu = gpu;
+        this.registers = gpu.getRegisters();
         lycIrqStatSource = enableBits;
-        lycIrqValueSource = gpu.getRegisters().get(LYC);
+        lycIrqValueSource = registers.get(LYC);
         lycIrqStatLatch = lycIrqStatSource;
         lycIrqValueLatch = lycIrqValueSource;
         nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
@@ -232,6 +235,17 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     public void tick() {
+        int currentLine = gpu.getLine();
+        int currentTicksInLine = gpu.getTicksInLine();
+        boolean currentGbc = gpu.isGbc();
+        boolean currentDmgCompat = gpu.isDmgCompatMode();
+        boolean currentLcdEnabled = gpu.isLcdEnabled();
+        boolean currentFirstLine = gpu.isFirstLine();
+        int currentMode0InterruptTick = gpu.getMode0InterruptTick();
+        int currentCpuMachineCycleDots = gpu.getCpuMachineCycleDots();
+        boolean currentDoubleSpeed = currentCpuMachineCycleDots == 2;
+        boolean currentNativeDoubleSpeed = currentGbc && !currentDmgCompat
+                && currentDoubleSpeed;
         interruptManager.finishLcdcReadMaskWindow();
         interruptManager.clearCpuReadInterruptPreview();
         lycIrqClock++;
@@ -239,13 +253,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         suppressCpuReadCoincidence = false;
         if (interruptManager.consumeLcdcInterruptAcknowledge()) {
             lastLcdcInterruptAcknowledgeClock = lycIrqClock;
-            if (isNativeDoubleSpeed()
+            if (currentNativeDoubleSpeed
                     && previousMode0Window
-                    && gpu.getTicksInLine() == gpu.getMode0InterruptTick() + 1
+                    && currentTicksInLine == currentMode0InterruptTick + 1
                     && mode0EventArmed
                     && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
                     && !((mode0IrqStatLatch & 0x40) != 0
-                    && gpu.getLine() == mode0IrqLycLatch)) {
+                    && currentLine == mode0IrqLycLatch)) {
                 // In native double speed, the mode-0 set latch owns the CPU
                 // acknowledge slot immediately following its event. A later
                 // acknowledge still consumes the stored request normally.
@@ -258,16 +272,16 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         boolean lcdcInterruptFlagWriteClear =
                 interruptManager.consumeLcdcInterruptFlagWriteClear();
         if (lcdcInterruptFlagWriteClear
-                && gpu.isGbc() && !gpu.isDmgCompatMode()
+                && currentGbc && !currentDmgCompat
                 && previousMode0Window
-                && (gpu.getTicksInLine() == gpu.getMode0InterruptTick()
-                + (isDoubleSpeed() ? 2 : 1)
-                || isDoubleSpeed() && gpu.getTicksInLine()
-                == gpu.getMode0InterruptTick() + 3)
+                && (currentTicksInLine == currentMode0InterruptTick
+                + (currentDoubleSpeed ? 2 : 1)
+                || currentDoubleSpeed && currentTicksInLine
+                == currentMode0InterruptTick + 3)
                 && mode0EventArmed
                 && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
                 && !((mode0IrqStatLatch & 0x40) != 0
-                && gpu.getLine() == mode0IrqLycLatch)) {
+                && currentLine == mode0IrqLycLatch)) {
             // An FF0F clear and the normal-speed CGB mode-0 set share this bus
             // slot. The captured PPU set wins; a clear in the next slot does not.
             interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
@@ -276,26 +290,32 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
             pendingCgbMode0Interrupt = false;
         }
-        commitPendingModeIrqRegisters();
-        commitPendingMode0IrqRegisters();
+        if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT) {
+            commitPendingModeIrqRegisters();
+        }
+        if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT) {
+            commitPendingMode0IrqRegisters();
+        }
         boolean suppressNaturalModeEdge =
                 updateModeIrqEvents(lcdcInterruptFlagWriteClear);
-        if (pendingCgbMode2Interrupt && gpu.getTicksInLine() == 452) {
+        if (pendingCgbMode2Interrupt && currentTicksInLine == 452) {
             publishPendingCgbMode2Event();
         }
-        if (pendingCgbMode2LateReplay && gpu.getTicksInLine() == 455) {
+        if (pendingCgbMode2LateReplay && currentTicksInLine == 455) {
             publishPendingCgbMode2Replay();
         }
         if (pendingCgbMode2LateReplay && retractableCgbMode2Interrupt
                 && cgbMode2CapturedAtLineEdge && (modeIrqStatLatch & 0x40) == 0
-                && gpu.getTicksInLine() == 454) {
+                && currentTicksInLine == 454) {
             interruptManager.maskLcdcUntilNextPeripheralTick();
         }
-        boolean publishCgbFrameMode2 = pendingCgbFrameMode2Interrupt && !isDoubleSpeed()
+        boolean publishCgbFrameMode2 = pendingCgbFrameMode2Interrupt && !currentDoubleSpeed
                 && ((getNormalSpeedClockPhase() == 0
-                && gpu.getLine() == 153 && gpu.getTicksInLine() == 455)
+                && currentLine == 153 && currentTicksInLine == 455)
                 || (getNormalSpeedClockPhase() == 1
-                && gpu.getLine() == 0 && gpu.getTicksInLine() == 0));
+                && currentLine == 0 && currentTicksInLine == 0));
         if (publishCgbFrameMode2) {
             // The normal-speed frame mode-2 event captures FF41/FF45 at dot 454.
             // A speed-switch clock rephase moves publication across the rollover.
@@ -307,16 +327,16 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             }
             pendingCgbFrameMode2Interrupt = false;
         }
-        if (retractableCgbMode2Interrupt && gpu.getTicksInLine() > 454) {
+        if (retractableCgbMode2Interrupt && currentTicksInLine > 454) {
             retractableCgbMode2Interrupt = false;
         }
         boolean settlingLycLine = false;
-        if (gpu.isLcdEnabled()) {
-            int ticksInLine = gpu.getTicksInLine();
+        if (currentLcdEnabled) {
+            int ticksInLine = currentTicksInLine;
             if (suppressedLycIrqLine >= 0
                     && registeredLy != suppressedLycIrqLine
                     && gpu.getVisibleLy() != suppressedLycIrqLine
-                    && !(suppressedLycIrqLine == 153 && gpu.getLine() == 153)) {
+                    && !(suppressedLycIrqLine == 153 && currentLine == 153)) {
                 suppressedLycIrqLine = -1;
             }
             if (modeBlockedLycIrqLine >= 0
@@ -324,8 +344,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                     && gpu.getVisibleLy() != modeBlockedLycIrqLine) {
                 modeBlockedLycIrqLine = -1;
             }
-            boolean lycComparePhase = (gpu.getLine() != 153 && ticksInLine == 454)
-                    || (gpu.getLine() == 153 && ticksInLine == 6);
+            boolean lycComparePhase = (currentLine != 153 && ticksInLine == 454)
+                    || (currentLine == 153 && ticksInLine == 6);
             if (lycComparePhase) {
                 int comparedLy = comparedLycIrqLine();
                 int comparedLyc = nextLycIrqEvent == lycIrqClock
@@ -334,7 +354,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 lycComparatorSignal = comparedLyc == comparedLy;
             }
             if (releaseTailLycCpuAcceptance && ticksInLine == 455) {
-                if (gpu.isGbc() || gpu.hasObjectsOnLine()) {
+                if (currentGbc || gpu.hasObjectsOnLine()) {
                     interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
                 } else {
                     interruptManager.releaseHaltWake(InterruptType.LCDC);
@@ -352,13 +372,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
                 pendingLycComparatorIrq = NO_LYC_IRQ_EVENT;
             }
-            boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
+            boolean nativeDoubleTailLycLatch = currentNativeDoubleSpeed
                     && ticksInLine == CGB_DOUBLE_TAIL_LATCH
-                    && gpu.getLine() != 153;
+                    && currentLine != 153;
             // In double-speed mode the PPU's line-144 request is readable during
             // the last two dots of line 143. CPU acceptance remains synchronized
             // to the internal rollover, preserving ordinary VBlank dispatch timing.
-            if (isNativeDoubleSpeed() && gpu.getLine() == 143
+            if (currentNativeDoubleSpeed && currentLine == 143
                     && ticksInLine == CGB_DOUBLE_TAIL_LATCH) {
                 if (!recentVBlankAcknowledgeWins()) {
                     interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
@@ -368,31 +388,31 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             if (gpu.isMode0HaltWakeTick()) {
                 interruptManager.releaseHaltWake(InterruptType.LCDC);
             }
-            if (gpu.isGbc() && ticksInLine == gpu.getCpuMachineCycleDots()) {
+            if (currentGbc && ticksInLine == currentCpuMachineCycleDots) {
                 interruptManager.releaseHaltWake(InterruptType.LCDC);
             }
             // The LY=0 comparison reaches IF four dots after readable LY falls
             // (dot 8 normally, dot 6 in native double speed), then crosses the
             // CPU/HALT input synchronizer one CPU M-cycle later.
-            if (gpu.getLine() == 153 && ticksInLine == getNewFrameLycCpuAcceptTick()) {
+            if (currentLine == 153 && ticksInLine == getNewFrameLycCpuAcceptTick()) {
                 interruptManager.releaseHaltWake(InterruptType.LCDC);
             }
-            if ((gpu.getLine() <= 144 || gpu.isGbc()) && ticksInLine == 0) {
+            if ((currentLine <= 144 || currentGbc) && ticksInLine == 0) {
                 // Release a request latched in the preceding line's tail before a
                 // possible new edge is registered below. Native double speed also
                 // latches LYC requests this way during VBlank (for example 151->152).
                 // PixelTransfer still describes the preceding line here. On DMG an
                 // object-stalled line holds the early mode-2 edge away from both CPU
                 // inputs until rollover; a BG-only line only holds the HALT path.
-                if (gpu.isGbc() || gpu.hasObjectsOnLine()) {
+                if (currentGbc || gpu.hasObjectsOnLine()) {
                     interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
                 } else {
                     interruptManager.releaseHaltWake(InterruptType.LCDC);
                 }
             }
             if (lycWriteSuppressed
-                    && ((gpu.getLine() != 153 && ticksInLine == 0)
-                    || (gpu.getLine() == 153 && ticksInLine == getNewFrameLycEdgeTick()))) {
+                    && ((currentLine != 153 && ticksInLine == 0)
+                    || (currentLine == 153 && ticksInLine == getNewFrameLycEdgeTick()))) {
                 lycWriteSuppressed = false;
             }
             // The normal comparison uses LY registered at the line start. Native
@@ -402,22 +422,22 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                     || nativeDoubleTailLycLatch) {
                 // On monochrome hardware LY has already returned to 0 when line 153
                 // starts, but the comparator still samples the short-lived 153 value.
-                registeredLy = gpu.getLine() == 153 && ticksInLine == 0
+                registeredLy = currentLine == 153 && ticksInLine == 0
                         ? 153
                         : gpu.getVisibleLy();
             }
-            coincidence = registeredLy == gpu.getRegisters().get(LYC);
+            coincidence = registeredLy == registers.get(LYC);
             int coincidenceReleaseTick = gpu.getCoincidenceReleaseTick();
-            boolean coincidenceRelease = gpu.isGbc()
-                    && !(gpu.isFirstLine() && !isDoubleSpeed())
+            boolean coincidenceRelease = currentGbc
+                    && !(currentFirstLine && !currentDoubleSpeed)
                     ? ticksInLine > coincidenceReleaseTick
                     : ticksInLine >= coincidenceReleaseTick;
-            boolean nativeDoubleTailComparison = isNativeDoubleSpeed()
+            boolean nativeDoubleTailComparison = currentNativeDoubleSpeed
                     && ticksInLine >= CGB_DOUBLE_TAIL_LATCH
-                    && gpu.getLine() != 153;
+                    && currentLine != 153;
             if ((coincidenceRelease && !nativeDoubleTailComparison
-                    && gpu.getLine() != 153)
-                    || (!gpu.isGbc() && gpu.getLine() == 153
+                    && currentLine != 153)
+                    || (!currentGbc && currentLine == 153
                     && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
                     || lycWriteSuppressed) {
                 // when LY changes, the comparison result reads 0 until the new value
@@ -434,8 +454,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             if (suppressedLycComparison) {
                 intCoincidence = false;
             }
-            if (ticksInLine < 4 && gpu.getLine() != 0
-                    && gpu.getLine() != 144 && gpu.getLine() != 153) {
+            if (ticksInLine < 4 && currentLine != 0
+                    && currentLine != 144 && currentLine != 153) {
                 intCoincidence = false;
                 settlingLycLine = coincidence
                         && !suppressedLycComparison
@@ -453,7 +473,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                     // before tick 4, the comparison must not be observed twice.
                     if (isNativeDoubleSpeed()) {
                         interruptManager.requestInterrupt(InterruptType.LCDC);
-                    } else if (gpu.isGbc()) {
+                    } else if (currentGbc) {
                         interruptManager.requestPhasedInterruptBeforeHaltWake(InterruptType.LCDC);
                     } else {
                         interruptManager.requestInterrupt(InterruptType.LCDC);
@@ -461,7 +481,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                     intLine = true;
                 }
             }
-            if (gpu.getLine() == 144 && ticksInLine == 0) {
+            if (currentLine == 144 && ticksInLine == 0) {
                 if (isNativeDoubleSpeed()) {
                     interruptManager.releaseCpuAcceptance(InterruptType.VBlank);
                 } else if (!recentVBlankAcknowledgeWins()) {
@@ -570,47 +590,51 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         cpuInterruptFlagReadMaskTicks = interruptFlagReadMaskTicks;
         cpuMode0InterruptDispatchPhased = mode0InterruptDispatchPhased;
         cpuMode0InstructionWinsAcceptance = mode0InstructionWinsAcceptance;
-        boolean dmgMode0 = gpu.isDmgTerminalWindowMode0ReadPreviewPhase()
-                && mode0EventArmed
+        boolean doubleSpeed = isDoubleSpeed();
+        boolean gbc = gpu.isGbc();
+        boolean dmgCompat = gpu.isDmgCompatMode();
+        int line = gpu.getLine();
+        int ticksInLine = gpu.getTicksInLine();
+        int mode0InterruptTick = gpu.getMode0InterruptTick();
+        boolean mode0SourceEnabled = mode0EventArmed
                 && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
-                && !((mode0IrqStatLatch & 0x40) != 0
-                && gpu.getLine() == mode0IrqLycLatch);
-        boolean nativeNormalRephased = gpu.isGbc() && !gpu.isDmgCompatMode()
-                && !isDoubleSpeed() && gpu.isStatModeLatchRephasedBySpeedSwitch();
-        boolean doubleSpeedMode0 = isNativeDoubleSpeed()
-                && gpu.getLine() < 144
-                && gpu.getTicksInLine() == gpu.getMode0InterruptTick() - 2
+                && !((mode0IrqStatLatch & 0x40) != 0 && line == mode0IrqLycLatch);
+        boolean dmgMode0 = mode0SourceEnabled
+                && gpu.isDmgTerminalWindowMode0ReadPreviewPhase();
+        boolean nativeNormalRephased = gbc && !dmgCompat
+                && !doubleSpeed && gpu.isStatModeLatchRephasedBySpeedSwitch();
+        boolean doubleSpeedMode0 = gbc && !dmgCompat && doubleSpeed
+                && line < 144
+                && ticksInLine == mode0InterruptTick - 2
                 && enableBits == 0x48
-                && mode0EventArmed
-                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
-                && !((mode0IrqStatLatch & 0x40) != 0
-                && gpu.getLine() == mode0IrqLycLatch);
+                && mode0SourceEnabled;
         boolean earlyVisibleMode2 = nativeNormalRephased
-                && gpu.getLine() < 144 && gpu.getTicksInLine() == 450
+                && line < 144 && ticksInLine == 450
                 && pendingCgbMode2Interrupt;
         // The rephased normal-speed CPU bus completes an IF read against the
         // upcoming PPU edge. Keep this read-only: the stored IF and interrupt
         // acceptance paths still settle at their ordinary MSTAT/VBlank clocks.
         boolean frameMode2 = nativeNormalRephased
-                && gpu.getLine() == 153 && gpu.getTicksInLine() >= 452
-                && gpu.getTicksInLine() <= 455 && enableBits == 0x20;
+                && line == 153 && ticksInLine >= 452
+                && ticksInLine <= 455 && enableBits == 0x20;
         interruptManager.setCpuReadInterruptPreview(
                 InterruptType.LCDC,
                 dmgMode0 || doubleSpeedMode0 || earlyVisibleMode2 || frameMode2);
         boolean frameVBlank = nativeNormalRephased
-                && gpu.getLine() == 143 && gpu.getTicksInLine() >= 452
-                && gpu.getTicksInLine() <= 455 && enableBits == 0x20;
+                && line == 143 && ticksInLine >= 452
+                && ticksInLine <= 455 && enableBits == 0x20;
         interruptManager.setCpuReadInterruptPreview(InterruptType.VBlank, frameVBlank);
     }
 
     /** Returns whether this scheduler tick will publish the delayed mode-0 edge. */
     public boolean isMode0InterruptEdgeNextTick() {
-        return gpu != null && gpu.isGbc() && !gpu.isDmgCompatMode()
-                && gpu.getLine() < 144
-                && gpu.getTicksInLine() + 1 == gpu.getMode0InterruptTick()
+        return gpu != null
                 && mode0EventArmed
                 && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
                 && !interruptManager.isInterruptFlagSet(InterruptType.LCDC)
+                && gpu.isGbc() && !gpu.isDmgCompatMode()
+                && gpu.getLine() < 144
+                && gpu.getTicksInLine() + 1 == gpu.getMode0InterruptTick()
                 && !((mode0IrqStatLatch & 0x40) != 0
                 && gpu.getLine() == mode0IrqLycLatch);
     }
@@ -848,7 +872,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             statCaptureDelay = 0;
         } else if (isDoubleSpeed()) {
             statCaptureDelay = 6;
-        } else if ((gpu.getRegisters().get(SCX) & 7) == 0) {
+        } else if ((registers.get(SCX) & 7) == 0) {
             statCaptureDelay = 6;
         } else {
             statCaptureDelay = scxChangedSinceMode0Event ? 4 : 8;
@@ -875,7 +899,20 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     private boolean updateModeIrqEvents(boolean lcdcInterruptFlagWriteClear) {
-        if (!gpu.isLcdEnabled()) {
+        boolean currentLcdEnabled = gpu.isLcdEnabled();
+        boolean currentGbc = gpu.isGbc();
+        boolean currentDmgCompat = gpu.isDmgCompatMode();
+        int currentLine = gpu.getLine();
+        int currentTicksInLine = gpu.getTicksInLine();
+        boolean currentFirstLine = gpu.isFirstLine();
+        boolean currentDoubleSpeed = gpu.getCpuMachineCycleDots() == 2;
+        boolean currentNativeDoubleSpeed = currentGbc && !currentDmgCompat
+                && currentDoubleSpeed;
+        boolean deferredCgbMode2Phase = currentGbc && currentLcdEnabled
+                && !currentFirstLine && currentLine < 144
+                && currentTicksInLine >= gpu.getEarlyLineEdgeTick()
+                && currentTicksInLine <= 452;
+        if (!currentLcdEnabled) {
             previousMode0Window = false;
             previousMode1Window = false;
             previousMode2Window = false;
@@ -899,35 +936,35 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
         boolean suppressNaturalModeEdge = false;
         if (mode2Event && mode2EventIsScheduled()) {
-            if (isDeferredCgbMode2Phase()
-                    && gpu.getTicksInLine() == gpu.getEarlyLineEdgeTick()) {
+            if (deferredCgbMode2Phase
+                    && currentTicksInLine == gpu.getEarlyLineEdgeTick()) {
                 // The early CGB mode level only schedules the line-tail MSTAT event.
                 // Its FF41/FF45 blockers are captured at the event itself, after
                 // their independent write windows have elapsed.
                 boolean ifHigh =
                         interruptManager.isInterruptFlagSet(InterruptType.LCDC);
-                pendingCgbMode2Interrupt = !ifHigh || (isDoubleSpeed() && !intLine);
+                pendingCgbMode2Interrupt = !ifHigh || (currentDoubleSpeed && !intLine);
                 pendingCgbMode2IfHighAtCapture =
-                        isDoubleSpeed() && pendingCgbMode2Interrupt && ifHigh;
+                        currentDoubleSpeed && pendingCgbMode2Interrupt && ifHigh;
                 cgbMode2CapturedAtLineEdge = pendingCgbMode2Interrupt;
             } else {
-                if (gpu.isGbc()) {
+                if (currentGbc) {
                     // Coffee GB publishes the CGB mode-2 request on its early CPU
                     // synchronizer edge. Relative to that edge, the six-clock
                     // register capture window has already elapsed.
                     commitPendingModeIrqLycImmediately();
                 }
-                int eventLy = gpu.getLine() == 0 && gpu.getTicksInLine() < 4
-                        ? 0 : incrementLy(gpu.getLine());
+                int eventLy = currentLine == 0 && currentTicksInLine < 4
+                        ? 0 : incrementLy(currentLine);
                 boolean blockedByM1 = eventLy == 0 && (modeIrqStatLatch & 0x10) != 0;
                 int precedingLy = eventLy == 0 ? 0 : eventLy - 1;
                 boolean blockedByLyc = (modeIrqStatLatch & 0x40) != 0
                         && precedingLy == modeIrqLycLatch;
                 if (blockedByM1 || blockedByLyc) {
                     suppressNaturalModeEdge = true;
-                } else if (gpu.isGbc() && !gpu.isDmgCompatMode()
-                        && !isDoubleSpeed() && gpu.getLine() == 153
-                        && gpu.getTicksInLine() == 454) {
+                } else if (currentGbc && !currentDmgCompat
+                        && !currentDoubleSpeed && currentLine == 153
+                        && currentTicksInLine == 454) {
                     boolean capturedRequest =
                             !interruptManager.isInterruptFlagSet(InterruptType.LCDC)
                                     && !frameMode2AcknowledgeWins;
@@ -955,16 +992,16 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         // While the CGB's early mode level is waiting for the explicit MSTAT
         // event, keep the shared level synchronized without publishing a second,
         // combinational edge from a late FF41 write.
-        suppressNaturalModeEdge |= isDeferredCgbMode2Phase()
+        suppressNaturalModeEdge |= deferredCgbMode2Phase
                 && (pendingCgbMode2Interrupt || (enableBits & 0x20) != 0);
         if (mode1Event) {
-            if (gpu.isGbc() && gpu.getLine() == 143) {
+            if (currentGbc && currentLine == 143) {
                 cgbMode1IfClearAtCapture =
                         !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
             } else {
                 refreshModeIrqLatches(false);
             }
-            if (!gpu.isGbc()
+            if (!currentGbc
                     && dmgLyc143Mode1CaptureClock != NO_LYC_IRQ_EVENT
                     && lastLcdcInterruptAcknowledgeClock
                     > dmgLyc143Mode1CaptureClock) {
@@ -972,8 +1009,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             }
             dmgLyc143Mode1CaptureClock = NO_LYC_IRQ_EVENT;
         }
-        if (!gpu.isGbc() && gpu.getLine() == 143
-                && gpu.getTicksInLine() == 448) {
+        if (!currentGbc && currentLine == 143
+                && currentTicksInLine == 448) {
             dmgLyc143Mode1CaptureClock = NO_LYC_IRQ_EVENT;
             if ((enableBits & 0x50) == 0x50 && intCoincidence) {
                 if (interruptManager.isInterruptFlagSet(InterruptType.LCDC)) {
@@ -984,16 +1021,16 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 }
             }
         }
-        if (isNativeDoubleSpeed() && gpu.getLine() == 143
-                && gpu.getTicksInLine() == 452) {
+        if (currentNativeDoubleSpeed && currentLine == 143
+                && currentTicksInLine == 452) {
             cgbMode1IfClearAtCapture =
                     !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
         }
-        if (gpu.isGbc() && gpu.getLine() == 143 && gpu.getTicksInLine() == 454) {
+        if (currentGbc && currentLine == 143 && currentTicksInLine == 454) {
             boolean blockedByCapturedMode = (modeIrqStatLatch & 0x28) != 0;
             pendingCgbMode1Interrupt = (enableBits & 0x10) != 0
                     && !blockedByCapturedMode && cgbMode1IfClearAtCapture;
-            if (isNativeDoubleSpeed() && pendingCgbMode1Interrupt) {
+            if (currentNativeDoubleSpeed && pendingCgbMode1Interrupt) {
                 interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
                         InterruptType.LCDC);
                 pendingCgbMode1Interrupt = false;
@@ -1005,8 +1042,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             }
             refreshModeIrqLatches(false);
         }
-        if (gpu.isGbc() && !isDoubleSpeed() && gpu.getLine() == 143
-                && gpu.getTicksInLine() == 455 && pendingCgbMode1Interrupt) {
+        if (currentGbc && !currentDoubleSpeed && currentLine == 143
+                && currentTicksInLine == 455 && pendingCgbMode1Interrupt) {
             boolean newlyAsserted =
                     !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
             interruptManager.requestInterrupt(InterruptType.LCDC);
@@ -1018,11 +1055,11 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         if (mode0Event && mode0EventArmed) {
             boolean enabled = ((enableBits | mode0IrqStatLatch) & 0x08) != 0;
             boolean blockedByLyc = (mode0IrqStatLatch & 0x40) != 0
-                    && gpu.getLine() == mode0IrqLycLatch;
+                    && currentLine == mode0IrqLycLatch;
             if (!enabled || blockedByLyc) {
                 suppressNaturalModeEdge = true;
             } else if (mode0AcknowledgeWins
-                    || (!gpu.isGbc() && lcdcInterruptFlagWriteClear)) {
+                    || (!currentGbc && lcdcInterruptFlagWriteClear)) {
                 // At normal speed, an acknowledge already in the mode-0 capture
                 // window consumes this occurrence. A same-slot explicit IF clear
                 // similarly wins on DMG. Synchronize the shared STAT level without
@@ -1037,7 +1074,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                         InterruptType.LCDC);
                 suppressNaturalModeEdge = true;
             } else {
-                if (gpu.isGbc() && !gpu.isDmgCompatMode()
+                if (currentGbc && !currentDmgCompat
                         && cpuInterruptFlagReadMaskTicks > 0
                         && mode0InterruptReadSamplesOldLatch()) {
                     interruptManager.maskMode0LcdcReadForTicks(
@@ -1167,7 +1204,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     private void requestMode0InterruptEvent() {
         if (gpu.isGbc() && !gpu.isDmgCompatMode() && !isDoubleSpeed()
                 && gpu.getLine() == 0 && !gpu.isFirstLine()
-                && (gpu.getRegisters().get(SCX) & 7) == 0) {
+                && (registers.get(SCX) & 7) == 0) {
             // At normal speed and fine-scroll phase zero, line zero's mode-0
             // level reaches STAT on this dot while IF settles after the same-dot
             // CPU read phase.

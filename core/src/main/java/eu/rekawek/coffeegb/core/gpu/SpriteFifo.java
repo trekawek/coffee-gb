@@ -15,21 +15,21 @@ public class SpriteFifo implements StatefulComponent<SpriteFifo> {
 
     private static final int EMPTY_PRIORITY = 200;
 
-    private final int[] pixel = new int[8];
+    final int[] pixel = new int[8];
 
-    private final int[] palette = new int[8];
+    final int[] palette = new int[8];
 
-    private final int[] priority = new int[8];
+    final int[] priority = new int[8];
 
-    private final boolean[] bgPriority = new boolean[8];
+    final boolean[] bgPriority = new boolean[8];
 
-    private int head;
+    int head;
 
-    private int size;
+    int size;
 
     // pops taken while the FIFO was empty; a rewind cancels these first so it only
     // restores pixels that were really popped (window-activation rollback alignment)
-    private int underflow;
+    int underflow;
 
     /** Popped pixel color index, 0 = transparent. */
     public int poppedPixel;

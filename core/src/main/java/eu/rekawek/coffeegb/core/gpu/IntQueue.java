@@ -10,11 +10,11 @@ import java.util.NoSuchElementException;
 
 public class IntQueue implements StatefulComponent<IntQueue> {
 
-    private final int[] array;
+    final int[] array;
 
-    private int size;
+    int size;
 
-    private int offset;
+    int offset;
 
     public IntQueue(int capacity) {
         this.array = new int[capacity];
@@ -30,6 +30,58 @@ public class IntQueue implements StatefulComponent<IntQueue> {
         }
         array[(offset + size) % array.length] = value;
         size++;
+    }
+
+    /** Adds a complete pixel group without paying the per-element call boundary. */
+    void enqueue8(int[] values) {
+        if (size + values.length > array.length) {
+            throw new IllegalStateException("Queue is full");
+        }
+        int writeOffset = (offset + size) % array.length;
+        for (int value : values) {
+            array[writeOffset] = value;
+            writeOffset++;
+            if (writeOffset == array.length) {
+                writeOffset = 0;
+            }
+        }
+        size += values.length;
+    }
+
+    /** Adds eight copies of one pixel attribute without eight enqueue calls. */
+    void enqueue8(int value) {
+        if (size + 8 > array.length) {
+            throw new IllegalStateException("Queue is full");
+        }
+        int writeOffset = (offset + size) % array.length;
+        for (int i = 0; i < 8; i++) {
+            array[writeOffset] = value;
+            writeOffset++;
+            if (writeOffset == array.length) {
+                writeOffset = 0;
+            }
+        }
+        size += 8;
+    }
+
+    void copyTo(IntQueue target) {
+        if (target.size + size > target.array.length) {
+            throw new IllegalStateException("Queue is full");
+        }
+        int readOffset = offset;
+        int writeOffset = (target.offset + target.size) % target.array.length;
+        for (int i = 0; i < size; i++) {
+            target.array[writeOffset] = array[readOffset];
+            readOffset++;
+            writeOffset++;
+            if (readOffset == array.length) {
+                readOffset = 0;
+            }
+            if (writeOffset == target.array.length) {
+                writeOffset = 0;
+            }
+        }
+        target.size += size;
     }
 
     public int dequeue() {
