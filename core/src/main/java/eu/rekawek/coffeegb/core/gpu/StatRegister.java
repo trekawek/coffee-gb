@@ -963,13 +963,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
                         InterruptType.LCDC);
             } else if (gpu.isMode0IntWindow()) {
-                if (!gpu.isGbc() && gpu.hasObjectsOnLine()) {
-                    // The object-fetch tail has already crossed the DMG's interrupt
-                    // synchronizer by the time its delayed mode-0 edge becomes visible.
-                    interruptManager.requestInterrupt(InterruptType.LCDC);
-                } else {
-                    interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
-                }
+                requestMode0InterruptEvent();
             } else {
                 interruptManager.requestInterrupt(InterruptType.LCDC);
             }
