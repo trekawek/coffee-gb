@@ -521,6 +521,35 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         previousMode2Window = mode2Window;
 
         boolean suppressNaturalModeEdge = false;
+        if (mode2Event && mode2EventIsScheduled()) {
+            if (gpu.isGbc()) {
+                // Coffee GB publishes the CGB mode-2 request on its early CPU
+                // synchronizer edge. Relative to that edge, the two-/six-clock
+                // register capture windows have already elapsed.
+                commitPendingModeIrqStatImmediately();
+                commitPendingModeIrqLycImmediately();
+            }
+            int eventLy = gpu.getLine() == 0 && gpu.getTicksInLine() < 4
+                    ? 0 : incrementLy(gpu.getLine());
+            boolean blockedByM1 = eventLy == 0 && (modeIrqStatLatch & 0x10) != 0;
+            int precedingLy = eventLy == 0 ? 0 : eventLy - 1;
+            boolean blockedByLyc = (modeIrqStatLatch & 0x40) != 0
+                    && precedingLy == modeIrqLycLatch;
+            if (blockedByM1 || blockedByLyc) {
+                suppressNaturalModeEdge = true;
+            }
+            if (gpu.isGbc() && !gpu.isFirstLine()
+                    && gpu.getTicksInLine() == gpu.getEarlyLineEdgeTick()
+                    && gpu.getEarlyLineEdgeTick() < 452) {
+                // Native CGB exposes the pre-line mode-2 level before the scheduled
+                // MSTAT event. Preserve that shared level for FF41 writes/blocking,
+                // but publish the ordinary mode-2 IF request at Gambatte's dot 452.
+                pendingCgbMode2Interrupt = !blockedByM1 && !blockedByLyc
+                        && !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
+                suppressNaturalModeEdge = true;
+            }
+            refreshModeIrqLatches(true);
+        }
         return suppressNaturalModeEdge;
     }
 
