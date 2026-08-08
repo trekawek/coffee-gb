@@ -303,6 +303,14 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private void commitPendingModeIrqStatImmediately() {
+        if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                && pendingModeIrqStatClock < lycIrqClock) {
+            modeIrqStatLatch = pendingModeIrqStat;
+            pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+        }
+    }
+
     private void commitPendingModeIrqLycImmediately() {
         if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
                 && pendingModeIrqLycClock < lycIrqClock) {
