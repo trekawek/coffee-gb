@@ -1031,6 +1031,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             updateIntLine(computeIntLine(glitchEnable));
         }
         int newEnableBits = value & 0b01111000;
+        if (gpu.isGbc() && gpu.isLcdEnabled()
+                && (newEnableBits & ~enableBits & 0x40) != 0
+                && !(lycIrqValueSource == 153 && gpu.getLine() == 153
+                && gpu.getTicksInLine() < 6)
+                && scheduleLycIrqEvent(newEnableBits, lycIrqValueSource)
+                - lycIrqClock > 456) {
+            // The comparator event for this FF45 value has already passed. Enabling
+            // its STAT source in the following CPU slot may create an explicit
+            // register-change request, but must not synthesize a line-level edge.
+            suppressedLycIrqLine = lycIrqValueSource;
+        }
         enableBits = newEnableBits;
     }
 
