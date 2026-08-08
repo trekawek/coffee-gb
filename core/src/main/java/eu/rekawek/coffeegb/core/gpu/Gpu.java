@@ -327,7 +327,47 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     private boolean isPaletteAccessibleForCpu() {
-        return !(lcdEnabled && mode == Mode.PixelTransfer);
+        if (!lcdEnabled) {
+            return true;
+        }
+        if (firstLine && ticksInLine < 84) {
+            // The CGB palette bus has its own display-enable latch: it remains open
+            // through dot 79 at either CPU speed, then closes before the fetcher does.
+            return ticksInLine < 80;
+        }
+        if (mode == Mode.PixelTransfer) {
+            // Before the CPU/PPU clock mux has moved, the palette latch closes with
+            // the mode-3 skeleton. After a speed switch it follows the fetch-start
+            // phase instead. At double speed the first internal transfer dot is
+            // occupied, followed by one accessible CPU cycle before the steady lock.
+            if (!statModeLatchRephasedBySpeedSwitch) {
+                return false;
+            }
+            int position = pixelTransferPhase.getPosition();
+            return speedMode.getSpeedMode() == 2
+                    ? position > -16 && position < -4
+                    : position < -4;
+        }
+        if (mode == Mode.OamSearch
+                && speedMode.getSpeedMode() == 2
+                && ticksInLine >= 79) {
+            // A double-speed CPU can sample the closing latch one dot before the
+            // internal mode-3 transition.
+            return false;
+        }
+        if (!firstLine
+                && speedMode.getSpeedMode() == 1
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && !pixelTransferPhase.hasActivatedWindowOnLine()) {
+            // On steady BG-only normal-speed lines, the release is quantized by fine
+            // SCX rather than following the variable internal HBlank edge.
+            return mode != Mode.HBlank
+                    || ticksInLine >= 258 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0);
+        }
+        // Other lines open eight dots after the mode-0 edge at normal speed and six
+        // dots after it at double speed.
+        int handoffDots = 4 + 4 / speedMode.getSpeedMode();
+        return mode != Mode.HBlank || ticksInLine >= hblankIntFrom + handoffDots;
     }
 
     public Mode tick() {
