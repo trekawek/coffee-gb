@@ -550,6 +550,14 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
             refreshModeIrqLatches(true);
         }
+        if (mode1Event) {
+            if (gpu.isGbc() && gpu.getLine() == 143) {
+                cgbMode1IfClearAtCapture =
+                        !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
+            } else {
+                refreshModeIrqLatches(false);
+            }
+        }
         return suppressNaturalModeEdge;
     }
 
