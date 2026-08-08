@@ -1214,10 +1214,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // the line grid is locked to the machine-cycle phase: enabling the LCD starts
         // the line one tick after the LCDC write, matching the power-on grid
         this.ticksInLine = -1;
-        this.mode0IntFrom = Integer.MAX_VALUE;
         this.firstLine = true;
+        this.lcdEnableClockPhase = true;
         this.pixelTransferDone = false;
         this.hblankIntFrom = Integer.MAX_VALUE;
+        this.mode0IntFrom = Integer.MAX_VALUE;
+        this.scxWrittenThisLine = false;
+        this.wyWrittenThisLine = false;
+        this.lastCpuVramWriteTick = Integer.MIN_VALUE;
         r.put(LY, 0);
         // Enabling the LCD samples the line-zero window master immediately. Later
         // WY writes must not undo that sample (enable_display_ly0_wemaster).
