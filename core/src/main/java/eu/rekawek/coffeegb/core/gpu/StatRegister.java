@@ -291,26 +291,50 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     /**
      * Models the CGB's LYC write conflicts around the LY latch points.
      */
-    public void onLycWrite(int oldValue) {
-        if (!gpu.isGbc() || !gpu.isLcdEnabled()) {
+    public void onLycWrite(int oldValue, int newValue) {
+        int writtenLyc = newValue & 0xff;
+        long writtenValueEvent = scheduleLycIrqEvent(enableBits, writtenLyc);
+        if (gpu.isGbc() && gpu.isLcdEnabled()
+                && writtenLyc == registeredLy
+                && writtenValueEvent - lycIrqClock > 456) {
+            suppressedLycIrqLine = writtenLyc;
+        }
+        if (gpu.isGbc() && !isDoubleSpeed() && gpu.isLcdEnabled()
+                && gpu.getTicksInLine() >= 454
+                && lycComparatorSignal
+                && (enableBits & 0x40) != 0
+                && oldValue == gpu.getVisibleLy()
+                && oldValue != writtenLyc) {
+            // The dot-454 compare has already reached the interrupt latch. A CPU
+            // write in the following slot can change readable FF45, but cannot
+            // withdraw that captured request.
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+            intLine = true;
+        }
+        updateLycIrqRegisters(enableBits, writtenLyc);
+        if (oldValue != writtenLyc) {
+            queueModeIrqLycChange(writtenLyc);
+        }
+        if (!gpu.isLcdEnabled() || oldValue == writtenLyc) {
+            return;
+        }
+        if (lycRegChangeTriggersStatIrq(oldValue, writtenLyc)) {
+            if (gpu.isGbc()) {
+                // A write-created comparison crosses the CGB interrupt latch after
+                // the write cycle. Native double speed reaches the next CPU sampling
+                // edge in three PPU clocks; normal speed uses the five-clock response
+                // measured by Gambatte's LYC register-change path.
+                int responseClocks = isDoubleSpeed() ? 3 : 5;
+                pendingLycWriteIrq = Math.min(
+                        pendingLycWriteIrq, lycIrqClock + responseClocks);
+            } else {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+            }
+        }
+        if (!gpu.isGbc()) {
             return;
         }
         int ticksInLine = gpu.getTicksInLine();
-        if (ticksInLine == 452
-                && oldValue == gpu.getVisibleLy()
-                && (enableBits & 0b01000000) != 0) {
-            // At this phase the comparator sees the old LYC value before the
-            // CPU write settles on the register bus.
-            updateIntLine(true);
-        }
-        if (gpu.getLine() == 153
-                && ticksInLine == 4
-                && oldValue == 0
-                && (enableBits & 0b01000000) != 0) {
-            // During the CGB's 153-to-0 transition, the old LYC value is
-            // compared against the next LY value before this write settles.
-            updateIntLine(true);
-        }
         if (ticksInLine == 448 || (gpu.getLine() == 153 && ticksInLine == 0)) {
             // A write in the complementary conflict window is not observed by
             // the comparator until the next LY latch point.

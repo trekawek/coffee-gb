@@ -234,12 +234,8 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     private void setByteImmediately(int address, int value) {
         if (address == LYC.getAddress()) {
-            statRegister.onLycWrite(r.get(LYC));
+            statRegister.onLycWrite(r.get(LYC), value);
         }
-        if (oamRam.accepts(address)) {
-            if (!gbc) {
-                int accessedRow = getDirectOamWriteRow();
-                if (accessedRow >= 0) {
         if (address == WY.getAddress()) {
             // The CGB's secondary WY comparator trails a CPU write. At double speed
             // the same delay occupies fewer PPU dots; DMG writes already arrive on
@@ -249,7 +245,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                     : speedMode.getSpeedMode() == 2 ? 4 : 6;
             pixelTransferPhase.scheduleWindowYWrite(value, comparatorDelay);
             pixelMachine.scheduleWindowYWrite(value, comparatorDelay);
+            if (lcdEnabled && line < 144) {
+                wyWrittenThisLine = true;
+            }
         }
+        if (oamRam.accepts(address)) {
+            if (!gbc) {
+                int accessedRow = getDirectOamWriteRow();
+                if (accessedRow >= 0) {
                     if (suppressNextDirectOamWriteCorruption) {
                         suppressNextDirectOamWriteCorruption = false;
                     } else {
