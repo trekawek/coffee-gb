@@ -1057,14 +1057,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             // dot 453 double speed (the `> releaseTick` CGB rule below maps to 452).
             return speedMode.getSpeedMode() == 2 ? 452 : getEarlyLineEdgeTick();
         }
-        if (!gbc) {
-            return getEarlyLineEdgeTick();
-        }
         if (lcdEnableClockPhase && gbc && !speedMode.isDmgCompat()
                 && speedMode.getSpeedMode() == 1) {
             // The LCD-enable grid makes the CPU's stored dot 452 correspond to the
             // non-readable tail slot in Gambatte's comparator timeline.
             return 451;
+        }
+        if (!gbc) {
+            return getEarlyLineEdgeTick();
         }
         if (speedMode.isDmgCompat()) {
             return 452;
