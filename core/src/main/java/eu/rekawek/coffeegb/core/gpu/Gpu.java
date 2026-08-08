@@ -84,6 +84,10 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     private int hblankIntFrom = Integer.MAX_VALUE;
 
     /**
+    // The mode-0 STAT source is predicted at output X=158 (Gambatte's PPU X=166).
+    // It can rise while an object at X=167 is still extending the physical transfer.
+    private int mode0IntFrom = Integer.MAX_VALUE;
+
      * Coffee GB keeps a calibrated CPU-visible timing skeleton and a pixel-producing
      * dot machine four dots behind it. Selected DMG register slices cross into that
      * second clock domain through their own latches; CPU reads still see the bus value
