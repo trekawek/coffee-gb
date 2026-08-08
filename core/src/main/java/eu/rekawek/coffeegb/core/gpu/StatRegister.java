@@ -303,6 +303,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private long cpuCyclesSince(long clock) {
+        int cpuClocksPerDot = 4 / gpu.getCpuMachineCycleDots();
+        return Math.max(0, lycIrqClock - clock) * cpuClocksPerDot
+                + getNormalSpeedClockPhase();
+    }
+
     private boolean updateModeIrqEvents() {
         if (!gpu.isLcdEnabled()) {
             previousMode0Window = false;
