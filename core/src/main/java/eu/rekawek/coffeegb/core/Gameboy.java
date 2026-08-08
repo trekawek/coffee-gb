@@ -497,6 +497,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      */
     private void applyPostBootState(boolean nonCgbCart) {
         speedMode.setDmgCompat(gbc && nonCgbCart);
+        gpu.prepareForTick();
         biosShadow.setByte(0xff50, 0);
         // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
         timer.presetDiv(hardwareProfile.bootSpec().postBootDivPreset());
@@ -679,6 +680,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private Mode tickSubsystems() {
+        gpu.prepareForTick();
         statRegister.captureCpuStatReadPhase(cpu.isSynchronousHaltEntryStatPhase(),
                 cpu.isAsynchronousHaltEntryStatPhase(),
                 cpu.isOrdinaryHaltWakeStatPhase(),
