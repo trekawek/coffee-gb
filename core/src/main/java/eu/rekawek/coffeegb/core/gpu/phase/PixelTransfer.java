@@ -153,6 +153,13 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     // the WX=0 window activation costs one extra dot (SameBoy sleeps 1 cycle there)
     private int machineStall;
 
+    // These values are stable for the whole machine tick. Keeping them here lets the
+    // nested fetch/object helpers share the tick's register snapshot without repeatedly
+    // traversing the window-register accessors.
+    private boolean tickWindowDisplay;
+
+    private int tickWindowX;
+
     // WX value seen on the previous tick: the DMG's secondary WX==position+6 activation
     // is suppressed for the single tick right after a WX write (SameBoy wx_just_changed)
 
@@ -639,10 +646,15 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     @Override
     public boolean tick() {
+        boolean windowDisplay = isWindowDisplay();
+        tickWindowDisplay = windowDisplay;
+        tickWindowX = getWindowX();
         boolean windowDisplayRising = gbc
-                && isWindowDisplay() && !previousWindowDisplay;
-        boolean windowEnabledOnThisTick = isNormalSpeedWindowEnableEdge();
-        previousWindowDisplay = isWindowDisplay();
+                && windowDisplay && !previousWindowDisplay;
+        boolean windowEnabledOnThisTick = gbc
+                && windowDisplay && !previousWindowDisplay
+                && speedMode.getSpeedMode() == 1;
+        previousWindowDisplay = windowDisplay;
         int currentScx = r.get(SCX);
         int fineScxAdvance = (currentScx & 7) - (previousScx & 7);
         if (lcdEnableFirstLine
@@ -738,7 +750,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             // hardware comparator saw the window still enabled at the match dot, but the
             // fetch never starts, so no side effects remain (wewx rows whose activation
             // dot collides with the LCDC.5-off pulse)
-            if (getWindowX() == windowPendingWx && (gbc || isWindowDisplay())) {
+            if (tickWindowX == windowPendingWx && (gbc || windowDisplay)) {
                 if (position != windowPendingPos) {
                     // roll back the pixel that popped during the pending tick: on
                     // hardware the FIFO was already cleared at the match dot
@@ -763,7 +775,8 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                     // the fetch restarted at the match dot on hardware: advance one
                     // state so its reads land on the original dots despite the
                     // pending tick; a re-activation's fetch starts one T-cycle later
-                    advanceFetcher(true, false);
+                    fetcher.advance(position, true, windowLineCounter, false,
+                            tickWindowX, tickWindowDisplay);
                 }
                 windowActivatedThisLine = true;
             }
@@ -774,7 +787,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         // plotting its retained background, while subsequent fetch states use the BG
         // source. DMG changes source at its next early tile-fetch state and retains its
         // separate restart/catch-up behaviour below.
-        if (gbc && window && !isWindowDisplay()) {
+        if (gbc && window && !windowDisplay) {
             if (speedMode.getSpeedMode() == 2 && (r.get(SCX) & 7) == 5
                     && ((entryDelay == 0 && fetcher.getState() == Fetcher.PUSH)
                     || (entryDelay == 4
@@ -789,7 +802,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             windowBeingFetched = false;
         } else if (!gbc
                 && window
-                && !isWindowDisplay()
+                && !windowDisplay
                 && objStep < 0
                 && fetcher.getState() <= Fetcher.GET_TILE_DATA_LOW_T2) {
             // the write disabling the window catches the fetch through GET_TILE_DATA_LOW_T2
@@ -809,9 +822,9 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         // mid-line pulse: the window will "catch up" when it is re-enabled (see the
         // desync branch below). Only for regular WX>=7 positions so the discard-phase
         // WX=0..6 activation is untouched.
-        if (!gbc && !window && !isWindowDisplay() && !windowActivatedThisLine
+        if (!gbc && !window && !windowDisplay && !windowActivatedThisLine
                 && windowYTriggered) {
-            int wxNow = getWindowX();
+            int wxNow = tickWindowX;
             if (wxNow >= 7 && wxNow < 166 && !r.isWxJustChanged()
                     && wxNow == ((position + 7) & 0xff)) {
                 windowCatchUpPos = position;
@@ -823,11 +836,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         // and the CGB also accepts WX=166. The window line counter increments at the
         // activation itself, once per line (mealybug m3_wx_*_change)
         if (!window
-                && isWindowDisplay()
+                && windowDisplay
                 && !windowEnabledOnThisTick
                 && (gbc || lcdc.isBgAndWindowDisplay())
                 && isWindowYMatch()) {
-            int wx = getWindowX();
+            int wx = tickWindowX;
             boolean activate;
             if (wx == 0) {
                 activate = (position >= -15 && position <= -7)
@@ -873,7 +886,8 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 fifo.clearBg();
                 cgbWindowStartTicks = gbc ? 6 : 0;
                 fetcher.startWindow();
-                advanceFetcher(true, false);
+                fetcher.advance(position, true, windowLineCounter, false,
+                        tickWindowX, tickWindowDisplay);
                 windowActivatedThisLine = true;
             } else if (activate && windowPendingTicks == 0) {
                 windowPendingTicks = 1;
@@ -887,11 +901,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
         if (window
                 && !windowBeingFetched
-                && (!gbc || getWindowX() == 0)
-                && isWindowDisplay()
+                && (!gbc || tickWindowX == 0)
+                && windowDisplay
                 && fetcher.getState() == Fetcher.GET_TILE_T1
                 && fifo.getLength() == 8
-                && getWindowX() == ((position + 7) & 0xff)) {
+                && tickWindowX == ((position + 7) & 0xff)) {
             insertBgPixel = true;
         }
 
@@ -907,8 +921,9 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 // on the rows whose object fetch the pulse truncates)
                 int catchUpDots = 0;
                 for (int i = 0; i < 3 && position != 160; i++) {
-                    renderPixelIfPossible();
-                    advanceFetcher(window, false);
+                    renderOnePixelIfPossible();
+                    fetcher.advance(position, window, windowLineCounter, false,
+                            tickWindowX, tickWindowDisplay);
                     catchUpDots++;
                 }
                 objectTimingPenalty -= catchUpDots;
@@ -939,7 +954,8 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 // the object fetch waits for the background fetcher's tile data; the wait
                 // already counts as "during object fetch" for the LCDC.1 conflict special
                 objWaiting = true;
-                advanceFetcher(window, true);
+                fetcher.advance(position, window, windowLineCounter, true,
+                        tickWindowX, tickWindowDisplay);
                 objectTimingPenalty++;
                 return true;
             }
@@ -951,8 +967,9 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
         objWaiting = false;
 
-        renderPixelIfPossible();
-        advanceFetcher(window, false);
+        renderOnePixelIfPossible();
+        fetcher.advance(position, window, windowLineCounter, false,
+                tickWindowX, tickWindowDisplay);
         if (fetcher.takeWindowRefresh()) {
             wdwRefreshAge = 0;
             wdwRefreshPops = 0;
@@ -989,14 +1006,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     // match is within this many dots of the re-enable position (mealybug wewx)
     private static final int DESYNC_MAX_GAP = 3;
 
-    private void advanceFetcher(boolean fetchingWindow, boolean duringObjectFetch) {
-        fetcher.setWindowRegisterView(getWindowX(), isWindowDisplay());
-        fetcher.advance(position, fetchingWindow, windowLineCounter, duringObjectFetch);
-    }
-
     private void objTick() {
         if (objStep <= 1) {
-            advanceFetcher(window, true);
+            fetcher.advance(position, window, windowLineCounter, true,
+                    tickWindowX, tickWindowDisplay);
         }
         if (objStep == 1) {
             SpritePosition sprite = sprites[spriteOrder[spriteHead]];
@@ -1018,10 +1031,6 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         objStep++;
     }
 
-    private void renderPixelIfPossible() {
-        renderOnePixelIfPossible();
-    }
-
     private void renderOnePixelIfPossible() {
         // rendering does not occur as long as an object at X=0 is pending
         if (spriteHead < spriteCount
@@ -1031,7 +1040,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
         boolean useClearedCgbBackground = gbc
                 && cgbWindowStartTicks > 0
-                && !isWindowDisplay();
+                && !tickWindowDisplay;
         if (gbc && cgbWindowStartTicks > 0 && !useClearedCgbBackground) {
             return;
         }

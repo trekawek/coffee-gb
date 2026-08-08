@@ -477,7 +477,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return null;
         }
 
-        advancePendingPpuWrites();
+        if (!pendingPpuWrites.isEmpty()) {
+            advancePendingPpuWrites();
+        }
         pixelMachine.advanceDelayedWindowWrites();
 
         // write-conflict mixes settle and the LCD output stage advances every tick,
@@ -562,10 +564,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                         boolean terminalWindowAlreadyStarted =
                                 pixelTransferPhase.hasCgbTerminalWindowStarted();
                         boolean active = phase.tick();
-                        if (!terminalWindowAlreadyStarted
+                        if (mode0IntFrom != Integer.MAX_VALUE
+                                && !terminalWindowAlreadyStarted
                                 && pixelTransferPhase.hasCgbTerminalWindowStarted()
-                                && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()
-                                && mode0IntFrom != Integer.MAX_VALUE) {
+                                && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()) {
                             // The X=166 M0 event is independent of the later X=167
                             // STAT/bus prediction. When both comparators collide, its
                             // CPU-visible event crosses two dots after Coffee's early
@@ -574,9 +576,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                             // X=159->160 commit, so mode0IntFrom is already finite.
                             mode0IntFrom += 2;
                         }
-                        if (mode0IntFrom == Integer.MAX_VALUE
+                        if (oldPosition <= 158
+                                && mode0IntFrom == Integer.MAX_VALUE
                                 && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()
-                                && oldPosition <= 158
                                 && pixelTransferPhase.getPosition() > 158) {
                             mode0IntFrom = ticksInLine + 3;
                         }
