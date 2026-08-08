@@ -160,6 +160,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         if (interruptManager.consumeLcdcInterruptAcknowledge()) {
             lastLcdcInterruptAcknowledgeClock = lycIrqClock;
         }
+        if (pendingCgbMode0Interrupt) {
+            interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            pendingCgbMode0Interrupt = false;
+        }
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
