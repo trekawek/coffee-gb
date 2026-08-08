@@ -302,6 +302,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private static int incrementLy(int ly) {
+        return ly == 153 ? 0 : ly + 1;
+    }
+
     private long scheduleLycIrqEvent(int stat, int lyc) {
         if (gpu == null || !gpu.isLcdEnabled() || (stat & 0x40) == 0 || lyc >= 154) {
             return NO_LYC_IRQ_EVENT;
