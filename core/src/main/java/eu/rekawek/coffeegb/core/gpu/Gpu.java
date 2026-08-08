@@ -212,6 +212,16 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             if (!gbc) {
                 int accessedRow = getDirectOamWriteRow();
                 if (accessedRow >= 0) {
+        if (address == WY.getAddress()) {
+            // The CGB's secondary WY comparator trails a CPU write. At double speed
+            // the same delay occupies fewer PPU dots; DMG writes already arrive on
+            // the comparator's clock edge in this scheduler.
+            int comparatorDelay = !lcdEnabled || !gbc
+                    ? 0
+                    : speedMode.getSpeedMode() == 2 ? 4 : 6;
+            pixelTransferPhase.scheduleWindowYWrite(value, comparatorDelay);
+            pixelMachine.scheduleWindowYWrite(value, comparatorDelay);
+        }
                     if (suppressNextDirectOamWriteCorruption) {
                         suppressNextDirectOamWriteCorruption = false;
                     } else {
