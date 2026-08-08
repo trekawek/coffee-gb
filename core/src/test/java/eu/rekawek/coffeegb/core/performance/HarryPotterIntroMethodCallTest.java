@@ -32,6 +32,10 @@ public class HarryPotterIntroMethodCallTest {
         if (targetFrames < 1) {
             throw new IllegalArgumentException("harryPotterTargetFrames must be positive");
         }
+        int topMethods = Integer.getInteger("harryPotterMethodCallTop", 0);
+        if (topMethods < 0) {
+            throw new IllegalArgumentException("harryPotterMethodCallTop must not be negative");
+        }
 
         byte[] batteryData = HarryPotterIntroHarness.loadBatteryData();
         AgentCounter counter = AgentCounter.load();
@@ -62,6 +66,9 @@ public class HarryPotterIntroMethodCallTest {
             System.out.printf("Core method calls: %d%n", methodCalls);
             System.out.printf("Core method calls/frame: %.3f%n", methodCalls / (double) frames);
             System.out.printf("Core method calls/tick: %.6f%n", methodCalls / (double) ticks);
+            if (topMethods > 0) {
+                System.out.print(counter.report(topMethods));
+            }
         }
     }
 
@@ -69,16 +76,19 @@ public class HarryPotterIntroMethodCallTest {
 
         private final Method reset;
         private final Method get;
+        private final Method report;
 
-        private AgentCounter(Method reset, Method get) {
+        private AgentCounter(Method reset, Method get, Method report) {
             this.reset = reset;
             this.get = get;
+            this.report = report;
         }
 
         private static AgentCounter load() {
             try {
                 Class<?> type = Class.forName("eu.rekawek.coffeegb.harness.MethodCallCounter");
-                return new AgentCounter(type.getMethod("reset"), type.getMethod("get"));
+                return new AgentCounter(type.getMethod("reset"), type.getMethod("get"),
+                        type.getMethod("report", int.class));
             } catch (ReflectiveOperationException e) {
                 throw new IllegalStateException(
                         "Method-call agent is not loaded; run the test with -javaagent", e);
@@ -91,6 +101,10 @@ public class HarryPotterIntroMethodCallTest {
 
         private long get() throws ReflectiveOperationException {
             return (long) get.invoke(null);
+        }
+
+        private String report(int limit) throws ReflectiveOperationException {
+            return (String) report.invoke(null, limit);
         }
     }
 }

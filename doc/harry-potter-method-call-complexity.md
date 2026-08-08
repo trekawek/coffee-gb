@@ -96,12 +96,41 @@ $env:HARRY_POTTER_TARGET_FRAMES = '1800'
 bash ./scripts/count-harry-potter-intro-method-calls.sh
 ```
 
+To print an exact ranking of the hottest production-core methods for that run:
+
+```powershell
+$env:HARRY_POTTER_METHOD_CALL_TOP = '500'
+bash ./scripts/count-harry-potter-intro-method-calls.sh
+```
+
+Each `HOT_METHOD` record contains the rank, exact call count, share of all counted calls, and
+fully qualified method name. The setting defaults to zero, which keeps normal historical scans
+compact. A large ranking is most useful for investigating one current commit; set it during a
+full scan only if per-method output for every commit is intentional.
+
 To override the embedded save, set `HARRY_POTTER_BATTERY_SAVE` to an absolute `.sav` path.
 
 This metric counts method entries, including constructors, in production core packages. It
 excludes abstract methods, native methods, class initializers, and the performance harness
 package itself. It is an exact complexity proxy, not a count of bytecode instructions or CPU
 cycles.
+
+## Sample CPU profiling
+
+The throughput probe can also capture a Java Flight Recorder profile of only its 600-frame
+measurement window. The recording starts after the 1,200-frame warm-up:
+
+```powershell
+$env:HARRY_POTTER_JFR = 'D:/tmp/coffee-gb-harry.jfr'
+bash ./scripts/measure-harry-potter-intro-fps.sh
+jfr view hot-methods D:/tmp/coffee-gb-harry.jfr
+```
+
+`jfr` is included with the JDK; the `view hot-methods` command is available in the validated
+JDK 21 configuration. Its sampled profile is directional rather than an exact call count, and
+recording adds overhead, so do not compare a profiled FPS result directly with an unprofiled
+result. Use the exact `HOT_METHOD` ranking to find call-volume candidates and JFR to identify
+which of those candidates consume meaningful CPU time.
 
 ## Instruction for another coding agent
 

@@ -10,8 +10,16 @@ DEFAULT_ROM="Z:/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europ
 ROM_PATH="${HARRY_POTTER_ROM:-$DEFAULT_ROM}"
 BATTERY_SAVE="${HARRY_POTTER_BATTERY_SAVE:-}"
 TARGET_FRAMES="${HARRY_POTTER_TARGET_FRAMES:-1800}"
+METHOD_CALL_TOP="${HARRY_POTTER_METHOD_CALL_TOP:-0}"
 
-if [[ ! -f "${AGENT_JAR}" ]]; then
+if [[ ! "${METHOD_CALL_TOP}" =~ ^[0-9]+$ ]]; then
+  echo "HARRY_POTTER_METHOD_CALL_TOP must be a non-negative integer" >&2
+  exit 2
+fi
+
+if [[ ! -f "${AGENT_JAR}" ]] \
+    || [[ -n "$(find "${AGENT_PROJECT}/pom.xml" "${AGENT_PROJECT}/src" \
+      -type f -newer "${AGENT_JAR}" -print -quit)" ]]; then
   mvn -q -f "${AGENT_PROJECT}/pom.xml" package
 fi
 
@@ -63,6 +71,7 @@ if ! JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+${JAVA_TOOL_OPTIONS} }-javaagent:${
     -DharryPotterRom="${ROM_PATH}" \
     -DharryPotterBatterySave="${BATTERY_SAVE}" \
     -DharryPotterTargetFrames="${TARGET_FRAMES}" \
+    -DharryPotterMethodCallTop="${METHOD_CALL_TOP}" \
     -Dsurefire.useFile=true \
     clean test >"${MAVEN_LOG}" 2>&1; then
   cat "${MAVEN_LOG}" >&2
@@ -70,8 +79,9 @@ if ! JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:+${JAVA_TOOL_OPTIONS} }-javaagent:${
 fi
 
 REPORT="core/target/surefire-reports/TEST-eu.rekawek.coffeegb.core.performance.HarryPotterIntroMethodCallTest.xml"
-RESULT="$(sed -n '/<system-out><!\[CDATA\[/,/]]><\/system-out>/p' "${REPORT}" \
-  | sed -e 's/^.*<!\[CDATA\[//' -e 's/]]><\/system-out>.*$//' \
+TEST_OUTPUT="$(sed -n '/<system-out><!\[CDATA\[/,/]]><\/system-out>/p' "${REPORT}" \
+  | sed -e 's/^.*<!\[CDATA\[//' -e 's/]]><\/system-out>.*$//')"
+RESULT="$(printf '%s\n' "${TEST_OUTPUT}" \
   | sed -n '/^METHOD_CALL_RESULT /p' \
   | tail -n 1)"
 
@@ -80,3 +90,4 @@ if [[ -z "${RESULT}" ]]; then
   exit 1
 fi
 echo "METHOD_CALL_RESULT commit=${TARGET_COMMIT} ${RESULT#METHOD_CALL_RESULT }"
+printf '%s\n' "${TEST_OUTPUT}" | sed -n '/^HOT_METHOD /p'

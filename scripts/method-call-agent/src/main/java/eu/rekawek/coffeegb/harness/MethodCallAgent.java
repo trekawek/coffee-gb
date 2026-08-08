@@ -38,7 +38,7 @@ public final class MethodCallAgent {
 
             try {
                 ClassReader reader = new ClassReader(classfileBuffer);
-                ClassWriter writer = new ClassWriter(reader, 0);
+                ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
                 ClassVisitor visitor = new ClassVisitor(Opcodes.ASM9, writer) {
                     @Override
                     public MethodVisitor visitMethod(int access, String name, String descriptor,
@@ -49,12 +49,15 @@ public final class MethodCallAgent {
                                 || "<clinit>".equals(name)) {
                             return method;
                         }
+                        int methodId = MethodCallCounter.register(
+                                className.replace('/', '.') + "." + name + descriptor);
                         return new MethodVisitor(Opcodes.ASM9, method) {
                             @Override
                             public void visitCode() {
                                 super.visitCode();
+                                super.visitLdcInsn(methodId);
                                 super.visitMethodInsn(Opcodes.INVOKESTATIC, COUNTER,
-                                        "increment", "()V", false);
+                                        "increment", "(I)V", false);
                             }
                         };
                     }

@@ -7,6 +7,7 @@ HARNESS_REF="${HARNESS_REF:-codex/a3e0ef8-split3}"
 DEFAULT_ROM="Z:/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europe) (En,Fr,De,Es,It,Nl,Pt,Sv,No,Da,Fi).gbc"
 ROM_PATH="${HARRY_POTTER_ROM:-$DEFAULT_ROM}"
 BATTERY_SAVE="${HARRY_POTTER_BATTERY_SAVE:-}"
+JFR_PATH="${HARRY_POTTER_JFR:-}"
 if (($# > 0)); then
   ROM_PATH="$1"
 fi
@@ -44,6 +45,7 @@ mvn -q -pl core \
   -Dtest=HarryPotterIntroFpsTest \
   -DharryPotterRom="$ROM_PATH" \
   -DharryPotterBatterySave="$BATTERY_SAVE" \
+  -DharryPotterJfr="$JFR_PATH" \
   -Dsurefire.useFile=false \
   test
 

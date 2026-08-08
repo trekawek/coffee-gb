@@ -8,6 +8,10 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import org.junit.Test;
 
 import java.io.File;
+import java.nio.file.Path;
+
+import jdk.jfr.Configuration;
+import jdk.jfr.Recording;
 
 /**
  * Unthrottled throughput probe for the Harry Potter intro after its company logos.
@@ -19,6 +23,8 @@ import java.io.File;
 public class HarryPotterIntroFpsTest {
 
     private static final String ROM_PROPERTY = "harryPotterRom";
+
+    private static final String JFR_PROPERTY = "harryPotterJfr";
 
     private static final String DEFAULT_ROM = "Z:\\emu\\roms\\gbc\\H\\"
             + "Harry Potter and the Sorcerer's Stone (USA, Europe) "
@@ -44,7 +50,7 @@ public class HarryPotterIntroFpsTest {
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
 
             Window warmup = runFrames(gameboy, WARMUP_FRAMES);
-            Window measurement = runFrames(gameboy, MEASUREMENT_FRAMES);
+            Window measurement = runMeasurement(gameboy);
 
             double fps = measurement.frames * 1_000_000_000.0 / measurement.elapsedNanos;
             double ticksPerSecond = measurement.ticks * 1_000_000_000.0 / measurement.elapsedNanos;
@@ -58,6 +64,24 @@ public class HarryPotterIntroFpsTest {
                     warmup.ticks * 1_000_000_000.0 / warmup.elapsedNanos);
             System.out.printf("Nominal-frame headroom: %.1f%%%n", fps * 100.0 / nominalFps);
         }
+    }
+
+    private static Window runMeasurement(Gameboy gameboy) throws Exception {
+        String jfrPath = System.getProperty(JFR_PROPERTY, "");
+        if (jfrPath.isBlank()) {
+            return runFrames(gameboy, MEASUREMENT_FRAMES);
+        }
+
+        Path output = Path.of(jfrPath).toAbsolutePath();
+        Window measurement;
+        try (Recording recording = new Recording(Configuration.getConfiguration("profile"))) {
+            recording.start();
+            measurement = runFrames(gameboy, MEASUREMENT_FRAMES);
+            recording.stop();
+            recording.dump(output);
+        }
+        System.out.println("JFR recording: " + output);
+        return measurement;
     }
 
     private static Window runFrames(Gameboy gameboy, long targetFrames) {
