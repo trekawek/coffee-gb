@@ -23,6 +23,8 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
 
     private BiosShadow biosShadow;
 
+    private transient Runnable timingStateListener;
+
     public SpeedMode(boolean gbc) {
         this(gbc, false);
     }
@@ -38,6 +40,18 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
 
     public void setDmgCompat(boolean dmgCompat) {
         this.dmgCompat = dmgCompat;
+        notifyTimingStateChanged();
+    }
+
+    /** Installs the owner-thread observer used by timing consumers to refresh cached state. */
+    public void setTimingStateListener(Runnable listener) {
+        timingStateListener = listener;
+    }
+
+    private void notifyTimingStateChanged() {
+        if (timingStateListener != null) {
+            timingStateListener.run();
+        }
     }
 
     public boolean isDmgCompat() {
@@ -80,6 +94,7 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
         if (prepareSpeedSwitch) {
             currentSpeed = !currentSpeed;
             prepareSpeedSwitch = false;
+            notifyTimingStateChanged();
             return true;
         } else {
             return false;
@@ -107,6 +122,7 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
         this.currentSpeed = mem.currentSpeed;
         this.prepareSpeedSwitch = mem.prepareSpeedSwitch;
         this.dmgCompat = mem.dmgCompat;
+        notifyTimingStateChanged();
     }
 
     private record SpeedModeState(boolean currentSpeed, boolean prepareSpeedSwitch, boolean dmgCompat)

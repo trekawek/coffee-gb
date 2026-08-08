@@ -52,6 +52,13 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
 
+    // Cached for the complete owner-thread tick. The clock mode can change only at a
+    // CPU STOP boundary; refreshing once per tick avoids repeating the same cross-object
+    // getter calls in the PPU timing decision tree.
+    private int speedModeValue = 1;
+    private boolean dmgCompatValue;
+    private boolean timingSnapshotPrepared;
+
     private final boolean earlyCgbLyReadEdge;
 
     private final ColorPalette bgPalette;
@@ -231,6 +238,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
+        prepareForTick();
+        speedMode.setTimingStateListener(this::prepareForTick);
+        timingSnapshotPrepared = false;
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -275,6 +285,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
+        if (!timingSnapshotPrepared) {
+            prepareForTick();
+        }
         cancelPendingPpuWrites(address);
         cancelDelayedPixelWindowWrite(address);
         setByteImmediately(address, value);
@@ -282,12 +295,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        if (!timingSnapshotPrepared) {
+            prepareForTick();
+        }
         scheduleDmgPixelWindowWrite(address, value);
         if (address == LCDC_ADDRESS && gbc && lcdEnabled && mode == Mode.PixelTransfer) {
             int changedTileSelect = (lcdc.get() ^ value) & 0x10;
             boolean fallingEdge = (lcdc.get() & 0x10) != 0 && (value & 0x10) == 0;
-            if ((speedMode.getSpeedMode() == 1 && fallingEdge)
-                    || (speedMode.getSpeedMode() == 2 && changedTileSelect != 0)) {
+            if ((speedModeValue == 1 && fallingEdge)
+                    || (speedModeValue == 2 && changedTileSelect != 0)) {
                 lcdc.triggerTileSelectGlitch();
             }
         }
@@ -295,7 +311,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             boolean dmgStartupEdge = !gbc
                     && pixelTransferPhase.getPosition() == -16
                     && pixelMachine.getPosition() == -16;
-            boolean doubleSpeedStartupEdge = gbc && speedMode.getSpeedMode() == 2
+            boolean doubleSpeedStartupEdge = gbc && speedModeValue == 2
                     && doubleSpeedMode2DispatchStatTailThisLine
                     && pixelMachine.getPosition() == -6;
             if (((r.get(SCX) ^ value) & 0x07) != 0
@@ -335,7 +351,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // the comparator's clock edge in this scheduler.
             int comparatorDelay = !lcdEnabled || !gbc
                     ? 0
-                    : speedMode.getSpeedMode() == 2 ? 4 : 6;
+                    : speedModeValue == 2 ? 4 : 6;
             pixelTransferPhase.scheduleWindowYWrite(value, comparatorDelay);
             pixelMachine.scheduleWindowYWrite(value, comparatorDelay);
             if (lcdEnabled && line < 144) {
@@ -384,6 +400,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public int getByte(int address) {
+        if (!timingSnapshotPrepared) {
+            prepareForTick();
+        }
         if (address >= LCDC_ADDRESS && address <= LAST_STANDARD_REGISTER_ADDRESS) {
             int cpuVisible = cpuVisiblePpuRegisters[address - LCDC_ADDRESS];
             if (cpuVisible >= 0) {
@@ -437,19 +456,19 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 return false;
             }
             int position = pixelTransferPhase.getPosition();
-            return speedMode.getSpeedMode() == 2
+            return speedModeValue == 2
                     ? position > -16 && position < -4
                     : position < -4;
         }
         if (mode == Mode.OamSearch
-                && speedMode.getSpeedMode() == 2
+                && speedModeValue == 2
                 && ticksInLine >= 79) {
             // A double-speed CPU can sample the closing latch one dot before the
             // internal mode-3 transition.
             return false;
         }
         if (!firstLine
-                && speedMode.getSpeedMode() == 1
+                && speedModeValue == 1
                 && !pixelTransferPhase.hasObjectsOnLine()
                 && !pixelTransferPhase.hasActivatedWindowOnLine()) {
             // On steady BG-only normal-speed lines, the release is quantized by fine
@@ -459,11 +478,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         // Other lines open eight dots after the mode-0 edge at normal speed and six
         // dots after it at double speed.
-        int handoffDots = 4 + 4 / speedMode.getSpeedMode();
+        int handoffDots = 4 + 4 / speedModeValue;
         return mode != Mode.HBlank || ticksInLine >= hblankIntFrom + handoffDots;
     }
 
     public Mode tick() {
+        if (!timingSnapshotPrepared) {
+            prepareForTick();
+        }
+        timingSnapshotPrepared = false;
         cpuLyReadAcrossLineEdge = false;
         directOamReadCorruptionThisTick = false;
         suppressNextDirectOamReadCorruption = false;
@@ -486,7 +509,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // in all modes (the last pixels of a line leave the delay line during HBlank)
         r.tickConflicts();
         lcdc.tickConflicts();
-        boolean earlyWindowFrameEdge = !gbc || speedMode.getSpeedMode() == 1;
+        boolean earlyWindowFrameEdge = !gbc || speedModeValue == 1;
         if (earlyWindowFrameEdge && line == 153 && ticksInLine == 454) {
             pixelTransferPhase.resetWindowLineCounter();
             pixelMachine.resetWindowLineCounter();
@@ -651,8 +674,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Rephases the CGB CPU-readable PPU latches when the CPU clock mux changes. */
     public void onSpeedSwitch() {
+        prepareForTick();
         statModeLatchRephasedBySpeedSwitch = true;
         lyReadLatchRephasedBySpeedSwitch = lcdEnabled;
+    }
+
+    /** Refreshes the PPU's owner-thread timing snapshot before subsystem callbacks run. */
+    public void prepareForTick() {
+        speedModeValue = speedMode.getSpeedMode();
+        dmgCompatValue = speedMode.isDmgCompat();
+        timingSnapshotPrepared = true;
     }
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
@@ -729,7 +760,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (gbc && address == LCDC_ADDRESS) {
             // Pending writes are advanced before the PPU edge of the CPU write tick,
             // so a remaining count of N reaches the PPU N+1 dots later.
-            return 2 / speedMode.getSpeedMode() - 1;
+            return 2 / speedModeValue - 1;
         }
         return PPU_WRITE_DELAY_DOTS;
     }
@@ -892,7 +923,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         if (line == 153) {
             if (gbc) {
-                int lastLyTicks = speedMode.getSpeedMode() == 2 ? 2 : 4;
+                int lastLyTicks = speedModeValue == 2 ? 2 : 4;
                 return ticksInLine < lastLyTicks ? 153 : 0;
             }
             return 0;
@@ -914,15 +945,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return line + 1;
         }
         int visibleLy = getVisibleLy();
-        if (earlyCgbLyReadEdge && gbc && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 1 && line < 153 && ticksInLine >= 448) {
+        if (earlyCgbLyReadEdge && gbc && !dmgCompatValue
+                && speedModeValue == 1 && line < 153 && ticksInLine >= 448) {
             // Mighty Mix polls LY in a 32-dot loop while its VBlank handler spends
             // two lines in OAM DMA. The original cart observes the next LY value in
             // the final CPU read slot, preserving 144 across the interrupt. Keep the
             // calibrated PPU/LYC edge at dot 452 and advance only this CPU-bus latch.
             return line + 1;
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && lcdEnableClockPhase && !lyReadLatchRephasedBySpeedSwitch
                 && line == 153 && ticksInLine < 4
                 && (ticksInLine != 0 || firstFrameAfterLcdEnable)) {
@@ -931,16 +962,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // power-on grid continue to retain 153 for all four dots.
             return 0;
         }
-        if (!gbc || speedMode.isDmgCompat() || !lyReadLatchRephasedBySpeedSwitch) {
+        if (!gbc || dmgCompatValue || !lyReadLatchRephasedBySpeedSwitch) {
             return visibleLy;
         }
         if (line == 153) {
-            int resetTransitionTick = speedMode.getSpeedMode() == 2 ? 1 : 2;
+            int resetTransitionTick = speedModeValue == 2 ? 1 : 2;
             if (ticksInLine == resetTransitionTick) {
                 return 0;
             }
-        } else if ((speedMode.getSpeedMode() == 1 && ticksInLine == 455)
-                || (speedMode.getSpeedMode() == 2 && ticksInLine == 451)) {
+        } else if ((speedModeValue == 1 && ticksInLine == 455)
+                || (speedModeValue == 2 && ticksInLine == 451)) {
             return line & (line + 1);
         }
         return visibleLy;
@@ -948,8 +979,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Captures the native-CGB LY mux at the end of an ordinary HALT-wake read. */
     void captureCpuLyReadPhase(boolean ordinaryHaltWakePhase) {
-        cpuLyReadAcrossLineEdge = gbc && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 1
+        cpuLyReadAcrossLineEdge = gbc && !dmgCompatValue
+                && speedModeValue == 1
                 && ordinaryHaltWakePhase && mode == Mode.VBlank
                 && line >= 144 && line < 153
                 && ticksInLine < getVisibleLyLineEdgeTick()
@@ -963,12 +994,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (!lcdEnabled) {
             return 0;
         }
-        if (gbc && !speedMode.isDmgCompat()) {
+        if (gbc && !dmgCompatValue) {
             // Gambatte's frame-tail getStat window: native CGB exposes a one-dot
             // mode-0 gap at normal speed, then the line-zero mode-2 latch. Double
             // speed has no mode-0 gap.
             if (line == 153) {
-                if (speedMode.getSpeedMode() == 1
+                if (speedModeValue == 1
                         && (ticksInLine == 452
                         || (lcdEnableClockPhase && ticksInLine >= 452
                         && ticksInLine <= 454))) {
@@ -980,7 +1011,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             }
             // The shortened enable line reaches that projected mode-2 latch one dot
             // earlier at double speed.
-            if (firstLine && speedMode.getSpeedMode() == 2 && ticksInLine >= 453) {
+            if (firstLine && speedModeValue == 2 && ticksInLine >= 453) {
                 return Mode.OamSearch.ordinal();
             }
         }
@@ -988,7 +1019,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // final two dots, independently of compatibility or CPU speed.
         int nextLineModeTick = 454;
         if (gbc && ticksInLine >= nextLineModeTick) {
-            if (line < 143 || (line == 153 && !speedMode.isDmgCompat())) {
+            if (line < 143 || (line == 153 && !dmgCompatValue)) {
                 return Mode.OamSearch.ordinal();
             } else if (line == 143) {
                 return Mode.VBlank.ordinal();
@@ -1011,7 +1042,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (gbc && mode == Mode.PixelTransfer && ticksInLine < 250) {
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && mode == Mode.HBlank
                 && pixelTransferPhase.hasFineScxRephaseOnLine()
                 && !pixelTransferPhase.hasObjectsOnLine()
@@ -1023,7 +1054,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // reaches its terminal pair, the readable latch has entered mode 0.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.PixelTransfer
                 && pixelTransferPhase.isWindowActive()
                 && pixelTransferPhase.hasActivatedWindowOnLine()
@@ -1055,7 +1086,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // SCX selects the pulse phase; an object fetch owns the X=155 hand-off.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.PixelTransfer
                 && pixelTransferPhase.hasActivatedWindowOnLine()
                 && !pixelTransferPhase.isWindowActive()
@@ -1066,18 +1097,18 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // CGB's CPU latch follows the shifted machine at its X=155 hand-off.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && speedMode.isDmgCompat() && mode == Mode.PixelTransfer) {
+        if (gbc && dmgCompatValue && mode == Mode.PixelTransfer) {
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && speedMode.isDmgCompat() && mode == Mode.HBlank
+        if (gbc && dmgCompatValue && mode == Mode.HBlank
                 && ticksInLine >= 250 && lcdc.isBgAndWindowDisplay()) {
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.HBlank
                 && line > 0
                 && wyWrittenThisLine
@@ -1089,7 +1120,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // even though the ordinary fixed-background read-ahead still says mode 3.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && lateDoubleSpeedLineZeroWindowEnable
                 && line == 1 && mode == Mode.HBlank
                 && pixelMachine.isWindowActive()
@@ -1106,7 +1137,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || (!statModeLatchRephasedBySpeedSwitch
                 && !firstLine && !lcdc.isWindowDisplay()
                 && (r.get(SCX) & 7) != 0) ? 2 : 0;
-        if (gbc && speedMode.getSpeedMode() == 1
+        if (gbc && speedModeValue == 1
                 && mode == Mode.HBlank
                 && ticksInLine + mode3ReadAhead < hblankIntFrom
                 && !pixelTransferPhase.hasObjectsOnLine()) {
@@ -1116,7 +1147,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // fractional background line exposes the raw HBlank prediction here.
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && mode == Mode.HBlank
                 && ticksInLine < hblankIntFrom
                 && ticksInLine + 2 >= hblankIntFrom
@@ -1126,7 +1157,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // CPU reads release its mode-3 latch two dots before the mode-0 edge.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && mode == Mode.HBlank
                 && pixelTransferPhase.hasObjectsOnLine()
                 && pixelMachine.isWindowActive()
@@ -1140,7 +1171,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // mode-0 interrupt.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && mode == Mode.HBlank
                 && scxWrittenThisLine
                 && pixelTransferPhase.hasObjectsOnLine()
@@ -1154,7 +1185,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // follows the output pipeline once it has completed the line.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && ((mode == Mode.PixelTransfer && pixelTransferDone)
                 || (mode == Mode.HBlank && ticksInLine < hblankIntFrom))) {
             return Mode.PixelTransfer.ordinal();
@@ -1162,7 +1193,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // A double-speed mode-2 interrupt enters its handler on the alternate CPU
         // phase. Gambatte's cc+2 comparison then retains the object-free X=167
         // prediction through the final four dots, independently of the mode-0 IRQ.
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && doubleSpeedMode2DispatchStatTailThisLine
                 && mode == Mode.HBlank
                 && !pixelTransferPhase.hasObjectsOnLine()
@@ -1172,7 +1203,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         // A fine-SCX write at startup can move that captured prediction four dots
         // farther without changing the timing skeleton's already scheduled M0 edge.
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && doubleSpeedMode2DispatchStatTailThisLine
                 && earlyScxStatTailThisLine
                 && mode == Mode.HBlank
@@ -1183,7 +1214,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // end of mode 3. WX=166 contributes the remaining StartWindowDraw states; an
         // object exactly at X=167 then restarts the tile phase and contributes ten more
         // predicted dots. Double speed has its own CPU sampling phase.
-        int terminalWindowReadTail = speedMode.getSpeedMode() == 2
+        int terminalWindowReadTail = speedModeValue == 2
                 ? 5
                 : pixelTransferPhase.hasSpriteAtTerminalPredictionEdge() ? 12 : 2;
         if (gbc && (mode == Mode.PixelTransfer
@@ -1200,14 +1231,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // continues to use its separate X=166 event above.
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 1
+        if (gbc && speedModeValue == 1
                 && mode == Mode.PixelTransfer
                 && pixelTransferPhase.hasObjectsOnLine()
                 && lcdc.isObjDisplayEffective()
                 && pixelTransferPhase.getPosition() >= 160) {
             return Mode.HBlank.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 1
+        if (gbc && speedModeValue == 1
                 && mode == Mode.PixelTransfer && pixelTransferDone
                 && (pixelTransferPhase.hasObjectsOnLine() || lcdc.isWindowDisplay())
                 && !(firstLine && oamSearchPhase.hadSpriteCandidate())) {
@@ -1222,7 +1253,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && pixelTransferPhase.getPosition() < 159
                 && pixelMachine.getPosition() >= 155
                 && (ticksInLine & 3) == 2);
-        if (gbc && speedMode.getSpeedMode() == 1
+        if (gbc && speedModeValue == 1
                 && (!statModeLatchRephasedBySpeedSwitch
                 || (mode == Mode.HBlank && lcdc.isWindowDisplay()))
                 && (mode == Mode.PixelTransfer || mode == Mode.HBlank)
@@ -1251,12 +1282,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         int readablePixelEnd;
         if (statModeLatchRephasedBySpeedSwitch) {
-            readablePixelEnd = speedMode.getSpeedMode() == 2
+            readablePixelEnd = speedModeValue == 2
                     && !pixelTransferPhase.hasObjectsOnLine()
                     && pixelMachine.hasActivatedWindowOnLine()
                     ? 160
                     : 158;
-        } else if (speedMode.getSpeedMode() == 1
+        } else if (speedModeValue == 1
                 && pixelTransferPhase.hasObjectsOnLine()) {
             // On object lines the CPU mode latch is three pixels ahead of the shifted
             // LCD-output machine. The timing skeleton has already handed off to
@@ -1271,7 +1302,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         if (gbc && mode == Mode.HBlank
                 && (pixelMachine.getPosition() < readablePixelEnd
-                || (speedMode.getSpeedMode() == 2
+                || (speedModeValue == 2
                 && ticksInLine < hblankIntFrom
                 && pixelMachine.isObjectFetchInProgress()))) {
             // Internal HBlank, its STAT interrupt source, and the CPU-readable mode
@@ -1283,7 +1314,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // both position counters, so its active state holds the latch.
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && mode == Mode.HBlank
                 && pixelMachine.isWindowActive()
                 && ((r.get(SCX) & 7) == 5
@@ -1296,7 +1327,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // counters have emitted their final pixel.
             return Mode.PixelTransfer.ordinal();
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.PixelTransfer.ordinal();
         }
@@ -1316,7 +1347,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                     ? Mode.PixelTransfer.ordinal()
                     : Mode.HBlank.ordinal();
         }
-        if (gbc && speedMode.isDmgCompat() && mode == Mode.HBlank
+        if (gbc && dmgCompatValue && mode == Mode.HBlank
                 && ticksInLine <= hblankIntFrom
                 && lcdc.isObjDisplayEffective()
                 && pixelTransferPhase.hasObjectsOnLine()
@@ -1347,7 +1378,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     /** Returns the normal-speed STAT mode sampled at the end of a rephased CPU read. */
     int getCpuVisibleStatMode() {
         int visibleMode = getVisibleStatMode();
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.HBlank && dma.ownsOamForPpu()
                 && pixelTransferPhase.hasObjectsOnLine()
                 && ticksInLine == hblankIntFrom) {
@@ -1356,8 +1387,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // latch even though the internal timing skeleton has entered HBlank.
             return Mode.PixelTransfer.ordinal();
         }
-        if (!gbc || speedMode.isDmgCompat() || !statModeLatchRephasedBySpeedSwitch
-                || speedSwitchCompletedThisLine || speedMode.getSpeedMode() != 1
+        if (!gbc || dmgCompatValue || !statModeLatchRephasedBySpeedSwitch
+                || speedSwitchCompletedThisLine || speedModeValue != 1
                 || scxWrittenThisLine
                 || firstLine || line >= 144) {
             return visibleMode;
@@ -1375,7 +1406,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     boolean isUnrephasedLineZeroStatTail() {
-        return gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        return gbc && !dmgCompatValue && speedModeValue == 1
                 && lcdEnableClockPhase && !statModeLatchRephasedBySpeedSwitch
                 && !firstLine && line == 0 && mode == Mode.HBlank
                 && !pixelTransferPhase.hasObjectsOnLine()
@@ -1398,7 +1429,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (mode2Handoff >= 0) {
             return mode2Handoff;
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && statModeLatchRephasedBySpeedSwitch
                 && mode == Mode.HBlank && ticksInLine >= hblankIntFrom
                 && pixelMachine.hasActivatedWindowOnLine()
@@ -1413,7 +1444,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * at stored dot 78, or {@code -1} outside that single hand-off phase.
      */
     int getCpuMode2HandoffStatOverride() {
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && !firstLine && mode == Mode.OamSearch && ticksInLine == 78) {
             return Mode.OamSearch.ordinal();
         }
@@ -1445,9 +1476,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                                    boolean ordinaryHaltWakePhase,
                                    boolean oneCycleOrdinaryHaltWakePhase,
                                    boolean recentOrdinaryHaltWakePhase) {
-        if (gbc && !speedMode.isDmgCompat()
+        if (gbc && !dmgCompatValue
                 && statRegister.isMode2InterruptSourceOnly()) {
-            if (speedMode.getSpeedMode() == 1
+            if (speedModeValue == 1
                     && (!ordinaryHaltWakePhase || recentOrdinaryHaltWakePhase)
                     && !firstLine
                     && mode == Mode.OamSearch && ticksInLine == 78) {
@@ -1455,7 +1486,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 // source latch even though the ordinary FF41 mux has entered mode 3.
                 return Mode.OamSearch.ordinal();
             }
-            if (speedMode.getSpeedMode() == 2
+            if (speedModeValue == 2
                     && doubleSpeedMode2DispatchStatTailThisLine
                     && mode == Mode.PixelTransfer && ticksInLine == 80) {
                 // Double speed accepts the mode-2 IRQ on the alternate CPU phase;
@@ -1469,7 +1500,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 // before the mode-2 source selects the next-line projection.
                 return Mode.HBlank.ordinal();
             }
-            if (speedMode.getSpeedMode() == 2
+            if (speedModeValue == 2
                     && doubleSpeedMode2DispatchCrossedLineEdge
                     && mode == Mode.OamSearch && ticksInLine == 0) {
                 // A double-speed read split by rollover completes on line dot zero,
@@ -1477,7 +1508,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 return Mode.HBlank.ordinal();
             }
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && !firstLine && (line == 0
                 || recentOrdinaryHaltWakePhase)
                 && mode == Mode.OamSearch
@@ -1488,7 +1519,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // the old side of the mux for this bus slot.
             return Mode.OamSearch.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && statModeLatchRephasedBySpeedSwitch
                 && lyReadLatchRephasedBySpeedSwitch
                 && !ordinaryHaltWakePhase
@@ -1502,7 +1533,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return Mode.PixelTransfer.ordinal();
         }
         if (mode == Mode.HBlank && line < 143 && !firstLine) {
-            if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+            if (gbc && !dmgCompatValue && speedModeValue == 1
                     && synchronousHaltEntryPhase && ticksInLine == 454) {
                 return Mode.HBlank.ordinal();
             }
@@ -1515,12 +1546,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             if (!gbc && asynchronousHaltEntryPhase && ticksInLine >= 455) {
                 return Mode.OamSearch.ordinal();
             }
-            if (gbc && !speedMode.isDmgCompat()
+            if (gbc && !dmgCompatValue
                     && statRegister.isMode0InterruptSourceOnly()
                     && !synchronousHaltEntryPhase
                     && !asynchronousHaltEntryPhase
                     && !ordinaryHaltWakePhase
-                    && (speedMode.getSpeedMode() == 2
+                    && (speedModeValue == 2
                     || (r.get(GpuRegister.SCX) & 0x07) == 3)
                     && ticksInLine + getCpuMachineCycleDots() == 454) {
                 // The final STAT read cycle on an active line samples the upcoming
@@ -1530,13 +1561,13 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 return Mode.OamSearch.ordinal();
             }
         }
-        if (gbc && !speedMode.isDmgCompat()
+        if (gbc && !dmgCompatValue
                 && statRegister.isMode0InterruptSourceOnly()
                 && mode == Mode.HBlank
                 && !pixelTransferPhase.hasObjectsOnLine()
                 && !pixelTransferPhase.hasActivatedWindowOnLine()
                 && !scxWrittenThisLine
-                && ticksInLine + (speedMode.getSpeedMode() == 2 ? 2 : 0)
+                && ticksInLine + (speedModeValue == 2 ? 2 : 0)
                 == hblankIntFrom) {
             // The mode-0 source samples its own CPU-facing mode latch when the
             // predicted event is accepted. A double-speed read starts two PPU dots
@@ -1544,7 +1575,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // the event dot. The direct PPU latch can still expose mode 3 there.
             return Mode.HBlank.ordinal();
         }
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1
+        if (gbc && !dmgCompatValue && speedModeValue == 1
                 && firstLine && mode == Mode.HBlank
                 && !pixelTransferPhase.hasObjectsOnLine()
                 && ticksInLine + 1 >= hblankIntFrom) {
@@ -1565,9 +1596,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return false;
         }
         return (line < 144 && ticksInLine >= getEarlyLineEdgeTick())
-                || (gbc && !speedMode.isDmgCompat()
+                || (gbc && !dmgCompatValue
                 && line == 153 && ticksInLine >= 454)
-                || ((!gbc || speedMode.isDmgCompat())
+                || ((!gbc || dmgCompatValue)
                 && !firstLine && line == 0 && ticksInLine < 4);
     }
 
@@ -1640,12 +1671,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (!lcdEnabled) {
             return true;
         }
-        int firstLineOamOpenTicks = gbc && write && speedMode.getSpeedMode() == 2
+        int firstLineOamOpenTicks = gbc && write && speedModeValue == 2
                 ? 77 : 79;
         if (firstLine && ticksInLine < firstLineOamOpenTicks) {
             return true;
         }
-        if (gbc && speedMode.getSpeedMode() == 2
+        if (gbc && speedModeValue == 2
                 && !write && mode == Mode.OamSearch && ticksInLine == 0) {
             // At double speed the read latch closes one CPU read phase after the line
             // rolls over. The write latch is already closed on dot 0.
@@ -1676,7 +1707,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 boolean dmaReadHandoff = !write && oamSearchPhase.wasDmaBlockedThisLine();
                 int handoffTick = dmaReadHandoff
                         ? hblankIntFrom
-                        : speedMode.getSpeedMode() == 1 && !firstLine
+                        : speedModeValue == 1 && !firstLine
                                 ? 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
                                 : hblankIntFrom + 4;
                 if (!write && !dmaReadHandoff
@@ -1700,9 +1731,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || oamSearchPhase.wasDmaBlockedThisLine();
         int cgbNormalSpeedLineEdgeTick = cgbOamScanOwnedLine
                 ? getEarlyLineEdgeTick() : 454;
-        boolean cgbNormalSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 1
+        boolean cgbNormalSpeedLineEdgeLock = gbc && speedModeValue == 1
                 && !firstLine && ticksInLine >= cgbNormalSpeedLineEdgeTick;
-        boolean cgbDoubleSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 2
+        boolean cgbDoubleSpeedLineEdgeLock = gbc && speedModeValue == 2
                 && ticksInLine >= 452 && ticksInLine < 454;
         if ((dmgEarlyReadLock || cgbNormalSpeedLineEdgeLock || cgbDoubleSpeedLineEdgeLock)
                 && (line < 143 || line == 153)) {
@@ -1719,7 +1750,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public int getCpuMachineCycleDots() {
-        return 4 / speedMode.getSpeedMode();
+        return 4 / speedModeValue;
     }
 
     public int getCoincidenceReleaseTick() {
@@ -1727,10 +1758,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // At the end of the shortened enable line Gambatte's getLycCmpLy has
             // entered its final non-readable comparison slot: dot 451 normal speed,
             // dot 453 double speed (the `> releaseTick` CGB rule below maps to 452).
-            return speedMode.getSpeedMode() == 2 ? 452 : getEarlyLineEdgeTick();
+            return speedModeValue == 2 ? 452 : getEarlyLineEdgeTick();
         }
-        if (line == 0 && lcdEnableClockPhase && gbc && !speedMode.isDmgCompat()
-                && speedMode.getSpeedMode() == 1
+        if (line == 0 && lcdEnableClockPhase && gbc && !dmgCompatValue
+                && speedModeValue == 1
                 && !statModeLatchRephasedBySpeedSwitch) {
             // On the LCD-restart grid, stored dot 452 is already the comparator's
             // non-readable tail slot. A speed switch replaces this phase with its
@@ -1740,19 +1771,19 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (!gbc) {
             return getEarlyLineEdgeTick();
         }
-        if (speedMode.isDmgCompat()) {
+        if (dmgCompatValue) {
             return 452;
         }
         // At double speed FF44 has already advanced, but the old coincidence
         // result remains readable through dot 454 in its separate STAT latch.
-        return speedMode.getSpeedMode() == 2 ? 454 : getVisibleLyLineEdgeTick();
+        return speedModeValue == 2 ? 454 : getVisibleLyLineEdgeTick();
     }
 
     private int getVisibleLyLineEdgeTick() {
         if (!gbc || firstLine) {
             return getEarlyLineEdgeTick();
         }
-        if (speedMode.isDmgCompat()) {
+        if (dmgCompatValue) {
             return 450;
         }
         return 452;
@@ -1777,7 +1808,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (firstLine && gbc && ticksInLine < 84) {
             // The display-enable VRAM latch closes one dot earlier at double speed;
             // it is distinct from both the CPU-readable STAT and palette latches.
-            return ticksInLine < (speedMode.getSpeedMode() == 2 ? 79 : 80);
+            return ticksInLine < (speedModeValue == 2 ? 79 : 80);
         }
         if (mode == Mode.PixelTransfer) {
             if (!gbc) {
@@ -1788,7 +1819,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // committed X=159. Reads use the request retained by the immediately
             // preceding write; fine SCX changes when X=159 is reached, not the
             // comparator itself (vramw_m3end).
-            if (speedMode.getSpeedMode() == 1 && position >= 159
+            if (speedModeValue == 1 && position >= 159
                     && (write || followsCpuVramWrite())) {
                 return true;
             }
@@ -1797,7 +1828,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             }
             // Around fetch start, a rephased CPU clock can land in one otherwise-idle
             // VRAM arbitration slot. Normal and double speed expose different slots.
-            return speedMode.getSpeedMode() == 2
+            return speedModeValue == 2
                     ? position <= -16
                     : position >= -8 && position < -4;
         }
@@ -1808,7 +1839,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             int handoffTick;
             if (pixelTransferPhase.hasObjectsOnLine()) {
                 handoffTick = hblankIntFrom;
-            } else if (speedMode.getSpeedMode() == 1 && !firstLine) {
+            } else if (speedModeValue == 1 && !firstLine) {
                 handoffTick = 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0);
             } else {
                 handoffTick = hblankIntFrom + 4;
@@ -1825,17 +1856,17 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             if (!gbc) {
                 return firstLine || ticksInLine < 76;
             }
-            return speedMode.getSpeedMode() != 2 || ticksInLine < 79;
+            return speedModeValue != 2 || ticksInLine < 79;
         }
         if (gbc && write && mode == Mode.OamSearch
-                && speedMode.getSpeedMode() == 2 && ticksInLine >= 79) {
+                && speedModeValue == 2 && ticksInLine >= 79) {
             return false;
         }
         return true;
     }
 
     private boolean followsCpuVramWrite() {
-        int readDelay = speedMode.getSpeedMode() == 2 ? 4 : 8;
+        int readDelay = speedModeValue == 2 ? 4 : 8;
         return lastCpuVramWriteTick != Integer.MIN_VALUE
                 && ticksInLine - lastCpuVramWriteTick == readDelay;
     }
@@ -1847,7 +1878,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private void setLcdc(int value) {
         int previousLcdc = lcdc.get();
-        if (gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2
+        if (gbc && !dmgCompatValue && speedModeValue == 2
                 && lcdEnabled && line == 0 && mode == Mode.HBlank
                 && (previousLcdc & 0x20) == 0 && (value & 0x20) != 0) {
             lateDoubleSpeedLineZeroWindowEnable = ticksInLine >= 449;
@@ -2029,14 +2060,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public boolean isDmgCompatMode() {
-        return speedMode.isDmgCompat();
+        return dmgCompatValue;
     }
 
     /** Captures raw physical PPU memories without applying CPU bus locks or DMA corruption. */
     public DebugGraphicsInspection captureDebugGraphicsInspection() {
         DebugGraphicsHardwareMode hardwareMode = !gbc
                 ? DebugGraphicsHardwareMode.DMG
-                : speedMode.isDmgCompat()
+                : dmgCompatValue
                         ? DebugGraphicsHardwareMode.CGB_COMPATIBILITY
                         : DebugGraphicsHardwareMode.CGB_NATIVE;
         return new DebugGraphicsInspection(
