@@ -1274,7 +1274,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         Memento<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.saveToMemento() : null;
         Memento<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.saveToMemento() : null;
 
-        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, pixelTransferDone, hblankIntFrom, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
+        return new GpuMemento(videoRam0Memento, videoRam1Memento, display.saveToMemento(), lcdc.saveToMemento(), bgPalette.saveToMemento(), oamPalette.saveToMemento(), oamSearchPhase.saveToMemento(), pixelTransferPhase.saveToMemento(), pixelMachine.saveToMemento(), r.saveToMemento(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, scxWrittenThisLine, wyWrittenThisLine, lastCpuVramWriteTick, mode, new ArrayList<>(pendingPpuWrites), cpuVisiblePpuRegisters.clone());
     }
 
     @Override
@@ -1307,8 +1307,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         this.line = mem.line;
         this.ticksInLine = mem.ticksInLine;
         this.firstLine = mem.firstLine;
+        this.lcdEnableClockPhase = mem.lcdEnableClockPhase;
         this.pixelTransferDone = mem.pixelTransferDone;
         this.hblankIntFrom = mem.hblankIntFrom;
+        this.mode0IntFrom = mem.mode0IntFrom;
+        this.statModeLatchRephasedBySpeedSwitch = mem.statModeLatchRephasedBySpeedSwitch;
+        this.scxWrittenThisLine = mem.scxWrittenThisLine;
+        this.wyWrittenThisLine = mem.wyWrittenThisLine;
+        this.lastCpuVramWriteTick = mem.lastCpuVramWriteTick;
         this.mode = mem.mode;
         pendingPpuWrites.clear();
         if (mem.pendingPpuWrites != null) {
@@ -1335,8 +1341,13 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                               Memento<PixelTransfer> pixelTransferPhaseMemento,
                               Memento<PixelTransfer> pixelMachineMemento,
                               Memento<GpuRegisterValues> rMemento, boolean lcdEnabled, int displayEnabledDelay,
-                              int line, int ticksInLine, boolean firstLine, boolean pixelTransferDone,
-                              int hblankIntFrom, Mode mode,
+                              int line, int ticksInLine, boolean firstLine,
+                              boolean lcdEnableClockPhase, boolean pixelTransferDone,
+                              int hblankIntFrom, int mode0IntFrom,
+                              boolean statModeLatchRephasedBySpeedSwitch,
+                              boolean scxWrittenThisLine,
+                              boolean wyWrittenThisLine,
+                              int lastCpuVramWriteTick, Mode mode,
                               List<PendingPpuWrite> pendingPpuWrites,
                               int[] cpuVisiblePpuRegisters) implements Memento<Gpu> {
     }
