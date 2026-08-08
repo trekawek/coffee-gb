@@ -31,6 +31,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private static final int CGB_DOUBLE_TAIL_LATCH = 454;
 
+    private static final long NO_LYC_IRQ_EVENT = Long.MAX_VALUE;
+
     private final InterruptManager interruptManager;
 
     private Gpu gpu;
