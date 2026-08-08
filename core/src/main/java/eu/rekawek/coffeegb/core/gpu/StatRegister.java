@@ -302,6 +302,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private boolean isDoubleSpeed() {
+        return gpu.getCpuMachineCycleDots() == 2;
+    }
+
     private static int incrementLy(int ly) {
         return ly == 153 ? 0 : ly + 1;
     }
