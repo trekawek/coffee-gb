@@ -262,6 +262,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void onLcdEnabled() {
+        cpuStatModeOverride = -1;
         registeredLy = 0;
         lycWriteSuppressed = false;
     }
