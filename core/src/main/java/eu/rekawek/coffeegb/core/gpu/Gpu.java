@@ -1029,7 +1029,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && !firstLine && ticksInLine >= 454;
         boolean cgbDoubleSpeedLineEdgeLock = gbc && speedMode.getSpeedMode() == 2
                 && ticksInLine >= 452 && ticksInLine < 454;
-        if ((!write || gbc) && ticksInLine >= getEarlyLineEdgeTick()
+        if ((dmgEarlyReadLock || cgbNormalSpeedLineEdgeLock || cgbDoubleSpeedLineEdgeLock)
                 && (line < 143 || line == 153)) {
             return false;
         }
