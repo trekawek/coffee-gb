@@ -994,6 +994,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (firstLine && ticksInLine < firstLineOamOpenTicks) {
             return true;
         }
+        if (gbc && speedMode.getSpeedMode() == 2
+                && !write && mode == Mode.OamSearch && ticksInLine == 0) {
+            // At double speed the read latch closes one CPU read phase after the line
+            // rolls over. The write latch is already closed on dot 0.
+            return true;
+        }
         if (mode == Mode.OamSearch) {
             // the OAM write bus is released between the end of the OAM scan and the
             // start of the pixel transfer (lcdon_write_timing-GS)
