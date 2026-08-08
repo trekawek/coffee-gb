@@ -1008,10 +1008,17 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
         }
-        if (!write && gbc && mode == Mode.HBlank && ticksInLine < hblankIntFrom) {
-            // The CGB exposes mode 0 before the OAM read latch is released. The latch
-            // opens with the internal HBlank edge two dots later.
-            return false;
+        if (gbc && mode == Mode.HBlank && !pixelTransferPhase.hasObjectsOnLine()) {
+            // BG-only lines release the CGB OAM latch with the final mode-3 output
+            // stage. Normal-speed release is quantized by fine SCX; double speed
+            // follows the internal HBlank hand-off. Object lines release immediately
+            // at that hand-off.
+            int handoffTick = speedMode.getSpeedMode() == 1 && !firstLine
+                    ? 254 + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
+                    : hblankIntFrom + 4;
+            if (ticksInLine < handoffTick) {
+                return false;
+            }
         }
         // DMG writes still pass during the early OAM read window
         // (lcdon_write_timing-GS); CGB has already switched both OAM bus latches.
