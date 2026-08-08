@@ -740,6 +740,30 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
+     * Returns the mode sampled by the CGB CPU bus before this dot's PPU clocks have
+     * settled, or {@code -1} when the ordinary readable STAT latch is visible.
+     *
+     * <p>This deliberately does not alter {@link #getVisibleStatMode()}: direct PPU
+     * observers see the mode-3 latch change at dot 78 and the rephased window latch
+     * release at output position 157. A CPU memory callback can still sample the old
+     * side of either transition for its current bus phase.</p>
+     */
+    int getCpuStatModeOverride() {
+        if (gbc && speedMode.getSpeedMode() == 1
+                && !firstLine && mode == Mode.OamSearch && ticksInLine == 78) {
+            return Mode.OamSearch.ordinal();
+        }
+        if (gbc && speedMode.getSpeedMode() == 2
+                && statModeLatchRephasedBySpeedSwitch
+                && mode == Mode.HBlank && ticksInLine >= hblankIntFrom
+                && pixelMachine.hasActivatedWindowOnLine()
+                && pixelMachine.getPosition() < 160) {
+            return Mode.PixelTransfer.ordinal();
+        }
+        return -1;
+    }
+
+    /**
      * The mode-2 STAT source is a short pulse during the final machine cycle of the
      * preceding line. At the frame boundary there is no visible preceding line, so the
      * pulse is exposed during the first four ticks of line 0 instead.
