@@ -307,12 +307,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // in all modes (the last pixels of a line leave the delay line during HBlank)
         r.tickConflicts();
         lcdc.tickConflicts();
-        pixelTransferPhase.checkWindowY(line, ticksInLine);
         boolean earlyWindowFrameEdge = !gbc || speedMode.getSpeedMode() == 1;
         if (earlyWindowFrameEdge && line == 153 && ticksInLine == 454) {
             pixelTransferPhase.resetWindowLineCounter();
             pixelMachine.resetWindowLineCounter();
         }
+        pixelTransferPhase.checkWindowY(line, ticksInLine);
         pixelMachine.checkWindowY(line, ticksInLine);
         pixelMachine.outputTick();
         pixelMachine.machineTick();
