@@ -872,6 +872,21 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && mode == Mode.PixelTransfer && pixelTransferDone) {
             return Mode.PixelTransfer.ordinal();
         }
+        // A late DMG OBJ enable/disable can make the CPU timing skeleton and the
+        // shifted LCD output pipeline take different fetch paths. Only use the output
+        // pipeline for that divergent tail: ordinary object lines retain the calibrated
+        // STAT/interrupt timing below.
+        if (!gbc
+                && (mode == Mode.PixelTransfer || mode == Mode.HBlank)
+                && pixelTransferPhase.getPosition() >= 159
+                && !pixelTransferPhase.isObjectFetchInProgress()
+                && !pixelMachine.isObjectFetchInProgress()
+                && pixelTransferPhase.getObjectTimingPenalty()
+                != pixelMachine.getObjectTimingPenalty()) {
+            return pixelMachine.getPosition() < 158
+                    ? Mode.PixelTransfer.ordinal()
+                    : Mode.HBlank.ordinal();
+        }
         // A scanline containing enabled objects, combined with fractional scroll or the
         // window, can leave the readable mode-3 tail asserted through the mode-0
         // interrupt edge even after the internal phase released the VRAM/OAM locks
