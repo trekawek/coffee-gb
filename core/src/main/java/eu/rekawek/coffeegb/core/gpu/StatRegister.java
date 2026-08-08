@@ -1030,7 +1030,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
             }
             updateIntLine(computeIntLine(glitchEnable));
         }
-        enableBits = value & 0b01111000;
+        int newEnableBits = value & 0b01111000;
+        enableBits = newEnableBits;
     }
 
     @Override
