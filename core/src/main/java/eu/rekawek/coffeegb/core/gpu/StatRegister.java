@@ -303,6 +303,21 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private void requestMode0InterruptEvent() {
+        if (gpu.isGbc() && !gpu.isDmgCompatMode() && !isDoubleSpeed()
+                && gpu.getLine() == 0 && !gpu.isFirstLine()
+                && (gpu.getRegisters().get(SCX) & 7) == 0) {
+            // At normal speed and fine-scroll phase zero, line zero's mode-0
+            // level reaches STAT on this dot while IF settles after the same-dot
+            // CPU read phase.
+            pendingCgbMode0Interrupt = true;
+        } else if (!gpu.isGbc() && gpu.hasObjectsOnLine()) {
+            interruptManager.requestInterrupt(InterruptType.LCDC);
+        } else {
+            interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+        }
+    }
+
     private long cpuCyclesUntil(long eventClock) {
         if (eventClock == NO_LYC_IRQ_EVENT) {
             return Long.MAX_VALUE;
