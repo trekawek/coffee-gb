@@ -977,9 +977,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
     }
 
     /**
-     * OAM is locked from 4 ticks before the end of the preceding line until the end of the
-     * pixel transfer. On the first line after enabling the LCD, it is locked when the pixel
-     * transfer starts.
+     * Applies the model-specific CPU-side OAM read and write bus gates. The CGB latches
+     * do not share the DMG write opening at the mode-2/mode-3 boundary, and their line
+     * edge and mode-0 hand-offs happen on separate CPU clock phases.
      */
     private boolean isOamAvailableForCpu() {
         return isOamAvailableForCpu(false);
