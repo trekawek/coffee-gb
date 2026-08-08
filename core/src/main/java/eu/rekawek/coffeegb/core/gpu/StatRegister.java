@@ -145,6 +145,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     // TODO remove circular dependency
     public void init(Gpu gpu) {
         this.gpu = gpu;
+        lycIrqStatSource = enableBits;
+        lycIrqValueSource = gpu.getRegisters().get(LYC);
+        lycIrqStatLatch = lycIrqStatSource;
+        lycIrqValueLatch = lycIrqValueSource;
+        nextLycIrqEvent = scheduleLycIrqEvent(lycIrqStatSource, lycIrqValueSource);
+        modeIrqStatLatch = 0;
+        modeIrqLycLatch = lycIrqValueSource;
     }
 
     public void tick() {
