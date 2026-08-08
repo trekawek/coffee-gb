@@ -1047,6 +1047,8 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 && statChangeTriggersStatIrq(enableBits, newEnableBits)) {
             interruptManager.requestInterrupt(InterruptType.LCDC);
         }
+        updateLycIrqRegisters(newEnableBits, lycIrqValueSource);
+        queueModeIrqStatChange(newEnableBits);
         enableBits = newEnableBits;
     }
 
