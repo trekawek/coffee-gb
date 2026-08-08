@@ -989,7 +989,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         if (!lcdEnabled) {
             return true;
         }
-        if (firstLine && ticksInLine < 79) {
+        int firstLineOamOpenTicks = gbc && write && speedMode.getSpeedMode() == 2
+                ? 77 : 79;
+        if (firstLine && ticksInLine < firstLineOamOpenTicks) {
             return true;
         }
         if (mode == Mode.OamSearch) {
