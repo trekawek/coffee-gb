@@ -801,10 +801,30 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 && pixelMachine.getPosition() >= 155
                 && (ticksInLine & 3) == 2);
         if (gbc && speedMode.getSpeedMode() == 1
-                && mode == Mode.HBlank && ticksInLine < hblankIntFrom
-                && !pixelTransferPhase.hasObjectsOnLine()) {
-            // On a BG-only line the internal phase can enter HBlank before the
-            // CPU-visible mode latch reaches the calibrated mode-0 edge.
+                && (!statModeLatchRephasedBySpeedSwitch
+                || (mode == Mode.HBlank && lcdc.isWindowDisplay()))
+                && (mode == Mode.PixelTransfer || mode == Mode.HBlank)
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && !(firstLine && oamSearchPhase.hadSpriteCandidate())
+                && !pixelTransferPhase.isWindowActive()
+                && !pixelTransferPhase.hasFineScxRephaseOnLine()
+                && (pixelTransferPhase.hasActivatedWindowOnLine()
+                ? (shiftedStatX >= 161
+                || (shiftedStatX >= 160
+                && ticksInLine >= hblankIntFrom - 1))
+                : !scxWrittenThisLine
+                && (!pixelMachine.isWindowActive() || wyWrittenThisLine)
+                && (fixedBackgroundModeLatch
+                ? ticksInLine >= 243 + (firstLine ? 4 : 0)
+                + ((r.get(SCX) & 0x04) != 0 ? 4 : 0)
+                : shiftedStatX >= 161
+                && ticksInLine >= hblankIntFrom))) {
+            // Window/enable lines use the fixed boot-phase latch. During an ordinary
+            // transfer, that latch is also sampled by normal-speed CPU reads landing
+            // on phase two before the final output stage; other phases follow shifted
+            // output only after the internal HBlank edge. A window that started and
+            // was then disabled has paid its dynamic startup cost, but its readable
+            // latch still leads the final two pixels.
             return Mode.PixelTransfer.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 2
