@@ -695,8 +695,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         statRegister.publishFrameLyc0Mode2HandoffBeforeCpu();
         boolean speedSwitching = cpu.isSpeedSwitching();
         boolean speedSwitchTail = speedSwitchTailTicks > 0;
-        dma.setCpuInterruptStackWrite(cpu.getState() == Cpu.State.IRQ_PUSH_1
-                || cpu.getState() == Cpu.State.IRQ_PUSH_2);
+        Cpu.State initialCpuState = cpu.getState();
+        dma.setCpuInterruptStackWrite(initialCpuState == Cpu.State.IRQ_PUSH_1
+                || initialCpuState == Cpu.State.IRQ_PUSH_2);
         // STOP's CGB speed-switch delay pauses instruction execution, not the
         // timer clock domain. DIV/TIMA continue advancing after STOP resets DIV.
         if (!speedSwitchTail) {
@@ -753,13 +754,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 }
             }
         } else if (hdma.isTransferInProgress()) {
-            if (cpu.getState() == Cpu.State.HALTED
-                    || cpu.getState() == Cpu.State.STOPPED) {
+            Cpu.State dmaCpuState = cpu.getState();
+            if (dmaCpuState == Cpu.State.HALTED
+                    || dmaCpuState == Cpu.State.STOPPED) {
                 // HBlank DMA is suspended while the CPU clock is halted or
                 // stopped. Keep ticking the CPU so an interrupt or asserted joypad
                 // line can wake it; the HDMA request is restored according to the
                 // request level captured when HALT was entered.
-                if (cpu.getState() == Cpu.State.STOPPED) {
+                if (dmaCpuState == Cpu.State.STOPPED) {
                     hdma.onStoppedCpuRequest();
                 }
                 cpu.tick();
@@ -832,7 +834,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 cpu.replaySpeedSwitchPaddingByte();
             }
         }
-        hdma.onCpuHaltState(cpu.getState() == Cpu.State.HALTED);
+        Cpu.State finalCpuState = cpu.getState();
+        hdma.onCpuHaltState(finalCpuState == Cpu.State.HALTED);
         if (deferFrameSequencerClock) {
             sound.commitFrameSequencerClock();
         }
@@ -843,10 +846,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         // OAM DMA is driven by the CPU clock domain. HALT pauses it after the
         // entry latency; STOP and a CGB speed switch pause it immediately.
-        boolean halted = cpu.getState() == Cpu.State.HALTED;
+        boolean halted = finalCpuState == Cpu.State.HALTED;
         dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
-        dma.tick(halted || cpu.getState() == Cpu.State.STOPPED
-                        || cpu.getState() == Cpu.State.SPEED_SWITCH || speedSwitchTail
+        dma.tick(halted || finalCpuState == Cpu.State.STOPPED
+                        || finalCpuState == Cpu.State.SPEED_SWITCH || speedSwitchTail
                         || hdma.pausesOamDmaForSpeedSwitchBurst(),
                 halted);
         sound.tick();
