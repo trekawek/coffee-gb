@@ -661,6 +661,12 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 && gpu.getCpuMachineCycleDots() == 2;
     }
 
+    private boolean recentLyc153AcknowledgeWins() {
+        int captureWindow = isDoubleSpeed() ? 1 : gpu.isGbc() ? 5 : 7;
+        return lastLcdcInterruptAcknowledgeClock != Long.MIN_VALUE
+                && lycIrqClock - lastLcdcInterruptAcknowledgeClock <= captureWindow;
+    }
+
     private int getNewFrameLycEdgeTick() {
         return isNativeDoubleSpeed() ? NEW_FRAME_LYC_EDGE - 2 : NEW_FRAME_LYC_EDGE;
     }
