@@ -789,7 +789,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
             return Mode.HBlank.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 1
-                && mode == Mode.PixelTransfer && pixelTransferDone) {
+                && mode == Mode.PixelTransfer && pixelTransferDone
+                && (pixelTransferPhase.hasObjectsOnLine() || lcdc.isWindowDisplay())
+                && !(firstLine && oamSearchPhase.hadSpriteCandidate())) {
             return Mode.HBlank.ordinal();
         }
         if (gbc && speedMode.getSpeedMode() == 1
