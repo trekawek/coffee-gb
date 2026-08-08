@@ -442,9 +442,23 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     private boolean computeIntLine(int enable) {
         boolean line = (enable & 0b01000000) != 0 && intCoincidence;
         if (gpu.isLcdEnabled()) {
-            line |= (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
-            line |= (enable & 0b00010000) != 0 && gpu.isMode1IntWindow();
-            line |= (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
+            boolean suppressLateCgbModeEnable = gpu.isGbc()
+                    && gpu.getLine() == 143
+                    && lastModeIrqStatWriteLineTick >= 453
+                    && lycIrqClock - lastModeIrqStatWriteClock <= 2
+                    && (enable & 0x28) != 0;
+            line |= !suppressLateCgbModeEnable
+                    && (enable & 0b00001000) != 0 && gpu.isMode0IntWindow();
+            boolean suppressLateCgbMode1Enable = gpu.isGbc()
+                    && gpu.getLine() == 153
+                    && lastModeIrqStatWriteLineTick >= (isDoubleSpeed() ? 453 : 452)
+                    && lycIrqClock - lastModeIrqStatWriteClock <= 4
+                    && (lastModeIrqStatWriteOld & 0x20) == 0
+                    && (enable & 0x10) != 0;
+            line |= !suppressLateCgbMode1Enable
+                    && (enable & 0b00010000) != 0 && isMode1IrqLineActive();
+            line |= !suppressLateCgbModeEnable
+                    && (enable & 0b00100000) != 0 && gpu.isMode2IntWindow();
         }
         return line;
     }
