@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 import eu.rekawek.coffeegb.core.memento.Originator;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.LYC;
+import static eu.rekawek.coffeegb.core.gpu.GpuRegister.SCX;
 
 /**
  * Implements the FF41 STAT register and the PPU interrupt generation, modelled after the
