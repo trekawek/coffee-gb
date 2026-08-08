@@ -1023,6 +1023,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                 return false;
             }
         }
+
         // DMG writes still pass during its early read-lock window. On CGB at double
         // speed, the read/write latch transition occupies dots 452-453; the read latch
         // has the separate dot-0 release above.
