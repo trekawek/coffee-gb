@@ -1054,7 +1054,23 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     @Override
     public int getByte(int address) {
-        return 0b10000000 | enableBits | (coincidence ? 0b100 : 0) | gpu.getVisibleStatMode();
+        int visibleMode = cpuStatModeOverride >= 0
+                ? cpuStatModeOverride
+                : gpu.getVisibleStatMode();
+        if (gpu.isGbc() && !isDoubleSpeed() && gpu.isLcdEnabled()
+                && gpu.getLine() < 143 && gpu.getTicksInLine() == 454
+                && !gpu.hasObjectsOnLine() && (enableBits & 0x40) != 0
+                && (lycIrqValueSource != registeredLy
+                || lycIrqClock - lastLycIrqRegisterChangeClock
+                >= gpu.getTicksInLine())) {
+            // The normal-speed CGB comparator and mode read mux share this final
+            // object-free tail slot while the comparator is primed for the next LY.
+            // A same-line register change that creates the current comparison uses
+            // the write-response path and has already released this mux. Object lines
+            // use their independently captured mode-2 path.
+            visibleMode = Mode.HBlank.ordinal();
+        }
+        return 0b10000000 | enableBits | (coincidence ? 0b100 : 0) | visibleMode;
     }
 
     @Override
