@@ -697,6 +697,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         }
         if (line == 153) {
             if (gbc) {
+                if (lcdEnableClockPhase && !speedMode.isDmgCompat()
+                        && speedMode.getSpeedMode() == 1 && ticksInLine < 4) {
+                    // The shortened enable line leaves the first frame's normal-speed
+                    // CPU read phase one dot past the transient LY=153 latch.
+                    return 0;
+                }
                 int lastLyTicks = speedMode.getSpeedMode() == 2 ? 2 : 4;
                 return ticksInLine < lastLyTicks ? 153 : 0;
             }
