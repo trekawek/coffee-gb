@@ -394,7 +394,14 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
                         pixelTransferDone = false;
                         mode = Mode.HBlank;
                     } else {
+                        int oldPosition = pixelTransferPhase.getPosition();
                         boolean active = phase.tick();
+                        if (mode0IntFrom == Integer.MAX_VALUE
+                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()
+                                && oldPosition <= 158
+                                && pixelTransferPhase.getPosition() > 158) {
+                            mode0IntFrom = ticksInLine + 3;
+                        }
                         if (active) {
                             break;
                         }
