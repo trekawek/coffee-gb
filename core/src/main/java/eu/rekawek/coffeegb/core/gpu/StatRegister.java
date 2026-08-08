@@ -157,6 +157,9 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     public void tick() {
         lycIrqClock++;
         cpuStatModeOverride = -1;
+        if (interruptManager.consumeLcdcInterruptAcknowledge()) {
+            lastLcdcInterruptAcknowledgeClock = lycIrqClock;
+        }
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
