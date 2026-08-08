@@ -920,6 +920,17 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
 
     private void updateIntLine(boolean newLine) {
         if (newLine && !intLine) {
+            boolean line153ComparisonEdge = coincidence && registeredLy == 153
+                    && (enableBits & 0b01000000) != 0
+                    && ((gpu.getLine() == 153 && gpu.getTicksInLine() == 0)
+                    || (isNativeDoubleSpeed() && gpu.getLine() == 152
+                    && gpu.getTicksInLine() == CGB_DOUBLE_TAIL_LATCH));
+            if (line153ComparisonEdge && recentLyc153AcknowledgeWins()) {
+                // The comparator was already high when the CPU acknowledge cleared
+                // IF, so preserve its shared level without issuing a second edge.
+                intLine = newLine;
+                return;
+            }
             int earlyMode2Edge = gpu.getEarlyLineEdgeTick();
             boolean nativeDoubleTailLycLatch = isNativeDoubleSpeed()
                     && gpu.getTicksInLine() == CGB_DOUBLE_TAIL_LATCH
