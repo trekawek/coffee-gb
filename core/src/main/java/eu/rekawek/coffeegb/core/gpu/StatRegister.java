@@ -307,7 +307,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                     // before its level contribution to the STAT line settles. A mode-0
                     // source retiring on this boundary does not mask the higher-priority
                     // LYC edge unless mode 2 is selected too. Keep the edge detector
-                    // latched across that settling window: if IRQ dispatch clears IF
+                    // latched across the settling window: if IRQ dispatch clears IF
                     // before tick 4, the comparison must not be observed twice.
                     if (isNativeDoubleSpeed()) {
                         interruptManager.requestInterrupt(InterruptType.LCDC);
