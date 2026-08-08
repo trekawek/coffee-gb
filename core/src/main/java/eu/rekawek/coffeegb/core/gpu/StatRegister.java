@@ -558,6 +558,22 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
                 refreshModeIrqLatches(false);
             }
         }
+        if (gpu.isGbc() && gpu.getLine() == 143 && gpu.getTicksInLine() == 454) {
+            boolean blockedByCapturedMode = (modeIrqStatLatch & 0x28) != 0;
+            pendingCgbMode1Interrupt = (enableBits & 0x10) != 0
+                    && !blockedByCapturedMode && cgbMode1IfClearAtCapture;
+            if (isNativeDoubleSpeed() && pendingCgbMode1Interrupt) {
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.LCDC);
+                pendingCgbMode1Interrupt = false;
+            }
+            if ((enableBits & 0x10) != 0) {
+                // Synchronize the shared STAT level without manufacturing an edge;
+                // the captured mode-1 event above owns interrupt publication.
+                suppressNaturalModeEdge = true;
+            }
+            refreshModeIrqLatches(false);
+        }
         return suppressNaturalModeEdge;
     }
 
