@@ -302,6 +302,15 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private long cpuCyclesUntil(long eventClock) {
+        if (eventClock == NO_LYC_IRQ_EVENT) {
+            return Long.MAX_VALUE;
+        }
+        int cpuClocksPerDot = 4 / gpu.getCpuMachineCycleDots();
+        return Math.max(0, eventClock - lycIrqClock) * cpuClocksPerDot
+                + getNormalSpeedClockPhase();
+    }
+
     private LycComparison getLycComparison() {
         int line = gpu.getLine();
         int timeToNextLy = cpuCyclesToNextLy();
