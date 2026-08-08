@@ -927,7 +927,7 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         // there is no OAM scan on the first line, but running it is harmless as the CPU
         // can still write to OAM at this point
         this.mode = Mode.OamSearch;
-        this.phase = oamSearchPhase.start();
+        this.phase = oamSearchPhase.start(false);
         this.lcdEnabled = true;
         this.displayEnabledDelay = 244;
         statRegister.onLcdEnabled();
