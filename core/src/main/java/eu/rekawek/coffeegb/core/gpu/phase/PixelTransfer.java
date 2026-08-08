@@ -46,6 +46,8 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     private final SpeedMode speedMode;
 
+    private int speedModeValue = 1;
+
     private final SpritePosition[] sprites;
 
     // ticks before the first dot of the line (mode-3 entry padding)
@@ -265,6 +267,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         this.lcdc = lcdc;
         this.gbc = gbc;
         this.speedMode = speedMode;
+        this.speedModeValue = speedMode.getSpeedMode();
         if (gbc) {
             this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
         } else {
@@ -281,6 +284,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     public PixelTransfer start(int extraEntryDelay) {
         return start(extraEntryDelay, false);
+    }
+
+    /** Refreshes the owner-thread timing snapshot before subsystem callbacks run. */
+    public void prepareForTick(int speedModeValue) {
+        this.speedModeValue = speedModeValue;
     }
 
     public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {
@@ -549,21 +557,21 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 ? windowWyOldOnWriteTick : r.get(WY);
         windowWyOldOnWriteTick = -1;
 
-        boolean earlyFrameCheckpoint = !gbc || speedMode.getSpeedMode() == 1;
+        boolean earlyFrameCheckpoint = !gbc || speedModeValue == 1;
         if (earlyFrameCheckpoint && line == 153 && ticksInLine == 454) {
             setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
         } else if (!earlyFrameCheckpoint && line == 0 && ticksInLine == 1) {
             setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
         }
         int currentLineCheckpoint = gbc
-                ? speedMode.getSpeedMode() == 1 ? 446 : 449
+                ? speedModeValue == 1 ? 446 : 449
                 : 450;
         if (line < 143 && ticksInLine == currentLineCheckpoint
                 && isWindowDisplay() && r.get(LY) == primaryWy) {
             setWindowYTriggered(true);
         }
         int upcomingLineCheckpoint = gbc
-                ? speedMode.getSpeedMode() == 1 ? 450 : 453
+                ? speedModeValue == 1 ? 450 : 453
                 : 454;
         if (line < 143 && ticksInLine == upcomingLineCheckpoint
                 && isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
@@ -653,7 +661,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 && windowDisplay && !previousWindowDisplay;
         boolean windowEnabledOnThisTick = gbc
                 && windowDisplay && !previousWindowDisplay
-                && speedMode.getSpeedMode() == 1;
+                && speedModeValue == 1;
         previousWindowDisplay = windowDisplay;
         int currentScx = r.get(SCX);
         int fineScxAdvance = (currentScx & 7) - (previousScx & 7);
@@ -671,7 +679,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             machineStall += fineScxRewind + 6;
             fineScxRephasedThisLine = true;
         }
-        outputScx = gbc && speedMode.getSpeedMode() == 2 ? previousScx : currentScx;
+        outputScx = gbc && speedModeValue == 2 ? previousScx : currentScx;
         previousScx = currentScx;
 
         if (cgbWindowStartTicks > 0 && --cgbWindowStartTicks == 0) {
@@ -788,7 +796,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         // source. DMG changes source at its next early tile-fetch state and retains its
         // separate restart/catch-up behaviour below.
         if (gbc && window && !windowDisplay) {
-            if (speedMode.getSpeedMode() == 2 && (r.get(SCX) & 7) == 5
+            if (speedModeValue == 2 && (r.get(SCX) & 7) == 5
                     && ((entryDelay == 0 && fetcher.getState() == Fetcher.PUSH)
                     || (entryDelay == 4
                     && fetcher.getState() == Fetcher.GET_TILE_DATA_LOW_T2
@@ -847,7 +855,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                         || (position == -16 && (r.get(SCX) & 7) != 0);
             } else if (wx < (gbc ? 167 : 166)) {
                 activate = wx == ((position + 7) & 0xff);
-                if (!activate && gbc && speedMode.getSpeedMode() == 2
+                if (!activate && gbc && speedModeValue == 2
                         && windowDisplayRising && (r.get(SCX) & 7) == 5) {
                     // Fine SCX=5 holds X=WX across Tile::f4. The shifted output
                     // machine's public position has advanced, but the comparator
@@ -997,7 +1005,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     private boolean isNormalSpeedWindowEnableEdge() {
         return gbc && isWindowDisplay() && !previousWindowDisplay
-                && speedMode.getSpeedMode() == 1;
+                && speedModeValue == 1;
     }
 
 

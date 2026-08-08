@@ -683,6 +683,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     public void prepareForTick() {
         speedModeValue = speedMode.getSpeedMode();
         dmgCompatValue = speedMode.isDmgCompat();
+        pixelTransferPhase.prepareForTick(speedModeValue);
+        pixelMachine.prepareForTick(speedModeValue);
         timingSnapshotPrepared = true;
     }
 
