@@ -1103,6 +1103,12 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
         return true;
     }
 
+    private boolean followsCpuVramWrite() {
+        int readDelay = speedMode.getSpeedMode() == 2 ? 4 : 8;
+        return lastCpuVramWriteTick != Integer.MIN_VALUE
+                && ticksInLine - lastCpuVramWriteTick == readDelay;
+    }
+
     private void setLcdc(int value) {
         // SameBoy's DMG_LCDC position_in_line == 0 special: hardware's position at the
         // write sits 3 dots behind our +4-shifted machine's, so the gate is position 3
