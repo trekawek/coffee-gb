@@ -302,6 +302,13 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private int comparedLycIrqLine() {
+        if (gpu.getLine() == 153) {
+            return 0;
+        }
+        return gpu.getLine() + 1;
+    }
+
     private void updateIntLine(boolean newLine) {
         if (newLine && !intLine) {
             int earlyMode2Edge = gpu.getEarlyLineEdgeTick();
