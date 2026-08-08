@@ -40,6 +40,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private final Ram r = new Ram(0xff24, 0x03);
 
+    private int volume = 0x77;
+
+    private int routing;
+
     private final int[] channels = new int[4];
 
     private boolean enabled = true;
@@ -114,15 +118,17 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             return;
         }
 
-        int enabledBefore = getDebugEnabledChannelMask();
+        int enabledBefore = debugHooks == null ? 0 : getEnabledChannelMask();
 
         channels[0] = allModes[0].tick(divReset);
         channels[1] = allModes[1].tick(divReset);
-        channels[2] = allModes[2].tick(divReset);
-        channels[3] = allModes[3].tick(divReset);
-        notifyDebugChannelDisables(enabledBefore);
+        channels[2] = allModes[2].tick();
+        channels[3] = allModes[3].tick();
+        if (debugHooks != null) {
+            notifyDebugChannelDisables(enabledBefore);
+        }
 
-        int selection = r.getByte(0xff25);
+        int selection = routing;
         int left = 0;
         int right = 0;
         for (int i = 0; i < 4; i++) {
@@ -134,7 +140,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             // constant positive offset. Games play PCM speech by parking such a DC and
             // modulating the master volume (Perfect Dark's intro voice, issue #56); a
             // disabled DAC outputs true analog zero.
-            int analog = allModes[i].isDacEnabled() ? 15 - 2 * channels[i] : 0;
+            int analog = allModes[i].dacEnabled ? 15 - 2 * channels[i] : 0;
             if ((selection & (1 << i + 4)) != 0) {
                 left += analog;
             }
@@ -144,7 +150,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         }
 
         // NR50 volume 0 means "very quiet", not silence: the scale factor is volume+1
-        int volumes = r.getByte(0xff24);
+        int volumes = volume;
         left *= ((volumes >> 4) & 0b111) + 1;
         right *= (volumes & 0b111) + 1;
 
@@ -294,6 +300,11 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
                 || mode3.isWriteAccepted(address);
         int enabledBefore = getDebugEnabledChannelMask();
         s.setByte(address, value);
+        if (address == 0xff24) {
+            volume = value;
+        } else if (address == 0xff25) {
+            routing = value;
+        }
         if (!accepted) {
             return;
         }
@@ -473,6 +484,8 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         }
         r.setByte(0xff24, 0);
         r.setByte(0xff25, 0);
+        volume = 0;
+        routing = 0;
     }
 
     public void enableChannel(int i, boolean enabled) {
@@ -539,6 +552,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             this.allModes[i].restoreState(mem.allModeMementos[i]);
         }
         this.r.restoreState(mem.ramMemento());
+        int[] restoredRegisters = r.getSpace();
+        this.volume = restoredRegisters[0];
+        this.routing = restoredRegisters[1];
         this.frameSequencer.restoreState(mem.frameSequencerMemento());
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();

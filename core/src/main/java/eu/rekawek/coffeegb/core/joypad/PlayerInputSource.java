@@ -13,7 +13,7 @@ public interface PlayerInputSource {
 
     int PLAYER_COUNT = 4;
 
-    PlayerInputSource RELEASED = PlayerInputSnapshot::released;
+    PlayerInputSource RELEASED = () -> PlayerInputSnapshot.RELEASED;
 
     /** Returns one immutable, deeply owned sample for all slots P1 through P4. */
     PlayerInputSnapshot sample();

@@ -117,7 +117,8 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
                 return;
             }
             ticks++;
-            for (int i = 0; i < speedMode.getSpeedMode(); i++) {
+            int speed = speedMode.getSpeedMode();
+            for (int i = 0; i < speed; i++) {
                 if (cpuClockPaused && pauseEntryClocks == 0) {
                     break;
                 }

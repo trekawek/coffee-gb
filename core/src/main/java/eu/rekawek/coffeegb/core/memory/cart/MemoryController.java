@@ -7,6 +7,11 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import java.util.Objects;
 
 public interface MemoryController extends AddressSpace, StatefulComponent<MemoryController> {
+    /** Whether this mapper has hardware that must be advanced by every master tick. */
+    default boolean isClocked() {
+        return false;
+    }
+
     default void tick() {
     }
 

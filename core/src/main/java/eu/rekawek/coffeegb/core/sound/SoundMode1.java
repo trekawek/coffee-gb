@@ -117,7 +117,7 @@ public class SoundMode1 extends AbstractSoundMode {
         }
 
         boolean e;
-        e = updateLength();
+        e = channelEnabled;
         e = updateSweep() && e;
         e = dacEnabled && e;
         if (!e) {

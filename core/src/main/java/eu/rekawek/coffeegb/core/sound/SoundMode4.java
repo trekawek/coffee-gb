@@ -59,7 +59,7 @@ public class SoundMode4 extends AbstractSoundMode {
     @Override
     public int tick() {
         boolean stepLfsr = polynomialCounter.tick();
-        if (!updateLength()) {
+        if (!channelEnabled) {
             return 0;
         }
         if (!dacEnabled) {

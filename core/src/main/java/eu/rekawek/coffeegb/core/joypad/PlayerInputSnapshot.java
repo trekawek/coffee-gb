@@ -11,13 +11,13 @@ import java.util.Set;
 /** Immutable, deeply owned physical-button sample for exactly P1 through P4. */
 public final class PlayerInputSnapshot {
 
-    private static final PlayerInputSnapshot RELEASED =
+    static final PlayerInputSnapshot RELEASED =
             new PlayerInputSnapshot(List.of(Set.of(), Set.of(), Set.of(), Set.of()));
 
     private final List<Set<Button>> players;
 
     /** Four stable eight-bit button masks packed from P1 in the low byte through P4. */
-    private final int packedButtonMasks;
+    final int packedButtonMasks;
 
     private PlayerInputSnapshot(List<Set<Button>> players) {
         this.players = players;

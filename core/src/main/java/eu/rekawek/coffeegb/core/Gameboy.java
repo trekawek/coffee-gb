@@ -127,6 +127,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final Cartridge slotCartridge;
 
+    private final boolean cartridgeClocked;
+
+    private final boolean slotCartridgeClocked;
+
     private final BiosShadow biosShadow;
 
     private final Gpu gpu;
@@ -192,6 +196,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private boolean clearBootTilemapPending;
 
     private boolean clearCgbBootOamShadowPending;
+
+    private transient boolean bootCompatibilityResolved;
 
     private transient volatile boolean doPause;
 
@@ -314,6 +320,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             slotCartridge = null;
         }
+        cartridgeClocked = cartridge.isClocked();
+        slotCartridgeClocked = slotCartridge != null && slotCartridge.isClocked();
         Bios bios = new Bios(hardwareProfile, configuration.bootstrapMode != BootstrapMode.SKIP);
         biosShadow = new BiosShadow(bios, cartridge);
         speedMode.setBiosShadow(biosShadow);
@@ -446,6 +454,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private void applyBootCompatibilityIfReady() {
+        if (bootCompatibilityResolved) {
+            return;
+        }
         if (!biosShadow.isBootFinished()) {
             return;
         }
@@ -476,6 +487,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
             clearCgbBootOamShadowPending = false;
         }
+        bootCompatibilityResolved = true;
     }
 
     /**
@@ -605,8 +617,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             warmResetRequested = false;
             applyWarmReset();
         }
-        cartridge.tick();
-        if (slotCartridge != null) {
+        if (cartridgeClocked) {
+            cartridge.tick();
+        }
+        if (slotCartridgeClocked) {
             slotCartridge.tick();
         }
         boolean result = false;
@@ -1599,6 +1613,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         blankCgbBootTilePending = mem.blankCgbBootTilePending();
         clearBootTilemapPending = mem.clearBootTilemapPending();
         clearCgbBootOamShadowPending = mem.clearCgbBootOamShadowPending();
+        bootCompatibilityResolved = biosShadow.isBootFinished()
+                && !blankCgbBootTilePending
+                && !clearBootTilemapPending
+                && !clearCgbBootOamShadowPending;
     }
 
     /** Current aggregate emulated motor output, without invoking host services. */

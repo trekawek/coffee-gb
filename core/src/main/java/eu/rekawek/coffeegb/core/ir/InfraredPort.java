@@ -32,6 +32,8 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
 
     private final FullChanger fullChanger = new FullChanger();
 
+    private transient boolean fullChangerActive;
+
     private transient InfraredEndpoint endpoint = InfraredEndpoint.NULL_ENDPOINT;
 
     private transient SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
@@ -62,7 +64,10 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         this.endpoint = endpoint;
         endpoint.setLightOn((rp & 0x01) != 0);
         alignDebugSignal();
-        eventBus.register(e -> fullChanger.transform(e.characterId()), FullChanger.TransformEvent.class);
+        eventBus.register(e -> {
+            fullChanger.transform(e.characterId());
+            fullChangerActive = true;
+        }, FullChanger.TransformEvent.class);
     }
 
     /** Connects RP bit 4 to the CGB link port's serial-input pin. */
@@ -80,9 +85,11 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     }
 
     public void tick() {
-        // the pulse timings are defined in double-speed cycles; advance twice as fast in
-        // double speed so a game sees the same delays regardless of its speed setting
-        fullChanger.tick(speedMode.getSpeedMode());
+        if (fullChangerActive) {
+            // the pulse timings are defined in double-speed cycles; advance twice as fast in
+            // double speed so a game sees the same delays regardless of its speed setting
+            fullChangerActive = fullChanger.tick(speedMode.getSpeedMode());
+        }
         notifyDebugSignalChange();
     }
 
@@ -164,6 +171,7 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         this.rp = mem.rp;
         endpoint.setLightOn((rp & 0x01) != 0);
         fullChanger.restoreState(mem.fullChangerMemento);
+        fullChangerActive = fullChanger.isActive();
         alignDebugSignal();
     }
 
