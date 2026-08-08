@@ -302,6 +302,10 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
         return line;
     }
 
+    private int getNormalSpeedClockPhase() {
+        return !isDoubleSpeed() && gpu.isStatModeLatchRephasedBySpeedSwitch() ? 1 : 0;
+    }
+
     private boolean isDoubleSpeed() {
         return gpu.getCpuMachineCycleDots() == 2;
     }
