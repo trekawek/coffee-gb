@@ -210,6 +210,9 @@ public class Gpu implements AddressSpace, Serializable, Originator<Gpu> {
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        if (address == SCX.getAddress() && lcdEnabled && line < 144) {
+            scxWrittenThisLine = true;
+        }
         if (!shouldDelayPpuWrite(address, value)) {
             cancelPendingPpuWrites(address);
             setByteImmediately(address, value);
