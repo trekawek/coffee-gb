@@ -155,6 +155,7 @@ public class StatRegister implements AddressSpace, Originator<StatRegister> {
     }
 
     public void tick() {
+        lycIrqClock++;
         boolean settlingLycLine = false;
         if (gpu.isLcdEnabled()) {
             int ticksInLine = gpu.getTicksInLine();
