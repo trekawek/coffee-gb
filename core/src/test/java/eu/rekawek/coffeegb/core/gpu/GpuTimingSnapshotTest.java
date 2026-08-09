@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
+import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.memory.Dma;
@@ -78,6 +79,54 @@ public class GpuTimingSnapshotTest {
         }
     }
 
+    @Test
+    public void dmgCompatibilityChangeUpdatesTimingAndCpuAccessWithoutGpuTick() {
+        Fixture fixture = new Fixture(true, 1, false);
+        GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
+        fixture.gpu.captureStatTiming(snapshot);
+        assertFalse(snapshot.dmgCompat);
+
+        fixture.speedMode.setDmgCompat(true);
+
+        assertTrue(fixture.gpu.isDmgCompatMode());
+        fixture.gpu.captureStatTiming(snapshot);
+        assertTrue(snapshot.dmgCompat);
+        fixture.gpu.setByteFromCpu(GpuRegister.VBK.getAddress(), 1);
+        assertEquals(0xfe, fixture.gpu.getByte(GpuRegister.VBK.getAddress()));
+    }
+
+    @Test
+    public void speedSwitchUpdatesTimingSnapshotWithoutGpuTick() {
+        Fixture fixture = new Fixture(true, new SpeedMode(true));
+        GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
+
+        fixture.gpu.captureStatTiming(snapshot);
+        assertEquals(4, snapshot.cpuMachineCycleDots);
+        switchSpeed(fixture, 2);
+        fixture.gpu.captureStatTiming(snapshot);
+        assertEquals(2, snapshot.cpuMachineCycleDots);
+        switchSpeed(fixture, 1);
+        fixture.gpu.captureStatTiming(snapshot);
+        assertEquals(4, snapshot.cpuMachineCycleDots);
+    }
+
+    @Test
+    public void speedModeRestoreAfterGpuRestoreRefreshesTimingSnapshot() {
+        Fixture fixture = new Fixture(true, 1, false);
+        fixture.speedMode.setDmgCompat(true);
+        var gpuState = fixture.gpu.captureState();
+        var speedModeState = fixture.speedMode.captureState();
+
+        fixture.speedMode.setDmgCompat(false);
+        fixture.gpu.restoreState(gpuState);
+        fixture.speedMode.restoreState(speedModeState);
+
+        GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
+        fixture.gpu.captureStatTiming(snapshot);
+        assertTrue(fixture.gpu.isDmgCompatMode());
+        assertTrue(snapshot.dmgCompat);
+    }
+
     private static void assertSnapshotMatchesGetters(Fixture fixture) {
         GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
         fixture.gpu.captureStatTiming(snapshot);
@@ -122,23 +171,44 @@ public class GpuTimingSnapshotTest {
                 && ticksInLine == mode0InterruptTick + 2);
     }
 
+    private static void switchSpeed(Fixture fixture, int expectedSpeed) {
+        Ram memory = new Ram(0, 0x10000);
+        memory.setByte(0x100, 0x10);
+        memory.setByte(0x101, 0);
+        memory.setByte(0xff00, 0xcf);
+        fixture.speedMode.setByte(0xff4d, 1);
+        Cpu cpu = new Cpu(memory, new InterruptManager(true), fixture.gpu,
+                fixture.speedMode, new Display(true));
+        cpu.getRegisters().setPC(0x100);
+        for (int i = 0; i < 20 && fixture.speedMode.getSpeedMode() != expectedSpeed; i++) {
+            cpu.tick();
+        }
+        assertEquals(expectedSpeed, fixture.speedMode.getSpeedMode());
+    }
+
     private static class Fixture {
 
         private final StatRegister stat;
 
         private final Gpu gpu;
 
+        private final SpeedMode speedMode;
+
         private Fixture(boolean gbc, int speed, boolean dmgCompat) {
-            Ram oam = new Ram(0xfe00, 0xa0);
-            InterruptManager interrupts = new InterruptManager(gbc);
-            stat = new StatRegister(interrupts);
-            SpeedMode speedMode = new SpeedMode(gbc) {
+            this(gbc, new SpeedMode(gbc) {
                 @Override
                 public int getSpeedMode() {
                     return speed;
                 }
-            };
+            });
             speedMode.setDmgCompat(dmgCompat);
+        }
+
+        private Fixture(boolean gbc, SpeedMode speedMode) {
+            Ram oam = new Ram(0xfe00, 0xa0);
+            InterruptManager interrupts = new InterruptManager(gbc);
+            stat = new StatRegister(interrupts);
+            this.speedMode = speedMode;
             gpu = new Gpu(
                     new Display(gbc),
                     new Dma(new Ram(0, 0x10000), oam, speedMode),
