@@ -42,6 +42,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private final GpuTimingSnapshot timing = new GpuTimingSnapshot();
 
+    // Derived from the GPU; never serialized as part of the STAT memento.
+    private long timingGeneration = Long.MIN_VALUE;
+
     private Gpu gpu;
 
     private boolean gbc;
@@ -224,7 +227,11 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     private void refreshGpuTiming() {
-        gpu.captureStatTiming(timing);
+        long generation = gpu.getTimingGeneration();
+        if (generation != timingGeneration) {
+            gpu.captureStatTiming(timing);
+            timingGeneration = generation;
+        }
     }
 
     // TODO remove circular dependency
@@ -1959,6 +1966,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         this.ordinaryHaltWakeStatClock = mem.ordinaryHaltWakeStatClock;
         this.previousOrdinaryHaltWakePhase = mem.previousOrdinaryHaltWakePhase;
         this.scxChangedSinceMode0Event = mem.scxChangedSinceMode0Event;
+        // The timing snapshot is derived and may refer to the GPU state from before
+        // the restore.  Let the first consumer recapture it from the restored GPU.
+        timingGeneration = Long.MIN_VALUE;
     }
 
     private record StatRegisterState(int enableBits, int registeredLy, boolean coincidence,

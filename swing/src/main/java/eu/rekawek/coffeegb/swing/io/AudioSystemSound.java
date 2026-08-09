@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.LineUnavailableException;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -83,6 +84,11 @@ public class AudioSystemSound implements Runnable {
     private volatile AudioBackend.AudioLine activeLine;
 
     private final StereoPcmConverter pcmConverter = new StereoPcmConverter(SAMPLE_RATE);
+
+    // Event delivery is synchronous on the emulation thread, so one grow-only scratch
+    // buffer is safe to reuse between conversions. The queued frame remains an owned,
+    // right-sized copy while the worker drains it.
+    private byte[] pcmScratch = new byte[0];
 
     /** Existing desktop constructor; preserves the old enabled/default-device behavior. */
     public AudioSystemSound(SoundProperties properties, EventBus eventBus, String callerId) {
@@ -623,11 +629,13 @@ public class AudioSystemSound implements Runnable {
         AudioRuntimeConfiguration configuration = desiredConfiguration.get();
         int[] source = event.buffer();
         int ticks = source.length / 2;
-        byte[] out = new byte[pcmConverter.maximumPcmBytes(ticks, event.clockSpec())];
+        int maximumBytes = pcmConverter.maximumPcmBytes(ticks, event.clockSpec());
+        if (pcmScratch.length < maximumBytes) {
+            pcmScratch = Arrays.copyOf(pcmScratch, maximumBytes);
+        }
         int written = pcmConverter.render(source, event.clockSpec(),
-                configuration.masterVolume(), configuration.muted(), out);
-        byte[] trimmed = new byte[written];
-        System.arraycopy(out, 0, trimmed, 0, written);
+                configuration.masterVolume(), configuration.muted(), pcmScratch);
+        byte[] trimmed = Arrays.copyOf(pcmScratch, written);
         if (generation == configurationGeneration.get()) {
             enqueuePcm(trimmed, configuration.latencyPreset().queuedFrames());
         }

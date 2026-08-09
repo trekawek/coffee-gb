@@ -35,6 +35,10 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     private final Display display;
 
+    // The timing-only PPU machine advances the LCD delay line without resolving
+    // pixels into its throwaway Display.
+    private boolean renderOutput = true;
+
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
@@ -70,6 +74,10 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         this.dmgCompatValue = dmgCompatValue;
     }
 
+    public void setRenderOutput(boolean renderOutput) {
+        this.renderOutput = renderOutput;
+    }
+
     @Override
     public int getLength() {
         return pixels.size;
@@ -103,7 +111,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         spriteFifo.rewind();
         if (delaySize > 0) {
             delaySize--;
-        } else {
+        } else if (renderOutput) {
             display.rewindPixel();
         }
     }
@@ -153,7 +161,9 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
             int entry = delayEntry[delayHead];
             delayHead = (delayHead + 1) & 7;
             delaySize--;
-            display.putColorPixel(resolvePixel(entry));
+            if (renderOutput) {
+                display.putColorPixel(resolvePixel(entry));
+            }
         }
     }
 

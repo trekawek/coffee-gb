@@ -34,6 +34,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     private static final int[] JUNK_PIXEL_LINE = new int[8];
 
+    private static final int WINDOW_Y_FRAME_CHECKPOINT = 1;
+    private static final int WINDOW_Y_CURRENT_LINE_CHECKPOINT = 2;
+    private static final int WINDOW_Y_UPCOMING_LINE_CHECKPOINT = 4;
+
     private final PixelFifo fifo;
 
     private final Fetcher fetcher;
@@ -299,6 +303,15 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
     }
 
+    /** Enables/disables visible pixel resolution for this dot machine. */
+    public void setRenderOutput(boolean renderOutput) {
+        if (fifo instanceof ColorPixelFifo colorPixelFifo) {
+            colorPixelFifo.setRenderOutput(renderOutput);
+        } else if (fifo instanceof DmgPixelFifo dmgPixelFifo) {
+            dmgPixelFifo.setRenderOutput(renderOutput);
+        }
+    }
+
     public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {
         this.lcdEnableFirstLine = lcdEnableFirstLine;
         entryTicks = entryDelay + extraEntryDelay;
@@ -560,14 +573,8 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
     }
 
-    /**
-     * Advances the delayed WY copy and samples the persistent window master at the
-     * PPU's line-edge checkpoints. Gambatte's CGB checkpoints at 450/454 map to
-     * Coffee's normal-speed skeleton at 446/450; double speed observes them at
-     * 449/453, and DMG uses 450/454. Normal-speed CGB and DMG sample frame line zero
-     * on line 153 dot 454, while double-speed CGB samples it on line zero dot 1.
-     */
-    public void checkWindowY(int line, int ticksInLine) {
+    /** Advances the delayed WY copy and returns the old-WY collision value, if any. */
+    public int advanceWindowYDelay() {
         if (windowWyDelay == 0) {
             windowWy = pendingWindowWy;
             windowWyDelay = -1;
@@ -576,7 +583,18 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
         int oldWindowWy = windowWyOldOnWriteTick;
         windowWyOldOnWriteTick = -1;
+        return oldWindowWy;
+    }
 
+    /**
+     * Returns the shared checkpoint mask for the current PPU line/tick. Gambatte's
+     * CGB checkpoints at 450/454 map to Coffee's normal-speed skeleton at 446/450;
+     * double speed observes them at 449/453, and DMG uses 450/454. Normal-speed CGB
+     * and DMG sample frame line zero on line 153 dot 454, while double-speed CGB samples
+     * it on line zero dot 1.
+     */
+    public static int windowYCheckpoint(boolean gbc, int speedModeValue,
+                                        int line, int ticksInLine) {
         boolean earlyFrameCheckpoint = !gbc || speedModeValue == 1;
         int currentLineTick = gbc
                 ? speedModeValue == 1 ? 446 : 449
@@ -584,29 +602,49 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         int upcomingLineTick = gbc
                 ? speedModeValue == 1 ? 450 : 453
                 : 454;
-        boolean frameCheckpoint = earlyFrameCheckpoint
+        int checkpoint = 0;
+        if (earlyFrameCheckpoint
                 ? line == 153 && ticksInLine == 454
-                : line == 0 && ticksInLine == 1;
-        boolean currentLineCheckpoint = line < 143 && ticksInLine == currentLineTick;
-        boolean upcomingLineCheckpoint = line < 143 && ticksInLine == upcomingLineTick;
-        if (!frameCheckpoint && !currentLineCheckpoint && !upcomingLineCheckpoint) {
+                : line == 0 && ticksInLine == 1) {
+            checkpoint |= WINDOW_Y_FRAME_CHECKPOINT;
+        }
+        if (line < 143 && ticksInLine == currentLineTick) {
+            checkpoint |= WINDOW_Y_CURRENT_LINE_CHECKPOINT;
+        }
+        if (line < 143 && ticksInLine == upcomingLineTick) {
+            checkpoint |= WINDOW_Y_UPCOMING_LINE_CHECKPOINT;
+        }
+        return checkpoint;
+    }
+
+    /** Applies a previously computed checkpoint to this machine's WY state. */
+    public void sampleWindowY(int checkpoint, int oldWindowWy) {
+        if (checkpoint == 0) {
             return;
         }
 
         int primaryWy = oldWindowWy >= 0 ? oldWindowWy : r.get(WY);
         boolean windowDisplay = isWindowDisplay();
-        if (frameCheckpoint) {
+        if ((checkpoint & WINDOW_Y_FRAME_CHECKPOINT) != 0) {
             setWindowYTriggered(windowDisplay && primaryWy == 0);
         }
-        if (currentLineCheckpoint || upcomingLineCheckpoint) {
+        if ((checkpoint & (WINDOW_Y_CURRENT_LINE_CHECKPOINT
+                | WINDOW_Y_UPCOMING_LINE_CHECKPOINT)) != 0) {
             int currentLy = r.get(LY);
-            if (currentLineCheckpoint && windowDisplay && currentLy == primaryWy) {
+            if ((checkpoint & WINDOW_Y_CURRENT_LINE_CHECKPOINT) != 0
+                    && windowDisplay && currentLy == primaryWy) {
                 setWindowYTriggered(true);
             }
-            if (upcomingLineCheckpoint && windowDisplay && currentLy + 1 == primaryWy) {
+            if ((checkpoint & WINDOW_Y_UPCOMING_LINE_CHECKPOINT) != 0
+                    && windowDisplay && currentLy + 1 == primaryWy) {
                 setWindowYTriggered(true);
             }
         }
+    }
+
+    public void checkWindowY(int line, int ticksInLine) {
+        int oldWindowWy = advanceWindowYDelay();
+        sampleWindowY(windowYCheckpoint(gbc, speedModeValue, line, ticksInLine), oldWindowWy);
     }
 
     /** Schedules the secondary WY comparator latch after a WY write. */

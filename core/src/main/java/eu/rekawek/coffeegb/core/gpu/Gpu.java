@@ -60,6 +60,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private boolean timingModeDirty = true;
     private boolean timingSnapshotPrepared;
 
+    // Monotonic owner-thread generation for the transient STAT timing view.  The
+    // PPU advances once per master tick, so StatRegister can reuse the snapshot it
+    // captured after the preceding GPU tick and only recapture when GPU state has
+    // actually moved in between.
+    private long timingGeneration;
+
     private final boolean earlyCgbLyReadEdge;
 
     private final ColorPalette bgPalette;
@@ -234,6 +240,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
+        this.pixelTransferPhase.setRenderOutput(false);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
         this.pixelMachine.setOamReaderBus(oamSearchPhase);
 
@@ -241,6 +248,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.phase = oamSearchPhase.start();
         prepareForTick();
         speedMode.setTimingStateListener(() -> {
+            timingGeneration++;
             timingModeDirty = true;
             prepareForTick();
         });
@@ -289,6 +297,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
+        timingGeneration++;
         if (!timingSnapshotPrepared) {
             prepareForTick();
         }
@@ -299,6 +308,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        timingGeneration++;
         if (!timingSnapshotPrepared) {
             prepareForTick();
         }
@@ -487,6 +497,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public Mode tick() {
+        timingGeneration++;
         if (!timingSnapshotPrepared) {
             prepareForTick();
         }
@@ -518,8 +529,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             pixelTransferPhase.resetWindowLineCounter();
             pixelMachine.resetWindowLineCounter();
         }
-        pixelTransferPhase.checkWindowY(line, ticksInLine);
-        pixelMachine.checkWindowY(line, ticksInLine);
+        int windowYCheckpoint = PixelTransfer.windowYCheckpoint(
+                gbc, speedModeValue, line, ticksInLine);
+        int timingWindowWy = pixelTransferPhase.advanceWindowYDelay();
+        int outputWindowWy = pixelMachine.advanceWindowYDelay();
+        if (windowYCheckpoint != 0) {
+            pixelTransferPhase.sampleWindowY(windowYCheckpoint, timingWindowWy);
+            pixelMachine.sampleWindowY(windowYCheckpoint, outputWindowWy);
+        }
         // Both dot machines enqueue popped pixels into an eight-slot LCD delay line.
         // The timing-only skeleton has a throwaway Display, but its delay line still
         // participates in window rewind/refresh bookkeeping and must advance as a
@@ -677,6 +694,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Rephases the CGB CPU-readable PPU latches when the CPU clock mux changes. */
     public void onSpeedSwitch() {
+        timingGeneration++;
         prepareForTick();
         statModeLatchRephasedBySpeedSwitch = true;
         lyReadLatchRephasedBySpeedSwitch = lcdEnabled;
@@ -698,12 +716,18 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
     public void onSpeedSwitchComplete() {
+        timingGeneration++;
         speedSwitchCompletedThisLine = true;
     }
 
     /** Captures the CPU/PPU phase selected when a double-speed mode-2 IRQ is accepted. */
     public void onDoubleSpeedMode2Dispatch() {
+        timingGeneration++;
         doubleSpeedMode2DispatchStatTailThisLine = true;
+    }
+
+    long getTimingGeneration() {
+        return timingGeneration;
     }
 
     public boolean isStatModeLatchRephasedBySpeedSwitch() {
@@ -2358,6 +2382,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         } else {
             phase = oamSearchPhase;
         }
+        // The generation is deliberately transient: it is only a cache-validity
+        // marker for the derived STAT timing snapshot and is not part of emulated
+        // state. Force a fresh capture after restoring the portable state.
+        timingGeneration++;
+        timingSnapshotPrepared = false;
     }
 
     private record GpuState(ComponentState<Ram> videoRam0Memento, ComponentState<Ram> videoRam1Memento,

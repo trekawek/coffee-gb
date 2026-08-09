@@ -14,6 +14,10 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
 
     private final Display display;
 
+    // The timing-only PPU machine advances raw output timing without resolving
+    // pixels into its throwaway Display.
+    private boolean renderOutput = true;
+
     private final Lcdc lcdc;
 
     private final GpuRegisterValues registers;
@@ -25,6 +29,10 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
         this.lcdc = lcdc;
         this.registers = registers;
         this.vRamTransfer = vRamTransfer;
+    }
+
+    public void setRenderOutput(boolean renderOutput) {
+        this.renderOutput = renderOutput;
     }
 
     @Override
@@ -100,6 +108,28 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
     @Override
     public void outputTick() {
         outputTicks++;
+        if (!renderOutput) {
+            // Preserve the first-pixel split latch and output cadence, but skip the
+            // palette/register/VRAM-transfer work that only the visible machine needs.
+            if (firstEntry >= 0) {
+                firstEntry = -1;
+            }
+            while (delaySize > 0 && delayStamp[delayHead] + OUTPUT_DELAY <= outputTicks) {
+                int entry = delayEntry[delayHead];
+                delayHead = (delayHead + 1) & 7;
+                delaySize--;
+                if (outCount == 0) {
+                    outCount++;
+                    firstEntry = entry;
+                    firstBgp = registers.getEffective(GpuRegister.BGP);
+                    firstObp0 = registers.getEffective(GpuRegister.OBP0);
+                    firstObp1 = registers.getEffective(GpuRegister.OBP1);
+                    break;
+                }
+                outCount++;
+            }
+            return;
+        }
         if (firstEntry >= 0) {
             // second phase of the first pixel: mux with the current LCDC, palettes from
             // the previous tick
@@ -200,7 +230,7 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
             // the previous pixel is still in the output delay line: remove it, so the
             // next pixel takes its output slot
             delaySize--;
-        } else {
+        } else if (renderOutput) {
             display.rewindPixel();
         }
     }
