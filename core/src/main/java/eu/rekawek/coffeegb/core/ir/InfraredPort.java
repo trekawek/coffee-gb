@@ -90,7 +90,9 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
             // double speed so a game sees the same delays regardless of its speed setting
             fullChangerActive = fullChanger.tick(speedMode.getSpeedMode());
         }
-        notifyDebugSignalChange();
+        if (debugHooks != null) {
+            notifyDebugSignalChange();
+        }
     }
 
     @Override
