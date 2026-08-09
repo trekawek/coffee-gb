@@ -82,6 +82,38 @@ public class InterruptManagerTest {
     }
 
     @Test
+    public void ppuPreviewBatchPreservesNonPpuPreviewBits() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+
+        interrupts.setCpuReadInterruptPreview(Timer, true);
+        interrupts.setCpuReadPpuInterruptPreview(true, false);
+
+        assertEquals((1 << LCDC.ordinal()) | (1 << Timer.ordinal()),
+                interrupts.getByte(0xff0f) & 0x1f);
+
+        interrupts.setCpuReadPpuInterruptPreview(false, true);
+
+        assertEquals((1 << VBlank.ordinal()) | (1 << Timer.ordinal()),
+                interrupts.getByte(0xff0f) & 0x1f);
+    }
+
+    @Test
+    public void ppuTickSignalsAreConsumedTogether() {
+        InterruptManager interrupts = enabledInterrupt(LCDC);
+        interrupts.requestInterrupt(VBlank);
+        interrupts.clearInterrupt(VBlank);
+        interrupts.requestInterrupt(LCDC);
+        interrupts.clearInterrupt(LCDC);
+        interrupts.setByteFromCpu(0xff0f, 0);
+
+        int expected = InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE
+                | InterruptManager.PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE
+                | InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR;
+        assertEquals(expected, interrupts.consumePpuTickSignals());
+        assertEquals(0, interrupts.consumePpuTickSignals());
+    }
+
+    @Test
     public void debugFlagViewsDoNotConsumeTransientIfReadMasks() {
         InterruptManager interrupts = new InterruptManager(false);
         interrupts.setByte(0xff0f,
