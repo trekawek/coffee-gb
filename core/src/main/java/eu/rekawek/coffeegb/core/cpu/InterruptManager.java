@@ -13,6 +13,12 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     private static final int PPU_INTERRUPT_MASK =
             (1 << InterruptType.VBlank.ordinal()) | (1 << InterruptType.LCDC.ordinal());
 
+    public static final int PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE = 1;
+
+    public static final int PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE = 1 << 1;
+
+    public static final int PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR = 1 << 2;
+
     public enum InterruptType {
         VBlank(0x0040),
         LCDC(0x0048),
@@ -327,6 +333,23 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         return result;
     }
 
+    public int consumePpuTickSignals() {
+        int result = 0;
+        if (lcdcInterruptAcknowledge) {
+            result |= PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE;
+        }
+        if (vBlankInterruptAcknowledge) {
+            result |= PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE;
+        }
+        if (lcdcInterruptFlagWriteClear) {
+            result |= PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR;
+        }
+        lcdcInterruptAcknowledge = false;
+        vBlankInterruptAcknowledge = false;
+        lcdcInterruptFlagWriteClear = false;
+        return result;
+    }
+
     public void finishTimerInterruptAcknowledge() {
         clearInterruptState(InterruptType.Timer);
     }
@@ -425,6 +448,14 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         }
     }
 
+    public void finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview() {
+        maskLcdcUntilNextPeripheralTick = false;
+        if (maskMode0LcdcReadTicks > 0) {
+            maskMode0LcdcReadTicks--;
+        }
+        cpuReadInterruptPreview = 0;
+    }
+
     public void setCpuReadInterruptPreview(InterruptType type, boolean active) {
         int mask = 1 << type.ordinal();
         if (active) {
@@ -432,6 +463,13 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         } else {
             cpuReadInterruptPreview &= ~mask;
         }
+    }
+
+    public void setCpuReadPpuInterruptPreview(boolean lcdc, boolean vblank) {
+        int preview = (lcdc ? 1 << InterruptType.LCDC.ordinal() : 0)
+                | (vblank ? 1 << InterruptType.VBlank.ordinal() : 0);
+        cpuReadInterruptPreview =
+                (cpuReadInterruptPreview & ~PPU_INTERRUPT_MASK) | preview;
     }
 
     public void clearCpuReadInterruptPreview() {

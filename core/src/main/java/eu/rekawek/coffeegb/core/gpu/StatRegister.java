@@ -249,12 +249,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         boolean currentDoubleSpeed = currentCpuMachineCycleDots == 2;
         boolean currentNativeDoubleSpeed = currentGbc && !currentDmgCompat
                 && currentDoubleSpeed;
-        interruptManager.finishLcdcReadMaskWindow();
-        interruptManager.clearCpuReadInterruptPreview();
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview();
         lycIrqClock++;
         cpuStatModeOverride = -1;
         suppressCpuReadCoincidence = false;
-        if (interruptManager.consumeLcdcInterruptAcknowledge()) {
+        int ppuTickSignals = interruptManager.consumePpuTickSignals();
+        if ((ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE) != 0) {
             lastLcdcInterruptAcknowledgeClock = lycIrqClock;
             if (currentNativeDoubleSpeed
                     && previousMode0Window
@@ -269,11 +270,12 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
             }
         }
-        if (interruptManager.consumeVBlankInterruptAcknowledge()) {
+        if ((ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE) != 0) {
             lastVBlankInterruptAcknowledgeClock = lycIrqClock;
         }
-        boolean lcdcInterruptFlagWriteClear =
-                interruptManager.consumeLcdcInterruptFlagWriteClear();
+        boolean lcdcInterruptFlagWriteClear = (ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR) != 0;
         if (lcdcInterruptFlagWriteClear
                 && currentGbc && !currentDmgCompat
                 && previousMode0Window
@@ -620,13 +622,12 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         boolean frameMode2 = nativeNormalRephased
                 && line == 153 && ticksInLine >= 452
                 && ticksInLine <= 455 && enableBits == 0x20;
-        interruptManager.setCpuReadInterruptPreview(
-                InterruptType.LCDC,
-                dmgMode0 || doubleSpeedMode0 || earlyVisibleMode2 || frameMode2);
         boolean frameVBlank = nativeNormalRephased
                 && line == 143 && ticksInLine >= 452
                 && ticksInLine <= 455 && enableBits == 0x20;
-        interruptManager.setCpuReadInterruptPreview(InterruptType.VBlank, frameVBlank);
+        interruptManager.setCpuReadPpuInterruptPreview(
+                dmgMode0 || doubleSpeedMode0 || earlyVisibleMode2 || frameMode2,
+                frameVBlank);
     }
 
     /** Returns whether this scheduler tick will publish the delayed mode-0 edge. */
