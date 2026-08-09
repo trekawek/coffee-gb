@@ -26,6 +26,12 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public static final int STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE = 1 << 3;
 
+    public static final int HDMA_PHASE_IN_FLIGHT_WRITE_CYCLE = 1;
+
+    public static final int HDMA_PHASE_CPU_REQUEST_SLOT_IN_PROGRESS = 1 << 1;
+
+    public static final int HDMA_PHASE_INTERRUPT_CLAIMED = 1 << 2;
+
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED,
         SPEED_SWITCH,
@@ -1145,6 +1151,30 @@ public class Cpu implements StatefulComponent<Cpu> {
         return clockCycle >= 2 && state == State.RUNNING && currentOpcode != null
                 && opIndex < currentOpCount
                 && currentOpWritesMemory[opIndex];
+    }
+
+    /** Returns the post-CPU HDMA arbitration flags sampled at this point in one call. */
+    public int getHdmaPhaseFlags() {
+        int flags = 0;
+        boolean instructionRetiring = !hdmaOpcodePrefetched
+                && (state == State.EXT_OPCODE || state == State.OPERAND
+                || state == State.RUNNING);
+        if (clockCycle >= 2 && state == State.RUNNING && currentOpcode != null
+                && opIndex < currentOpCount && currentOpWritesMemory[opIndex]) {
+            flags |= HDMA_PHASE_IN_FLIGHT_WRITE_CYCLE;
+        }
+        if (instructionRetiring
+                || (!hdmaOpcodePrefetched && state == State.OPCODE && clockCycle >= 2)) {
+            flags |= HDMA_PHASE_CPU_REQUEST_SLOT_IN_PROGRESS;
+        }
+        boolean interruptEntry = state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2
+                || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2
+                || ((state == State.OPCODE || state == State.RUNNING) && clockCycle == 2
+                && interruptManager.isIme() && interruptManager.isInterruptRequested());
+        if (interruptEntry) {
+            flags |= HDMA_PHASE_INTERRUPT_CLAIMED;
+        }
+        return flags;
     }
 
     public boolean isSpeedSwitching() {
