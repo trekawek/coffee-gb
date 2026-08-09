@@ -9,9 +9,11 @@ import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -173,6 +175,64 @@ public class OamSearchTest {
         fixture.tickSearch();
 
         assertEquals(8, fixture.search.getSprites()[0].getX());
+    }
+
+    @Test
+    public void readerInitializesWhenTheFirstTrackedPositionIsOutsideMode2() {
+        Fixture fixture = new Fixture();
+
+        assertFalse(fixture.search.isOamReaderInitialized());
+        fixture.search.trackDmaSource(100);
+
+        assertTrue(fixture.search.isOamReaderInitialized());
+    }
+
+    @Test
+    public void readerTracksDmaSourceChangesOutsideMode2() {
+        Fixture fixture = new Fixture();
+        fixture.search.trackDmaSource(0);
+        fixture.dma.setByte(0xff46, 0x12);
+        fixture.advanceDmaWithoutReader(7);
+        fixture.dma.tick();
+
+        assertTrue(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+        fixture.search.trackDmaSource(100);
+
+        assertTrue(booleanField(fixture.search, "oamReaderDmaSource"));
+        assertEquals(80, intField(fixture.search, "oamReaderSourceChangeTicks"));
+    }
+
+    @Test
+    public void stableTrackingOutsideMode2LeavesTheReaderUntouched() {
+        Fixture fixture = new Fixture();
+        fixture.search.trackDmaSource(0);
+        int[] beforeY = intArrayField(fixture.search, "oamReaderY").clone();
+        int[] beforeX = intArrayField(fixture.search, "oamReaderX").clone();
+        int beforeBusY = intField(fixture.search, "oamReaderBusY");
+        int beforeBusX = intField(fixture.search, "oamReaderBusX");
+        boolean beforeSource = booleanField(fixture.search, "oamReaderDmaSource");
+        int beforeChangeTicks = intField(fixture.search, "oamReaderSourceChangeTicks");
+
+        fixture.search.trackDmaSource(80);
+
+        assertArrayEquals(beforeY, intArrayField(fixture.search, "oamReaderY"));
+        assertArrayEquals(beforeX, intArrayField(fixture.search, "oamReaderX"));
+        assertEquals(beforeBusY, intField(fixture.search, "oamReaderBusY"));
+        assertEquals(beforeBusX, intField(fixture.search, "oamReaderBusX"));
+        assertEquals(beforeSource, booleanField(fixture.search, "oamReaderDmaSource"));
+        assertEquals(beforeChangeTicks, intField(fixture.search, "oamReaderSourceChangeTicks"));
+    }
+
+    @Test
+    public void everyMode2ReaderPositionConsumesOneSourceChangeTick() {
+        Fixture fixture = new Fixture();
+        fixture.search.onLcdEnabled();
+
+        for (int readerPosition = 0; readerPosition < 80; readerPosition++) {
+            fixture.search.trackDmaSource(readerPosition);
+            assertEquals(79 - readerPosition,
+                    intField(fixture.search, "oamReaderSourceChangeTicks"));
+        }
     }
 
     @Test
@@ -342,6 +402,40 @@ public class OamSearchTest {
 
         restored.beginSearchLine();
         assertFalse(restored.search.hadSpriteHeightTransition());
+    }
+
+    private static Field field(OamSearch search, String name) {
+        try {
+            Field field = OamSearch.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static int intField(OamSearch search, String name) {
+        try {
+            return field(search, name).getInt(search);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static int[] intArrayField(OamSearch search, String name) {
+        try {
+            return (int[]) field(search, name).get(search);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static boolean booleanField(OamSearch search, String name) {
+        try {
+            return field(search, name).getBoolean(search);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static class Fixture {

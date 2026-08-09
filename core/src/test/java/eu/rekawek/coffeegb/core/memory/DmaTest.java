@@ -59,6 +59,39 @@ public class DmaTest {
     }
 
     @Test
+    public void settledInactiveOwnershipKeepsBothPpuReaderSnapshotsFalse() {
+        Fixture fixture = new Fixture();
+
+        for (int i = 0; i < 4; i++) {
+            fixture.dma.tick();
+
+            assertFalse(fixture.dma.ownedOamForPpuBeforeTick());
+            assertFalse(fixture.dma.ownsOamForPpu());
+            assertFalse(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+        }
+    }
+
+    @Test
+    public void ppuOamOwnershipTransitionIsObservableAtAcquireAndRelease() {
+        Fixture fixture = new Fixture(true);
+        fixture.start();
+
+        fixture.tick(6);
+        assertFalse(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+        fixture.tick(1);
+        assertFalse(fixture.dma.ownedOamForPpuBeforeTick());
+        assertTrue(fixture.dma.ownsOamForPpu());
+        assertTrue(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+
+        fixture.tick(639);
+        assertFalse(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+        fixture.tick(1);
+        assertTrue(fixture.dma.ownedOamForPpuBeforeTick());
+        assertFalse(fixture.dma.ownsOamForPpu());
+        assertTrue(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+    }
+
+    @Test
     public void normalSpeedCgbUsesItsOamReaderClockPhase() {
         Fixture fixture = new Fixture(true);
         fixture.start();
@@ -116,6 +149,7 @@ public class DmaTest {
         fixture.start();
         fixture.tick(1);
         assertTrue(fixture.dma.ownsOamForPpu());
+        assertFalse(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
     }
 
     @Test
@@ -145,6 +179,7 @@ public class DmaTest {
             fixture.dma.tick(true);
         }
 
+        assertFalse(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
         assertEquals(0x40, fixture.oam.getByte(0xfe00));
         assertEquals(0x41, fixture.oam.getByte(0xfe01));
         assertEquals(0x42, fixture.oam.getByte(0xfe02));
@@ -239,6 +274,7 @@ public class DmaTest {
         copiedFinalByte.dma.tick(true, false);
         assertTrue(copiedFinalByte.dma.ownedOamForPpuBeforeTick());
         assertFalse(copiedFinalByte.dma.ownsOamForPpu());
+        assertTrue(copiedFinalByte.dma.hasPpuOamOwnershipTransitionThisTick());
     }
 
     @Test

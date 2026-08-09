@@ -543,7 +543,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         int oldLine = line;
         ticksInLine++;
         int lineLength = firstLine ? 455 : 456;
-        oamSearchPhase.trackDmaSource(ticksInLine == lineLength ? 0 : ticksInLine);
+        int oamReaderPosition = ticksInLine == lineLength ? 0 : ticksInLine;
+        if (oamReaderPosition < 80
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || !oamSearchPhase.isOamReaderInitialized()) {
+            oamSearchPhase.trackDmaSource(oamReaderPosition);
+        }
         // the line started by enabling the LCD is one tick shorter: its grid starts at
         // the LCDC write itself, while the machine-cycle-locked line grid starts one
         // tick later (lcdon_timing-GS vs the steady-state line phase)

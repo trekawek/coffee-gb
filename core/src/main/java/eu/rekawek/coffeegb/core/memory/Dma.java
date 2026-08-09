@@ -299,7 +299,16 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         return oamOwnedForPpuBeforeTick;
     }
 
+    /** True if the persistent PPU OAM reader changed source on the last DMA tick. */
+    public boolean hasPpuOamOwnershipTransitionThisTick() {
+        return oamOwnedForPpuBeforeTick != oamOwnedForPpu;
+    }
+
     private void updatePpuOamOwnership() {
+        if (!transferInProgress && !ppuOamOwnedThroughRestart) {
+            oamOwnedForPpu = false;
+            return;
+        }
         boolean normalSpeedCgb = speedMode.isGbc() && speedMode.getSpeedMode() == 1;
         int acquisitionClocks = normalSpeedCgb ? 7 : 8;
         int releaseClocks = normalSpeedCgb ? 647 : 648;

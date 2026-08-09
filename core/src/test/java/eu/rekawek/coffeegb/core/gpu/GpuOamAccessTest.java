@@ -2,10 +2,13 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.gpu.phase.OamSearch;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
+
+import java.lang.reflect.Field;
 
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
 import static org.junit.Assert.assertEquals;
@@ -170,6 +173,81 @@ public class GpuOamAccessTest {
         fixture.tick();
         assertTrue(fixture.gpu.isMode0IntWindow());
         assertEquals(Mode.PixelTransfer, fixture.gpu.getMode());
+    }
+
+    @Test
+    public void gpuTracksOamDmaOwnershipChangesAfterMode2() {
+        Fixture fixture = new Fixture(false, 1);
+        fixture.advanceTo(0, 99);
+        OamSearch reader = oamSearchPhase(fixture.gpu);
+        fixture.dma.setByte(0xff46, 0x00);
+
+        for (int i = 0; i < 8; i++) {
+            fixture.tick();
+        }
+
+        assertTrue(fixture.dma.hasPpuOamOwnershipTransitionThisTick());
+        assertTrue(booleanField(reader, "oamReaderDmaSource"));
+        assertEquals(80, intField(reader, "oamReaderSourceChangeTicks"));
+    }
+
+    @Test
+    public void gpuSkipsStableOamReaderUpdatesAfterMode2() {
+        Fixture fixture = new Fixture(false, 1);
+        fixture.advanceTo(0, 99);
+        OamSearch reader = oamSearchPhase(fixture.gpu);
+        reader.onLcdEnabled();
+
+        fixture.tick();
+
+        assertEquals(80, intField(reader, "oamReaderSourceChangeTicks"));
+    }
+
+    @Test
+    public void gpuStillTracksTheOamReaderAtTheLineBoundary() {
+        Fixture fixture = new Fixture(false, 1);
+        fixture.advanceTo(0, 455);
+        OamSearch reader = oamSearchPhase(fixture.gpu);
+        reader.onLcdEnabled();
+
+        fixture.tick();
+
+        assertEquals(0, fixture.gpu.getTicksInLine());
+        assertEquals(79, intField(reader, "oamReaderSourceChangeTicks"));
+    }
+
+    private static OamSearch oamSearchPhase(Gpu gpu) {
+        try {
+            return (OamSearch) field(gpu, "oamSearchPhase").get(gpu);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static int intField(Object object, String name) {
+        try {
+            return field(object, name).getInt(object);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static boolean booleanField(Object object, String name) {
+        try {
+            return field(object, name).getBoolean(object);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static Field field(Object object, String name) {
+        try {
+            Field field = object.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static void assertBgOnlyOamHandoff(int speed, int scx, int closedDot) {
