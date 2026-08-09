@@ -705,7 +705,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (!speedSwitchTail) {
             timer.tick();
         }
-        sound.tickFrameSequencer();
+        sound.tickFrameSequencer(false);
         boolean deferFrameSequencerClock = sound.isFrameSequencerClockAfterCpu();
         if (!deferFrameSequencerClock) {
             sound.commitFrameSequencerClock();
@@ -845,8 +845,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (deferFrameSequencerClock) {
             sound.commitFrameSequencerClock();
         }
-        if (timer.isDivResetPending()) {
-            sound.tickFrameSequencer();
+        boolean divReset = timer.consumeDivReset();
+        if (divReset) {
+            sound.tickFrameSequencer(true);
             sound.commitFrameSequencerClock();
             serialPort.onDivReset();
         }
@@ -858,7 +859,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         || finalCpuState == Cpu.State.SPEED_SWITCH || speedSwitchTail
                         || hdma.pausesOamDmaForSpeedSwitchBurst(),
                 halted);
-        sound.tick();
+        sound.tick(divReset);
         serialPort.tick();
         infraredPort.tick();
         joypad.tick();
