@@ -864,9 +864,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         joypad.tick();
         // The HBlank request crosses from the PPU to the CPU arbiter while the CPU is
         // still allowed to finish the current machine cycle.
-        hdma.advanceHblankRequest(cpu.hasInFlightWriteCycleForHdma(),
-                cpu.isCpuRequestSlotInProgressForHdma(),
-                cpu.isInterruptClaimedAtHdmaSample());
+        int hdmaPhaseFlags = cpu.getHdmaPhaseFlags();
+        hdma.advanceHblankRequest(
+                (hdmaPhaseFlags & Cpu.HDMA_PHASE_IN_FLIGHT_WRITE_CYCLE) != 0,
+                (hdmaPhaseFlags & Cpu.HDMA_PHASE_CPU_REQUEST_SLOT_IN_PROGRESS) != 0,
+                (hdmaPhaseFlags & Cpu.HDMA_PHASE_INTERRUPT_CLAIMED) != 0);
         Mode mode = gpu.tick();
         statRegister.tick();
         cpu.onPeripheralsTicked();
