@@ -1240,13 +1240,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Resumes normal output after restoring a rewind snapshot captured at a coherent frame point.
+     * Resumes normal output after a controller-owned coherent restore transaction commits.
      *
      * <p>Manual state loads intentionally keep a partially restored scanout hidden until the next
-     * physical frame edge. Rewind snapshots are selected only while full output is active, so the
-     * controller can safely resume their restored output immediately.</p>
+     * physical frame edge. In-process snapshots are captured at controller-owned coherent points,
+     * so their successful transaction can safely resume output immediately.</p>
      */
-    public void resumeFullFrameRenderingAfterRewindRestore() {
+    public void resumeFullFrameRenderingAfterCoherentRestore() {
         requestedFrameRenderSuppression = false;
         frameRenderSuppressed = false;
         gpu.setRenderOutput(true);

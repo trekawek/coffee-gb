@@ -69,6 +69,7 @@ internal class SessionSnapshot private constructor(
 
     val rollbackMachine = MachineSnapshot.capture(session.gameboy)
     val rollbackRumble = session.gameboy.isRumbleActive
+    val rollbackRenderedOutput = session.gameboy.isCurrentVisibleFrameFullyRendering
     val rollbackSerial = endpoint.captureState()
     val rollbackRuntime = DetachedStateAdapter.captureSerialRuntime(endpoint)
     try {
@@ -80,10 +81,15 @@ internal class SessionSnapshot private constructor(
       DetachedStateAdapter.applySerialRuntime(endpoint, serialRuntime)
       effectiveCartridgePause?.let(session.gameboy::reanchorCartridgeRtcPause)
     } catch (failure: Throwable) {
-      rollback(session, endpoint, rollbackMachine, rollbackSerial, rollbackRuntime, failure)
+      val rollbackRestoredMachine =
+          rollback(session, endpoint, rollbackMachine, rollbackSerial, rollbackRuntime, failure)
+      if (rollbackRestoredMachine && rollbackRenderedOutput) {
+        session.gameboy.resumeFullFrameRenderingAfterCoherentRestore()
+      }
       throw StateApplyException("Internal session snapshot could not be applied atomically", failure)
     }
     session.gameboy.synchronizeRumbleOutput(rollbackRumble)
+    session.gameboy.resumeFullFrameRenderingAfterCoherentRestore()
   }
 
   private fun rollback(
@@ -93,18 +99,22 @@ internal class SessionSnapshot private constructor(
       rollbackSerial: ComponentState<SerialEndpoint>?,
       rollbackRuntime: SerialRuntimeState,
       original: Throwable,
-  ) {
-    try {
-      rollbackMachine.restore(session.gameboy, synchronizeHostOutputs = false)
-    } catch (rollbackFailure: Throwable) {
-      original.addSuppressed(rollbackFailure)
-    }
+  ): Boolean {
+    val restoredMachine =
+        try {
+          rollbackMachine.restore(session.gameboy, synchronizeHostOutputs = false)
+          true
+        } catch (rollbackFailure: Throwable) {
+          original.addSuppressed(rollbackFailure)
+          false
+        }
     try {
       endpoint.restoreState(rollbackSerial)
       DetachedStateAdapter.applySerialRuntime(endpoint, rollbackRuntime)
     } catch (rollbackFailure: Throwable) {
       original.addSuppressed(rollbackFailure)
     }
+    return restoredMachine
   }
 
   companion object {

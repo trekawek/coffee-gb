@@ -17,6 +17,18 @@ import org.junit.Test
 class MachineSnapshotTest {
 
   @Test
+  fun directRestoreResumesFullHostOutputAfterCommit() {
+    StateCodecTestSupport.session().use { session ->
+      val snapshot = MachineSnapshot.capture(session.gameboy)
+      repeat(2_000) { session.gameboy.tick() }
+
+      snapshot.restore(session.gameboy)
+
+      assertTrue(session.gameboy.isCurrentVisibleFrameFullyRendering)
+    }
+  }
+
+  @Test
   fun stableProfileIdentityRejectsCgbAndCgb0CrossRestoreBeforeMutation() {
     val bytes = StateCodecTestSupport.rom(cgb = true)
     val cgbConfig =
@@ -433,6 +445,7 @@ class MachineSnapshotTest {
       repeat(2_000) { session.gameboy.tick() }
       session.heldButtons = setOf(Button.START)
       val before = DetachedStateAdapter.capture(session.gameboy)
+      assertTrue(session.gameboy.isCurrentVisibleFrameFullyRendering)
 
       assertFailsWith<StateApplyException> {
         target.restore(session.gameboy) { stage ->
@@ -441,6 +454,10 @@ class MachineSnapshotTest {
       }
       assertEquals(before, DetachedStateAdapter.capture(session.gameboy))
       assertEquals(setOf(Button.START), session.heldButtons)
+      assertTrue(
+          session.gameboy.isCurrentVisibleFrameFullyRendering,
+          "a failed transaction must restore the prior full-output host state",
+      )
     }
   }
 
