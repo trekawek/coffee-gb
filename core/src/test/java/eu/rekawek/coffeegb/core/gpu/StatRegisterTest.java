@@ -13,9 +13,54 @@ import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.VBlank
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 public class StatRegisterTest {
+
+    @Test
+    public void quietTicksLeaveTimingStaleUntilAStatConsumerNeedsIt() throws Exception {
+        Fixture quiet = quietFixture();
+        int staleTicksInLine = statTiming(quiet.stat).ticksInLine;
+        long staleGeneration = statTimingGeneration(quiet.stat);
+
+        quiet.tick();
+
+        assertEquals(staleGeneration, statTimingGeneration(quiet.stat));
+        assertEquals(staleTicksInLine, statTiming(quiet.stat).ticksInLine);
+        assertNotEquals(quiet.gpu.getTicksInLine(), statTiming(quiet.stat).ticksInLine);
+
+        quiet.stat.getByte(StatRegister.ADDRESS);
+        assertStatTimingMatchesGpu(quiet);
+
+        Fixture checkpoint = quietFixture();
+        checkpoint.advanceTo(1, 447);
+        assertNotEquals(checkpoint.gpu.getTicksInLine(), statTiming(checkpoint.stat).ticksInLine);
+        checkpoint.tick();
+        assertStatTimingMatchesGpu(checkpoint);
+
+        Fixture dirty = quietFixture();
+        dirty.gpu.setByteFromCpu(GpuRegister.SCX.getAddress(), 1);
+        dirty.tick();
+        assertStatTimingMatchesGpu(dirty);
+
+        Fixture signalled = quietFixture();
+        signalled.interrupts.requestInterrupt(LCDC);
+        signalled.interrupts.clearInterrupt(LCDC);
+        signalled.tick();
+        assertStatTimingMatchesGpu(signalled);
+
+        Fixture scheduled = new Fixture(true);
+        scheduled.advanceTo(1, 100);
+        scheduled.stat.setByte(StatRegister.ADDRESS, 0x40);
+        scheduled.gpu.setByte(GpuRegister.LYC.getAddress(), 3);
+        long deadline = longField(scheduled.stat, "nextLycIrqEvent");
+        assertTrue(deadline > longField(scheduled.stat, "lycIrqClock"));
+        while (longField(scheduled.stat, "lycIrqClock") < deadline) {
+            scheduled.tick();
+        }
+        assertStatTimingMatchesGpu(scheduled);
+    }
 
     @Test
     public void hblankEnableMasksStatWriteGlitchAtOamBoundary() {
@@ -2342,6 +2387,38 @@ public class StatRegisterTest {
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);
         }
+    }
+
+    private static Fixture quietFixture() {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(1, 100);
+        assertFalse(fixture.gpu.isStatEventCheckpoint());
+        return fixture;
+    }
+
+    private static GpuTimingSnapshot statTiming(StatRegister stat) throws Exception {
+        Field field = StatRegister.class.getDeclaredField("timing");
+        field.setAccessible(true);
+        return (GpuTimingSnapshot) field.get(stat);
+    }
+
+    private static long statTimingGeneration(StatRegister stat) throws Exception {
+        return longField(stat, "timingGeneration");
+    }
+
+    private static long longField(StatRegister stat, String name) throws Exception {
+        Field field = StatRegister.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.getLong(stat);
+    }
+
+    private static void assertStatTimingMatchesGpu(Fixture fixture) throws Exception {
+        GpuTimingSnapshot timing = statTiming(fixture.stat);
+        assertEquals(fixture.gpu.getLine(), timing.line);
+        assertEquals(fixture.gpu.getTicksInLine(), timing.ticksInLine);
+        assertEquals(fixture.gpu.getVisibleLy(), timing.visibleLy);
+        assertEquals(fixture.gpu.getMode0InterruptTick(), timing.mode0InterruptTick);
+        assertEquals(fixture.gpu.isLcdEnabled(), timing.lcdEnabled);
     }
 
     private static class Fixture {

@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class GpuTimingSnapshotTest {
 
@@ -30,6 +32,47 @@ public class GpuTimingSnapshotTest {
                     assertSnapshotMatchesGetters(fixture);
                     fixture.advanceTo(153, 0);
                     assertSnapshotMatchesGetters(fixture);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void liveStatCheckpointMatchesSnapshotPredicateAcrossPpuConfigurations() {
+        for (boolean gbc : new boolean[]{false, true}) {
+            for (int speed : new int[]{1, 2}) {
+                for (boolean dmgCompat : new boolean[]{false, true}) {
+                    Fixture fixture = new Fixture(gbc, speed, dmgCompat);
+
+                    fixture.gpu.setByte(0xff40, 0);
+                    assertFalse(fixture.gpu.isStatEventCheckpoint());
+                    assertCheckpointMatchesSnapshot(fixture);
+
+                    fixture.gpu.setByte(0xff40, 0x91);
+                    int finiteMode0Edges = 0;
+                    int mode0EdgeChanges = 0;
+                    int previousMode0Edge = Integer.MIN_VALUE;
+                    // Scan every dot in a complete frame after LCD enable. This
+                    // covers line/tail boundaries and samples the live mode-0
+                    // prediction while pixel transfer updates it.
+                    for (int dot = 0; dot < 154 * 456; dot++) {
+                        GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
+                        fixture.gpu.captureStatTiming(snapshot);
+                        assertEquals(legacyStatEventCheckpoint(snapshot),
+                                fixture.gpu.isStatEventCheckpoint());
+                        if (snapshot.mode0InterruptTick != Integer.MAX_VALUE) {
+                            finiteMode0Edges++;
+                        }
+                        if (previousMode0Edge != Integer.MIN_VALUE
+                                && previousMode0Edge != snapshot.mode0InterruptTick) {
+                            mode0EdgeChanges++;
+                        }
+                        previousMode0Edge = snapshot.mode0InterruptTick;
+                        fixture.tick();
+                    }
+                    assertTrue("expected a live mode-0 edge", finiteMode0Edges > 0);
+                    assertTrue("expected pixel transfer to update the mode-0 edge",
+                            mode0EdgeChanges > 0);
                 }
             }
         }
@@ -58,6 +101,25 @@ public class GpuTimingSnapshotTest {
         assertEquals(fixture.gpu.isGbc() && !fixture.gpu.isDmgCompatMode()
                         && fixture.gpu.getCpuMachineCycleDots() == 2,
                 snapshot.nativeDoubleSpeed);
+    }
+
+    private static void assertCheckpointMatchesSnapshot(Fixture fixture) {
+        GpuTimingSnapshot snapshot = new GpuTimingSnapshot();
+        fixture.gpu.captureStatTiming(snapshot);
+        assertEquals(legacyStatEventCheckpoint(snapshot), fixture.gpu.isStatEventCheckpoint());
+    }
+
+    private static boolean legacyStatEventCheckpoint(GpuTimingSnapshot snapshot) {
+        if (!snapshot.lcdEnabled) {
+            return false;
+        }
+        int ticksInLine = snapshot.ticksInLine;
+        int mode0InterruptTick = snapshot.mode0InterruptTick;
+        return ticksInLine < 13
+                || ticksInLine >= 448
+                || ticksInLine == mode0InterruptTick
+                || (snapshot.line < 144 && mode0InterruptTick != Integer.MAX_VALUE
+                && ticksInLine == mode0InterruptTick + 2);
     }
 
     private static class Fixture {
@@ -94,6 +156,11 @@ public class GpuTimingSnapshotTest {
                 gpu.tick();
                 stat.tick();
             }
+        }
+
+        private void tick() {
+            gpu.tick();
+            stat.tick();
         }
     }
 }

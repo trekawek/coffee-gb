@@ -924,6 +924,24 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Returns whether the current PPU dot can change a STAT source or one of
+     * its closely coupled latches. This is intentionally a live, allocation-
+     * free counterpart of the checkpoint test historically applied to
+     * {@link GpuTimingSnapshot} in {@link StatRegister}.
+     */
+    boolean isStatEventCheckpoint() {
+        if (!lcdEnabled) {
+            return false;
+        }
+        int mode0InterruptTick = getMode0InterruptTick();
+        return ticksInLine < 13
+                || ticksInLine >= 448
+                || ticksInLine == mode0InterruptTick
+                || (line < 144 && mode0InterruptTick != Integer.MAX_VALUE
+                && ticksInLine == mode0InterruptTick + 2);
+    }
+
+    /**
      * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
      */
     public void corruptOam(SpriteBug.CorruptionType type) {
