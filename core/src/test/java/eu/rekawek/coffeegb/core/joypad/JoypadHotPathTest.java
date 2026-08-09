@@ -43,6 +43,19 @@ public class JoypadHotPathTest {
     }
 
     @Test
+    public void releasedDefaultSourceStillReconcilesSeededPhysicalInput() {
+        Joypad joypad = new Joypad(
+                new InterruptManager(false), EventBus.NULL_EVENT_BUS, false);
+        PlayerInputSnapshot pressed = PlayerInputSnapshot.of(List.of(
+                Set.of(Button.A), Set.of(), Set.of(), Set.of()));
+        joypad.seedDeterministicReplayInput(Set.of(), pressed);
+
+        joypad.tick();
+
+        assertEquals(PlayerInputSnapshot.RELEASED, joypad.getSampledInput());
+    }
+
+    @Test
     public void stablePhysicalInputHotPathAllocatesNothing() {
         java.lang.management.ThreadMXBean platformBean = ManagementFactory.getThreadMXBean();
         Assume.assumeTrue(platformBean instanceof ThreadMXBean);
