@@ -562,6 +562,27 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         }
     }
 
+    /** Captures all STAT state needed by the production pre-CPU phase. */
+    public boolean beginCpuReadPhase(boolean synchronousHaltEntryPhase,
+                                     boolean asynchronousHaltEntryPhase,
+                                     boolean ordinaryHaltWakePhase,
+                                     boolean oneCycleOrdinaryHaltWakePhase) {
+        refreshGpuTiming();
+        captureCpuStatReadPhasePrepared(synchronousHaltEntryPhase,
+                asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
+                oneCycleOrdinaryHaltWakePhase);
+        return isMode0InterruptEdgeNextTickPrepared();
+    }
+
+    /** Completes the production pre-CPU STAT phase without recapturing GPU timing. */
+    public void finishCpuReadPhase(int interruptFlagReadMaskTicks,
+                                   boolean mode0InterruptDispatchPhased,
+                                   boolean mode0InstructionWinsAcceptance) {
+        captureCpuInterruptReadPhasePrepared(interruptFlagReadMaskTicks,
+                mode0InterruptDispatchPhased, mode0InstructionWinsAcceptance);
+        publishFrameLyc0Mode2HandoffBeforeCpuPrepared();
+    }
+
     /** Captures the PPU mux phase before this tick's CPU memory callback. */
     public void captureCpuStatReadPhase(boolean synchronousHaltEntryPhase,
                                         boolean asynchronousHaltEntryPhase,
@@ -575,6 +596,15 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                                         boolean ordinaryHaltWakePhase,
                                         boolean oneCycleOrdinaryHaltWakePhase) {
         refreshGpuTiming();
+        captureCpuStatReadPhasePrepared(synchronousHaltEntryPhase,
+                asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
+                oneCycleOrdinaryHaltWakePhase);
+    }
+
+    private void captureCpuStatReadPhasePrepared(boolean synchronousHaltEntryPhase,
+                                                 boolean asynchronousHaltEntryPhase,
+                                                 boolean ordinaryHaltWakePhase,
+                                                 boolean oneCycleOrdinaryHaltWakePhase) {
         if (ordinaryHaltWakePhase && !previousOrdinaryHaltWakePhase) {
             ordinaryHaltWakeStatClock = lycIrqClock;
         }
@@ -603,6 +633,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                                              boolean mode0InterruptDispatchPhased,
                                              boolean mode0InstructionWinsAcceptance) {
         refreshGpuTiming();
+        captureCpuInterruptReadPhasePrepared(interruptFlagReadMaskTicks,
+                mode0InterruptDispatchPhased, mode0InstructionWinsAcceptance);
+    }
+
+    private void captureCpuInterruptReadPhasePrepared(int interruptFlagReadMaskTicks,
+                                                      boolean mode0InterruptDispatchPhased,
+                                                      boolean mode0InstructionWinsAcceptance) {
         cpuInterruptFlagReadMaskTicks = interruptFlagReadMaskTicks;
         cpuMode0InterruptDispatchPhased = mode0InterruptDispatchPhased;
         cpuMode0InstructionWinsAcceptance = mode0InstructionWinsAcceptance;
@@ -647,6 +684,10 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             return false;
         }
         refreshGpuTiming();
+        return isMode0InterruptEdgeNextTickPrepared();
+    }
+
+    private boolean isMode0InterruptEdgeNextTickPrepared() {
         return mode0EventArmed
                 && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
                 && !interruptManager.isInterruptFlagSet(InterruptType.LCDC)
@@ -660,6 +701,10 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     /** Publishes line 1's LYC=0-blocked normal-speed mode-2 handoff before CPU I/O. */
     public void publishFrameLyc0Mode2HandoffBeforeCpu() {
         refreshGpuTiming();
+        publishFrameLyc0Mode2HandoffBeforeCpuPrepared();
+    }
+
+    private void publishFrameLyc0Mode2HandoffBeforeCpuPrepared() {
         if (pendingCgbMode2Interrupt && !timing.doubleSpeed
                 && isDeferredCgbMode2Phase()
                 && timing.line == 1
