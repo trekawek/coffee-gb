@@ -78,7 +78,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     @Override
     public void putPixelToScreen() {
         linePixels++;
-        int entry = popEntry();
+        int entry = popEntry(pixels, palettes, priorities);
         int tail = (delayHead + delaySize) & 7;
         delayEntry[tail] = entry;
         delayStamp[tail] = outputTicks;
@@ -110,10 +110,6 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     // pack bg pixel (2b), bg palette (3b), bg priority (1b), sprite pixel (2b),
     // sprite palette (3b), sprite bg-priority (1b)
-    private int popEntry() {
-        return popEntry(pixels, palettes, priorities);
-    }
-
     private int popEntry(IntQueue bgPixels, IntQueue bgPalettes, IntQueue bgPriorities) {
         int bgPixel = bgPixels.array[bgPixels.offset++];
         if (bgPixels.offset == bgPixels.array.length) {
