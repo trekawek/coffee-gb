@@ -10,6 +10,7 @@ import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import java.awt.image.BufferedImage
 import java.nio.file.Path
+import java.util.Locale
 import javax.swing.Action
 import javax.swing.BorderFactory
 import javax.swing.Box
@@ -41,6 +42,8 @@ internal data class DesktopPresentation(
     val commands: DesktopCommandPresentation = DesktopCommandPresentation(),
     val netplaySummary: String = "Netplay: Off",
     val persistentStatus: String = "Ready",
+    /** Presentation-thread rate, intentionally distinct from emulated VBlank cadence. */
+    val presentedFramesPerSecond: Double? = null,
     /** Durable recovery notice; routine lifecycle status changes must not erase it. */
     val notice: DesktopNotice? = null,
     /** Compatibility path for direct presentation callers; coordinators use [notice]. */
@@ -50,6 +53,8 @@ internal data class DesktopPresentation(
     require(gameTitle == null || gameTitle.isNotBlank())
     require(netplaySummary.isNotBlank())
     require(persistentStatus.isNotBlank())
+    require(presentedFramesPerSecond == null ||
+        (presentedFramesPerSecond.isFinite() && presentedFramesPerSecond >= 0))
   }
 
   val visibleStatus: String
@@ -205,6 +210,9 @@ internal class DesktopStatusBar(
               if (commandState.paused) add("Paused")
               if (commandState.muted) add("Muted")
               if (presentation.gameTitle != null) add("Slot ${commandState.stateSlot}")
+              presentation.presentedFramesPerSecond?.let {
+                add(String.format(Locale.ROOT, "FPS %.1f", it))
+              }
               add(presentation.netplaySummary)
             }
             .joinToString("  ·  ")

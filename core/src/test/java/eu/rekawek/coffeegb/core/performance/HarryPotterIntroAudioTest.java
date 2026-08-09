@@ -45,6 +45,7 @@ public class HarryPotterIntroAudioTest {
             AudioCapture capture = new AudioCapture(warmupFrames, measurementFrames);
             eventBus.register(event -> capture.accept(event.buffer()), Sound.SoundSampleEvent.class);
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            gameboy.requestFrameRenderSuppression(HarryPotterIntroHarness.forceFrameSkip());
 
             if (Boolean.getBoolean("harryPotterAudioPressStart")) {
                 eventBus.post(new ButtonPressEvent(Button.START));
@@ -58,6 +59,9 @@ public class HarryPotterIntroAudioTest {
                 gameboy.tick();
             }
             capture.printReport();
+            if (HarryPotterIntroHarness.forceFrameSkip()) {
+                System.out.println("Forced frame suppression: enabled");
+            }
         }
     }
 

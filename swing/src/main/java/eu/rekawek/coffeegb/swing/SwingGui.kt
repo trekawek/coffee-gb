@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.swing.io.DesktopCameraSource
+import eu.rekawek.coffeegb.swing.io.SwingDisplay
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.awt.Cursor
 import java.awt.Dimension
@@ -471,6 +472,14 @@ class SwingGui private constructor(
     }
     eventBus.register<Sound.SoundEnabledEvent> { event ->
       dispatchSwingMutation { desktopUiCoordinator.muted(!event.enabled()) }
+    }
+    eventBus.register<SwingDisplay.PresentationFrameRateEvent> { event ->
+      dispatchSwingMutation {
+        desktopUiCoordinator.presentedFramesPerSecond(event.framesPerSecond)
+      }
+    }
+    eventBus.register<SwingDisplay.PresentationFrameRateResetEvent> {
+      dispatchSwingMutation { desktopUiCoordinator.presentedFramesPerSecond(null) }
     }
     eventBus.register<DisplaySettingsChangedEvent> { event ->
       dispatchSwingMutation { desktopUiCoordinator.displaySettings(event.display) }

@@ -8,6 +8,7 @@ DEFAULT_ROM="Z:/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europ
 ROM_PATH="${HARRY_POTTER_ROM:-$DEFAULT_ROM}"
 BATTERY_SAVE="${HARRY_POTTER_BATTERY_SAVE:-}"
 JFR_PATH="${HARRY_POTTER_JFR:-}"
+FORCE_FRAME_SKIP="${HARRY_POTTER_FORCE_FRAME_SKIP:-false}"
 if (($# > 0)); then
   ROM_PATH="$1"
 fi
@@ -46,6 +47,7 @@ mvn -q -pl core \
   -DharryPotterRom="$ROM_PATH" \
   -DharryPotterBatterySave="$BATTERY_SAVE" \
   -DharryPotterJfr="$JFR_PATH" \
+  -DharryPotterForceFrameSkip="$FORCE_FRAME_SKIP" \
   -Dsurefire.useFile=false \
   test
 

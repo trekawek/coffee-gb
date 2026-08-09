@@ -10,6 +10,9 @@ import java.util.zip.GZIPInputStream;
 /** Shared setup for the Harry Potter ROM probes. */
 public final class HarryPotterIntroHarness {
 
+    /** Opt-in deterministic presentation pressure for comparing host-only frame suppression. */
+    public static final String FORCE_FRAME_SKIP_PROPERTY = "harryPotterForceFrameSkip";
+
     /** Gzip-compressed 8 KiB battery save that skips the language-selection menu. */
     private static final String EMBEDDED_BATTERY_SAVE =
             "H4sIAAAAAAAEAO3BMQEAIAgAMKhAAksR0ceSmsGPY9vpXZkrAAAAgH8XAAAAYIgH3AhargAgAAA=";
@@ -52,5 +55,10 @@ public final class HarryPotterIntroHarness {
             System.out.printf("Harry Potter battery save: embedded (%d bytes)%n", data.length);
             return data;
         }
+    }
+
+    /** Returns whether the probe should continually request the core's every-other-frame cap. */
+    public static boolean forceFrameSkip() {
+        return Boolean.getBoolean(FORCE_FRAME_SKIP_PROPERTY);
     }
 }

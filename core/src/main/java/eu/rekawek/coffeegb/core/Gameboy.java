@@ -181,6 +181,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient volatile boolean doStop;
 
+    /**
+     * Host-only request sampled at the next physical VBlank edge. It intentionally is not part
+     * of a machine snapshot: presentation pacing must not affect deterministic replay.
+     */
+    private transient volatile boolean requestedFrameRenderSuppression;
+
+    /** Whether the visible frame currently being scanned out is host-suppressed. */
+    private transient boolean frameRenderSuppressed;
+
     private boolean requestedScreenRefresh;
 
     private boolean lcdDisabled;
@@ -671,8 +680,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
             if (!stopFrameBlanked && newMode == Mode.VBlank) {
                 requestedScreenRefresh = true;
-                display.frameIsReady();
+                // The request is deliberately not acted on at the controller's shorter
+                // 69,905-tick cadence. At this PPU edge every visible dot of the current frame
+                // has already advanced, so one whole physical frame is either published or held.
+                if (!frameRenderSuppressed) {
+                    display.frameIsReady();
+                }
+                // This is emulated SGB transfer timing, not host presentation. In particular,
+                // it must remain available independently of a future presentation policy.
                 vRamTransfer.frameIsReady();
+                latchFrameRenderSuppressionAtVBlank();
+                // A suppressed frame is still a real emulated VBlank. Keep the long-standing
+                // tick result and requested-screen-refresh cadence for host callers.
                 result = true;
             } else if (requestedScreenRefresh && newMode == Mode.OamSearch) {
                 requestedScreenRefresh = false;
@@ -1198,6 +1217,41 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return gpu;
     }
 
+    /**
+     * Requests that a future visible frame omit host presentation work.
+     *
+     * <p>This is a host-only pacing control. The request is latched only when the PPU reaches
+     * VBlank, is ignored for Super Game Boy profiles (their DMG pixels feed emulated SGB
+     * transfers), and never becomes serialized machine state.</p>
+     */
+    public void requestFrameRenderSuppression(boolean suppress) {
+        requestedFrameRenderSuppression = suppress
+                && !hardwareProfile.capabilities().superGameboyCommands();
+    }
+
+    /**
+     * Returns whether the current PPU frame is producing host-visible pixels.
+     *
+     * <p>This is host-only state used to choose coherent rewind capture points. It is deliberately
+     * not part of serialized machine state.</p>
+     */
+    public boolean isCurrentVisibleFrameFullyRendering() {
+        return !frameRenderSuppressed;
+    }
+
+    /**
+     * Resumes normal output after restoring a rewind snapshot captured at a coherent frame point.
+     *
+     * <p>Manual state loads intentionally keep a partially restored scanout hidden until the next
+     * physical frame edge. Rewind snapshots are selected only while full output is active, so the
+     * controller can safely resume their restored output immediately.</p>
+     */
+    public void resumeFullFrameRenderingAfterRewindRestore() {
+        requestedFrameRenderSuppression = false;
+        frameRenderSuppressed = false;
+        gpu.setRenderOutput(true);
+    }
+
     public Sound getSound() {
         return sound;
     }
@@ -1630,6 +1684,40 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !blankCgbBootTilePending
                 && !clearBootTilemapPending
                 && !clearCgbBootOamShadowPending;
+        resetHostFrameRenderingAfterRestore();
+    }
+
+    /**
+     * A snapshot can be restored in the middle of a scanout. Hold that partial host frame and
+     * return to ordinary rendering at the following physical frame edge; otherwise the restored
+     * tail could be published together with pixels from an abandoned host timeline.
+     */
+    private void resetHostFrameRenderingAfterRestore() {
+        requestedFrameRenderSuppression = false;
+        if (hardwareProfile.capabilities().superGameboyCommands()) {
+            frameRenderSuppressed = false;
+            gpu.setRenderOutput(true);
+            return;
+        }
+        frameRenderSuppressed = true;
+        gpu.setRenderOutput(false);
+    }
+
+    /** Applies the most recent host request at one real PPU frame boundary. */
+    private void latchFrameRenderSuppressionAtVBlank() {
+        // Ordinary playback only performs this one host-request read and false branch. Do not
+        // rewrite the output gate at every VBlank: it is already enabled and no host policy is
+        // asking to change the following physical frame.
+        if (!requestedFrameRenderSuppression) {
+            if (frameRenderSuppressed) {
+                frameRenderSuppressed = false;
+                gpu.setRenderOutput(true);
+            }
+            return;
+        }
+        // Sustained catch-up pressure still presents every other physical LCD frame.
+        frameRenderSuppressed = !frameRenderSuppressed;
+        gpu.setRenderOutput(!frameRenderSuppressed);
     }
 
     /** Current aggregate emulated motor output, without invoking host services. */

@@ -61,6 +61,7 @@ internal class DesktopUiCoordinator(
                   loadableStateSlots = emptySet(),
               ),
           persistentStatus = "$gameTitle is running",
+          presentedFramesPerSecond = null,
           statusRecoveryCommand = null,
       )
     }
@@ -96,6 +97,7 @@ internal class DesktopUiCoordinator(
                   fullscreen = false,
               ),
           persistentStatus = "Ready",
+          presentedFramesPerSecond = null,
           statusRecoveryCommand = null,
       )
     }
@@ -124,6 +126,7 @@ internal class DesktopUiCoordinator(
             persistentStatus =
                 if (paused) "Paused"
                 else it.gameTitle?.let { title -> "$title is running" } ?: "Ready",
+            presentedFramesPerSecond = if (paused) null else it.presentedFramesPerSecond,
             statusRecoveryCommand = null,
         )
       }
@@ -179,6 +182,11 @@ internal class DesktopUiCoordinator(
   fun netplaySummary(summary: String) {
     require(summary.isNotBlank())
     update { it.copy(netplaySummary = summary) }
+  }
+
+  fun presentedFramesPerSecond(value: Double?) {
+    require(value == null || (value.isFinite() && value >= 0))
+    update { it.copy(presentedFramesPerSecond = value) }
   }
 
   fun warning(message: String, recoveryCommand: DesktopCommand? = null) {

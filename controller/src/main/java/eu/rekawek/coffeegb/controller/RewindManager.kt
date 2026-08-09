@@ -73,6 +73,10 @@ internal class RewindManager(
     // This is intentionally the first operation. A disabled manager does not advance cadence,
     // inspect the live machine, allocate a capture DTO, or create a snapshot.
     if (!enabled) return
+    // A suppressed frame is intentionally not a rewind point: resuming a snapshot from the
+    // matching full-output phase keeps rewind presentation coherent. Check before advancing the
+    // six-frame cadence so sustained every-other-frame suppression cannot phase-lock captures.
+    if (!gameboy.isCurrentVisibleFrameFullyRendering) return
     selectHistory(HistoryKind.MACHINE)
     if (frameCounter++ % RECORD_INTERVAL != 0) {
       return
@@ -91,6 +95,7 @@ internal class RewindManager(
   /** Captures machine plus active serial-endpoint state at the controller frame safe point. */
   fun record(session: Session) {
     if (!enabled) return
+    if (!session.gameboy.isCurrentVisibleFrameFullyRendering) return
     selectHistory(HistoryKind.SESSION)
     if (frameCounter++ % RECORD_INTERVAL != 0) return
     if (states.size == capacity) states.removeFirst()
@@ -111,6 +116,7 @@ internal class RewindManager(
     }
     val state = states.removeLastOrNull() as? MachineEntry ?: return false
     state.machine.restore(gameboy)
+    gameboy.resumeFullFrameRenderingAfterRewindRestore()
     return true
   }
 
@@ -122,6 +128,7 @@ internal class RewindManager(
     }
     val state = states.removeLastOrNull() as? SessionEntry ?: return false
     state.snapshot.restore(session)
+    session.gameboy.resumeFullFrameRenderingAfterRewindRestore()
     return true
   }
 

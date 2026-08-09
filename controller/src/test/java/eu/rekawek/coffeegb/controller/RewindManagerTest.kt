@@ -1,14 +1,17 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.state.MachineSnapshot
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.gpu.Display
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.serial.mobile.DeterministicMobileAdapterBackend
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterBackendPort
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -17,6 +20,42 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class RewindManagerTest {
+
+  @Test
+  fun machineRewindEntriesResumeFullOutputOnEveryRestore() {
+    assertRepeatedRewindKeepsPublishing(
+        record = { manager, session -> manager.record(session.gameboy) },
+        rewind = { manager, session -> manager.rewindOneStep(session.gameboy) },
+    )
+  }
+
+  @Test
+  fun sessionRewindEntriesResumeFullOutputOnEveryRestore() {
+    assertRepeatedRewindKeepsPublishing(
+        record = RewindManager::record,
+        rewind = RewindManager::rewindOneStep,
+    )
+  }
+
+  @Test
+  fun suppressedFramesDoNotAdvanceRewindCaptureCadence() {
+    StateCodecTestSupport.session().use { session ->
+      val manager = RewindManager()
+      val gameboy = session.gameboy
+
+      gameboy.requestFrameRenderSuppression(true)
+      tickUntilVBlank(gameboy)
+      assertFalse(gameboy.isCurrentVisibleFrameFullyRendering)
+      repeat(RewindManager.RECORD_INTERVAL * 3) { manager.record(gameboy) }
+      assertEquals(0, manager.captureCount)
+
+      gameboy.requestFrameRenderSuppression(false)
+      tickUntilVBlank(gameboy)
+      assertTrue(gameboy.isCurrentVisibleFrameFullyRendering)
+      repeat(RewindManager.RECORD_INTERVAL) { manager.record(gameboy) }
+      assertEquals(1, manager.captureCount)
+    }
+  }
 
   @Test
   fun sessionRewindRestoresPartialMobileTransferCancelsBackendAndAccountsForSerialState() {
@@ -204,6 +243,38 @@ class RewindManagerTest {
     gameboy.addressSpace.setByte(0xa000 + (frame * 43 and 0x1fff), value xor 0xc3)
   }
 
+  private fun assertRepeatedRewindKeepsPublishing(
+      record: (RewindManager, Session) -> Unit,
+      rewind: (RewindManager, Session) -> Boolean,
+  ) {
+    StateCodecTestSupport.session().use { session ->
+      val publishedFrames = AtomicInteger()
+      session.eventBus.register<Display.DmgFrameReadyEvent> { publishedFrames.incrementAndGet() }
+      val manager = RewindManager()
+
+      repeat(REWIND_ENTRY_COUNT * RewindManager.RECORD_INTERVAL) {
+        tickUntilVBlank(session.gameboy)
+        record(manager, session)
+      }
+      assertEquals(REWIND_ENTRY_COUNT, manager.captureCount)
+      val framesBeforeRewind = publishedFrames.get()
+
+      repeat(REWIND_ENTRY_COUNT) {
+        assertTrue(rewind(manager, session))
+        assertTrue(session.gameboy.isCurrentVisibleFrameFullyRendering)
+        tickUntilVBlank(session.gameboy)
+      }
+      assertEquals(framesBeforeRewind + REWIND_ENTRY_COUNT, publishedFrames.get())
+    }
+  }
+
+  private fun tickUntilVBlank(gameboy: Gameboy) {
+    repeat(Gameboy.TICKS_PER_FRAME * 2) {
+      if (gameboy.tick()) return
+    }
+    error("PPU did not reach VBlank within two physical frames")
+  }
+
   private fun configuration() =
       StateCodecTestSupport.configuration(
               StateCodecTestSupport.rom(cgb = true).also {
@@ -269,6 +340,7 @@ class RewindManagerTest {
     /** Exact production-cadence primitive-array baseline measured on master 195d9172. */
     private const val MASTER_BASELINE_RETAINED_PRIMITIVE_BYTES = 337_665_600L
     private const val EXTRA_CAPTURES = 2
+    private const val REWIND_ENTRY_COUNT = 3
     private const val TEST_ADDRESS = 0xc100
   }
 }

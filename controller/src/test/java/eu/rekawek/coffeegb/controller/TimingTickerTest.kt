@@ -21,9 +21,11 @@ class TimingTickerTest {
 
     repeat(custom.controllerTicksPerFrame() - 1) { ticker.run(custom) }
     assertEquals(0, ticker.completedFrames)
+    kotlin.test.assertFalse(ticker.hasPacingDebt)
     ticker.run(custom)
 
     assertEquals(1, ticker.completedFrames)
+    kotlin.test.assertTrue(ticker.hasPacingDebt)
     assertEquals(emptyList(), parked)
   }
 
@@ -37,6 +39,7 @@ class TimingTickerTest {
     repeat(99) { ticker.run(first) }
     repeat(199) { ticker.run(second) }
     assertEquals(0, ticker.completedFrames)
+    kotlin.test.assertFalse(ticker.hasPacingDebt)
     ticker.run(second)
     assertEquals(1, ticker.completedFrames)
   }

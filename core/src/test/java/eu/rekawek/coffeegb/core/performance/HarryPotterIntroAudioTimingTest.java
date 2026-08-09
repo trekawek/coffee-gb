@@ -45,9 +45,13 @@ public class HarryPotterIntroAudioTimingTest {
             AudioCadence capture = new AudioCadence(WARMUP_FRAMES, MEASUREMENT_FRAMES);
             eventBus.register(event -> capture.accept(), Sound.SoundSampleEvent.class);
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            gameboy.requestFrameRenderSuppression(HarryPotterIntroHarness.forceFrameSkip());
 
             paceFrames(gameboy, capture);
             capture.printReport();
+            if (HarryPotterIntroHarness.forceFrameSkip()) {
+                System.out.println("Forced frame suppression: enabled");
+            }
         }
     }
 
