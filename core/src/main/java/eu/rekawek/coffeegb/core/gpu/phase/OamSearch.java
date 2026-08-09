@@ -258,6 +258,11 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         }
     }
 
+    /** Whether the persistent OAM reader has captured its initial OAM contents. */
+    public boolean isOamReaderInitialized() {
+        return oamReaderInitialized;
+    }
+
     /** Reconnects the persistent reader after its clock was stopped with the LCD. */
     public void onLcdEnabled() {
         initializeOamReader();
