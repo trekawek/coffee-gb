@@ -38,6 +38,10 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     private static final long NO_LYC_IRQ_EVENT = Long.MAX_VALUE;
 
+    // Distinct from the ordinary -1 "no CPU override" value: the production
+    // CPU phase was captured, but no FF41 read has asked us to resolve it yet.
+    private static final int CPU_STAT_MODE_UNRESOLVED = -2;
+
     private final InterruptManager interruptManager;
 
     private final GpuTimingSnapshot timing = new GpuTimingSnapshot();
@@ -205,6 +209,18 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     // separate from the readable latch used by direct PPU observers.
     private int cpuStatModeOverride = -1;
 
+    // Inputs captured at the CPU/PPU boundary for an eventual FF41 read. They
+    // are deliberately transient: a restored state begins a new CPU phase.
+    private boolean cpuSynchronousHaltEntryPhase;
+
+    private boolean cpuAsynchronousHaltEntryPhase;
+
+    private boolean cpuOrdinaryHaltWakePhase;
+
+    private boolean cpuOneCycleOrdinaryHaltWakePhase;
+
+    private boolean cpuRecentOrdinaryHaltWakePhase;
+
     /*
      * Between STAT event checkpoints, and absent a register write or pending
      * capture deadline, readable coincidence and every STAT source level are
@@ -275,8 +291,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         boolean statEventCheckpoint = isStatEventCheckpoint();
         interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview();
         lycIrqClock++;
-        cpuStatModeOverride = -1;
-        suppressCpuReadCoincidence = false;
+        clearCpuStatReadPhase();
         int ppuTickSignals = interruptManager.consumePpuTickSignals();
         boolean mustEvaluateStat = statEvaluationDirty || statEventCheckpoint
                 || ppuTickSignals != 0;
@@ -563,7 +578,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     public void onLcdEnabled() {
         refreshGpuTiming();
-        cpuStatModeOverride = -1;
+        clearCpuStatReadPhase();
         statEvaluationDirty = true;
         registeredLy = 0;
         lycWriteSuppressed = false;
@@ -612,17 +627,29 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                                      boolean asynchronousHaltEntryPhase,
                                      boolean ordinaryHaltWakePhase,
                                      boolean oneCycleOrdinaryHaltWakePhase) {
-        refreshGpuTiming();
         captureCpuStatReadPhasePrepared(synchronousHaltEntryPhase,
                 asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
                 oneCycleOrdinaryHaltWakePhase);
+        if (!canPublishMode0InterruptEdge()) {
+            return false;
+        }
+        refreshGpuTiming();
         return isMode0InterruptEdgeNextTickPrepared();
     }
 
-    /** Completes the production pre-CPU STAT phase without recapturing GPU timing. */
+    /** Completes the production pre-CPU STAT phase after refreshing only if it needs timing. */
     public void finishCpuReadPhase(int interruptFlagReadMaskTicks,
                                    boolean mode0InterruptDispatchPhased,
                                    boolean mode0InstructionWinsAcceptance) {
+        if (!needsCpuInterruptReadTiming()) {
+            captureCpuInterruptReadPhasePrepared(interruptFlagReadMaskTicks,
+                    mode0InterruptDispatchPhased, mode0InstructionWinsAcceptance);
+            return;
+        }
+        // beginCpuReadPhase may have skipped its refresh when no mode-0 edge
+        // was armed.  Pending CGB mode-2 and frame handoff paths still need a
+        // current snapshot before their prepared helpers inspect it.
+        refreshGpuTiming();
         captureCpuInterruptReadPhasePrepared(interruptFlagReadMaskTicks,
                 mode0InterruptDispatchPhased, mode0InstructionWinsAcceptance);
         publishFrameLyc0Mode2HandoffBeforeCpuPrepared();
@@ -660,13 +687,12 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 <= ORDINARY_HALT_WAKE_STAT_HOLD_TICKS;
         gpu.captureCpuLyReadPhase(ordinaryHaltWakePhase
                 && isMode1InterruptSourceOnly());
-        cpuStatModeOverride = gpu.getCpuReadStatModeOverride(
-                synchronousHaltEntryPhase, asynchronousHaltEntryPhase,
-                ordinaryHaltWakePhase, oneCycleOrdinaryHaltWakePhase,
-                recentOrdinaryHaltWakePhase);
-        suppressCpuReadCoincidence = gbc && !timing.dmgCompat
-                && !timing.doubleSpeed && timing.line == 153
-                && timing.ticksInLine == 6 && coincidence;
+        cpuSynchronousHaltEntryPhase = synchronousHaltEntryPhase;
+        cpuAsynchronousHaltEntryPhase = asynchronousHaltEntryPhase;
+        cpuOrdinaryHaltWakePhase = ordinaryHaltWakePhase;
+        cpuOneCycleOrdinaryHaltWakePhase = oneCycleOrdinaryHaltWakePhase;
+        cpuRecentOrdinaryHaltWakePhase = recentOrdinaryHaltWakePhase;
+        cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
     }
 
     /** Captures PPU edges visible to this tick's CPU IF read before IF itself settles. */
@@ -688,14 +714,20 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         cpuInterruptFlagReadMaskTicks = interruptFlagReadMaskTicks;
         cpuMode0InterruptDispatchPhased = mode0InterruptDispatchPhased;
         cpuMode0InstructionWinsAcceptance = mode0InstructionWinsAcceptance;
+        boolean mode0Enabled = isMode0InterruptPreviewEnabled();
+        // Most ticks have no enabled mode-0 source and no mode-2 event in
+        // flight. The per-tick lifecycle clears the prior preview before this
+        // point, so there is no state to publish or GPU timing to inspect.
+        if (!mode0Enabled && !pendingCgbMode2Interrupt && enableBits != 0x20) {
+            return;
+        }
         boolean doubleSpeed = timing.doubleSpeed;
         boolean gbc = this.gbc;
         boolean dmgCompat = timing.dmgCompat;
         int line = timing.line;
         int ticksInLine = timing.ticksInLine;
         int mode0InterruptTick = timing.mode0InterruptTick;
-        boolean mode0SourceEnabled = mode0EventArmed
-                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
+        boolean mode0SourceEnabled = mode0Enabled
                 && !((mode0IrqStatLatch & 0x40) != 0 && line == mode0IrqLycLatch);
         boolean dmgMode0 = mode0SourceEnabled
                 && gpu.isDmgTerminalWindowMode0ReadPreviewPhase();
@@ -721,6 +753,20 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         interruptManager.setCpuReadPpuInterruptPreview(
                 dmgMode0 || doubleSpeedMode0 || earlyVisibleMode2 || frameMode2,
                 frameVBlank);
+    }
+
+    private boolean canPublishMode0InterruptEdge() {
+        return isMode0InterruptPreviewEnabled()
+                && !interruptManager.isInterruptFlagSet(InterruptType.LCDC);
+    }
+
+    private boolean needsCpuInterruptReadTiming() {
+        return isMode0InterruptPreviewEnabled()
+                || pendingCgbMode2Interrupt || enableBits == 0x20;
+    }
+
+    private boolean isMode0InterruptPreviewEnabled() {
+        return mode0EventArmed && ((enableBits | mode0IrqStatLatch) & 0x08) != 0;
     }
 
     /** Returns whether this scheduler tick will publish the delayed mode-0 edge. */
@@ -762,7 +808,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     public void onLcdDisabled() {
         refreshGpuTiming();
-        cpuStatModeOverride = -1;
+        clearCpuStatReadPhase();
         statEvaluationDirty = true;
         dmgLyc143Mode1CaptureClock = NO_LYC_IRQ_EVENT;
         pendingCgbMode1Interrupt = false;
@@ -1868,6 +1914,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     @Override
     public int getByte(int address) {
         refreshGpuTiming();
+        resolveCpuStatReadPhase();
         int visibleMode = cpuStatModeOverride >= 0
                 ? cpuStatModeOverride
                 : gpu.getCpuVisibleStatMode();
@@ -1922,6 +1969,29 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         }
         return 0b10000000 | enableBits
                 | (visibleCoincidence ? 0b100 : 0) | visibleMode;
+    }
+
+    private void resolveCpuStatReadPhase() {
+        if (cpuStatModeOverride != CPU_STAT_MODE_UNRESOLVED) {
+            return;
+        }
+        cpuStatModeOverride = gpu.getCpuReadStatModeOverride(
+                cpuSynchronousHaltEntryPhase, cpuAsynchronousHaltEntryPhase,
+                cpuOrdinaryHaltWakePhase, cpuOneCycleOrdinaryHaltWakePhase,
+                cpuRecentOrdinaryHaltWakePhase);
+        suppressCpuReadCoincidence = gbc && !timing.dmgCompat
+                && !timing.doubleSpeed && timing.line == 153
+                && timing.ticksInLine == 6 && coincidence;
+    }
+
+    private void clearCpuStatReadPhase() {
+        cpuStatModeOverride = -1;
+        suppressCpuReadCoincidence = false;
+        cpuSynchronousHaltEntryPhase = false;
+        cpuAsynchronousHaltEntryPhase = false;
+        cpuOrdinaryHaltWakePhase = false;
+        cpuOneCycleOrdinaryHaltWakePhase = false;
+        cpuRecentOrdinaryHaltWakePhase = false;
     }
 
     @Override
@@ -2022,6 +2092,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         // This fast-path hint is intentionally not serialized. A restored state
         // always reevaluates once against the restored timing snapshot.
         statEvaluationDirty = true;
+        clearCpuStatReadPhase();
     }
 
     private record StatRegisterState(int enableBits, int registeredLy, boolean coincidence,
