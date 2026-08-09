@@ -57,6 +57,14 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private volatile boolean inputChangedSinceLastTick;
 
+    /**
+     * Derived state for the default released-input fast path. It is deliberately transient and
+     * excluded from portable state: state restore recomputes it from the fields it summarizes.
+     * Volatile invalidation lets a UI input thread conservatively publish a pending mutation
+     * before the emulation thread considers skipping its regular sample path.
+     */
+    private transient volatile boolean releasedInputFastPathEligible;
+
     /** Owner-thread observation only; deliberately absent from portable machine state. */
     private transient DebugHooks debugHooks;
 
@@ -99,6 +107,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         transferInProgress = isSgb;
         transferReadyForData = false;
         sgbBus.register(event -> {
+            invalidateReleasedInputFastPath();
             players = event.getMultiplayerControl() & 0x03;
             if (players == 2) {
                 // Undocumented MLT_REQ value 2 keeps the ICD2 in a distinct state:
@@ -108,7 +117,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 currentPlayer &= players;
             }
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
+            invalidateReleasedInputFastPath();
         }, Commands.MltReqCmd.class);
+        refreshReleasedInputFastPathEligibility();
     }
 
     public void init(EventBus eventBus) {
@@ -118,6 +129,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     private void onPress(Button button) {
+        invalidateReleasedInputFastPath();
         if (eventBus != null) {
             eventBus.post(new JoypadPressEvent(button, tick));
         }
@@ -127,15 +139,18 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             notifyDebugInputChange();
             notifyLegacyInputChange();
         }
+        invalidateReleasedInputFastPath();
     }
 
     private void onRelease(Button button) {
+        invalidateReleasedInputFastPath();
         LOG.atDebug().log("Released button {} at tick {}", button, tick);
         if (buttons.remove(button)) {
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
             notifyLegacyInputChange();
         }
+        invalidateReleasedInputFastPath();
     }
 
     /**
@@ -185,11 +200,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 Objects.requireNonNull(legacyButtons, "legacyButtons"));
         PlayerInputSnapshot physical = Objects.requireNonNull(
                 sampledPhysicalInput, "sampledPhysicalInput");
+        invalidateReleasedInputFastPath();
         buttons.clear();
         buttons.addAll(legacyCopy);
         sampledInput = physical;
         alignDebugInput();
         alignInputTimeline();
+        refreshReleasedInputFastPathEligibility();
     }
 
     /**
@@ -205,26 +222,38 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (buttons.equals(replayButtons)) {
             return;
         }
+        invalidateReleasedInputFastPath();
         buttons.clear();
         buttons.addAll(replayButtons);
         inputChangedSinceLastTick = true;
         alignDebugInput();
         alignInputTimeline();
+        invalidateReleasedInputFastPath();
     }
 
     public void setPressedButtons(Collection<Button> pressed) {
-        if (buttons.equals(Set.copyOf(pressed))) {
+        Set<Button> pressedCopy = Set.copyOf(pressed);
+        if (buttons.equals(pressedCopy)) {
             return;
         }
+        invalidateReleasedInputFastPath();
         buttons.clear();
-        buttons.addAll(pressed);
+        buttons.addAll(pressedCopy);
         inputChangedSinceLastTick = true;
         notifyDebugInputChange();
         notifyLegacyInputChange();
+        invalidateReleasedInputFastPath();
     }
 
     public void tick() {
         tick++;
+        if (releasedInputFastPathEligible) {
+            return;
+        }
+        tickInputSlowPath();
+    }
+
+    private void tickInputSlowPath() {
         PlayerInputSnapshot nextInput = playerInputSource == PlayerInputSource.RELEASED
                 ? PlayerInputSnapshot.RELEASED
                 : Objects.requireNonNull(
@@ -241,6 +270,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         // the DMG joypad circuit and keeps short selector glitches from raising IF.
         if (inputChangedSinceLastTick) {
             inputChangedSinceLastTick = false;
+            refreshReleasedInputFastPathEligibility();
             return;
         }
         int inputLines;
@@ -265,6 +295,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         }
         if (inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines) {
+            refreshReleasedInputFastPathEligibility();
             return;
         }
         int nextFilteredInputLines = filteredInputLines;
@@ -285,6 +316,21 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (fallingEdges != 0) {
             interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         }
+        refreshReleasedInputFastPathEligibility();
+    }
+
+    private void invalidateReleasedInputFastPath() {
+        releasedInputFastPathEligible = false;
+    }
+
+    private void refreshReleasedInputFastPathEligibility() {
+        releasedInputFastPathEligible = playerInputSource == PlayerInputSource.RELEASED
+                && sampledInput == PlayerInputSnapshot.RELEASED
+                && players == 0
+                && !inputChangedSinceLastTick
+                && buttons.isEmpty()
+                && inputHistory == SETTLED_HISTORY[0x0f]
+                && filteredInputLines == 0x0f;
     }
 
     private static int[] createSettledHistory() {
@@ -309,8 +355,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     @Override
     public void setByte(int address, int value) {
         int previousSelection = p1;
+        int nextSelection = value & 0x30;
+        if (nextSelection != previousSelection) {
+            invalidateReleasedInputFastPath();
+        }
         if (isSgb) {
-            int input = value & 0x30;
+            int input = nextSelection;
             // The ICD2 receiver reacts to line transitions. Rewriting the level that is
             // already on JOYP must neither add a bit nor abort an in-flight packet.
             if (input != p1) {
@@ -325,9 +375,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             }
             LOG.atDebug().log("Player changed to {}", currentPlayer);
         }
-        p1 = value & 0b00110000;
+        p1 = nextSelection;
         if (p1 != previousSelection) {
             inputChangedSinceLastTick = true;
+            invalidateReleasedInputFastPath();
         }
     }
 
@@ -477,6 +528,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             throw new IllegalArgumentException("Invalid state type");
         }
         validateState(mem);
+        invalidateReleasedInputFastPath();
         this.p1 = mem.p1;
         this.tick = mem.tick;
         this.inputHistory = mem.inputHistory;
@@ -493,6 +545,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         this.currentPacketIndex = mem.currentPacketIndex;
         alignDebugInput();
         alignInputTimeline();
+        refreshReleasedInputFastPathEligibility();
     }
 
     /**
