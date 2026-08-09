@@ -34,6 +34,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private static final int INPUT_FILTER_MASK = (1 << INPUT_FILTER_SAMPLES) - 1;
 
+    /** Fully settled four-sample history for each active-low input-line level. */
+    private static final int[] SETTLED_HISTORY = createSettledHistory();
+
     private final Set<Button> buttons = new CopyOnWriteArraySet<>();
     private final InterruptManager interruptManager;
     private final boolean isSgb;
@@ -222,8 +225,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     public void tick() {
         tick++;
-        PlayerInputSnapshot nextInput = Objects.requireNonNull(
-                playerInputSource.sample(), "PlayerInputSource returned null");
+        PlayerInputSnapshot nextInput = playerInputSource == PlayerInputSource.RELEASED
+                ? PlayerInputSnapshot.RELEASED
+                : Objects.requireNonNull(
+                        playerInputSource.sample(), "PlayerInputSource returned null");
         if (sampledInput != nextInput && !sampledInput.equals(nextInput)) {
             sampledInput = nextInput;
             inputChangedSinceLastTick = true;
@@ -258,6 +263,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 inputLines = applyButtons(inputLines, buttons);
             }
         }
+        if (inputHistory == SETTLED_HISTORY[inputLines]
+                && filteredInputLines == inputLines) {
+            return;
+        }
         int nextFilteredInputLines = filteredInputLines;
         for (int line = 0; line < 4; line++) {
             int shift = line * INPUT_FILTER_SAMPLES;
@@ -276,6 +285,20 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (fallingEdges != 0) {
             interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         }
+    }
+
+    private static int[] createSettledHistory() {
+        int[] settledHistory = new int[1 << 4];
+        for (int inputLines = 0; inputLines < settledHistory.length; inputLines++) {
+            int history = 0;
+            for (int line = 0; line < 4; line++) {
+                if ((inputLines & (1 << line)) == 0) {
+                    history |= INPUT_FILTER_MASK << (line * INPUT_FILTER_SAMPLES);
+                }
+            }
+            settledHistory[inputLines] = history;
+        }
+        return settledHistory;
     }
 
     @Override
