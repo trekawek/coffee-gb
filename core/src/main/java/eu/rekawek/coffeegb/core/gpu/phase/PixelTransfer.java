@@ -288,7 +288,15 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /** Refreshes the owner-thread timing snapshot before subsystem callbacks run. */
     public void prepareForTick(int speedModeValue) {
+        prepareForTick(speedModeValue, speedMode != null && speedMode.isDmgCompat());
+    }
+
+    /** Refreshes the cached timing mode and compatibility mode before a tick. */
+    public void prepareForTick(int speedModeValue, boolean dmgCompatValue) {
         this.speedModeValue = speedModeValue;
+        if (fifo instanceof ColorPixelFifo colorPixelFifo) {
+            colorPixelFifo.setDmgCompat(dmgCompatValue);
+        }
     }
 
     public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {

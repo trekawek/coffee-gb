@@ -41,7 +41,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     private final GpuRegisterValues r;
 
-    private final SpeedMode speedMode;
+    private boolean dmgCompatValue;
 
     private final int[] delayEntry = new int[8];
 
@@ -63,7 +63,11 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         this.bgPalette = bgPalette;
         this.oamPalette = oamPalette;
         this.r = r;
-        this.speedMode = speedMode;
+        this.dmgCompatValue = speedMode != null && speedMode.isDmgCompat();
+    }
+
+    public void setDmgCompat(boolean dmgCompatValue) {
+        this.dmgCompatValue = dmgCompatValue;
     }
 
     @Override
@@ -167,7 +171,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
         // in DMG compatibility mode LCDC.0 blanks the background like on the DMG;
         // in CGB mode it only drops the background's priority
-        boolean compatMode = speedMode != null && speedMode.isDmgCompat();
+        boolean compatMode = dmgCompatValue;
         if (compatMode && !lcdc.isBgAndWindowDisplay()) {
             bgPixel = 0;
             bgAttrPriority = false;
@@ -237,7 +241,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void setOverlay(int[] pixelLine, int offset, TileAttributes spriteAttr, int oamIndex) {
-        boolean compat = speedMode != null && speedMode.isDmgCompat();
+        boolean compat = dmgCompatValue;
         int paletteIndex = compat
                 ? (spriteAttr.getDmgPalette() == GpuRegister.OBP1 ? 1 : 0)
                 : spriteAttr.getColorPaletteIndex();

@@ -57,6 +57,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // getter calls in the PPU timing decision tree.
     private int speedModeValue = 1;
     private boolean dmgCompatValue;
+    private boolean timingModeDirty = true;
     private boolean timingSnapshotPrepared;
 
     private final boolean earlyCgbLyReadEdge;
@@ -239,7 +240,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.mode = Mode.OamSearch;
         this.phase = oamSearchPhase.start();
         prepareForTick();
-        speedMode.setTimingStateListener(this::prepareForTick);
+        speedMode.setTimingStateListener(() -> {
+            timingModeDirty = true;
+            prepareForTick();
+        });
         timingSnapshotPrepared = false;
     }
 
@@ -681,10 +685,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Refreshes the PPU's owner-thread timing snapshot before subsystem callbacks run. */
     public void prepareForTick() {
-        speedModeValue = speedMode.getSpeedMode();
-        dmgCompatValue = speedMode.isDmgCompat();
-        pixelTransferPhase.prepareForTick(speedModeValue);
-        pixelMachine.prepareForTick(speedModeValue);
+        if (timingModeDirty) {
+            int newSpeedModeValue = speedMode.getSpeedMode();
+            boolean newDmgCompatValue = speedMode.isDmgCompat();
+            speedModeValue = newSpeedModeValue;
+            dmgCompatValue = newDmgCompatValue;
+            pixelTransferPhase.prepareForTick(newSpeedModeValue, newDmgCompatValue);
+            pixelMachine.prepareForTick(newSpeedModeValue, newDmgCompatValue);
+            timingModeDirty = false;
+        }
         timingSnapshotPrepared = true;
     }
 
