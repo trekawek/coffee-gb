@@ -841,6 +841,54 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return ticksInLine;
     }
 
+    void captureStatTiming(GpuTimingSnapshot target) {
+        target.line = line;
+        target.ticksInLine = ticksInLine;
+        target.lcdEnabled = lcdEnabled;
+        target.firstLine = firstLine;
+        target.dmgCompat = dmgCompatValue;
+        target.statModeLatchRephasedBySpeedSwitch = statModeLatchRephasedBySpeedSwitch;
+        target.earlyLineEdgeTick = firstLine ? 451 : gbc ? 448 : 452;
+        target.cpuMachineCycleDots = 4 / speedModeValue;
+        target.doubleSpeed = target.cpuMachineCycleDots == 2;
+        target.nativeDoubleSpeed = gbc && !target.dmgCompat && target.doubleSpeed;
+
+        int visibleLyLineEdgeTick;
+        if (!gbc || firstLine) {
+            visibleLyLineEdgeTick = target.earlyLineEdgeTick;
+        } else if (target.dmgCompat) {
+            visibleLyLineEdgeTick = 450;
+        } else {
+            visibleLyLineEdgeTick = target.doubleSpeed ? 454 : 452;
+        }
+        if (!lcdEnabled) {
+            target.visibleLy = 0;
+        } else if (line == 153) {
+            if (gbc) {
+                target.visibleLy = ticksInLine < (target.doubleSpeed ? 2 : 4) ? 153 : 0;
+            } else {
+                target.visibleLy = 0;
+            }
+        } else {
+            target.visibleLy = ticksInLine >= visibleLyLineEdgeTick ? line + 1 : line;
+        }
+
+        target.mode0InterruptTick = gbc
+                || (!lcdc.isWindowDisplay() && pixelTransferPhase.hasSpriteAtMode0PredictionEdge())
+                ? mode0IntFrom : hblankIntFrom;
+        target.mode0HaltWakeTick = lcdEnabled && line < 144
+                && ticksInLine == target.mode0InterruptTick + 2;
+        target.mode0IntWindow = lcdEnabled && line < 144
+                && ticksInLine >= target.mode0InterruptTick;
+        target.mode1IntWindow = lcdEnabled
+                && (mode == Mode.VBlank || gbc && line == 143 && ticksInLine >= 448);
+        target.mode2IntWindow = lcdEnabled
+                && ((line < 144 && ticksInLine >= target.earlyLineEdgeTick)
+                || (gbc && !target.dmgCompat && line == 153 && ticksInLine >= 454)
+                || ((!gbc || target.dmgCompat) && !firstLine && line == 0
+                && ticksInLine < 4));
+    }
+
     /**
      * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
      */
