@@ -112,7 +112,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     public void tick() {
-        boolean divReset = timer.consumeDivReset();
+        tick(timer.consumeDivReset());
+    }
+
+    public void tick(boolean divReset) {
         if (!enabled) {
             play(0, 0);
             return;
@@ -162,12 +165,16 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      * CPU (for natural DIV edges) and after it (for an edge caused by an FF04 write).
      */
     public void tickFrameSequencer() {
+        tickFrameSequencer(timer.isDivResetPending());
+    }
+
+    public void tickFrameSequencer(boolean divReset) {
         int divCounter = (timer.getDivCounter() + frameSequencerDivOffset) & 0xffff;
         int firedStep = frameSequencer.tick(divCounter, enabled, speedMode.getSpeedMode() == 2);
         if (firedStep >= 0) {
             pendingFrameSequencerStep = firedStep;
         }
-        if (timer.isDivResetPending()) {
+        if (divReset) {
             frameSequencerDivOffset = 0;
         }
     }
