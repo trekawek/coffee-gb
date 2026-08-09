@@ -2,10 +2,16 @@ package eu.rekawek.coffeegb.core.cpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.gpu.Gpu;
+import eu.rekawek.coffeegb.core.gpu.StatRegister;
+import eu.rekawek.coffeegb.core.gpu.VRamTransfer;
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class CpuStopTest {
 
@@ -42,6 +48,20 @@ public class CpuStopTest {
         assertEquals(PROGRAM + 3, cpu.getRegisters().getPC());
     }
 
+    @Test
+    public void speedModeListenerUpdatesGpuMachineCycleTimingSynchronously() {
+        SpeedMode speedMode = new SpeedMode(true);
+        Gpu gpu = gpu(speedMode);
+
+        assertEquals(4, gpu.getCpuMachineCycleDots());
+        speedMode.setByte(0xff4d, 1);
+        assertTrue(speedMode.onStop());
+        assertEquals(2, gpu.getCpuMachineCycleDots());
+        speedMode.setByte(0xff4d, 1);
+        assertTrue(speedMode.onStop());
+        assertEquals(4, gpu.getCpuMachineCycleDots());
+    }
+
     private static Ram stopProgram(int joyp) {
         Ram memory = new Ram(0, 0x10000);
         memory.setByte(PROGRAM, 0x10);
@@ -54,6 +74,20 @@ public class CpuStopTest {
         Cpu cpu = new Cpu(memory, new InterruptManager(false), null, speedMode, new Display(false));
         cpu.getRegisters().setPC(PROGRAM);
         return cpu;
+    }
+
+    private static Gpu gpu(SpeedMode speedMode) {
+        Ram oam = new Ram(0xfe00, 0xa0);
+        StatRegister stat = new StatRegister(new InterruptManager(true));
+        Gpu gpu = new Gpu(new Display(true),
+                new Dma(new Ram(0, 0x10000), oam, speedMode),
+                oam,
+                new VRamTransfer(EventBus.NULL_EVENT_BUS),
+                stat,
+                true,
+                speedMode);
+        stat.init(gpu);
+        return gpu;
     }
 
     private static void runUntilNotExecutingStop(Cpu cpu) {

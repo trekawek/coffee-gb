@@ -52,13 +52,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private final eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode;
 
-    // Cached for the complete owner-thread tick. The clock mode can change only at a
-    // CPU STOP boundary; refreshing once per tick avoids repeating the same cross-object
-    // getter calls in the PPU timing decision tree.
+    // Refreshed synchronously when SpeedMode changes, so the PPU timing decision tree
+    // never needs to repeat cross-object getter calls during a tick.
     private int speedModeValue = 1;
     private boolean dmgCompatValue;
     private boolean timingModeDirty = true;
-    private boolean timingSnapshotPrepared;
 
     // Monotonic owner-thread generation for the transient STAT timing view.  The
     // PPU advances once per master tick, so StatRegister can reuse the snapshot it
@@ -252,7 +250,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             timingModeDirty = true;
             prepareForTick();
         });
-        timingSnapshotPrepared = false;
     }
 
     /**
@@ -309,9 +306,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     @Override
     public void setByte(int address, int value) {
         timingGeneration++;
-        if (!timingSnapshotPrepared) {
-            prepareForTick();
-        }
         cancelPendingPpuWrites(address);
         cancelDelayedPixelWindowWrite(address);
         setByteImmediately(address, value);
@@ -320,9 +314,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     @Override
     public void setByteFromCpu(int address, int value) {
         timingGeneration++;
-        if (!timingSnapshotPrepared) {
-            prepareForTick();
-        }
         scheduleDmgPixelWindowWrite(address, value);
         if (address == LCDC_ADDRESS && gbc && lcdEnabled && mode == Mode.PixelTransfer) {
             int changedTileSelect = (lcdc.get() ^ value) & 0x10;
@@ -425,9 +416,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public int getByte(int address) {
-        if (!timingSnapshotPrepared) {
-            prepareForTick();
-        }
         if (address >= LCDC_ADDRESS && address <= LAST_STANDARD_REGISTER_ADDRESS) {
             int cpuVisible = cpuVisiblePpuRegisters[address - LCDC_ADDRESS];
             if (cpuVisible >= 0) {
@@ -509,10 +497,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     public Mode tick() {
         timingGeneration++;
-        if (!timingSnapshotPrepared) {
-            prepareForTick();
-        }
-        timingSnapshotPrepared = false;
         cpuLyReadAcrossLineEdge = false;
         directOamReadCorruptionThisTick = false;
         suppressNextDirectOamReadCorruption = false;
@@ -711,7 +695,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         lyReadLatchRephasedBySpeedSwitch = lcdEnabled;
     }
 
-    /** Refreshes the PPU's owner-thread timing snapshot before subsystem callbacks run. */
+    /** Refreshes cached PPU timing mode after an owner-thread source change. */
     public void prepareForTick() {
         if (timingModeDirty) {
             int newSpeedModeValue = speedMode.getSpeedMode();
@@ -722,7 +706,6 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             pixelMachine.prepareForTick(newSpeedModeValue, newDmgCompatValue);
             timingModeDirty = false;
         }
-        timingSnapshotPrepared = true;
     }
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
@@ -2411,11 +2394,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         } else {
             phase = oamSearchPhase;
         }
-        // The generation is deliberately transient: it is only a cache-validity
-        // marker for the derived STAT timing snapshot and is not part of emulated
-        // state. Force a fresh capture after restoring the portable state.
+        // The generation is deliberately transient: it only invalidates the derived
+        // STAT timing snapshot and is not part of emulated state. In a full-machine
+        // restore, the later SpeedMode restore synchronously refreshes this GPU's timing
+        // mode; for a standalone GPU restore, the external SpeedMode remains authoritative.
         timingGeneration++;
-        timingSnapshotPrepared = false;
     }
 
     private record GpuState(ComponentState<Ram> videoRam0Memento, ComponentState<Ram> videoRam1Memento,
