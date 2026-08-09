@@ -18,6 +18,14 @@ import java.util.List;
 
 public class Cpu implements StatefulComponent<Cpu> {
 
+    public static final int STAT_READ_PHASE_SYNCHRONOUS_HALT_ENTRY = 1;
+
+    public static final int STAT_READ_PHASE_ASYNCHRONOUS_HALT_ENTRY = 1 << 1;
+
+    public static final int STAT_READ_PHASE_ORDINARY_HALT_WAKE = 1 << 2;
+
+    public static final int STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE = 1 << 3;
+
     public enum State {
         OPCODE, EXT_OPCODE, OPERAND, RUNNING, IRQ_WAIT_1, IRQ_WAIT_2, IRQ_PUSH_1, IRQ_PUSH_2, IRQ_JUMP, STOPPED, HALTED,
         SPEED_SWITCH,
@@ -758,6 +766,24 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public boolean isOneCycleOrdinaryHaltWakeStatPhase() {
         return ordinaryHaltWakeStatPhase && haltedCpuCycles == 1;
+    }
+
+    /** Returns all STAT CPU-read phase flags sampled at this point in one call. */
+    public int getStatReadPhaseFlags() {
+        int flags = 0;
+        if (synchronousHaltEntryStatPhase) {
+            flags |= STAT_READ_PHASE_SYNCHRONOUS_HALT_ENTRY;
+        }
+        if (asynchronousHaltEntryStatPhase) {
+            flags |= STAT_READ_PHASE_ASYNCHRONOUS_HALT_ENTRY;
+        }
+        if (ordinaryHaltWakeStatPhase) {
+            flags |= STAT_READ_PHASE_ORDINARY_HALT_WAKE;
+            if (haltedCpuCycles == 1) {
+                flags |= STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE;
+            }
+        }
+        return flags;
     }
 
     /**
