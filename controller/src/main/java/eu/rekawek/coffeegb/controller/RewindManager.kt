@@ -116,7 +116,6 @@ internal class RewindManager(
     }
     val state = states.removeLastOrNull() as? MachineEntry ?: return false
     state.machine.restore(gameboy)
-    gameboy.resumeFullFrameRenderingAfterRewindRestore()
     return true
   }
 
@@ -128,7 +127,6 @@ internal class RewindManager(
     }
     val state = states.removeLastOrNull() as? SessionEntry ?: return false
     state.snapshot.restore(session)
-    session.gameboy.resumeFullFrameRenderingAfterRewindRestore()
     return true
   }
 

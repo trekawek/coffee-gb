@@ -112,6 +112,7 @@ class SessionSnapshotRtcPauseTest {
       session.gameboy.addressSpace.setByte(0xc123, 0x77)
       repeat(128) { session.gameboy.tick() }
       val before = DetachedStateAdapter.capture(session)
+      assertTrue(session.gameboy.isCurrentVisibleFrameFullyRendering)
       rumble.clear()
 
       // The rollback capture consults the paused clock twice. Fail only after that preflight, at
@@ -125,9 +126,14 @@ class SessionSnapshotRtcPauseTest {
 
       assertEquals(before, DetachedStateAdapter.capture(session))
       assertEquals(emptyList(), rumble)
+      assertTrue(
+          session.gameboy.isCurrentVisibleFrameFullyRendering,
+          "a failed outer transaction must restore the prior full-output host state",
+      )
 
       target.restore(session, effectiveCartridgePause = true)
       assertEquals(listOf(true), rumble)
+      assertTrue(session.gameboy.isCurrentVisibleFrameFullyRendering)
     }
   }
 
