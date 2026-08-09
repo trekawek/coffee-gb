@@ -85,7 +85,6 @@ internal class MachineSnapshot private constructor(
     val rollbackRtc = gameboy.captureRtcRuntimeStateWithoutTimeSource()
     val rollbackWallClock = gameboy.captureWallClockRuntimeStateWithoutTimeSource()
     val rollbackFifo = gameboy.captureDmgFifoRuntimeState()
-    val rollbackRenderedOutput = gameboy.isCurrentVisibleFrameFullyRendering
     try {
       probe?.invoke(ApplyStage.BEFORE_LIVE_MUTATION)
       gameboy.restoreStateSilently(candidate)
@@ -94,24 +93,18 @@ internal class MachineSnapshot private constructor(
       gameboy.restoreRtcRuntimeState(candidateRtc)
       gameboy.restoreWallClockRuntimeState(candidateWallClock)
     } catch (failure: Throwable) {
-      var rollbackRestoredMachine = false
       try {
         gameboy.restoreStateSilently(rollbackState)
         gameboy.restoreDmgFifoRuntimeState(rollbackFifo)
         gameboy.restoreRtcRuntimeState(rollbackRtc)
         gameboy.restoreWallClockRuntimeState(rollbackWallClock)
-        rollbackRestoredMachine = true
       } catch (rollbackFailure: Throwable) {
         failure.addSuppressed(rollbackFailure)
-      }
-      if (rollbackRestoredMachine && rollbackRenderedOutput) {
-        gameboy.resumeFullFrameRenderingAfterCoherentRestore()
       }
       throw StateApplyException("Internal machine snapshot could not be applied atomically", failure)
     }
     if (synchronizeHostOutputs) {
       gameboy.synchronizeRumbleOutput(rollbackRumble)
-      gameboy.resumeFullFrameRenderingAfterCoherentRestore()
     }
   }
 

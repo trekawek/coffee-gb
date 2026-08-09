@@ -1240,13 +1240,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Resumes normal output after a controller-owned coherent restore transaction commits.
+     * Resumes normal output after restoring a rewind snapshot captured at a coherent frame point.
      *
      * <p>Manual state loads intentionally keep a partially restored scanout hidden until the next
-     * physical frame edge. In-process snapshots are captured at controller-owned coherent points,
-     * so their successful transaction can safely resume output immediately.</p>
+     * physical frame edge. Rewind snapshots are selected only while full output is active, so the
+     * controller can safely resume their restored output immediately.</p>
      */
-    public void resumeFullFrameRenderingAfterCoherentRestore() {
+    public void resumeFullFrameRenderingAfterRewindRestore() {
         requestedFrameRenderSuppression = false;
         frameRenderSuppressed = false;
         gpu.setRenderOutput(true);
@@ -1597,12 +1597,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             throw new IllegalArgumentException();
         }
         restoreMachineState(mem, true);
+        resetHostFrameRenderingAfterRestore();
         synchronizeRumbleOutput(previousRumble);
     }
 
     /**
      * Applies emulated state without publishing host output or consulting an external RTC
-     * TimeSource from a speculative transaction.
+     * TimeSource from a speculative transaction. Host-only presentation pacing is deliberately
+     * preserved so the owning transaction can complete or roll back without changing it.
      */
     public void restoreStateSilently(ComponentState<Gameboy> state) {
         if (!(state instanceof GameboyState mem)) {
@@ -1684,7 +1686,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !blankCgbBootTilePending
                 && !clearBootTilemapPending
                 && !clearCgbBootOamShadowPending;
-        resetHostFrameRenderingAfterRestore();
     }
 
     /**

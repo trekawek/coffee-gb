@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /** Host-only frame skipping must stay aligned with physical PPU frames, not controller frames. */
@@ -59,12 +60,31 @@ public class GameboyAdaptiveFrameRenderingTest {
                 gameboy.tick();
             }
             gameboy.restoreState(state);
+            assertFalse(gameboy.isCurrentVisibleFrameFullyRendering());
 
             // A restored mid-scanout state must not compose a new host frame from its tail.
             runToNextFrame(gameboy);
             assertEquals(1, published.get());
             runToNextFrame(gameboy);
             assertEquals(2, published.get());
+        }
+    }
+
+    @Test
+    public void silentRestorePreservesTheExistingHostRenderGate() throws Exception {
+        try (EventBus eventBus = new EventBusImpl(); Gameboy gameboy = newGameboy()) {
+            gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            var state = gameboy.captureState();
+
+            gameboy.restoreStateSilently(state);
+            assertTrue(gameboy.isCurrentVisibleFrameFullyRendering());
+
+            gameboy.requestFrameRenderSuppression(true);
+            runToNextFrame(gameboy);
+            assertFalse(gameboy.isCurrentVisibleFrameFullyRendering());
+
+            gameboy.restoreStateSilently(state);
+            assertFalse(gameboy.isCurrentVisibleFrameFullyRendering());
         }
     }
 

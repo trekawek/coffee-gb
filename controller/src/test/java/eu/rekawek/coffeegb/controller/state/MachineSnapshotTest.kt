@@ -17,7 +17,7 @@ import org.junit.Test
 class MachineSnapshotTest {
 
   @Test
-  fun directRestoreResumesFullHostOutputAfterCommit() {
+  fun directRestorePreservesFullHostOutputAfterCommit() {
     StateCodecTestSupport.session().use { session ->
       val snapshot = MachineSnapshot.capture(session.gameboy)
       repeat(2_000) { session.gameboy.tick() }
