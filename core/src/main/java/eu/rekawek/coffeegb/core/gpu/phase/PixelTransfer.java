@@ -357,6 +357,14 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         fifo.outputTick();
     }
 
+    /** Advances the LCD output stage and the output-producing pixel machine in one boundary. */
+    public void outputAndMachineTick() {
+        fifo.outputTick();
+        if (machineActive && !tick()) {
+            machineActive = false;
+        }
+    }
+
     public DmgPixelFifo.RuntimeState captureDmgFifoRuntimeState() {
         return fifo instanceof DmgPixelFifo dmgFifo ? dmgFifo.captureRuntimeState() : null;
     }

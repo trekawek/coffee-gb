@@ -525,8 +525,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // participates in window rewind/refresh bookkeeping and must advance as a
         // bounded ring just like the shifted output machine.
         pixelTransferPhase.outputTick();
-        pixelMachine.outputTick();
-        pixelMachine.machineTick();
+        pixelMachine.outputAndMachineTick();
 
         Mode oldMode = mode;
         int oldLine = line;
