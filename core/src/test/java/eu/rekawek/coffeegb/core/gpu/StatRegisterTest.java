@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.LCDC;
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.VBlank;
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
@@ -433,8 +435,11 @@ public class StatRegisterTest {
         fixture.advanceTo(1, 78);
 
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
-        fixture.stat.captureCpuStatReadPhase(false, false, false);
+        fixture.stat.beginCpuReadPhase(false, false, false, false);
+        assertEquals(-2, cpuStatModeOverride(fixture.stat));
         assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+        assertEquals(Mode.OamSearch.ordinal(), cpuStatModeOverride(fixture.stat));
     }
 
     @Test
@@ -671,7 +676,7 @@ public class StatRegisterTest {
         fixture.advanceTo(153, 6);
 
         assertEquals(0x04, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
-        fixture.stat.captureCpuStatReadPhase(false, false, false);
+        fixture.stat.beginCpuReadPhase(false, false, false, false);
         assertEquals(0, fixture.stat.getByte(StatRegister.ADDRESS) & 0x04);
 
         fixture.tick();
@@ -2327,6 +2332,16 @@ public class StatRegisterTest {
         fixture.stat.setByte(StatRegister.ADDRESS, 0x50);
 
         return fixture.lcdInterruptFlag();
+    }
+
+    private static int cpuStatModeOverride(StatRegister stat) {
+        try {
+            Field field = StatRegister.class.getDeclaredField("cpuStatModeOverride");
+            field.setAccessible(true);
+            return field.getInt(stat);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static class Fixture {
