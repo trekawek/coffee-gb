@@ -157,13 +157,18 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     @Override
     public void outputTick() {
         outputTicks++;
+        if (!renderOutput) {
+            // The GPU advances output before the pixel machine can append this dot's
+            // entry. With the one-dot CGB delay, every entry already present is due.
+            delayHead = (delayHead + delaySize) & 7;
+            delaySize = 0;
+            return;
+        }
         while (delaySize > 0 && delayStamp[delayHead] + OUTPUT_DELAY <= outputTicks) {
             int entry = delayEntry[delayHead];
             delayHead = (delayHead + 1) & 7;
             delaySize--;
-            if (renderOutput) {
-                display.putColorPixel(resolvePixel(entry));
-            }
+            display.putColorPixel(resolvePixel(entry));
         }
     }
 
