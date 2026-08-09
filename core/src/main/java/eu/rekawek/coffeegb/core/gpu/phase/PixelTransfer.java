@@ -560,30 +560,44 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      * on line 153 dot 454, while double-speed CGB samples it on line zero dot 1.
      */
     public void checkWindowY(int line, int ticksInLine) {
-        advanceWindowWy();
-        int primaryWy = windowWyOldOnWriteTick >= 0
-                ? windowWyOldOnWriteTick : r.get(WY);
+        if (windowWyDelay == 0) {
+            windowWy = pendingWindowWy;
+            windowWyDelay = -1;
+        } else if (windowWyDelay > 0) {
+            windowWyDelay--;
+        }
+        int oldWindowWy = windowWyOldOnWriteTick;
         windowWyOldOnWriteTick = -1;
 
         boolean earlyFrameCheckpoint = !gbc || speedModeValue == 1;
-        if (earlyFrameCheckpoint && line == 153 && ticksInLine == 454) {
-            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
-        } else if (!earlyFrameCheckpoint && line == 0 && ticksInLine == 1) {
-            setWindowYTriggered(isWindowDisplay() && primaryWy == 0);
-        }
-        int currentLineCheckpoint = gbc
+        int currentLineTick = gbc
                 ? speedModeValue == 1 ? 446 : 449
                 : 450;
-        if (line < 143 && ticksInLine == currentLineCheckpoint
-                && isWindowDisplay() && r.get(LY) == primaryWy) {
-            setWindowYTriggered(true);
-        }
-        int upcomingLineCheckpoint = gbc
+        int upcomingLineTick = gbc
                 ? speedModeValue == 1 ? 450 : 453
                 : 454;
-        if (line < 143 && ticksInLine == upcomingLineCheckpoint
-                && isWindowDisplay() && r.get(LY) + 1 == primaryWy) {
-            setWindowYTriggered(true);
+        boolean frameCheckpoint = earlyFrameCheckpoint
+                ? line == 153 && ticksInLine == 454
+                : line == 0 && ticksInLine == 1;
+        boolean currentLineCheckpoint = line < 143 && ticksInLine == currentLineTick;
+        boolean upcomingLineCheckpoint = line < 143 && ticksInLine == upcomingLineTick;
+        if (!frameCheckpoint && !currentLineCheckpoint && !upcomingLineCheckpoint) {
+            return;
+        }
+
+        int primaryWy = oldWindowWy >= 0 ? oldWindowWy : r.get(WY);
+        boolean windowDisplay = isWindowDisplay();
+        if (frameCheckpoint) {
+            setWindowYTriggered(windowDisplay && primaryWy == 0);
+        }
+        if (currentLineCheckpoint || upcomingLineCheckpoint) {
+            int currentLy = r.get(LY);
+            if (currentLineCheckpoint && windowDisplay && currentLy == primaryWy) {
+                setWindowYTriggered(true);
+            }
+            if (upcomingLineCheckpoint && windowDisplay && currentLy + 1 == primaryWy) {
+                setWindowYTriggered(true);
+            }
         }
     }
 
@@ -598,15 +612,6 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             windowWyDelay = -1;
         } else {
             windowWyDelay = delayDots;
-        }
-    }
-
-    private void advanceWindowWy() {
-        if (windowWyDelay == 0) {
-            windowWy = pendingWindowWy;
-            windowWyDelay = -1;
-        } else if (windowWyDelay > 0) {
-            windowWyDelay--;
         }
     }
 
