@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import org.junit.Test;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
@@ -154,6 +155,92 @@ public class HdmaTest {
     }
 
     @Test
+    public void cpuHdmaPhaseFlagsAreSampledOnlyAtObservableRequestEdges() {
+        Fixture inactive = new Fixture();
+        assertFalse(inactive.hdma.requiresCpuHdmaPhaseFlags());
+
+        Fixture countdown = hblankRequestCountdown();
+        assertFalse(countdown.hdma.requiresCpuHdmaPhaseFlags());
+        countdown.advanceHblankRequest(2);
+        assertTrue(countdown.hdma.requiresCpuHdmaPhaseFlags());
+        countdown.hdma.advanceHblankRequest(true, true, true);
+        var capturedEdge = (Hdma.HdmaState) countdown.hdma.captureState();
+        assertTrue(capturedEdge.requestOverlappedCpuWrite());
+        assertTrue(capturedEdge.interruptEntryWonArbitration());
+
+        Fixture unresolved = hblankRequestCountdown();
+        unresolved.advanceHblankRequest(3);
+        assertTrue(unresolved.hdma.requiresCpuHdmaPhaseFlags());
+        unresolved.hdma.advanceHblankRequest(false, false, true);
+        assertTrue(unresolved.hdma.isInterruptEntryRequestOwner());
+
+        Fixture aged = hblankRequestCountdown();
+        aged.advanceHblankRequest(4);
+        assertFalse(aged.hdma.requiresCpuHdmaPhaseFlags());
+
+        Fixture outsideWindow = hblankRequestCountdown();
+        outsideWindow.advanceHblankRequest(3);
+        outsideWindow.hdma.onGpuTiming(1, 252);
+        assertFalse(outsideWindow.hdma.requiresCpuHdmaPhaseFlags());
+
+        Fixture halted = hblankRequestCountdown();
+        halted.advanceHblankRequest(2);
+        halted.hdma.onCpuHaltState(true);
+        assertFalse(halted.hdma.requiresCpuHdmaPhaseFlags());
+    }
+
+    @Test
+    public void cpuInstructionPhaseIsCapturedAtCountdownEdgeAfterSpeedSwitch() {
+        Fixture fixture = new Fixture(2);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(0, 120);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        fixture.startTransfer(0x80);
+        assertFalse(fixture.hdma.onSpeedSwitch());
+        fixture.hdma.onGpuTiming(0, 448);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.hdma.onSpeedSwitchComplete();
+
+        fixture.advanceHblankRequest(2);
+        assertTrue(fixture.hdma.requiresCpuHdmaPhaseFlags());
+        fixture.hdma.advanceHblankRequest(false, true, false);
+        assertTrue(fixture.hdma.preemptsCpuInstructionForSpeedSwitchWake());
+    }
+
+    @Test
+    public void omittedCpuHdmaPhaseFlagsDoNotChangeAnyNonObservableRequestState() {
+        assertIgnoredCpuPhaseFlags(hdmaState(new Fixture()));
+
+        Fixture countdown = hblankRequestCountdown();
+        assertIgnoredCpuPhaseFlags(hdmaState(countdown));
+
+        Fixture finalCountdownTick = hblankRequestCountdown();
+        finalCountdownTick.advanceHblankRequest(1);
+        assertIgnoredCpuPhaseFlags(hdmaState(finalCountdownTick));
+
+        Fixture aged = hblankRequestCountdown();
+        aged.advanceHblankRequest(4);
+        assertIgnoredCpuPhaseFlags(hdmaState(aged));
+
+        Fixture queuedNextRequest = hblankRequestCountdown(0x81);
+        queuedNextRequest.advanceHblankRequest(4);
+        queuedNextRequest.hdma.onGpuUpdate(Mode.HBlank);
+        assertTrue(hdmaState(queuedNextRequest).nextHblankRequestTicks() > 0);
+        assertFalse(queuedNextRequest.hdma.requiresCpuHdmaPhaseFlags());
+        assertIgnoredCpuPhaseFlags(hdmaState(queuedNextRequest));
+
+        Fixture outsideWindow = hblankRequestCountdown();
+        outsideWindow.advanceHblankRequest(3);
+        outsideWindow.hdma.onGpuTiming(1, 252);
+        assertIgnoredCpuPhaseFlags(hdmaState(outsideWindow));
+
+        Fixture halted = hblankRequestCountdown();
+        halted.advanceHblankRequest(2);
+        halted.hdma.onCpuHaltState(true);
+        assertIgnoredCpuPhaseFlags(hdmaState(halted));
+    }
+
+    @Test
     public void fetchedInstructionOwnsARequestUntilItRetires() {
         Fixture fixture = synchronizedHblankRequest(1);
 
@@ -243,6 +330,83 @@ public class HdmaTest {
         fixture.hdma.onGpuUpdate(Mode.HBlank);
         fixture.advanceHblankRequest(3);
         return fixture;
+    }
+
+    private Fixture hblankRequestCountdown() {
+        return hblankRequestCountdown(0x80);
+    }
+
+    private Fixture hblankRequestCountdown(int control) {
+        Fixture fixture = new Fixture();
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(1, 240);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        fixture.startTransfer(control);
+        fixture.hdma.onGpuTiming(1, 248);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.hdma.onGpuTiming(1, 249);
+        return fixture;
+    }
+
+    private Hdma.HdmaState hdmaState(Fixture fixture) {
+        return (Hdma.HdmaState) fixture.hdma.captureState();
+    }
+
+    private void assertIgnoredCpuPhaseFlags(Hdma.HdmaState initialState) {
+        Fixture predicate = new Fixture();
+        predicate.hdma.restoreState(initialState);
+        assertFalse(predicate.hdma.requiresCpuHdmaPhaseFlags());
+
+        for (int flags = 0; flags < 8; flags++) {
+            Fixture expected = new Fixture();
+            Fixture actual = new Fixture();
+            expected.hdma.restoreState(initialState);
+            actual.hdma.restoreState(initialState);
+
+            expected.hdma.advanceHblankRequest(false, false, false);
+            actual.hdma.advanceHblankRequest((flags & 1) != 0,
+                    (flags & 2) != 0, (flags & 4) != 0);
+
+            assertSameHdmaState(hdmaState(expected), hdmaState(actual));
+        }
+    }
+
+    private void assertSameHdmaState(Hdma.HdmaState expected, Hdma.HdmaState actual) {
+        assertEquals(expected.gpuMode(), actual.gpuMode());
+        assertEquals(expected.transferInProgress(), actual.transferInProgress());
+        assertEquals(expected.hblankTransfer(), actual.hblankTransfer());
+        assertEquals(expected.lcdEnabled(), actual.lcdEnabled());
+        assertEquals(expected.length(), actual.length());
+        assertEquals(expected.src(), actual.src());
+        assertEquals(expected.dst(), actual.dst());
+        assertEquals(expected.tick(), actual.tick());
+        assertArrayEquals(expected.blockData(), actual.blockData());
+        assertEquals(expected.hblankRequestTicks(), actual.hblankRequestTicks());
+        assertEquals(expected.hblankRequestAge(), actual.hblankRequestAge());
+        assertEquals(expected.nextHblankRequestTicks(), actual.nextHblankRequestTicks());
+        assertEquals(expected.nextHblankRequestAge(), actual.nextHblankRequestAge());
+        assertEquals(expected.sourceBytesTransferred(), actual.sourceBytesTransferred());
+        assertEquals(expected.cpuBusValue(), actual.cpuBusValue());
+        assertEquals(expected.stopAfterCurrentBlock(), actual.stopAfterCurrentBlock());
+        assertEquals(expected.preserveLengthAfterCurrentBlock(), actual.preserveLengthAfterCurrentBlock());
+        assertEquals(expected.speedSwitchInProgress(), actual.speedSwitchInProgress());
+        assertEquals(expected.speedSwitchStartedWithoutRequest(), actual.speedSwitchStartedWithoutRequest());
+        assertEquals(expected.pauseOamDmaForSpeedSwitchBurst(), actual.pauseOamDmaForSpeedSwitchBurst());
+        assertEquals(String.valueOf(expected.wakeRequestArbitration()),
+                String.valueOf(actual.wakeRequestArbitration()));
+        assertEquals(expected.gpuLine(), actual.gpuLine());
+        assertEquals(expected.gpuTicksInLine(), actual.gpuTicksInLine());
+        assertEquals(expected.gpuCpuClockRephased(), actual.gpuCpuClockRephased());
+        assertEquals(expected.hblankStartTicksInLine(), actual.hblankStartTicksInLine());
+        assertEquals(expected.cpuHalted(), actual.cpuHalted());
+        assertEquals(String.valueOf(expected.haltHdmaState()), String.valueOf(actual.haltHdmaState()));
+        assertEquals(expected.haltEnteredThisTick(), actual.haltEnteredThisTick());
+        assertEquals(expected.requestOverlappedCpuWrite(), actual.requestOverlappedCpuWrite());
+        assertEquals(expected.interruptEntryWonArbitration(), actual.interruptEntryWonArbitration());
+        assertEquals(String.valueOf(expected.cpuRequestArbitration()),
+                String.valueOf(actual.cpuRequestArbitration()));
+        assertEquals(expected.cpuRequestAllowsLateInterrupt(), actual.cpuRequestAllowsLateInterrupt());
+        assertEquals(expected.haltOpcodeRequestLatched(), actual.haltOpcodeRequestLatched());
     }
 
     @Test

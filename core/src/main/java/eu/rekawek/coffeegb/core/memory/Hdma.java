@@ -452,6 +452,36 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     /**
+     * Whether the next HBlank-request synchronizer tick can retain any of the
+     * CPU phase inputs supplied to {@link #advanceHblankRequest(boolean, boolean, boolean)}.
+     *
+     * <p>The overwhelmingly common inactive-request path returns before any
+     * timing calculation. A request crossing the synchronizer captures all
+     * three inputs; an unresolved request on its first HBlank arbitration dot
+     * can additionally retain an interrupt-entry input.</p>
+     */
+    public boolean requiresCpuHdmaPhaseFlags() {
+        int requestTicks = hblankRequestTicks;
+        if (requestTicks < 0 || cpuHalted) {
+            return false;
+        }
+        return requiresCpuHdmaPhaseFlagsAtRequest(requestTicks);
+    }
+
+    private boolean requiresCpuHdmaPhaseFlagsAtRequest(int requestTicks) {
+        if (requestTicks == 1) {
+            return true;
+        }
+        if (requestTicks != 0 || hblankRequestAge != 0
+                || cpuRequestArbitration != CpuRequestArbitration.UNRESOLVED
+                || gpuMode != Mode.HBlank) {
+            return false;
+        }
+        int ticksSinceHblankStart = gpuTicksInLine - hblankStartTicksInLine;
+        return ticksSinceHblankStart >= 0 && ticksSinceHblankStart <= 2;
+    }
+
+    /**
      * HALT acknowledges the asynchronous HDMA request and remembers whether the
      * request line was low, high, or already latched. On wake, a low-to-high request
      * may be asserted again; a request that was already latched is always restored.
