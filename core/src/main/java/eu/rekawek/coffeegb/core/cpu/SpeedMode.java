@@ -67,7 +67,11 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
     public void setByte(int address, int value) {
         if (address == 0xff4c) {
             if (biosShadow == null || !biosShadow.isBootFinished()) {
-                dmgCompat = (value & 0x0c) != 0;
+                boolean newDmgCompat = (value & 0x0c) != 0;
+                if (dmgCompat != newDmgCompat) {
+                    dmgCompat = newDmgCompat;
+                    notifyTimingStateChanged();
+                }
             }
         } else if (isSpeedSwitchAccessible()) {
             prepareSpeedSwitch = (value & 0x01) != 0;
