@@ -255,6 +255,17 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         timingSnapshotPrepared = false;
     }
 
+    /**
+     * Enables or suppresses only the resolved panel output of the visible pixel machine.
+     *
+     * <p>The timing-only pixel machine always remains disabled. This host-facing switch leaves
+     * every PPU timing, FIFO advance, and CPU-visible state transition intact while avoiding the
+     * final palette/display work for a deliberately unpresented frame.</p>
+     */
+    public void setRenderOutput(boolean renderOutput) {
+        pixelMachine.setRenderOutput(renderOutput);
+    }
+
     private AddressSpace getAddressSpace(int address) {
         if (videoRam0.accepts(address)) {
             return isVramAvailableForCpu() ? getVideoRam() : null;

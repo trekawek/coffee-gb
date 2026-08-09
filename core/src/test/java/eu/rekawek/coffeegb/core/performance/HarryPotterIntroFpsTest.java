@@ -9,6 +9,7 @@ import org.junit.Test;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicLong;
 
 import jdk.jfr.Configuration;
 import jdk.jfr.Recording;
@@ -39,35 +40,50 @@ public class HarryPotterIntroFpsTest {
 
         try (EventBus eventBus = new EventBusImpl(); Gameboy gameboy = configuration.build()) {
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            AtomicLong publishedFrames = new AtomicLong();
+            eventBus.register(e -> publishedFrames.incrementAndGet(),
+                    eu.rekawek.coffeegb.core.gpu.Display.DmgFrameReadyEvent.class);
+            eventBus.register(e -> publishedFrames.incrementAndGet(),
+                    eu.rekawek.coffeegb.core.gpu.Display.GbcFrameReadyEvent.class);
+            gameboy.requestFrameRenderSuppression(HarryPotterIntroHarness.forceFrameSkip());
 
-            Window warmup = runFrames(gameboy, WARMUP_FRAMES);
-            Window measurement = runMeasurement(gameboy);
+            Window warmup = runFrames(gameboy, WARMUP_FRAMES, publishedFrames);
+            Window measurement = runMeasurement(gameboy, publishedFrames);
 
-            double fps = measurement.frames * 1_000_000_000.0 / measurement.elapsedNanos;
+            double emulatedFps = measurement.emulatedFrames * 1_000_000_000.0 / measurement.elapsedNanos;
+            double renderedFps = measurement.publishedFrames * 1_000_000_000.0 / measurement.elapsedNanos;
             double ticksPerSecond = measurement.ticks * 1_000_000_000.0 / measurement.elapsedNanos;
             double nominalFps = Gameboy.TICKS_PER_SEC / (456.0 * 154.0);
 
-            System.out.printf("Harry Potter intro FPS: %.3f%n", fps);
+            // Retain the historical line as the emulator/VBlank throughput figure.
+            System.out.printf("Harry Potter intro FPS: %.3f%n", emulatedFps);
+            System.out.printf("Emulated VBlank FPS: %.3f%n", emulatedFps);
+            System.out.printf("Rendered/published FPS: %.3f%n", renderedFps);
             System.out.printf("Ticks/sec: %.0f%n", ticksPerSecond);
-            System.out.printf("Frames: %d in %.6f s%n", measurement.frames,
+            System.out.printf("Frames: %d emulated, %d rendered/published in %.6f s%n",
+                    measurement.emulatedFrames, measurement.publishedFrames,
                     measurement.elapsedNanos / 1_000_000_000.0);
-            System.out.printf("Warm-up: %d frames, %.0f ticks/sec%n", warmup.frames,
+            System.out.printf("Warm-up: %d emulated, %d rendered/published frames, %.0f ticks/sec%n",
+                    warmup.emulatedFrames, warmup.publishedFrames,
                     warmup.ticks * 1_000_000_000.0 / warmup.elapsedNanos);
-            System.out.printf("Nominal-frame headroom: %.1f%%%n", fps * 100.0 / nominalFps);
+            System.out.printf("Nominal-frame headroom: %.1f%%%n", emulatedFps * 100.0 / nominalFps);
+            if (HarryPotterIntroHarness.forceFrameSkip()) {
+                System.out.println("Forced frame suppression: enabled");
+            }
         }
     }
 
-    private static Window runMeasurement(Gameboy gameboy) throws Exception {
+    private static Window runMeasurement(Gameboy gameboy, AtomicLong publishedFrames) throws Exception {
         String jfrPath = System.getProperty(JFR_PROPERTY, "");
         if (jfrPath.isBlank()) {
-            return runFrames(gameboy, MEASUREMENT_FRAMES);
+            return runFrames(gameboy, MEASUREMENT_FRAMES, publishedFrames);
         }
 
         Path output = Path.of(jfrPath).toAbsolutePath();
         Window measurement;
         try (Recording recording = new Recording(Configuration.getConfiguration("profile"))) {
             recording.start();
-            measurement = runFrames(gameboy, MEASUREMENT_FRAMES);
+            measurement = runFrames(gameboy, MEASUREMENT_FRAMES, publishedFrames);
             recording.stop();
             recording.dump(output);
         }
@@ -75,21 +91,23 @@ public class HarryPotterIntroFpsTest {
         return measurement;
     }
 
-    private static Window runFrames(Gameboy gameboy, long targetFrames) {
+    private static Window runFrames(Gameboy gameboy, long targetFrames, AtomicLong publishedFrames) {
         long start = System.nanoTime();
-        long frames = 0;
+        long publishedAtStart = publishedFrames.get();
+        long emulatedFrames = 0;
         long ticks = 0;
 
-        while (frames < targetFrames) {
+        while (emulatedFrames < targetFrames) {
             if (gameboy.tick()) {
-                frames++;
+                emulatedFrames++;
             }
             ticks++;
         }
 
-        return new Window(frames, ticks, System.nanoTime() - start);
+        return new Window(emulatedFrames, publishedFrames.get() - publishedAtStart, ticks,
+                System.nanoTime() - start);
     }
 
-    private record Window(long frames, long ticks, long elapsedNanos) {
+    private record Window(long emulatedFrames, long publishedFrames, long ticks, long elapsedNanos) {
     }
 }

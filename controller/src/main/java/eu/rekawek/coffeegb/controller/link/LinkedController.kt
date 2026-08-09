@@ -1073,6 +1073,9 @@ class LinkedController(
 
   fun runFrame() {
     timingFrameProbe?.invoke()
+    // Replays, lifecycle work, and waits below must never inherit a stale adaptive request from
+    // the preceding ordinary frame. The paced forward path installs its new request later.
+    sessions.forEach { it?.gameboy?.requestFrameRenderSuppression(false) }
     processPendingWorkAtSafePoint()
 
     // Local preparation and battery persistence are deliberately owned by a worker. Hold every
@@ -1125,6 +1128,11 @@ class LinkedController(
     }
 
     val clockSpec = requireCompatibleLinkedClock(configs)
+    sessions.forEach {
+      it?.gameboy?.requestFrameRenderSuppression(
+          !timingTicker.disabled && timingTicker.hasPacingDebt,
+      )
+    }
     repeat(clockSpec.controllerTicksPerFrame()) {
       sessions.forEach { it?.gameboy?.tick() }
       timingTicker.run(clockSpec)

@@ -5,6 +5,7 @@ HARNESS_REF="${HARNESS_REF:-master}"
 DEFAULT_ROM="Z:/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europe) (En,Fr,De,Es,It,Nl,Pt,Sv,No,Da,Fi).gbc"
 ROM_PATH="${HARRY_POTTER_ROM:-$DEFAULT_ROM}"
 BATTERY_SAVE="${HARRY_POTTER_BATTERY_SAVE:-}"
+FORCE_FRAME_SKIP="${HARRY_POTTER_FORCE_FRAME_SKIP:-false}"
 if (($# > 0)); then
   ROM_PATH="$1"
 fi
@@ -47,6 +48,7 @@ mvn -q -pl core \
   -Dtest=HarryPotterIntroAudioTimingTest \
   -DharryPotterRom="$ROM_PATH" \
   -DharryPotterBatterySave="$BATTERY_SAVE" \
+  -DharryPotterForceFrameSkip="$FORCE_FRAME_SKIP" \
   -Dsurefire.useFile=false \
   test
 

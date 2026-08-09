@@ -569,6 +569,9 @@ class BasicController private constructor(
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.REWIND)
       }
       isRewinding = rewindManager.enabled && it.active
+      // Rewind restores arbitrary machine positions; keep host output complete rather than
+      // carrying an adaptive request across a non-forward presentation path.
+      session?.gameboy?.requestFrameRenderSuppression(false)
     }
     eventQueue.register<SgbDisplay.SetSgbBorder> {
       // The display consumes the same event on its session bus. Keep the configuration identity
@@ -689,6 +692,7 @@ class BasicController private constructor(
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
     val frameTicks = clockSpec.controllerTicksPerFrame()
     if (!rewound && (debugPaused || pendingDebugAction != null)) {
+      session?.gameboy?.requestFrameRenderSuppression(false)
       runDebugTickWindow(clockSpec, stopAtNextBoundary = false)
       return
     }
@@ -697,6 +701,7 @@ class BasicController private constructor(
         !isEffectivelyPaused() &&
         !isRewinding &&
         debugInstrumentation?.hasEnabledBreakpoints() == true) {
+      session?.gameboy?.requestFrameRenderSuppression(false)
       runDebugTickWindow(clockSpec, stopAtNextBoundary = false)
       return
     }
@@ -707,6 +712,16 @@ class BasicController private constructor(
     }
 
     val trackDebugHistory = !rewound && debugCheckpointHistory.enabled
+    session?.gameboy?.requestFrameRenderSuppression(
+        !rewound &&
+            !isEffectivelyPaused() &&
+            !isRewinding &&
+            debugPort == null &&
+            debugInstrumentation == null &&
+            !debugCheckpointHistory.enabled &&
+            !timingTicker.disabled &&
+            timingTicker.hasPacingDebt,
+    )
     repeat(frameTicks) {
       if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
         val gameboy = session?.gameboy
@@ -736,6 +751,7 @@ class BasicController private constructor(
   }
 
   private fun runDebugContinuation() {
+    session?.gameboy?.requestFrameRenderSuppression(false)
     if (pendingDebugAction == null) {
       serviceDebugSafePointControls()
     }
@@ -811,6 +827,7 @@ class BasicController private constructor(
           stopJob?.attempt?.isDone == true
 
   private fun runDebugTickWindow(clockSpec: ClockSpec, stopAtNextBoundary: Boolean) {
+    session?.gameboy?.requestFrameRenderSuppression(false)
     val frameTicks = clockSpec.controllerTicksPerFrame()
     var holdAtBoundary = false
     repeat(frameTicks) {

@@ -100,6 +100,21 @@ class DesktopUiCoordinatorTest {
   }
 
   @Test
+  fun `presentation FPS clears on pause and session stop`() {
+    val coordinator =
+        DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
+    coordinator.opened("Alleyway")
+    coordinator.presentedFramesPerSecond(59.7)
+    assertEquals(59.7, coordinator.current().presentedFramesPerSecond)
+
+    coordinator.paused(true)
+    assertNull(coordinator.current().presentedFramesPerSecond)
+    coordinator.presentedFramesPerSecond(29.7)
+    coordinator.stopped()
+    assertNull(coordinator.current().presentedFramesPerSecond)
+  }
+
+  @Test
   fun `slot load availability is removed when state commands or the session stop`() {
     val coordinator = DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
     coordinator.opened("Tetris")

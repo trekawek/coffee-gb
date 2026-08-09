@@ -255,6 +255,23 @@ class DesktopMainPanelTest {
   }
 
   @Test
+  fun `status reports display-thread FPS instead of an emulated frame cadence`() {
+    onEdt {
+      val panel = panel(actions())
+      val statusBar = descendants(panel).filterIsInstance<DesktopStatusBar>().single()
+
+      panel.render(
+          DesktopPresentation(
+              gameTitle = "Tetris",
+              commands = DesktopCommandPresentation(gameLoaded = true),
+              presentedFramesPerSecond = 29.7,
+          ))
+
+      assertTrue(statusBar.session.text.contains("FPS 29.7"))
+    }
+  }
+
+  @Test
   fun `exact one scale packs to the raster and reveals commands only after a wide resize`() {
     onEdt {
       val surface = JPanel().apply {

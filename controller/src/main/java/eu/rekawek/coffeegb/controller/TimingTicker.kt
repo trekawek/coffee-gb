@@ -23,12 +23,23 @@ internal constructor(
   internal var completedFrames = 0L
     private set
 
+  /**
+   * Whether the last completed controller cadence arrived after its pacing deadline.
+   *
+   * This is intentionally sampled only at the existing cadence boundary: querying it from a
+   * controller does not introduce a clock read, allocation, or per-master-tick work.
+   */
+  @VisibleForTesting
+  internal var hasPacingDebt = false
+    private set
+
   override fun run() {
     run(ClockSpec.LEGACY)
   }
 
   fun run(clockSpec: ClockSpec) {
     if (disabled) {
+      hasPacingDebt = false
       return
     }
     if (activeClock != clockSpec) {
@@ -36,6 +47,7 @@ internal constructor(
       frameNanos = clockSpec.newFrameNanosecondAccumulator()
       ticks = 0
       deadline = nanoTime()
+      hasPacingDebt = false
     }
     if (++ticks < clockSpec.controllerTicksPerFrame()) {
       return
@@ -50,6 +62,7 @@ internal constructor(
           nanoTime()
         }
     val now = nanoTime()
+    hasPacingDebt = now > deadline
     if (now - deadline > MAX_CATCH_UP_NANOS) {
       // Preserve short scheduling/GC delays so subsequent frames can repay them instead of
       // permanently losing emulated audio time. A long pause retains only a small bounded debt:

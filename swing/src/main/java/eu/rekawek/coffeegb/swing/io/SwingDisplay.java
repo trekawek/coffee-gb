@@ -38,6 +38,9 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private final AtomicLong preferredSizeRevision = new AtomicLong();
 
+    private final PresentationFrameRateMeter presentationFrameRate =
+            new PresentationFrameRateMeter();
+
     private PendingFrame pendingFrame;
 
     private volatile int displayWidth = DISPLAY_WIDTH;
@@ -127,12 +130,23 @@ public class SwingDisplay extends JPanel implements Runnable {
         // visual rumble through the owner lifecycle while subscribers are still active.
         eventBus.register(e -> this.rumbling = false, Controller.RomLoadingEvent.class);
         eventBus.register(e -> this.rumbling = false, Controller.EmulationStoppedEvent.class);
+        eventBus.register(e -> resetPresentationFrameRate(), Controller.PauseEmulationEvent.class);
+        eventBus.register(e -> resetPresentationFrameRate(), Controller.ResumeEmulationEvent.class);
+        eventBus.register(e -> resetPresentationFrameRate(), Controller.RomLoadingEvent.class);
+        eventBus.register(e -> resetPresentationFrameRate(), Controller.EmulationStartedEvent.class);
+        eventBus.register(e -> resetPresentationFrameRate(), Controller.EmulationStoppedEvent.class);
         requestPreferredSizeUpdate();
     }
 
     /** Resets host-only output state before a controller can quiesce or close its event bus. */
     public void releaseForLifecycleChange() {
         rumbling = false;
+        resetPresentationFrameRate();
+    }
+
+    private void resetPresentationFrameRate() {
+        presentationFrameRate.reset();
+        eventBus.post(new PresentationFrameRateResetEvent());
     }
 
     private synchronized void onHardwareProfile(Controller.HardwareProfileEvent e) {
@@ -434,6 +448,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
             displayedFrame.set(DisplayFrameSnapshot.copyOf(
                     frame.width(), frame.height(), frame.rgb()));
+            double framesPerSecond = presentationFrameRate.framePublished();
+            if (!Double.isNaN(framesPerSecond)) {
+                eventBus.post(new PresentationFrameRateEvent(framesPerSecond));
+            }
             requestRepaint();
         }
         isStopped = true;
@@ -552,6 +570,19 @@ public class SwingDisplay extends JPanel implements Runnable {
         public Dimension preferredSize() {
             return new Dimension(preferredSize);
         }
+    }
+
+    /** Low-frequency count of frames that survived SwingDisplay coalescing and were published. */
+    public record PresentationFrameRateEvent(double framesPerSecond) implements Event {
+        public PresentationFrameRateEvent {
+            if (!Double.isFinite(framesPerSecond) || framesPerSecond < 0) {
+                throw new IllegalArgumentException("Frame rate must be finite and non-negative");
+            }
+        }
+    }
+
+    /** Clears a stale presentation-rate sample after a pause or session ownership transition. */
+    public record PresentationFrameRateResetEvent() implements Event {
     }
 
     private record PendingFrame(int width, int height, int[] rgb, boolean resetBlend) {
