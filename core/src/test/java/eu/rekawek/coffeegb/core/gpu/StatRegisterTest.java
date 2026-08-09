@@ -1300,6 +1300,78 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void cgbNormalSpeedMidLineLycWriteRequestCrossesFifthPpuClock() {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(1, 100);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0xff);
+        fixture.clearInterrupts();
+
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+        for (int clock = 0; clock < 4; clock++) {
+            fixture.tick();
+            assertEquals("LYC write response must not arrive early", 0,
+                    fixture.lcdInterruptFlag());
+        }
+        fixture.tick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void midLineStatWriteRaisesTheAlreadyActiveModeZeroSource() {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceToHBlank();
+        fixture.clearInterrupts();
+
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.tick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void lcdRestartReevaluatesTheRetiredModeLineBeforeLycEdge() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceToHBlank();
+        fixture.clearInterrupts();
+
+        fixture.gpu.setByte(0xff40, 0x00);
+        fixture.tick();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.tick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
+    public void restoredLcdOffStateClearsStatLineBeforeRestart() {
+        Fixture fixture = new Fixture(true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x08);
+        fixture.advanceToHBlank();
+        fixture.clearInterrupts();
+        fixture.gpu.setByte(0xff40, 0x00);
+        var gpuMemento = fixture.gpu.captureState();
+        var statMemento = fixture.stat.captureState();
+        var interruptMemento = fixture.interrupts.captureState();
+
+        fixture.tick();
+        fixture.gpu.restoreState(gpuMemento);
+        fixture.stat.restoreState(statMemento);
+        fixture.interrupts.restoreState(interruptMemento);
+        fixture.tick();
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.gpu.setByte(0xff40, 0x91);
+        fixture.tick();
+
+        assertEquals(1 << LCDC.ordinal(), fixture.lcdInterruptFlag());
+    }
+
+    @Test
     public void cgbDoubleSpeedVblankFlagIsReadableBeforeCpuAcceptance() {
         Fixture fixture = new Fixture(true, true);
         fixture.interrupts.setByte(0xffff, 1 << VBlank.ordinal());

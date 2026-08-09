@@ -205,6 +205,14 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     // separate from the readable latch used by direct PPU observers.
     private int cpuStatModeOverride = -1;
 
+    /*
+     * Between STAT event checkpoints, and absent a register write or pending
+     * capture deadline, readable coincidence and every STAT source level are
+     * piecewise constant. This derived flag brings the full evaluator back in
+     * when a mutation can invalidate that invariant.
+     */
+    private boolean statEvaluationDirty = true;
+
     private int cpuInterruptFlagReadMaskTicks;
 
     private boolean cpuMode0InterruptDispatchPhased;
@@ -249,6 +257,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         modeIrqLycLatch = lycIrqValueSource;
         mode0IrqStatLatch = 0;
         mode0IrqLycLatch = lycIrqValueSource;
+        statEvaluationDirty = true;
     }
 
     public void tick() {
@@ -263,11 +272,14 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         int currentCpuMachineCycleDots = timing.cpuMachineCycleDots;
         boolean currentDoubleSpeed = timing.doubleSpeed;
         boolean currentNativeDoubleSpeed = timing.nativeDoubleSpeed;
+        boolean statEventCheckpoint = isStatEventCheckpoint();
         interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview();
         lycIrqClock++;
         cpuStatModeOverride = -1;
         suppressCpuReadCoincidence = false;
         int ppuTickSignals = interruptManager.consumePpuTickSignals();
+        boolean mustEvaluateStat = statEvaluationDirty || statEventCheckpoint
+                || ppuTickSignals != 0;
         if ((ppuTickSignals
                 & InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE) != 0) {
             lastLcdcInterruptAcknowledgeClock = lycIrqClock;
@@ -308,17 +320,24 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         if (pendingCgbMode0Interrupt) {
             interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
             pendingCgbMode0Interrupt = false;
+            mustEvaluateStat = true;
         }
+        boolean pendingModeLatchChanged = false;
         if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
                 || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT) {
-            commitPendingModeIrqRegisters();
+            pendingModeLatchChanged = commitPendingModeIrqRegisters();
         }
         if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
                 || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT) {
-            commitPendingMode0IrqRegisters();
+            pendingModeLatchChanged |= commitPendingMode0IrqRegisters();
         }
-        boolean suppressNaturalModeEdge =
-                updateModeIrqEvents(lcdcInterruptFlagWriteClear);
+        mustEvaluateStat |= pendingModeLatchChanged;
+        boolean scheduledEvent = nextLycIrqEvent == lycIrqClock
+                || pendingLycWriteIrq == lycIrqClock
+                || pendingLycComparatorIrq == lycIrqClock;
+        mustEvaluateStat |= scheduledEvent;
+        boolean suppressNaturalModeEdge = mustEvaluateStat
+                && updateModeIrqEvents(lcdcInterruptFlagWriteClear);
         if (pendingCgbMode2Interrupt && currentTicksInLine == 452) {
             publishPendingCgbMode2Event();
         }
@@ -348,6 +367,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         }
         if (retractableCgbMode2Interrupt && currentTicksInLine > 454) {
             retractableCgbMode2Interrupt = false;
+        }
+        if (!mustEvaluateStat) {
+            return;
         }
         boolean settlingLycLine = false;
         if (currentLcdEnabled) {
@@ -523,11 +545,26 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 updateIntLine(newLine);
             }
         }
+        statEvaluationDirty = false;
+    }
+
+    private boolean isStatEventCheckpoint() {
+        if (!timing.lcdEnabled) {
+            return false;
+        }
+        int ticksInLine = timing.ticksInLine;
+        int mode0InterruptTick = timing.mode0InterruptTick;
+        return ticksInLine < 13
+                || ticksInLine >= 448
+                || ticksInLine == mode0InterruptTick
+                || (timing.line < 144 && mode0InterruptTick != Integer.MAX_VALUE
+                && ticksInLine == mode0InterruptTick + 2);
     }
 
     public void onLcdEnabled() {
         refreshGpuTiming();
         cpuStatModeOverride = -1;
+        statEvaluationDirty = true;
         registeredLy = 0;
         lycWriteSuppressed = false;
         lycIrqStatLatch = lycIrqStatSource;
@@ -566,6 +603,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
             // the scheduled dot-452 MSTAT boundary. Resolve that boundary before
             // the callback; CPU and HALT acceptance remain blocked until rollover.
             publishPendingCgbMode2Event();
+            statEvaluationDirty = true;
         }
     }
 
@@ -725,6 +763,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     public void onLcdDisabled() {
         refreshGpuTiming();
         cpuStatModeOverride = -1;
+        statEvaluationDirty = true;
         dmgLyc143Mode1CaptureClock = NO_LYC_IRQ_EVENT;
         pendingCgbMode1Interrupt = false;
         pendingCgbMode0Interrupt = false;
@@ -741,6 +780,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     void onScxWrite() {
         refreshGpuTiming();
         scxChangedSinceMode0Event = true;
+        statEvaluationDirty = true;
     }
 
     boolean isMode0InterruptSourceOnly() {
@@ -760,6 +800,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
      */
     public void onLycWrite(int oldValue, int newValue) {
         refreshGpuTiming();
+        statEvaluationDirty = true;
         int writtenLyc = newValue & 0xff;
         long writtenValueEvent = scheduleLycIrqEvent(enableBits, writtenLyc);
         if (gbc && timing.lcdEnabled
@@ -926,21 +967,26 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         pendingMode0IrqLycClock = lycIrqClock;
     }
 
-    private void commitPendingModeIrqRegisters() {
+    private boolean commitPendingModeIrqRegisters() {
+        boolean changed = false;
         if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
                 && cpuCyclesSince(pendingModeIrqStatClock) > (gbc ? 2 : 0)) {
             modeIrqStatLatch = pendingModeIrqStat;
             pendingModeIrqStatClock = NO_LYC_IRQ_EVENT;
+            changed = true;
         }
         int lycCaptureDelay = gbc ? (timing.doubleSpeed ? 5 : 6) : 1;
         if (pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
                 && cpuCyclesSince(pendingModeIrqLycClock) > lycCaptureDelay) {
             modeIrqLycLatch = pendingModeIrqLyc;
             pendingModeIrqLycClock = NO_LYC_IRQ_EVENT;
+            changed = true;
         }
+        return changed;
     }
 
-    private void commitPendingMode0IrqRegisters() {
+    private boolean commitPendingMode0IrqRegisters() {
+        boolean changed = false;
         int statCaptureDelay;
         if (!gbc) {
             statCaptureDelay = 0;
@@ -955,6 +1001,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 && cpuCyclesSince(pendingMode0IrqStatClock) > statCaptureDelay) {
             mode0IrqStatLatch = pendingMode0IrqStat;
             pendingMode0IrqStatClock = NO_LYC_IRQ_EVENT;
+            changed = true;
         }
         int lycCaptureDelay = gbc
                 ? (timing.doubleSpeed || scxChangedSinceMode0Event ? 8 : 10)
@@ -963,7 +1010,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 && cpuCyclesSince(pendingMode0IrqLycClock) > lycCaptureDelay) {
             mode0IrqLycLatch = pendingMode0IrqLyc;
             pendingMode0IrqLycClock = NO_LYC_IRQ_EVENT;
+            changed = true;
         }
+        return changed;
     }
 
     private long cpuCyclesSince(long clock) {
@@ -1683,6 +1732,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     @Override
     public void setByte(int address, int value) {
         refreshGpuTiming();
+        statEvaluationDirty = true;
         int newEnableBits = value & 0b01111000;
         boolean capturedDmgLycToModeHandoff = !gbc
                 && timing.lcdEnabled
@@ -1969,6 +2019,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         // The timing snapshot is derived and may refer to the GPU state from before
         // the restore.  Let the first consumer recapture it from the restored GPU.
         timingGeneration = Long.MIN_VALUE;
+        // This fast-path hint is intentionally not serialized. A restored state
+        // always reevaluates once against the restored timing snapshot.
+        statEvaluationDirty = true;
     }
 
     private record StatRegisterState(int enableBits, int registeredLy, boolean coincidence,
