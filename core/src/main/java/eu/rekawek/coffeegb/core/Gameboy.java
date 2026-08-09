@@ -627,7 +627,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean result = false;
 
         Mode newMode = tickSubsystems();
-        applyBootCompatibilityIfReady();
+        if (!bootCompatibilityResolved) {
+            applyBootCompatibilityIfReady();
+        }
         if (newMode != null) {
             hdma.onGpuUpdate(newMode);
         }
@@ -817,13 +819,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             // A retiring instruction can issue its final VRAM read on the CPU half
             // of the edge immediately before an HBlank request reaches arbitration.
-            boolean retiringIntoHdmaRequest = cpu.isInstructionRetiringForHdma()
-                    && hdma.isHblankRequestArrivingAfterCpuTick();
-            gpu.setCpuRetiringInstructionForHdma(retiringIntoHdmaRequest);
-            try {
+            boolean retiringIntoHdmaRequest = hdma.isHblankRequestArrivingAfterCpuTick()
+                    && cpu.isInstructionRetiringForHdma();
+            if (retiringIntoHdmaRequest) {
+                gpu.setCpuRetiringInstructionForHdma(true);
+                try {
+                    cpu.tick();
+                } finally {
+                    gpu.setCpuRetiringInstructionForHdma(false);
+                }
+            } else {
                 cpu.tick();
-            } finally {
-                gpu.setCpuRetiringInstructionForHdma(false);
             }
         }
         if (!speedSwitching && cpu.isSpeedSwitching()) {
