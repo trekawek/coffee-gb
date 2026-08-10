@@ -184,6 +184,40 @@ public class SwingDisplayTest {
     }
 
     @Test
+    public void publishedFrameRemainsImmutableAcrossLaterFramesAndSourceMutation() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        eventBus.post(new SwingDisplay.SetBlendingEvent(false));
+        int size = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
+        int[] firstSource = new int[size];
+        Arrays.fill(firstSource, 3);
+        int[] expectedFirst = dmgRgb(firstSource);
+        int[] secondSource = new int[size];
+        Arrays.fill(secondSource, 2);
+        int[] expectedSecond = dmgRgb(secondSource);
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            eventBus.post(new Display.DmgFrameReadyEvent(firstSource));
+            DisplayFrameSnapshot first = awaitDisplayedFrame(
+                    display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expectedFirst);
+            Arrays.fill(firstSource, 0);
+
+            eventBus.post(new Display.DmgFrameReadyEvent(secondSource));
+            DisplayFrameSnapshot second = awaitDisplayedFrame(
+                    display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT, expectedSecond);
+            Arrays.fill(secondSource, 0);
+
+            assertArrayEquals(expectedFirst, first.copyRgb());
+            assertArrayEquals(expectedSecond, second.copyRgb());
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
     public void cgbFrameIsTranslatedAndCopiedBeforePublication() throws Exception {
         EventBusImpl eventBus = new EventBusImpl(null, "test", false);
         SwingDisplay display = newDisplay(eventBus);

@@ -755,6 +755,83 @@ class BasicControllerTest {
   }
 
   @Test
+  fun preparedRewindSeedCommitsBeforeCandidateEventsAndFailedPreparationKeepsOldSession() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val failures = LinkedBlockingQueue<LoadRomFailedEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    val sourceEvents = LinkedBlockingQueue<PreparedSeedSourceEvent>()
+    val rewind = TrackingRewindManager()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<LoadRomFailedEvent>(failures::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+    eventBus.register<PreparedSeedSourceEvent> {
+      rewind.sourceEventObservedAfterCommit =
+          rewind.preparationCount.get() == 1 && rewind.hasPreparedSessionSeed
+      sourceEvents.add(it)
+    }
+    val oldRom = namedRom("SEED_OLD")
+    val failingRom = namedRom("SEED_FAIL")
+    val preparer =
+        SessionPreparer { properties, event ->
+          val config =
+              Controller.createGameboyConfig(properties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun init(
+                    eventBus: EventBus,
+                    serialEndpoint: SerialEndpoint,
+                    infraredEndpoint: InfraredEndpoint,
+                    console: Console?,
+                ) {
+                  super.init(eventBus, serialEndpoint, infraredEndpoint, console)
+                  eventBus.post(PreparedSeedSourceEvent())
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller =
+        BasicController(
+            eventBus,
+            EmulatorProperties(),
+            null,
+            preparer,
+            SnapshotManagerFactory.DEFAULT,
+            rewind,
+        )
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(oldRom))
+      assertNotNull(sourceEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals("SEED_OLD", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
+      assertEquals(1, rewind.preparationCount.get())
+      assertTrue(rewind.sourceEventObservedAfterCommit)
+
+      rewind.failPreparation = true
+      frames.clear()
+      eventBus.post(LoadRomEvent(failingRom))
+
+      assertEquals(failingRom, assertNotNull(failures.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).rom)
+      assertEquals(2, rewind.preparationCount.get())
+      assertNull(
+          sourceEvents.poll(300, TimeUnit.MILLISECONDS),
+          "a discarded candidate must not publish its staged source event",
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "the old session must continue after candidate seed preparation fails",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      oldRom.delete()
+      failingRom.delete()
+    }
+  }
+
+  @Test
   fun disabledRewindCreatesNoFrameCapturesAndCannotFreezeForwardEmulation() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
@@ -1559,6 +1636,18 @@ class BasicControllerTest {
     }
   }
 
+  private class TrackingRewindManager : RewindManager() {
+    val preparationCount = AtomicInteger()
+    @Volatile var failPreparation = false
+    @Volatile var sourceEventObservedAfterCommit = false
+
+    override fun prepareSessionSeed(session: Session): PreparedSessionSeed? {
+      preparationCount.incrementAndGet()
+      if (failPreparation) throw IOException("injected rewind seed failure")
+      return super.prepareSessionSeed(session)
+    }
+  }
+
   private class TrackingConsole : Console() {
     @Volatile var attachedDebugPort: DebugPort? = null
 
@@ -1570,4 +1659,6 @@ class BasicControllerTest {
   private class StalledSessionEvent : Event
 
   private class FinalCloseEvent : Event
+
+  private class PreparedSeedSourceEvent : Event
 }

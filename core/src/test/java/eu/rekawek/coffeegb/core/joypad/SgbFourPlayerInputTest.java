@@ -153,7 +153,7 @@ public class SgbFourPlayerInputTest {
         physical.update(Set.of(Button.B));
         assertEquals("the old latch remains intact before the next tick",
                 Set.of(Button.A), joypad.getPressedButtons());
-        joypad.tick();
+        tickThroughNextHubPoll(joypad);
         assertEquals("A to B is one atomic sample, never an A+B transient",
                 Set.of(Button.B), joypad.getPressedButtons());
 
@@ -208,6 +208,7 @@ public class SgbFourPlayerInputTest {
             joypad.tick();
             fixture.sendCommand(0x11, 1, 0);
             joypad.restoreState(state);
+            tickThroughNextHubPoll(joypad);
 
             assertEquals(1, joypad.getSgbMultiplayerStatus().selectedPlayer());
             assertPlayer(joypad, 0x07);
@@ -244,6 +245,12 @@ public class SgbFourPlayerInputTest {
     private static void selectNext(Joypad joypad) {
         joypad.setByte(JOYP, 0x10);
         joypad.setByte(JOYP, 0x30);
+    }
+
+    private static void tickThroughNextHubPoll(Joypad joypad) {
+        for (int tick = 0; tick < Joypad.PLAYER_INPUT_HUB_POLL_TICKS; tick++) {
+            joypad.tick();
+        }
     }
 
     private static void assertPlayer(Joypad joypad, int expectedLines) {

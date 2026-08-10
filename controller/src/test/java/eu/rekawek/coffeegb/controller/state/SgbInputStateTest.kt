@@ -47,7 +47,8 @@ class SgbInputStateTest {
       val portable = StateCodec.encode(StateCodec.capture(session))
 
       playerTwo.update(setOf(Button.START))
-      session.gameboy.tick()
+      // The desktop PlayerInputHub is sampled at its bounded 64-master-tick cadence.
+      repeat(64) { session.gameboy.tick() }
       sendMltReq(session, 0)
       assertEquals(0, session.gameboy.sgbMultiplayerStatus.selectedPlayer)
 

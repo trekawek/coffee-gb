@@ -446,7 +446,7 @@ public class SwingDisplay extends JPanel implements Runnable {
                 }
             }
 
-            displayedFrame.set(DisplayFrameSnapshot.copyOf(
+            displayedFrame.set(DisplayFrameSnapshot.takeOwnership(
                     frame.width(), frame.height(), frame.rgb()));
             double framesPerSecond = presentationFrameRate.framePublished();
             if (!Double.isNaN(framesPerSecond)) {

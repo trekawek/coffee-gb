@@ -35,6 +35,14 @@ import javax.swing.JFrame
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
 
+fun interface SwingAudioOutputFactory {
+  fun create(
+      configuration: AudioRuntimeConfiguration,
+      eventBus: EventBus,
+      callerId: String,
+  ): AudioSystemSound
+}
+
 /** Synchronous boundary emitted before an old controller is closed and replaced. */
 internal class ControllerOwnershipChangingEvent : Event
 
@@ -54,6 +62,10 @@ class SwingEmulator(
         },
     private val mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
         MobileAdapterGuestConfigurationSink.NO_OP,
+    private val audioOutputFactory: SwingAudioOutputFactory =
+        SwingAudioOutputFactory { configuration, bus, callerId ->
+          AudioSystemSound(configuration, bus, callerId) {}
+        },
 ) {
   private val display: SwingDisplay
   private val joypad: SwingJoypad
@@ -88,11 +100,11 @@ class SwingEmulator(
   init {
     display = SwingDisplay(properties.display, eventBus, "main")
     sound =
-        AudioSystemSound(
+        audioOutputFactory.create(
             properties.applicationSettings.audio.toRuntimeConfiguration(),
             eventBus,
             "main",
-        ) {}
+        )
     val playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
     tiltInput = DesktopTiltInput(eventBus)
     joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)

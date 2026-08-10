@@ -3,16 +3,18 @@ package eu.rekawek.coffeegb.controller
 import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import java.util.concurrent.locks.LockSupport
+import java.util.function.LongConsumer
+import java.util.function.LongSupplier
 
 class TimingTicker
 @VisibleForTesting
 internal constructor(
-    private val nanoTime: () -> Long,
-    private val parkNanos: (Long) -> Unit,
+    private val nanoTime: LongSupplier,
+    private val parkNanos: LongConsumer,
 ) : Runnable {
-  constructor() : this(System::nanoTime, LockSupport::parkNanos)
+  constructor() : this(LongSupplier(System::nanoTime), LongConsumer(LockSupport::parkNanos))
 
-  private var deadline = nanoTime()
+  private var deadline = nanoTime.asLong
   private var ticks: Long = 0
   private var activeClock = ClockSpec.LEGACY
   private var frameNanos = activeClock.newFrameNanosecondAccumulator()
@@ -46,7 +48,7 @@ internal constructor(
       activeClock = clockSpec
       frameNanos = clockSpec.newFrameNanosecondAccumulator()
       ticks = 0
-      deadline = nanoTime()
+      deadline = nanoTime.asLong
       hasPacingDebt = false
     }
     if (++ticks < clockSpec.controllerTicksPerFrame()) {
@@ -59,9 +61,9 @@ internal constructor(
         try {
           Math.addExact(deadline, frameDurationNanos)
         } catch (_: ArithmeticException) {
-          nanoTime()
+          nanoTime.asLong
         }
-    val now = nanoTime()
+    val now = nanoTime.asLong
     hasPacingDebt = now > deadline
     if (now - deadline > MAX_CATCH_UP_NANOS) {
       // Preserve short scheduling/GC delays so subsequent frames can repay them instead of
@@ -73,12 +75,12 @@ internal constructor(
     // millisecond-ish slack depending on the OS timer, and yielding keeps fine-grained pacing
     // without relying on Java 9's unavailable spin-wait hint or pegging a core for the whole frame.
     while (true) {
-      val remaining = deadline - nanoTime()
+      val remaining = deadline - nanoTime.asLong
       if (remaining <= 0) {
         break
       }
       if (remaining > SPIN_THRESHOLD_NANOS) {
-        parkNanos(remaining - SPIN_THRESHOLD_NANOS)
+        parkNanos.accept(remaining - SPIN_THRESHOLD_NANOS)
       } else {
         Thread.yield()
       }

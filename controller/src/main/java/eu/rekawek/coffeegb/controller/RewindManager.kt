@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller
 
+import com.google.common.annotations.VisibleForTesting
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.controller.state.MachineSnapshot
 import eu.rekawek.coffeegb.controller.state.SessionSnapshot
@@ -10,7 +11,7 @@ import eu.rekawek.coffeegb.controller.state.SessionSnapshot
  * Rewinding restores one recorded state per rendered frame, so it plays backwards at
  * [RECORD_INTERVAL] times the game speed.
  */
-internal class RewindManager(
+internal open class RewindManager(
     val enabled: Boolean = true,
     durationSeconds: Int = DEFAULT_DURATION_SECONDS,
     private val memoryBudgetBytes: Long = DEFAULT_MEMORY_BUDGET_BYTES,
@@ -54,6 +55,13 @@ internal class RewindManager(
 
   private var frameCounter = 0
 
+  /**
+   * Incremental baseline captured while a fully initialized candidate is still staged. It is not
+   * a rewind entry: the first post-frame session capture consumes it only as an immutable sharing
+   * source, then becomes the first history entry in its own right.
+   */
+  private var preparedSessionSeed: SessionSnapshot? = null
+
   internal var captureCount = 0
     private set
 
@@ -73,6 +81,9 @@ internal class RewindManager(
     // This is intentionally the first operation. A disabled manager does not advance cadence,
     // inspect the live machine, allocate a capture DTO, or create a snapshot.
     if (!enabled) return
+    // A session seed cannot describe a machine-only recording path. Discard it before the
+    // suppressed-frame return as well: machine and session histories must never share it.
+    discardPreparedSessionSeed()
     // A suppressed frame is intentionally not a rewind point: resuming a snapshot from the
     // matching full-output phase keeps rewind presentation coherent. Check before advancing the
     // six-frame cadence so sustained every-other-frame suppression cannot phase-lock captures.
@@ -97,13 +108,28 @@ internal class RewindManager(
     if (!enabled) return
     if (!session.gameboy.isCurrentVisibleFrameFullyRendering) return
     selectHistory(HistoryKind.SESSION)
-    if (frameCounter++ % RECORD_INTERVAL != 0) return
-    if (states.size == capacity) states.removeFirst()
-    val previous = (states.lastOrNull() as? SessionEntry)?.snapshot
+    if (frameCounter % RECORD_INTERVAL != 0) {
+      frameCounter++
+      return
+    }
+    // Capture before mutating cadence, retained history, or the staged seed. A capture failure
+    // therefore leaves the candidate baseline available for the next successful frame.
+    val usesPreparedSeed = preparedSessionSeed != null
+    val previous = preparedSessionSeed ?: (states.lastOrNull() as? SessionEntry)?.snapshot
     val entry = SessionEntry(SessionSnapshot.capture(session, previous))
+    if (states.size == capacity) states.removeFirst()
     states.addLast(entry)
+    frameCounter++
+    preparedSessionSeed = null
     approximateRetainedBytes =
-        saturatingAdd(approximateRetainedBytes, approximateCaptureBytes(entry))
+        if (usesPreparedSeed) {
+          // The prepared seed was not a history entry. Its capture stats describe only changes
+          // relative to a graph that is about to be released, so account the first real entry as
+          // a complete root rather than under-counting all pages it inherited from the seed.
+          retainedBytes(states.toList())
+        } else {
+          saturatingAdd(approximateRetainedBytes, approximateCaptureBytes(entry))
+        }
     captureCount++
     enforceMemoryBudget()
   }
@@ -137,6 +163,32 @@ internal class RewindManager(
     frameCounter = 0
     approximateRetainedBytes = 0
     historyKind = null
+    preparedSessionSeed = null
+  }
+
+  /**
+   * Captures an incremental baseline for a fully constructed but not yet committed session.
+   * Preparation deliberately has no history, cadence, or capture-count side effects.
+   */
+  internal open fun prepareSessionSeed(session: Session): PreparedSessionSeed? {
+    if (!enabled) return null
+    return PreparedSessionSeed(this, session, SessionSnapshot.capture(session))
+  }
+
+  /**
+   * Starts a new session history at the ownership boundary. The prepared baseline remains hidden
+   * until the first successful post-frame [record] uses it as its incremental predecessor.
+   */
+  internal fun beginSession(session: Session, seed: PreparedSessionSeed?) {
+    clear()
+    if (!enabled) {
+      seed?.discard()
+      return
+    }
+    preparedSessionSeed = seed?.take(this, session)
+    // The manager owns this transient snapshot until the first real frame consumes it. Keep the
+    // conservative ledger honest during that interval even though it is not rewindable history.
+    preparedSessionSeed?.let { approximateRetainedBytes = SessionSnapshot.retainedBytes(listOf(it)) }
   }
 
   internal val historySize: Int
@@ -144,12 +196,59 @@ internal class RewindManager(
 
   internal fun snapshotsForTesting(): List<MachineSnapshot> = states.map(RewindEntry::machine)
 
-  internal fun retainedBytesForTesting(): Long =
-      retainedBytes(states.toList())
+  internal fun retainedBytesForTesting(): Long {
+    val retainedHistory = retainedBytes(states.toList())
+    val retainedSeed = preparedSessionSeed?.let { SessionSnapshot.retainedBytes(listOf(it)) } ?: 0L
+    return saturatingAdd(retainedHistory, retainedSeed)
+  }
+
+  @VisibleForTesting
+  internal val approximateRetainedBytesForTesting: Long
+    get() = approximateRetainedBytes
+
+  @VisibleForTesting
+  internal val hasPreparedSessionSeed: Boolean
+    get() = preparedSessionSeed != null
 
   private fun selectHistory(requested: HistoryKind) {
     if (historyKind != null && historyKind != requested) clear()
     historyKind = requested
+  }
+
+  private fun discardPreparedSessionSeed() {
+    if (preparedSessionSeed == null) return
+    preparedSessionSeed = null
+    // A prepared seed is only installed after beginSession(), which clears history first. Keep
+    // this robust for machine-only test paths and future callers that invalidate it early.
+    approximateRetainedBytes = retainedBytes(states.toList())
+  }
+
+  /** Opaque ownership token for a candidate-only snapshot baseline. */
+  internal class PreparedSessionSeed private constructor(
+      private val owner: RewindManager,
+      private val session: Session,
+      private var snapshot: SessionSnapshot?,
+  ) {
+
+    internal fun take(owner: RewindManager, session: Session): SessionSnapshot? {
+      if (this.owner !== owner || this.session !== session) {
+        discard()
+        return null
+      }
+      return snapshot.also { snapshot = null }
+    }
+
+    internal fun discard() {
+      snapshot = null
+    }
+
+    companion object {
+      operator fun invoke(
+          owner: RewindManager,
+          session: Session,
+          snapshot: SessionSnapshot,
+      ): PreparedSessionSeed = PreparedSessionSeed(owner, session, snapshot)
+    }
   }
 
   private fun enforceMemoryBudget() {

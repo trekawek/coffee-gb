@@ -9,6 +9,7 @@ import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
 public class EventBusImpl implements EventBus {
@@ -32,6 +33,9 @@ public class EventBusImpl implements EventBus {
     private int activeSynchronousDispatches;
 
     private final BlockingDeque<Event> asyncEvents = new LinkedBlockingDeque<>();
+    /** One permit for every accepted async event; wakes the worker without idle polling. */
+    private final Semaphore asyncEventSignal = new Semaphore(0);
+    private volatile boolean asyncWorkerWaitingForEvent;
 
     public EventBusImpl() {
         this(null, null, true);
@@ -104,6 +108,7 @@ public class EventBusImpl implements EventBus {
                 throw new IllegalStateException("This EventBus is no longer active.");
             }
             asyncEvents.addLast(event);
+            asyncEventSignal.release();
         }
     }
 
@@ -310,23 +315,43 @@ public class EventBusImpl implements EventBus {
     private record Registration(Subscriber<?> subscriber, Class<?> eventType, String callerFilter) {
     }
 
+    /** Package-private test seam for confirming the idle worker is blocking on its event signal. */
+    boolean isAsyncWorkerBlockedForEvent() {
+        return asyncThread != null
+                && asyncWorkerWaitingForEvent
+                && asyncThread.getState() == Thread.State.WAITING;
+    }
+
     private class AsyncRunnable implements Runnable {
         @Override
         public void run() {
             try {
                 while (!doStop) {
-                    // peek first and remove only after dispatching, so the queue reads
-                    // as non-empty for the whole duration of the dispatch (drainAsyncEvents
-                    // relies on it)
+                    try {
+                        asyncWorkerWaitingForEvent = true;
+                        asyncEventSignal.acquire();
+                    } catch (InterruptedException e) {
+                        // close() interrupts a blocked worker after setting doStop. An unrelated
+                        // interrupt must clear normally, then return to the blocking acquire so it
+                        // cannot become a spin loop or discard a queued event.
+                        if (doStop) {
+                            break;
+                        }
+                        continue;
+                    } finally {
+                        asyncWorkerWaitingForEvent = false;
+                    }
+                    if (doStop) {
+                        break;
+                    }
+                    // Peek first and remove only after dispatching, so the queue remains
+                    // non-empty for the whole subscriber callback (drainAsyncEvents relies on it).
                     Event event = asyncEvents.peekFirst();
                     if (event == null) {
-                        try {
-                            Thread.sleep(1);
-                        } catch (InterruptedException e) {
-                            if (!doStop) {
-                                Thread.currentThread().interrupt();
-                            }
-                        }
+                        // The one-per-enqueue protocol makes this unreachable in normal operation.
+                        // Keep the worker defensive if a future queue implementation ever breaks
+                        // that invariant: wait for another signal rather than spinning or
+                        // inventing an event delivery.
                         continue;
                     }
                     try {

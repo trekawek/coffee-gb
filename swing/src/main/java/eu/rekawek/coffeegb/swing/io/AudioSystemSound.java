@@ -58,10 +58,14 @@ public class AudioSystemSound implements Runnable {
     private static final long RETRY_UNAVAILABLE_MILLIS = 1000;
     private static final long STOP_TIMEOUT_MILLIS = 2000;
     private static final long FORCED_CLOSE_TIMEOUT_MILLIS = 250;
-    private static final int MAX_QUEUED_FRAMES =
-            AudioRuntimeConfiguration.LatencyPreset.SAFE.queuedFrames();
+    private static final int WINDOWS_AUDIO_WORKER_PRIORITY =
+            Math.min(Thread.MAX_PRIORITY, Thread.NORM_PRIORITY + 1);
+    private static final int MAX_RUNTIME_QUEUED_FRAMES =
+            AudioRuntimeConfiguration.LatencyPreset.SAFE.runtimeQueueCapacity();
 
     private final AudioBackend backend;
+    private final String operatingSystemName;
+    private final WorkerThreadPrioritySetter workerThreadPrioritySetter;
     private final AtomicReference<AudioRuntimeConfiguration> desiredConfiguration;
     private final BlockingQueue<AudioRuntimeConfiguration> configurationQueue =
             new ArrayBlockingQueue<>(1);
@@ -69,10 +73,11 @@ public class AudioSystemSound implements Runnable {
 
     /*
      * Keep this field name and BlockingQueue type source-compatible with the deterministic clock
-     * probes. The physical capacity is the largest preset; enqueuePcm enforces the active preset.
+     * probes. The physical capacity is the largest runtime preset; enqueuePcm enforces the active
+     * bounded runtime capacity while startup priming continues to use queuedFrames().
      */
     private final BlockingQueue<byte[]> queue =
-            new ArrayBlockingQueue<>(MAX_QUEUED_FRAMES);
+            new ArrayBlockingQueue<>(MAX_RUNTIME_QUEUED_FRAMES);
 
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean emergencyCloseStarted = new AtomicBoolean();
@@ -82,6 +87,13 @@ public class AudioSystemSound implements Runnable {
     private volatile boolean doStop;
     private volatile Thread workerThread;
     private volatile AudioBackend.AudioLine activeLine;
+
+    /**
+     * Worker-local ownership of one dequeued PCM buffer, including any blocking provider writes.
+     * Package-private observation lets the external timing probe avoid treating an empty shared
+     * queue as delivered while this buffer is still in flight.
+     */
+    private volatile boolean pcmBufferWriteInProgress;
 
     private final StereoPcmConverter pcmConverter = new StereoPcmConverter(SAMPLE_RATE);
 
@@ -124,8 +136,46 @@ public class AudioSystemSound implements Runnable {
             String callerId,
             AudioBackend backend,
             Consumer<AudioOutputStatus> statusObserver) {
+        this(
+                initialConfiguration,
+                eventBus,
+                callerId,
+                backend,
+                statusObserver,
+                System.getProperty("os.name"),
+                Thread::setPriority);
+    }
+
+    AudioSystemSound(
+            AudioRuntimeConfiguration initialConfiguration,
+            EventBus eventBus,
+            String callerId,
+            AudioBackend backend,
+            Consumer<AudioOutputStatus> statusObserver,
+            String operatingSystemName) {
+        this(
+                initialConfiguration,
+                eventBus,
+                callerId,
+                backend,
+                statusObserver,
+                operatingSystemName,
+                Thread::setPriority);
+    }
+
+    AudioSystemSound(
+            AudioRuntimeConfiguration initialConfiguration,
+            EventBus eventBus,
+            String callerId,
+            AudioBackend backend,
+            Consumer<AudioOutputStatus> statusObserver,
+            String operatingSystemName,
+            WorkerThreadPrioritySetter workerThreadPrioritySetter) {
         Objects.requireNonNull(eventBus, "eventBus");
         this.backend = Objects.requireNonNull(backend, "backend");
+        this.operatingSystemName = operatingSystemName;
+        this.workerThreadPrioritySetter =
+                Objects.requireNonNull(workerThreadPrioritySetter, "workerThreadPrioritySetter");
         this.desiredConfiguration =
                 new AtomicReference<>(Objects.requireNonNull(
                         initialConfiguration, "initialConfiguration"));
@@ -155,6 +205,7 @@ public class AudioSystemSound implements Runnable {
         }
         Thread thread = new Thread(this::runWorker, "coffee-gb-audio-output");
         thread.setDaemon(true);
+        configureOwnedWorkerPriority(thread, operatingSystemName, workerThreadPrioritySetter);
         workerThread = thread;
         thread.start();
         return thread;
@@ -244,7 +295,7 @@ public class AudioSystemSound implements Runnable {
         AudioBackend.AudioLine line = null;
         boolean usingFallback = false;
         boolean priming = true;
-        Deque<byte[]> primingFrames = new ArrayDeque<>(MAX_QUEUED_FRAMES);
+        Deque<byte[]> primingFrames = new ArrayDeque<>(MAX_RUNTIME_QUEUED_FRAMES);
         long appliedGeneration = configurationGeneration.get();
         long retryAtNanos = 0;
         publishStatus(new AudioOutputStatus(
@@ -353,9 +404,10 @@ public class AudioSystemSound implements Runnable {
                         int watermark = applied.latencyPreset().queuedFrames();
                         if (primingFrames.size() >= watermark) {
                             // A running line lets a staged batch larger than its physical buffer
-                            // drain while writeFully completes. start() is an idempotent recovery
-                            // nudge for providers that stop themselves after an underrun.
-                            line.start();
+                            // drain while writeFully completes. Providers may stop after an
+                            // underrun, so recover that state without issuing a native start for
+                            // every normal PCM buffer.
+                            ensureLineRunning(line);
                             while (!primingFrames.isEmpty()) {
                                 if (appliedGeneration != configurationGeneration.get()) {
                                     // A SAFE batch can span several blocking device writes. Do not
@@ -372,7 +424,7 @@ public class AudioSystemSound implements Runnable {
                         // SourceDataLine providers may stop after naturally draining. Resume the
                         // real frame immediately; withholding it to rebuild the startup watermark
                         // would turn a slow producer into a larger periodic burst/pause cycle.
-                        line.start();
+                        ensureLineRunning(line);
                         writeFully(line, buffer);
                     }
                 } catch (RuntimeException failure) {
@@ -495,6 +547,18 @@ public class AudioSystemSound implements Runnable {
         }
     }
 
+    /**
+     * Ensures the provider has been asked to run when its public running state is false. Some
+     * Java Sound implementations report false until their first PCM write, so that can require
+     * one idempotent priming start. {@link javax.sound.sampled.DataLine#isActive()} is deliberately
+     * unsuitable: a naturally empty {@code SourceDataLine} can be inactive while still running.
+     */
+    private void ensureLineRunning(AudioBackend.AudioLine line) {
+        if (!line.isRunning()) {
+            line.start();
+        }
+    }
+
     private void publishUnavailable(
             String requested, Throwable requestedFailure, Throwable fallbackFailure) {
         String detail = "No audio output is currently available ("
@@ -592,13 +656,18 @@ public class AudioSystemSound implements Runnable {
     }
 
     private void writeFully(AudioBackend.AudioLine line, byte[] bytes) {
-        int offset = 0;
-        while (offset < bytes.length && !doStop) {
-            int written = line.write(bytes, offset, bytes.length - offset);
-            if (written <= 0) {
-                throw new IllegalStateException("Audio line made no write progress");
+        pcmBufferWriteInProgress = true;
+        try {
+            int offset = 0;
+            while (offset < bytes.length && !doStop) {
+                int written = line.write(bytes, offset, bytes.length - offset);
+                if (written <= 0) {
+                    throw new IllegalStateException("Audio line made no write progress");
+                }
+                offset += written;
             }
-            offset += written;
+        } finally {
+            pcmBufferWriteInProgress = false;
         }
     }
 
@@ -637,7 +706,7 @@ public class AudioSystemSound implements Runnable {
                 configuration.masterVolume(), configuration.muted(), pcmScratch);
         byte[] trimmed = Arrays.copyOf(pcmScratch, written);
         if (generation == configurationGeneration.get()) {
-            enqueuePcm(trimmed, configuration.latencyPreset().queuedFrames());
+            enqueuePcm(trimmed, configuration.latencyPreset().runtimeQueueCapacity());
         }
     }
 
@@ -664,5 +733,34 @@ public class AudioSystemSound implements Runnable {
 
     Thread workerThreadForTesting() {
         return workerThread;
+    }
+
+    /** Package-private timing-probe seam for a worker-local dequeued PCM buffer. */
+    boolean isPcmBufferWriteInProgressForTesting() {
+        return pcmBufferWriteInProgress;
+    }
+
+    static boolean isWindows(String operatingSystemName) {
+        return operatingSystemName != null
+                && operatingSystemName.regionMatches(true, 0, "Windows", 0, "Windows".length());
+    }
+
+    static void configureOwnedWorkerPriority(
+            Thread worker,
+            String operatingSystemName,
+            WorkerThreadPrioritySetter prioritySetter) {
+        if (!isWindows(operatingSystemName)) {
+            return;
+        }
+        try {
+            prioritySetter.setPriority(worker, WINDOWS_AUDIO_WORKER_PRIORITY);
+        } catch (SecurityException | UnsupportedOperationException failure) {
+            LOG.debug("Unable to raise owned audio worker priority");
+        }
+    }
+
+    @FunctionalInterface
+    interface WorkerThreadPrioritySetter {
+        void setPriority(Thread worker, int priority);
     }
 }

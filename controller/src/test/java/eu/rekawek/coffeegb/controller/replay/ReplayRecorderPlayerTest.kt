@@ -61,14 +61,10 @@ class ReplayRecorderPlayerTest {
                     ReplayInputPhase.LEGACY_P1_BEFORE_TICK,
                     ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE,
                     ReplayInputPhase.LEGACY_P1_BEFORE_TICK,
-                    ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE,
-                    ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE,
-                    ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE,
-                    ReplayInputPhase.PHYSICAL_JOYPAD_SAMPLE,
                 ),
                 replay.inputs.map { it.phase },
             )
-            assertEquals(listOf(0L, 0L, 1L, 1L, 1L, 2L, 2L), replay.inputs.map { it.tick })
+            assertEquals(listOf(0L, 0L, 1L), replay.inputs.map { it.tick })
 
             val decoded = ReplayCodec.decode(ReplayCodec.encode(replay))
             ReplayPlayer.open(decoded, rig.configuration).use { player ->

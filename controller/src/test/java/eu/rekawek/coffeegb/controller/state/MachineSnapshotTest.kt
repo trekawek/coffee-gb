@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.ir.FullChanger
 import eu.rekawek.coffeegb.core.joypad.Button
+import eu.rekawek.coffeegb.core.memory.GbcRam
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import java.util.concurrent.TimeUnit
@@ -83,6 +84,7 @@ class MachineSnapshotTest {
   fun unchangedPagesReuseIdentityAndOneWramWriteCopiesOnlyItsPage() {
     StateCodecTestSupport.session(cgbMbc5Configuration()).use { session ->
       val gameboy = session.gameboy
+      seedIdenticalGbcWramBanks(gameboy, 0x13)
       val first = MachineSnapshot.capture(gameboy)
       assertPagedArray(first, GBC_RAM_MEMENTO, "ram", 7 * 0x1000)
       assertTrue(
@@ -97,10 +99,32 @@ class MachineSnapshotTest {
       assertPagedArray(first, DISPLAY_MEMENTO, "buffer", 160 * 144)
       assertPagedArray(first, DISPLAY_MEMENTO, "lastFrame", 160 * 144)
       assertPagedArray(first, MBC5_MEMENTO, "ram", 0x8000)
-      val unchanged = MachineSnapshot.capture(gameboy, first)
+      val workRam = first.debugArrays(GBC_RAM_MEMENTO, "ram").single()
+      assertTrue(
+          workRam.pageTokens.drop(1).all { it === workRam.pageTokens.first() },
+          "identical primitive pages in one array must deduplicate during the first capture",
+      )
+      writeGbcWramBank(gameboy, 1, 0xa7)
+      writeGbcWramBank(gameboy, 2, 0xa7)
+      gameboy.addressSpace.setByte(GbcRam.SVBK, 1)
+      val crossPosition = MachineSnapshot.capture(gameboy, first)
+      val crossPositionPages = crossPosition.debugArrays(GBC_RAM_MEMENTO, "ram").single()
+      assertTrue(
+          crossPositionPages.pageTokens[0] === crossPositionPages.pageTokens[1],
+          "a preferred miss must retain cross-position fallback deduplication",
+      )
+      assertTrue(crossPositionPages.pageTokens[0] !== workRam.pageTokens[0])
+      assertEquals(1, crossPosition.captureStats.copiedPages)
+
+      val unchanged = MachineSnapshot.capture(gameboy, crossPosition)
 
       assertEquals(0, unchanged.captureStats.copiedPages)
       assertEquals(0, unchanged.captureStats.copiedPageBytes)
+      assertEquals(
+          0,
+          unchanged.captureStats.newValueNodes,
+          "an unchanged graph must reuse scalar, array, record, and field identities",
+      )
       assertTrue(unchanged.captureStats.identityVerifiedPayloadArrays > 0)
       assertTrue(unchanged.captureStats.identityVerifiedPayloadBytes > 0)
       assertTrue(unchanged.captureStats.reusedPages > 0)
@@ -113,6 +137,8 @@ class MachineSnapshotTest {
       val changed = MachineSnapshot.capture(gameboy, unchanged)
       val before = unchanged.debugArrays(RAM_MEMENTO, "space")
       val after = changed.debugArrays(RAM_MEMENTO, "space")
+      val fieldsBefore = unchanged.debugRecordFields(RAM_MEMENTO)
+      val fieldsAfter = changed.debugRecordFields(RAM_MEMENTO)
       val changedPageCount =
           before.indices.sumOf { index ->
             before[index].pageTokens.indices.count { page ->
@@ -122,6 +148,17 @@ class MachineSnapshotTest {
       assertEquals(1, changedPageCount)
       assertEquals(1, changed.captureStats.copiedPages)
       assertEquals(MachineSnapshot.PAGE_BYTES.toLong(), changed.captureStats.copiedPageBytes)
+      assertEquals(fieldsBefore.size, fieldsAfter.size)
+      assertEquals(
+          1,
+          fieldsBefore.indices.sumOf { index ->
+            val old = fieldsBefore[index].fieldTokens
+            val next = fieldsAfter[index].fieldTokens
+            assertEquals(old.keys, next.keys)
+            old.keys.count { field -> old[field] !== next[field] }
+          },
+          "one WRAM page mutation must materialize only its owning record field",
+      )
       assertEquals(
           unchanged.captureStats.identityVerifiedPayloadArrays,
           changed.captureStats.identityVerifiedPayloadArrays,
@@ -483,6 +520,18 @@ class MachineSnapshotTest {
     val array = snapshot.debugArrays(owner, field).single()
     assertEquals(size, array.size)
     assertTrue(array.pageTokens.isNotEmpty())
+  }
+
+  private fun seedIdenticalGbcWramBanks(gameboy: Gameboy, seed: Int) {
+    (1..7).forEach { bank -> writeGbcWramBank(gameboy, bank, seed) }
+    gameboy.addressSpace.setByte(GbcRam.SVBK, 1)
+  }
+
+  private fun writeGbcWramBank(gameboy: Gameboy, bank: Int, seed: Int) {
+    gameboy.addressSpace.setByte(GbcRam.SVBK, bank)
+    repeat(0x1000) { offset ->
+      gameboy.addressSpace.setByte(0xd000 + offset, (seed + offset * 37) and 0xff)
+    }
   }
 
   private fun MachineState.record(className: String): RecordState {

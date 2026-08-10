@@ -15,6 +15,9 @@ interface AudioBackend {
     interface AudioLine extends AutoCloseable {
         void start();
 
+        /** True when the provider currently reports that playback is running. */
+        boolean isRunning();
+
         int write(byte[] bytes, int offset, int length);
 
         int available();

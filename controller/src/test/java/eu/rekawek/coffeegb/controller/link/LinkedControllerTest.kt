@@ -83,6 +83,7 @@ import java.nio.file.Path
 import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -3507,6 +3508,7 @@ class LinkedControllerTest {
     sut.timingTicker.disabled = true
     val failures = mutableListOf<ProtocolErrorReason>()
     val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    val feedbackGate = Semaphore(0)
     eventBus.post(LoadRomEvent(ROM))
     eventBus.post(
         PeerLoadedGameEvent(
@@ -3520,13 +3522,22 @@ class LinkedControllerTest {
         ))
     sut.runFrame()
 
-    eventBus.register<ValidatedPeerResetEvent> {
-      eventBus.post(
-          ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
+    eventBus.register<ValidatedPeerResetEvent> { validated ->
+      if (validated.event.source === offender) {
+        // Keep the asynchronous feedback event in flight until the frame that accepted it has
+        // completed. This prevents the event-bus worker from refilling the current dispatch.
+        feedbackGate.acquireUninterruptibly()
+        eventBus.post(
+            ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
+      }
     }
     eventBus.post(ReceivedRemoteResetEvent(sut.currentFrame(), player = 1, source = offender))
     repeat(12) {
-      if (failures.isEmpty()) sut.runFrame()
+      if (failures.isEmpty()) {
+        sut.runFrame()
+        feedbackGate.release()
+        eventBus.drainAsyncEvents()
+      }
     }
 
     assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
@@ -3548,18 +3559,25 @@ class LinkedControllerTest {
     sut.timingTicker.disabled = true
     val failures = mutableListOf<ProtocolErrorReason>()
     val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    val feedbackGate = Semaphore(0)
     eventBus.post(LoadRomEvent(ROM))
     sut.runFrame()
 
     eventBus.register<ValidatedPeerStateEvent> { validated ->
       if (validated.event.source === offender) {
+        // Release exactly one feedback event after its owning emulator frame, then wait for the
+        // active async subscriber to queue it for the following frame.
+        feedbackGate.acquireUninterruptibly()
         eventBus.post(peerState(sut.currentFrame(), offender))
       }
     }
     eventBus.post(peerState(sut.currentFrame(), offender))
     repeat(24) {
-      eventBus.drainAsyncEvents()
-      if (failures.isEmpty()) sut.runFrame()
+      if (failures.isEmpty()) {
+        sut.runFrame()
+        feedbackGate.release()
+        eventBus.drainAsyncEvents()
+      }
     }
 
     assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
@@ -3581,24 +3599,30 @@ class LinkedControllerTest {
     sut.timingTicker.disabled = true
     val failures = mutableListOf<ProtocolErrorReason>()
     val offender = PeerEventSource(1) { reason, _ -> failures += reason }
+    val feedbackGate = Semaphore(0)
     eventBus.post(LoadRomEvent(ROM))
     sut.runFrame()
 
     eventBus.register<ValidatedPeerStateEvent> { validated ->
       if (validated.event.source === offender) {
+        feedbackGate.acquireUninterruptibly()
         eventBus.post(
             ReceivedRemoteStopEvent(sut.currentFrame(), player = 1, source = offender))
       }
     }
     eventBus.register<ValidatedPeerStopEvent> { validated ->
       if (validated.event.source === offender) {
+        feedbackGate.acquireUninterruptibly()
         eventBus.post(peerState(sut.currentFrame(), offender))
       }
     }
     eventBus.post(peerState(sut.currentFrame(), offender))
     repeat(24) {
-      eventBus.drainAsyncEvents()
-      if (failures.isEmpty()) sut.runFrame()
+      if (failures.isEmpty()) {
+        sut.runFrame()
+        feedbackGate.release()
+        eventBus.drainAsyncEvents()
+      }
     }
 
     assertEquals(listOf(ProtocolErrorReason.EXCESSIVE_REPLAY_WORK), failures)
@@ -3648,9 +3672,14 @@ class LinkedControllerTest {
     sut.timingTicker.disabled = true
     val failures = mutableListOf<ProtocolErrorReason>()
     val offender = PeerEventSource(0) { reason, _ -> failures += reason }
+    val feedbackGate = Semaphore(0)
     var acceptedCheckpoints = 0
     eventBus.register<ValidatedPeerCheckpointEvent> { validated ->
       if (validated.event.source === offender) {
+        // Keep the asynchronous feedback event in flight until the frame that accepted it has
+        // completed. This makes the test's one-checkpoint-per-frame model deterministic while
+        // drainAsyncEvents still verifies that it waits for an active subscriber.
+        feedbackGate.acquireUninterruptibly()
         acceptedCheckpoints++
         eventBus.post(
             SessionCheckpointEvent(
@@ -3664,9 +3693,9 @@ class LinkedControllerTest {
     repeat(20) {
       if (failures.isEmpty()) {
         sut.runFrame()
-        // Accepted peer lifecycle notifications deliberately share the asynchronous publication
-        // FIFO with ROM payloads. Wait for the listener to enqueue the next streaming checkpoint
-        // before advancing the controller-owned work budget again.
+        // Release one feedback checkpoint only after its owning emulator frame completed, then
+        // wait until the async subscriber has enqueued it for the next frame.
+        feedbackGate.release()
         eventBus.drainAsyncEvents()
       }
     }

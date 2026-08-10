@@ -16,6 +16,8 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -153,6 +155,121 @@ class RewindManagerTest {
       assertEquals(0, manager.captureCount)
       assertEquals(0, manager.historySize)
       assertFalse(manager.rewindOneStep(session.gameboy))
+    }
+  }
+
+  @Test
+  fun disabledManagerDoesNotPrepareSessionSeed() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager = RewindManager(enabled = false)
+
+      assertNull(manager.prepareSessionSeed(session))
+      assertFalse(manager.hasPreparedSessionSeed)
+      assertEquals(0, manager.captureCount)
+      assertEquals(0, manager.historySize)
+    }
+  }
+
+  @Test
+  fun preparedSessionSeedLeavesHistoryCadenceAndCaptureCountUntouched() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager = RewindManager()
+
+      val seed = assertNotNull(manager.prepareSessionSeed(session))
+
+      assertFalse(manager.hasPreparedSessionSeed, "a candidate token is not history state")
+      assertEquals(0, manager.captureCount)
+      assertEquals(0, manager.historySize)
+      seed.discard()
+    }
+  }
+
+  @Test
+  fun firstSessionRecordUsesPreparedSeedButOnlyRestoresPostFrameState() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager = RewindManager()
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x11)
+      val seed = assertNotNull(manager.prepareSessionSeed(session))
+
+      manager.beginSession(session, seed)
+      assertTrue(manager.hasPreparedSessionSeed)
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x22)
+      manager.record(session)
+
+      assertEquals(1, manager.captureCount)
+      assertEquals(1, manager.historySize)
+      assertFalse(manager.hasPreparedSessionSeed)
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x33)
+      assertTrue(manager.rewindOneStep(session))
+      assertEquals(0x22, session.gameboy.addressSpace.getByte(TEST_ADDRESS))
+      assertFalse(manager.rewindOneStep(session), "the pre-frame seed is never rewindable")
+    }
+  }
+
+  @Test
+  fun preparedSessionSeedRetainsSixFrameCadenceAndSurvivesSuppressedFrames() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager = RewindManager()
+      val seed = assertNotNull(manager.prepareSessionSeed(session))
+      manager.beginSession(session, seed)
+
+      session.gameboy.requestFrameRenderSuppression(true)
+      tickUntilVBlank(session.gameboy)
+      manager.record(session)
+      assertTrue(manager.hasPreparedSessionSeed)
+      assertEquals(0, manager.captureCount)
+
+      session.gameboy.requestFrameRenderSuppression(false)
+      tickUntilVBlank(session.gameboy)
+      repeat(RewindManager.RECORD_INTERVAL * 2) { manager.record(session) }
+
+      assertEquals(2, manager.captureCount)
+      assertFalse(manager.hasPreparedSessionSeed)
+    }
+  }
+
+  @Test
+  fun clearAndMachineRecordingReleasePreparedSessionSeed() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager = RewindManager()
+      manager.beginSession(session, assertNotNull(manager.prepareSessionSeed(session)))
+      assertTrue(manager.hasPreparedSessionSeed)
+      manager.clear()
+      assertFalse(manager.hasPreparedSessionSeed)
+
+      manager.beginSession(session, assertNotNull(manager.prepareSessionSeed(session)))
+      manager.record(session.gameboy)
+
+      assertFalse(manager.hasPreparedSessionSeed)
+      assertEquals(1, manager.historySize)
+      assertFailsWith<IllegalStateException> { manager.rewindOneStep(session) }
+    }
+  }
+
+  @Test
+  fun preparedSeedTransfersExactRetentionIntoFirstHistoryEntry() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager =
+          RewindManager(memoryBudgetBytes = RewindManager.MIN_MEMORY_BUDGET_BYTES)
+      manager.beginSession(session, assertNotNull(manager.prepareSessionSeed(session)))
+
+      val pendingBytes = manager.retainedBytesForTesting()
+      assertTrue(pendingBytes > 0L, "the staged baseline is manager-owned memory")
+      assertEquals(pendingBytes, manager.approximateRetainedBytesForTesting)
+
+      session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x5a)
+      manager.record(session)
+
+      assertEquals(1, manager.historySize)
+      assertFalse(manager.hasPreparedSessionSeed)
+      assertEquals(
+          manager.retainedBytesForTesting(),
+          manager.approximateRetainedBytesForTesting,
+          "the first seed-relative entry must be charged as a complete retained root",
+      )
+      manager.clear()
+      assertEquals(0L, manager.retainedBytesForTesting())
+      assertEquals(0L, manager.approximateRetainedBytesForTesting)
     }
   }
 
