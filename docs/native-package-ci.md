@@ -21,10 +21,10 @@ runner is a release blocker rather than permission to relabel another architectu
 
 The wrapper runs the Maven-authoritative `clean verify` reactor, including unit tests and the
 target-neutral staging integration tests, before building one unsigned target package. For a tagged
-release on Linux, `release:prepare` has already run that unit-test suite against the same immutable
-commit, so the package job reuses that result instead of repeating Surefire inside Xvfb. Maven still
-compiles the tests, runs the staging integration tests, and produces every artifact consumed by the
-native package and launch gates. The package tool then:
+release, `release:prepare` has already run that unit-test suite against the same immutable commit, so
+each target package job reuses that result instead of repeating Surefire. Maven still compiles the
+tests, runs the staging integration tests, and produces every artifact consumed by the native package
+and launch gates. The package tool then:
 
 1. verifies the minimized runtime module closure and launches the neutral JAR with that runtime;
 2. validates the canonical NFC UTF-8 license and exact `Tomasz Rękawek` author name, generates the

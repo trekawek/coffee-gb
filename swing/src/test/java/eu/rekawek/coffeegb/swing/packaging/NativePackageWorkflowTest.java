@@ -21,6 +21,7 @@ public class NativePackageWorkflowTest {
         Path packaging = Path.of("../packaging").toAbsolutePath().normalize();
         String packageSh = normalizedText(packaging.resolve("verify-native-package.sh"));
         String packagePs1 = normalizedText(packaging.resolve("verify-native-package.ps1"));
+        String packageBuilderPs1 = normalizedText(packaging.resolve("package-native.ps1"));
 
         for (String target :
                 new String[] {
@@ -69,13 +70,31 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
         assertEquals(2, occurrences(packages,
-                "name: Reuse prepared Linux unit-test result"));
+                "name: Reuse prepared release unit-test result"));
         assertEquals(2, occurrences(packages,
-                "if: runner.os == 'Linux' && inputs.release_version != ''"));
+                "if: runner.os != 'Windows' && inputs.release_version != ''"));
+        assertEquals(2, occurrences(packages,
+                "name: Reuse prepared Windows release unit-test result"));
+        assertEquals(2, occurrences(packages,
+                "if: runner.os == 'Windows' && inputs.release_version != ''"));
         assertEquals(2, occurrences(packages,
                 "exec mvn -Dskip.unit.tests=true \"$@\""));
         assertEquals(2, occurrences(packages,
                 "COFFEE_GB_MAVEN_COMMAND=$maven_wrapper"));
+        assertEquals(2, occurrences(packages,
+                "& $Maven \"-Dskip.unit.tests=true\" @args"));
+        assertEquals(2, occurrences(packages, "exit $LASTEXITCODE"));
+        assertEquals(2, occurrences(packages,
+                "Get-Command \"mvn\" -CommandType Application -ErrorAction Stop"));
+        assertEquals(2, occurrences(packages,
+                "Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM"));
+        assertEquals(2, occurrences(packages,
+                "COFFEE_GB_MAVEN_COMMAND=$MavenWrapper"));
+        assertTrue(packageBuilderPs1.contains("$env:COFFEE_GB_MAVEN_COMMAND"));
+        assertTrue(packageBuilderPs1.contains("& $MavenCommand -B"));
+        assertTrue(packageBuilderPs1.contains("if ($LASTEXITCODE -ne 0)"));
+        assertFalse(packages.contains("-DskipTests"));
+        assertFalse(packages.contains("-Dmaven.test.skip"));
         assertEquals(2, occurrences(packages,
                 "sudo apt-get install --yes --no-install-recommends "
                         + "desktop-file-utils gnome-menus xdg-utils"));

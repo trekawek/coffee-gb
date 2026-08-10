@@ -129,8 +129,8 @@ jobs:
           cache: maven
           cache-dependency-path: "**/pom.xml"
 
-      - name: Reuse prepared Linux unit-test result
-        if: runner.os == 'Linux' && inputs.release_version != ''
+      - name: Reuse prepared release unit-test result
+        if: runner.os != 'Windows' && inputs.release_version != ''
         shell: bash
         run: |
           maven_wrapper="$RUNNER_TEMP/coffee-gb-prepared-release-maven"
@@ -140,6 +140,20 @@ jobs:
             > "$maven_wrapper"
           chmod 700 "$maven_wrapper"
           echo "COFFEE_GB_MAVEN_COMMAND=$maven_wrapper" >> "$GITHUB_ENV"
+
+      - name: Reuse prepared Windows release unit-test result
+        if: runner.os == 'Windows' && inputs.release_version != ''
+        shell: pwsh
+        run: |
+          $MavenWrapper = Join-Path $env:RUNNER_TEMP "coffee-gb-prepared-release-maven.ps1"
+          @'
+          $ErrorActionPreference = "Stop"
+          $Maven = (Get-Command "mvn" -CommandType Application -ErrorAction Stop).Source
+          & $Maven "-Dskip.unit.tests=true" @args
+          exit $LASTEXITCODE
+          '@ | Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM
+          "COFFEE_GB_MAVEN_COMMAND=$MavenWrapper" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prove target runner architecture
         if: runner.os != 'Windows'
@@ -498,8 +512,8 @@ jobs:
           cache: maven
           cache-dependency-path: "**/pom.xml"
 
-      - name: Reuse prepared Linux unit-test result
-        if: runner.os == 'Linux' && inputs.release_version != ''
+      - name: Reuse prepared release unit-test result
+        if: runner.os != 'Windows' && inputs.release_version != ''
         shell: bash
         run: |
           maven_wrapper="$RUNNER_TEMP/coffee-gb-prepared-release-maven"
@@ -509,6 +523,20 @@ jobs:
             > "$maven_wrapper"
           chmod 700 "$maven_wrapper"
           echo "COFFEE_GB_MAVEN_COMMAND=$maven_wrapper" >> "$GITHUB_ENV"
+
+      - name: Reuse prepared Windows release unit-test result
+        if: runner.os == 'Windows' && inputs.release_version != ''
+        shell: pwsh
+        run: |
+          $MavenWrapper = Join-Path $env:RUNNER_TEMP "coffee-gb-prepared-release-maven.ps1"
+          @'
+          $ErrorActionPreference = "Stop"
+          $Maven = (Get-Command "mvn" -CommandType Application -ErrorAction Stop).Source
+          & $Maven "-Dskip.unit.tests=true" @args
+          exit $LASTEXITCODE
+          '@ | Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM
+          "COFFEE_GB_MAVEN_COMMAND=$MavenWrapper" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Prepare pinned Windows portable-EXE tooling
         if: runner.os == 'Windows'
