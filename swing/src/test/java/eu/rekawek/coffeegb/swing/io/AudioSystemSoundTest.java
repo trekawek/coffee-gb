@@ -68,7 +68,33 @@ public class AudioSystemSoundTest {
             eventBus.post(new Sound.SoundSampleEvent(new int[400]));
         }
 
-        assertEquals(1, queue(sound).size());
+        assertEquals(
+                AudioRuntimeConfiguration.LatencyPreset.LOW.runtimeQueueCapacity(),
+                queue(sound).size());
+    }
+
+    @Test
+    public void balancedRuntimeQueueAcceptsCatchUpHeadroomWithoutChangingStartupWatermark()
+            throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                new FakeBackend(),
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int capacity = AudioRuntimeConfiguration.LatencyPreset.BALANCED.runtimeQueueCapacity();
+
+        for (int frame = 0; frame < capacity; frame++) {
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+        }
+        assertEquals(12, capacity);
+        assertEquals(capacity, queue(sound).size());
+
+        eventBus.post(new Sound.SoundSampleEvent(samples));
+        assertEquals("runtime queue must remain bounded", capacity, queue(sound).size());
     }
 
     @Test
@@ -345,6 +371,9 @@ public class AudioSystemSoundTest {
                 defaults.latencyPreset());
         assertEquals(8192, defaults.latencyPreset().lineBufferBytes());
         assertEquals(3, defaults.latencyPreset().queuedFrames());
+        assertEquals(4, AudioRuntimeConfiguration.LatencyPreset.LOW.runtimeQueueCapacity());
+        assertEquals(12, defaults.latencyPreset().runtimeQueueCapacity());
+        assertEquals(15, AudioRuntimeConfiguration.LatencyPreset.SAFE.runtimeQueueCapacity());
 
         assertInvalid(() -> new AudioRuntimeConfiguration(
                 "array-index-0", 100, false,

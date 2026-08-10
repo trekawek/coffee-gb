@@ -58,8 +58,8 @@ public class AudioSystemSound implements Runnable {
     private static final long RETRY_UNAVAILABLE_MILLIS = 1000;
     private static final long STOP_TIMEOUT_MILLIS = 2000;
     private static final long FORCED_CLOSE_TIMEOUT_MILLIS = 250;
-    private static final int MAX_QUEUED_FRAMES =
-            AudioRuntimeConfiguration.LatencyPreset.SAFE.queuedFrames();
+    private static final int MAX_RUNTIME_QUEUED_FRAMES =
+            AudioRuntimeConfiguration.LatencyPreset.SAFE.runtimeQueueCapacity();
 
     private final AudioBackend backend;
     private final AtomicReference<AudioRuntimeConfiguration> desiredConfiguration;
@@ -69,10 +69,11 @@ public class AudioSystemSound implements Runnable {
 
     /*
      * Keep this field name and BlockingQueue type source-compatible with the deterministic clock
-     * probes. The physical capacity is the largest preset; enqueuePcm enforces the active preset.
+     * probes. The physical capacity is the largest runtime preset; enqueuePcm enforces the active
+     * bounded runtime capacity while startup priming continues to use queuedFrames().
      */
     private final BlockingQueue<byte[]> queue =
-            new ArrayBlockingQueue<>(MAX_QUEUED_FRAMES);
+            new ArrayBlockingQueue<>(MAX_RUNTIME_QUEUED_FRAMES);
 
     private final AtomicBoolean started = new AtomicBoolean();
     private final AtomicBoolean emergencyCloseStarted = new AtomicBoolean();
@@ -244,7 +245,7 @@ public class AudioSystemSound implements Runnable {
         AudioBackend.AudioLine line = null;
         boolean usingFallback = false;
         boolean priming = true;
-        Deque<byte[]> primingFrames = new ArrayDeque<>(MAX_QUEUED_FRAMES);
+        Deque<byte[]> primingFrames = new ArrayDeque<>(MAX_RUNTIME_QUEUED_FRAMES);
         long appliedGeneration = configurationGeneration.get();
         long retryAtNanos = 0;
         publishStatus(new AudioOutputStatus(
@@ -637,7 +638,7 @@ public class AudioSystemSound implements Runnable {
                 configuration.masterVolume(), configuration.muted(), pcmScratch);
         byte[] trimmed = Arrays.copyOf(pcmScratch, written);
         if (generation == configurationGeneration.get()) {
-            enqueuePcm(trimmed, configuration.latencyPreset().queuedFrames());
+            enqueuePcm(trimmed, configuration.latencyPreset().runtimeQueueCapacity());
         }
     }
 
