@@ -34,6 +34,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private static final int INPUT_FILTER_MASK = (1 << INPUT_FILTER_SAMPLES) - 1;
 
+    /**
+     * Host input is stable between GUI updates, so the thread-safe live hub needs polling only at
+     * this master-tick cadence. The initial tick is a poll boundary and later boundaries reuse the
+     * persisted {@link #tick} phase rather than storing a second cadence counter.
+     */
+    static final int PLAYER_INPUT_HUB_POLL_TICKS = 64;
+
     /** Fully settled four-sample history for each active-low input-line level. */
     private static final int[] SETTLED_HISTORY = createSettledHistory();
 
@@ -64,6 +71,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      * before the emulation thread considers skipping its regular sample path.
      */
     private transient volatile boolean releasedInputFastPathEligible;
+
+    /**
+     * Derived settled-state shortcut for the default thread-safe desktop input hub. Unlike the
+     * released-only shortcut, this permits a held physical input once its JOYP filter has settled.
+     */
+    private transient volatile boolean playerInputHubFastPathEligible;
 
     /** Owner-thread observation only; deliberately absent from portable machine state. */
     private transient DebugHooks debugHooks;
@@ -107,7 +120,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         transferInProgress = isSgb;
         transferReadyForData = false;
         sgbBus.register(event -> {
-            invalidateReleasedInputFastPath();
+            invalidateInputFastPaths();
             players = event.getMultiplayerControl() & 0x03;
             if (players == 2) {
                 // Undocumented MLT_REQ value 2 keeps the ICD2 in a distinct state:
@@ -117,7 +130,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 currentPlayer &= players;
             }
             LOG.atDebug().log("Players: {}, current player: {}", players, currentPlayer);
-            invalidateReleasedInputFastPath();
+            invalidateInputFastPaths();
         }, Commands.MltReqCmd.class);
         refreshReleasedInputFastPathEligibility();
     }
@@ -129,7 +142,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     }
 
     private void onPress(Button button) {
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         if (eventBus != null) {
             eventBus.post(new JoypadPressEvent(button, tick));
         }
@@ -139,18 +152,18 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             notifyDebugInputChange();
             notifyLegacyInputChange();
         }
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
     }
 
     private void onRelease(Button button) {
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         LOG.atDebug().log("Released button {} at tick {}", button, tick);
         if (buttons.remove(button)) {
             inputChangedSinceLastTick = true;
             notifyDebugInputChange();
             notifyLegacyInputChange();
         }
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
     }
 
     /**
@@ -200,7 +213,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 Objects.requireNonNull(legacyButtons, "legacyButtons"));
         PlayerInputSnapshot physical = Objects.requireNonNull(
                 sampledPhysicalInput, "sampledPhysicalInput");
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         buttons.clear();
         buttons.addAll(legacyCopy);
         sampledInput = physical;
@@ -222,13 +235,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (buttons.equals(replayButtons)) {
             return;
         }
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         buttons.clear();
         buttons.addAll(replayButtons);
         inputChangedSinceLastTick = true;
         alignDebugInput();
         alignInputTimeline();
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
     }
 
     public void setPressedButtons(Collection<Button> pressed) {
@@ -236,13 +249,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (buttons.equals(pressedCopy)) {
             return;
         }
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         buttons.clear();
         buttons.addAll(pressedCopy);
         inputChangedSinceLastTick = true;
         notifyDebugInputChange();
         notifyLegacyInputChange();
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
     }
 
     public void tick() {
@@ -250,19 +263,23 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (releasedInputFastPathEligible) {
             return;
         }
+        if (playerInputHubFastPathEligible && !isPlayerInputHubPollDue()) {
+            return;
+        }
         tickInputSlowPath();
     }
 
     private void tickInputSlowPath() {
-        PlayerInputSnapshot nextInput = playerInputSource == PlayerInputSource.RELEASED
-                ? PlayerInputSnapshot.RELEASED
-                : Objects.requireNonNull(
-                        playerInputSource.sample(), "PlayerInputSource returned null");
-        if (sampledInput != nextInput && !sampledInput.equals(nextInput)) {
+        PlayerInputSnapshot nextInput = sampleInputForTick();
+        if (sampledInput != nextInput) {
+            boolean physicalButtonsChanged =
+                    sampledInput.packedButtonMasks != nextInput.packedButtonMasks;
             sampledInput = nextInput;
-            inputChangedSinceLastTick = true;
-            notifyDebugInputChange();
-            notifyPhysicalInputChanges();
+            if (physicalButtonsChanged) {
+                inputChangedSinceLastTick = true;
+                notifyDebugInputChange();
+                notifyPhysicalInputChanges();
+            }
         }
         // JOYP writes happen after the joypad clock edge represented by this emulator
         // tick. Start sampling a changed input on the following tick, then require four
@@ -296,6 +313,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines) {
             refreshReleasedInputFastPathEligibility();
+            refreshPlayerInputHubFastPathEligibility(inputLines);
             return;
         }
         int nextFilteredInputLines = filteredInputLines;
@@ -317,10 +335,28 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         }
         refreshReleasedInputFastPathEligibility();
+        refreshPlayerInputHubFastPathEligibility(inputLines);
     }
 
-    private void invalidateReleasedInputFastPath() {
+    private PlayerInputSnapshot sampleInputForTick() {
+        if (playerInputSource == PlayerInputSource.RELEASED) {
+            return PlayerInputSnapshot.RELEASED;
+        }
+        if (playerInputSource instanceof PlayerInputHub && !isPlayerInputHubPollDue()) {
+            return sampledInput;
+        }
+        return Objects.requireNonNull(playerInputSource.sample(), "PlayerInputSource returned null");
+    }
+
+    private boolean isPlayerInputHubPollDue() {
+        // tick is incremented before sampling. Poll the first clock edge and then every 64th
+        // edge, preserving that phase through portable state capture/restore without extra state.
+        return (tick & (PLAYER_INPUT_HUB_POLL_TICKS - 1L)) == 1;
+    }
+
+    private void invalidateInputFastPaths() {
         releasedInputFastPathEligible = false;
+        playerInputHubFastPathEligible = false;
     }
 
     private void refreshReleasedInputFastPathEligibility() {
@@ -331,6 +367,16 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && buttons.isEmpty()
                 && inputHistory == SETTLED_HISTORY[0x0f]
                 && filteredInputLines == 0x0f;
+        // Hub eligibility additionally depends on the current selector and filtered electrical
+        // lines. It is recomputed only after this tick has calculated those values.
+        playerInputHubFastPathEligible = false;
+    }
+
+    private void refreshPlayerInputHubFastPathEligibility(int inputLines) {
+        playerInputHubFastPathEligible = playerInputSource instanceof PlayerInputHub
+                && !inputChangedSinceLastTick
+                && inputHistory == SETTLED_HISTORY[inputLines]
+                && filteredInputLines == inputLines;
     }
 
     private static int[] createSettledHistory() {
@@ -357,7 +403,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         int previousSelection = p1;
         int nextSelection = value & 0x30;
         if (nextSelection != previousSelection) {
-            invalidateReleasedInputFastPath();
+            invalidateInputFastPaths();
         }
         if (isSgb) {
             int input = nextSelection;
@@ -378,7 +424,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         p1 = nextSelection;
         if (p1 != previousSelection) {
             inputChangedSinceLastTick = true;
-            invalidateReleasedInputFastPath();
+            invalidateInputFastPaths();
         }
     }
 
@@ -528,7 +574,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             throw new IllegalArgumentException("Invalid state type");
         }
         validateState(mem);
-        invalidateReleasedInputFastPath();
+        invalidateInputFastPaths();
         this.p1 = mem.p1;
         this.tick = mem.tick;
         this.inputHistory = mem.inputHistory;

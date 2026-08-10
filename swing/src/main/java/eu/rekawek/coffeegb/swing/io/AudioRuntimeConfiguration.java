@@ -6,9 +6,9 @@ import java.util.regex.Pattern;
 /**
  * Validated host-audio settings applied without mutating emulation state.
  *
- * <p>The balanced preset deliberately retains Coffee GB's historical 8192-byte line and
- * three-frame startup watermark. Runtime producer capacity is separately bounded so it can be
- * tuned without changing startup priming or line-buffer latency.
+ * <p>The balanced default prioritizes continuity across bounded host-audio stalls: its 16 KiB
+ * line provides about 92.88 ms of device runway, it primes six source frames, and its separate
+ * runtime producer capacity remains bounded at twenty-four frames.
  */
 public record AudioRuntimeConfiguration(
         String outputDeviceId,
@@ -56,10 +56,10 @@ public record AudioRuntimeConfiguration(
     public enum LatencyPreset {
         /** Latency-first: one startup frame plus three controller frames of catch-up headroom. */
         LOW(2048, 1, 4),
-        /** Historical default startup latency with nine transient scheduling-headroom frames. */
-        BALANCED(8192, 3, 12),
-        /** Conservative startup latency with the same nine-frame transient scheduling headroom. */
-        SAFE(16384, 6, 15);
+        /** Continuity-safe default: 92.88 ms line/startup runway and 400 ms catch-up capacity. */
+        BALANCED(16384, 6, 24),
+        /** Conservative option: 185.76 ms line/startup runway and about 533 ms catch-up capacity. */
+        SAFE(32768, 12, 32);
 
         private final int lineBufferBytes;
         private final int queuedFrames;
@@ -93,9 +93,11 @@ public record AudioRuntimeConfiguration(
         /**
          * Maximum real PCM frames retained while playback is running.
          *
-         * <p>This does not change startup priming or line-buffer latency. BALANCED and SAFE retain
-         * nine controller frames (about 150 ms) beyond their startup watermarks to absorb short
-         * Windows Java Sound/JVM scheduling stalls; LOW intentionally retains only three.</p>
+         * <p>BALANCED retains up to twenty-four controller frames (about 400 ms), in addition to
+         * its 16 KiB device line and six-frame startup prime, to absorb measured Windows provider
+         * stalls without unbounded producer growth. SAFE retains thirty-two frames (about
+         * 533 ms) with its 32 KiB line and twelve-frame prime; LOW intentionally retains only
+         * four frames.</p>
          */
         public int runtimeQueueCapacity() {
             return runtimeQueueCapacity;

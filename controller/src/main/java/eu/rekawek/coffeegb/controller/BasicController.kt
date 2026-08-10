@@ -3192,6 +3192,7 @@ class BasicController private constructor(
     var nextGameboy: Gameboy? = preparedGameboy
     var nextSession: Session? = null
     var nextSnapshotManager: SnapshotManager? = null
+    var preparedRewindSeed: RewindManager.PreparedSessionSeed? = null
     try {
       // Finish constructing and initializing the candidate before releasing the current session.
       // A core-startup failure must leave the old game available for resume/cancel semantics.
@@ -3203,7 +3204,11 @@ class BasicController private constructor(
           } else {
             null
           }
+      // Keep snapshot preparation inside the candidate transaction: a capture failure must
+      // discard this still-staged session and leave the live session/history untouched.
+      preparedRewindSeed = rewindManager.prepareSessionSeed(checkNotNull(nextSession))
     } catch (e: Exception) {
+      preparedRewindSeed?.discard()
       try {
         nextSession?.discardUnstarted()
       } catch (cleanupFailure: RuntimeException) {
@@ -3222,7 +3227,8 @@ class BasicController private constructor(
     if (job.clearPatches) {
       patches.clear()
     }
-    rewindManager.clear()
+    rewindManager.beginSession(checkNotNull(nextSession), preparedRewindSeed)
+    preparedRewindSeed = null
     debugCheckpointHistory.clear(DebugHistoryTruncationReason.SESSION_BOUNDARY)
 
     val previousSession = session

@@ -2128,6 +2128,25 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return copy;
         }
 
+        /**
+         * Service-free copy for disposable real-game execution warmup. The caller has already
+         * limited this to ordinary non-RTC cartridges, but a fixed clock source keeps that
+         * boundary explicit should a future eligibility rule widen. No live input or writable
+         * battery/storage service can reach the throwaway machine.
+         */
+        public GameboyConfiguration forRuntimeWarmup() {
+            GameboyConfiguration copy = forBootTemplate();
+            copy.bootstrapMode = BootstrapMode.SKIP;
+            copy.batteryStorage = null;
+            copy.slotBatteryStorage = null;
+            copy.debugHistoryReplay = false;
+            copy.debugHistoryPrimaryBatteryShape = null;
+            copy.debugHistorySlotBatteryShape = null;
+            copy.rtcTimeSource = () -> 0L;
+            copy.playerInputSource = PlayerInputSource.RELEASED;
+            return copy;
+        }
+
         private GameboyConfiguration copy() {
             GameboyConfiguration copy = new GameboyConfiguration(rom);
             copy.hardwareProfile = hardwareProfile;

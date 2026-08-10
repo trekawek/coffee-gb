@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.core.events;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -308,6 +311,85 @@ public class EventBusImplTest {
         assertEquals(1, closeCalls.get());
     }
 
+    @Test
+    public void asyncBurstIsDeliveredOnceAndInFifoOrder() {
+        EventBusImpl bus = new EventBusImpl(null, "fifo", true, 1_000);
+        List<Integer> deliveries = Collections.synchronizedList(new ArrayList<>());
+        bus.register(event -> deliveries.add(event.sequence), SequencedEvent.class);
+
+        for (int sequence = 0; sequence < 100; sequence++) {
+            bus.postAsync(new SequencedEvent(sequence));
+        }
+        bus.drainAsyncEvents();
+
+        assertEquals(100, deliveries.size());
+        for (int sequence = 0; sequence < deliveries.size(); sequence++) {
+            assertEquals(sequence, deliveries.get(sequence).intValue());
+        }
+        bus.close();
+    }
+
+    @Test
+    public void drainWaitsWhileTheHeadAsyncSubscriberIsStillRunning() throws Exception {
+        EventBusImpl bus = new EventBusImpl(null, "drain", true, 1_000);
+        CountDownLatch entered = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch drained = new CountDownLatch(1);
+        bus.register(
+                event -> {
+                    entered.countDown();
+                    try {
+                        release.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                },
+                TestEvent.class);
+        bus.postAsync(new TestEvent());
+        assertTrue(entered.await(2, TimeUnit.SECONDS));
+
+        Thread drainer = new Thread(() -> {
+            bus.drainAsyncEvents();
+            drained.countDown();
+        });
+        drainer.setDaemon(true);
+        drainer.start();
+        assertFalse("the head must remain visible through subscriber dispatch",
+                drained.await(50, TimeUnit.MILLISECONDS));
+
+        release.countDown();
+        assertTrue(drained.await(2, TimeUnit.SECONDS));
+        drainer.join(2_000);
+        assertFalse(drainer.isAlive());
+        bus.close();
+    }
+
+    @Test
+    public void idleAsyncWorkerBlocksUntilSignalledAndCloseWakesIt() throws Exception {
+        EventBusImpl bus = new EventBusImpl(null, "idle", true, 1_000);
+        await("the async worker to block on its event signal", bus::isAsyncWorkerBlockedForEvent);
+
+        long started = System.nanoTime();
+        bus.close();
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue("close took " + elapsedMillis + " ms", elapsedMillis < 1_000);
+        assertThrows(IllegalStateException.class, () -> bus.postAsync(new TestEvent()));
+    }
+
+    private static void await(String description, Condition condition) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!condition.evaluate() && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+        }
+        assertTrue("Timed out waiting for " + description, condition.evaluate());
+    }
+
+    @FunctionalInterface
+    private interface Condition {
+        boolean evaluate();
+    }
+
     private static class TestEvent implements Event {
     }
 
@@ -316,6 +398,14 @@ public class EventBusImplTest {
 
         private NestedEvent(int depth) {
             this.depth = depth;
+        }
+    }
+
+    private static class SequencedEvent implements Event {
+        private final int sequence;
+
+        private SequencedEvent(int sequence) {
+            this.sequence = sequence;
         }
     }
 }

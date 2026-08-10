@@ -169,6 +169,11 @@ final class JavaSoundAudioBackend implements AudioBackend {
         }
 
         @Override
+        public boolean isRunning() {
+            return line.isRunning();
+        }
+
+        @Override
         public int write(byte[] bytes, int offset, int length) {
             return line.write(bytes, offset, length);
         }

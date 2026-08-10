@@ -5,9 +5,18 @@ HARNESS_REF="${HARNESS_REF:-master}"
 DEFAULT_ROM="Z:/emu/roms/gbc/H/Harry Potter and the Sorcerer's Stone (USA, Europe) (En,Fr,De,Es,It,Nl,Pt,Sv,No,Da,Fi).gbc"
 ROM_PATH="${HARRY_POTTER_ROM:-$DEFAULT_ROM}"
 BATTERY_SAVE="${HARRY_POTTER_BATTERY_SAVE:-}"
-FORCE_FRAME_SKIP="${HARRY_POTTER_FORCE_FRAME_SKIP:-false}"
 LATENCY_PRESET="${HARRY_POTTER_AUDIO_LATENCY:-BALANCED}"
+REWIND_ENABLED="${HARRY_POTTER_REWIND_ENABLED:-true}"
+BOOTSTRAP_MODE="${HARRY_POTTER_BOOTSTRAP_MODE:-SKIP}"
+SAMPLE_LINE_OCCUPANCY="${HARRY_POTTER_SAMPLE_LINE_OCCUPANCY:-false}"
 JFR_PATH="${HARRY_POTTER_JFR:-}"
+case "$SAMPLE_LINE_OCCUPANCY" in
+  true|false) ;;
+  *)
+    echo "HARRY_POTTER_SAMPLE_LINE_OCCUPANCY must be true or false: $SAMPLE_LINE_OCCUPANCY" >&2
+    exit 2
+    ;;
+esac
 if (($# > 0)); then
   ROM_PATH="$1"
 fi
@@ -41,8 +50,10 @@ mvn -q -pl swing -am \
   -Dsurefire.failIfNoSpecifiedTests=false \
   -DharryPotterRom="$ROM_PATH" \
   -DharryPotterBatterySave="$BATTERY_SAVE" \
-  -DharryPotterForceFrameSkip="$FORCE_FRAME_SKIP" \
   -DharryPotterAudioLatency="$LATENCY_PRESET" \
+  -DharryPotterRewindEnabled="$REWIND_ENABLED" \
+  -DharryPotterBootstrapMode="$BOOTSTRAP_MODE" \
+  -DharryPotterSampleLineOccupancy="$SAMPLE_LINE_OCCUPANCY" \
   -DharryPotterJfr="$JFR_PATH" \
   -Dsurefire.useFile=false \
   test
@@ -50,4 +61,4 @@ mvn -q -pl swing -am \
 report="swing/target/surefire-reports/TEST-eu.rekawek.coffeegb.swing.io.HarryPotterIntroUiAudioTimingTest.xml"
 sed -n '/<system-out><!\[CDATA\[/,/]]><\/system-out>/p' "$report" \
   | sed -e 's/^.*<!\[CDATA\[//' -e 's/]]><\/system-out>.*$//' \
-  | sed -n '/UI audio timing\|Audio frontend\|Audio line\|Producer event\|Controller frame\|Audio gaps\|Audio underruns\|Audio gap\|Audio worker\|Forced frame suppression\|JFR/p'
+  | sed -n '/Full intro/p'

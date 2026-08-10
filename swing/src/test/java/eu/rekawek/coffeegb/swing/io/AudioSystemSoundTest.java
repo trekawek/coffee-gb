@@ -19,8 +19,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -74,7 +78,7 @@ public class AudioSystemSoundTest {
     }
 
     @Test
-    public void balancedRuntimeQueueAcceptsCatchUpHeadroomWithoutChangingStartupWatermark()
+    public void balancedRuntimeQueueAcceptsContinuityHeadroomAndBoundsOldestFrame()
             throws Exception {
         EventBusImpl eventBus = synchronousBus();
         AudioSystemSound sound = new AudioSystemSound(
@@ -84,17 +88,138 @@ public class AudioSystemSoundTest {
                 new FakeBackend(),
                 ignored -> {
                 });
-        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int ticks = ClockSpec.LEGACY.controllerTicksPerFrame();
         int capacity = AudioRuntimeConfiguration.LatencyPreset.BALANCED.runtimeQueueCapacity();
 
-        for (int frame = 0; frame < capacity; frame++) {
-            eventBus.post(new Sound.SoundSampleEvent(samples));
+        for (int frame = 1; frame <= capacity; frame++) {
+            eventBus.post(new Sound.SoundSampleEvent(constantSamples(ticks, frame * 480)));
         }
-        assertEquals(12, capacity);
+        assertEquals(24, capacity);
         assertEquals(capacity, queue(sound).size());
+        List<byte[]> beforeOverflow = new ArrayList<>(queue(sound));
 
-        eventBus.post(new Sound.SoundSampleEvent(samples));
+        eventBus.post(new Sound.SoundSampleEvent(constantSamples(ticks, (capacity + 1) * 480)));
         assertEquals("runtime queue must remain bounded", capacity, queue(sound).size());
+        assertArrayEquals("overflow must discard the oldest real PCM frame",
+                beforeOverflow.get(1), queue(sound).peek());
+    }
+
+    @Test
+    public void balancedQueueCoversA324MillisecondScriptedWorkerStallWithoutSleeping()
+            throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                new FakeBackend(),
+                ignored -> {
+                });
+        ClockSpec clock = ClockSpec.LEGACY;
+        int stalledFrames = 20;
+        ClockSpec.RateAccumulator elapsed = clock.newFrameNanosecondAccumulator();
+
+        for (int frame = 0; frame < stalledFrames; frame++) {
+            eventBus.post(new Sound.SoundSampleEvent(
+                    constantSamples(clock.controllerTicksPerFrame(), 480)));
+        }
+
+        long scriptedStallNanos = elapsed.advance(stalledFrames);
+        assertTrue(scriptedStallNanos >= TimeUnit.MILLISECONDS.toNanos(324));
+        assertTrue(scriptedStallNanos < TimeUnit.MILLISECONDS.toNanos(400));
+        assertTrue(stalledFrames <= AudioRuntimeConfiguration.LatencyPreset.BALANCED
+                .runtimeQueueCapacity());
+        assertEquals(stalledFrames, queue(sound).size());
+    }
+
+    @Test
+    public void windowsPriorityIsAppliedBeforeStartWhileNonWindowsLeavesItUntouched() {
+        Thread windowsWorker = new Thread();
+        AtomicReference<Thread.State> stateDuringConfiguration = new AtomicReference<>();
+        AtomicInteger requestedPriority = new AtomicInteger();
+
+        AudioSystemSound.configureOwnedWorkerPriority(
+                windowsWorker,
+                "wInDoWs 11",
+                (worker, priority) -> {
+                    stateDuringConfiguration.set(worker.getState());
+                    requestedPriority.set(priority);
+                    worker.setPriority(priority);
+                });
+
+        assertEquals(Thread.State.NEW, stateDuringConfiguration.get());
+        assertEquals(Thread.NORM_PRIORITY + 1, requestedPriority.get());
+        assertEquals(Thread.NORM_PRIORITY + 1, windowsWorker.getPriority());
+        assertTrue(AudioSystemSound.isWindows("Windows NT"));
+        assertFalse(AudioSystemSound.isWindows("Linux"));
+
+        Thread nonWindowsWorker = new Thread();
+        nonWindowsWorker.setPriority(Thread.NORM_PRIORITY - 2);
+        AtomicBoolean nonWindowsSetterCalled = new AtomicBoolean();
+
+        AudioSystemSound.configureOwnedWorkerPriority(
+                nonWindowsWorker,
+                "Mac OS X",
+                (worker, priority) -> nonWindowsSetterCalled.set(true));
+
+        assertFalse("non-Windows worker priority must remain inherited", nonWindowsSetterCalled.get());
+        assertEquals(Thread.NORM_PRIORITY - 2, nonWindowsWorker.getPriority());
+    }
+
+    @Test
+    public void windowsOwnedWorkerStartsAsNamedDaemonAtRaisedPriority() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                },
+                "Windows 11");
+
+        Thread worker = sound.start();
+        try {
+            await("Windows-priority output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            assertEquals("coffee-gb-audio-output", worker.getName());
+            assertTrue(worker.isDaemon());
+            assertEquals(Thread.NORM_PRIORITY + 1, worker.getPriority());
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void priorityFailureDoesNotPreventWindowsAudioWorkerStartup() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add("default", "System Default");
+        AtomicBoolean priorityAttempted = new AtomicBoolean();
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                },
+                "Windows 11",
+                (worker, priority) -> {
+                    priorityAttempted.set(true);
+                    throw new SecurityException("priority denied");
+                });
+
+        Thread worker = sound.start();
+        try {
+            await("audio worker after a failed priority request",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            assertTrue(priorityAttempted.get());
+            assertTrue(worker.isAlive());
+        } finally {
+            sound.stopThread();
+        }
     }
 
     @Test
@@ -169,6 +294,232 @@ public class AudioSystemSoundTest {
 
             eventBus.post(new Sound.SoundSampleEvent(samples));
             await("primed PCM batch", () -> line.nonSilentWriteCount() == watermark);
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void runningLineStartsOnlyAtOpenNotAtPrimingOrEachRealBuffer() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int watermark = AudioRuntimeConfiguration.LatencyPreset.BALANCED.queuedFrames();
+
+        sound.start();
+        try {
+            await("default output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            FakeLine line = backend.lastLine("default");
+            assertEquals("openAndStart starts the fresh provider once", 1, line.startCount);
+
+            for (int frame = 0; frame < watermark; frame++) {
+                eventBus.post(new Sound.SoundSampleEvent(samples));
+            }
+            await("primed PCM batch", () -> line.nonSilentWriteCount() == watermark);
+            assertEquals("priming must not restart a running line", 1, line.startCount);
+
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("steady-state PCM frame", () -> line.nonSilentWriteCount() == watermark + 1);
+            assertEquals("steady PCM must not restart a running line", 1, line.startCount);
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void windowsPublicRunningStateMayNeedOnePrimingStartButNotSteadyStarts()
+            throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.runningBecomesPublicAfterFirstWrite = true;
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                AudioRuntimeConfiguration.defaults(),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int watermark = AudioRuntimeConfiguration.LatencyPreset.BALANCED.queuedFrames();
+
+        sound.start();
+        try {
+            await("Windows-like output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            FakeLine line = backend.lastLine("default");
+            assertEquals(1, line.startCount);
+            assertFalse("some providers do not report running until the first PCM write",
+                    line.isRunning());
+
+            for (int frame = 0; frame < watermark; frame++) {
+                eventBus.post(new Sound.SoundSampleEvent(samples));
+            }
+            await("primed Windows-like PCM", () -> line.nonSilentWriteCount() == watermark);
+            assertEquals("the false public state permits one idempotent priming start", 2,
+                    line.startCount);
+            assertTrue(line.isRunning());
+
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("steady Windows-like PCM", () -> line.nonSilentWriteCount() == watermark + 1);
+            assertEquals("steady PCM must not repeat native starts", 2, line.startCount);
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void stoppedLineRestartsBeforeRealPcmAndStartFailureFallsBack() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        FakeBackend backend = new FakeBackend();
+        backend.add(DEVICE_A, "Output A");
+        backend.add("default", "System Default");
+        AudioSystemSound sound = new AudioSystemSound(
+                new AudioRuntimeConfiguration(
+                        DEVICE_A, 100, false,
+                        AudioRuntimeConfiguration.LatencyPreset.BALANCED),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int watermark = AudioRuntimeConfiguration.LatencyPreset.BALANCED.queuedFrames();
+
+        sound.start();
+        try {
+            await("configured output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            FakeLine line = backend.lastLine(DEVICE_A);
+            for (int frame = 0; frame < watermark; frame++) {
+                eventBus.post(new Sound.SoundSampleEvent(samples));
+            }
+            await("initial real PCM", () -> line.nonSilentWriteCount() == watermark);
+
+            line.running = false;
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("stopped provider restart", () -> line.nonSilentWriteCount() == watermark + 1);
+            assertEquals("the stopped provider must restart before writing real PCM", 2,
+                    line.startCount);
+
+            line.running = false;
+            line.failStarts = true;
+            backend.remove(DEVICE_A);
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("restart failure fallback", () -> sound.currentStatus().state()
+                    == AudioOutputStatus.State.FALLBACK);
+            assertTrue("failed restart line must be closed", line.closed);
+            assertEquals("default", sound.currentStatus().activeDeviceId());
+            assertEquals(1, backend.lastLine("default").startCount);
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void workerCompletesPartialProviderWritesInOrderWithoutAvailabilityPolling()
+            throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        PartialWriteBackend backend = new PartialWriteBackend(12);
+        AudioRuntimeConfiguration configuration = new AudioRuntimeConfiguration(
+                "default", 100, false, AudioRuntimeConfiguration.LatencyPreset.LOW);
+        AudioSystemSound sound = new AudioSystemSound(
+                configuration,
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        byte[] expected = render(configuration, samples);
+
+        sound.start();
+        try {
+            await("partial-write output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("complete PCM frame through partial writes",
+                    () -> backend.line.writtenBytes() == expected.length);
+
+            assertTrue("the provider must report more than one partial write",
+                    backend.line.writeLengths.size() > 1);
+            assertEquals("the initial provider call receives the whole PCM frame", expected.length,
+                    (int) backend.line.requestLengths.get(0));
+            assertEquals("writeFully must not second-guess provider availability", 0,
+                    backend.line.availableCalls);
+            assertArrayEquals(expected, backend.line.concatenatedWrites());
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void wholePcmBufferWriteObservationSpansBlockingPartialProviderWrites() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        PausingPartialWriteBackend backend = new PausingPartialWriteBackend(16);
+        AudioRuntimeConfiguration configuration = new AudioRuntimeConfiguration(
+                "default", 100, false, AudioRuntimeConfiguration.LatencyPreset.LOW);
+        AudioSystemSound sound = new AudioSystemSound(
+                configuration,
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+        int[] samples = audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame());
+        int expectedBytes = render(configuration, samples).length;
+
+        sound.start();
+        try {
+            await("partial-write output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            eventBus.post(new Sound.SoundSampleEvent(samples));
+            await("first PCM chunk before the provider blocks", backend.line::firstChunkWritten);
+
+            assertTrue("the dequeued PCM buffer must remain visible between chunks",
+                    sound.isPcmBufferWriteInProgressForTesting());
+            backend.line.allowRemainingWrites();
+            await("complete PCM buffer after availability resumes",
+                    () -> backend.line.writtenBytes() == expectedBytes);
+            await("completed PCM buffer observation to clear",
+                    () -> !sound.isPcmBufferWriteInProgressForTesting());
+        } finally {
+            sound.stopThread();
+        }
+    }
+
+    @Test
+    public void zeroProgressProviderWriteReopensTheOutput() throws Exception {
+        EventBusImpl eventBus = synchronousBus();
+        PartialWriteBackend backend = new PartialWriteBackend(12, 1);
+        AudioSystemSound sound = new AudioSystemSound(
+                new AudioRuntimeConfiguration(
+                        "default", 100, false, AudioRuntimeConfiguration.LatencyPreset.LOW),
+                eventBus,
+                null,
+                backend,
+                ignored -> {
+                });
+
+        sound.start();
+        try {
+            await("zero-progress output to open",
+                    () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
+            PartialWriteLine first = backend.line;
+            eventBus.post(new Sound.SoundSampleEvent(
+                    audibleSamples(ClockSpec.LEGACY.controllerTicksPerFrame())));
+            await("zero-progress output to reopen", () -> backend.openCount() >= 2);
+            assertTrue("the no-progress provider must be closed", first.closed);
+            assertEquals(AudioOutputStatus.State.ACTIVE, sound.currentStatus().state());
         } finally {
             sound.stopThread();
         }
@@ -251,7 +602,7 @@ public class AudioSystemSoundTest {
                 () -> sound.currentStatus().state() == AudioOutputStatus.State.ACTIVE);
         assertEquals(DEVICE_A, sound.currentStatus().activeDeviceId());
         FakeLine first = backend.lastLine(DEVICE_A);
-        assertEquals(8192, first.requestedBufferBytes);
+        assertEquals(16384, first.requestedBufferBytes);
 
         int opensBeforeGain = backend.openedIds.size();
         sound.applyConfiguration(new AudioRuntimeConfiguration(
@@ -266,7 +617,7 @@ public class AudioSystemSoundTest {
         await("latency change to reopen line",
                 () -> backend.openedIds.size() > opensBeforeGain);
         FakeLine safe = backend.lastLine(DEVICE_A);
-        assertEquals(16384, safe.requestedBufferBytes);
+        assertEquals(32768, safe.requestedBufferBytes);
         assertTrue(first.closed);
 
         backend.remove(DEVICE_A);
@@ -369,11 +720,13 @@ public class AudioSystemSoundTest {
         assertEquals(
                 AudioRuntimeConfiguration.LatencyPreset.BALANCED,
                 defaults.latencyPreset());
-        assertEquals(8192, defaults.latencyPreset().lineBufferBytes());
-        assertEquals(3, defaults.latencyPreset().queuedFrames());
+        assertEquals(16384, defaults.latencyPreset().lineBufferBytes());
+        assertEquals(6, defaults.latencyPreset().queuedFrames());
         assertEquals(4, AudioRuntimeConfiguration.LatencyPreset.LOW.runtimeQueueCapacity());
-        assertEquals(12, defaults.latencyPreset().runtimeQueueCapacity());
-        assertEquals(15, AudioRuntimeConfiguration.LatencyPreset.SAFE.runtimeQueueCapacity());
+        assertEquals(24, defaults.latencyPreset().runtimeQueueCapacity());
+        assertEquals(32768, AudioRuntimeConfiguration.LatencyPreset.SAFE.lineBufferBytes());
+        assertEquals(12, AudioRuntimeConfiguration.LatencyPreset.SAFE.queuedFrames());
+        assertEquals(32, AudioRuntimeConfiguration.LatencyPreset.SAFE.runtimeQueueCapacity());
 
         assertInvalid(() -> new AudioRuntimeConfiguration(
                 "array-index-0", 100, false,
@@ -387,6 +740,11 @@ public class AudioSystemSoundTest {
     }
 
     private static byte[] render(AudioRuntimeConfiguration configuration) throws Exception {
+        return render(configuration, constantSamples(2000, 480));
+    }
+
+    private static byte[] render(AudioRuntimeConfiguration configuration, int[] samples)
+            throws Exception {
         EventBusImpl eventBus = synchronousBus();
         AudioSystemSound sound = new AudioSystemSound(
                 configuration,
@@ -395,7 +753,7 @@ public class AudioSystemSoundTest {
                 new FakeBackend(),
                 ignored -> {
                 });
-        eventBus.post(new Sound.SoundSampleEvent(constantSamples(2000, 480)));
+        eventBus.post(new Sound.SoundSampleEvent(samples));
         return queue(sound).remove();
     }
 
@@ -478,6 +836,7 @@ public class AudioSystemSoundTest {
         private final List<String> operationThreads = new CopyOnWriteArrayList<>();
         private volatile String exclusivePreferredDevice;
         private volatile int exclusiveOpenConflicts;
+        private volatile boolean runningBecomesPublicAfterFirstWrite;
 
         void add(String id, String name) {
             available.put(
@@ -515,7 +874,8 @@ public class AudioSystemSoundTest {
                 throw new LineUnavailableException(
                         "preferred output is exclusive while fallback remains open");
             }
-            FakeLine line = new FakeLine(bufferBytes, operationThreads);
+            FakeLine line = new FakeLine(
+                    bufferBytes, operationThreads, runningBecomesPublicAfterFirstWrite);
             lines.put(stableId, line);
             openedIds.add(stableId);
             return line;
@@ -525,15 +885,24 @@ public class AudioSystemSoundTest {
     private static final class FakeLine implements AudioBackend.AudioLine {
         private final int requestedBufferBytes;
         private final List<String> operationThreads;
+        private final boolean runningBecomesPublicAfterFirstWrite;
         private volatile boolean open = true;
+        private volatile boolean running;
+        private volatile boolean startRequested;
         private volatile boolean closed;
         private volatile boolean failWrites;
+        private volatile boolean failStarts;
         private volatile int flushCount;
+        private volatile int startCount;
         private final List<byte[]> writes = new CopyOnWriteArrayList<>();
 
-        private FakeLine(int requestedBufferBytes, List<String> operationThreads) {
+        private FakeLine(
+                int requestedBufferBytes,
+                List<String> operationThreads,
+                boolean runningBecomesPublicAfterFirstWrite) {
             this.requestedBufferBytes = requestedBufferBytes;
             this.operationThreads = operationThreads;
+            this.runningBecomesPublicAfterFirstWrite = runningBecomesPublicAfterFirstWrite;
         }
 
         private void record() {
@@ -543,6 +912,19 @@ public class AudioSystemSoundTest {
         @Override
         public void start() {
             record();
+            startCount++;
+            if (failStarts) {
+                throw new IllegalStateException("provider failed to start");
+            }
+            startRequested = true;
+            if (!runningBecomesPublicAfterFirstWrite) {
+                running = true;
+            }
+        }
+
+        @Override
+        public boolean isRunning() {
+            return running;
         }
 
         @Override
@@ -550,6 +932,9 @@ public class AudioSystemSoundTest {
             record();
             if (failWrites) {
                 throw new IllegalStateException("device disconnected");
+            }
+            if (runningBecomesPublicAfterFirstWrite && startRequested) {
+                running = true;
             }
             writes.add(Arrays.copyOfRange(bytes, offset, offset + length));
             return length;
@@ -598,13 +983,241 @@ public class AudioSystemSoundTest {
         @Override
         public void stop() {
             record();
+            running = false;
         }
 
         @Override
         public void close() {
             record();
             open = false;
+            running = false;
             closed = true;
+        }
+    }
+
+    private static final class PartialWriteBackend implements AudioBackend {
+        private final int maximumProgressBytes;
+        private int zeroProgressOpensRemaining;
+        private final List<PartialWriteLine> lines = new CopyOnWriteArrayList<>();
+        private volatile PartialWriteLine line;
+
+        private PartialWriteBackend(int maximumProgressBytes) {
+            this(maximumProgressBytes, 0);
+        }
+
+        private PartialWriteBackend(int maximumProgressBytes, int zeroProgressOpens) {
+            this.maximumProgressBytes = maximumProgressBytes;
+            this.zeroProgressOpensRemaining = zeroProgressOpens;
+        }
+
+        @Override
+        public List<AudioDeviceSnapshot> devices() {
+            return List.of(AudioDeviceSnapshot.systemDefaultDevice());
+        }
+
+        @Override
+        public AudioLine open(String stableId, AudioFormat format, int bufferBytes)
+                throws LineUnavailableException {
+            if (!AudioDeviceSnapshot.SYSTEM_DEFAULT_ID.equals(stableId)) {
+                throw new LineUnavailableException("missing " + stableId);
+            }
+            PartialWriteLine opened = new PartialWriteLine(
+                    maximumProgressBytes, zeroProgressOpensRemaining-- > 0);
+            lines.add(opened);
+            line = opened;
+            return opened;
+        }
+
+        private int openCount() {
+            return lines.size();
+        }
+    }
+
+    private static final class PartialWriteLine implements AudioBackend.AudioLine {
+        private final int maximumProgressBytes;
+        private final boolean zeroProgress;
+        private final List<byte[]> writes = new CopyOnWriteArrayList<>();
+        private final List<Integer> requestLengths = new CopyOnWriteArrayList<>();
+        private final List<Integer> writeLengths = new CopyOnWriteArrayList<>();
+        private volatile int availableCalls;
+        private volatile boolean running;
+        private volatile boolean closed;
+
+        private PartialWriteLine(int maximumProgressBytes, boolean zeroProgress) {
+            this.maximumProgressBytes = maximumProgressBytes;
+            this.zeroProgress = zeroProgress;
+        }
+
+        @Override
+        public void start() {
+            running = true;
+        }
+
+        @Override
+        public boolean isRunning() {
+            return running;
+        }
+
+        @Override
+        public int write(byte[] bytes, int offset, int length) {
+            requestLengths.add(length);
+            if (zeroProgress) {
+                return 0;
+            }
+            int written = Math.min(length, maximumProgressBytes);
+            writeLengths.add(written);
+            writes.add(Arrays.copyOfRange(bytes, offset, offset + written));
+            return written;
+        }
+
+        private int writtenBytes() {
+            return writeLengths.stream().mapToInt(Integer::intValue).sum();
+        }
+
+        private byte[] concatenatedWrites() {
+            byte[] result = new byte[writtenBytes()];
+            int offset = 0;
+            for (byte[] write : writes) {
+                System.arraycopy(write, 0, result, offset, write.length);
+                offset += write.length;
+            }
+            return result;
+        }
+
+        @Override
+        public int available() {
+            availableCalls++;
+            return 0;
+        }
+
+        @Override
+        public int bufferSize() {
+            return maximumProgressBytes;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return !closed;
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void stop() {
+            running = false;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            running = false;
+        }
+    }
+
+    private static final class PausingPartialWriteBackend implements AudioBackend {
+        private final PausingPartialWriteLine line;
+
+        private PausingPartialWriteBackend(int chunkBytes) {
+            this.line = new PausingPartialWriteLine(chunkBytes);
+        }
+
+        @Override
+        public List<AudioDeviceSnapshot> devices() {
+            return List.of(AudioDeviceSnapshot.systemDefaultDevice());
+        }
+
+        @Override
+        public AudioLine open(String stableId, AudioFormat format, int bufferBytes)
+                throws LineUnavailableException {
+            if (!AudioDeviceSnapshot.SYSTEM_DEFAULT_ID.equals(stableId)) {
+                throw new LineUnavailableException("missing " + stableId);
+            }
+            return line;
+        }
+    }
+
+    private static final class PausingPartialWriteLine implements AudioBackend.AudioLine {
+        private final int chunkBytes;
+        private final CountDownLatch firstChunk = new CountDownLatch(1);
+        private final CountDownLatch allowRemainingWrites = new CountDownLatch(1);
+        private volatile boolean firstWrite = true;
+        private volatile boolean running;
+        private volatile int writtenBytes;
+
+        private PausingPartialWriteLine(int chunkBytes) {
+            this.chunkBytes = chunkBytes;
+        }
+
+        @Override
+        public void start() {
+            running = true;
+        }
+
+        @Override
+        public boolean isRunning() {
+            return running;
+        }
+
+        @Override
+        public int write(byte[] bytes, int offset, int length) {
+            if (firstWrite) {
+                firstWrite = false;
+                int written = Math.min(length, chunkBytes);
+                writtenBytes += written;
+                firstChunk.countDown();
+                return written;
+            }
+            try {
+                allowRemainingWrites.await();
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return 0;
+            }
+            int written = Math.min(length, chunkBytes);
+            writtenBytes += written;
+            return written;
+        }
+
+        private boolean firstChunkWritten() {
+            return firstChunk.getCount() == 0;
+        }
+
+        private void allowRemainingWrites() {
+            allowRemainingWrites.countDown();
+        }
+
+        private int writtenBytes() {
+            return writtenBytes;
+        }
+
+        @Override
+        public int available() {
+            return chunkBytes;
+        }
+
+        @Override
+        public int bufferSize() {
+            return chunkBytes;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void stop() {
+            running = false;
+        }
+
+        @Override
+        public void close() {
         }
     }
 
@@ -623,6 +1236,11 @@ public class AudioSystemSoundTest {
             return new AudioLine() {
                 @Override
                 public void start() {
+                }
+
+                @Override
+                public boolean isRunning() {
+                    return true;
                 }
 
                 @Override

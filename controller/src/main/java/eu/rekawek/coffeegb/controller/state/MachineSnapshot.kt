@@ -136,6 +136,21 @@ internal class MachineSnapshot private constructor(
 
   internal data class ArrayDebug(val size: Int, val pageTokens: List<Any>)
 
+  /** Read-only identity probe for tests; tokens are immutable field wrappers, never payloads. */
+  internal fun debugRecordFields(ownerClassName: String): List<RecordDebug> {
+    val result = ArrayList<RecordDebug>()
+    root.visitRecords { record ->
+      if (SnapshotGraph.recordClassName(record.typeId) == ownerClassName) {
+        val fields = LinkedHashMap<String, Any>()
+        record.fields.forEach { fields[it.name] = it }
+        result += RecordDebug(Collections.unmodifiableMap(fields))
+      }
+    }
+    return Collections.unmodifiableList(result)
+  }
+
+  internal data class RecordDebug(val fieldTokens: Map<String, Any>)
+
   internal data class CaptureStats(
       val copiedPages: Int,
       val copiedPageBytes: Long,
@@ -543,7 +558,12 @@ private class BytePage(private val data: ByteArray, hash: Int) :
     SnapshotPage(PageKind.BYTE, data.size, hash) {
   override fun matches(source: Any, offset: Int): Boolean {
     source as ByteArray
-    return data.indices.all { data[it] == source[offset + it] }
+    var index = 0
+    while (index < data.size) {
+      if (data[index] != source[offset + index]) return false
+      index++
+    }
+    return true
   }
 
   override fun copyTo(target: Any, offset: Int) {
@@ -555,7 +575,12 @@ private class IntPage(private val data: IntArray, hash: Int) :
     SnapshotPage(PageKind.INT, data.size, hash) {
   override fun matches(source: Any, offset: Int): Boolean {
     source as IntArray
-    return data.indices.all { data[it] == source[offset + it] }
+    var index = 0
+    while (index < data.size) {
+      if (data[index] != source[offset + index]) return false
+      index++
+    }
+    return true
   }
 
   override fun copyTo(target: Any, offset: Int) {
@@ -567,7 +592,12 @@ private class LongPage(private val data: LongArray, hash: Int) :
     SnapshotPage(PageKind.LONG, data.size, hash) {
   override fun matches(source: Any, offset: Int): Boolean {
     source as LongArray
-    return data.indices.all { data[it] == source[offset + it] }
+    var index = 0
+    while (index < data.size) {
+      if (data[index] != source[offset + index]) return false
+      index++
+    }
+    return true
   }
 
   override fun copyTo(target: Any, offset: Int) {
@@ -579,7 +609,12 @@ private class BooleanPage(private val data: BooleanArray, hash: Int) :
     SnapshotPage(PageKind.BOOLEAN, data.size, hash) {
   override fun matches(source: Any, offset: Int): Boolean {
     source as BooleanArray
-    return data.indices.all { data[it] == source[offset + it] }
+    var index = 0
+    while (index < data.size) {
+      if (data[index] != source[offset + index]) return false
+      index++
+    }
+    return true
   }
 
   override fun copyTo(target: Any, offset: Int) {
@@ -587,36 +622,64 @@ private class BooleanPage(private val data: BooleanArray, hash: Int) :
   }
 }
 
-private class SnapshotPagePool(previous: SnapshotRecord?) {
-  private val pages = HashMap<PageKey, MutableList<SnapshotPage>>()
+private class SnapshotPagePool(private val previous: SnapshotRecord?) {
+  // A first capture needs immediate cross-array deduplication. An incremental capture begins with
+  // same-position preferred pages, so defer the map (and PageKey/bucket allocations) until one
+  // page misses and genuinely needs a graph-wide lookup.
+  private var pages: HashMap<PageKey, MutableList<SnapshotPage>>? =
+      if (previous == null) HashMap() else null
+  private var previousIndexed = previous == null
 
-  init {
-    previous?.visit { value ->
-      if (value is SnapshotPrimitiveArray) value.pages.forEach(::add)
-    }
-  }
-
-  fun reuse(
+  fun reusePreferred(
       kind: PageKind,
       source: Any,
       offset: Int,
       length: Int,
-      hash: Int,
       preferred: SnapshotPage?,
   ): SnapshotPage? {
     if (preferred != null &&
         preferred.kind == kind &&
         preferred.length == length &&
-        preferred.hash == hash &&
         preferred.matches(source, offset)) {
       return preferred
     }
-    return pages[PageKey(kind, length, hash)]?.firstOrNull { it.matches(source, offset) }
+    return null
+  }
+
+  fun reuseFallback(
+      kind: PageKind,
+      source: Any,
+      offset: Int,
+      length: Int,
+      hash: Int,
+  ): SnapshotPage? {
+    indexPreviousOnFirstPreferredMiss()
+    return pages
+        ?.get(PageKey(kind, length, hash))
+        ?.firstOrNull { it.matches(source, offset) }
   }
 
   fun add(page: SnapshotPage) {
-    val bucket = pages.getOrPut(PageKey(page.kind, page.length, page.hash), ::ArrayList)
+    // Before the first miss every selected page is its same-position predecessor, already
+    // reachable from the previous graph. There is nothing new to index yet.
+    val indexed = pages ?: return
+    val bucket = indexed.getOrPut(PageKey(page.kind, page.length, page.hash), ::ArrayList)
     if (bucket.none { it === page }) bucket += page
+  }
+
+  /**
+   * Most incremental pages are in exactly the same array position as their predecessor. Avoid
+   * scanning/indexing the complete previous graph until a page actually needs cross-position
+   * lookup; selected pages before that point are already reachable from the prior graph and are
+   * recovered when it is indexed.
+   */
+  private fun indexPreviousOnFirstPreferredMiss() {
+    if (previousIndexed) return
+    previousIndexed = true
+    pages = HashMap()
+    previous?.visit { value ->
+      if (value is SnapshotPrimitiveArray) value.pages.forEach(::add)
+    }
   }
 }
 
@@ -867,11 +930,11 @@ private object SnapshotGraph {
       countValue()
       if (source == null) return SnapshotNull
       return when (source) {
-        is Int -> reuseScalar(previous, SnapshotInt(source))
-        is Long -> reuseScalar(previous, SnapshotLong(source))
-        is Boolean -> reuseScalar(previous, SnapshotBoolean(source))
-        is Double -> reuseScalar(previous, SnapshotDoubleBits(source.toBits()))
-        is String -> reuseScalar(previous, SnapshotString(source))
+        is Int -> captureInt(source, previous)
+        is Long -> captureLong(source, previous)
+        is Boolean -> captureBoolean(source, previous)
+        is Double -> captureDouble(source, previous)
+        is String -> captureString(source, previous)
         is ByteArray -> captureBytes(source, previous as? SnapshotBytes)
         is IntArray -> captureInts(source, previous as? SnapshotInts)
         is LongArray -> captureLongs(source, previous as? SnapshotLongs)
@@ -882,7 +945,7 @@ private object SnapshotGraph {
           val id =
               enumIds[source.javaClass]
                   ?: error("Unregistered snapshot enum ${source.javaClass.name}")
-          reuseScalar(previous, SnapshotEnum(id, source.ordinal))
+          captureEnum(id, source.ordinal, previous)
         }
         else ->
             if (source.javaClass.isArray) {
@@ -893,8 +956,48 @@ private object SnapshotGraph {
       }
     }
 
-    private fun reuseScalar(previous: SnapshotValue?, candidate: SnapshotValue): SnapshotValue =
-        if (previous == candidate) previous else candidate.also { newValueNodes++ }
+    private fun captureInt(source: Int, previous: SnapshotValue?): SnapshotValue {
+      if (previous is SnapshotInt && previous.value == source) return previous
+      newValueNodes++
+      return SnapshotInt(source)
+    }
+
+    private fun captureLong(source: Long, previous: SnapshotValue?): SnapshotValue {
+      if (previous is SnapshotLong && previous.value == source) return previous
+      newValueNodes++
+      return SnapshotLong(source)
+    }
+
+    private fun captureBoolean(source: Boolean, previous: SnapshotValue?): SnapshotValue {
+      if (previous is SnapshotBoolean && previous.value == source) return previous
+      newValueNodes++
+      return SnapshotBoolean(source)
+    }
+
+    private fun captureDouble(source: Double, previous: SnapshotValue?): SnapshotValue {
+      val bits = source.toBits()
+      if (previous is SnapshotDoubleBits && previous.bits == bits) return previous
+      newValueNodes++
+      return SnapshotDoubleBits(bits)
+    }
+
+    private fun captureString(source: String, previous: SnapshotValue?): SnapshotValue {
+      if (previous is SnapshotString && previous.value == source) return previous
+      newValueNodes++
+      return SnapshotString(source)
+    }
+
+    private fun captureEnum(
+        typeId: Int,
+        ordinal: Int,
+        previous: SnapshotValue?,
+    ): SnapshotValue {
+      if (previous is SnapshotEnum && previous.typeId == typeId && previous.ordinal == ordinal) {
+        return previous
+      }
+      newValueNodes++
+      return SnapshotEnum(typeId, ordinal)
+    }
 
     private fun captureBytes(source: ByteArray, previous: SnapshotBytes?): SnapshotValue =
         capturePrimitive(
@@ -953,38 +1056,47 @@ private object SnapshotGraph {
     ): SnapshotValue {
       val pageElements = bytePageElements(kind.width)
       val pageCount = if (size == 0) 0 else (size - 1) / pageElements + 1
-      val result = ArrayList<SnapshotPage>(pageCount)
+      val compatiblePrevious =
+          previous?.takeIf { it.size == size && it.pages.size == pageCount }
+      var result: ArrayList<SnapshotPage>? = null
       repeat(pageCount) { index ->
         val offset = index * pageElements
         val length = min(pageElements, size - offset)
-        val hash = pageHash(offset, length)
-        val reused =
-            pool.reuse(
-                kind,
-                source,
-                offset,
-                length,
-                hash,
-                previous?.takeIf { it.size == size }?.pages?.getOrNull(index),
-            )
+        val preferred = compatiblePrevious?.pages?.get(index)
+        val reusedPreferred = pool.reusePreferred(kind, source, offset, length, preferred)
         val page =
-            reused
-                ?: create(offset, length, hash).also {
+            if (reusedPreferred != null) {
+              reusedPages++
+              reusedPreferred
+            } else {
+              val hash = pageHash(offset, length)
+              val reusedFallback = pool.reuseFallback(kind, source, offset, length, hash)
+              if (reusedFallback != null) {
+                reusedPages++
+                reusedFallback
+              } else {
+                create(offset, length, hash).also {
                   copiedPages++
                   copiedPageBytes += length.toLong() * kind.width
                 }
-        if (reused != null) reusedPages++
+              }
+            }
         pool.add(page)
-        result += page
+        val materialized = result
+        if (materialized != null) {
+          materialized += page
+        } else if (page !== preferred) {
+          result = ArrayList<SnapshotPage>(pageCount).also { materialized ->
+            if (compatiblePrevious != null) {
+              materialized.addAll(compatiblePrevious.pages.subList(0, index))
+            }
+            materialized += page
+          }
+        }
       }
-      if (previous != null &&
-          previous.size == size &&
-          previous.pages.size == result.size &&
-          result.indices.all { result[it] === previous.pages[it] }) {
-        return previous
-      }
+      if (result == null && compatiblePrevious != null) return compatiblePrevious
       newValueNodes++
-      return array(size, result)
+      return array(size, result ?: emptyList())
     }
 
     private fun captureObjectArray(
@@ -1060,37 +1172,42 @@ private object SnapshotGraph {
     ): SnapshotValue {
       val type = source.javaClass
       val typeId = recordIds[type] ?: error("Unregistered snapshot record ${type.name}")
-      val sameType = previous?.takeIf { it.typeId == typeId }
-      val fields =
-          StateRecordIntrospection.components(type).mapIndexed { index, component ->
-            val old =
-                sameType
-                    ?.fields
-                    ?.getOrNull(index)
-                    ?.takeIf { it.name == component.name }
-                    ?.value
+      val components = StateRecordIntrospection.components(type)
+      val compatiblePrevious =
+          previous?.takeIf {
+            it.typeId == typeId &&
+                it.fields.size == components.size &&
+                components.indices.all { index -> it.fields[index].name == components[index].name }
+          }
+      var fields: ArrayList<SnapshotField>? = null
+      components.forEachIndexed { index, component ->
+        val previousField = compatiblePrevious?.fields?.get(index)
+        val captured =
             try {
-              SnapshotField(
-                  component.name,
-                  value(component.value(source), old, depth + 1),
-              )
+              value(component.value(source), previousField?.value, depth + 1)
             } catch (failure: IllegalStateException) {
               throw IllegalStateException(
                   "${type.name}.${component.name}: ${failure.message}",
                   failure,
               )
             }
+        val materialized = fields
+        if (materialized != null) {
+          materialized +=
+              previousField?.takeIf { captured === it.value }
+                  ?: SnapshotField(component.name, captured)
+        } else if (captured !== previousField?.value) {
+          fields = ArrayList<SnapshotField>(components.size).also { materialized ->
+            if (compatiblePrevious != null) {
+              materialized.addAll(compatiblePrevious.fields.subList(0, index))
+            }
+            materialized += SnapshotField(component.name, captured)
           }
-      if (sameType != null &&
-          sameType.fields.size == fields.size &&
-          fields.indices.all {
-            fields[it].name == sameType.fields[it].name &&
-                fields[it].value === sameType.fields[it].value
-          }) {
-        return sameType
+        }
       }
+      if (fields == null && compatiblePrevious != null) return compatiblePrevious
       newValueNodes++
-      return SnapshotRecord(typeId, fields)
+      return SnapshotRecord(typeId, fields ?: emptyList())
     }
 
     private fun countValue() {

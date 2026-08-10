@@ -6,12 +6,17 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
+import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
+import eu.rekawek.coffeegb.core.joypad.PlayerInputHub
+import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.DesktopRomPersistenceStore
 import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.controller.state.StateRomHashes
 import eu.rekawek.coffeegb.controller.state.StateStore
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Feature
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties.Mapper
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeType
 import eu.rekawek.coffeegb.core.memory.cart.Rom
@@ -19,6 +24,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.LinkedHashMap
 import java.util.concurrent.CancellationException
+import org.slf4j.LoggerFactory
 
 internal fun interface SessionPreparer {
   fun prepare(properties: EmulatorProperties, event: LoadRomEvent): PreparedSession
@@ -28,6 +34,7 @@ internal fun interface SessionPreparer {
 internal class RomSessionPreparer(
     internal val bootStateCache: BootStateCache = BootStateCache(),
     private val configure: (Gameboy.GameboyConfiguration) -> Unit = {},
+    internal val runtimeWarmupCache: RuntimeWarmupCache = RuntimeWarmupCache.shared,
 ) : SessionPreparer {
 
   override fun prepare(properties: EmulatorProperties, event: LoadRomEvent): PreparedSession {
@@ -54,6 +61,8 @@ internal class RomSessionPreparer(
       return PreparedSession.FromDetachedState(config, it, romHashes, stateStore)
     }
 
+    warmRuntime(config)
+
     bootStateCache.getOrCreate(config)?.let {
       return PreparedSession.FromBootState(config, it, romHashes, stateStore)
     }
@@ -69,7 +78,197 @@ internal class RomSessionPreparer(
       throw CancellationException("ROM preparation superseded")
     }
   }
+
+  /**
+   * Warms ordinary SKIP-start game code before the candidate reaches the controller thread.
+   * This is intentionally best-effort: a failed disposable machine must never reject a playable
+   * ROM. Cancellation remains observable because a superseded load must not continue preparing.
+   */
+  private fun warmRuntime(config: GameboyConfiguration) {
+    try {
+      runtimeWarmupCache.warm(config, ::ensureActive)
+    } catch (error: CancellationException) {
+      throw error
+    } catch (error: VirtualMachineError) {
+      throw error
+    } catch (error: ThreadDeath) {
+      throw error
+    } catch (error: Throwable) {
+      ensureActive()
+      LOG.warn(
+          "Disposable runtime warmup failed ({}); continuing with the requested ROM load",
+          error.javaClass.simpleName,
+      )
+    }
+  }
+
+  private companion object {
+    private val LOG = LoggerFactory.getLogger(RomSessionPreparer::class.java)
+  }
 }
+
+/** Invokes a disposable, service-free machine without making tests execute millions of ticks. */
+internal fun interface RuntimeWarmupExecutor {
+  fun warm(config: GameboyConfiguration, ticks: Int, ensureActive: () -> Unit)
+}
+
+/**
+ * Process-local bounded cache of JIT warmups, keyed by execution shape rather than ROM identity.
+ * HotSpot profiles code globally, so title bytes do not warrant another eight-million-tick run;
+ * mapper/type, profile, and every cartridge feature that can alter an execution branch do.
+ */
+internal class RuntimeWarmupCache(
+    private val capacity: Int = DEFAULT_CAPACITY,
+    private val executor: RuntimeWarmupExecutor = GameboyRuntimeWarmupExecutor,
+) {
+
+  private val monitor = Object()
+  private val completed =
+      object : LinkedHashMap<RuntimeWarmupKey, Unit>(capacity + 1, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<RuntimeWarmupKey, Unit>?
+        ): Boolean = size > capacity
+      }
+  private val inProgress = mutableSetOf<RuntimeWarmupKey>()
+
+  init {
+    require(capacity > 0) { "Runtime warmup cache capacity must be positive" }
+  }
+
+  internal var hitCount = 0
+    private set
+
+  internal val size: Int
+    get() = synchronized(monitor) { completed.size }
+
+  /**
+   * Performs at most one successful warmup per shape. Waiters observe a completed owner run or
+   * take ownership after its cancellation/failure; only successful, still-active runs are cached.
+   */
+  fun warm(config: GameboyConfiguration, ensureActive: () -> Unit) {
+    val key = RuntimeWarmupKey.from(config) ?: return
+    ensureActive()
+    synchronized(monitor) {
+      while (true) {
+        if (completed[key] != null) {
+          hitCount++
+          return
+        }
+        if (inProgress.add(key)) {
+          break
+        }
+        try {
+          monitor.wait()
+        } catch (interrupted: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw CancellationException("ROM preparation superseded")
+        }
+        ensureActive()
+      }
+    }
+
+    try {
+      val warmupConfig = config.forRuntimeWarmup().setPlayerInputSource(PlayerInputHub())
+      val ticks = Math.multiplyExact(WARMUP_FRAMES, warmupConfig.clockSpec.controllerTicksPerFrame())
+      executor.warm(warmupConfig, ticks, ensureActive)
+      ensureActive()
+      synchronized(monitor) {
+        completed[key] = Unit
+      }
+    } finally {
+      synchronized(monitor) {
+        inProgress.remove(key)
+        monitor.notifyAll()
+      }
+    }
+  }
+
+  private data class RuntimeWarmupKey(
+      val profileId: String,
+      val mapper: Mapper,
+      val cartridgeType: CartridgeType,
+      val gameboyColorFlag: Rom.GameboyColorFlag,
+      val romLength: Int,
+      val ramSize: Int,
+      val cartridgeFeatures: List<Feature>,
+      val displaySgbBorder: Boolean,
+      val mealybugDmgBlob: Boolean,
+      val codeBreakerRumble: Boolean,
+  ) {
+    companion object {
+      fun from(config: GameboyConfiguration): RuntimeWarmupKey? {
+        val rom = config.rom
+        if (config.bootstrapMode != BootstrapMode.SKIP ||
+            config.slotRom != null ||
+            rom.cartridgeProperties.mapper != Mapper.STANDARD ||
+            !isOrdinaryNonRtcCartridge(rom.type)) {
+          return null
+        }
+        val cartridgeFeatures = Feature.values().filter(rom.cartridgeProperties::has)
+        return RuntimeWarmupKey(
+            config.hardwareProfile.id(),
+            rom.cartridgeProperties.mapper,
+            rom.type,
+            rom.gameboyColorFlag,
+            rom.rom.size,
+            rom.ramSize,
+            cartridgeFeatures,
+            config.isDisplaySgbBorder,
+            config.isMealybugDmgBlob,
+            config.isCodeBreakerRumble,
+        )
+      }
+    }
+  }
+
+  private object GameboyRuntimeWarmupExecutor : RuntimeWarmupExecutor {
+    override fun warm(config: GameboyConfiguration, ticks: Int, ensureActive: () -> Unit) {
+      val delegate = EventBusImpl(null, "runtime-warmup", false)
+      val eventBus = StagedEventBus(delegate)
+      var gameboy: Gameboy? = null
+      try {
+        gameboy = config.build()
+        gameboy.init(
+            eventBus,
+            Peer2PeerSerialEndpoint(),
+            InfraredEndpoint.NULL_ENDPOINT,
+            null,
+        )
+        // Match the live Session receiver shape without attaching any UI/audio subscribers.
+        eventBus.activate()
+        repeat(ticks) { tick ->
+          if (tick % CANCELLATION_CHECK_TICKS == 0) {
+            ensureActive()
+          }
+          gameboy.tick()
+        }
+        ensureActive()
+      } finally {
+        try {
+          gameboy?.discardUnstarted()
+        } finally {
+          eventBus.close()
+        }
+      }
+    }
+  }
+
+  companion object {
+    const val WARMUP_FRAMES = 120
+    const val CANCELLATION_CHECK_TICKS = 4_096
+    const val DEFAULT_CAPACITY = 8
+
+    internal val shared = RuntimeWarmupCache()
+  }
+}
+
+private fun isOrdinaryNonRtcCartridge(type: CartridgeType): Boolean =
+    type == CartridgeType.ROM ||
+        type == CartridgeType.ROM_RAM ||
+        type == CartridgeType.ROM_RAM_BATTERY ||
+        type.isMbc1 ||
+        type.isMbc2 ||
+        type.isMbc5
 
 /**
  * Small process-local LRU of exact BIOS handoff states. Cache entries contain no file-backed
@@ -144,14 +343,6 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
             config.isCodeBreakerRumble,
         )
       }
-
-      private fun isOrdinaryNonRtcCartridge(type: CartridgeType): Boolean =
-          type == CartridgeType.ROM ||
-              type == CartridgeType.ROM_RAM ||
-              type == CartridgeType.ROM_RAM_BATTERY ||
-              type.isMbc1 ||
-              type.isMbc2 ||
-              type.isMbc5
 
       private fun digest(rom: Rom): String {
         val digest = MessageDigest.getInstance("SHA-256")

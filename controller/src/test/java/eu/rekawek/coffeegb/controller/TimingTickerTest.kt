@@ -1,13 +1,18 @@
 package eu.rekawek.coffeegb.controller
 
+import com.sun.management.ThreadMXBean
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import java.lang.management.ManagementFactory
 import java.util.concurrent.atomic.AtomicLong
+import java.util.function.LongConsumer
+import java.util.function.LongSupplier
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import org.junit.Test
 
 class TimingTickerTest {
@@ -16,7 +21,10 @@ class TimingTickerTest {
   fun `controller pacing boundary uses supplied session clock`() {
     val now = AtomicLong(0)
     val parked = mutableListOf<Long>()
-    val ticker = TimingTicker({ now.addAndGet(1_000_000_000L) }, parked::add)
+    val ticker = TimingTicker(
+        LongSupplier { now.addAndGet(1_000_000_000L) },
+        LongConsumer { parked.add(it) },
+    )
     val custom = ClockSpec(1_000, 10, 1)
 
     repeat(custom.controllerTicksPerFrame() - 1) { ticker.run(custom) }
@@ -32,7 +40,10 @@ class TimingTickerTest {
   @Test
   fun `changing clock discards an incomplete prior frame`() {
     val now = AtomicLong(0)
-    val ticker = TimingTicker({ now.addAndGet(1_000_000_000L) }, {})
+    val ticker = TimingTicker(
+        LongSupplier { now.addAndGet(1_000_000_000L) },
+        LongConsumer {},
+    )
     val first = ClockSpec(1_000, 10, 1)
     val second = ClockSpec(2_000, 10, 1)
 
@@ -50,8 +61,8 @@ class TimingTickerTest {
     val parked = mutableListOf<Long>()
     val ticker =
         TimingTicker(
-            { now.addAndGet(1_000_000L) },
-            { duration ->
+            LongSupplier { now.addAndGet(1_000_000L) },
+            LongConsumer { duration ->
               parked += duration
               now.addAndGet(duration)
             },
@@ -89,8 +100,8 @@ class TimingTickerTest {
     val parked = mutableListOf<Long>()
     val ticker =
         TimingTicker(
-            { now.addAndGet(1_000_000L) },
-            { duration ->
+            LongSupplier { now.addAndGet(1_000_000L) },
+            LongConsumer { duration ->
               parked += duration
               now.addAndGet(duration)
             },
@@ -131,7 +142,10 @@ class TimingTickerTest {
               .setHardwareProfile(HardwareProfileRegistry.SGB2)
       return StateCodecTestSupport.session(configuration).use { session ->
         val now = AtomicLong(0)
-        val ticker = TimingTicker({ now.addAndGet(hostStep) }, {})
+        val ticker = TimingTicker(
+            LongSupplier { now.addAndGet(hostStep) },
+            LongConsumer {},
+        )
         val clock = session.gameboy.clockSpec
         repeat(clock.controllerTicksPerFrame()) {
           session.gameboy.tick()
@@ -150,4 +164,65 @@ class TimingTickerTest {
 
     assertContentEquals(runWithHostStep(17_000_000L), runWithHostStep(91_000_000L))
   }
+
+  @Test
+  fun `primitive timing seams do not allocate inside repeated fine waits`() {
+    val allocation = threadAllocation() ?: return
+    val seam = FineWaitSeam()
+    val ticker = TimingTicker(seam, seam)
+    val clock = ClockSpec(1, 1, 1)
+
+    repeat(2_000) { ticker.run(clock) }
+    assertEquals(2_000, seam.parkCalls)
+    assertTrue(
+        seam.nanoTimeCalls > seam.parkCalls * 10,
+        "the deterministic clock must force repeated final-stretch wait iterations",
+    )
+
+    var minimumAllocated = Long.MAX_VALUE
+    repeat(5) {
+      val before = allocation.current()
+      repeat(2_000) { ticker.run(clock) }
+      minimumAllocated = minOf(minimumAllocated, allocation.current() - before)
+    }
+
+    assertEquals(0L, minimumAllocated, "primitive fine-wait seam allocated")
+  }
+
+  private fun threadAllocation(): AllocationCounter? {
+    val bean = ManagementFactory.getThreadMXBean() as? ThreadMXBean ?: return null
+    if (!bean.isThreadAllocatedMemorySupported) return null
+    if (!bean.isThreadAllocatedMemoryEnabled) bean.isThreadAllocatedMemoryEnabled = true
+    return AllocationCounter(bean, Thread.currentThread().id)
+  }
+
+  private data class AllocationCounter(
+      val bean: ThreadMXBean,
+      val threadId: Long,
+  ) {
+    fun current(): Long = bean.getThreadAllocatedBytes(threadId)
+  }
+
+  private class FineWaitSeam : LongSupplier, LongConsumer {
+    private var now = 0L
+    var nanoTimeCalls = 0
+      private set
+    var parkCalls = 0
+      private set
+    var lastParkNanos = 0L
+      private set
+
+    override fun getAsLong(): Long {
+      nanoTimeCalls++
+      now += 100_000L
+      return now
+    }
+
+    override fun accept(duration: Long) {
+      parkCalls++
+      lastParkNanos = duration
+      now += duration
+    }
+  }
+
 }
