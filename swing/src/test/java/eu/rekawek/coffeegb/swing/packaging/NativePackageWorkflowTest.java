@@ -45,6 +45,16 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("persist-credentials: false"));
         assertTrue(packages.contains("7z.exe"));
         assertTrue(packages.contains("7z.sfx"));
+        assertTrue(packages.contains("7zSD.sfx"));
+        assertTrue(packages.contains("lzma2602.7z"));
+        assertTrue(packages.contains(
+                "2878c85f5f43a4a4e0952b1fd4e5fe097c1c143997a8047c7e1e788892aa9357"));
+        assertTrue(packages.contains(
+                "89645457d40b0e6731014a61ee6ebedd22c01a92fc38618480d385461c4347bb"));
+        assertTrue(packages.contains(
+                "0fc21d175a0e4c7e4f10521f35f6e6effa9dbd3c0ea80895cc79e72a9fdde088"));
+        assertEquals(2, occurrences(packages,
+                "name: Prepare pinned Windows portable-EXE tooling"));
         assertEquals(2, occurrences(packages,
                 "Join-Path $env:ProgramFiles \"7-Zip\""));
         assertEquals(2, occurrences(packages, "$env:GITHUB_PATH"));
@@ -58,6 +68,14 @@ public class NativePackageWorkflowTest {
         assertFalse(packages.contains("OS association"));
         assertTrue(packages.contains("COFFEE_GB_DESKTOP_SMOKE: \"true\""));
         assertTrue(packages.contains("xvfb-run -a ./packaging/package-native.sh"));
+        assertEquals(2, occurrences(packages,
+                "name: Reuse prepared Linux unit-test result"));
+        assertEquals(2, occurrences(packages,
+                "if: runner.os == 'Linux' && inputs.release_version != ''"));
+        assertEquals(2, occurrences(packages,
+                "exec mvn -Dskip.unit.tests=true \"$@\""));
+        assertEquals(2, occurrences(packages,
+                "COFFEE_GB_MAVEN_COMMAND=$maven_wrapper"));
         assertEquals(2, occurrences(packages,
                 "sudo apt-get install --yes --no-install-recommends "
                         + "desktop-file-utils gnome-menus xdg-utils"));
