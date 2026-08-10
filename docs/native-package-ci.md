@@ -131,9 +131,12 @@ assets, uploads exactly the checksum-validated bundle, downloads and byte-compar
 asset-name set, prepends all four matrix-validated target signing states to bounded generated
 release notes, adds the fixed macOS system-SDL2 controller limitation while confirming keyboard
 input and emulation remain usable, normalizes the release to a non-prerelease, and only then
-publishes the draft. A rerun accepts an existing stable public release only when its title, complete
-notes body, every asset name, and every asset byte exactly match the validated release; an existing
-public prerelease or any other mismatch fails closed.
+publishes the draft. A dispatch with `curate_release_notes_before_publish=true` stops after the
+stable draft, its generated notes, and every uploaded byte have been verified, so a maintainer can
+replace the notes and reverify the title, body, and assets before making the release public. A rerun
+accepts an existing stable public release only when its title, complete notes body, every asset name,
+and every asset byte exactly match the validated release; an existing public prerelease or any other
+mismatch fails closed.
 Tag pushes do not trigger the native workflow, so the release-created tag cannot start a duplicate
 run or cancel the gated release call.
 

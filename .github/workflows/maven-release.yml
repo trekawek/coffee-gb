@@ -26,6 +26,11 @@ on:
         required: true
         default: false
         type: boolean
+      curate_release_notes_before_publish:
+        description: Leave the verified GitHub release as a draft for manual note curation
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -229,6 +234,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.release_version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           TAG_REF: ${{ needs.prepare.outputs.tag_ref }}
+          CURATE_RELEASE_NOTES_BEFORE_PUBLISH: >-
+            ${{ inputs.curate_release_notes_before_publish }}
         run: |
           if [[ "$TAG_REF" != "refs/tags/coffee-gb-${RELEASE_VERSION}" ||
                 "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
@@ -493,6 +500,10 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
           verify_remote_assets
           verify_remote_notes
+          if [[ "$CURATE_RELEASE_NOTES_BEFORE_PUBLISH" == true ]]; then
+            echo "Validated GitHub release remains a stable draft for manual note curation."
+            exit 0
+          fi
           gh release edit "$tag" \
             --repo "$GITHUB_REPOSITORY" \
             --draft=false \
