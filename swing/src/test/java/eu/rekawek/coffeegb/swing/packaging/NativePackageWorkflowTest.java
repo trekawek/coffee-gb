@@ -128,7 +128,14 @@ public class NativePackageWorkflowTest {
         assertTrue(release.contains("resume_existing_release"));
         assertTrue(release.contains("prepared_source_sha"));
         assertTrue(release.contains("curate_release_notes_before_publish"));
-        assertTrue(release.contains("CURATE_RELEASE_NOTES_BEFORE_PUBLISH"));
+        assertEquals(1, occurrences(release, "CURATE_RELEASE_NOTES_BEFORE_PUBLISH: >-"));
+        int publishGithubStep = release.indexOf(
+                "- name: Verify provenance and publish the complete GitHub release");
+        int publishGithubRun = release.indexOf("        run: |", publishGithubStep);
+        int curateNotesEnvironment = release.indexOf(
+                "CURATE_RELEASE_NOTES_BEFORE_PUBLISH: >-", publishGithubStep);
+        assertTrue(curateNotesEnvironment > publishGithubStep);
+        assertTrue(curateNotesEnvironment < publishGithubRun);
         assertTrue(release.contains(
                 "Validated GitHub release remains a stable draft for manual note curation."));
         assertTrue(release.contains("if: ${{ ! inputs.resume_existing_release }}"));

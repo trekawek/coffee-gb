@@ -234,8 +234,6 @@ jobs:
           RELEASE_VERSION: ${{ inputs.release_version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           TAG_REF: ${{ needs.prepare.outputs.tag_ref }}
-          CURATE_RELEASE_NOTES_BEFORE_PUBLISH: >-
-            ${{ inputs.curate_release_notes_before_publish }}
         run: |
           if [[ "$TAG_REF" != "refs/tags/coffee-gb-${RELEASE_VERSION}" ||
                 "$(git rev-parse 'HEAD^{commit}')" != "$SOURCE_SHA" ]]; then
@@ -307,6 +305,8 @@ jobs:
           RELEASE_VERSION: ${{ inputs.release_version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           TAG_REF: ${{ needs.prepare.outputs.tag_ref }}
+          CURATE_RELEASE_NOTES_BEFORE_PUBLISH: >-
+            ${{ inputs.curate_release_notes_before_publish }}
         run: |
           tag="coffee-gb-${RELEASE_VERSION}"
           if [[ "$TAG_REF" != "refs/tags/$tag" ||
