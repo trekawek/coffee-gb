@@ -11,6 +11,16 @@ on:
         description: Next development version (for example, 1.7.6-SNAPSHOT)
         required: true
         type: string
+      resume_existing_release:
+        description: Resume a prepared release that failed before Maven or GitHub publication
+        required: true
+        default: false
+        type: boolean
+      prepared_source_sha:
+        description: Exact prepared release commit required when resuming an existing release
+        required: false
+        default: ""
+        type: string
       sign_native_packages:
         description: Sign/notarize every native target with protected release credentials
         required: true
@@ -54,6 +64,7 @@ jobs:
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
       - name: Configure the release commit author
+        if: ${{ ! inputs.resume_existing_release }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -96,6 +107,7 @@ jobs:
           fi
 
       - name: Prepare the release commits and exact tag without publishing
+        if: ${{ ! inputs.resume_existing_release }}
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
           DEVELOPMENT_VERSION: ${{ inputs.development_version }}
@@ -113,10 +125,17 @@ jobs:
         shell: bash
         env:
           RELEASE_VERSION: ${{ inputs.release_version }}
+          DEVELOPMENT_VERSION: ${{ inputs.development_version }}
+          RESUME_EXISTING_RELEASE: ${{ inputs.resume_existing_release }}
+          EXPECTED_SOURCE_SHA: ${{ inputs.prepared_source_sha }}
         run: |
           tag="coffee-gb-${RELEASE_VERSION}"
           tag_ref="refs/tags/$tag"
           git fetch --no-tags origin "$tag_ref"
+          if [[ "$(git cat-file -t FETCH_HEAD)" != tag ]]; then
+            echo "Prepared release ref is not an annotated tag" >&2
+            exit 1
+          fi
           source_sha=$(git rev-parse 'FETCH_HEAD^{commit}')
           if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Prepared release tag did not resolve to a full commit ID" >&2
@@ -128,6 +147,37 @@ jobs:
           if [[ "$tagged_version" != "$RELEASE_VERSION" ]]; then
             echo "Prepared tag contains Maven version $tagged_version" >&2
             exit 1
+          fi
+          if [[ "$RESUME_EXISTING_RELEASE" == true ]]; then
+            if [[ ! "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ||
+                  "$source_sha" != "$EXPECTED_SOURCE_SHA" ]]; then
+              echo "Prepared release commit does not match the explicitly requested source SHA" >&2
+              exit 1
+            fi
+            development_branch_version=$(sed -n \
+              's:.*<version>\([^<]*\)</version>.*:\1:p' pom.xml | head -1)
+            if [[ "$development_branch_version" != "$DEVELOPMENT_VERSION" ]]; then
+              echo "Default branch contains Maven version $development_branch_version, not $DEVELOPMENT_VERSION" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$source_sha" HEAD; then
+              echo "Prepared release commit is not an ancestor of the default branch" >&2
+              exit 1
+            fi
+            next_development_commit=$(git rev-list --first-parent --reverse \
+              "$source_sha..HEAD" | head -1)
+            if [[ -z "$next_development_commit" ]]; then
+              echo "Prepared release has no next-development commit" >&2
+              exit 1
+            fi
+            next_development_parent=$(git rev-parse "$next_development_commit^1")
+            next_development_version=$(git show "$next_development_commit:pom.xml" |
+              sed -n 's:.*<version>\([^<]*\)</version>.*:\1:p' | head -1)
+            if [[ "$next_development_parent" != "$source_sha" ||
+                  "$next_development_version" != "$DEVELOPMENT_VERSION" ]]; then
+              echo "Prepared release is not followed by the requested next-development version" >&2
+              exit 1
+            fi
           fi
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "tag_ref=$tag_ref" >> "$GITHUB_OUTPUT"

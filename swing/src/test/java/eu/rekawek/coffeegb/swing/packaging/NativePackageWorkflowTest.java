@@ -45,6 +45,9 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("persist-credentials: false"));
         assertTrue(packages.contains("7z.exe"));
         assertTrue(packages.contains("7z.sfx"));
+        assertEquals(2, occurrences(packages,
+                "Join-Path $env:ProgramFiles \"7-Zip\""));
+        assertEquals(2, occurrences(packages, "$env:GITHUB_PATH"));
         assertFalse(packages.contains("candle.exe"));
         assertFalse(packages.contains("light.exe"));
         assertEquals(2, occurrences(packages, "package_type: exe"));
@@ -104,6 +107,13 @@ public class NativePackageWorkflowTest {
 
         assertTrue(release.contains("uses: ./.github/workflows/native-packages.yml"));
         assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));
+        assertTrue(release.contains("resume_existing_release"));
+        assertTrue(release.contains("prepared_source_sha"));
+        assertTrue(release.contains("if: ${{ ! inputs.resume_existing_release }}"));
+        assertTrue(release.contains("explicitly requested source SHA"));
+        assertTrue(release.contains("Prepared release commit is not an ancestor"));
+        assertTrue(release.contains("requested next-development version"));
+        assertTrue(release.contains("Prepared release ref is not an annotated tag"));
         assertTrue(release.contains("release:clean release:prepare"));
         assertFalse(release.contains("release:perform"));
         assertTrue(release.contains("needs: [prepare, native-packages]"));

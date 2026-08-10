@@ -102,6 +102,13 @@ commit ID; every matrix and gate checkout uses that ID and verifies `HEAD`, and 
 re-fetched and re-peeled before each promotion. A moved tag therefore fails closed. The release
 matrix records the bound source commit.
 
+If native validation fails after preparation but before either publication job starts, a recovery
+dispatch can set `resume_existing_release=true` and provide the exact peeled release commit as
+`prepared_source_sha`. Resume mode preserves the annotated tag and skips `release:prepare`; it
+fails closed unless the tag, requested SHA, first-parent next-development commit, tagged version,
+and current development version all agree. Do not use resume mode after Maven or GitHub
+publication has started, because Maven deployment is not generally idempotent.
+
 Publication waits for the unsigned build, package inspection, desktop/debug launch, and
 no-registration gates on all four targets. A Linux release-gate job independently downloads the
 results, requires one default package, one canonical byte-identical Maven dependency SBOM, and
