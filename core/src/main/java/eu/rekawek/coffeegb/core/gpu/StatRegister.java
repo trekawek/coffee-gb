@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.gpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -41,6 +42,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     // Distinct from the ordinary -1 "no CPU override" value: the production
     // CPU phase was captured, but no FF41 read has asked us to resolve it yet.
     private static final int CPU_STAT_MODE_UNRESOLVED = -2;
+
+    private static final int STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE = 1 << 4;
 
     private final InterruptManager interruptManager;
 
@@ -209,17 +212,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     // separate from the readable latch used by direct PPU observers.
     private int cpuStatModeOverride = -1;
 
-    // Inputs captured at the CPU/PPU boundary for an eventual FF41 read. They
-    // are deliberately transient: a restored state begins a new CPU phase.
-    private boolean cpuSynchronousHaltEntryPhase;
-
-    private boolean cpuAsynchronousHaltEntryPhase;
-
-    private boolean cpuOrdinaryHaltWakePhase;
-
-    private boolean cpuOneCycleOrdinaryHaltWakePhase;
-
-    private boolean cpuRecentOrdinaryHaltWakePhase;
+    // Packed inputs captured at the CPU/PPU boundary for an eventual FF41 read.
+    // This is deliberately transient: a restored state begins a new CPU phase.
+    private int cpuStatReadPhaseFlags;
 
     /*
      * Between STAT event checkpoints, and absent a register write or pending
@@ -624,9 +619,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                                      boolean asynchronousHaltEntryPhase,
                                      boolean ordinaryHaltWakePhase,
                                      boolean oneCycleOrdinaryHaltWakePhase) {
-        captureCpuStatReadPhasePrepared(synchronousHaltEntryPhase,
+        return beginCpuReadPhase(packCpuStatReadPhase(synchronousHaltEntryPhase,
                 asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
-                oneCycleOrdinaryHaltWakePhase);
+                oneCycleOrdinaryHaltWakePhase));
+    }
+
+    public boolean beginCpuReadPhase(int statReadPhaseFlags) {
+        captureCpuStatReadPhasePrepared(statReadPhaseFlags);
         if (!canPublishMode0InterruptEdge()) {
             return false;
         }
@@ -665,15 +664,34 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                                         boolean ordinaryHaltWakePhase,
                                         boolean oneCycleOrdinaryHaltWakePhase) {
         refreshGpuTiming();
-        captureCpuStatReadPhasePrepared(synchronousHaltEntryPhase,
+        captureCpuStatReadPhasePrepared(packCpuStatReadPhase(synchronousHaltEntryPhase,
                 asynchronousHaltEntryPhase, ordinaryHaltWakePhase,
-                oneCycleOrdinaryHaltWakePhase);
+                oneCycleOrdinaryHaltWakePhase));
     }
 
-    private void captureCpuStatReadPhasePrepared(boolean synchronousHaltEntryPhase,
-                                                 boolean asynchronousHaltEntryPhase,
-                                                 boolean ordinaryHaltWakePhase,
-                                                 boolean oneCycleOrdinaryHaltWakePhase) {
+    private static int packCpuStatReadPhase(boolean synchronousHaltEntryPhase,
+                                             boolean asynchronousHaltEntryPhase,
+                                             boolean ordinaryHaltWakePhase,
+                                             boolean oneCycleOrdinaryHaltWakePhase) {
+        int statReadPhaseFlags = 0;
+        if (synchronousHaltEntryPhase) {
+            statReadPhaseFlags |= Cpu.STAT_READ_PHASE_SYNCHRONOUS_HALT_ENTRY;
+        }
+        if (asynchronousHaltEntryPhase) {
+            statReadPhaseFlags |= Cpu.STAT_READ_PHASE_ASYNCHRONOUS_HALT_ENTRY;
+        }
+        if (ordinaryHaltWakePhase) {
+            statReadPhaseFlags |= Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE;
+        }
+        if (oneCycleOrdinaryHaltWakePhase) {
+            statReadPhaseFlags |= Cpu.STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE;
+        }
+        return statReadPhaseFlags;
+    }
+
+    private void captureCpuStatReadPhasePrepared(int statReadPhaseFlags) {
+        boolean ordinaryHaltWakePhase = (statReadPhaseFlags
+                & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0;
         if (ordinaryHaltWakePhase && !previousOrdinaryHaltWakePhase) {
             ordinaryHaltWakeStatClock = lycIrqClock;
         }
@@ -684,11 +702,11 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 <= ORDINARY_HALT_WAKE_STAT_HOLD_TICKS;
         gpu.captureCpuLyReadPhase(ordinaryHaltWakePhase
                 && isMode1InterruptSourceOnly());
-        cpuSynchronousHaltEntryPhase = synchronousHaltEntryPhase;
-        cpuAsynchronousHaltEntryPhase = asynchronousHaltEntryPhase;
-        cpuOrdinaryHaltWakePhase = ordinaryHaltWakePhase;
-        cpuOneCycleOrdinaryHaltWakePhase = oneCycleOrdinaryHaltWakePhase;
-        cpuRecentOrdinaryHaltWakePhase = recentOrdinaryHaltWakePhase;
+        statReadPhaseFlags &= ~STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
+        if (recentOrdinaryHaltWakePhase) {
+            statReadPhaseFlags |= STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
+        }
+        cpuStatReadPhaseFlags = statReadPhaseFlags;
         cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
     }
 
@@ -1972,10 +1990,13 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         if (cpuStatModeOverride != CPU_STAT_MODE_UNRESOLVED) {
             return;
         }
+        int statReadPhaseFlags = cpuStatReadPhaseFlags;
         cpuStatModeOverride = gpu.getCpuReadStatModeOverride(
-                cpuSynchronousHaltEntryPhase, cpuAsynchronousHaltEntryPhase,
-                cpuOrdinaryHaltWakePhase, cpuOneCycleOrdinaryHaltWakePhase,
-                cpuRecentOrdinaryHaltWakePhase);
+                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_SYNCHRONOUS_HALT_ENTRY) != 0,
+                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ASYNCHRONOUS_HALT_ENTRY) != 0,
+                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0,
+                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE) != 0,
+                (statReadPhaseFlags & STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE) != 0);
         suppressCpuReadCoincidence = gbc && !timing.dmgCompat
                 && !timing.doubleSpeed && timing.line == 153
                 && timing.ticksInLine == 6 && coincidence;
@@ -1984,11 +2005,8 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     private void clearCpuStatReadPhase() {
         cpuStatModeOverride = -1;
         suppressCpuReadCoincidence = false;
-        cpuSynchronousHaltEntryPhase = false;
-        cpuAsynchronousHaltEntryPhase = false;
-        cpuOrdinaryHaltWakePhase = false;
-        cpuOneCycleOrdinaryHaltWakePhase = false;
-        cpuRecentOrdinaryHaltWakePhase = false;
+        // Packed inputs are read only while the unresolved sentinel is set.
+        // The next capture overwrites them before publishing that sentinel.
     }
 
     @Override
