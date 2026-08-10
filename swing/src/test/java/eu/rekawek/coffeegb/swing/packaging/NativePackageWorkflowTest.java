@@ -85,7 +85,11 @@ public class NativePackageWorkflowTest {
                 "& $Maven \"-Dskip.unit.tests=true\" @args"));
         assertEquals(2, occurrences(packages, "exit $LASTEXITCODE"));
         assertEquals(2, occurrences(packages,
-                "Get-Command \"mvn\" -CommandType Application -ErrorAction Stop"));
+                "Get-Command \"mvn.cmd\" -CommandType Application -ErrorAction Stop"));
+        assertEquals(2, occurrences(packages, "Select-Object -First 1"));
+        assertFalse(packages.contains("Get-Command \"mvn\""));
+        assertEquals(2, occurrences(packages,
+                "$Maven -isnot [string] -or [string]::IsNullOrWhiteSpace($Maven)"));
         assertEquals(2, occurrences(packages,
                 "Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM"));
         assertEquals(2, occurrences(packages,
