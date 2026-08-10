@@ -4,11 +4,11 @@
     <parent>
         <groupId>eu.rekawek.coffeegb</groupId>
         <artifactId>coffee-gb</artifactId>
-        <version>2.0.1</version>
+        <version>2.0.2-SNAPSHOT</version>
     </parent>
 
     <artifactId>android-portable</artifactId>
-    <version>2.0.1</version>
+    <version>2.0.2-SNAPSHOT</version>
     <name>Android portability boundary</name>
     <description>Temporary same-checkout Java and Kotlin bytecode probe for the Android build boundary.</description>
 
