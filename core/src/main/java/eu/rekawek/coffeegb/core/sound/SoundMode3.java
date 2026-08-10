@@ -9,6 +9,8 @@ import eu.rekawek.coffeegb.core.timer.Timer;
 
 public class SoundMode3 extends AbstractSoundMode {
 
+    private static final int[] VOLUME_SHIFTS = {4, 0, 1, 2};
+
     private static final int[] DMG_WAVE =
             new int[]{
                     0x84, 0x40, 0x43, 0xaa, 0x2d, 0x78, 0x92, 0x3c,
@@ -22,6 +24,8 @@ public class SoundMode3 extends AbstractSoundMode {
             };
 
     private final Ram waveRam = new Ram(0xff30, 0x10);
+
+    private final int[] waveRamData = waveRam.getSpace();
 
     byte[] copyDebugWaveRam() {
         int[] source = waveRam.getSpace();
@@ -37,6 +41,10 @@ public class SoundMode3 extends AbstractSoundMode {
     // counts 2 MHz APU cycles: the CH3 frequency counter is clocked by the 2 MHz APU
     // clock, so the sample fetches are quantized to that lattice
     private int freqDivider;
+
+    private int frequencyPeriod = 2048;
+
+    private int volumeShift = VOLUME_SHIFTS[0];
 
     private int lastOutput;
 
@@ -121,6 +129,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     protected void setNr2(int value) {
         super.setNr2(value);
+        volumeShift = VOLUME_SHIFTS[(value >> 5) & 0b11];
         if (channelEnabled) {
             lastOutput = getBufferedOutput();
         }
@@ -129,21 +138,25 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     protected void setNr3(int value) {
         super.setNr3(value);
+        updateFrequencyPeriod();
     }
 
     @Override
     public void setNr4(int value) {
+        // trigger() runs from super.setNr4(), so cache the period with the newly written
+        // high frequency bits before delegating.
+        frequencyPeriod = 2048 - (nr3 | ((value & 0b111) << 8));
         if (!gbc && (value & (1 << 7)) != 0) {
             // retriggering the channel while it is about to fetch a sample corrupts the
             // first bytes of the wave RAM
             if (isEnabled() && freqDivider <= 1) {
-                int pos = ((i + 1) % 32) / 2;
+                int pos = ((i + 1) & 31) >> 1;
                 if (pos < 4) {
-                    waveRam.setByte(0xff30, waveRam.getByte(0xff30 + pos));
+                    waveRamData[0] = waveRamData[pos];
                 } else {
                     pos = pos & ~3;
                     for (int j = 0; j < 4; j++) {
-                        waveRam.setByte(0xff30 + j, waveRam.getByte(0xff30 + ((pos + j) % 0x10)));
+                        waveRamData[j] = waveRamData[(pos + j) & 15];
                     }
                 }
             }
@@ -163,6 +176,7 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void stop() {
         super.stop();
+        updateDerivedRegisters();
         i = 0;
         lastOutput = 0;
         buffer = 0;
@@ -179,7 +193,7 @@ public class SoundMode3 extends AbstractSoundMode {
         i = 0;
         // the first wave position advance is delayed by 3 extra APU cycles and does not
         // fetch a sample; the stale buffer keeps playing until the second advance
-        freqDivider = getFrequency() + 3;
+        freqDivider = frequencyPeriod + 3;
         triggered = !gbc;
         if (gbc) {
             // CGB wave-RAM access is redirected to the current byte immediately,
@@ -198,7 +212,7 @@ public class SoundMode3 extends AbstractSoundMode {
         }
         if (clock2Mhz && --freqDivider == 0) {
             resetFreqDivider();
-            i = (i + 1) % 32;
+            i = (i + 1) & 31;
             int stale = applyVolume((buffer >> 4) & 0x0f);
             int out = getWaveEntry();
             // the first advance after the trigger fetches the sample (opening the CPU
@@ -214,20 +228,17 @@ public class SoundMode3 extends AbstractSoundMode {
         return lastOutput;
     }
 
-    private int getVolume() {
-        return (getNr2() >> 5) & 0b11;
-    }
-
     private int getWaveEntry() {
         ticksSinceRead = 0;
-        lastReadAddr = 0xff30 + i / 2;
-        buffer = waveRam.getByte(lastReadAddr);
+        int waveRamIndex = i >> 1;
+        lastReadAddr = 0xff30 + waveRamIndex;
+        buffer = waveRamData[waveRamIndex];
         return getBufferedOutput();
     }
 
     private int getBufferedOutput() {
         int b = buffer;
-        if (i % 2 == 0) {
+        if ((i & 1) == 0) {
             b = (b >> 4) & 0x0f;
         } else {
             b = b & 0x0f;
@@ -236,22 +247,20 @@ public class SoundMode3 extends AbstractSoundMode {
     }
 
     private int applyVolume(int sample) {
-        switch (getVolume()) {
-            case 0:
-                return 0;
-            case 1:
-                return sample;
-            case 2:
-                return sample >> 1;
-            case 3:
-                return sample >> 2;
-            default:
-                throw new IllegalStateException();
-        }
+        return sample >> volumeShift;
     }
 
     private void resetFreqDivider() {
-        freqDivider = getFrequency();
+        freqDivider = frequencyPeriod;
+    }
+
+    private void updateFrequencyPeriod() {
+        frequencyPeriod = 2048 - (nr3 | ((nr4 & 0b111) << 8));
+    }
+
+    private void updateDerivedRegisters() {
+        updateFrequencyPeriod();
+        volumeShift = VOLUME_SHIFTS[(nr2 >> 5) & 0b11];
     }
 
     @Override
@@ -280,6 +289,7 @@ public class SoundMode3 extends AbstractSoundMode {
             throw new IllegalArgumentException("Invalid state type");
         }
         super.restoreState(mem.abstractSoundMemento);
+        updateDerivedRegisters();
         this.waveRam.restoreState(mem.waveRamMemento);
         this.freqDivider = mem.freqDivider;
         this.lastOutput = mem.lastOutput;

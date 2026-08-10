@@ -623,8 +623,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                         }
                         if (oldPosition <= 158
                                 && mode0IntFrom == Integer.MAX_VALUE
-                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()
-                                && pixelTransferPhase.getPosition() > 158) {
+                                && pixelTransferPhase.getPosition() > 158
+                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()) {
                             mode0IntFrom = ticksInLine + 3;
                         }
                         if (active) {
