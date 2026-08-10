@@ -868,10 +868,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // entry latency; STOP and a CGB speed switch pause it immediately.
         boolean halted = finalCpuState == Cpu.State.HALTED;
         dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
-        dma.tick(halted || finalCpuState == Cpu.State.STOPPED
+        boolean dmaCpuClockPaused = halted || finalCpuState == Cpu.State.STOPPED
                         || finalCpuState == Cpu.State.SPEED_SWITCH || speedSwitchTail
-                        || hdma.pausesOamDmaForSpeedSwitchBurst(),
-                halted);
+                        || hdma.pausesOamDmaForSpeedSwitchBurst();
+        if (dma.requiresClockTick(dmaCpuClockPaused)) {
+            dma.tick(dmaCpuClockPaused, halted);
+        }
         sound.tick(divReset);
         serialPort.tick();
         infraredPort.tick();

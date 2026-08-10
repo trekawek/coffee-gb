@@ -323,6 +323,20 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         return transferInProgress;
     }
 
+    /**
+     * Returns whether advancing the OAM-DMA clock can still change its observable
+     * state. A settled, inactive engine otherwise has no work on a Game Boy tick.
+     */
+    public boolean requiresClockTick(boolean requestedCpuClockPaused) {
+        return transferInProgress
+                || restarted
+                || ppuOamOwnedThroughRestart
+                || oamOwnedForPpu
+                || oamOwnedForPpuBeforeTick != oamOwnedForPpu
+                || cpuClockPaused != requestedCpuClockPaused
+                || vramDmaBusAddress >= 0;
+    }
+
     boolean hasCpuBusSpecialState() {
         return transferInProgress || restarted;
     }
