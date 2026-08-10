@@ -6,8 +6,12 @@ import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
+import java.lang.reflect.Field;
+
 import static eu.rekawek.coffeegb.core.events.EventBus.NULL_EVENT_BUS;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class GpuOamReadCorruptionTest {
 
@@ -53,6 +57,46 @@ public class GpuOamReadCorruptionTest {
         }
     }
 
+    @Test
+    public void directOamCorruptionStateIsResetOnlyOnDmgTicks()
+            throws ReflectiveOperationException {
+        Fixture dmg = new Fixture(false);
+        Fixture cgb = new Fixture(true);
+        for (String field : DIRECT_OAM_CORRUPTION_FIELDS) {
+            setBooleanField(dmg.gpu, field, true);
+            setBooleanField(cgb.gpu, field, true);
+        }
+
+        dmg.tick();
+        cgb.tick();
+
+        for (String field : DIRECT_OAM_CORRUPTION_FIELDS) {
+            assertFalse(field, getBooleanField(dmg.gpu, field));
+            assertTrue(field, getBooleanField(cgb.gpu, field));
+        }
+    }
+
+    private static final String[] DIRECT_OAM_CORRUPTION_FIELDS = {
+            "directOamReadCorruptionThisTick",
+            "suppressNextDirectOamReadCorruption",
+            "directOamWriteCorruptionThisTick",
+            "suppressNextDirectOamWriteCorruption"
+    };
+
+    private static void setBooleanField(Gpu gpu, String name, boolean value)
+            throws ReflectiveOperationException {
+        Field field = Gpu.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.setBoolean(gpu, value);
+    }
+
+    private static boolean getBooleanField(Gpu gpu, String name)
+            throws ReflectiveOperationException {
+        Field field = Gpu.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.getBoolean(gpu);
+    }
+
     private static class Fixture {
 
         private final Ram oam = new Ram(0xfe00, 0xa0);
@@ -81,9 +125,13 @@ public class GpuOamReadCorruptionTest {
 
         private void advanceTo(int line, int ticksInLine) {
             while (gpu.getLine() != line || gpu.getTicksInLine() != ticksInLine) {
-                gpu.tick();
-                stat.tick();
+                tick();
             }
+        }
+
+        private void tick() {
+            gpu.tick();
+            stat.tick();
         }
     }
 }
