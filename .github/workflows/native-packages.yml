@@ -144,14 +144,18 @@ jobs:
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
             throw "windows-x86-64 requires an X64 runner"
           }
-          $SevenZip = Get-Command 7z.exe -ErrorAction SilentlyContinue
-          if (-not $SevenZip) {
-            throw "windows-x86-64 requires 7z.exe to build the portable EXE"
+          $SevenZipRoot = Join-Path $env:ProgramFiles "7-Zip"
+          $SevenZip = Join-Path $SevenZipRoot "7z.exe"
+          $SfxModule = Join-Path $SevenZipRoot "7z.sfx"
+          if (-not (Test-Path -LiteralPath $SevenZip -PathType Leaf) -or
+              (Get-Item -LiteralPath $SevenZip).Length -eq 0) {
+            throw "windows-x86-64 requires the installed 7-Zip executable: $SevenZip"
           }
-          $SfxModule = Join-Path (Split-Path -Parent $SevenZip.Source) "7z.sfx"
-          if (-not (Test-Path -LiteralPath $SfxModule -PathType Leaf)) {
+          if (-not (Test-Path -LiteralPath $SfxModule -PathType Leaf) -or
+              (Get-Item -LiteralPath $SfxModule).Length -eq 0) {
             throw "windows-x86-64 requires the 7-Zip SFX module: $SfxModule"
           }
+          $SevenZipRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux package validation prerequisites
         if: runner.os == 'Linux'
@@ -445,6 +449,23 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: "**/pom.xml"
+
+      - name: Prove Windows portable-EXE tooling and expose the real 7-Zip installation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $SevenZipRoot = Join-Path $env:ProgramFiles "7-Zip"
+          $SevenZip = Join-Path $SevenZipRoot "7z.exe"
+          $SfxModule = Join-Path $SevenZipRoot "7z.sfx"
+          if (-not (Test-Path -LiteralPath $SevenZip -PathType Leaf) -or
+              (Get-Item -LiteralPath $SevenZip).Length -eq 0) {
+            throw "windows-x86-64 requires the installed 7-Zip executable: $SevenZip"
+          }
+          if (-not (Test-Path -LiteralPath $SfxModule -PathType Leaf) -or
+              (Get-Item -LiteralPath $SfxModule).Length -eq 0) {
+            throw "windows-x86-64 requires the 7-Zip SFX module: $SfxModule"
+          }
+          $SevenZipRoot | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux package validation prerequisites
         if: runner.os == 'Linux'
