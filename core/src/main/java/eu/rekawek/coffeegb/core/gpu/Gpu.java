@@ -498,10 +498,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     public Mode tick() {
         timingGeneration++;
         cpuLyReadAcrossLineEdge = false;
-        directOamReadCorruptionThisTick = false;
-        suppressNextDirectOamReadCorruption = false;
-        directOamWriteCorruptionThisTick = false;
-        suppressNextDirectOamWriteCorruption = false;
+        if (!gbc) {
+            directOamReadCorruptionThisTick = false;
+            suppressNextDirectOamReadCorruption = false;
+            directOamWriteCorruptionThisTick = false;
+            suppressNextDirectOamWriteCorruption = false;
+        }
         if (displayEnabledDelay > 0 && --displayEnabledDelay == 0) {
             display.enableLcd();
         }
