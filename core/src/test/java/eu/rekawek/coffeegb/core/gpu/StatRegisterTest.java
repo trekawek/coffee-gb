@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.memory.Dma;
@@ -495,6 +496,40 @@ public class StatRegisterTest {
         assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
         fixture.stat.captureCpuStatReadPhase(false, false, true);
         assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+    }
+
+    @Test
+    public void packedCpuStatReadPhaseRetainsEveryCpuInputFlag() throws Exception {
+        for (int flags = 0; flags < 16; flags++) {
+            Fixture fixture = new Fixture(true);
+            fixture.advanceTo(1, 78);
+
+            fixture.stat.beginCpuReadPhase(flags);
+
+            int expected = flags;
+            if ((flags & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0) {
+                expected |= 1 << 4;
+            }
+            assertEquals(expected, intField(fixture.stat, "cpuStatReadPhaseFlags"));
+        }
+    }
+
+    @Test
+    public void stalePackedCpuStatReadPhaseIsHiddenUntilTheNextCapture() throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(1, 78);
+
+        fixture.stat.beginCpuReadPhase(Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE);
+        assertEquals(Mode.OamSearch.ordinal(), fixture.readStatMode());
+        int capturedFlags = intField(fixture.stat, "cpuStatReadPhaseFlags");
+
+        fixture.tick();
+
+        assertEquals(capturedFlags, intField(fixture.stat, "cpuStatReadPhaseFlags"));
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
+        fixture.stat.beginCpuReadPhase(0);
+        assertEquals(0, intField(fixture.stat, "cpuStatReadPhaseFlags"));
+        assertEquals(Mode.PixelTransfer.ordinal(), fixture.readStatMode());
     }
 
     @Test
@@ -2380,8 +2415,12 @@ public class StatRegisterTest {
     }
 
     private static int cpuStatModeOverride(StatRegister stat) {
+        return intField(stat, "cpuStatModeOverride");
+    }
+
+    private static int intField(StatRegister stat, String name) {
         try {
-            Field field = StatRegister.class.getDeclaredField("cpuStatModeOverride");
+            Field field = StatRegister.class.getDeclaredField(name);
             field.setAccessible(true);
             return field.getInt(stat);
         } catch (ReflectiveOperationException e) {

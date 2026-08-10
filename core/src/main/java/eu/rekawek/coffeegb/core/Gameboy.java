@@ -702,11 +702,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private Mode tickSubsystems() {
         int statReadPhaseFlags = cpu.getStatReadPhaseFlags();
-        boolean mode0InterruptEdgeNextTick = statRegister.beginCpuReadPhase(
-                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_SYNCHRONOUS_HALT_ENTRY) != 0,
-                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ASYNCHRONOUS_HALT_ENTRY) != 0,
-                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0,
-                (statReadPhaseFlags & Cpu.STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE) != 0);
+        boolean mode0InterruptEdgeNextTick = statRegister.beginCpuReadPhase(statReadPhaseFlags);
         statRegister.finishCpuReadPhase(
                 cpu.getInterruptFlagReadMaskTicks(mode0InterruptEdgeNextTick),
                 cpu.isMode0InterruptDispatchPhased(mode0InterruptEdgeNextTick),
