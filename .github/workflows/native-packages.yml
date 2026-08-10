@@ -148,7 +148,13 @@ jobs:
           $MavenWrapper = Join-Path $env:RUNNER_TEMP "coffee-gb-prepared-release-maven.ps1"
           @'
           $ErrorActionPreference = "Stop"
-          $Maven = (Get-Command "mvn" -CommandType Application -ErrorAction Stop).Source
+          $Maven = (
+            Get-Command "mvn.cmd" -CommandType Application -ErrorAction Stop |
+              Select-Object -First 1
+          ).Source
+          if ($Maven -isnot [string] -or [string]::IsNullOrWhiteSpace($Maven)) {
+            throw "Maven command did not resolve to one application path"
+          }
           & $Maven "-Dskip.unit.tests=true" @args
           exit $LASTEXITCODE
           '@ | Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM
@@ -531,7 +537,13 @@ jobs:
           $MavenWrapper = Join-Path $env:RUNNER_TEMP "coffee-gb-prepared-release-maven.ps1"
           @'
           $ErrorActionPreference = "Stop"
-          $Maven = (Get-Command "mvn" -CommandType Application -ErrorAction Stop).Source
+          $Maven = (
+            Get-Command "mvn.cmd" -CommandType Application -ErrorAction Stop |
+              Select-Object -First 1
+          ).Source
+          if ($Maven -isnot [string] -or [string]::IsNullOrWhiteSpace($Maven)) {
+            throw "Maven command did not resolve to one application path"
+          }
           & $Maven "-Dskip.unit.tests=true" @args
           exit $LASTEXITCODE
           '@ | Set-Content -LiteralPath $MavenWrapper -Encoding utf8NoBOM
