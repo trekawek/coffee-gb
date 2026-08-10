@@ -127,6 +127,10 @@ public class NativePackageWorkflowTest {
         assertTrue(release.contains("checkout_ref: ${{ needs.prepare.outputs.tag_ref }}"));
         assertTrue(release.contains("resume_existing_release"));
         assertTrue(release.contains("prepared_source_sha"));
+        assertTrue(release.contains("curate_release_notes_before_publish"));
+        assertTrue(release.contains("CURATE_RELEASE_NOTES_BEFORE_PUBLISH"));
+        assertTrue(release.contains(
+                "Validated GitHub release remains a stable draft for manual note curation."));
         assertTrue(release.contains("if: ${{ ! inputs.resume_existing_release }}"));
         assertTrue(release.contains("explicitly requested source SHA"));
         assertTrue(release.contains("Prepared release commit is not an ancestor"));
