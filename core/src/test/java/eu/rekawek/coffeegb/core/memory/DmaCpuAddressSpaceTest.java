@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class DmaCpuAddressSpaceTest {
@@ -218,6 +219,51 @@ public class DmaCpuAddressSpaceTest {
         assertEquals(0xe4, memory.getByte(0xff47));
     }
 
+    @Test
+    public void inactiveDmaDelegatesDirectlyAndFf46StillStartsTransfer() {
+        InactiveFixture fixture = new InactiveFixture();
+        fixture.memory.setByte(0xc001, 0x51);
+
+        assertEquals(0x51, fixture.cpu.getByte(0xc001));
+        assertEquals(0xc001, fixture.memory.lastReadAddress);
+        fixture.cpu.setByte(0xc001, 0x62);
+        assertTrue(fixture.memory.cpuWrite);
+        assertEquals(0xc001, fixture.memory.lastCpuWriteAddress);
+        assertEquals(0x62, fixture.memory.getByte(0xc001));
+
+        fixture.cpu.setByte(0xff46, 0x12);
+
+        assertTrue(fixture.dma.isTransferInProgress());
+        assertEquals(0x12, fixture.dma.getByte(0xff46));
+    }
+
+    @Test
+    public void firstActiveDmaTickStartsTheCpuBusConflict() {
+        InactiveFixture fixture = new InactiveFixture();
+        fixture.start();
+
+        fixture.tick(7);
+        assertEquals(0x11, fixture.cpu.getByte(0x0100));
+        fixture.tick(1);
+
+        assertEquals(0x42, fixture.cpu.getByte(0x0100));
+    }
+
+    @Test
+    public void completedDmaReturnsToDirectCpuAccess() {
+        InactiveFixture fixture = new InactiveFixture();
+        fixture.start();
+        fixture.tick(648);
+        fixture.memory.setByte(0x0100, 0x73);
+
+        assertFalse(fixture.dma.isTransferInProgress());
+        assertEquals(0x73, fixture.cpu.getByte(0x0100));
+        fixture.cpu.setByte(0x0100, 0x84);
+
+        assertEquals(0x84, fixture.memory.getByte(0x0100));
+        assertEquals(0x0100, fixture.memory.lastCpuWriteAddress);
+    }
+
     private static class Fixture {
 
         private final TestAddressSpace memory = new TestAddressSpace();
@@ -258,11 +304,82 @@ public class DmaCpuAddressSpaceTest {
         }
     }
 
+    private static class InactiveFixture {
+
+        private final TestAddressSpace memory = new TestAddressSpace();
+
+        private final Ram oam = new Ram(0xfe00, 0xa0);
+
+        private final Dma dma = new Dma(memory, oam, new SpeedMode(false));
+
+        private final DmaCpuAddressSpace cpu = new DmaCpuAddressSpace(
+                new DmaRegisterAddressSpace(memory, dma), dma, false);
+
+        private InactiveFixture() {
+            memory.setByte(0x0100, 0x11);
+            memory.setByte(0x1200, 0x42);
+        }
+
+        private void start() {
+            cpu.setByte(0xff46, 0x12);
+        }
+
+        private void tick(int count) {
+            for (int i = 0; i < count; i++) {
+                dma.tick();
+            }
+        }
+    }
+
+    private static class DmaRegisterAddressSpace implements AddressSpace {
+
+        private final TestAddressSpace memory;
+
+        private final Dma dma;
+
+        private DmaRegisterAddressSpace(TestAddressSpace memory, Dma dma) {
+            this.memory = memory;
+            this.dma = dma;
+        }
+
+        @Override
+        public boolean accepts(int address) {
+            return true;
+        }
+
+        @Override
+        public void setByte(int address, int value) {
+            if (dma.accepts(address)) {
+                dma.setByte(address, value);
+            } else {
+                memory.setByte(address, value);
+            }
+        }
+
+        @Override
+        public void setByteFromCpu(int address, int value) {
+            if (dma.accepts(address)) {
+                dma.setByteFromCpu(address, value);
+            } else {
+                memory.setByteFromCpu(address, value);
+            }
+        }
+
+        @Override
+        public int getByte(int address) {
+            return dma.accepts(address) ? dma.getByte(address) : memory.getByte(address);
+        }
+    }
+
     private static class TestAddressSpace implements AddressSpace {
 
         private final int[] data = new int[0x10000];
 
         private boolean cpuWrite;
+
+        private int lastReadAddress = -1;
+
+        private int lastCpuWriteAddress = -1;
 
         @Override
         public boolean accepts(int address) {
@@ -277,11 +394,13 @@ public class DmaCpuAddressSpaceTest {
         @Override
         public void setByteFromCpu(int address, int value) {
             cpuWrite = true;
+            lastCpuWriteAddress = address;
             data[address] = value;
         }
 
         @Override
         public int getByte(int address) {
+            lastReadAddress = address;
             return data[address];
         }
     }
