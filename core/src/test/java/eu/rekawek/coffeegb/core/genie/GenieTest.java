@@ -26,6 +26,23 @@ public class GenieTest {
     }
 
     @Test
+    public void unmatchedAddressFallsBackToDelegateWithPatchesPresent() {
+        CountingAddressSpace delegate = new CountingAddressSpace();
+        delegate.setByte(0xc124, 0x43);
+        Genie genie = new Genie(delegate, false);
+        CountingPatch patch = new CountingPatch(0xc123, true, 0x22);
+
+        try (EventBusImpl eventBus = new EventBusImpl(null, null, false)) {
+            genie.init(eventBus);
+            eventBus.post(new AddPatches(List.of(patch)));
+
+            assertEquals(0x43, genie.getByte(0xc124));
+            assertEquals(0, patch.acceptCalls);
+            assertEquals(1, delegate.reads);
+        }
+    }
+
+    @Test
     public void lookupPreservesFirstAcceptedPatchAndIgnoresOtherAddresses() {
         CountingAddressSpace delegate = new CountingAddressSpace();
         delegate.setByte(0xc123, 0x42);
