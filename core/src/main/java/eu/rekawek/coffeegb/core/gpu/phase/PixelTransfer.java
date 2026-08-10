@@ -575,6 +575,13 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /** Advances the delayed WY copy and returns the old-WY collision value, if any. */
     public int advanceWindowYDelay() {
+        if (windowWyDelay < 0 && windowWyOldOnWriteTick < 0) {
+            return -1;
+        }
+        return advanceWindowYDelayTransition();
+    }
+
+    private int advanceWindowYDelayTransition() {
         if (windowWyDelay == 0) {
             windowWy = pendingWindowWy;
             windowWyDelay = -1;
