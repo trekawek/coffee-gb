@@ -10,16 +10,21 @@ Linux. Each jpackage invocation runs on its target architecture:
 | macOS x64 | `macos-15-intel` | DMG | read-only `hdiutil` mount |
 | macOS arm64 | `macos-15` | DMG | read-only `hdiutil` mount |
 
-JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image must also expose 7-Zip's
-`7z.exe` and `7z.sfx` module; each job fails before building if its architecture or required host
-tool is wrong. Oracle jpackage cannot cross-build these formats, so a missing target runner is a
-release blocker rather than permission to relabel another architecture.
+JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image bootstraps a digest-pinned LZMA
+SDK archive, then exposes its x64 `7zr.exe` and configuration-aware `7zSD.sfx` installer module
+under the sibling names expected by the package interface. The archive and both extracted files
+must match reviewed SHA-256 values before building. Each job also fails if its architecture or
+required host tool is wrong. Oracle jpackage cannot cross-build these formats, so a missing target
+runner is a release blocker rather than permission to relabel another architecture.
 
 ## What CI proves
 
 The wrapper runs the Maven-authoritative `clean verify` reactor, including unit tests and the
-target-neutral staging integration tests, before building one unsigned target package. The package tool
-then:
+target-neutral staging integration tests, before building one unsigned target package. For a tagged
+release on Linux, `release:prepare` has already run that unit-test suite against the same immutable
+commit, so the package job reuses that result instead of repeating Surefire inside Xvfb. Maven still
+compiles the tests, runs the staging integration tests, and produces every artifact consumed by the
+native package and launch gates. The package tool then:
 
 1. verifies the minimized runtime module closure and launches the neutral JAR with that runtime;
 2. validates the canonical NFC UTF-8 license and exact `Tomasz Rękawek` author name, generates the
