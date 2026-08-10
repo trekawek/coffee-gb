@@ -64,6 +64,22 @@ public class IntQueue implements StatefulComponent<IntQueue> {
         size += 8;
     }
 
+    /** Adds a complete packed pixel group with constant attribute bits. */
+    void enqueue8Packed(int[] values, int bits) {
+        if (size + values.length > array.length) {
+            throw new IllegalStateException("Queue is full");
+        }
+        int writeOffset = (offset + size) % array.length;
+        for (int value : values) {
+            array[writeOffset] = value | bits;
+            writeOffset++;
+            if (writeOffset == array.length) {
+                writeOffset = 0;
+            }
+        }
+        size += values.length;
+    }
+
     void copyTo(IntQueue target) {
         if (target.size + size > target.array.length) {
             throw new IllegalStateException("Queue is full");

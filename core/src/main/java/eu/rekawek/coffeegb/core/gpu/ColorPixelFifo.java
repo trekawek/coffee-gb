@@ -15,19 +15,26 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     // four-dot entry skew, that leaves one dot in this final output stage.
     static final int OUTPUT_DELAY = 1;
 
-    private final IntQueue pixels = new IntQueue(16);
-
-    private final IntQueue palettes = new IntQueue(16);
-
-    private final IntQueue priorities = new IntQueue(16); // bg attribute priority flag
+    // Low six bits match the delayed pixel layout: bg pixel (2b), palette (3b), priority (1b).
+    private final IntQueue background = new IntQueue(16);
 
     // StartWindowDraw keeps the old background shift register beside the fresh window
     // fetch. On CGB, disabling LCDC.5 during its six startup states plots these pixels.
-    private final IntQueue clearedPixels = new IntQueue(16);
+    private final IntQueue clearedBackground = new IntQueue(16);
 
-    private final IntQueue clearedPalettes = new IntQueue(16);
+    // The portable state layout predates the packed runtime representation. Materialize its
+    // logical ring triples only while capturing or restoring a snapshot.
+    private final IntQueue statePixels = new IntQueue(16);
 
-    private final IntQueue clearedPriorities = new IntQueue(16);
+    private final IntQueue statePalettes = new IntQueue(16);
+
+    private final IntQueue statePriorities = new IntQueue(16);
+
+    private final IntQueue stateClearedPixels = new IntQueue(16);
+
+    private final IntQueue stateClearedPalettes = new IntQueue(16);
+
+    private final IntQueue stateClearedPriorities = new IntQueue(16);
 
     private final SpriteFifo spriteFifo = new SpriteFifo();
 
@@ -80,13 +87,13 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public int getLength() {
-        return pixels.size;
+        return background.size;
     }
 
     @Override
     public void putPixelToScreen() {
         linePixels++;
-        int entry = popEntry(pixels, palettes, priorities);
+        int entry = popEntry(background);
         int tail = (delayHead + delaySize) & 7;
         delayEntry[tail] = entry;
         delayStamp[tail] = outputTicks;
@@ -118,22 +125,12 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     // pack bg pixel (2b), bg palette (3b), bg priority (1b), sprite pixel (2b),
     // sprite palette (3b), sprite bg-priority (1b)
-    private int popEntry(IntQueue bgPixels, IntQueue bgPalettes, IntQueue bgPriorities) {
-        int bgPixel = bgPixels.array[bgPixels.offset++];
-        if (bgPixels.offset == bgPixels.array.length) {
-            bgPixels.offset = 0;
+    private int popEntry(IntQueue background) {
+        int entry = background.array[background.offset++];
+        if (background.offset == background.array.length) {
+            background.offset = 0;
         }
-        bgPixels.size--;
-        int bgPaletteIndex = bgPalettes.array[bgPalettes.offset++];
-        if (bgPalettes.offset == bgPalettes.array.length) {
-            bgPalettes.offset = 0;
-        }
-        bgPalettes.size--;
-        int bgAttrPriority = bgPriorities.array[bgPriorities.offset++];
-        if (bgPriorities.offset == bgPriorities.array.length) {
-            bgPriorities.offset = 0;
-        }
-        bgPriorities.size--;
+        background.size--;
         if (spriteFifo.size == 0) {
             spriteFifo.poppedPixel = 0;
             spriteFifo.poppedPalette = 0;
@@ -146,12 +143,16 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
             spriteFifo.head = (spriteFifo.head + 1) & 7;
             spriteFifo.size--;
         }
-        return bgPixel
-                | (bgPaletteIndex << 2)
-                | (bgAttrPriority << 5)
+        return entry
                 | (spriteFifo.poppedPixel << 6)
                 | (spriteFifo.poppedPalette << 8)
                 | (spriteFifo.poppedBgPriority ? 1 << 11 : 0);
+    }
+
+    private static void dropEntry(IntQueue background) {
+        background.offset = background.offset + 1 == background.array.length
+                ? 0 : background.offset + 1;
+        background.size--;
     }
 
     @Override
@@ -221,12 +222,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void dropPixel() {
-        pixels.offset = pixels.offset + 1 == pixels.array.length ? 0 : pixels.offset + 1;
-        pixels.size--;
-        palettes.offset = palettes.offset + 1 == palettes.array.length ? 0 : palettes.offset + 1;
-        palettes.size--;
-        priorities.offset = priorities.offset + 1 == priorities.array.length ? 0 : priorities.offset + 1;
-        priorities.size--;
+        dropEntry(background);
         if (spriteFifo.size == 0) {
             spriteFifo.poppedPixel = 0;
             spriteFifo.poppedPalette = 0;
@@ -243,11 +239,9 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void enqueue8Pixels(int[] pixelLine, TileAttributes tileAttributes) {
-        int paletteIndex = tileAttributes.getColorPaletteIndex();
-        int priority = tileAttributes.isPriority() ? 1 : 0;
-        pixels.enqueue8(pixelLine);
-        palettes.enqueue8(paletteIndex);
-        priorities.enqueue8(priority);
+        int attributeBits = (tileAttributes.getColorPaletteIndex() << 2)
+                | (tileAttributes.isPriority() ? 1 << 5 : 0);
+        background.enqueue8Packed(pixelLine, attributeBits);
     }
 
     @Override
@@ -266,9 +260,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void clear() {
-        pixels.clear();
-        palettes.clear();
-        priorities.clear();
+        background.clear();
         spriteFifo.clear();
         discardClearedBg();
     }
@@ -276,23 +268,19 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     @Override
     public void clearBg() {
         discardClearedBg();
-        pixels.copyTo(clearedPixels);
-        palettes.copyTo(clearedPalettes);
-        priorities.copyTo(clearedPriorities);
-        pixels.clear();
-        palettes.clear();
-        priorities.clear();
+        background.copyTo(clearedBackground);
+        background.clear();
     }
 
     @Override
     public int getClearedBgLength() {
-        return clearedPixels.size;
+        return clearedBackground.size;
     }
 
     @Override
     public void putClearedBgToScreen() {
         linePixels++;
-        int entry = popEntry(clearedPixels, clearedPalettes, clearedPriorities);
+        int entry = popEntry(clearedBackground);
         int tail = (delayHead + delaySize) & 7;
         delayEntry[tail] = entry;
         delayStamp[tail] = outputTicks;
@@ -301,15 +289,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void dropClearedBgPixel() {
-        clearedPixels.offset = clearedPixels.offset + 1 == clearedPixels.array.length
-                ? 0 : clearedPixels.offset + 1;
-        clearedPixels.size--;
-        clearedPalettes.offset = clearedPalettes.offset + 1 == clearedPalettes.array.length
-                ? 0 : clearedPalettes.offset + 1;
-        clearedPalettes.size--;
-        clearedPriorities.offset = clearedPriorities.offset + 1 == clearedPriorities.array.length
-                ? 0 : clearedPriorities.offset + 1;
-        clearedPriorities.size--;
+        dropEntry(clearedBackground);
         if (spriteFifo.size == 0) {
             spriteFifo.poppedPixel = 0;
             spriteFifo.poppedPalette = 0;
@@ -326,9 +306,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void discardClearedBg() {
-        clearedPixels.clear();
-        clearedPalettes.clear();
-        clearedPriorities.clear();
+        clearedBackground.clear();
     }
 
     @Override
@@ -338,10 +316,11 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public ComponentState<ColorPixelFifo> captureState() {
+        materializeStateQueues();
         return new ColorPixelFifoState(
-                pixels.captureState(),
-                palettes.captureState(),
-                priorities.captureState(),
+                statePixels.captureState(),
+                statePalettes.captureState(),
+                statePriorities.captureState(),
                 spriteFifo.captureState(),
                 delayEntry.clone(),
                 delayStamp.clone(),
@@ -349,17 +328,18 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
                 delaySize,
                 outputTicks,
                 linePixels,
-                clearedPixels.captureState(),
-                clearedPalettes.captureState(),
-                clearedPriorities.captureState());
+                stateClearedPixels.captureState(),
+                stateClearedPalettes.captureState(),
+                stateClearedPriorities.captureState());
     }
 
     @Override
     public ComponentState<ColorPixelFifo> captureState(MachineStateCapture capture) {
+        materializeStateQueues();
         return new ColorPixelFifoState(
-                pixels.captureState(capture),
-                palettes.captureState(capture),
-                priorities.captureState(capture),
+                statePixels.captureState(capture),
+                statePalettes.captureState(capture),
+                statePriorities.captureState(capture),
                 spriteFifo.captureState(capture),
                 capture.ints(delayEntry),
                 capture.longs(delayStamp),
@@ -367,9 +347,9 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
                 delaySize,
                 outputTicks,
                 linePixels,
-                clearedPixels.captureState(capture),
-                clearedPalettes.captureState(capture),
-                clearedPriorities.captureState(capture));
+                stateClearedPixels.captureState(capture),
+                stateClearedPalettes.captureState(capture),
+                stateClearedPriorities.captureState(capture));
     }
 
     @Override
@@ -377,16 +357,22 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         if (!(state instanceof ColorPixelFifoState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
-        pixels.restoreState(mem.pixels);
-        palettes.restoreState(mem.palettes);
-        priorities.restoreState(mem.priorities);
+        statePixels.restoreState(mem.pixels);
+        statePalettes.restoreState(mem.palettes);
+        statePriorities.restoreState(mem.priorities);
+        restorePackedQueue(statePixels, statePalettes, statePriorities, background);
         spriteFifo.restoreState(mem.spriteFifo);
         if (mem.clearedPixels != null
                 && mem.clearedPalettes != null
                 && mem.clearedPriorities != null) {
-            clearedPixels.restoreState(mem.clearedPixels);
-            clearedPalettes.restoreState(mem.clearedPalettes);
-            clearedPriorities.restoreState(mem.clearedPriorities);
+            stateClearedPixels.restoreState(mem.clearedPixels);
+            stateClearedPalettes.restoreState(mem.clearedPalettes);
+            stateClearedPriorities.restoreState(mem.clearedPriorities);
+            restorePackedQueue(
+                    stateClearedPixels,
+                    stateClearedPalettes,
+                    stateClearedPriorities,
+                    clearedBackground);
         } else {
             discardClearedBg();
         }
@@ -401,6 +387,42 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         } else {
             delayHead = 0;
             delaySize = 0;
+        }
+    }
+
+    private void materializeStateQueues() {
+        splitPackedQueue(background, statePixels, statePalettes, statePriorities);
+        splitPackedQueue(
+                clearedBackground,
+                stateClearedPixels,
+                stateClearedPalettes,
+                stateClearedPriorities);
+    }
+
+    private static void splitPackedQueue(
+            IntQueue source, IntQueue pixels, IntQueue palettes, IntQueue priorities) {
+        pixels.size = palettes.size = priorities.size = source.size;
+        pixels.offset = palettes.offset = priorities.offset = source.offset;
+        for (int i = 0; i < source.array.length; i++) {
+            int entry = source.array[i];
+            pixels.array[i] = entry & 0b11;
+            palettes.array[i] = (entry >> 2) & 0b111;
+            priorities.array[i] = (entry >> 5) & 1;
+        }
+    }
+
+    private static void restorePackedQueue(
+            IntQueue pixels, IntQueue palettes, IntQueue priorities, IntQueue target) {
+        if (pixels.size != palettes.size || pixels.size != priorities.size
+                || pixels.offset != palettes.offset || pixels.offset != priorities.offset) {
+            throw new IllegalArgumentException("ColorPixelFifo state queues are not aligned");
+        }
+        target.size = pixels.size;
+        target.offset = pixels.offset;
+        for (int i = 0; i < target.array.length; i++) {
+            target.array[i] = pixels.array[i]
+                    | (palettes.array[i] << 2)
+                    | (priorities.array[i] << 5);
         }
     }
 
