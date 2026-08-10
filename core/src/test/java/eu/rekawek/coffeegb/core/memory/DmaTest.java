@@ -72,6 +72,85 @@ public class DmaTest {
     }
 
     @Test
+    public void settledInactiveDmaDoesNotRequireAClockTick() {
+        Fixture fixture = new Fixture();
+
+        assertFalse(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
+    public void inactivePauseTransitionsRequireOneClockTick() {
+        Fixture fixture = new Fixture();
+
+        assertTrue(fixture.dma.requiresClockTick(true));
+        fixture.dma.tick(true);
+        assertFalse(fixture.dma.requiresClockTick(true));
+
+        assertTrue(fixture.dma.requiresClockTick(false));
+        fixture.dma.tick(false);
+        assertFalse(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
+    public void inactiveVramDmaBusSampleRequiresOneClockTickToClear() {
+        Fixture fixture = new Fixture();
+        fixture.dma.setVramDmaBusSample(new Hdma.SourceBusSample(0x1234, 0x56));
+
+        assertTrue(fixture.dma.requiresClockTick(false));
+        fixture.dma.tick();
+        assertFalse(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
+    public void activeDmaAlwaysRequiresAClockTick() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+
+        assertTrue(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
+    public void completedDmaRequiresExactlyOneOwnershipDrainTick() {
+        Fixture fixture = new Fixture();
+        fixture.start();
+        fixture.tick(648);
+
+        assertFalse(fixture.dma.isTransferInProgress());
+        assertTrue(fixture.dma.requiresClockTick(false));
+        fixture.dma.tick();
+        assertFalse(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
+    public void skippingSettledDmaClockPreservesMementoState() {
+        Fixture fixture = new Fixture();
+        fixture.dma.tick(true);
+        assertFalse(fixture.dma.requiresClockTick(true));
+        var settledState = fixture.dma.captureState();
+
+        Fixture ticked = new Fixture();
+        ticked.dma.restoreState(settledState);
+        ticked.dma.tick(true);
+
+        assertEquals(settledState, ticked.dma.captureState());
+    }
+
+    @Test
+    public void restoredRestartedStateRequiresAClockTick() {
+        Fixture fixture = new Fixture();
+        Dma.DmaState settled = (Dma.DmaState) fixture.dma.captureState();
+        fixture.dma.restoreState(new Dma.DmaState(false, true,
+                settled.from(), settled.ticks(), settled.transferClocks(),
+                settled.oamOwnedForPpuBeforeTick(), settled.oamOwnedForPpu(),
+                settled.ppuOamOwnedThroughRestart(), settled.cpuClockPaused(),
+                settled.pauseEntryClocks(), settled.currentByte(), settled.regValue(),
+                settled.pendingInterruptWriteByte(), settled.pendingInterruptWriteValue(),
+                settled.vramDmaBusCollisionObserved()));
+
+        assertTrue(fixture.dma.requiresClockTick(false));
+    }
+
+    @Test
     public void ppuOamOwnershipTransitionIsObservableAtAcquireAndRelease() {
         Fixture fixture = new Fixture(true);
         fixture.start();
