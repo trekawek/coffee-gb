@@ -323,6 +323,10 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         return transferInProgress;
     }
 
+    boolean hasCpuBusSpecialState() {
+        return transferInProgress || restarted;
+    }
+
     /** Captures the OAM-DMA latch and progress without reading FF46 through the bus. */
     public DebugHardwareInspection.OamDma captureDebugOamDmaInspection() {
         return new DebugHardwareInspection.OamDma(

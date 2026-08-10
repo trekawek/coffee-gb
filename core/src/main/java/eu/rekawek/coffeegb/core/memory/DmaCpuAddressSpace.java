@@ -32,6 +32,10 @@ public class DmaCpuAddressSpace implements AddressSpace {
 
     @Override
     public void setByte(int address, int value) {
+        if (!dma.hasCpuBusSpecialState()) {
+            addressSpace.setByteFromCpu(address, value);
+            return;
+        }
         if (dma.isOamBlocked() && address >= 0xfea0 && address < 0xff00) {
             // CGB normally mirrors parts of OAM through the unusable range. OAM DMA
             // disconnects that whole range, so a stack write there must not leak into
@@ -47,6 +51,9 @@ public class DmaCpuAddressSpace implements AddressSpace {
 
     @Override
     public int getByte(int address) {
+        if (!dma.hasCpuBusSpecialState()) {
+            return addressSpace.getByte(address);
+        }
         if (dma.isOamBlocked() && address >= 0xfea0 && address < 0xff00) {
             return 0xff;
         }
