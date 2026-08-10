@@ -64,6 +64,10 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
         if (patches.isEmpty()) {
             return value;
         }
+        return applyPatches(address, value);
+    }
+
+    private int applyPatches(int address, int value) {
         List<CheatPatch> addressPatches = patches.get(address);
         if (addressPatches == null) {
             return value;
