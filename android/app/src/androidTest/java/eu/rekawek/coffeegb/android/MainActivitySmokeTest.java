@@ -22,6 +22,7 @@ import org.junit.runner.RunWith;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -45,14 +46,14 @@ public class MainActivitySmokeTest {
     @Test
     public void toggleMenuAdvancesGenerationBeforeQueuedStateDelivery() throws Exception {
         AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        AtomicBoolean ownerDrained = new AtomicBoolean();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             await("runtime binding", () -> {
                 scenario.onActivity(activity -> runtime.set(runtime(activity)));
                 return runtime.get() != null;
             });
-            runtime.get().openRom(FixtureRomProvider.URI, 0);
-            await("fixture running", () -> runtime.get().state().phase()
-                    == RuntimeState.Phase.RUNNING);
+            runtime.get().listStateSlots(ignored -> ownerDrained.set(true));
+            await("runtime owner queue", ownerDrained::get);
 
             scenario.onActivity(activity -> {
                 AndroidEmulationRuntime active = runtime(activity);
@@ -68,17 +69,16 @@ public class MainActivitySmokeTest {
                 try {
                     setRuntimeState(active, current);
                     menuButton(activity).performClick();
+                    assertEquals(currentGeneration,
+                            longField(activity, "observedGeneration"));
+                    assertEquals(current, observedState(activity));
                     activity.onStateChanged(queued);
                     assertEquals(currentGeneration, longField(activity, "observedGeneration"));
-                    assertEquals(RuntimeState.Phase.PAUSED, observedState(activity).phase());
+                    assertEquals(current, observedState(activity));
                 } finally {
                     setRuntimeState(active, original);
                 }
             });
-        } finally {
-            if (runtime.get() != null) {
-                runtime.get().stop();
-            }
         }
     }
 
