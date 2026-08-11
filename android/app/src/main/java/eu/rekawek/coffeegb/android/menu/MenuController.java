@@ -29,6 +29,7 @@ public final class MenuController implements MenuTouchInput {
     private final EnumSet<MenuKey> capturedKeys = EnumSet.noneOf(MenuKey.class);
 
     private MenuState state = MenuReducer.initial();
+    private boolean backIntercepted;
 
     public MenuController(Listener listener) {
         this.listener = Objects.requireNonNull(listener, "listener");
@@ -56,9 +57,7 @@ public final class MenuController implements MenuTouchInput {
         synchronized (lock) {
             MenuPage page = MenuPage.from(spec);
             pages.put(spec.route(), page);
-            if (state.visible() && state.route() == spec.route()) {
-                state = MenuReducer.replaceCurrent(state, page);
-            }
+            state = MenuReducer.replacePage(state, page);
             next = state.presentation();
         }
         notifyPresentation(next);
@@ -72,9 +71,7 @@ public final class MenuController implements MenuTouchInput {
             for (MenuPageSpec spec : specs) {
                 MenuPage page = MenuPage.from(Objects.requireNonNull(spec, "spec"));
                 pages.put(spec.route(), page);
-                if (state.visible() && state.route() == spec.route()) {
-                    state = MenuReducer.replaceCurrent(state, page);
-                }
+                state = MenuReducer.replacePage(state, page);
             }
             next = state.presentation();
         }
@@ -98,6 +95,50 @@ public final class MenuController implements MenuTouchInput {
             next = state.presentation();
         }
         notifyPresentation(next);
+    }
+
+    /** Captures every route and focused item in one immutable operation. */
+    public MenuStackSnapshot snapshot() {
+        synchronized (lock) {
+            if (!state.visible()) {
+                return MenuStackSnapshot.hidden();
+            }
+            ArrayList<MenuStackSnapshot.Frame> frames = new ArrayList<>(state.stack().size());
+            for (MenuState.Frame frame : state.stack()) {
+                frames.add(new MenuStackSnapshot.Frame(frame.page().route(),
+                        frame.page().items().get(frame.focusedIndex()).id()));
+            }
+            return new MenuStackSnapshot(frames);
+        }
+    }
+
+    /** Restores a complete route chain against the latest page models in one transition. */
+    public void restore(MenuStackSnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        MenuPresentation next;
+        synchronized (lock) {
+            if (!snapshot.visible()) {
+                state = MenuReducer.initial();
+            } else {
+                ArrayList<MenuPage> routePages = new ArrayList<>(snapshot.frames().size());
+                ArrayList<String> focus = new ArrayList<>(snapshot.frames().size());
+                for (MenuStackSnapshot.Frame frame : snapshot.frames()) {
+                    routePages.add(page(frame.route()));
+                    focus.add(frame.focusedItemId());
+                }
+                state = MenuReducer.restore(routePages, focus);
+            }
+            clearTransientInputsLocked(true);
+            next = state.presentation();
+        }
+        notifyPresentation(next);
+    }
+
+    /** Keeps a B edge on the current route so an inline capture can cancel itself. */
+    public void setBackIntercepted(boolean intercepted) {
+        synchronized (lock) {
+            backIntercepted = intercepted;
+        }
     }
 
     public void back() {
@@ -294,9 +335,19 @@ public final class MenuController implements MenuTouchInput {
         switch (key) {
             case UP -> state = MenuReducer.move(state, MenuCommand.Direction.UP);
             case DOWN -> state = MenuReducer.move(state, MenuCommand.Direction.DOWN);
-            case LEFT -> state = MenuReducer.move(state, MenuCommand.Direction.LEFT);
-            case RIGHT -> state = MenuReducer.move(state, MenuCommand.Direction.RIGHT);
+            case LEFT, RIGHT -> {
+                MenuItem item = state.page().items().get(state.focusedIndex());
+                if (item.enabled() && item.adjustable()) {
+                    return new Transition(state.presentation(), Event.adjust(
+                            state.route(), item.id(), key == MenuKey.LEFT ? -1 : 1));
+                }
+                state = MenuReducer.move(state, key == MenuKey.LEFT
+                        ? MenuCommand.Direction.LEFT : MenuCommand.Direction.RIGHT);
+            }
             case B -> {
+                if (backIntercepted) {
+                    return new Transition(state.presentation(), Event.back(state.route()));
+                }
                 state = MenuReducer.back(state);
                 if (!state.visible()) {
                     clearTransientInputsLocked(false);
@@ -358,10 +409,11 @@ public final class MenuController implements MenuTouchInput {
     }
 
     private void notifyEvent(Event event) {
-        if (event.header) {
-            listener.onHeaderSelected(event.route);
-        } else {
-            listener.onItemSelected(event.route, event.id, event.secondary);
+        switch (event.kind) {
+            case HEADER -> listener.onHeaderSelected(event.route);
+            case ITEM -> listener.onItemSelected(event.route, event.id, event.secondary);
+            case ADJUST -> listener.onItemAdjusted(event.route, event.id, event.adjustment);
+            case BACK -> listener.onBackIntercepted(event.route);
         }
     }
 
@@ -376,24 +428,41 @@ public final class MenuController implements MenuTouchInput {
     }
 
     private static final class Event {
+        private enum Kind {
+            ITEM,
+            HEADER,
+            ADJUST,
+            BACK
+        }
+
         private final MenuRoute route;
         private final String id;
         private final boolean secondary;
-        private final boolean header;
+        private final int adjustment;
+        private final Kind kind;
 
-        private Event(MenuRoute route, String id, boolean secondary, boolean header) {
+        private Event(MenuRoute route, String id, boolean secondary, int adjustment, Kind kind) {
             this.route = route;
             this.id = id;
             this.secondary = secondary;
-            this.header = header;
+            this.adjustment = adjustment;
+            this.kind = kind;
         }
 
         private static Event item(MenuRoute route, String id, boolean secondary) {
-            return new Event(route, id, secondary, false);
+            return new Event(route, id, secondary, 0, Kind.ITEM);
         }
 
         private static Event header(MenuRoute route) {
-            return new Event(route, null, false, true);
+            return new Event(route, null, false, 0, Kind.HEADER);
+        }
+
+        private static Event adjust(MenuRoute route, String id, int adjustment) {
+            return new Event(route, id, false, adjustment, Kind.ADJUST);
+        }
+
+        private static Event back(MenuRoute route) {
+            return new Event(route, null, false, 0, Kind.BACK);
         }
     }
 
@@ -404,5 +473,11 @@ public final class MenuController implements MenuTouchInput {
         void onItemSelected(MenuRoute route, String id, boolean secondary);
 
         void onHeaderSelected(MenuRoute route);
+
+        default void onItemAdjusted(MenuRoute route, String id, int direction) {
+        }
+
+        default void onBackIntercepted(MenuRoute route) {
+        }
     }
 }

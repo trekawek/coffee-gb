@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.android;
 
+import android.view.InputDevice;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import org.junit.Test;
@@ -43,5 +44,17 @@ public class AndroidInputRouterTest {
         } finally {
             router.close();
         }
+    }
+
+    @Test
+    public void onlyPhysicalGamepadOrJoystickQualifiesForConfiguration() {
+        assertTrue(AndroidInputRouter.isConfigurableControllerSources(
+                InputDevice.SOURCE_GAMEPAD, false));
+        assertTrue(AndroidInputRouter.isConfigurableControllerSources(
+                InputDevice.SOURCE_JOYSTICK, false));
+        org.junit.Assert.assertFalse(AndroidInputRouter.isConfigurableControllerSources(
+                InputDevice.SOURCE_DPAD, false));
+        org.junit.Assert.assertFalse(AndroidInputRouter.isConfigurableControllerSources(
+                InputDevice.SOURCE_GAMEPAD | InputDevice.SOURCE_DPAD, true));
     }
 }

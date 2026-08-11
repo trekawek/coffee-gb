@@ -7,6 +7,7 @@ import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
+import eu.rekawek.coffeegb.android.menu.MenuPreview;
 import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
@@ -183,13 +184,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         });
     }
 
-    /** Creates a preview bitmap away from the main thread, then returns it to the UI. */
-    void previewPrinter(Consumer<Bitmap> callback) {
-        Consumer<Bitmap> checked = Objects.requireNonNull(callback, "callback");
+    /** Creates a bounded detached preview away from the main thread. */
+    void previewPrinter(Consumer<MenuPreview> callback) {
+        Consumer<MenuPreview> checked = Objects.requireNonNull(callback, "callback");
         submit(() -> {
             AndroidPrinterStore.Snapshot snapshot = printer == null ? null : printer.snapshot();
-            Bitmap bitmap = snapshot == null ? null : snapshot.toBitmap();
-            mainHandler.post(() -> checked.accept(bitmap));
+            MenuPreview preview = snapshot == null ? MenuPreview.empty()
+                    : snapshot.preview(160, 192);
+            mainHandler.post(() -> checked.accept(preview));
         });
     }
 
@@ -527,6 +529,48 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     bitmap.recycle();
                 }
             }
+        });
+    }
+
+    /** Exports full-resolution paper and reports success or failure on the main thread. */
+    void exportPrinter(Uri destination, Consumer<Boolean> completed) {
+        Uri checked = Objects.requireNonNull(destination, "destination");
+        Consumer<Boolean> callback = Objects.requireNonNull(completed, "completed");
+        submit(() -> {
+            AndroidPrinterStore.Snapshot snapshot = printer == null ? null : printer.snapshot();
+            if (snapshot == null) {
+                publish(state.phase(), "Nothing has been printed yet.", List.of(),
+                        state.transferReady(), state.paused(), state.flushPending());
+                mainHandler.post(() -> callback.accept(false));
+                return;
+            }
+            RuntimeState before = state;
+            publish(before.phase(), "Exporting printer paper…", List.of(), before.transferReady(),
+                    before.paused(), before.flushPending());
+            Bitmap bitmap = null;
+            boolean success = false;
+            try {
+                bitmap = snapshot.toBitmap();
+                try (OutputStream output = context.getContentResolver()
+                        .openOutputStream(checked, "wt")) {
+                    if (output == null || !bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw new IOException("Printer paper could not be encoded");
+                    }
+                    output.flush();
+                }
+                success = true;
+                publish(before.phase(), "Printer paper exported.", List.of(),
+                        before.transferReady(), before.paused(), before.flushPending());
+            } catch (IOException failure) {
+                publish(before.phase(), "Coffee GB could not export printer paper.", List.of(),
+                        before.transferReady(), before.paused(), before.flushPending());
+            } finally {
+                if (bitmap != null) {
+                    bitmap.recycle();
+                }
+            }
+            boolean result = success;
+            mainHandler.post(() -> callback.accept(result));
         });
     }
 

@@ -36,7 +36,7 @@ final class MenuReducer {
         if (page == null) {
             throw new IllegalArgumentException("page is required");
         }
-        return MenuState.visible(page, page.firstEnabledIndex());
+        return MenuState.visible(page, page.initialFocusIndex());
     }
 
     static MenuState hide(MenuState state) {
@@ -63,10 +63,10 @@ final class MenuReducer {
             throw new IllegalArgumentException("page is required");
         }
         if (!state.visible()) {
-            return MenuState.visible(page, page.firstEnabledIndex());
+            return MenuState.visible(page, page.initialFocusIndex());
         }
         ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
-        stack.add(new MenuState.Frame(page, page.firstEnabledIndex()));
+        stack.add(new MenuState.Frame(page, page.initialFocusIndex()));
         return MenuState.withStack(stack);
     }
 
@@ -78,16 +78,51 @@ final class MenuReducer {
             return state;
         }
         String focusedId = state.focusedItemId();
-        int focusedIndex = page.firstEnabledIndex();
-        for (int index = 0; index < page.items().size(); index++) {
-            if (page.items().get(index).enabled()
-                    && page.items().get(index).id().equals(focusedId)) {
-                focusedIndex = index;
-                break;
-            }
+        int focusedIndex = page.enabledIndex(focusedId);
+        if (focusedIndex < 0) {
+            focusedIndex = page.initialFocusIndex();
         }
         ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
         stack.set(stack.size() - 1, new MenuState.Frame(page, focusedIndex));
+        return MenuState.withStack(stack);
+    }
+
+    static MenuState replacePage(MenuState state, MenuPage page) {
+        if (state == null || page == null) {
+            throw new IllegalArgumentException("state and page are required");
+        }
+        if (!state.visible()) {
+            return state;
+        }
+        ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
+        for (int index = 0; index < stack.size(); index++) {
+            MenuState.Frame frame = stack.get(index);
+            if (frame.page().route() != page.route()) {
+                continue;
+            }
+            String focusedId = frame.page().items().get(frame.focusedIndex()).id();
+            int focusedIndex = page.enabledIndex(focusedId);
+            if (focusedIndex < 0) {
+                focusedIndex = page.initialFocusIndex();
+            }
+            stack.set(index, new MenuState.Frame(page, focusedIndex));
+        }
+        return MenuState.withStack(stack);
+    }
+
+    static MenuState restore(List<MenuPage> pages, List<String> focusedItemIds) {
+        if (pages == null || focusedItemIds == null || pages.size() != focusedItemIds.size()) {
+            throw new IllegalArgumentException("pages and focused ids must have equal size");
+        }
+        ArrayList<MenuState.Frame> stack = new ArrayList<>(pages.size());
+        for (int index = 0; index < pages.size(); index++) {
+            MenuPage page = pages.get(index);
+            int focus = page.enabledIndex(focusedItemIds.get(index));
+            if (focus < 0) {
+                focus = page.initialFocusIndex();
+            }
+            stack.add(new MenuState.Frame(page, focus));
+        }
         return MenuState.withStack(stack);
     }
 

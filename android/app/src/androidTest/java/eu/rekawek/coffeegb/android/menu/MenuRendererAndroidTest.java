@@ -37,4 +37,22 @@ public class MenuRendererAndroidTest {
         }
         assertNotEquals(untouched, bitmap.getPixel(21, 31));
     }
+
+    @Test
+    public void boundedPrinterPreviewIsAspectFitAndClippedToPanel() {
+        int untouched = Color.MAGENTA;
+        Bitmap bitmap = Bitmap.createBitmap(240, 180, Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(untouched);
+        int[] pixels = new int[20 * 100];
+        java.util.Arrays.fill(pixels, Color.BLACK);
+        RectF bounds = new RectF(40, 20, 200, 160);
+
+        new MenuRenderer().drawPreview(
+                new Canvas(bitmap), MenuPreview.ready(20, 100, pixels), bounds);
+
+        assertEquals(untouched, bitmap.getPixel(10, 10));
+        assertEquals(untouched, bitmap.getPixel(220, 170));
+        assertNotEquals(untouched, bitmap.getPixel(120, 90));
+        assertEquals(Color.rgb(239, 240, 211), bitmap.getPixel(45, 25));
+    }
 }

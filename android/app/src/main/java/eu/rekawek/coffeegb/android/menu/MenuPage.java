@@ -16,10 +16,19 @@ final class MenuPage {
     private final List<MenuItem> items;
     private final int columns;
     private final List<String> footerHints;
+    private final String preferredFocusId;
+    private final MenuPreview preview;
 
     MenuPage(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
             List<String> footerHints) {
+        this(route, title, context, headerAction, sideHeading, sideLines, items, columns,
+                footerHints, null, MenuPreview.empty());
+    }
+
+    MenuPage(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
+            List<String> footerHints, String preferredFocusId, MenuPreview preview) {
         if (route == null) {
             throw new IllegalArgumentException("route cannot be null");
         }
@@ -35,6 +44,8 @@ final class MenuPage {
         this.items = immutableItems(items);
         this.columns = Math.max(1, columns);
         this.footerHints = immutableStrings(footerHints, "footerHints");
+        this.preferredFocusId = preferredFocusId;
+        this.preview = java.util.Objects.requireNonNull(preview, "preview");
         if (firstEnabledIndex() < 0) {
             throw new IllegalArgumentException("A menu page needs an enabled item");
         }
@@ -44,10 +55,11 @@ final class MenuPage {
         ArrayList<MenuItem> items = new ArrayList<>(spec.items().size());
         for (MenuPageSpec.Item item : spec.items()) {
             items.add(new MenuItem(item.id(), item.label(), item.detail(), item.enabled(),
-                    item.secondaryId()));
+                    item.secondaryId(), item.adjustable(), item.progress()));
         }
         return new MenuPage(spec.route(), spec.title(), spec.context(), spec.headerAction(),
-                spec.sideHeading(), spec.sideLines(), items, spec.columns(), spec.footerHints());
+                spec.sideHeading(), spec.sideLines(), items, spec.columns(), spec.footerHints(),
+                spec.preferredFocusId(), spec.preview());
     }
 
     MenuRoute route() {
@@ -86,6 +98,33 @@ final class MenuPage {
         return footerHints;
     }
 
+    MenuPreview preview() {
+        return preview;
+    }
+
+    int initialFocusIndex() {
+        if (preferredFocusId != null) {
+            int preferred = enabledIndex(preferredFocusId);
+            if (preferred >= 0) {
+                return preferred;
+            }
+        }
+        return firstEnabledIndex();
+    }
+
+    int enabledIndex(String id) {
+        if (id == null) {
+            return -1;
+        }
+        for (int index = 0; index < items.size(); index++) {
+            MenuItem item = items.get(index);
+            if (item.enabled() && id.equals(item.id())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     int firstEnabledIndex() {
         for (int index = 0; index < items.size(); index++) {
             if (items.get(index).enabled()) {
@@ -101,7 +140,7 @@ final class MenuPage {
             rows.add(item.presentation());
         }
         return new MenuPresentation(true, route, title, context, headerAction, sideHeading,
-                sideLines, rows, focusedIndex, columns, footerHints);
+                sideLines, rows, focusedIndex, columns, footerHints, preview);
     }
 
     private static String text(String value, String name) {
@@ -141,25 +180,34 @@ final class MenuItem {
     private final String detail;
     private final boolean enabled;
     private final String secondaryId;
+    private final boolean adjustable;
+    private final int progress;
 
     MenuItem(String id, String label) {
-        this(id, label, "", true);
+        this(id, label, "", true, null, false, -1);
     }
 
     MenuItem(String id, String label, String detail) {
-        this(id, label, detail, true, null);
+        this(id, label, detail, true, null, false, -1);
     }
 
     MenuItem(String id, String label, String detail, boolean enabled) {
-        this(id, label, detail, enabled, null);
+        this(id, label, detail, enabled, null, false, -1);
     }
 
     MenuItem(String id, String label, String detail, boolean enabled, String secondaryId) {
+        this(id, label, detail, enabled, secondaryId, false, -1);
+    }
+
+    MenuItem(String id, String label, String detail, boolean enabled, String secondaryId,
+            boolean adjustable, int progress) {
         this.id = text(id, "id");
         this.label = text(label, "label");
         this.detail = text(detail, "detail");
         this.enabled = enabled;
         this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
+        this.adjustable = adjustable;
+        this.progress = progress;
     }
 
     String id() {
@@ -182,8 +230,17 @@ final class MenuItem {
         return secondaryId;
     }
 
+    boolean adjustable() {
+        return adjustable;
+    }
+
+    int progress() {
+        return progress;
+    }
+
     MenuPresentation.Item presentation() {
-        return new MenuPresentation.Item(id, label, detail, enabled, secondaryId);
+        return new MenuPresentation.Item(
+                id, label, detail, enabled, secondaryId, adjustable, progress);
     }
 
     private static String text(String value, String name) {

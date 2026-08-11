@@ -127,6 +127,10 @@ android {
   namespace = "eu.rekawek.coffeegb.android"
   compileSdk = 36
 
+  buildFeatures {
+    buildConfig = true
+  }
+
   defaultConfig {
     applicationId = "eu.rekawek.coffeegb.android"
     minSdk = 26
