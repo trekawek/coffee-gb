@@ -33,11 +33,18 @@ internal class RomFileChooser : JFileChooser() {
         else -> super.getName(file)
       }
 
+  /**
+   * FlatLaf's Windows renderer resolves ordinary icons through the shell while painting each
+   * row, which blocks the EDT when scrolling through a large ROM directory. Use the generic
+   * Swing icons instead; UIManager lookup is constant-time and constructor-safe.
+   */
   override fun getIcon(file: File?): Icon? =
       when (file) {
         is SyntacticDirectoryFile -> UIManager.getIcon("FileView.directoryIcon")
         null -> null
-        else -> super.getIcon(file)
+        else ->
+            if (file.isDirectory()) UIManager.getIcon("FileView.directoryIcon")
+            else UIManager.getIcon("FileView.fileIcon")
       }
 
   private class SyntacticDirectoryFile(path: String) : File(path) {
