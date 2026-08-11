@@ -93,6 +93,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private CoffeeGbSurfaceView video;
     private Button menuButton;
     private AndroidEmulationRuntime runtime;
+    private AndroidEmulationRuntime observedRuntime;
+    private long observedGeneration = -1L;
     private boolean bound;
     private InputManager inputManager;
     private PendingDocumentResult pendingDocumentResult;
@@ -160,7 +162,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
-            runtime = ((EmulationService.RuntimeBinder) service).runtime();
+            AndroidEmulationRuntime connected =
+                    ((EmulationService.RuntimeBinder) service).runtime();
+            if (observedRuntime != connected) {
+                observedRuntime = connected;
+                observedGeneration = -1L;
+            }
+            runtime = connected;
             bound = true;
             runtime.addObserver(MainActivity.this);
             video.attach(runtime.frames(), runtime.input());
@@ -199,6 +207,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
             video.clearMenuPresentation();
             runtime = null;
+            observedRuntime = null;
+            observedGeneration = -1L;
             bound = false;
             observedState = RuntimeState.stopped();
             refreshMenuPages();
@@ -489,7 +499,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         AndroidEmulationRuntime active = runtime;
         RuntimeState current = active == null ? observedState : active.state();
-        observedState = current;
+        applyState(current);
+        current = observedState;
         if (active != null) {
             active.input().releaseAll();
         }
@@ -1722,6 +1733,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void applyState(RuntimeState state) {
+        if (state.generation() < observedGeneration) {
+            return;
+        }
+        observedGeneration = state.generation();
+        if (state.flushPending() && !observedState.flushPending()
+                && menuController != null && menuController.visible()
+                && menuController.route() == MenuRoute.DATA_MEDIA) {
+            deferredMenuFocusRestore = menuController.snapshot();
+        }
         observedState = state;
         refreshMenuPages();
         if (runtime == null || menuController == null || externalSurface.active()) {
