@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.PointF;
 import android.hardware.input.InputManager;
 import android.net.Uri;
 import android.os.Build;
@@ -267,15 +268,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         styleMenuButton();
         menuButton.setContentDescription("Open Coffee GB menu");
         menuButton.setOnClickListener(ignored -> toggleMenu());
+        int menuTarget = menuButtonSize();
         root.addView(menuButton, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addOnLayoutChangeListener((view, left, top, right, bottom,
-                                        oldLeft, oldTop, oldRight, oldBottom) ->
-                positionMenuOverlay(right - left, bottom - top));
+                menuTarget, menuTarget));
+        video.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                         oldLeft, oldTop, oldRight, oldBottom) ->
+                positionMenuOverlay());
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            positionMenuOverlay(view.getWidth(), view.getHeight());
             return insets;
         });
         setContentView(root);
@@ -528,28 +529,39 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void styleMenuButton() {
-        int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
+        int target = menuButtonSize();
         menuButton.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         menuButton.setText(null);
-        menuButton.setMinWidth(48 * density);
-        menuButton.setMinHeight(48 * density);
+        menuButton.setMinWidth(target);
+        menuButton.setMinHeight(target);
         menuButton.setPadding(0, 0, 0, 0);
     }
 
-    private void positionMenuOverlay(int width, int height) {
-        if (width <= 0 || height <= 0 || menuButton == null) {
+    private int menuButtonSize() {
+        return Math.max(1, Math.round(48f * getResources().getDisplayMetrics().density));
+    }
+
+    private void positionMenuOverlay() {
+        if (video == null || menuButton == null || video.getParent() == null) {
             return;
         }
-        int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
-        int target = 48 * density;
+        int width = video.getWidth();
+        int height = video.getHeight();
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        int target = menuButtonSize();
+        PointF center = video.menuControlCenter(width, height);
+        FrameLayout root = (FrameLayout) video.getParent();
+        int videoLeft = video.getLeft() - root.getPaddingLeft();
+        int videoTop = video.getTop() - root.getPaddingTop();
         FrameLayout.LayoutParams layout = (FrameLayout.LayoutParams) menuButton.getLayoutParams();
-        boolean portrait = height >= width;
-        int centerX = Math.round(width * (portrait ? .125f : .059f));
-        int centerY = Math.round(height * (portrait ? .050f : .085f));
         layout.gravity = Gravity.TOP | Gravity.START;
-        layout.leftMargin = Math.max(0, centerX - target / 2);
+        layout.width = target;
+        layout.height = target;
+        layout.leftMargin = videoLeft + Math.round(center.x - target / 2f);
         layout.rightMargin = 0;
-        layout.topMargin = Math.max(0, centerY - target / 2);
+        layout.topMargin = videoTop + Math.round(center.y - target / 2f);
         menuButton.setLayoutParams(layout);
     }
 

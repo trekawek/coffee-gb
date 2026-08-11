@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.joypad.Button;
+import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import org.junit.Test;
 
 import java.util.List;
@@ -42,5 +43,27 @@ public class TouchControlsLayoutTest {
         assertEquals(List.of(Button.START), layout.buttonsAt(
                 layout.utilityCenterX(width, height, true), layout.utilityCenterY(width, height),
                 width, height));
+    }
+
+    @Test
+    public void mappedViewTouchUsesNativeSkinGeometryAndLetterboxMoveReleasesIt() {
+        TouchControlsLayout layout = new TouchControlsLayout(.5f, 1f, 0f, false, false);
+        SkinTransform transform = SkinTransform.aspectFit(941, 1672, 920, 1884);
+        float nativeX = layout.actionCenterX(941, 1672, true);
+        float nativeY = layout.actionCenterY(941, 1672, true);
+        SkinTransform.Point mapped = transform.mapPoint(nativeX, nativeY);
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            router.updateTouchPointer(7,
+                    layout.buttonsAtViewPoint(mapped.x(), mapped.y(), transform));
+            assertEquals(java.util.Set.of(Button.A), hub.sample().buttons(0));
+
+            router.updateTouchPointer(7, layout.buttonsAtViewPoint(
+                    mapped.x(), transform.skinBounds().top() - 1f, transform));
+            assertTrue(hub.sample().buttons(0).isEmpty());
+        } finally {
+            router.close();
+        }
     }
 }
