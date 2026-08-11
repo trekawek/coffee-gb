@@ -20,6 +20,7 @@ import org.junit.runner.RunWith;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
@@ -37,6 +38,46 @@ public class MainActivitySmokeTest {
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.moveToState(Lifecycle.State.RESUMED);
             scenario.recreate();
+        }
+    }
+
+    @Test
+    public void toggleMenuAdvancesGenerationBeforeQueuedStateDelivery() throws Exception {
+        AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            await("runtime binding", () -> {
+                scenario.onActivity(activity -> runtime.set(runtime(activity)));
+                return runtime.get() != null;
+            });
+            runtime.get().openRom(FixtureRomProvider.URI, 0);
+            await("fixture running", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.RUNNING);
+
+            scenario.onActivity(activity -> {
+                AndroidEmulationRuntime active = runtime(activity);
+                RuntimeState original = active.state();
+                long observedGeneration = longField(activity, "observedGeneration");
+                long currentGeneration = Math.max(observedGeneration, original.generation()) + 2L;
+                RuntimeState current = new RuntimeState(RuntimeState.Phase.PAUSED,
+                        "newest runtime snapshot", List.of(), true, true, false,
+                        currentGeneration);
+                RuntimeState queued = new RuntimeState(RuntimeState.Phase.STOPPED,
+                        "older queued snapshot", List.of(), false, false, false,
+                        currentGeneration - 1L);
+                try {
+                    setRuntimeState(active, current);
+                    menuButton(activity).performClick();
+                    activity.onStateChanged(queued);
+                    assertEquals(currentGeneration, longField(activity, "observedGeneration"));
+                    assertEquals(RuntimeState.Phase.PAUSED, observedState(activity).phase());
+                } finally {
+                    setRuntimeState(active, original);
+                }
+            });
+        } finally {
+            if (runtime.get() != null) {
+                runtime.get().stop();
+            }
         }
     }
 
@@ -164,7 +205,8 @@ public class MainActivitySmokeTest {
             moveFocusTo(scenario, instrumentation, "confirm");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
 
-            await("native picker ownership", () -> externalSurfaceActive(scenario));
+            await("native picker resumed", () -> externalSurfaceActive(scenario)
+                    && nativePickerResumed(instrumentation));
             sendSystemBack(instrumentation);
             awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.DATA_MEDIA);
             awaitFocused(scenario, "import-battery");
@@ -173,6 +215,23 @@ public class MainActivitySmokeTest {
             scenario.recreate();
             awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.DATA_MEDIA);
             awaitFocused(scenario, "import-battery");
+            scenario.onActivity(activity -> {
+                long latestGeneration = longField(activity, "observedGeneration");
+                assertTrue("fixture runtime has published state", latestGeneration > 0L);
+
+                activity.onStateChanged(new RuntimeState(RuntimeState.Phase.STOPPED,
+                        "stale observer delivery", List.of(), false, false, false,
+                        latestGeneration - 1L));
+                assertEquals("import-battery", focusedItemId(activity));
+
+                activity.onStateChanged(new RuntimeState(RuntimeState.Phase.PAUSED,
+                        "background flush", List.of(), true, true, true,
+                        latestGeneration + 1L));
+                activity.onStateChanged(new RuntimeState(RuntimeState.Phase.PAUSED,
+                        "background flush complete", List.of(), true, true, false,
+                        latestGeneration + 2L));
+                assertEquals("import-battery", focusedItemId(activity));
+            });
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
         } finally {
             if (runtime.get() != null) {
@@ -368,8 +427,26 @@ public class MainActivitySmokeTest {
             while ((count = stream.read(buffer)) != -1) {
                 output.write(buffer, 0, count);
             }
-            return output.toString(java.nio.charset.StandardCharsets.UTF_8);
+            return new String(output.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
         }
+    }
+
+    private static boolean nativePickerResumed(Instrumentation instrumentation) throws IOException {
+        String activities = shellOutput(instrumentation, "dumpsys activity activities");
+        for (String line : activities.split("\\R")) {
+            String trimmed = line.trim();
+            boolean resumed = trimmed.startsWith("mResumedActivity:")
+                    || trimmed.startsWith("mResumedActivity=")
+                    || trimmed.startsWith("topResumedActivity=")
+                    || trimmed.startsWith("ResumedActivity:");
+            if (resumed
+                    && (trimmed.contains("com.google.android.documentsui/")
+                    || trimmed.contains("com.android.documentsui/"))
+                    && trimmed.contains("PickActivity")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Button menuButton(MainActivity activity) {
@@ -397,6 +474,12 @@ public class MainActivitySmokeTest {
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
         }
+    }
+
+    private static String focusedItemId(MainActivity activity) {
+        eu.rekawek.coffeegb.android.menu.MenuStackSnapshot snapshot =
+                menuController(activity).snapshot();
+        return snapshot.frames().get(snapshot.frames().size() - 1).focusedItemId();
     }
 
     private static boolean externalSurfaceActive(ActivityScenario<MainActivity> scenario) {
@@ -432,6 +515,36 @@ public class MainActivitySmokeTest {
             Field field = MainActivity.class.getDeclaredField(name);
             field.setAccessible(true);
             return field.getBoolean(activity);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static long longField(MainActivity activity, String name) {
+        try {
+            Field field = MainActivity.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.getLong(activity);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static RuntimeState observedState(MainActivity activity) {
+        try {
+            Field field = MainActivity.class.getDeclaredField("observedState");
+            field.setAccessible(true);
+            return (RuntimeState) field.get(activity);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static void setRuntimeState(AndroidEmulationRuntime runtime, RuntimeState state) {
+        try {
+            Field field = AndroidEmulationRuntime.class.getDeclaredField("state");
+            field.setAccessible(true);
+            field.set(runtime, state);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
         }
