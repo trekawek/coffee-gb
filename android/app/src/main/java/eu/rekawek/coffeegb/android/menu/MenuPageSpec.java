@@ -17,10 +17,19 @@ public final class MenuPageSpec {
     private final List<Item> items;
     private final int columns;
     private final List<String> footerHints;
+    private final String preferredFocusId;
+    private final MenuPreview preview;
 
     public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<Item> items, int columns,
             List<String> footerHints) {
+        this(route, title, context, headerAction, sideHeading, sideLines, items, columns,
+                footerHints, null, MenuPreview.empty());
+    }
+
+    public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<Item> items, int columns,
+            List<String> footerHints, String preferredFocusId, MenuPreview preview) {
         this.route = Objects.requireNonNull(route, "route");
         this.title = text(title, "title");
         this.context = text(context, "context");
@@ -30,6 +39,9 @@ public final class MenuPageSpec {
         this.items = items(items);
         this.columns = Math.max(1, columns);
         this.footerHints = strings(footerHints, "footerHints");
+        this.preferredFocusId = preferredFocusId == null ? null
+                : text(preferredFocusId, "preferredFocusId");
+        this.preview = Objects.requireNonNull(preview, "preview");
         boolean enabled = false;
         for (Item item : this.items) {
             if (item.enabled()) {
@@ -78,6 +90,14 @@ public final class MenuPageSpec {
         return footerHints;
     }
 
+    public String preferredFocusId() {
+        return preferredFocusId;
+    }
+
+    public MenuPreview preview() {
+        return preview;
+    }
+
     private static String text(String value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + " cannot be null");
@@ -115,17 +135,29 @@ public final class MenuPageSpec {
         private final String detail;
         private final boolean enabled;
         private final String secondaryId;
+        private final boolean adjustable;
+        private final int progress;
 
         public Item(String id, String label, String detail, boolean enabled) {
             this(id, label, detail, enabled, null);
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId) {
+            this(id, label, detail, enabled, secondaryId, false, -1);
+        }
+
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                boolean adjustable, int progress) {
             this.id = text(id, "id");
             this.label = text(label, "label");
             this.detail = text(detail, "detail");
             this.enabled = enabled;
             this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
+            this.adjustable = adjustable;
+            if (progress < -1 || progress > 100) {
+                throw new IllegalArgumentException("progress must be absent or between 0 and 100");
+            }
+            this.progress = progress;
         }
 
         public String id() {
@@ -146,6 +178,14 @@ public final class MenuPageSpec {
 
         public String secondaryId() {
             return secondaryId;
+        }
+
+        public boolean adjustable() {
+            return adjustable;
+        }
+
+        public int progress() {
+            return progress;
         }
     }
 }

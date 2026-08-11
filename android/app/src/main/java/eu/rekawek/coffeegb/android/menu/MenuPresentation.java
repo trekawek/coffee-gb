@@ -14,7 +14,7 @@ public final class MenuPresentation {
 
     private static final MenuPresentation HIDDEN = new MenuPresentation(
             false, null, "", "", "", "", Collections.emptyList(), Collections.emptyList(),
-            -1, 1, Collections.emptyList());
+            -1, 1, Collections.emptyList(), MenuPreview.empty());
 
     private final boolean visible;
     private final MenuRoute route;
@@ -27,10 +27,11 @@ public final class MenuPresentation {
     private final int focusedIndex;
     private final int columns;
     private final List<String> footerHints;
+    private final MenuPreview preview;
 
     MenuPresentation(boolean visible, MenuRoute route, String title, String context,
             String headerAction, String sideHeading, List<String> sideLines, List<Item> items,
-            int focusedIndex, int columns, List<String> footerHints) {
+            int focusedIndex, int columns, List<String> footerHints, MenuPreview preview) {
         this.visible = visible;
         this.route = route;
         this.title = requireText(title, "title");
@@ -42,6 +43,7 @@ public final class MenuPresentation {
         this.focusedIndex = focusedIndex;
         this.columns = Math.max(1, columns);
         this.footerHints = immutableStrings(footerHints, "footerHints");
+        this.preview = java.util.Objects.requireNonNull(preview, "preview");
         if (visible && route == null) {
             throw new IllegalArgumentException("A visible menu needs a route");
         }
@@ -98,6 +100,10 @@ public final class MenuPresentation {
         return footerHints;
     }
 
+    public MenuPreview preview() {
+        return preview;
+    }
+
     private static String requireText(String value, String name) {
         if (value == null) {
             throw new IllegalArgumentException(name + " cannot be null");
@@ -138,17 +144,29 @@ public final class MenuPresentation {
         private final String detail;
         private final boolean enabled;
         private final String secondaryId;
+        private final boolean adjustable;
+        private final int progress;
 
         public Item(String id, String label, String detail, boolean enabled) {
             this(id, label, detail, enabled, null);
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId) {
+            this(id, label, detail, enabled, secondaryId, false, -1);
+        }
+
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                boolean adjustable, int progress) {
             this.id = requireText(id, "id");
             this.label = requireText(label, "label");
             this.detail = requireText(detail, "detail");
             this.enabled = enabled;
             this.secondaryId = secondaryId == null ? null : requireText(secondaryId, "secondaryId");
+            this.adjustable = adjustable;
+            if (progress < -1 || progress > 100) {
+                throw new IllegalArgumentException("progress must be absent or between 0 and 100");
+            }
+            this.progress = progress;
         }
 
         public String id() {
@@ -169,6 +187,14 @@ public final class MenuPresentation {
 
         public String secondaryId() {
             return secondaryId;
+        }
+
+        public boolean adjustable() {
+            return adjustable;
+        }
+
+        public int progress() {
+            return progress;
         }
     }
 }

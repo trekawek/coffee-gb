@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 
 import java.util.Collection;
 import java.util.EnumSet;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -44,9 +45,9 @@ final class AndroidInputRouter implements AutoCloseable {
     private final Map<Integer, String> deviceIds = new HashMap<>();
     private final PlayerInputHub.SourceHandle keyboard;
     private final EnumSet<Button> keyboardButtons = EnumSet.noneOf(Button.class);
+    private final ControllerKeyCapture capture;
 
     private InputDevice activeController;
-    private Button captureTarget;
     private boolean closed;
 
     AndroidInputRouter(PlayerInputHub hub) {
@@ -56,6 +57,12 @@ final class AndroidInputRouter implements AutoCloseable {
     AndroidInputRouter(PlayerInputHub hub, AndroidControllerMappings mappings) {
         this.hub = Objects.requireNonNull(hub, "hub");
         this.mappings = mappings;
+        capture = new ControllerKeyCapture((deviceId, keyCode, target) -> {
+            InputDevice controller = InputDevice.getDevice(deviceId);
+            if (this.mappings != null && isConfigurableController(controller)) {
+                this.mappings.setBinding(controller, keyCode, target, DEFAULT_KEYS);
+            }
+        });
         keyboard = hub.openSource(0);
     }
 
@@ -86,12 +93,16 @@ final class AndroidInputRouter implements AutoCloseable {
         }
         if (isGameController(event.getSource())) {
             InputDevice controller = event.getDevice();
-            activeController = controller;
-            if (event.getAction() == KeyEvent.ACTION_DOWN && captureTarget != null) {
-                if (mappings != null && controller != null) {
-                    mappings.setBinding(controller, event.getKeyCode(), captureTarget, DEFAULT_KEYS);
+            if (isConfigurableController(controller)) {
+                activeController = controller;
+            }
+            if (capture.active()) {
+                CaptureResult result = captureKeyEvent(event);
+                if (result != CaptureResult.NONE) {
+                    return true;
                 }
-                captureTarget = null;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() > 0) {
                 return true;
             }
             Button button = DEFAULT_KEYS.get(event.getKeyCode());
@@ -132,7 +143,9 @@ final class AndroidInputRouter implements AutoCloseable {
             return false;
         }
         InputDevice controller = event.getDevice();
-        activeController = controller;
+        if (isConfigurableController(controller)) {
+            activeController = controller;
+        }
         DeviceSource source = device(controller);
         float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X);
         float hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
@@ -161,16 +174,17 @@ final class AndroidInputRouter implements AutoCloseable {
 
     synchronized void disconnect(int deviceId) {
         String key = deviceIds.remove(deviceId);
-        if (key == null) {
-            return;
-        }
-        DeviceSource source = devices.remove(key);
-        if (source != null) {
-            source.close();
+        if (key != null) {
+            DeviceSource source = devices.remove(key);
+            if (source != null) {
+                source.close();
+            }
         }
         if (activeController != null && activeController.getId() == deviceId) {
             activeController = null;
-            captureTarget = null;
+            cancelCapture();
+        } else {
+            capture.disconnect(deviceId);
         }
     }
 
@@ -178,8 +192,60 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || configurationDevice() == null) {
             return false;
         }
-        captureTarget = Objects.requireNonNull(target, "target");
+        capture.begin(Objects.requireNonNull(target, "target"));
         return true;
+    }
+
+    synchronized CaptureResult captureKeyEvent(KeyEvent event) {
+        if (closed || !capture.active() || event == null
+                || !isConfigurableController(event.getDevice())) {
+            return CaptureResult.NONE;
+        }
+        InputDevice controller = event.getDevice();
+        activeController = controller;
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            capture.keyDown(event.getDeviceId(), event.getKeyCode());
+            return CaptureResult.CONSUMED;
+        }
+        if (event.getAction() == KeyEvent.ACTION_UP) {
+            ControllerKeyCapture.Result result = capture.keyUp(
+                    event.getDeviceId(), event.getKeyCode());
+            return result == ControllerKeyCapture.Result.COMPLETED
+                    ? CaptureResult.COMPLETED : CaptureResult.CONSUMED;
+        }
+        return CaptureResult.CONSUMED;
+    }
+
+    synchronized void cancelCapture() {
+        capture.cancel();
+    }
+
+    synchronized boolean captureActive() {
+        return capture.active();
+    }
+
+    synchronized boolean captureWaitingForRelease() {
+        return capture.waitingForRelease();
+    }
+
+    synchronized Button captureTarget() {
+        return capture.target();
+    }
+
+    synchronized Map<Button, String> effectiveKeyLabels() {
+        InputDevice controller = configurationDevice();
+        EnumMap<Button, String> labels = new EnumMap<>(Button.class);
+        if (controller == null) {
+            return Map.of();
+        }
+        for (Button button : Button.values()) {
+            Integer keyCode = mappings == null ? defaultKeyCode(button)
+                    : mappings.keyCodeForButton(controller, button, DEFAULT_KEYS);
+            if (keyCode != null) {
+                labels.put(button, keyLabel(keyCode));
+            }
+        }
+        return Map.copyOf(labels);
     }
 
     synchronized boolean toggleHorizontalInversion() {
@@ -216,7 +282,7 @@ final class AndroidInputRouter implements AutoCloseable {
             return false;
         }
         mappings.reset(controller);
-        captureTarget = null;
+        cancelCapture();
         return true;
     }
 
@@ -230,7 +296,7 @@ final class AndroidInputRouter implements AutoCloseable {
         keyboardButtons.clear();
         keyboard.update(keyboardButtons);
         devices.values().forEach(DeviceSource::clear);
-        captureTarget = null;
+        cancelCapture();
     }
 
     @Override
@@ -244,7 +310,7 @@ final class AndroidInputRouter implements AutoCloseable {
         devices.clear();
         deviceIds.clear();
         activeController = null;
-        captureTarget = null;
+        cancelCapture();
         closed = true;
     }
 
@@ -257,12 +323,13 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     private InputDevice configurationDevice() {
-        if (activeController != null) {
+        if (isConfigurableController(activeController)) {
             return activeController;
         }
+        activeController = null;
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
-            if (device != null && isGameController(device.getSources())) {
+            if (isConfigurableController(device)) {
                 activeController = device;
                 return device;
             }
@@ -274,6 +341,39 @@ final class AndroidInputRouter implements AutoCloseable {
         return (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
                 || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
                 || (source & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
+    }
+
+    private static boolean isConfigurableController(InputDevice device) {
+        return device != null
+                && isConfigurableControllerSources(device.getSources(), device.isVirtual());
+    }
+
+    static boolean isConfigurableControllerSources(int sources, boolean virtual) {
+        return !virtual && ((sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK);
+    }
+
+    private static Integer defaultKeyCode(Button target) {
+        int[] preferred = {
+                KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B,
+                KeyEvent.KEYCODE_BUTTON_START, KeyEvent.KEYCODE_BUTTON_SELECT,
+                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT
+        };
+        for (int keyCode : preferred) {
+            if (DEFAULT_KEYS.get(keyCode) == target) {
+                return keyCode;
+            }
+        }
+        return null;
+    }
+
+    private static String keyLabel(int keyCode) {
+        String label = KeyEvent.keyCodeToString(keyCode);
+        if (label.startsWith("KEYCODE_")) {
+            label = label.substring("KEYCODE_".length());
+        }
+        return label.replace("BUTTON_", "BUTTON ");
     }
 
     private static String deviceKey(InputDevice device) {
@@ -318,5 +418,11 @@ final class AndroidInputRouter implements AutoCloseable {
         private void close() {
             handle.close();
         }
+    }
+
+    enum CaptureResult {
+        NONE,
+        CONSUMED,
+        COMPLETED
     }
 }

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.graphics.Bitmap;
+import eu.rekawek.coffeegb.android.menu.MenuPreview;
 import eu.rekawek.coffeegb.controller.Controller;
 
 import java.util.ArrayList;
@@ -105,6 +106,37 @@ final class AndroidPrinterStore {
                 top += segment.height();
             }
             return bitmap;
+        }
+
+        /** Builds an aspect-preserving bounded preview without assembling the full paper roll. */
+        MenuPreview preview(int maxWidth, int maxHeight) {
+            if (maxWidth <= 0 || maxHeight <= 0) {
+                throw new IllegalArgumentException("Preview bounds must be positive");
+            }
+            double scale = Math.min(1.0, Math.min(
+                    maxWidth / (double) WIDTH, maxHeight / (double) height));
+            int targetWidth = Math.max(1, (int) Math.round(WIDTH * scale));
+            int targetHeight = Math.max(1, (int) Math.round(height * scale));
+            int[] pixels = new int[Math.multiplyExact(targetWidth, targetHeight)];
+            int segmentIndex = 0;
+            int segmentTop = 0;
+            for (int y = 0; y < targetHeight; y++) {
+                int sourceY = Math.min(height - 1,
+                        (int) (((long) y * height) / targetHeight));
+                while (segmentIndex + 1 < segments.size()
+                        && sourceY >= segmentTop + segments.get(segmentIndex).height()) {
+                    segmentTop += segments.get(segmentIndex).height();
+                    segmentIndex++;
+                }
+                Segment segment = segments.get(segmentIndex);
+                int rowOffset = (sourceY - segmentTop) * WIDTH;
+                for (int x = 0; x < targetWidth; x++) {
+                    int sourceX = Math.min(WIDTH - 1,
+                            (int) (((long) x * WIDTH) / targetWidth));
+                    pixels[y * targetWidth + x] = segment.argb()[rowOffset + sourceX];
+                }
+            }
+            return MenuPreview.ready(targetWidth, targetHeight, pixels);
         }
     }
 

@@ -4,53 +4,46 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Intent;
-import android.net.Uri;
 import android.content.ServiceConnection;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.SeekBar;
-import android.widget.ScrollView;
-import android.widget.Switch;
-import android.widget.TextView;
-import android.widget.Toast;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import eu.rekawek.coffeegb.android.menu.MenuController;
+import eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState;
 import eu.rekawek.coffeegb.android.menu.MenuKey;
 import eu.rekawek.coffeegb.android.menu.MenuPageSpec;
 import eu.rekawek.coffeegb.android.menu.MenuPresentation;
+import eu.rekawek.coffeegb.android.menu.MenuPreview;
 import eu.rekawek.coffeegb.android.menu.MenuRoute;
-import eu.rekawek.coffeegb.android.menu.OpenRomPickerState;
+import eu.rekawek.coffeegb.android.menu.MenuStackSnapshot;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
 
-/**
- * Thin SAF/UI client for {@link EmulationService}.
- *
- * <p>The Activity owns only document-picker and dialog interactions. Its bound service owns every
- * emulator, controller, event-bus, persistence, and lifecycle resource, so rotation never creates
- * a second session and unbinding never directly stops the active game.
- */
+/** Canvas-menu and native external-surface client for {@link EmulationService}. */
 public final class MainActivity extends Activity implements RuntimeObserver {
 
     private static final int OPEN_ROM_REQUEST = 1;
@@ -61,18 +54,56 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_SCREENSHOT_REQUEST = 6;
     private static final int EXPORT_PRINTER_REQUEST = 7;
     private static final int CAMERA_PERMISSION_REQUEST = 8;
-    private static final String STATE_OPEN_ROM_PICKER_ROUTE = "openRomPicker.route";
-    private static final String STATE_OPEN_ROM_PICKER_PAUSE_OWNED = "openRomPicker.pauseOwned";
-    private static final String STATE_OPEN_ROM_PICKER_RESTORE = "openRomPicker.restore";
+
+    private static final String STATE_EXTERNAL_ACTION = "external.action";
+    private static final String STATE_EXTERNAL_REQUEST = "external.request";
+    private static final String STATE_EXTERNAL_POLICY = "external.policy";
+    private static final String STATE_EXTERNAL_PAUSE = "external.pause";
+    private static final String STATE_EXTERNAL_RESTORE = "external.restore";
+    private static final String STATE_MENU_PAUSE = "menu.pause";
+    private static final String STATE_CONFIRM_VARIANT = "menu.confirm.variant";
+    private static final String STATE_CONFIRM_SLOT = "menu.confirm.slot";
+    private static final String STATE_SLOT_MODE = "menu.state.mode";
+    private static final String STATE_AUDIO_ACTIVE = "draft.audio.active";
+    private static final String STATE_AUDIO_VOLUME = "draft.audio.volume";
+    private static final String STATE_AUDIO_MUTED = "draft.audio.muted";
+    private static final String STATE_TOUCH_ACTIVE = "draft.touch.active";
+    private static final String STATE_TOUCH_OPACITY = "draft.touch.opacity";
+    private static final String STATE_TOUCH_SCALE = "draft.touch.scale";
+    private static final String STATE_TOUCH_VERTICAL = "draft.touch.vertical";
+    private static final String STATE_TOUCH_LEFT = "draft.touch.left";
+    private static final String STATE_TOUCH_HAPTICS = "draft.touch.haptics";
+    private static final String STATE_DEVICES_ACTIVE = "draft.devices.active";
+    private static final String STATE_DEVICES_RUMBLE = "draft.devices.rumble";
+    private static final String STATE_DEVICES_CAMERA = "draft.devices.camera";
+    private static final String STATE_DEVICES_PRINTER = "draft.devices.printer";
+    private static final String STATE_PENDING_ACTION = "document.pending.action";
+    private static final String STATE_PENDING_REQUEST = "document.pending.request";
+    private static final String STATE_PENDING_URI = "document.pending.uri";
+    private static final String STATE_PENDING_FLAGS = "document.pending.flags";
+    private static final String STATE_OPTIONAL_STATUS = "status.optional-devices";
+    private static final String STATE_PRINTER_STATUS = "status.printer";
+    private static final String STATE_ABOUT_STATUS = "status.about";
+    private static final String PRINTER_CONTINUATION_PREFS = "printer-share-continuation";
+    private static final String PRINTER_CONTINUATION_TOKEN = "token";
+    private static final String PRINTER_CONTINUATION_URI = "uri";
+    private static final String PRINTER_CONTINUATION_PHASE = "phase";
+    private static final String SOURCE_URL = "https://github.com/trekawek/coffee-gb";
 
     private CoffeeGbSurfaceView video;
     private Button menuButton;
-
     private AndroidEmulationRuntime runtime;
     private boolean bound;
     private InputManager inputManager;
     private PendingDocumentResult pendingDocumentResult;
+    private SharedPreferences printerContinuationPreferences;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final SharedPreferences.OnSharedPreferenceChangeListener printerContinuationListener =
+            (preferences, key) -> {
+                if (PRINTER_CONTINUATION_PHASE.equals(key)) {
+                    mainHandler.post(this::consumePrinterExportContinuation);
+                }
+            };
     private MenuController menuController;
     private RuntimeState observedState = RuntimeState.stopped();
     private List<AndroidStateSlot> stateSlots = List.of();
@@ -83,28 +114,48 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private boolean menuVisible;
     private boolean menuPauseOwned;
     private boolean selectionActionInFlight;
-    private OpenRomPickerState openRomPickerState = OpenRomPickerState.none();
+    private boolean preserveRouteOnHide;
+    private MenuRoute presentedRoute;
+    private MenuStackSnapshot suspendedMenu = MenuStackSnapshot.hidden();
+    private boolean suspendedMenuPauseOwned;
+    private MenuExternalSurfaceState externalSurface = MenuExternalSurfaceState.none();
     private Api33MenuBackCallback predictiveMenuBack;
 
-    private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
-        @Override
-        public void onInputDeviceAdded(int deviceId) {
-            // The first event selects the controller; no implicit mapping is created on connect.
-        }
+    private AndroidMenuModel.AudioDraft audioDraft;
+    private AndroidMenuModel.TouchDraft touchDraft;
+    private AndroidMenuModel.DevicesDraft devicesDraft;
+    private String optionalDevicesStatus = "READY";
+    private String aboutStatus = "OPEN IN BROWSER";
+    private String printerStatus = "READY";
+    private String systemPreferredFocus = "video-status";
+    private MenuPreview printerPreview = MenuPreview.empty();
+    private int printerPreviewGeneration;
+    private MenuStackSnapshot deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+    private boolean activityResumed;
+    private long lifecycleGeneration;
 
-        @Override
-        public void onInputDeviceRemoved(int deviceId) {
-            AndroidEmulationRuntime active = runtime;
-            if (active != null) {
-                active.input().disconnect(deviceId);
-            }
-        }
+    private final InputManager.InputDeviceListener inputDevices =
+            new InputManager.InputDeviceListener() {
+                @Override
+                public void onInputDeviceAdded(int deviceId) {
+                    refreshMenuPages();
+                }
 
-        @Override
-        public void onInputDeviceChanged(int deviceId) {
-            // Android delivers the new axes on the next motion event.
-        }
-    };
+                @Override
+                public void onInputDeviceRemoved(int deviceId) {
+                    AndroidEmulationRuntime active = runtime;
+                    if (active != null) {
+                        active.input().disconnect(deviceId);
+                    }
+                    cancelControllerCapture();
+                    refreshMenuPages();
+                }
+
+                @Override
+                public void onInputDeviceChanged(int deviceId) {
+                    refreshMenuPages();
+                }
+            };
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -113,10 +164,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             bound = true;
             runtime.addObserver(MainActivity.this);
             video.attach(runtime.frames(), runtime.input());
-            runtime.setAudioMuted(getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
-            runtime.setAudioVolume(getPreferences(MODE_PRIVATE).getInt("audio.volume", 100));
-            runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
-            runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
+            runtime.setAudioMuted(getPreferences(MODE_PRIVATE)
+                    .getBoolean("audio.muted", false));
+            runtime.setAudioVolume(getPreferences(MODE_PRIVATE)
+                    .getInt("audio.volume", 100));
+            runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE)
+                    .getBoolean("devices.rumble", false));
+            runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE)
+                    .getBoolean("devices.printer", false));
             if (getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false)
                     && checkSelfPermission(Manifest.permission.CAMERA)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -124,17 +179,22 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
             applyState(runtime.state());
             dispatchPendingDocumentResult();
-            restoreMenuAfterOpenRomCancel();
+            restoreExternalSurfaceIfRequested();
+            restoreSuspendedMenu();
         }
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
             if (runtime != null) {
+                cancelControllerCapture();
                 video.detach();
                 runtime.removeObserver(MainActivity.this);
             }
-            menuPauseOwned = false;
-            if (menuController != null) {
+            if (menuController != null && menuController.visible()) {
+                suspendedMenu = snapshotForPersistence();
+                suspendedMenuPauseOwned = menuPauseOwned;
+                preserveRouteOnHide = true;
+                menuPauseOwned = false;
                 menuController.hide();
             }
             video.clearMenuPresentation();
@@ -148,10 +208,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        restoreOpenRomPickerState(savedInstanceState);
+        printerContinuationPreferences = getApplicationContext().getSharedPreferences(
+                PRINTER_CONTINUATION_PREFS, MODE_PRIVATE);
+        restoreActivityState(savedInstanceState);
 
         FrameLayout root = new FrameLayout(this);
-
         video = new CoffeeGbSurfaceView(this);
         menuController = new MenuController(new MenuController.Listener() {
             @Override
@@ -168,6 +229,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             public void onHeaderSelected(MenuRoute route) {
                 handleMenuHeader(route);
             }
+
+            @Override
+            public void onItemAdjusted(MenuRoute route, String id, int direction) {
+                handleMenuAdjustment(route, id, direction);
+            }
+
+            @Override
+            public void onBackIntercepted(MenuRoute route) {
+                if (route == MenuRoute.CONTROLLER_MAPPING) {
+                    cancelControllerCapture();
+                    refreshMenuPages();
+                }
+            }
         });
         video.setMenuInput(menuController);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -182,11 +256,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         menuButton.setOnClickListener(ignored -> toggleMenu());
         root.addView(menuButton, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
         root.addOnLayoutChangeListener((view, left, top, right, bottom,
-                                        oldLeft, oldTop, oldRight, oldBottom) -> {
-            positionMenuOverlay(right - left, bottom - top);
-        });
+                                        oldLeft, oldTop, oldRight, oldBottom) ->
+                positionMenuOverlay(right - left, bottom - top));
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
                     insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
@@ -199,19 +271,45 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        super.onSaveInstanceState(outState);
-        if (openRomPickerState.active()) {
-            outState.putString(STATE_OPEN_ROM_PICKER_ROUTE, openRomPickerState.route().name());
-            outState.putBoolean(
-                    STATE_OPEN_ROM_PICKER_PAUSE_OWNED, openRomPickerState.pauseOwned());
-            outState.putBoolean(
-                    STATE_OPEN_ROM_PICKER_RESTORE, openRomPickerState.restoreRequested());
+        if (menuController != null && menuController.visible()) {
+            writeSnapshot(outState, "menu", snapshotForPersistence());
+            outState.putBoolean(STATE_MENU_PAUSE, menuPauseOwned);
+        } else if (suspendedMenu.visible()) {
+            writeSnapshot(outState, "menu", suspendedMenu);
+            outState.putBoolean(STATE_MENU_PAUSE, suspendedMenuPauseOwned);
         }
+        if (externalSurface.active()) {
+            outState.putString(STATE_EXTERNAL_ACTION, externalSurface.action().name());
+            outState.putInt(STATE_EXTERNAL_REQUEST, externalSurface.requestCode());
+            outState.putString(STATE_EXTERNAL_POLICY, externalSurface.restorePolicy().name());
+            outState.putBoolean(STATE_EXTERNAL_PAUSE, externalSurface.pauseOwned());
+            outState.putBoolean(STATE_EXTERNAL_RESTORE, externalSurface.restoreRequested());
+            writeSnapshot(outState, "external", externalSurface.menuStack());
+        }
+        saveDrafts(outState);
+        if (confirmVariant != null) {
+            outState.putString(STATE_CONFIRM_VARIANT, confirmVariant.name());
+            outState.putInt(STATE_CONFIRM_SLOT, confirmSlot);
+        }
+        outState.putString(STATE_SLOT_MODE, stateMenuMode.name());
+        outState.putString(STATE_OPTIONAL_STATUS, optionalDevicesStatus);
+        outState.putString(STATE_PRINTER_STATUS, printerStatus);
+        outState.putString(STATE_ABOUT_STATUS, aboutStatus);
+        if (pendingDocumentResult != null) {
+            outState.putString(STATE_PENDING_ACTION, pendingDocumentResult.action().name());
+            outState.putInt(STATE_PENDING_REQUEST, pendingDocumentResult.requestCode());
+            outState.putString(STATE_PENDING_URI, pendingDocumentResult.uri().toString());
+            outState.putInt(STATE_PENDING_FLAGS, pendingDocumentResult.flags());
+        }
+        super.onSaveInstanceState(outState);
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        lifecycleGeneration++;
+        printerContinuationPreferences.registerOnSharedPreferenceChangeListener(
+                printerContinuationListener);
         inputManager = getSystemService(InputManager.class);
         inputManager.registerInputDeviceListener(inputDevices, null);
         EmulationService.start(this);
@@ -221,14 +319,37 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+        consumePrinterExportContinuation();
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        super.onPause();
+    }
+
+    @Override
     protected void onStop() {
+        lifecycleGeneration++;
+        printerPreviewGeneration++;
+        printerContinuationPreferences.unregisterOnSharedPreferenceChangeListener(
+                printerContinuationListener);
         if (inputManager != null) {
             inputManager.unregisterInputDeviceListener(inputDevices);
             inputManager = null;
         }
+        cancelControllerCapture();
         if (menuController != null && menuController.visible()) {
-            // Backgrounding must preserve the runtime's paused lifecycle state; it must not
-            // resume a game merely because the transient Activity menu was dismissed.
+            if (externalSurface.active()) {
+                suspendedMenu = MenuStackSnapshot.hidden();
+            } else {
+                suspendedMenu = snapshotForPersistence();
+                suspendedMenuPauseOwned = menuPauseOwned;
+            }
+            preserveRouteOnHide = true;
             menuPauseOwned = false;
             menuController.hide();
         }
@@ -248,6 +369,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     protected void onDestroy() {
+        lifecycleGeneration++;
+        if (printerContinuationPreferences != null) {
+            printerContinuationPreferences.unregisterOnSharedPreferenceChangeListener(
+                    printerContinuationListener);
+        }
         if (predictiveMenuBack != null) {
             predictiveMenuBack.close();
             predictiveMenuBack = null;
@@ -258,10 +384,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
         if (isSystemBack(event)) {
-            // System/hardware Back must have exactly one owner. Let Activity dispatch it to the
-            // API 33+ OnBackInvokedCallback or the API 26-32 onBackPressed fallback; never route it
-            // through menu/game input first.
             return super.dispatchKeyEvent(event);
+        }
+        AndroidEmulationRuntime active = runtime;
+        if (active != null && menuController != null && menuController.visible()
+                && menuController.route() == MenuRoute.CONTROLLER_MAPPING
+                && active.input().captureActive() && isGameController(event.getSource())) {
+            AndroidInputRouter.CaptureResult result = active.input().captureKeyEvent(event);
+            if (result != AndroidInputRouter.CaptureResult.NONE) {
+                if (result == AndroidInputRouter.CaptureResult.COMPLETED) {
+                    menuController.setBackIntercepted(false);
+                }
+                refreshMenuPages();
+                return true;
+            }
         }
         MenuKey menuKey = menuKey(event);
         if (menuKey != null) {
@@ -279,7 +415,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 return true;
             }
         }
-        AndroidEmulationRuntime active = runtime;
         if (active != null && active.input().onKeyEvent(event)) {
             return true;
         }
@@ -288,18 +423,25 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
+        AndroidEmulationRuntime active = runtime;
         if (menuController != null && menuController.visible()
                 && isGameController(event.getSource())
                 && event.getAction() == MotionEvent.ACTION_MOVE) {
+            if (active != null && menuController.route() == MenuRoute.CONTROLLER_MAPPING
+                    && active.input().captureActive()) {
+                return true;
+            }
             float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X);
             float hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
-            float x = Math.abs(hatX) >= .45f ? hatX : event.getAxisValue(MotionEvent.AXIS_X);
-            float y = Math.abs(hatY) >= .45f ? hatY : event.getAxisValue(MotionEvent.AXIS_Y);
+            float x = Math.abs(hatX) >= .45f ? hatX
+                    : event.getAxisValue(MotionEvent.AXIS_X);
+            float y = Math.abs(hatY) >= .45f ? hatY
+                    : event.getAxisValue(MotionEvent.AXIS_Y);
             menuController.onAxis(x, y);
             return true;
         }
-        AndroidEmulationRuntime active = runtime;
         if (active != null && active.input().onMotionEvent(event)) {
+            refreshMenuPages();
             return true;
         }
         return super.onGenericMotionEvent(event);
@@ -310,9 +452,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         super.onWindowFocusChanged(hasFocus);
         if (!hasFocus && runtime != null) {
             runtime.input().releaseAll();
+            cancelControllerCapture();
             if (menuController != null) {
                 menuController.cancelInput();
             }
+            refreshMenuPages();
         }
     }
 
@@ -320,8 +464,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @SuppressLint("GestureBackNavigation")
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
-        // API 26-32 has no OnBackInvokedDispatcher. API 33+ must be owned exclusively by the
-        // dynamically registered predictive-back callback while the menu is visible.
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && dispatchMenuBack()) {
             return;
         }
@@ -338,7 +480,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void toggleMenu() {
-        if (menuController == null) {
+        if (menuController == null || externalSurface.active()) {
             return;
         }
         if (menuController.visible()) {
@@ -349,7 +491,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         RuntimeState current = active == null ? observedState : active.state();
         observedState = current;
         if (active != null) {
-            // No touch/key state that opened the menu may leak into the emulated game.
             active.input().releaseAll();
         }
         menuPauseOwned = current.phase() == RuntimeState.Phase.RUNNING;
@@ -362,9 +503,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         } else if (current.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION) {
             menuController.show(MenuRoute.LIBRARY);
         } else if (current.phase() == RuntimeState.Phase.PAUSED
-                || (current.transferReady() && current.paused())) {
-            menuController.show(MenuRoute.PAUSE_CONSOLE);
-        } else if (current.transferReady() && current.phase() == RuntimeState.Phase.RUNNING) {
+                || (current.transferReady() && current.paused())
+                || (current.transferReady() && current.phase() == RuntimeState.Phase.RUNNING)) {
             menuController.show(MenuRoute.PAUSE_CONSOLE);
         } else {
             menuController.show(MenuRoute.LIBRARY);
@@ -373,7 +513,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void styleMenuButton() {
         int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
-        // The raster skin supplies the visible menu glyph; this is its accessible tap target.
         menuButton.setBackgroundColor(android.graphics.Color.TRANSPARENT);
         menuButton.setText(null);
         menuButton.setMinWidth(48 * density);
@@ -386,35 +525,85 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
-        int buttonTarget = 48 * density;
-        FrameLayout.LayoutParams buttonLayout =
-                (FrameLayout.LayoutParams) menuButton.getLayoutParams();
+        int target = 48 * density;
+        FrameLayout.LayoutParams layout = (FrameLayout.LayoutParams) menuButton.getLayoutParams();
         boolean portrait = height >= width;
-        int skinMenuCenterX = Math.round(width * (portrait ? .125f : .059f));
-        int skinMenuCenterY = Math.round(height * (portrait ? .050f : .085f));
-        buttonLayout.gravity = Gravity.TOP | Gravity.START;
-        buttonLayout.leftMargin = Math.max(0, skinMenuCenterX - buttonTarget / 2);
-        buttonLayout.rightMargin = 0;
-        buttonLayout.topMargin = Math.max(0, skinMenuCenterY - buttonTarget / 2);
-        menuButton.setLayoutParams(buttonLayout);
+        int centerX = Math.round(width * (portrait ? .125f : .059f));
+        int centerY = Math.round(height * (portrait ? .050f : .085f));
+        layout.gravity = Gravity.TOP | Gravity.START;
+        layout.leftMargin = Math.max(0, centerX - target / 2);
+        layout.rightMargin = 0;
+        layout.topMargin = Math.max(0, centerY - target / 2);
+        menuButton.setLayoutParams(layout);
     }
 
     private void presentMenu(MenuPresentation presentation) {
         boolean wasVisible = menuVisible;
+        MenuRoute previous = presentedRoute;
         menuVisible = presentation.visible();
+        presentedRoute = menuVisible ? presentation.route() : null;
         if (predictiveMenuBack != null) {
             predictiveMenuBack.setEnabled(menuVisible);
         }
         if (menuVisible) {
+            if (previous != null && previous != presentedRoute
+                    && !stackContains(menuController.snapshot(), previous)) {
+                onRouteExited(previous);
+            }
             video.setMenuPresentation(presentation);
             menuButton.setContentDescription("Close Coffee GB menu");
         } else {
             video.clearMenuPresentation();
             menuButton.setContentDescription("Open Coffee GB menu");
             if (wasVisible) {
-                onMenuClosed();
+                boolean preserve = preserveRouteOnHide || externalSurface.active();
+                preserveRouteOnHide = false;
+                if (!preserve && previous != null) {
+                    onRouteExited(previous);
+                }
+                if (!preserve) {
+                    onMenuClosed();
+                }
             }
         }
+    }
+
+    private void onRouteExited(MenuRoute route) {
+        if (deferredMenuFocusRestore.visible()
+                && stackContains(deferredMenuFocusRestore, route)) {
+            deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+        }
+        switch (route) {
+            case AUDIO -> audioDraft = null;
+            case TOUCH_CONTROLS -> touchDraft = null;
+            case OPTIONAL_DEVICES -> devicesDraft = null;
+            case CONTROLLER_MAPPING -> cancelControllerCapture();
+            case PRINTER_PAPER -> {
+                printerPreviewGeneration++;
+                deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+            }
+            case CHOOSE_ROM -> {
+                if (!selectionActionInFlight && runtime != null
+                        && observedState.phase()
+                        == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION) {
+                    runtime.cancelPendingSelection();
+                }
+            }
+            default -> { }
+        }
+        if (route == MenuRoute.CONFIRM_ACTION) {
+            confirmVariant = null;
+            confirmSlot = -1;
+        }
+    }
+
+    private static boolean stackContains(MenuStackSnapshot snapshot, MenuRoute route) {
+        for (MenuStackSnapshot.Frame frame : snapshot.frames()) {
+            if (frame.route() == route) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void onMenuClosed() {
@@ -427,9 +616,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         if (menuPauseOwned) {
             menuPauseOwned = false;
-            AndroidEmulationRuntime active = runtime;
-            if (active != null) {
-                active.resume();
+            if (runtime != null) {
+                runtime.resume();
             }
         }
     }
@@ -440,103 +628,388 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
+    private void handleMenuAdjustment(MenuRoute route, String id, int direction) {
+        if (route == MenuRoute.AUDIO && "volume".equals(id) && audioDraft != null) {
+            audioDraft = AndroidMenuModel.adjustVolume(audioDraft, direction);
+            refreshMenuPages();
+        } else if (route == MenuRoute.AUDIO && "mute-audio".equals(id)
+                && audioDraft != null) {
+            audioDraft = audioDraft.toggleMuted();
+            refreshMenuPages();
+        }
+    }
+
     private void handleMenuItem(MenuRoute route, String id, boolean secondary) {
+        if (id == null) {
+            return;
+        }
         AndroidEmulationRuntime active = runtime;
-        if (active == null || id == null) {
+        switch (route) {
+            case PAUSE_CONSOLE -> handlePauseItem(active, id);
+            case SAVE_STATES -> handleStateItem(active, id, secondary);
+            case LIBRARY -> handleLibraryItem(active, id);
+            case CHOOSE_ROM -> handleChooseRomItem(active, id);
+            case SETTINGS -> handleSettingsItem(id);
+            case AUDIO -> handleAudioItem(id);
+            case TOUCH_CONTROLS -> handleTouchItem(id);
+            case OPTIONAL_DEVICES -> handleOptionalDevicesItem(active, id);
+            case CONTROLLER_MAPPING -> handleControllerItem(active, id);
+            case PRINTER_PAPER -> handlePrinterPaperItem(id);
+            case SYSTEM -> menuController.back();
+            case DATA_MEDIA -> handleDataMediaItem(id);
+            case ABOUT -> handleAboutItem(id);
+            case CONFIRM_ACTION -> handleConfirmationItem(id);
+        }
+    }
+
+    private void handlePauseItem(AndroidEmulationRuntime active, String id) {
+        if (active == null) {
             return;
         }
-        if (route == MenuRoute.PAUSE_CONSOLE) {
-            switch (id) {
-                case "resume" -> resumeAndClose(active);
-                case "save-state" -> showStateMenu(StateMenuMode.SAVE);
-                case "load-state" -> showStateMenu(StateMenuMode.LOAD);
-                case "reset" -> showConfirmation(ConfirmVariant.RESET, -1);
-                case "settings" -> menuController.push(MenuRoute.SETTINGS);
-                case "stop" -> showConfirmation(ConfirmVariant.STOP, -1);
-                case "open-rom" -> openRomFromMenu();
-                default -> { }
-            }
+        switch (id) {
+            case "resume" -> resumeAndClose(active);
+            case "save-state" -> showStateMenu(StateMenuMode.SAVE);
+            case "load-state" -> showStateMenu(StateMenuMode.LOAD);
+            case "reset" -> showConfirmation(ConfirmVariant.RESET, -1);
+            case "settings" -> menuController.push(MenuRoute.SETTINGS);
+            case "stop" -> showConfirmation(ConfirmVariant.STOP, -1);
+            case "open-rom" -> openRomFromMenu();
+            default -> { }
+        }
+    }
+
+    private void handleStateItem(AndroidEmulationRuntime active, String id, boolean secondary) {
+        if ("back".equals(id)) {
+            menuController.back();
             return;
         }
-        if (route == MenuRoute.SAVE_STATES) {
-            if (id.equals("back")) {
-                menuController.back();
-                return;
-            }
-            if (secondary || id.startsWith("delete-slot:")) {
-                String value = id.startsWith("delete-slot:")
-                        ? id.substring("delete-slot:".length()) : id;
-                int slot = parseSlot(value);
-                if (slot >= 0) {
-                    showConfirmation(ConfirmVariant.DELETE, slot);
-                }
-                return;
-            }
-            if (id.startsWith("slot:")) {
-                int slot = parseSlot(id.substring("slot:".length()));
-                if (slot < 0) {
-                    return;
-                }
-                AndroidStateSlot stateSlot = stateSlot(slot);
-                if (stateMenuMode == StateMenuMode.LOAD) {
-                    if (stateSlot != null && stateSlot.loadable()) {
-                        active.restoreSnapshot(slot);
-                        closeMenuWithoutResume();
-                    }
-                } else if (stateSlot != null && stateSlot.loadable()) {
-                    showConfirmation(ConfirmVariant.OVERWRITE, slot);
-                } else {
-                    active.saveSnapshot(slot);
-                    refreshStateSlotsAfterMutation();
-                }
-            }
+        if (active == null) {
             return;
         }
-        if (route == MenuRoute.LIBRARY) {
-            if (id.equals("open-rom")) {
-                openRomFromMenu();
-            } else if (id.equals("recent-rom")) {
-                active.requestRecentDocuments();
-            } else if (id.startsWith("recent:")) {
-                long token = parseToken(id.substring("recent:".length()));
-                if (token >= 0) {
-                    selectRecentFromMenu(active, token);
-                }
-            } else if (id.equals("choose-rom")) {
-                menuController.push(MenuRoute.CHOOSE_ROM);
+        if (secondary || id.startsWith("delete-slot:")) {
+            String value = id.startsWith("delete-slot:")
+                    ? id.substring("delete-slot:".length()) : id;
+            int slot = parseSlot(value);
+            if (slot >= 0) {
+                showConfirmation(ConfirmVariant.DELETE, slot);
             }
             return;
         }
-        if (route == MenuRoute.CHOOSE_ROM) {
-            if (id.equals("cancel")) {
-                menuController.back();
-                return;
-            }
-            if (id.startsWith("archive:")) {
-                long token = parseToken(id.substring("archive:".length()));
-                if (token >= 0) {
-                    selectionActionInFlight = true;
-                    menuPauseOwned = false;
-                    menuController.hide();
-                    active.selectArchiveCandidate(token);
-                }
-            }
+        if (!id.startsWith("slot:")) {
             return;
         }
-        if (route == MenuRoute.CONFIRM_ACTION) {
-            if (id.equals("cancel")) {
-                menuController.back();
-            } else if (id.equals("confirm")) {
-                executeConfirmation(active);
+        int slot = parseSlot(id.substring("slot:".length()));
+        AndroidStateSlot stateSlot = stateSlot(slot);
+        if (slot < 0) {
+            return;
+        }
+        if (stateMenuMode == StateMenuMode.LOAD) {
+            if (stateSlot != null && stateSlot.loadable()) {
+                active.restoreSnapshot(slot);
+                closeMenuWithoutResume();
+            }
+        } else if (stateSlot != null && stateSlot.loadable()) {
+            showConfirmation(ConfirmVariant.OVERWRITE, slot);
+        } else {
+            active.saveSnapshot(slot);
+            refreshStateSlotsAfterMutation();
+        }
+    }
+
+    private void handleLibraryItem(AndroidEmulationRuntime active, String id) {
+        if ("open-rom".equals(id)) {
+            openRomFromMenu();
+        } else if ("recent-rom".equals(id) && active != null) {
+            active.requestRecentDocuments();
+        } else if (id.startsWith("recent:") && active != null) {
+            long token = parseToken(id.substring("recent:".length()));
+            if (token >= 0) {
+                selectionActionInFlight = true;
+                menuPauseOwned = false;
+                menuController.hide();
+                active.selectRecentDocument(token);
+            }
+        } else if ("choose-rom".equals(id)) {
+            menuController.push(MenuRoute.CHOOSE_ROM);
+        }
+    }
+
+    private void handleChooseRomItem(AndroidEmulationRuntime active, String id) {
+        if ("cancel".equals(id)) {
+            menuController.back();
+            return;
+        }
+        if (id.startsWith("archive:") && active != null) {
+            long token = parseToken(id.substring("archive:".length()));
+            if (token >= 0) {
+                selectionActionInFlight = true;
+                menuPauseOwned = false;
+                menuController.hide();
+                active.selectArchiveCandidate(token);
             }
         }
     }
 
-    private void selectRecentFromMenu(AndroidEmulationRuntime active, long token) {
-        selectionActionInFlight = true;
+    private void handleSettingsItem(String id) {
+        switch (id) {
+            case "audio" -> {
+                audioDraft = loadAudioDraft();
+                refreshMenuPages();
+                menuController.push(MenuRoute.AUDIO);
+            }
+            case "touch-controls" -> {
+                touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
+                refreshMenuPages();
+                menuController.push(MenuRoute.TOUCH_CONTROLS);
+            }
+            case "controller-mapping" -> menuController.push(MenuRoute.CONTROLLER_MAPPING);
+            case "optional-devices" -> {
+                devicesDraft = loadDevicesDraft();
+                loadPrinterPreview();
+                refreshMenuPages();
+                menuController.push(MenuRoute.OPTIONAL_DEVICES);
+            }
+            case "video" -> openSystem("video-status");
+            case "system-profile" -> openSystem("profile-status");
+            case "rewind-save" -> openSystem("rewind-save-status");
+            case "data-media" -> menuController.push(MenuRoute.DATA_MEDIA);
+            case "about" -> menuController.push(MenuRoute.ABOUT);
+            default -> { }
+        }
+    }
+
+    private void handleAudioItem(String id) {
+        if (audioDraft == null) {
+            audioDraft = loadAudioDraft();
+        }
+        switch (id) {
+            case "volume" -> audioDraft = AndroidMenuModel.adjustVolume(audioDraft, 1);
+            case "mute-audio" -> audioDraft = audioDraft.toggleMuted();
+            case "save-audio" -> {
+                getPreferences(MODE_PRIVATE).edit()
+                        .putInt("audio.volume", audioDraft.volume())
+                        .putBoolean("audio.muted", audioDraft.muted()).apply();
+                if (runtime != null) {
+                    runtime.setAudioVolume(audioDraft.volume());
+                    runtime.setAudioMuted(audioDraft.muted());
+                }
+                audioDraft = null;
+                menuController.back();
+            }
+            case "cancel-audio" -> {
+                audioDraft = null;
+                menuController.back();
+            }
+            default -> { }
+        }
+        refreshMenuPages();
+    }
+
+    private void handleTouchItem(String id) {
+        if (touchDraft == null) {
+            touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
+        }
+        switch (id) {
+            case "haptics" -> touchDraft = touchDraft.toggleHaptics();
+            case "reset-touch" -> touchDraft = AndroidMenuModel.resetTouchDraft();
+            case "save-touch" -> {
+                video.updateTouchLayout(touchDraft.layout());
+                touchDraft = null;
+                menuController.back();
+            }
+            case "cancel-touch" -> {
+                touchDraft = null;
+                menuController.back();
+            }
+            default -> { }
+        }
+        refreshMenuPages();
+    }
+
+    private void handleOptionalDevicesItem(AndroidEmulationRuntime active, String id) {
+        if (devicesDraft == null) {
+            devicesDraft = loadDevicesDraft();
+        }
+        switch (id) {
+            case "rumble" -> devicesDraft = devicesDraft.toggleRumble();
+            case "live-camera" -> devicesDraft = devicesDraft.toggleCamera();
+            case "game-boy-printer" -> devicesDraft = devicesDraft.togglePrinter();
+            case "calibrate-tilt" -> {
+                if (active != null) {
+                    active.calibrateTilt();
+                    optionalDevicesStatus = "TILT CALIBRATES ON NEXT SAMPLE";
+                } else {
+                    optionalDevicesStatus = "NO GAME";
+                }
+            }
+            case "preview-printer-paper" -> openPrinterPaper();
+            case "export-share-paper" -> {
+                if (printerPreview.state() == MenuPreview.State.READY) {
+                    showConfirmation(ConfirmVariant.EXPORT_PRINTER, -1);
+                }
+            }
+            case "save-devices" -> saveOptionalDevices();
+            case "cancel-devices" -> {
+                devicesDraft = null;
+                menuController.back();
+            }
+            default -> { }
+        }
+        refreshMenuPages();
+    }
+
+    private void saveOptionalDevices() {
+        if (devicesDraft == null) {
+            return;
+        }
+        AndroidMenuModel.DevicesDraft committed = devicesDraft;
+        AndroidMenuModel.DevicesCommit plan = AndroidMenuModel.commitDevices(committed,
+                checkSelfPermission(Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED);
+        getPreferences(MODE_PRIVATE).edit()
+                .putBoolean("devices.rumble", plan.rumble())
+                .putBoolean("devices.printer", plan.printer())
+                .putBoolean("devices.camera", plan.persistedCamera()).apply();
+        if (runtime != null) {
+            runtime.setRumbleEnabled(plan.rumble());
+            runtime.setPrinterEnabled(plan.printer());
+            runtime.setCameraEnabled(plan.cameraEnabled());
+        }
+        devicesDraft = null;
+        menuController.back();
+        if (!plan.requestCameraPermission()) {
+            return;
+        }
+        externalSurface = MenuExternalSurfaceState.launched(
+                MenuExternalSurfaceState.Action.CAMERA_PERMISSION, CAMERA_PERMISSION_REQUEST,
+                menuController.snapshot(), menuPauseOwned,
+                MenuExternalSurfaceState.RestorePolicy.ALWAYS);
         menuPauseOwned = false;
         menuController.hide();
-        active.selectRecentDocument(token);
+        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+    }
+
+    private void handleControllerItem(AndroidEmulationRuntime active, String id) {
+        if ("back".equals(id)) {
+            menuController.back();
+            return;
+        }
+        if (active == null) {
+            return;
+        }
+        AndroidInputRouter input = active.input();
+        eu.rekawek.coffeegb.core.joypad.Button target = mappingTarget(id);
+        if (target != null) {
+            if (input.beginCapture(target)) {
+                menuController.setBackIntercepted(true);
+            }
+        } else if ("invert-x".equals(id)) {
+            input.toggleHorizontalInversion();
+        } else if ("invert-y".equals(id)) {
+            input.toggleVerticalInversion();
+        } else if ("reset-controller".equals(id)) {
+            input.resetActiveController();
+        }
+        refreshMenuPages();
+    }
+
+    private void handlePrinterPaperItem(String id) {
+        switch (id) {
+            case "clear-paper" -> showConfirmation(ConfirmVariant.CLEAR_PRINTER, -1);
+            case "export-share-paper" -> showConfirmation(ConfirmVariant.EXPORT_PRINTER, -1);
+            case "back" -> menuController.back();
+            default -> { }
+        }
+    }
+
+    private void handleDataMediaItem(String id) {
+        switch (id) {
+            case "import-battery" -> showConfirmation(ConfirmVariant.IMPORT_BATTERY, -1);
+            case "export-battery" -> showConfirmation(ConfirmVariant.EXPORT_BATTERY, -1);
+            case "import-state-0" -> showConfirmation(ConfirmVariant.IMPORT_STATE, -1);
+            case "export-state-0" -> showConfirmation(ConfirmVariant.EXPORT_STATE, -1);
+            case "export-screenshot" -> showConfirmation(ConfirmVariant.EXPORT_SCREENSHOT, -1);
+            case "preview-printer-paper" -> openPrinterPaper();
+            case "back" -> menuController.back();
+            default -> { }
+        }
+    }
+
+    private void handleAboutItem(String id) {
+        if ("source-notices".equals(id)) {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(SOURCE_URL)));
+                aboutStatus = "OPENED IN BROWSER";
+            } catch (ActivityNotFoundException failure) {
+                aboutStatus = "NO BROWSER AVAILABLE";
+            }
+            refreshMenuPages();
+        } else if ("back".equals(id)) {
+            menuController.back();
+        }
+    }
+
+    private void handleConfirmationItem(String id) {
+        if ("cancel".equals(id)) {
+            menuController.back();
+        } else if ("confirm".equals(id)) {
+            executeConfirmation();
+        }
+    }
+
+    private void executeConfirmation() {
+        ConfirmVariant variant = confirmVariant;
+        int slot = confirmSlot;
+        confirmVariant = null;
+        confirmSlot = -1;
+        AndroidEmulationRuntime active = runtime;
+        if (variant == null) {
+            menuController.back();
+            return;
+        }
+        switch (variant) {
+            case RESET -> {
+                if (active != null) {
+                    closeMenuWithoutResume();
+                    active.reset();
+                }
+            }
+            case STOP -> {
+                if (active != null) {
+                    closeMenuWithoutResume();
+                    active.stop();
+                }
+            }
+            case OVERWRITE -> {
+                if (active != null) {
+                    active.saveSnapshot(slot);
+                    menuController.back();
+                    refreshStateSlotsAfterMutation();
+                }
+            }
+            case DELETE -> {
+                if (active != null) {
+                    active.deleteSnapshot(slot);
+                    menuController.back();
+                    refreshStateSlotsAfterMutation();
+                }
+            }
+            case CLEAR_PRINTER -> {
+                menuController.back();
+                if (active != null) {
+                    printerPreview = MenuPreview.loading();
+                    active.clearPrinter();
+                    printerStatus = "PAPER CLEARED";
+                    refreshMenuPages();
+                    mainHandler.postDelayed(this::loadPrinterPreview, 100L);
+                }
+            }
+            case IMPORT_BATTERY, EXPORT_BATTERY, IMPORT_STATE, EXPORT_STATE,
+                    EXPORT_SCREENSHOT, EXPORT_PRINTER -> {
+                menuController.back();
+                launchDocumentAction(variant.externalAction);
+            }
+        }
     }
 
     private void showStateMenu(StateMenuMode mode) {
@@ -544,13 +1017,21 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         stateSlotsLoading = true;
         refreshMenuPages();
         menuController.push(MenuRoute.SAVE_STATES);
-        AndroidEmulationRuntime active = runtime;
-        if (active != null) {
-            active.listStateSlots(slots -> {
+        loadStateSlots();
+    }
+
+    private void loadStateSlots() {
+        stateSlotsLoading = true;
+        refreshMenuPages();
+        if (runtime != null) {
+            runtime.listStateSlots(slots -> {
                 stateSlots = List.copyOf(slots);
                 stateSlotsLoading = false;
                 refreshMenuPages();
             });
+        } else {
+            stateSlotsLoading = false;
+            refreshMenuPages();
         }
     }
 
@@ -561,35 +1042,43 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         menuController.push(MenuRoute.CONFIRM_ACTION);
     }
 
-    private void executeConfirmation(AndroidEmulationRuntime active) {
-        ConfirmVariant variant = confirmVariant;
-        int slot = confirmSlot;
-        if (variant == null) {
-            menuController.back();
+    private void openSystem(String preferredFocus) {
+        systemPreferredFocus = preferredFocus;
+        refreshMenuPages();
+        menuController.push(MenuRoute.SYSTEM);
+    }
+
+    private void openPrinterPaper() {
+        printerPreview = MenuPreview.loading();
+        printerStatus = "READING BOUNDED PREVIEW";
+        refreshMenuPages();
+        menuController.push(MenuRoute.PRINTER_PAPER);
+        loadPrinterPreview();
+    }
+
+    private void loadPrinterPreview() {
+        int generation = ++printerPreviewGeneration;
+        long ownerGeneration = lifecycleGeneration;
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            printerPreview = MenuPreview.empty();
+            printerStatus = "NO GAME";
+            refreshMenuPages();
             return;
         }
-        switch (variant) {
-            case RESET -> {
-                closeMenuWithoutResume();
-                active.reset();
+        printerPreview = MenuPreview.loading();
+        refreshMenuPages();
+        active.previewPrinter(preview -> {
+            if (generation != printerPreviewGeneration
+                    || ownerGeneration != lifecycleGeneration || runtime != active) {
+                return;
             }
-            case STOP -> {
-                closeMenuWithoutResume();
-                active.stop();
-            }
-            case OVERWRITE -> {
-                active.saveSnapshot(slot);
-                menuController.back();
-                refreshStateSlotsAfterMutation();
-            }
-            case DELETE -> {
-                active.deleteSnapshot(slot);
-                menuController.back();
-                refreshStateSlotsAfterMutation();
-            }
-        }
-        confirmVariant = null;
-        confirmSlot = -1;
+            printerPreview = preview;
+            printerStatus = preview.state() == MenuPreview.State.EMPTY
+                    ? "NOTHING PRINTED" : "BOUNDED PREVIEW / FULL EXPORT";
+            refreshMenuPages();
+            restoreDeferredPaperFocusIfReady();
+        });
     }
 
     private void resumeAndClose(AndroidEmulationRuntime active) {
@@ -600,52 +1089,419 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void closeMenuWithoutResume() {
         menuPauseOwned = false;
+        suspendedMenu = MenuStackSnapshot.hidden();
         menuController.hide();
     }
 
     private void openRomFromMenu() {
-        if (runtime == null || menuController == null || !menuController.visible()) {
+        launchDocumentAction(MenuExternalSurfaceState.Action.OPEN_ROM);
+    }
+
+    private void launchDocumentAction(MenuExternalSurfaceState.Action action) {
+        if (runtime == null || menuController == null || !menuController.visible()
+                || externalSurface.active()) {
             return;
         }
-        // A native picker owns the screen. Keep a paused session paused while it is open and do not
-        // attempt to represent provider/filesystem rows in the emulator renderer.
-        openRomPickerState = OpenRomPickerState.launched(
-                menuController.route(), menuPauseOwned);
+        if (action == MenuExternalSurfaceState.Action.EXPORT_PRINTER_SHARE
+                && printerPreview.state() != MenuPreview.State.READY) {
+            printerStatus = "NOTHING PRINTED";
+            refreshMenuPages();
+            return;
+        }
+        Intent intent;
+        int requestCode;
+        MenuExternalSurfaceState.RestorePolicy policy;
+        switch (action) {
+            case OPEN_ROM -> {
+                intent = openRomIntent();
+                requestCode = OPEN_ROM_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ON_CANCEL;
+            }
+            case IMPORT_BATTERY -> {
+                intent = importIntent();
+                requestCode = IMPORT_BATTERY_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case EXPORT_BATTERY -> {
+                intent = exportIntent("application/octet-stream", "battery.sav");
+                requestCode = EXPORT_BATTERY_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case IMPORT_STATE_0 -> {
+                intent = importIntent();
+                requestCode = IMPORT_STATE_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case EXPORT_STATE_0 -> {
+                intent = exportIntent("application/octet-stream", "slot-0.cgbstate");
+                requestCode = EXPORT_STATE_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case EXPORT_SCREENSHOT -> {
+                intent = exportIntent("image/png", "coffee-gb.png");
+                requestCode = EXPORT_SCREENSHOT_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case EXPORT_PRINTER_SHARE -> {
+                intent = exportIntent("image/png", "coffee-gb-printer.png")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                requestCode = EXPORT_PRINTER_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
+            case CAMERA_PERMISSION -> {
+                return;
+            }
+            default -> throw new IllegalStateException("Unknown native action " + action);
+        }
+        MenuStackSnapshot stack = menuController.snapshot();
+        externalSurface = MenuExternalSurfaceState.launched(
+                action, requestCode, stack, menuPauseOwned, policy);
         menuPauseOwned = false;
         menuController.hide();
-        openRomDocument(null);
+        try {
+            startActivityForResult(intent, requestCode);
+        } catch (ActivityNotFoundException failure) {
+            externalSurface = externalSurface.afterResult(false);
+            restoreExternalSurfaceIfRequested();
+        }
+    }
+
+    private static Intent openRomIntent() {
+        return new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/octet-stream")
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                        "application/octet-stream", "application/x-gameboy-rom",
+                        "application/zip", "application/x-zip-compressed"})
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    }
+
+    private static Intent importIntent() {
+        return new Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("application/octet-stream")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+    }
+
+    private static Intent exportIntent(String type, String title) {
+        return new Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType(type)
+                .putExtra(Intent.EXTRA_TITLE, title)
+                .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (!externalSurface.active() || externalSurface.requestCode() != requestCode) {
+            return;
+        }
+        Uri uri = data == null ? null : data.getData();
+        boolean successful = resultCode == RESULT_OK && uri != null;
+        MenuExternalSurfaceState.Action action = externalSurface.action();
+        externalSurface = externalSurface.afterResult(successful);
+        if (!successful) {
+            restoreExternalSurfaceIfRequested();
+            return;
+        }
+        PendingDocumentResult result = new PendingDocumentResult(
+                action, requestCode, uri, data.getFlags());
+        if (runtime == null) {
+            pendingDocumentResult = result;
+            return;
+        }
+        dispatchDocumentResult(result);
+        restoreExternalSurfaceIfRequested();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION_REQUEST) {
+            return;
+        }
+        boolean granted = grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("devices.camera", granted).apply();
+        if (runtime != null) {
+            runtime.setCameraEnabled(granted);
+        }
+        optionalDevicesStatus = granted ? "CAMERA ENABLED" : "CAMERA DENIED / DISABLED";
+        if (externalSurface.active()
+                && externalSurface.action()
+                == MenuExternalSurfaceState.Action.CAMERA_PERMISSION) {
+            externalSurface = externalSurface.afterResult(granted);
+            restoreExternalSurfaceIfRequested();
+        }
+        refreshMenuPages();
+    }
+
+    private void dispatchPendingDocumentResult() {
+        PendingDocumentResult result = pendingDocumentResult;
+        pendingDocumentResult = null;
+        if (result != null && runtime != null) {
+            dispatchDocumentResult(result);
+        }
+    }
+
+    private void dispatchDocumentResult(PendingDocumentResult result) {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            pendingDocumentResult = result;
+            return;
+        }
+        switch (result.action()) {
+            case OPEN_ROM -> active.openRom(result.uri(), result.flags());
+            case IMPORT_BATTERY -> active.importBattery(result.uri());
+            case EXPORT_BATTERY -> active.exportBattery(result.uri());
+            case IMPORT_STATE_0 -> active.importState(result.uri());
+            case EXPORT_STATE_0 -> active.exportState(result.uri());
+            case EXPORT_SCREENSHOT -> active.exportScreenshot(result.uri());
+            case EXPORT_PRINTER_SHARE -> {
+                long token = beginPrinterExportContinuation(result.uri());
+                active.exportPrinter(result.uri(), new PrinterExportCompletion(
+                        printerContinuationPreferences, token, this, lifecycleGeneration));
+            }
+            case CAMERA_PERMISSION -> { }
+        }
+    }
+
+    private long beginPrinterExportContinuation(Uri uri) {
+        synchronized (MainActivity.class) {
+            long previous = printerContinuationPreferences.getLong(
+                    PRINTER_CONTINUATION_TOKEN, 0L);
+            long token = previous == Long.MAX_VALUE ? 1L : previous + 1L;
+            writePrinterExportContinuation(printerContinuationPreferences,
+                    PrinterExportContinuation.pending(token, uri.toString()), true);
+            return token;
+        }
+    }
+
+    private void consumePrinterExportContinuation() {
+        consumePrinterExportContinuation(-1L);
+    }
+
+    private void consumePrinterExportContinuation(long expectedGeneration) {
+        if (!activityResumed || isFinishing() || isDestroyed()
+                || (expectedGeneration >= 0L && expectedGeneration != lifecycleGeneration)) {
+            return;
+        }
+        PrinterExportContinuation continuation;
+        synchronized (MainActivity.class) {
+            continuation = readPrinterExportContinuation(printerContinuationPreferences);
+            if (!continuation.actionable()) {
+                return;
+            }
+            writePrinterExportContinuation(printerContinuationPreferences,
+                    PrinterExportContinuation.none(), false);
+        }
+        if (continuation.phase() == PrinterExportContinuation.Phase.FAILED) {
+            printerStatus = "EXPORT FAILED";
+            refreshMenuPages();
+            return;
+        }
+        printerStatus = "EXPORTED / OPENING SHARE";
+        refreshMenuPages();
+        sharePrinter(Uri.parse(continuation.uri()));
+    }
+
+    private static PrinterExportContinuation readPrinterExportContinuation(
+            SharedPreferences preferences) {
+        return PrinterExportContinuation.restored(
+                preferences.getLong(PRINTER_CONTINUATION_TOKEN, 0L),
+                preferences.getString(PRINTER_CONTINUATION_URI, ""),
+                preferences.getString(PRINTER_CONTINUATION_PHASE,
+                        PrinterExportContinuation.Phase.NONE.name()));
+    }
+
+    private static void writePrinterExportContinuation(SharedPreferences preferences,
+            PrinterExportContinuation continuation, boolean updateToken) {
+        SharedPreferences.Editor editor = preferences.edit();
+        if (updateToken) {
+            editor.putLong(PRINTER_CONTINUATION_TOKEN, continuation.token());
+        }
+        if (continuation.phase() == PrinterExportContinuation.Phase.NONE) {
+            editor.remove(PRINTER_CONTINUATION_URI)
+                    .remove(PRINTER_CONTINUATION_PHASE);
+        } else {
+            editor.putString(PRINTER_CONTINUATION_URI, continuation.uri())
+                    .putString(PRINTER_CONTINUATION_PHASE, continuation.phase().name());
+        }
+        editor.apply();
+    }
+
+    private void sharePrinter(Uri uri) {
+        Intent share = new Intent(Intent.ACTION_SEND)
+                .setType("image/png")
+                .putExtra(Intent.EXTRA_STREAM, uri);
+        share.setClipData(ClipData.newRawUri("Game Boy Printer paper", uri));
+        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(Intent.createChooser(share, "Share printer paper"));
+        } catch (ActivityNotFoundException failure) {
+            printerStatus = "NO SHARE HANDLER";
+            refreshMenuPages();
+        }
+    }
+
+    private void restoreExternalSurfaceIfRequested() {
+        if (!externalSurface.restoreRequested() || runtime == null || menuController == null) {
+            return;
+        }
+        MenuExternalSurfaceState restoring = externalSurface;
+        externalSurface = MenuExternalSurfaceState.none();
+        runtime.input().releaseAll();
+        menuPauseOwned = restoring.pauseOwned();
+        if (menuPauseOwned) {
+            runtime.pause();
+        }
+        refreshMenuPages();
+        menuController.restore(restoring.menuStack());
+        deferFocusRestoreIfNeeded(restoring.menuStack());
+        refreshRestoredDynamicRoute(restoring.menuStack());
+    }
+
+    private void restoreSuspendedMenu() {
+        if (externalSurface.active() || !suspendedMenu.visible() || runtime == null
+                || menuController == null || menuController.visible()) {
+            return;
+        }
+        MenuStackSnapshot restoring = suspendedMenu;
+        suspendedMenu = MenuStackSnapshot.hidden();
+        runtime.input().releaseAll();
+        menuPauseOwned = suspendedMenuPauseOwned;
+        suspendedMenuPauseOwned = false;
+        if (menuPauseOwned) {
+            runtime.pause();
+        }
+        refreshMenuPages();
+        menuController.restore(restoring);
+        deferFocusRestoreIfNeeded(restoring);
+        refreshRestoredDynamicRoute(restoring);
+    }
+
+    private void refreshRestoredDynamicRoute(MenuStackSnapshot snapshot) {
+        if (stackContains(snapshot, MenuRoute.SAVE_STATES)) {
+            loadStateSlots();
+        }
+        if (stackContains(snapshot, MenuRoute.PRINTER_PAPER)
+                || stackContains(snapshot, MenuRoute.OPTIONAL_DEVICES)) {
+            deferredMenuFocusRestore = snapshot;
+            mainHandler.post(this::loadPrinterPreview);
+        }
+    }
+
+    private void restoreDeferredPaperFocusIfReady() {
+        MenuStackSnapshot deferred = deferredMenuFocusRestore;
+        if (!deferred.visible()
+                || (!stackContains(deferred, MenuRoute.PRINTER_PAPER)
+                && !stackContains(deferred, MenuRoute.OPTIONAL_DEVICES))) {
+            return;
+        }
+        if (printerPreview.state() != MenuPreview.State.READY) {
+            if (printerPreview.state() == MenuPreview.State.EMPTY) {
+                deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+            }
+            return;
+        }
+        attemptDeferredFocusRestore();
+    }
+
+    private void deferFocusRestoreIfNeeded(MenuStackSnapshot desired) {
+        if (menuController == null || !desired.visible()) {
+            return;
+        }
+        MenuStackSnapshot current = menuController.snapshot();
+        if (sameRoutePath(current, desired) && !sameFocusedItems(current, desired)) {
+            deferredMenuFocusRestore = desired;
+        }
+    }
+
+    private void attemptDeferredFocusRestore() {
+        MenuStackSnapshot desired = deferredMenuFocusRestore;
+        if (menuController == null || !desired.visible()) {
+            return;
+        }
+        MenuStackSnapshot current = menuController.snapshot();
+        if (!sameRoutePath(current, desired)) {
+            deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+            return;
+        }
+        MenuStackSnapshot.Frame desiredFrame = desired.frames().get(desired.frames().size() - 1);
+        boolean enabled = false;
+        for (MenuPresentation.Item item : menuController.presentation().items()) {
+            if (desiredFrame.focusedItemId().equals(item.id()) && item.enabled()) {
+                enabled = true;
+                break;
+            }
+        }
+        if (!enabled) {
+            return;
+        }
+        deferredMenuFocusRestore = MenuStackSnapshot.hidden();
+        menuController.restore(desired);
+    }
+
+    private MenuStackSnapshot snapshotForPersistence() {
+        MenuStackSnapshot current = menuController == null
+                ? MenuStackSnapshot.hidden() : menuController.snapshot();
+        return deferredMenuFocusRestore.visible()
+                && sameRoutePath(current, deferredMenuFocusRestore)
+                ? deferredMenuFocusRestore : current;
+    }
+
+    private static boolean sameRoutePath(MenuStackSnapshot left, MenuStackSnapshot right) {
+        if (left.frames().size() != right.frames().size()) {
+            return false;
+        }
+        for (int index = 0; index < left.frames().size(); index++) {
+            if (left.frames().get(index).route() != right.frames().get(index).route()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean sameFocusedItems(MenuStackSnapshot left, MenuStackSnapshot right) {
+        if (!sameRoutePath(left, right)) {
+            return false;
+        }
+        for (int index = 0; index < left.frames().size(); index++) {
+            if (!left.frames().get(index).focusedItemId()
+                    .equals(right.frames().get(index).focusedItemId())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void refreshStateSlotsAfterMutation() {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null) {
+        if (runtime == null) {
             return;
         }
         stateSlotsLoading = true;
         refreshMenuPages();
-        active.listStateSlots(slots -> {
+        runtime.listStateSlots(slots -> {
             stateSlots = List.copyOf(slots);
             stateSlotsLoading = false;
             refreshMenuPages();
         });
-        // Manual state workers finish asynchronously; these bounded re-reads make the visible row
-        // reflect the catalog after the controller has committed the save/delete operation.
-        mainHandler.postDelayed(() -> refreshStateSlotsIfMenuVisible(), 250L);
-        mainHandler.postDelayed(() -> refreshStateSlotsIfMenuVisible(), 750L);
+        mainHandler.postDelayed(this::refreshStateSlotsIfMenuVisible, 250L);
+        mainHandler.postDelayed(this::refreshStateSlotsIfMenuVisible, 750L);
     }
 
     private void refreshStateSlotsIfMenuVisible() {
-        if (!menuVisible || menuController.route() != MenuRoute.SAVE_STATES) {
+        if (!menuVisible || menuController.route() != MenuRoute.SAVE_STATES || runtime == null) {
             return;
         }
-        AndroidEmulationRuntime active = runtime;
-        if (active != null) {
-            active.listStateSlots(slots -> {
-                stateSlots = List.copyOf(slots);
-                stateSlotsLoading = false;
-                refreshMenuPages();
-            });
-        }
+        runtime.listStateSlots(slots -> {
+            stateSlots = List.copyOf(slots);
+            stateSlotsLoading = false;
+            refreshMenuPages();
+        });
     }
 
     private AndroidStateSlot stateSlot(int index) {
@@ -657,42 +1513,40 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         return null;
     }
 
-    private static int parseSlot(String value) {
-        try {
-            int slot = Integer.parseInt(value);
-            return slot >= StateRef.MIN_SLOT && slot <= StateRef.MAX_SLOT ? slot : -1;
-        } catch (NumberFormatException ignored) {
-            return -1;
-        }
-    }
-
-    private static long parseToken(String value) {
-        try {
-            long token = Long.parseLong(value);
-            return token >= 0 ? token : -1L;
-        } catch (NumberFormatException ignored) {
-            return -1L;
-        }
-    }
-
     private void refreshMenuPages() {
-        if (menuController == null) {
+        if (menuController == null || video == null) {
             return;
         }
+        AndroidMenuModel.AudioDraft audio = audioDraft == null ? loadAudioDraft() : audioDraft;
+        AndroidMenuModel.TouchDraft touch = touchDraft == null
+                ? AndroidMenuModel.touchDraft(video.touchLayout()) : touchDraft;
+        AndroidMenuModel.DevicesDraft devices = devicesDraft == null
+                ? loadDevicesDraft() : devicesDraft;
         menuController.setPages(List.of(
-                pausePage(), statePage(), libraryPage(), chooseRomPage(), confirmationPage()));
+                pausePage(), statePage(), libraryPage(), chooseRomPage(),
+                AndroidMenuModel.settingsPage(), AndroidMenuModel.audioPage(audio),
+                AndroidMenuModel.touchPage(touch), controllerPage(),
+                AndroidMenuModel.optionalDevicesPage(devices, optionalDevicesStatus,
+                        printerPreview),
+                AndroidMenuModel.printerPaperPage(printerPreview, printerStatus),
+                AndroidMenuModel.systemPage(systemPreferredFocus),
+                AndroidMenuModel.dataMediaPage(AndroidMenuModel.transferAvailability(
+                        runtime != null, observedState)),
+                AndroidMenuModel.aboutPage(BuildConfig.VERSION_NAME, aboutStatus),
+                confirmationPage()));
+        attemptDeferredFocusRestore();
     }
 
     private MenuPageSpec pausePage() {
         return page(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "PAUSED", "OPEN ROM", "CURRENT GAME",
-                List.of(observedState.message(), "INPUT  MENU CAPTURED", "A RESUME / B BACK"),
+                List.of(observedState.message(), "INPUT MENU CAPTURED", "A RESUME / B BACK"),
                 List.of(
                         item("resume", "RESUME", "RUN GAME", true),
-                        item("save-state", "SAVE STATE", "SAVE MODE", true),
-                        item("load-state", "LOAD STATE", "LOAD MODE", true),
-                        item("reset", "RESET GAME", "CONFIRM", true),
+                        item("save-state", "SAVE STATE", "SAVE MODE", runtime != null),
+                        item("load-state", "LOAD STATE", "LOAD MODE", runtime != null),
+                        item("reset", "RESET GAME", "CONFIRM", runtime != null),
                         item("settings", "SETTINGS", "OPEN", true),
-                        item("stop", "STOP GAME", "CONFIRM", true),
+                        item("stop", "STOP GAME", "CONFIRM", runtime != null),
                         item("open-rom", "OPEN ROM", "NATIVE PICKER", runtime != null)),
                 List.of("D-PAD MOVE", "[A] OK", "[B] BACK", "[START] OPEN ROM"));
     }
@@ -702,16 +1556,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         for (int index = StateRef.MIN_SLOT; index <= StateRef.MAX_SLOT; index++) {
             AndroidStateSlot slot = stateSlot(index);
             boolean loadable = slot != null && slot.loadable();
-            boolean enabled = !stateSlotsLoading && (stateMenuMode == StateMenuMode.SAVE || loadable);
-            String detail = stateSlotsLoading ? "LOADING" : slot == null ? "EMPTY"
-                    : slot.detail();
-            String secondary = loadable ? "delete-slot:" + index : null;
-            items.add(item("slot:" + index, "SLOT " + index, detail, enabled, secondary));
+            boolean enabled = !stateSlotsLoading
+                    && (stateMenuMode == StateMenuMode.SAVE || loadable);
+            String detail = stateSlotsLoading ? "LOADING" : slot == null ? "EMPTY" : slot.detail();
+            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index, detail, enabled,
+                    loadable ? "delete-slot:" + index : null));
         }
         items.add(item("back", "BACK", "RETURN", true));
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
-        return page(MenuRoute.SAVE_STATES, "COFFEE GB", "SAVE STATES / " + mode, "", "STATE BANK",
-                List.of("SLOTS " + StateRef.MIN_SLOT + "-" + StateRef.MAX_SLOT,
+        return page(MenuRoute.SAVE_STATES, "COFFEE GB", "SAVE STATES / " + mode, "",
+                "STATE BANK", List.of("SLOTS " + StateRef.MIN_SLOT + "-" + StateRef.MAX_SLOT,
                         stateSlotsLoading ? "READING CATALOG" : "A SELECTS",
                         "SELECT/Y DELETE"), items,
                 List.of("D-PAD MOVE", "[A] SELECT", "[SELECT] DELETE", "[B] BACK"));
@@ -733,7 +1587,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             items.add(item("wait", "RUNTIME STARTING", "WAIT", true));
         }
         return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
-                List.of("DOCUMENT PICKER  NATIVE", "RECENT METADATA  PRIVATE", "ZIP  MULTI-ROM"),
+                List.of("DOCUMENT PICKER NATIVE", "RECENT METADATA PRIVATE", "ZIP MULTI-ROM"),
                 items, List.of("D-PAD MOVE", "[A] OPEN", "[B] BACK", "[START] OPEN ROM"));
     }
 
@@ -749,6 +1603,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         return page(MenuRoute.CHOOSE_ROM, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
                 List.of("SELECT ONE TO OPEN", "A OPENS ROM", "B CANCELS PENDING ZIP"), items,
                 List.of("D-PAD MOVE", "[A] OPEN", "[B] CANCEL"));
+    }
+
+    private MenuPageSpec controllerPage() {
+        AndroidInputRouter input = runtime == null ? null : runtime.input();
+        String name = input == null ? null : input.activeControllerName();
+        Map<eu.rekawek.coffeegb.core.joypad.Button, String> labels = input == null
+                ? Map.of() : input.effectiveKeyLabels();
+        return AndroidMenuModel.controllerPage(name, labels,
+                input == null ? null : input.captureTarget(),
+                input != null && input.captureWaitingForRelease(),
+                input != null && input.horizontalInverted(),
+                input != null && input.verticalInverted());
     }
 
     private MenuPageSpec confirmationPage() {
@@ -767,22 +1633,69 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 items, 1, hints);
     }
 
-    private static MenuPageSpec.Item item(String id, String label, String detail, boolean enabled) {
+    private static MenuPageSpec.Item item(String id, String label, String detail,
+            boolean enabled) {
         return new MenuPageSpec.Item(id, label, detail, enabled);
     }
 
-    private static MenuPageSpec.Item item(String id, String label, String detail, boolean enabled,
-            String secondaryId) {
-        return new MenuPageSpec.Item(id, label, detail, enabled, secondaryId);
+    private AndroidMenuModel.AudioDraft loadAudioDraft() {
+        return AndroidMenuModel.audioDraft(
+                getPreferences(MODE_PRIVATE).getInt("audio.volume", 100),
+                getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
+    }
+
+    private AndroidMenuModel.DevicesDraft loadDevicesDraft() {
+        return new AndroidMenuModel.DevicesDraft(
+                getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false),
+                getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false),
+                getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
+    }
+
+    private void cancelControllerCapture() {
+        if (runtime != null) {
+            runtime.input().cancelCapture();
+        }
+        if (menuController != null) {
+            menuController.setBackIntercepted(false);
+        }
+    }
+
+    private static eu.rekawek.coffeegb.core.joypad.Button mappingTarget(String id) {
+        return switch (id) {
+            case "map-a" -> eu.rekawek.coffeegb.core.joypad.Button.A;
+            case "map-b" -> eu.rekawek.coffeegb.core.joypad.Button.B;
+            case "map-start" -> eu.rekawek.coffeegb.core.joypad.Button.START;
+            case "map-select" -> eu.rekawek.coffeegb.core.joypad.Button.SELECT;
+            case "map-up" -> eu.rekawek.coffeegb.core.joypad.Button.UP;
+            case "map-down" -> eu.rekawek.coffeegb.core.joypad.Button.DOWN;
+            case "map-left" -> eu.rekawek.coffeegb.core.joypad.Button.LEFT;
+            case "map-right" -> eu.rekawek.coffeegb.core.joypad.Button.RIGHT;
+            default -> null;
+        };
+    }
+
+    private static int parseSlot(String value) {
+        try {
+            int slot = Integer.parseInt(value);
+            return slot >= StateRef.MIN_SLOT && slot <= StateRef.MAX_SLOT ? slot : -1;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static long parseToken(String value) {
+        try {
+            long token = Long.parseLong(value);
+            return token >= 0 ? token : -1L;
+        } catch (NumberFormatException ignored) {
+            return -1L;
+        }
     }
 
     private static boolean isGameController(int source) {
-        return (source & android.view.InputDevice.SOURCE_GAMEPAD)
-                        == android.view.InputDevice.SOURCE_GAMEPAD
-                || (source & android.view.InputDevice.SOURCE_JOYSTICK)
-                        == android.view.InputDevice.SOURCE_JOYSTICK
-                || (source & android.view.InputDevice.SOURCE_DPAD)
-                        == android.view.InputDevice.SOURCE_DPAD;
+        return (source & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (source & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                || (source & InputDevice.SOURCE_DPAD) == InputDevice.SOURCE_DPAD;
     }
 
     private static MenuKey menuKey(KeyEvent event) {
@@ -805,465 +1718,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @SuppressLint("GestureBackNavigation")
     private static boolean isSystemBack(KeyEvent event) {
-        // This does not intercept Back: it prevents menu/emulator input interception and delegates
-        // the event unchanged to Activity's platform back pipeline.
         return event.getKeyCode() == KeyEvent.KEYCODE_BACK;
-    }
-
-    private void openRomDocument(View ignored) {
-        if (runtime == null) {
-            return;
-        }
-        Intent request = new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/octet-stream")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/octet-stream",
-                        "application/x-gameboy-rom",
-                        "application/zip",
-                        "application/x-zip-compressed",
-                })
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        startActivityForResult(request, OPEN_ROM_REQUEST);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        Uri uri = data == null ? null : data.getData();
-        if (requestCode == OPEN_ROM_REQUEST) {
-            if (resultCode != RESULT_OK || uri == null) {
-                openRomPickerState = openRomPickerState.canceled();
-                restoreMenuAfterOpenRomCancel();
-                return;
-            }
-            // Opening another ROM supersedes the old paused/menu session. Do not restore or resume
-            // it even when runtime binding finishes after this result callback.
-            openRomPickerState = openRomPickerState.completed();
-        }
-        if (resultCode != RESULT_OK || uri == null) {
-            return;
-        }
-        PendingDocumentResult result = new PendingDocumentResult(
-                requestCode, uri, data.getFlags());
-        if (runtime == null) {
-            pendingDocumentResult = result;
-            return;
-        }
-        dispatchDocumentResult(result);
-    }
-
-    private void restoreOpenRomPickerState(Bundle savedInstanceState) {
-        if (savedInstanceState == null) {
-            return;
-        }
-        String routeName = savedInstanceState.getString(STATE_OPEN_ROM_PICKER_ROUTE);
-        if (routeName == null) {
-            return;
-        }
-        try {
-            openRomPickerState = OpenRomPickerState.restored(
-                    MenuRoute.valueOf(routeName),
-                    savedInstanceState.getBoolean(STATE_OPEN_ROM_PICKER_PAUSE_OWNED),
-                    savedInstanceState.getBoolean(STATE_OPEN_ROM_PICKER_RESTORE));
-        } catch (IllegalArgumentException ignored) {
-            openRomPickerState = OpenRomPickerState.none();
-        }
-    }
-
-    private void restoreMenuAfterOpenRomCancel() {
-        OpenRomPickerState pickerState = openRomPickerState;
-        AndroidEmulationRuntime active = runtime;
-        if (!pickerState.restoreRequested() || active == null || menuController == null) {
-            return;
-        }
-        openRomPickerState = pickerState.completed();
-        active.input().releaseAll();
-        menuPauseOwned = pickerState.pauseOwned();
-        if (menuPauseOwned) {
-            active.pause();
-        }
-        refreshMenuPages();
-        menuController.show(pickerState.route());
-    }
-
-    private void dispatchPendingDocumentResult() {
-        PendingDocumentResult result = pendingDocumentResult;
-        pendingDocumentResult = null;
-        if (result != null && runtime != null) {
-            dispatchDocumentResult(result);
-        }
-    }
-
-    private void dispatchDocumentResult(PendingDocumentResult result) {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null) {
-            pendingDocumentResult = result;
-            return;
-        }
-        switch (result.requestCode()) {
-            case OPEN_ROM_REQUEST -> active.openRom(result.uri(), result.flags());
-            case IMPORT_BATTERY_REQUEST -> active.importBattery(result.uri());
-            case EXPORT_BATTERY_REQUEST -> confirmExport(
-                    "Export battery save?", "The chosen document will be replaced.",
-                    () -> active.exportBattery(result.uri()));
-            case IMPORT_STATE_REQUEST -> active.importState(result.uri());
-            case EXPORT_STATE_REQUEST -> confirmExport(
-                    "Export state slot 0?", "The chosen document will be replaced.",
-                    () -> active.exportState(result.uri()));
-            case EXPORT_SCREENSHOT_REQUEST -> confirmExport(
-                    "Export native screenshot?", "The chosen document will be replaced.",
-                    () -> active.exportScreenshot(result.uri()));
-            case EXPORT_PRINTER_REQUEST -> confirmExport(
-                    "Export printer paper?", "The chosen document will be replaced.",
-                    () -> active.exportPrinter(result.uri(), () -> sharePrinter(result.uri())));
-            default -> { }
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != CAMERA_PERMISSION_REQUEST || runtime == null) {
-            return;
-        }
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            runtime.setCameraEnabled(true);
-        } else {
-            runtime.setCameraEnabled(false);
-            Toast.makeText(this, "Pocket Camera will use its test pattern until camera access is allowed.",
-                    Toast.LENGTH_LONG).show();
-        }
-    }
-
-    private void chooseBatteryImport(View ignored) {
-        confirmImport(
-                "Import battery save?",
-                "Importing can replace this ROM's app-private battery save.",
-                IMPORT_BATTERY_REQUEST);
-    }
-
-    private void chooseBatteryExport(View ignored) {
-        chooseExport(EXPORT_BATTERY_REQUEST, "battery.sav");
-    }
-
-    private void chooseStateImport(View ignored) {
-        confirmImport(
-                "Import state slot 0?",
-                "Importing can replace this ROM's app-private state slot 0.",
-                IMPORT_STATE_REQUEST);
-    }
-
-    private void chooseStateExport(View ignored) {
-        chooseExport(EXPORT_STATE_REQUEST, "slot-0.cgbstate");
-    }
-
-    private void chooseScreenshotExport(View ignored) {
-        if (!canTransfer()) {
-            return;
-        }
-        startActivityForResult(
-                new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                        .addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType("image/png")
-                        .putExtra(Intent.EXTRA_TITLE, "coffee-gb.png")
-                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
-                EXPORT_SCREENSHOT_REQUEST);
-    }
-
-    private void choosePrinterExport() {
-        if (runtime == null) {
-            return;
-        }
-        startActivityForResult(
-                new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                        .addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType("image/png")
-                        .putExtra(Intent.EXTRA_TITLE, "coffee-gb-printer.png")
-                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
-                EXPORT_PRINTER_REQUEST);
-    }
-
-    private void configureTouchControls() {
-        TouchControlsLayout initial = video.touchLayout();
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        int padding = (int) (20 * getResources().getDisplayMetrics().density);
-        form.setPadding(padding, padding, padding, padding);
-
-        TextView fixedSkin = new TextView(this);
-        fixedSkin.setText("The Coffee GB skin fixes the visible control positions.");
-        form.addView(fixedSkin);
-        Switch haptics = new Switch(this);
-        haptics.setText("Haptic feedback");
-        haptics.setChecked(initial.haptics());
-        form.addView(haptics);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Touch controls")
-                .setView(form)
-                .setNegativeButton("Cancel", null)
-                .setNeutralButton("Reset", (dialog, ignored) -> video.updateTouchLayout(
-                        new TouchControlsLayout(TouchControlsLayout.DEFAULT_OPACITY,
-                                TouchControlsLayout.DEFAULT_SCALE,
-                                TouchControlsLayout.DEFAULT_VERTICAL_POSITION, false, false)))
-                .setPositiveButton("Save", (dialog, ignored) -> video.updateTouchLayout(
-                        new TouchControlsLayout(TouchControlsLayout.DEFAULT_OPACITY,
-                                TouchControlsLayout.DEFAULT_SCALE,
-                                TouchControlsLayout.DEFAULT_VERTICAL_POSITION, false,
-                                haptics.isChecked())))
-                .show();
-    }
-
-    private SeekBar slider(LinearLayout form, String label, int min, int max, int value) {
-        TextView text = new TextView(this);
-        text.setText(label);
-        form.addView(text);
-        SeekBar slider = new SeekBar(this);
-        slider.setMin(min);
-        slider.setMax(max);
-        slider.setProgress(value);
-        form.addView(slider);
-        return slider;
-    }
-
-    private void configureController() {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null) {
-            return;
-        }
-        AndroidInputRouter input = active.input();
-        String name = input.activeControllerName();
-        if (name == null) {
-            Toast.makeText(this, "Connect or press a game controller first.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        eu.rekawek.coffeegb.core.joypad.Button[] targets = {
-                eu.rekawek.coffeegb.core.joypad.Button.A,
-                eu.rekawek.coffeegb.core.joypad.Button.B,
-                eu.rekawek.coffeegb.core.joypad.Button.START,
-                eu.rekawek.coffeegb.core.joypad.Button.SELECT,
-                eu.rekawek.coffeegb.core.joypad.Button.UP,
-                eu.rekawek.coffeegb.core.joypad.Button.DOWN,
-                eu.rekawek.coffeegb.core.joypad.Button.LEFT,
-                eu.rekawek.coffeegb.core.joypad.Button.RIGHT
-        };
-        String[] items = {
-                "Map A", "Map B", "Map Start", "Map Select", "Map Up", "Map Down",
-                "Map Left", "Map Right", "Horizontal axis: "
-                        + (input.horizontalInverted() ? "inverted" : "normal"),
-                "Vertical axis: " + (input.verticalInverted() ? "inverted" : "normal"),
-                "Reset this controller"
-        };
-        new AlertDialog.Builder(this)
-                .setTitle("Controller: " + name)
-                .setItems(items, (dialog, which) -> {
-                    if (which < targets.length) {
-                        if (input.beginCapture(targets[which])) {
-                            Toast.makeText(this, "Press the button to map. A conflicting mapping is replaced.",
-                                    Toast.LENGTH_LONG).show();
-                        }
-                    } else if (which == targets.length) {
-                        if (input.toggleHorizontalInversion()) {
-                            Toast.makeText(this, "Horizontal axis toggled.", Toast.LENGTH_SHORT).show();
-                        }
-                    } else if (which == targets.length + 1) {
-                        if (input.toggleVerticalInversion()) {
-                            Toast.makeText(this, "Vertical axis toggled.", Toast.LENGTH_SHORT).show();
-                        }
-                    } else if (input.resetActiveController()) {
-                        Toast.makeText(this, "Controller mappings reset.", Toast.LENGTH_SHORT).show();
-                    }
-                })
-                .show();
-    }
-
-    private void showSettings() {
-        String[] choices = {"Audio", "Touch controls", "Controller mapping", "Optional devices", "Video", "System profile",
-                "Rewind and save behavior"};
-        new AlertDialog.Builder(this).setTitle("Settings").setItems(choices, (dialog, which) -> {
-            switch (which) {
-                case 0 -> configureAudio();
-                case 1 -> configureTouchControls();
-                case 2 -> configureController();
-                case 3 -> configureOptionalDevices();
-                case 4 -> showUnavailable("Video", "Video uses native nearest-neighbor rendering with aspect-preserving fit.");
-                case 5 -> showUnavailable("System profile", "Profile selection is determined safely when the ROM opens; changing it during a session is unavailable.");
-                case 6 -> showUnavailable("Rewind and save behavior", "Rewind and battery-save behavior use the portable session defaults. Live changes are unavailable during a session.");
-                default -> { }
-            }
-        }).show();
-    }
-
-    private void configureAudio() {
-        LinearLayout form = new LinearLayout(this);
-        form.setOrientation(LinearLayout.VERTICAL);
-        int volume = getPreferences(MODE_PRIVATE).getInt("audio.volume", 100);
-        boolean muted = getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false);
-        SeekBar slider = slider(form, "Volume", 0, 100, volume);
-        Switch mute = new Switch(this);
-        mute.setText("Mute audio");
-        mute.setChecked(muted);
-        form.addView(mute);
-        new AlertDialog.Builder(this).setTitle("Audio").setView(form).setNegativeButton("Cancel", null)
-                .setPositiveButton("Save", (dialog, which) -> {
-                    getPreferences(MODE_PRIVATE).edit().putInt("audio.volume", slider.getProgress())
-                            .putBoolean("audio.muted", mute.isChecked()).apply();
-                    requireRuntime(active -> {
-                        active.setAudioVolume(slider.getProgress());
-                        active.setAudioMuted(mute.isChecked());
-                    });
-                }).show();
-    }
-
-    private void configureOptionalDevices() {
-        LinearLayout options = new LinearLayout(this);
-        options.setOrientation(LinearLayout.VERTICAL);
-        Switch rumble = new Switch(this);
-        rumble.setText("Rumble when supported by the game and device");
-        rumble.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.rumble", false));
-        options.addView(rumble);
-        Switch camera = new Switch(this);
-        camera.setText("Use live camera for Pocket Camera cartridges");
-        camera.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false));
-        options.addView(camera);
-        Switch printer = new Switch(this);
-        printer.setText("Emulate the Game Boy Printer");
-        printer.setChecked(getPreferences(MODE_PRIVATE).getBoolean("devices.printer", false));
-        options.addView(printer);
-        Button calibrateTilt = new Button(this);
-        calibrateTilt.setText("Set current position as tilt neutral");
-        calibrateTilt.setOnClickListener(ignored -> {
-            requireRuntime(AndroidEmulationRuntime::calibrateTilt);
-            Toast.makeText(this, "Tilt will calibrate using the next sensor sample.",
-                    Toast.LENGTH_SHORT).show();
-        });
-        options.addView(calibrateTilt);
-        Button previewPrinter = new Button(this);
-        previewPrinter.setText("Preview printer paper");
-        previewPrinter.setOnClickListener(ignored -> requireRuntime(this::showPrinterPreview));
-        options.addView(previewPrinter);
-        Button exportPrinter = new Button(this);
-        exportPrinter.setText("Export and share printer paper");
-        exportPrinter.setOnClickListener(ignored -> choosePrinterExport());
-        options.addView(exportPrinter);
-        new AlertDialog.Builder(this).setTitle("Optional devices").setView(options)
-                .setMessage("Tilt, camera, and printer integrations require a compatible cartridge and are configured only when available.")
-                .setNegativeButton("Cancel", null).setPositiveButton("Save", (dialog, which) -> {
-                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.rumble", rumble.isChecked()).apply();
-                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.camera", camera.isChecked()).apply();
-                    getPreferences(MODE_PRIVATE).edit().putBoolean("devices.printer", printer.isChecked()).apply();
-                    requireRuntime(active -> {
-                        active.setRumbleEnabled(rumble.isChecked());
-                        active.setPrinterEnabled(printer.isChecked());
-                    });
-                    if (camera.isChecked()) {
-                        enableCameraIfPermitted();
-                    } else {
-                        requireRuntime(active -> active.setCameraEnabled(false));
-                    }
-                }).show();
-    }
-
-    private void enableCameraIfPermitted() {
-        if (runtime == null) {
-            return;
-        }
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            runtime.setCameraEnabled(true);
-            return;
-        }
-        runtime.setCameraEnabled(false);
-        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
-    }
-
-    private void showPrinterPreview(AndroidEmulationRuntime active) {
-        active.previewPrinter(bitmap -> {
-            if (bitmap == null) {
-                Toast.makeText(this, "Nothing has been printed yet.", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            ImageView image = new ImageView(this);
-            image.setImageBitmap(bitmap);
-            image.setAdjustViewBounds(true);
-            ScrollView scroll = new ScrollView(this);
-            scroll.addView(image);
-            new AlertDialog.Builder(this).setTitle("Game Boy Printer paper").setView(scroll)
-                    .setNegativeButton("Close", null)
-                    .setNeutralButton("Clear", (dialog, which) -> active.clearPrinter())
-                    .setPositiveButton("Export", (dialog, which) -> choosePrinterExport()).show();
-        });
-    }
-
-    private void sharePrinter(android.net.Uri uri) {
-        Intent share = new Intent(Intent.ACTION_SEND)
-                .setType("image/png")
-                .putExtra(Intent.EXTRA_STREAM, uri);
-        share.setClipData(ClipData.newRawUri("Game Boy Printer paper", uri));
-        share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        startActivity(Intent.createChooser(share, "Share printer paper"));
-    }
-
-    private void showUnavailable(String title, String reason) {
-        new AlertDialog.Builder(this).setTitle(title).setMessage(reason)
-                .setPositiveButton("OK", null).show();
-    }
-
-    private void showAbout() {
-        new AlertDialog.Builder(this).setTitle("About Coffee GB Android")
-                .setMessage("Coffee GB is GPL-3.0-or-later software. This MVP opens GB, GBC, and ZIP documents you select, stores saves privately by ROM identity, and exports only when you choose a document. It requests no network, broad storage, or microphone permission. Camera access is requested only after you enable live Pocket Camera capture; optional rumble uses Android's normal vibration permission only when enabled.\n\nSource and third-party notices: github.com/trekawek/coffee-gb")
-                .setPositiveButton("OK", null).show();
-    }
-
-    private void confirmImport(String title, String message, int requestCode) {
-        if (!canTransfer()) {
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Choose document", (dialog, ignored) -> startActivityForResult(
-                        new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                                .addCategory(Intent.CATEGORY_OPENABLE)
-                                .setType("application/octet-stream")
-                                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
-                        requestCode))
-                .show();
-    }
-
-    private void chooseExport(int requestCode, String suggestedName) {
-        if (!canTransfer()) {
-            return;
-        }
-        startActivityForResult(
-                new Intent(Intent.ACTION_CREATE_DOCUMENT)
-                        .addCategory(Intent.CATEGORY_OPENABLE)
-                        .setType("application/octet-stream")
-                        .putExtra(Intent.EXTRA_TITLE, suggestedName)
-                        .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
-                requestCode);
-    }
-
-    private void confirmExport(String title, String message, Runnable action) {
-        new AlertDialog.Builder(this)
-                .setTitle(title)
-                .setMessage(message)
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Export", (dialog, ignored) -> action.run())
-                .show();
-    }
-
-    private boolean canTransfer() {
-        return runtime != null && observedState.transferReady() && !observedState.flushPending();
     }
 
     private void applyState(RuntimeState state) {
         observedState = state;
         refreshMenuPages();
-        if (runtime == null || menuController == null) {
+        if (runtime == null || menuController == null || externalSurface.active()) {
             return;
         }
         if (state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION
@@ -1277,16 +1738,132 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    private void requireRuntime(RuntimeAction action) {
-        AndroidEmulationRuntime active = runtime;
-        if (active != null) {
-            action.run(active);
+    private void restoreActivityState(Bundle state) {
+        if (state == null) {
+            return;
+        }
+        suspendedMenu = readSnapshot(state, "menu");
+        suspendedMenuPauseOwned = state.getBoolean(STATE_MENU_PAUSE);
+        String actionName = state.getString(STATE_EXTERNAL_ACTION);
+        String policyName = state.getString(STATE_EXTERNAL_POLICY);
+        if (actionName != null && policyName != null) {
+            try {
+                externalSurface = MenuExternalSurfaceState.restored(
+                        MenuExternalSurfaceState.Action.valueOf(actionName),
+                        state.getInt(STATE_EXTERNAL_REQUEST, -1),
+                        readSnapshot(state, "external"),
+                        state.getBoolean(STATE_EXTERNAL_PAUSE),
+                        MenuExternalSurfaceState.RestorePolicy.valueOf(policyName),
+                        state.getBoolean(STATE_EXTERNAL_RESTORE));
+            } catch (IllegalArgumentException ignored) {
+                externalSurface = MenuExternalSurfaceState.none();
+            }
+        }
+        restoreDrafts(state);
+        String confirm = state.getString(STATE_CONFIRM_VARIANT);
+        if (confirm != null) {
+            try {
+                confirmVariant = ConfirmVariant.valueOf(confirm);
+                confirmSlot = state.getInt(STATE_CONFIRM_SLOT, -1);
+            } catch (IllegalArgumentException ignored) {
+                confirmVariant = null;
+                confirmSlot = -1;
+            }
+        }
+        String slotMode = state.getString(STATE_SLOT_MODE);
+        if (slotMode != null) {
+            try {
+                stateMenuMode = StateMenuMode.valueOf(slotMode);
+            } catch (IllegalArgumentException ignored) {
+                stateMenuMode = StateMenuMode.SAVE;
+            }
+        }
+        optionalDevicesStatus = state.getString(STATE_OPTIONAL_STATUS, optionalDevicesStatus);
+        printerStatus = state.getString(STATE_PRINTER_STATUS, printerStatus);
+        aboutStatus = state.getString(STATE_ABOUT_STATUS, aboutStatus);
+        String pendingAction = state.getString(STATE_PENDING_ACTION);
+        String pendingUri = state.getString(STATE_PENDING_URI);
+        if (pendingAction != null && pendingUri != null) {
+            try {
+                pendingDocumentResult = new PendingDocumentResult(
+                        MenuExternalSurfaceState.Action.valueOf(pendingAction),
+                        state.getInt(STATE_PENDING_REQUEST, -1), Uri.parse(pendingUri),
+                        state.getInt(STATE_PENDING_FLAGS));
+            } catch (IllegalArgumentException ignored) {
+                pendingDocumentResult = null;
+            }
         }
     }
 
-    @FunctionalInterface
-    private interface RuntimeAction {
-        void run(AndroidEmulationRuntime runtime);
+    private void saveDrafts(Bundle state) {
+        if (audioDraft != null) {
+            state.putBoolean(STATE_AUDIO_ACTIVE, true);
+            state.putInt(STATE_AUDIO_VOLUME, audioDraft.volume());
+            state.putBoolean(STATE_AUDIO_MUTED, audioDraft.muted());
+        }
+        if (touchDraft != null) {
+            state.putBoolean(STATE_TOUCH_ACTIVE, true);
+            state.putFloat(STATE_TOUCH_OPACITY, touchDraft.opacity());
+            state.putFloat(STATE_TOUCH_SCALE, touchDraft.scale());
+            state.putFloat(STATE_TOUCH_VERTICAL, touchDraft.verticalPosition());
+            state.putBoolean(STATE_TOUCH_LEFT, touchDraft.leftHanded());
+            state.putBoolean(STATE_TOUCH_HAPTICS, touchDraft.haptics());
+        }
+        if (devicesDraft != null) {
+            state.putBoolean(STATE_DEVICES_ACTIVE, true);
+            state.putBoolean(STATE_DEVICES_RUMBLE, devicesDraft.rumble());
+            state.putBoolean(STATE_DEVICES_CAMERA, devicesDraft.camera());
+            state.putBoolean(STATE_DEVICES_PRINTER, devicesDraft.printer());
+        }
+    }
+
+    private void restoreDrafts(Bundle state) {
+        if (state.getBoolean(STATE_AUDIO_ACTIVE)) {
+            audioDraft = AndroidMenuModel.audioDraft(state.getInt(STATE_AUDIO_VOLUME, 100),
+                    state.getBoolean(STATE_AUDIO_MUTED));
+        }
+        if (state.getBoolean(STATE_TOUCH_ACTIVE)) {
+            touchDraft = new AndroidMenuModel.TouchDraft(
+                    state.getFloat(STATE_TOUCH_OPACITY, TouchControlsLayout.DEFAULT_OPACITY),
+                    state.getFloat(STATE_TOUCH_SCALE, TouchControlsLayout.DEFAULT_SCALE),
+                    state.getFloat(STATE_TOUCH_VERTICAL,
+                            TouchControlsLayout.DEFAULT_VERTICAL_POSITION),
+                    state.getBoolean(STATE_TOUCH_LEFT),
+                    state.getBoolean(STATE_TOUCH_HAPTICS, true));
+        }
+        if (state.getBoolean(STATE_DEVICES_ACTIVE)) {
+            devicesDraft = new AndroidMenuModel.DevicesDraft(
+                    state.getBoolean(STATE_DEVICES_RUMBLE),
+                    state.getBoolean(STATE_DEVICES_CAMERA),
+                    state.getBoolean(STATE_DEVICES_PRINTER));
+        }
+    }
+
+    private static void writeSnapshot(Bundle state, String prefix, MenuStackSnapshot snapshot) {
+        state.putInt(prefix + ".count", snapshot.frames().size());
+        for (int index = 0; index < snapshot.frames().size(); index++) {
+            MenuStackSnapshot.Frame frame = snapshot.frames().get(index);
+            state.putString(prefix + ".route." + index, frame.route().name());
+            state.putString(prefix + ".focus." + index, frame.focusedItemId());
+        }
+    }
+
+    private static MenuStackSnapshot readSnapshot(Bundle state, String prefix) {
+        int count = state.getInt(prefix + ".count", 0);
+        ArrayList<MenuStackSnapshot.Frame> frames = new ArrayList<>(Math.max(0, count));
+        for (int index = 0; index < count; index++) {
+            String route = state.getString(prefix + ".route." + index);
+            String focus = state.getString(prefix + ".focus." + index);
+            if (route == null || focus == null) {
+                return MenuStackSnapshot.hidden();
+            }
+            try {
+                frames.add(new MenuStackSnapshot.Frame(MenuRoute.valueOf(route), focus));
+            } catch (IllegalArgumentException ignored) {
+                return MenuStackSnapshot.hidden();
+            }
+        }
+        return new MenuStackSnapshot(frames);
     }
 
     @TargetApi(Build.VERSION_CODES.TIRAMISU)
@@ -1319,7 +1896,44 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    private record PendingDocumentResult(int requestCode, Uri uri, int flags) { }
+    /** Application-owned completion that never retains or launches from an obsolete Activity. */
+    private static final class PrinterExportCompletion implements Consumer<Boolean> {
+
+        private final SharedPreferences preferences;
+        private final long token;
+        private final WeakReference<MainActivity> activity;
+        private final long ownerGeneration;
+
+        private PrinterExportCompletion(SharedPreferences preferences, long token,
+                MainActivity activity, long ownerGeneration) {
+            this.preferences = preferences;
+            this.token = token;
+            this.activity = new WeakReference<>(activity);
+            this.ownerGeneration = ownerGeneration;
+        }
+
+        @Override
+        public void accept(Boolean successful) {
+            synchronized (MainActivity.class) {
+                PrinterExportContinuation current =
+                        readPrinterExportContinuation(preferences);
+                PrinterExportContinuation completed = current.complete(token,
+                        Boolean.TRUE.equals(successful));
+                if (completed != current) {
+                    writePrinterExportContinuation(preferences, completed, true);
+                }
+            }
+            MainActivity owner = activity.get();
+            if (owner != null) {
+                owner.mainHandler.post(() ->
+                        owner.consumePrinterExportContinuation(ownerGeneration));
+            }
+        }
+    }
+
+    private record PendingDocumentResult(MenuExternalSurfaceState.Action action, int requestCode,
+                                         Uri uri, int flags) {
+    }
 
     private enum StateMenuMode {
         SAVE,
@@ -1327,17 +1941,33 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private enum ConfirmVariant {
-        RESET("RESET GAME", "UNSAVED PROGRESS MAY BE LOST"),
-        STOP("STOP GAME", "THE CURRENT SESSION WILL END"),
-        OVERWRITE("OVERWRITE STATE", "THE EXISTING SLOT WILL BE REPLACED"),
-        DELETE("DELETE STATE", "THE SAVED SLOT CANNOT BE RECOVERED");
+        RESET("RESET GAME", "UNSAVED PROGRESS MAY BE LOST", null),
+        STOP("STOP GAME", "THE CURRENT SESSION WILL END", null),
+        OVERWRITE("OVERWRITE STATE", "THE EXISTING SLOT WILL BE REPLACED", null),
+        DELETE("DELETE STATE", "THE SAVED SLOT CANNOT BE RECOVERED", null),
+        CLEAR_PRINTER("CLEAR PAPER", "THE PRINTER ROLL CANNOT BE RECOVERED", null),
+        IMPORT_BATTERY("IMPORT BATTERY SAVE", "APP-PRIVATE SAVE DATA MAY BE REPLACED",
+                MenuExternalSurfaceState.Action.IMPORT_BATTERY),
+        EXPORT_BATTERY("EXPORT BATTERY SAVE", "ANDROID WILL CREATE A DOCUMENT",
+                MenuExternalSurfaceState.Action.EXPORT_BATTERY),
+        IMPORT_STATE("IMPORT STATE SLOT 0", "APP-PRIVATE SLOT 0 MAY BE REPLACED",
+                MenuExternalSurfaceState.Action.IMPORT_STATE_0),
+        EXPORT_STATE("EXPORT STATE SLOT 0", "ANDROID WILL CREATE A DOCUMENT",
+                MenuExternalSurfaceState.Action.EXPORT_STATE_0),
+        EXPORT_SCREENSHOT("EXPORT NATIVE SCREENSHOT", "ANDROID WILL CREATE A PNG",
+                MenuExternalSurfaceState.Action.EXPORT_SCREENSHOT),
+        EXPORT_PRINTER("EXPORT & SHARE PAPER", "ANDROID WILL CREATE A FULL-RES PNG",
+                MenuExternalSurfaceState.Action.EXPORT_PRINTER_SHARE);
 
         private final String label;
         private final String description;
+        private final MenuExternalSurfaceState.Action externalAction;
 
-        ConfirmVariant(String label, String description) {
+        ConfirmVariant(String label, String description,
+                MenuExternalSurfaceState.Action externalAction) {
             this.label = label;
             this.description = description;
+            this.externalAction = externalAction;
         }
     }
 }

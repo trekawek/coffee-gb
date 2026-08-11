@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.android.menu;
 
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -24,6 +25,8 @@ public final class MenuRenderer {
     private final Paint fill = new Paint();
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private MenuPreview cachedPreview;
+    private Bitmap cachedPreviewBitmap;
 
     public MenuRenderer() {
         fill.setStyle(Paint.Style.FILL);
@@ -90,16 +93,28 @@ public final class MenuRenderer {
 
     private void drawHeader(Canvas canvas, MenuPresentation presentation, RectF bounds) {
         drawPanel(canvas, bounds, CREAM, INK);
-        drawText(canvas, upper(presentation.title()), bounds.left + 8, bounds.centerY() + 4,
-                12, INK, Paint.Align.LEFT);
-        drawText(canvas, upper(presentation.context()), bounds.centerX(), bounds.centerY() + 3,
-                8, OLIVE_LIGHT, Paint.Align.CENTER);
-        if (!presentation.headerAction().isEmpty()) {
-            float right = bounds.right - 5;
-            float buttonWidth = Math.min(68, Math.max(46, presentation.headerAction().length() * 5.2f));
-            RectF button = new RectF(right - buttonWidth, bounds.top + 5, right, bounds.bottom - 5);
+        String title = upper(presentation.title());
+        String context = upper(presentation.context());
+        String action = upper(presentation.headerAction());
+        text.setTextSize(12.0f);
+        float buttonWidth = action.isEmpty() ? 0.0f
+                : Math.min(68.0f, Math.max(46.0f, action.length() * 5.2f));
+        MenuTextLayout.HeaderColumns columns = MenuTextLayout.header(bounds.left, bounds.right,
+                text.measureText(title), !context.isEmpty(), buttonWidth);
+        drawFittedText(canvas, title, columns.title(), bounds.top, bounds.bottom,
+                bounds.centerY() + 4, 12, INK, Paint.Align.LEFT);
+        if (!context.isEmpty()) {
+            drawFittedText(canvas, context, columns.context(), bounds.top, bounds.bottom,
+                    bounds.centerY() + 3, 8, OLIVE_LIGHT, Paint.Align.LEFT);
+        }
+        if (!action.isEmpty()) {
+            MenuTextLayout.Span actionSpan = columns.action();
+            RectF button = new RectF(actionSpan.left(), bounds.top + 5,
+                    actionSpan.right(), bounds.bottom - 5);
             drawPanel(canvas, button, MINT, INK);
-            drawText(canvas, upper(presentation.headerAction()), button.centerX(), button.centerY() + 3,
+            drawFittedText(canvas, action,
+                    new MenuTextLayout.Span(button.left + 3, button.right - 3),
+                    button.top, button.bottom, button.centerY() + 3,
                     6.5f, INK, Paint.Align.CENTER);
         }
     }
@@ -107,7 +122,9 @@ public final class MenuRenderer {
     private void drawSide(Canvas canvas, MenuPresentation presentation, RectF bounds,
             boolean portrait) {
         drawPanel(canvas, bounds, MINT, INK);
-        drawText(canvas, upper(presentation.sideHeading()), bounds.left + 6, bounds.top + 14,
+        drawFittedText(canvas, upper(presentation.sideHeading()),
+                new MenuTextLayout.Span(bounds.left + 6, bounds.right - 6),
+                bounds.top + 2, bounds.top + 18, bounds.top + 14,
                 portrait ? 6.5f : 7.5f, INK, Paint.Align.LEFT);
 
         float thumbnailTop = bounds.top + 19;
@@ -122,7 +139,11 @@ public final class MenuRenderer {
             if (sideText.nextBaseline() > sideText.bottom()) {
                 break;
             }
-            drawText(canvas, upper(line), sideText.left(), sideText.nextBaseline(), size, OLIVE, Paint.Align.LEFT);
+            drawFittedText(canvas, upper(line),
+                    new MenuTextLayout.Span(sideText.left(), bounds.right - 6),
+                    Math.max(bounds.top, sideText.nextBaseline() - size),
+                    Math.min(bounds.bottom, sideText.nextBaseline() + 2),
+                    sideText.nextBaseline(), size, OLIVE, Paint.Align.LEFT);
             sideText.advance();
         }
     }
@@ -175,6 +196,22 @@ public final class MenuRenderer {
         if (items.isEmpty()) {
             return;
         }
+        if (presentation.route() == MenuRoute.PRINTER_PAPER) {
+            float rowsHeight = Math.min(bounds.height() * .34f,
+                    Math.max(32.0f, items.size() * 23.0f));
+            RectF previewBounds = new RectF(
+                    bounds.left + 4, bounds.top + 4, bounds.right - 4,
+                    Math.max(bounds.top + 8, bounds.bottom - rowsHeight - 3));
+            drawPreview(canvas, presentation.preview(), previewBounds);
+            drawRows(canvas, presentation, new RectF(
+                    bounds.left, previewBounds.bottom + 3, bounds.right, bounds.bottom));
+            return;
+        }
+        drawRows(canvas, presentation, bounds);
+    }
+
+    private void drawRows(Canvas canvas, MenuPresentation presentation, RectF bounds) {
+        List<MenuPresentation.Item> items = presentation.items();
         float rowHeight = bounds.height() / items.size();
         float textSize = Math.max(5.5f, Math.min(10.0f, rowHeight * 0.43f));
         for (int index = 0; index < items.size(); index++) {
@@ -192,14 +229,78 @@ public final class MenuRenderer {
                 drawFocusArrow(canvas, bounds.left + 7, (top + bottom) / 2.0f);
             }
             int color = item.enabled() ? CREAM : MUTED;
-            drawText(canvas, upper(item.label()), bounds.left + 17, (top + bottom) / 2.0f + textSize * 0.34f,
-                    textSize, color, Paint.Align.LEFT);
+            MenuTextLayout.RowColumns columns = MenuTextLayout.row(bounds.left, bounds.right,
+                    !item.detail().isEmpty());
+            float baseline = (top + bottom) / 2.0f + textSize * 0.34f;
+            drawFittedText(canvas, upper(item.label()), columns.label(), top, bottom,
+                    baseline, textSize, color, Paint.Align.LEFT);
             if (!item.detail().isEmpty()) {
-                drawText(canvas, upper(item.detail()), bounds.right - 7,
-                        (top + bottom) / 2.0f + textSize * 0.34f, Math.max(5.0f, textSize - 1),
+                drawFittedText(canvas, upper(item.detail()), columns.detail(), top, bottom,
+                        baseline, Math.max(5.0f, textSize - 1),
                         item.enabled() ? MINT_DARK : MUTED, Paint.Align.RIGHT);
             }
+            if (item.progress() >= 0) {
+                float left = bounds.left + 17;
+                float right = bounds.right - 7;
+                float barBottom = bottom - 3;
+                fill.setColor(MUTED);
+                canvas.drawRect(left, barBottom - 2, right, barBottom, fill);
+                fill.setColor(item.enabled() ? MINT : MUTED);
+                canvas.drawRect(left, barBottom - 2,
+                        left + (right - left) * item.progress() / 100.0f, barBottom, fill);
+            }
         }
+    }
+
+    void drawPreview(Canvas canvas, MenuPreview preview, RectF bounds) {
+        int save = canvas.save();
+        try {
+            canvas.clipRect(bounds);
+            fill.setColor(CREAM);
+            canvas.drawRect(bounds, fill);
+            stroke.setColor(MINT_DARK);
+            canvas.drawRect(bounds, stroke);
+            if (preview.state() == MenuPreview.State.LOADING) {
+                drawFittedText(canvas, "LOADING PAPER...",
+                        new MenuTextLayout.Span(bounds.left + 3, bounds.right - 3),
+                        bounds.top, bounds.bottom, bounds.centerY() + 3,
+                        7, INK, Paint.Align.CENTER);
+                return;
+            }
+            if (preview.state() == MenuPreview.State.EMPTY) {
+                drawFittedText(canvas, "NOTHING PRINTED",
+                        new MenuTextLayout.Span(bounds.left + 3, bounds.right - 3),
+                        bounds.top, bounds.bottom, bounds.centerY() + 3,
+                        7, INK, Paint.Align.CENTER);
+                return;
+            }
+            Bitmap bitmap = bitmapFor(preview);
+            float scale = Math.min(bounds.width() / bitmap.getWidth(),
+                    bounds.height() / bitmap.getHeight());
+            float width = bitmap.getWidth() * scale;
+            float height = bitmap.getHeight() * scale;
+            RectF destination = new RectF(bounds.centerX() - width / 2.0f,
+                    bounds.centerY() - height / 2.0f, bounds.centerX() + width / 2.0f,
+                    bounds.centerY() + height / 2.0f);
+            Paint pixels = new Paint();
+            pixels.setFilterBitmap(false);
+            canvas.drawBitmap(bitmap, null, destination, pixels);
+        } finally {
+            canvas.restoreToCount(save);
+        }
+    }
+
+    private Bitmap bitmapFor(MenuPreview preview) {
+        if (cachedPreview != preview || cachedPreviewBitmap == null
+                || cachedPreviewBitmap.isRecycled()) {
+            if (cachedPreviewBitmap != null && !cachedPreviewBitmap.isRecycled()) {
+                cachedPreviewBitmap.recycle();
+            }
+            cachedPreview = preview;
+            cachedPreviewBitmap = Bitmap.createBitmap(preview.copyPixels(), preview.width(),
+                    preview.height(), Bitmap.Config.ARGB_8888);
+        }
+        return cachedPreviewBitmap;
     }
 
     private void drawFocusArrow(Canvas canvas, float x, float centerY) {
@@ -232,9 +333,10 @@ public final class MenuRenderer {
                 stroke.setStrokeWidth(0.75f);
                 canvas.drawLine(left, bounds.top + 2, left, bounds.bottom - 2, stroke);
             }
-            drawText(canvas, upper(hints.get(index)), (left + right) / 2.0f,
-                    bounds.centerY() + 2.3f, bounds.height() < 12 ? 4.5f : 5.5f, INK,
-                    Paint.Align.CENTER);
+            drawFittedText(canvas, upper(hints.get(index)),
+                    new MenuTextLayout.Span(left + 2, Math.max(left + 2, right - 2)),
+                    bounds.top, bounds.bottom, bounds.centerY() + 2.3f,
+                    bounds.height() < 12 ? 4.5f : 5.5f, INK, Paint.Align.CENTER);
         }
     }
 
@@ -256,6 +358,35 @@ public final class MenuRenderer {
         text.setTextSize(size);
         text.setTextAlign(align);
         canvas.drawText(value, x, baseline, text);
+    }
+
+    private void drawFittedText(Canvas canvas, String value, MenuTextLayout.Span span,
+            float clipTop, float clipBottom, float baseline, float size, int color,
+            Paint.Align align) {
+        if (value.isEmpty() || span.width() <= 0.0f || clipBottom <= clipTop) {
+            return;
+        }
+        text.setTextSize(size);
+        String fitted = fitText(value, span.width());
+        if (fitted.isEmpty()) {
+            return;
+        }
+        float x = switch (align) {
+            case LEFT -> span.left();
+            case CENTER -> (span.left() + span.right()) / 2.0f;
+            case RIGHT -> span.right();
+        };
+        int save = canvas.save();
+        try {
+            canvas.clipRect(span.left(), clipTop, span.right(), clipBottom);
+            drawText(canvas, fitted, x, baseline, size, color, align);
+        } finally {
+            canvas.restoreToCount(save);
+        }
+    }
+
+    private String fitText(String value, float maxWidth) {
+        return MenuTextLayout.ellipsize(value, maxWidth, text::measureText);
     }
 
     private static String upper(String value) {

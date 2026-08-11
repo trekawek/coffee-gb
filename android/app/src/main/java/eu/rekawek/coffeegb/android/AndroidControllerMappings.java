@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * App-private controller remaps keyed by the controller descriptor plus vendor and product ids.
@@ -74,6 +75,26 @@ final class AndroidControllerMappings {
         edit.putString(BINDING + identity + "." + keyCode, button.name())
                 .putStringSet(KEYS + identity, keys)
                 .apply();
+    }
+
+    Integer keyCodeForButton(InputDevice device, Button button, Map<Integer, Button> defaults) {
+        String deviceIdentity = identity(device);
+        TreeSet<Integer> candidates = new TreeSet<>();
+        for (String encoded : preferences.getStringSet(
+                KEYS + deviceIdentity, Collections.emptySet())) {
+            try {
+                candidates.add(Integer.parseInt(encoded));
+            } catch (NumberFormatException ignored) {
+                // Ignore a malformed app-private preference and fall back to defaults.
+            }
+        }
+        candidates.addAll(defaults.keySet());
+        for (int keyCode : candidates) {
+            if (binding(device, keyCode, defaults.get(keyCode)) == button) {
+                return keyCode;
+            }
+        }
+        return null;
     }
 
     boolean invertedX(InputDevice device) {
