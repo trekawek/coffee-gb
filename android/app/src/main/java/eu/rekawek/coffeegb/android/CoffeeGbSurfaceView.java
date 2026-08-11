@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.view.HapticFeedbackConstants;
@@ -32,8 +33,11 @@ import java.util.Set;
 public final class CoffeeGbSurfaceView extends SurfaceView
         implements SurfaceHolder.Callback, NativeFrameStore.Listener {
 
+    private static final int CANVAS_MATTE = 0xFFFAFAFA;
+
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint displayPaint = new Paint();
     private final Paint skinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Rect source = new Rect();
     private final Rect destination = new Rect();
@@ -56,9 +60,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     public CoffeeGbSurfaceView(Context context) {
         super(context);
         videoPaint.setFilterBitmap(false);
+        displayPaint.setColor(Color.BLACK);
         skinPaint.setFilterBitmap(true);
-        portraitSkin = RasterSkin.load(context, R.drawable.coffee_gb_skin_portrait);
-        landscapeSkin = RasterSkin.load(context, R.drawable.coffee_gb_skin_landscape);
+        portraitSkin = RasterSkin.portrait(context);
+        landscapeSkin = RasterSkin.landscape(context);
         touchPreferences = new TouchControlsPreferences(context);
         touchLayout = touchPreferences.load();
         setZOrderOnTop(false);
@@ -208,8 +213,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 || action == MotionEvent.ACTION_MOVE) {
             TouchControlsLayout layout = touchLayout;
             for (int index = 0; index < event.getPointerCount(); index++) {
-                List<Button> buttons = layout.buttonsAt(event.getX(index), event.getY(index),
-                        getWidth(), getHeight());
+                List<Button> buttons = buttonsAtViewPoint(layout,
+                        event.getX(index), event.getY(index));
                 router.updateTouchPointer(event.getPointerId(index), buttons);
                 if (index == event.getActionIndex() && action != MotionEvent.ACTION_MOVE
                         && !buttons.isEmpty() && layout.haptics()) {
@@ -222,7 +227,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     }
 
     private List<MenuKey> menuKeysAt(float x, float y) {
-        List<Button> buttons = touchLayout.buttonsAt(x, y, getWidth(), getHeight());
+        List<Button> buttons = buttonsAtViewPoint(touchLayout, x, y);
         if (buttons.isEmpty()) {
             return List.of();
         }
@@ -241,6 +246,16 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             keys.add(key);
         }
         return List.copyOf(keys);
+    }
+
+    private List<Button> buttonsAtViewPoint(TouchControlsLayout layout, float x, float y) {
+        int width = getWidth();
+        int height = getHeight();
+        if (width <= 0 || height <= 0) {
+            return List.of();
+        }
+        RasterSkin skin = skinFor(width, height);
+        return layout.buttonsAtViewPoint(x, y, skin.transform(width, height));
     }
 
     @Override
@@ -340,6 +355,12 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         return height >= width ? portraitSkin : landscapeSkin;
     }
 
+    PointF menuControlCenter(int width, int height) {
+        RasterSkin skin = skinFor(width, height);
+        SkinTransform transform = skin.transform(width, height);
+        return skin.menuControlCenter(transform);
+    }
+
     private final class RenderThread extends Thread {
         private final SurfaceHolder holder;
         private boolean running = true;
@@ -399,9 +420,11 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 return;
             }
             try {
-                canvas.drawColor(Color.BLACK);
+                canvas.drawColor(CANVAS_MATTE);
                 RasterSkin skin = skinFor(canvas.getWidth(), canvas.getHeight());
-                RectF display = skin.displayBounds(canvas.getWidth(), canvas.getHeight());
+                SkinTransform transform = skin.transform(canvas.getWidth(), canvas.getHeight());
+                RectF display = skin.displayBounds(transform);
+                canvas.drawRect(display, displayPaint);
                 if (frame != null) {
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
                             frame.width(), frame.height());
@@ -414,7 +437,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 if (menu != null) {
                     menuRenderer.draw(canvas, menu, display);
                 }
-                skin.draw(canvas, skinPaint);
+                skin.draw(canvas, skinPaint, transform);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
             }

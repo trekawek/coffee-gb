@@ -52,6 +52,15 @@ final class TouchControlsLayout {
         return haptics;
     }
 
+    List<Button> buttonsAtViewPoint(float x, float y, SkinTransform transform) {
+        if (!transform.containsViewPoint(x, y)) {
+            return List.of();
+        }
+        SkinTransform.Point nativePoint = transform.inversePoint(x, y);
+        return buttonsAt(nativePoint.x(), nativePoint.y(),
+                transform.skinWidth(), transform.skinHeight());
+    }
+
     List<Button> buttonsAt(float x, float y, int width, int height) {
         if (width <= 0 || height <= 0) {
             return List.of();
