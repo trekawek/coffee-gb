@@ -47,4 +47,23 @@ public class MenuGeometryTest {
         assertEquals(0, invalid.logicalWidth());
         assertEquals(0, invalid.logicalHeight());
     }
+
+    @Test
+    public void shortWideThumbnailUsesIndependentAxesAndKeepsDecorationInBounds() {
+        MenuGeometry.ThumbnailGrid grid = MenuGeometry.thumbnailGrid(294.0f, 28.0f);
+
+        assertTrue(grid.valid());
+        assertEquals(294.0f / 36.0f, grid.unitX(), 0.001f);
+        assertEquals(28.0f / 20.0f, grid.unitY(), 0.001f);
+        assertTrue(grid.unitY() < grid.unitX());
+        for (int index = 0; index < 13; index++) {
+            float column = index * 7 % 31;
+            float row = index * 11 % 19;
+            assertTrue(grid.contains(column, row, column + 3, row + 2));
+        }
+        assertTrue(grid.contains(3, 13, 13, 17));
+        assertTrue(grid.contains(23, 7, 31, 17));
+        assertTrue(grid.contains(36.0f * 0.28f, 12, 36.0f * 0.28f + 4, 17));
+        assertFalse(MenuGeometry.thumbnailGrid(294.0f, 0.0f).valid());
+    }
 }

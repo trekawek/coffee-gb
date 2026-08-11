@@ -23,7 +23,7 @@ public enum MenuRoute {
         this.label = label;
     }
 
-    String label() {
+    public String label() {
         return label;
     }
 }

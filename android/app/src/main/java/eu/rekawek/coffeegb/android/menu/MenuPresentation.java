@@ -137,12 +137,18 @@ public final class MenuPresentation {
         private final String label;
         private final String detail;
         private final boolean enabled;
+        private final String secondaryId;
 
         public Item(String id, String label, String detail, boolean enabled) {
+            this(id, label, detail, enabled, null);
+        }
+
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId) {
             this.id = requireText(id, "id");
             this.label = requireText(label, "label");
             this.detail = requireText(detail, "detail");
             this.enabled = enabled;
+            this.secondaryId = secondaryId == null ? null : requireText(secondaryId, "secondaryId");
         }
 
         public String id() {
@@ -159,6 +165,10 @@ public final class MenuPresentation {
 
         public boolean enabled() {
             return enabled;
+        }
+
+        public String secondaryId() {
+            return secondaryId;
         }
     }
 }

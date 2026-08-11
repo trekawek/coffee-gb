@@ -11,13 +11,14 @@ import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -27,7 +28,15 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import eu.rekawek.coffeegb.android.menu.MenuController;
+import eu.rekawek.coffeegb.android.menu.MenuKey;
+import eu.rekawek.coffeegb.android.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.android.menu.MenuPresentation;
+import eu.rekawek.coffeegb.android.menu.MenuRoute;
+import eu.rekawek.coffeegb.android.menu.OpenRomPickerState;
+import eu.rekawek.coffeegb.controller.state.StateRef;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -47,33 +56,29 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_SCREENSHOT_REQUEST = 6;
     private static final int EXPORT_PRINTER_REQUEST = 7;
     private static final int CAMERA_PERMISSION_REQUEST = 8;
+    private static final String STATE_OPEN_ROM_PICKER_ROUTE = "openRomPicker.route";
+    private static final String STATE_OPEN_ROM_PICKER_PAUSE_OWNED = "openRomPicker.pauseOwned";
+    private static final String STATE_OPEN_ROM_PICKER_RESTORE = "openRomPicker.restore";
 
-    private TextView status;
     private CoffeeGbSurfaceView video;
     private Button menuButton;
-    private ScrollView menu;
-    private AlertDialog menuDialog;
-    private Button open;
-    private Button recent;
-    private Button pauseMenu;
-    private Button resume;
-    private Button stop;
-    private Button states;
-    private Button settings;
-    private Button about;
-    private Button importBattery;
-    private Button exportBattery;
-    private Button importState;
-    private Button exportState;
-    private Button exportScreenshot;
-    private Button touchControls;
-    private Button controllerMapping;
 
     private AndroidEmulationRuntime runtime;
     private boolean bound;
     private InputManager inputManager;
-    private long shownSelectionGeneration = -1L;
     private PendingDocumentResult pendingDocumentResult;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private MenuController menuController;
+    private RuntimeState observedState = RuntimeState.stopped();
+    private List<AndroidStateSlot> stateSlots = List.of();
+    private StateMenuMode stateMenuMode = StateMenuMode.SAVE;
+    private ConfirmVariant confirmVariant;
+    private int confirmSlot = -1;
+    private boolean stateSlotsLoading;
+    private boolean menuVisible;
+    private boolean menuPauseOwned;
+    private boolean selectionActionInFlight;
+    private OpenRomPickerState openRomPickerState = OpenRomPickerState.none();
 
     private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
         @Override
@@ -113,6 +118,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
             applyState(runtime.state());
             dispatchPendingDocumentResult();
+            restoreMenuAfterOpenRomCancel();
         }
 
         @Override
@@ -121,20 +127,43 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 video.detach();
                 runtime.removeObserver(MainActivity.this);
             }
+            menuPauseOwned = false;
+            if (menuController != null) {
+                menuController.hide();
+            }
+            video.clearMenuPresentation();
             runtime = null;
             bound = false;
-            disableCommands();
-            status.setText("Coffee GB runtime stopped. Reopen the app to choose a ROM.");
+            observedState = RuntimeState.stopped();
+            refreshMenuPages();
         }
     };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        restoreOpenRomPickerState(savedInstanceState);
 
         FrameLayout root = new FrameLayout(this);
 
         video = new CoffeeGbSurfaceView(this);
+        menuController = new MenuController(new MenuController.Listener() {
+            @Override
+            public void onPresentation(MenuPresentation presentation) {
+                presentMenu(presentation);
+            }
+
+            @Override
+            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
+                handleMenuItem(route, id, secondary);
+            }
+
+            @Override
+            public void onHeaderSelected(MenuRoute route) {
+                handleMenuHeader(route);
+            }
+        });
+        video.setMenuInput(menuController);
         root.addView(video, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -145,60 +174,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         root.addView(menuButton, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        menu = new ScrollView(this);
-        menu.setFillViewport(false);
-        menu.setBackgroundColor(android.graphics.Color.rgb(239, 232, 216));
-
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setGravity(Gravity.CENTER_HORIZONTAL);
-        int padding = (int) (24 * getResources().getDisplayMetrics().density);
-        int bottomPadding = padding + (int) (48 * getResources().getDisplayMetrics().density);
-        content.setPadding(padding, padding, padding, bottomPadding);
-
-        status = new TextView(this);
-        status.setGravity(Gravity.CENTER);
-        status.setContentDescription("Coffee GB Android runtime status");
-        status.setText("Starting Coffee GB Android runtime…");
-        content.addView(status);
-
-        open = button("Open ROM", this::openRomDocument);
-        recent = button("Open recent ROM", ignored -> requireRuntime(AndroidEmulationRuntime::requestRecentDocuments));
-        pauseMenu = button("Pause and menu", ignored -> showPauseMenu());
-        resume = button("Resume", ignored -> requireRuntime(AndroidEmulationRuntime::resume));
-        stop = button("Stop game", ignored -> requireRuntime(AndroidEmulationRuntime::stop));
-        states = button("Save states", ignored -> showStateSlots());
-        settings = button("Settings", ignored -> showSettings());
-        about = button("About, licenses, and privacy", ignored -> showAbout());
-        importBattery = button("Import battery save", this::chooseBatteryImport);
-        exportBattery = button("Export battery save", this::chooseBatteryExport);
-        importState = button("Import state slot 0", this::chooseStateImport);
-        exportState = button("Export state slot 0", this::chooseStateExport);
-        exportScreenshot = button("Export native screenshot", this::chooseScreenshotExport);
-        touchControls = button("Touch controls", ignored -> configureTouchControls());
-        controllerMapping = button("Controller mapping", ignored -> configureController());
-        content.addView(open);
-        content.addView(recent);
-        content.addView(pauseMenu);
-        content.addView(resume);
-        content.addView(stop);
-        content.addView(states);
-        content.addView(settings);
-        content.addView(importBattery);
-        content.addView(exportBattery);
-        content.addView(importState);
-        content.addView(exportState);
-        content.addView(exportScreenshot);
-        content.addView(touchControls);
-        content.addView(controllerMapping);
-        content.addView(about);
-        menu.addView(content);
-        menuDialog = new AlertDialog.Builder(this)
-                .setTitle("Coffee GB")
-                .setView(menu)
-                .create();
-        menuDialog.setOnDismissListener(ignored ->
-                menuButton.setContentDescription("Open Coffee GB menu"));
         root.addOnLayoutChangeListener((view, left, top, right, bottom,
                                         oldLeft, oldTop, oldRight, oldBottom) -> {
             positionMenuOverlay(right - left, bottom - top);
@@ -210,7 +185,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return insets;
         });
         setContentView(root);
-        disableCommands();
+        refreshMenuPages();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (openRomPickerState.active()) {
+            outState.putString(STATE_OPEN_ROM_PICKER_ROUTE, openRomPickerState.route().name());
+            outState.putBoolean(
+                    STATE_OPEN_ROM_PICKER_PAUSE_OWNED, openRomPickerState.pauseOwned());
+            outState.putBoolean(
+                    STATE_OPEN_ROM_PICKER_RESTORE, openRomPickerState.restoreRequested());
+        }
     }
 
     @Override
@@ -230,6 +217,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             inputManager.unregisterInputDeviceListener(inputDevices);
             inputManager = null;
         }
+        if (menuController != null && menuController.visible()) {
+            // Backgrounding must preserve the runtime's paused lifecycle state; it must not
+            // resume a game merely because the transient Activity menu was dismissed.
+            menuPauseOwned = false;
+            menuController.hide();
+        }
+        if (menuController != null) {
+            menuController.cancelInput();
+        }
         if (bound) {
             runtime.input().releaseAll();
             video.detach();
@@ -243,6 +239,22 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        MenuKey menuKey = menuKey(event);
+        if (menuKey != null) {
+            if (event.getAction() == KeyEvent.ACTION_MULTIPLE
+                    && menuController != null && menuController.visible()) {
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_DOWN
+                    && menuController != null && menuController.visible()
+                    && menuController.onKeyDown(menuKey, event.getRepeatCount() > 0)) {
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_UP
+                    && menuController != null && menuController.onKeyUp(menuKey)) {
+                return true;
+            }
+        }
         AndroidEmulationRuntime active = runtime;
         if (active != null && active.input().onKeyEvent(event)) {
             return true;
@@ -252,6 +264,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
+        if (menuController != null && menuController.visible()
+                && isGameController(event.getSource())
+                && event.getAction() == MotionEvent.ACTION_MOVE) {
+            float hatX = event.getAxisValue(MotionEvent.AXIS_HAT_X);
+            float hatY = event.getAxisValue(MotionEvent.AXIS_HAT_Y);
+            float x = Math.abs(hatX) >= .45f ? hatX : event.getAxisValue(MotionEvent.AXIS_X);
+            float y = Math.abs(hatY) >= .45f ? hatY : event.getAxisValue(MotionEvent.AXIS_Y);
+            menuController.onAxis(x, y);
+            return true;
+        }
         AndroidEmulationRuntime active = runtime;
         if (active != null && active.input().onMotionEvent(event)) {
             return true;
@@ -264,7 +286,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         super.onWindowFocusChanged(hasFocus);
         if (!hasFocus && runtime != null) {
             runtime.input().releaseAll();
+            if (menuController != null) {
+                menuController.cancelInput();
+            }
         }
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (menuController != null && menuController.visible()) {
+            menuController.onKeyDown(MenuKey.B, false);
+            menuController.onKeyUp(MenuKey.B);
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override
@@ -272,38 +307,37 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         applyState(state);
     }
 
-    private Button button(String label, View.OnClickListener listener) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setOnClickListener(view -> {
-            hideMenu();
-            listener.onClick(view);
-        });
-        return button;
-    }
-
     private void toggleMenu() {
-        if (menuDialog.isShowing()) {
-            hideMenu();
+        if (menuController == null) {
+            return;
+        }
+        if (menuController.visible()) {
+            menuController.hide();
+            return;
+        }
+        AndroidEmulationRuntime active = runtime;
+        RuntimeState current = active == null ? observedState : active.state();
+        observedState = current;
+        if (active != null) {
+            // No touch/key state that opened the menu may leak into the emulated game.
+            active.input().releaseAll();
+        }
+        menuPauseOwned = current.phase() == RuntimeState.Phase.RUNNING;
+        if (menuPauseOwned && active != null) {
+            active.pause();
+        }
+        refreshMenuPages();
+        if (current.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION) {
+            menuController.show(MenuRoute.CHOOSE_ROM);
+        } else if (current.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION) {
+            menuController.show(MenuRoute.LIBRARY);
+        } else if (current.phase() == RuntimeState.Phase.PAUSED
+                || (current.transferReady() && current.paused())) {
+            menuController.show(MenuRoute.PAUSE_CONSOLE);
+        } else if (current.transferReady() && current.phase() == RuntimeState.Phase.RUNNING) {
+            menuController.show(MenuRoute.PAUSE_CONSOLE);
         } else {
-            menuDialog.show();
-            Window window = menuDialog.getWindow();
-            if (window != null) {
-                int density = Math.max(1, Math.round(getResources().getDisplayMetrics().density));
-                int width = Math.max(1, video.getWidth() - 32 * density);
-                int height = Math.max(1, video.getHeight() - 32 * density);
-                window.setLayout(Math.min(360 * density, width), Math.min(640 * density, height));
-            }
-            menuButton.setContentDescription("Close Coffee GB menu");
-        }
-    }
-
-    private void hideMenu() {
-        if (menuDialog != null && menuDialog.isShowing()) {
-            menuDialog.dismiss();
-        }
-        if (menuButton != null) {
-            menuButton.setContentDescription("Open Coffee GB menu");
+            menuController.show(MenuRoute.LIBRARY);
         }
     }
 
@@ -335,6 +369,408 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         menuButton.setLayoutParams(buttonLayout);
     }
 
+    private void presentMenu(MenuPresentation presentation) {
+        boolean wasVisible = menuVisible;
+        menuVisible = presentation.visible();
+        if (menuVisible) {
+            video.setMenuPresentation(presentation);
+            menuButton.setContentDescription("Close Coffee GB menu");
+        } else {
+            video.clearMenuPresentation();
+            menuButton.setContentDescription("Open Coffee GB menu");
+            if (wasVisible) {
+                onMenuClosed();
+            }
+        }
+    }
+
+    private void onMenuClosed() {
+        if (selectionActionInFlight) {
+            selectionActionInFlight = false;
+        } else if (runtime != null && (observedState.phase()
+                == RuntimeState.Phase.AWAITING_RECENT_SELECTION
+                || observedState.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION)) {
+            runtime.cancelPendingSelection();
+        }
+        if (menuPauseOwned) {
+            menuPauseOwned = false;
+            AndroidEmulationRuntime active = runtime;
+            if (active != null) {
+                active.resume();
+            }
+        }
+    }
+
+    private void handleMenuHeader(MenuRoute route) {
+        if (route == MenuRoute.PAUSE_CONSOLE || route == MenuRoute.LIBRARY) {
+            openRomFromMenu();
+        }
+    }
+
+    private void handleMenuItem(MenuRoute route, String id, boolean secondary) {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null || id == null) {
+            return;
+        }
+        if (route == MenuRoute.PAUSE_CONSOLE) {
+            switch (id) {
+                case "resume" -> resumeAndClose(active);
+                case "save-state" -> showStateMenu(StateMenuMode.SAVE);
+                case "load-state" -> showStateMenu(StateMenuMode.LOAD);
+                case "reset" -> showConfirmation(ConfirmVariant.RESET, -1);
+                case "settings" -> menuController.push(MenuRoute.SETTINGS);
+                case "stop" -> showConfirmation(ConfirmVariant.STOP, -1);
+                case "open-rom" -> openRomFromMenu();
+                default -> { }
+            }
+            return;
+        }
+        if (route == MenuRoute.SAVE_STATES) {
+            if (id.equals("back")) {
+                menuController.back();
+                return;
+            }
+            if (secondary || id.startsWith("delete-slot:")) {
+                String value = id.startsWith("delete-slot:")
+                        ? id.substring("delete-slot:".length()) : id;
+                int slot = parseSlot(value);
+                if (slot >= 0) {
+                    showConfirmation(ConfirmVariant.DELETE, slot);
+                }
+                return;
+            }
+            if (id.startsWith("slot:")) {
+                int slot = parseSlot(id.substring("slot:".length()));
+                if (slot < 0) {
+                    return;
+                }
+                AndroidStateSlot stateSlot = stateSlot(slot);
+                if (stateMenuMode == StateMenuMode.LOAD) {
+                    if (stateSlot != null && stateSlot.loadable()) {
+                        active.restoreSnapshot(slot);
+                        closeMenuWithoutResume();
+                    }
+                } else if (stateSlot != null && stateSlot.loadable()) {
+                    showConfirmation(ConfirmVariant.OVERWRITE, slot);
+                } else {
+                    active.saveSnapshot(slot);
+                    refreshStateSlotsAfterMutation();
+                }
+            }
+            return;
+        }
+        if (route == MenuRoute.LIBRARY) {
+            if (id.equals("open-rom")) {
+                openRomFromMenu();
+            } else if (id.equals("recent-rom")) {
+                active.requestRecentDocuments();
+            } else if (id.startsWith("recent:")) {
+                long token = parseToken(id.substring("recent:".length()));
+                if (token >= 0) {
+                    selectRecentFromMenu(active, token);
+                }
+            } else if (id.equals("choose-rom")) {
+                menuController.push(MenuRoute.CHOOSE_ROM);
+            }
+            return;
+        }
+        if (route == MenuRoute.CHOOSE_ROM) {
+            if (id.equals("cancel")) {
+                menuController.back();
+                return;
+            }
+            if (id.startsWith("archive:")) {
+                long token = parseToken(id.substring("archive:".length()));
+                if (token >= 0) {
+                    selectionActionInFlight = true;
+                    menuPauseOwned = false;
+                    menuController.hide();
+                    active.selectArchiveCandidate(token);
+                }
+            }
+            return;
+        }
+        if (route == MenuRoute.CONFIRM_ACTION) {
+            if (id.equals("cancel")) {
+                menuController.back();
+            } else if (id.equals("confirm")) {
+                executeConfirmation(active);
+            }
+        }
+    }
+
+    private void selectRecentFromMenu(AndroidEmulationRuntime active, long token) {
+        selectionActionInFlight = true;
+        menuPauseOwned = false;
+        menuController.hide();
+        active.selectRecentDocument(token);
+    }
+
+    private void showStateMenu(StateMenuMode mode) {
+        stateMenuMode = mode;
+        stateSlotsLoading = true;
+        refreshMenuPages();
+        menuController.push(MenuRoute.SAVE_STATES);
+        AndroidEmulationRuntime active = runtime;
+        if (active != null) {
+            active.listStateSlots(slots -> {
+                stateSlots = List.copyOf(slots);
+                stateSlotsLoading = false;
+                refreshMenuPages();
+            });
+        }
+    }
+
+    private void showConfirmation(ConfirmVariant variant, int slot) {
+        confirmVariant = variant;
+        confirmSlot = slot;
+        refreshMenuPages();
+        menuController.push(MenuRoute.CONFIRM_ACTION);
+    }
+
+    private void executeConfirmation(AndroidEmulationRuntime active) {
+        ConfirmVariant variant = confirmVariant;
+        int slot = confirmSlot;
+        if (variant == null) {
+            menuController.back();
+            return;
+        }
+        switch (variant) {
+            case RESET -> {
+                closeMenuWithoutResume();
+                active.reset();
+            }
+            case STOP -> {
+                closeMenuWithoutResume();
+                active.stop();
+            }
+            case OVERWRITE -> {
+                active.saveSnapshot(slot);
+                menuController.back();
+                refreshStateSlotsAfterMutation();
+            }
+            case DELETE -> {
+                active.deleteSnapshot(slot);
+                menuController.back();
+                refreshStateSlotsAfterMutation();
+            }
+        }
+        confirmVariant = null;
+        confirmSlot = -1;
+    }
+
+    private void resumeAndClose(AndroidEmulationRuntime active) {
+        menuPauseOwned = false;
+        menuController.hide();
+        active.resume();
+    }
+
+    private void closeMenuWithoutResume() {
+        menuPauseOwned = false;
+        menuController.hide();
+    }
+
+    private void openRomFromMenu() {
+        if (runtime == null || menuController == null || !menuController.visible()) {
+            return;
+        }
+        // A native picker owns the screen. Keep a paused session paused while it is open and do not
+        // attempt to represent provider/filesystem rows in the emulator renderer.
+        openRomPickerState = OpenRomPickerState.launched(
+                menuController.route(), menuPauseOwned);
+        menuPauseOwned = false;
+        menuController.hide();
+        openRomDocument(null);
+    }
+
+    private void refreshStateSlotsAfterMutation() {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            return;
+        }
+        stateSlotsLoading = true;
+        refreshMenuPages();
+        active.listStateSlots(slots -> {
+            stateSlots = List.copyOf(slots);
+            stateSlotsLoading = false;
+            refreshMenuPages();
+        });
+        // Manual state workers finish asynchronously; these bounded re-reads make the visible row
+        // reflect the catalog after the controller has committed the save/delete operation.
+        mainHandler.postDelayed(() -> refreshStateSlotsIfMenuVisible(), 250L);
+        mainHandler.postDelayed(() -> refreshStateSlotsIfMenuVisible(), 750L);
+    }
+
+    private void refreshStateSlotsIfMenuVisible() {
+        if (!menuVisible || menuController.route() != MenuRoute.SAVE_STATES) {
+            return;
+        }
+        AndroidEmulationRuntime active = runtime;
+        if (active != null) {
+            active.listStateSlots(slots -> {
+                stateSlots = List.copyOf(slots);
+                stateSlotsLoading = false;
+                refreshMenuPages();
+            });
+        }
+    }
+
+    private AndroidStateSlot stateSlot(int index) {
+        for (AndroidStateSlot slot : stateSlots) {
+            if (slot.index() == index) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    private static int parseSlot(String value) {
+        try {
+            int slot = Integer.parseInt(value);
+            return slot >= StateRef.MIN_SLOT && slot <= StateRef.MAX_SLOT ? slot : -1;
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private static long parseToken(String value) {
+        try {
+            long token = Long.parseLong(value);
+            return token >= 0 ? token : -1L;
+        } catch (NumberFormatException ignored) {
+            return -1L;
+        }
+    }
+
+    private void refreshMenuPages() {
+        if (menuController == null) {
+            return;
+        }
+        menuController.setPages(List.of(
+                pausePage(), statePage(), libraryPage(), chooseRomPage(), confirmationPage()));
+    }
+
+    private MenuPageSpec pausePage() {
+        return page(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "PAUSED", "OPEN ROM", "CURRENT GAME",
+                List.of(observedState.message(), "INPUT  MENU CAPTURED", "A RESUME / B BACK"),
+                List.of(
+                        item("resume", "RESUME", "RUN GAME", true),
+                        item("save-state", "SAVE STATE", "SAVE MODE", true),
+                        item("load-state", "LOAD STATE", "LOAD MODE", true),
+                        item("reset", "RESET GAME", "CONFIRM", true),
+                        item("settings", "SETTINGS", "OPEN", true),
+                        item("stop", "STOP GAME", "CONFIRM", true),
+                        item("open-rom", "OPEN ROM", "NATIVE PICKER", runtime != null)),
+                List.of("D-PAD MOVE", "[A] OK", "[B] BACK", "[START] OPEN ROM"));
+    }
+
+    private MenuPageSpec statePage() {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (int index = StateRef.MIN_SLOT; index <= StateRef.MAX_SLOT; index++) {
+            AndroidStateSlot slot = stateSlot(index);
+            boolean loadable = slot != null && slot.loadable();
+            boolean enabled = !stateSlotsLoading && (stateMenuMode == StateMenuMode.SAVE || loadable);
+            String detail = stateSlotsLoading ? "LOADING" : slot == null ? "EMPTY"
+                    : slot.detail();
+            String secondary = loadable ? "delete-slot:" + index : null;
+            items.add(item("slot:" + index, "SLOT " + index, detail, enabled, secondary));
+        }
+        items.add(item("back", "BACK", "RETURN", true));
+        String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
+        return page(MenuRoute.SAVE_STATES, "COFFEE GB", "SAVE STATES / " + mode, "", "STATE BANK",
+                List.of("SLOTS " + StateRef.MIN_SLOT + "-" + StateRef.MAX_SLOT,
+                        stateSlotsLoading ? "READING CATALOG" : "A SELECTS",
+                        "SELECT/Y DELETE"), items,
+                List.of("D-PAD MOVE", "[A] SELECT", "[SELECT] DELETE", "[B] BACK"));
+    }
+
+    private MenuPageSpec libraryPage() {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        if (observedState.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION) {
+            for (RuntimeState.Selection selection : observedState.selections()) {
+                items.add(item("recent:" + selection.token(), selection.label(), "A OPEN", true));
+            }
+        } else {
+            items.add(item("recent-rom", "RECENT ROMS", "CHOOSE", runtime != null));
+            items.add(item("choose-rom", "CHOOSE ROM", "ZIP RESULTS",
+                    observedState.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION));
+        }
+        items.add(item("open-rom", "OPEN ROM", "NATIVE PICKER", runtime != null));
+        if (runtime == null) {
+            items.add(item("wait", "RUNTIME STARTING", "WAIT", true));
+        }
+        return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
+                List.of("DOCUMENT PICKER  NATIVE", "RECENT METADATA  PRIVATE", "ZIP  MULTI-ROM"),
+                items, List.of("D-PAD MOVE", "[A] OPEN", "[B] BACK", "[START] OPEN ROM"));
+    }
+
+    private MenuPageSpec chooseRomPage() {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (RuntimeState.Selection selection : observedState.selections()) {
+            items.add(item("archive:" + selection.token(), selection.label(), "A OPEN", true));
+        }
+        if (items.isEmpty()) {
+            items.add(item("empty", "NO ROM CANDIDATES", "CANCEL", false));
+        }
+        items.add(item("cancel", "BACK TO LIBRARY", "CANCEL", true));
+        return page(MenuRoute.CHOOSE_ROM, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
+                List.of("SELECT ONE TO OPEN", "A OPENS ROM", "B CANCELS PENDING ZIP"), items,
+                List.of("D-PAD MOVE", "[A] OPEN", "[B] CANCEL"));
+    }
+
+    private MenuPageSpec confirmationPage() {
+        ConfirmVariant variant = confirmVariant == null ? ConfirmVariant.RESET : confirmVariant;
+        return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", variant.label,
+                List.of(variant.description, "A CONFIRM", "B CANCEL"),
+                List.of(item("cancel", "CANCEL", "RETURN", true),
+                        item("confirm", "CONFIRM", variant.label, true)),
+                List.of("D-PAD MOVE", "[A] CONFIRM", "[B] CANCEL"));
+    }
+
+    private static MenuPageSpec page(MenuRoute route, String title, String context,
+            String headerAction, String sideHeading, List<String> sideLines,
+            List<MenuPageSpec.Item> items, List<String> hints) {
+        return new MenuPageSpec(route, title, context, headerAction, sideHeading, sideLines,
+                items, 1, hints);
+    }
+
+    private static MenuPageSpec.Item item(String id, String label, String detail, boolean enabled) {
+        return new MenuPageSpec.Item(id, label, detail, enabled);
+    }
+
+    private static MenuPageSpec.Item item(String id, String label, String detail, boolean enabled,
+            String secondaryId) {
+        return new MenuPageSpec.Item(id, label, detail, enabled, secondaryId);
+    }
+
+    private static boolean isGameController(int source) {
+        return (source & android.view.InputDevice.SOURCE_GAMEPAD)
+                        == android.view.InputDevice.SOURCE_GAMEPAD
+                || (source & android.view.InputDevice.SOURCE_JOYSTICK)
+                        == android.view.InputDevice.SOURCE_JOYSTICK
+                || (source & android.view.InputDevice.SOURCE_DPAD)
+                        == android.view.InputDevice.SOURCE_DPAD;
+    }
+
+    private static MenuKey menuKey(KeyEvent event) {
+        return switch (event.getKeyCode()) {
+            case KeyEvent.KEYCODE_DPAD_UP -> MenuKey.UP;
+            case KeyEvent.KEYCODE_DPAD_DOWN -> MenuKey.DOWN;
+            case KeyEvent.KEYCODE_DPAD_LEFT -> MenuKey.LEFT;
+            case KeyEvent.KEYCODE_DPAD_RIGHT -> MenuKey.RIGHT;
+            case KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_X,
+                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> MenuKey.A;
+            case KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE,
+                    KeyEvent.KEYCODE_BACK -> MenuKey.B;
+            case KeyEvent.KEYCODE_BUTTON_Y, KeyEvent.KEYCODE_FORWARD_DEL,
+                    KeyEvent.KEYCODE_DEL -> MenuKey.SECONDARY;
+            case KeyEvent.KEYCODE_BUTTON_START -> MenuKey.START;
+            case KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_DPAD_CENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> MenuKey.SELECT;
+            default -> null;
+        };
+    }
+
     private void openRomDocument(View ignored) {
         if (runtime == null) {
             return;
@@ -356,16 +792,61 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+        Uri uri = data == null ? null : data.getData();
+        if (requestCode == OPEN_ROM_REQUEST) {
+            if (resultCode != RESULT_OK || uri == null) {
+                openRomPickerState = openRomPickerState.canceled();
+                restoreMenuAfterOpenRomCancel();
+                return;
+            }
+            // Opening another ROM supersedes the old paused/menu session. Do not restore or resume
+            // it even when runtime binding finishes after this result callback.
+            openRomPickerState = openRomPickerState.completed();
+        }
+        if (resultCode != RESULT_OK || uri == null) {
             return;
         }
         PendingDocumentResult result = new PendingDocumentResult(
-                requestCode, data.getData(), data.getFlags());
+                requestCode, uri, data.getFlags());
         if (runtime == null) {
             pendingDocumentResult = result;
             return;
         }
         dispatchDocumentResult(result);
+    }
+
+    private void restoreOpenRomPickerState(Bundle savedInstanceState) {
+        if (savedInstanceState == null) {
+            return;
+        }
+        String routeName = savedInstanceState.getString(STATE_OPEN_ROM_PICKER_ROUTE);
+        if (routeName == null) {
+            return;
+        }
+        try {
+            openRomPickerState = OpenRomPickerState.restored(
+                    MenuRoute.valueOf(routeName),
+                    savedInstanceState.getBoolean(STATE_OPEN_ROM_PICKER_PAUSE_OWNED),
+                    savedInstanceState.getBoolean(STATE_OPEN_ROM_PICKER_RESTORE));
+        } catch (IllegalArgumentException ignored) {
+            openRomPickerState = OpenRomPickerState.none();
+        }
+    }
+
+    private void restoreMenuAfterOpenRomCancel() {
+        OpenRomPickerState pickerState = openRomPickerState;
+        AndroidEmulationRuntime active = runtime;
+        if (!pickerState.restoreRequested() || active == null || menuController == null) {
+            return;
+        }
+        openRomPickerState = pickerState.completed();
+        active.input().releaseAll();
+        menuPauseOwned = pickerState.pauseOwned();
+        if (menuPauseOwned) {
+            active.pause();
+        }
+        refreshMenuPages();
+        menuController.show(pickerState.route());
     }
 
     private void dispatchPendingDocumentResult() {
@@ -440,7 +921,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void chooseScreenshotExport(View ignored) {
-        if (runtime == null || !exportScreenshot.isEnabled()) {
+        if (!canTransfer()) {
             return;
         }
         startActivityForResult(
@@ -558,79 +1039,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     }
                 })
                 .show();
-    }
-
-    private void showPauseMenu() {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null || !pauseMenu.isEnabled()) {
-            return;
-        }
-        active.pause();
-        String[] choices = {"Resume", "Reset game", "Save state (slot 0)", "Load state (slot 0)",
-                "Save states", "Settings", "Stop game"};
-        new AlertDialog.Builder(this)
-                .setTitle("Game paused")
-                .setItems(choices, (dialog, which) -> {
-                    switch (which) {
-                        case 0 -> active.resume();
-                        case 1 -> new AlertDialog.Builder(this).setTitle("Reset game?")
-                                .setMessage("Unsaved progress in the running game may be lost.")
-                                .setNegativeButton("Cancel", null)
-                                .setPositiveButton("Reset", (ignored, button) -> active.reset()).show();
-                        case 2 -> active.saveSnapshot(0);
-                        case 3 -> active.restoreSnapshot(0);
-                        case 4 -> showStateSlots();
-                        case 5 -> showSettings();
-                        case 6 -> new AlertDialog.Builder(this).setTitle("Stop game?")
-                                .setMessage("The running session will end after its safe cleanup.")
-                                .setNegativeButton("Cancel", null)
-                                .setPositiveButton("Stop", (ignored, button) -> active.stop()).show();
-                        default -> { }
-                    }
-                }).show();
-    }
-
-    private void showStateSlots() {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null || !states.isEnabled()) {
-            return;
-        }
-        active.listStateSlots(slots -> {
-            if (slots.isEmpty()) {
-                Toast.makeText(this, "Open a ROM before managing save states.", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            String[] labels = slots.stream().map(AndroidStateSlot::label).toArray(String[]::new);
-            new AlertDialog.Builder(this).setTitle("Save states")
-                    .setItems(labels, (dialog, which) -> showStateSlotActions(slots.get(which))).show();
-        });
-    }
-
-    private void showStateSlotActions(AndroidStateSlot slot) {
-        AndroidEmulationRuntime active = runtime;
-        if (active == null) {
-            return;
-        }
-        List<String> choices = new java.util.ArrayList<>();
-        choices.add("Save or overwrite");
-        if (slot.loadable()) {
-            choices.add("Load");
-            choices.add("Delete");
-        }
-        new AlertDialog.Builder(this).setTitle("State slot " + slot.index() + ": " + slot.detail())
-                .setItems(choices.toArray(new String[0]), (dialog, which) -> {
-                    String choice = choices.get(which);
-                    if (choice.equals("Save or overwrite")) {
-                        active.saveSnapshot(slot.index());
-                    } else if (choice.equals("Load")) {
-                        active.restoreSnapshot(slot.index());
-                    } else {
-                        new AlertDialog.Builder(this).setTitle("Delete state slot?")
-                                .setMessage("This cannot be undone.").setNegativeButton("Cancel", null)
-                                .setPositiveButton("Delete", (ignored, button) -> active.deleteSnapshot(slot.index()))
-                                .show();
-                    }
-                }).show();
     }
 
     private void showSettings() {
@@ -771,7 +1179,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void confirmImport(String title, String message, int requestCode) {
-        if (runtime == null || !importBattery.isEnabled()) {
+        if (!canTransfer()) {
             return;
         }
         new AlertDialog.Builder(this)
@@ -788,7 +1196,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void chooseExport(int requestCode, String suggestedName) {
-        if (runtime == null || !exportBattery.isEnabled()) {
+        if (!canTransfer()) {
             return;
         }
         startActivityForResult(
@@ -809,52 +1217,25 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 .show();
     }
 
-    private void applyState(RuntimeState state) {
-        status.setText(state.message());
-        boolean ready = runtime != null;
-        open.setEnabled(ready);
-        recent.setEnabled(ready);
-        pauseMenu.setEnabled(ready && state.transferReady() && !state.paused());
-        resume.setEnabled(ready && state.paused() && state.transferReady());
-        stop.setEnabled(ready && state.transferReady());
-        states.setEnabled(ready && state.transferReady() && !state.flushPending());
-        settings.setEnabled(ready);
-        about.setEnabled(true);
-        importBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
-        exportBattery.setEnabled(ready && state.transferReady() && !state.flushPending());
-        importState.setEnabled(ready && state.transferReady() && !state.flushPending());
-        exportState.setEnabled(ready && state.transferReady() && !state.flushPending());
-        exportScreenshot.setEnabled(ready && state.transferReady() && !state.flushPending());
-        touchControls.setEnabled(ready);
-        controllerMapping.setEnabled(ready);
-        showSelectionIfNeeded(state);
+    private boolean canTransfer() {
+        return runtime != null && observedState.transferReady() && !observedState.flushPending();
     }
 
-    private void showSelectionIfNeeded(RuntimeState state) {
-        if (runtime == null || state.selections().isEmpty()
-                || state.generation() == shownSelectionGeneration) {
+    private void applyState(RuntimeState state) {
+        observedState = state;
+        refreshMenuPages();
+        if (runtime == null || menuController == null) {
             return;
         }
-        boolean archive = state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION;
-        boolean recentSelection = state.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION;
-        if (!archive && !recentSelection) {
-            return;
+        if (state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION
+                && !menuController.visible()) {
+            menuPauseOwned = false;
+            menuController.show(MenuRoute.CHOOSE_ROM);
+        } else if (state.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION
+                && !menuController.visible()) {
+            menuPauseOwned = false;
+            menuController.show(MenuRoute.LIBRARY);
         }
-        shownSelectionGeneration = state.generation();
-        List<RuntimeState.Selection> selections = state.selections();
-        String[] labels = selections.stream().map(RuntimeState.Selection::label).toArray(String[]::new);
-        new AlertDialog.Builder(this)
-                .setTitle(archive ? "Choose ROM from archive" : "Open recent ROM")
-                .setItems(labels, (dialog, index) -> {
-                    RuntimeState.Selection selection = selections.get(index);
-                    if (archive) {
-                        runtime.selectArchiveCandidate(selection.token());
-                    } else {
-                        runtime.selectRecentDocument(selection.token());
-                    }
-                })
-                .setOnCancelListener(dialog -> runtime.cancelPendingSelection())
-                .show();
     }
 
     private void requireRuntime(RuntimeAction action) {
@@ -864,31 +1245,30 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    private void disableCommands() {
-        if (open == null) {
-            return;
-        }
-        open.setEnabled(false);
-        recent.setEnabled(false);
-        pauseMenu.setEnabled(false);
-        resume.setEnabled(false);
-        stop.setEnabled(false);
-        states.setEnabled(false);
-        settings.setEnabled(false);
-        about.setEnabled(true);
-        importBattery.setEnabled(false);
-        exportBattery.setEnabled(false);
-        importState.setEnabled(false);
-        exportState.setEnabled(false);
-        exportScreenshot.setEnabled(false);
-        touchControls.setEnabled(false);
-        controllerMapping.setEnabled(false);
-    }
-
     @FunctionalInterface
     private interface RuntimeAction {
         void run(AndroidEmulationRuntime runtime);
     }
 
     private record PendingDocumentResult(int requestCode, Uri uri, int flags) { }
+
+    private enum StateMenuMode {
+        SAVE,
+        LOAD
+    }
+
+    private enum ConfirmVariant {
+        RESET("RESET GAME", "UNSAVED PROGRESS MAY BE LOST"),
+        STOP("STOP GAME", "THE CURRENT SESSION WILL END"),
+        OVERWRITE("OVERWRITE STATE", "THE EXISTING SLOT WILL BE REPLACED"),
+        DELETE("DELETE STATE", "THE SAVED SLOT CANNOT BE RECOVERED");
+
+        private final String label;
+        private final String description;
+
+        ConfirmVariant(String label, String description) {
+            this.label = label;
+            this.description = description;
+        }
+    }
 }
