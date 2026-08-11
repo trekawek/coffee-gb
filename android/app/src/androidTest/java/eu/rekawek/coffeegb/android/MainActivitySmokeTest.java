@@ -47,6 +47,7 @@ public class MainActivitySmokeTest {
     public void toggleMenuAdvancesGenerationBeforeQueuedStateDelivery() throws Exception {
         AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
         AtomicBoolean ownerDrained = new AtomicBoolean();
+        AtomicBoolean cleanupDrained = new AtomicBoolean();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             await("runtime binding", () -> {
                 scenario.onActivity(activity -> runtime.set(runtime(activity)));
@@ -79,6 +80,15 @@ public class MainActivitySmokeTest {
                     setRuntimeState(active, original);
                 }
             });
+        } finally {
+            AndroidEmulationRuntime active = runtime.get();
+            if (active != null) {
+                active.stop();
+                active.listStateSlots(ignored -> cleanupDrained.set(true));
+                await("runtime cleanup queue", cleanupDrained::get);
+                assertEquals("runtime cleanup phase", RuntimeState.Phase.STOPPED,
+                        active.state().phase());
+            }
         }
     }
 
