@@ -13,6 +13,8 @@ final class MenuGeometry {
     static final int LANDSCAPE_HEIGHT = 240;
     static final int PORTRAIT_WIDTH = 240;
     static final int PORTRAIT_HEIGHT = 320;
+    private static final float THUMBNAIL_COLUMNS = 36.0f;
+    private static final float THUMBNAIL_ROWS = 20.0f;
 
     private MenuGeometry() {
     }
@@ -30,6 +32,51 @@ final class MenuGeometry {
         return new Layout(portrait, (int) logicalWidth, (int) logicalHeight, scale,
                 (displayWidth - contentWidth) / 2.0f, (displayHeight - contentHeight) / 2.0f,
                 contentWidth, contentHeight);
+    }
+
+    static ThumbnailGrid thumbnailGrid(float width, float height) {
+        if (!(width > 0.0f) || !(height > 0.0f)
+                || !Float.isFinite(width) || !Float.isFinite(height)) {
+            return new ThumbnailGrid(0.0f, 0.0f);
+        }
+        return new ThumbnailGrid(width / THUMBNAIL_COLUMNS, height / THUMBNAIL_ROWS);
+    }
+
+    static final class ThumbnailGrid {
+
+        private final float unitX;
+        private final float unitY;
+
+        private ThumbnailGrid(float unitX, float unitY) {
+            this.unitX = unitX;
+            this.unitY = unitY;
+        }
+
+        float unitX() {
+            return unitX;
+        }
+
+        float unitY() {
+            return unitY;
+        }
+
+        float x(float column) {
+            return column * unitX;
+        }
+
+        float y(float row) {
+            return row * unitY;
+        }
+
+        boolean valid() {
+            return unitX > 0.0f && unitY > 0.0f;
+        }
+
+        boolean contains(float left, float top, float right, float bottom) {
+            return valid() && left >= 0.0f && top >= 0.0f
+                    && right >= left && bottom >= top
+                    && right <= THUMBNAIL_COLUMNS && bottom <= THUMBNAIL_ROWS;
+        }
     }
 
     static final class Layout {

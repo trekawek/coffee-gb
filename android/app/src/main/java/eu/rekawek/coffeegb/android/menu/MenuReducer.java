@@ -29,6 +29,13 @@ final class MenuReducer {
     static MenuState show(MenuState state, MenuRoute route) {
         requireRoute(route);
         MenuPage page = MenuPages.forRoute(route);
+        return show(state, page);
+    }
+
+    static MenuState show(MenuState state, MenuPage page) {
+        if (page == null) {
+            throw new IllegalArgumentException("page is required");
+        }
         return MenuState.visible(page, page.firstEnabledIndex());
     }
 
@@ -45,11 +52,42 @@ final class MenuReducer {
         }
         requireRoute(route);
         MenuPage page = MenuPages.forRoute(route);
+        return push(state, page);
+    }
+
+    static MenuState push(MenuState state, MenuPage page) {
+        if (state == null) {
+            throw new IllegalArgumentException("state is required");
+        }
+        if (page == null) {
+            throw new IllegalArgumentException("page is required");
+        }
         if (!state.visible()) {
             return MenuState.visible(page, page.firstEnabledIndex());
         }
         ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
         stack.add(new MenuState.Frame(page, page.firstEnabledIndex()));
+        return MenuState.withStack(stack);
+    }
+
+    static MenuState replaceCurrent(MenuState state, MenuPage page) {
+        if (state == null || page == null) {
+            throw new IllegalArgumentException("state and page are required");
+        }
+        if (!state.visible()) {
+            return state;
+        }
+        String focusedId = state.focusedItemId();
+        int focusedIndex = page.firstEnabledIndex();
+        for (int index = 0; index < page.items().size(); index++) {
+            if (page.items().get(index).enabled()
+                    && page.items().get(index).id().equals(focusedId)) {
+                focusedIndex = index;
+                break;
+            }
+        }
+        ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
+        stack.set(stack.size() - 1, new MenuState.Frame(page, focusedIndex));
         return MenuState.withStack(stack);
     }
 

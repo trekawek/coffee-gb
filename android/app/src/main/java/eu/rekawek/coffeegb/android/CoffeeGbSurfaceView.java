@@ -13,9 +13,14 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import eu.rekawek.coffeegb.android.menu.MenuPresentation;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
+import eu.rekawek.coffeegb.android.menu.MenuKey;
+import eu.rekawek.coffeegb.android.menu.MenuTouchInput;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Dedicated nearest-neighbour native-frame surface.
@@ -37,9 +42,11 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final RasterSkin portraitSkin;
     private final RasterSkin landscapeSkin;
     private final MenuRenderer menuRenderer = new MenuRenderer();
+    private final Set<Integer> menuTouchPointers = new HashSet<>();
 
     private volatile NativeFrameStore frames;
     private volatile MenuPresentation menuPresentation;
+    private volatile MenuTouchInput menuInput;
     private final TouchControlsPreferences touchPreferences;
     private volatile TouchControlsLayout touchLayout;
     private AndroidInputRouter input;
@@ -94,6 +101,18 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         onFrameAvailable();
     }
 
+    /** Installs the input bridge used to consume skin controls while the menu is visible. */
+    public void setMenuInput(MenuTouchInput input) {
+        MenuTouchInput previous = menuInput;
+        if (previous != null) {
+            previous.releaseAllPointers();
+        }
+        synchronized (menuTouchPointers) {
+            menuTouchPointers.clear();
+        }
+        menuInput = input;
+    }
+
     /** Attaches this transient Surface to the long-lived service frame store. */
     public void attach(NativeFrameStore frameStore, AndroidInputRouter inputRouter) {
         if (frames == frameStore) {
@@ -119,17 +138,64 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         if (input != null) {
             input.releaseAllTouch();
         }
+        MenuTouchInput menu = menuInput;
+        if (menu != null) {
+            menu.releaseAllPointers();
+        }
+        synchronized (menuTouchPointers) {
+            menuTouchPointers.clear();
+        }
         input = null;
         stopRenderer();
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        MenuTouchInput menu = menuInput;
+        int action = event.getActionMasked();
+        int actionPointerId = event.getPointerId(event.getActionIndex());
+        boolean menuVisible = menu != null && menu.visible();
+        boolean menuPointer = false;
+        synchronized (menuTouchPointers) {
+            menuPointer = menuTouchPointers.contains(actionPointerId)
+                    || !menuTouchPointers.isEmpty();
+        }
+        if (menu != null && (menuVisible || menuPointer)) {
+            if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
+                menu.releaseAllPointers();
+                synchronized (menuTouchPointers) {
+                    menuTouchPointers.clear();
+                }
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
+                menu.releasePointer(actionPointerId);
+                synchronized (menuTouchPointers) {
+                    menuTouchPointers.remove(actionPointerId);
+                }
+                return true;
+            }
+            if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN
+                    || action == MotionEvent.ACTION_MOVE) {
+                if (menuVisible) {
+                    for (int index = 0; index < event.getPointerCount(); index++) {
+                        int pointerId = event.getPointerId(index);
+                        menu.updatePointer(pointerId, menuKeysAt(event.getX(index), event.getY(index)));
+                        synchronized (menuTouchPointers) {
+                            menuTouchPointers.add(pointerId);
+                        }
+                    }
+                }
+                // A menu may close from the A/B edge generated above. Keep consuming this pointer
+                // until its UP so that no partial touch chord reaches gameplay input.
+                return true;
+            }
+        }
+
         AndroidInputRouter router = input;
         if (router == null) {
             return false;
         }
-        int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
             router.releaseAllTouch();
             return true;
@@ -153,6 +219,28 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    private List<MenuKey> menuKeysAt(float x, float y) {
+        List<Button> buttons = touchLayout.buttonsAt(x, y, getWidth(), getHeight());
+        if (buttons.isEmpty()) {
+            return List.of();
+        }
+        ArrayList<MenuKey> keys = new ArrayList<>(buttons.size());
+        for (Button button : buttons) {
+            MenuKey key = switch (button) {
+                case UP -> MenuKey.UP;
+                case DOWN -> MenuKey.DOWN;
+                case LEFT -> MenuKey.LEFT;
+                case RIGHT -> MenuKey.RIGHT;
+                case A -> MenuKey.A;
+                case B -> MenuKey.B;
+                case START -> MenuKey.START;
+                case SELECT -> MenuKey.SELECT;
+            };
+            keys.add(key);
+        }
+        return List.copyOf(keys);
     }
 
     @Override
@@ -179,6 +267,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         AndroidInputRouter router = input;
         if (router != null) {
             router.releaseAllTouch();
+        }
+        MenuTouchInput menu = menuInput;
+        if (menu != null) {
+            menu.releaseAllPointers();
+        }
+        synchronized (menuTouchPointers) {
+            menuTouchPointers.clear();
         }
         stopRenderer();
     }

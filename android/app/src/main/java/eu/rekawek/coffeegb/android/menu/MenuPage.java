@@ -40,6 +40,16 @@ final class MenuPage {
         }
     }
 
+    static MenuPage from(MenuPageSpec spec) {
+        ArrayList<MenuItem> items = new ArrayList<>(spec.items().size());
+        for (MenuPageSpec.Item item : spec.items()) {
+            items.add(new MenuItem(item.id(), item.label(), item.detail(), item.enabled(),
+                    item.secondaryId()));
+        }
+        return new MenuPage(spec.route(), spec.title(), spec.context(), spec.headerAction(),
+                spec.sideHeading(), spec.sideLines(), items, spec.columns(), spec.footerHints());
+    }
+
     MenuRoute route() {
         return route;
     }
@@ -130,20 +140,26 @@ final class MenuItem {
     private final String label;
     private final String detail;
     private final boolean enabled;
+    private final String secondaryId;
 
     MenuItem(String id, String label) {
         this(id, label, "", true);
     }
 
     MenuItem(String id, String label, String detail) {
-        this(id, label, detail, true);
+        this(id, label, detail, true, null);
     }
 
     MenuItem(String id, String label, String detail, boolean enabled) {
+        this(id, label, detail, enabled, null);
+    }
+
+    MenuItem(String id, String label, String detail, boolean enabled, String secondaryId) {
         this.id = text(id, "id");
         this.label = text(label, "label");
         this.detail = text(detail, "detail");
         this.enabled = enabled;
+        this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
     }
 
     String id() {
@@ -162,8 +178,12 @@ final class MenuItem {
         return enabled;
     }
 
+    String secondaryId() {
+        return secondaryId;
+    }
+
     MenuPresentation.Item presentation() {
-        return new MenuPresentation.Item(id, label, detail, enabled);
+        return new MenuPresentation.Item(id, label, detail, enabled, secondaryId);
     }
 
     private static String text(String value, String name) {

@@ -127,30 +127,46 @@ public final class MenuRenderer {
         }
     }
 
-    private void drawThumbnail(Canvas canvas, RectF bounds) {
-        fill.setColor(OLIVE_LIGHT);
-        canvas.drawRect(bounds, fill);
-        stroke.setColor(INK);
-        stroke.setStrokeWidth(1.0f);
-        canvas.drawRect(bounds, stroke);
-        float unit = Math.max(1.0f, bounds.width() / 36.0f);
-        fill.setColor(MINT_DARK);
-        for (int index = 0; index < 13; index++) {
-            float x = bounds.left + (index * 7 % 31) * unit;
-            float y = bounds.top + (index * 11 % 19) * unit;
-            canvas.drawRect(x, y, x + unit * 3, y + unit * 2, fill);
+    void drawThumbnail(Canvas canvas, RectF bounds) {
+        MenuGeometry.ThumbnailGrid grid = MenuGeometry.thumbnailGrid(
+                bounds.width(), bounds.height());
+        if (!grid.valid()) {
+            return;
         }
-        fill.setColor(MINT);
-        canvas.drawRect(bounds.left + unit * 3, bounds.bottom - unit * 7,
-                bounds.left + unit * 13, bounds.bottom - unit * 3, fill);
-        canvas.drawRect(bounds.left + unit * 23, bounds.bottom - unit * 13,
-                bounds.left + unit * 31, bounds.bottom - unit * 3, fill);
-        fill.setColor(CREAM);
-        float characterX = bounds.left + bounds.width() * 0.28f;
-        float characterY = bounds.bottom - unit * 8;
-        canvas.drawRect(characterX, characterY, characterX + unit * 4, characterY + unit * 5, fill);
-        canvas.drawRect(characterX + unit, characterY - unit * 3,
-                characterX + unit * 3, characterY, fill);
+        int save = canvas.save();
+        try {
+            // Thumbnail art is decorative and must never escape into side text or menu rows.
+            canvas.clipRect(bounds);
+            fill.setColor(OLIVE_LIGHT);
+            canvas.drawRect(bounds, fill);
+            stroke.setColor(INK);
+            stroke.setStrokeWidth(1.0f);
+            canvas.drawRect(bounds, stroke);
+
+            fill.setColor(MINT_DARK);
+            for (int index = 0; index < 13; index++) {
+                float column = index * 7 % 31;
+                float row = index * 11 % 19;
+                drawThumbnailRect(canvas, bounds, grid, column, row, column + 3, row + 2);
+            }
+            fill.setColor(MINT);
+            drawThumbnailRect(canvas, bounds, grid, 3, 13, 13, 17);
+            drawThumbnailRect(canvas, bounds, grid, 23, 7, 31, 17);
+            fill.setColor(CREAM);
+            float characterColumn = 36.0f * 0.28f;
+            drawThumbnailRect(canvas, bounds, grid, characterColumn, 12,
+                    characterColumn + 4, 17);
+            drawThumbnailRect(canvas, bounds, grid, characterColumn + 1, 9,
+                    characterColumn + 3, 12);
+        } finally {
+            canvas.restoreToCount(save);
+        }
+    }
+
+    private void drawThumbnailRect(Canvas canvas, RectF bounds,
+            MenuGeometry.ThumbnailGrid grid, float left, float top, float right, float bottom) {
+        canvas.drawRect(bounds.left + grid.x(left), bounds.top + grid.y(top),
+                bounds.left + grid.x(right), bounds.top + grid.y(bottom), fill);
     }
 
     private void drawList(Canvas canvas, MenuPresentation presentation, RectF bounds) {
