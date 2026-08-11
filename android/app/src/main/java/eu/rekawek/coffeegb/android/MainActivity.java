@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.android;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
@@ -10,6 +12,7 @@ import android.net.Uri;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.hardware.input.InputManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -28,6 +31,8 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import eu.rekawek.coffeegb.android.menu.MenuController;
 import eu.rekawek.coffeegb.android.menu.MenuKey;
 import eu.rekawek.coffeegb.android.menu.MenuPageSpec;
@@ -79,6 +84,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private boolean menuPauseOwned;
     private boolean selectionActionInFlight;
     private OpenRomPickerState openRomPickerState = OpenRomPickerState.none();
+    private Api33MenuBackCallback predictiveMenuBack;
 
     private final InputManager.InputDeviceListener inputDevices = new InputManager.InputDeviceListener() {
         @Override
@@ -164,6 +170,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
         });
         video.setMenuInput(menuController);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            predictiveMenuBack = new Api33MenuBackCallback(this, this::dispatchMenuBack);
+        }
         root.addView(video, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -238,7 +247,22 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     @Override
+    protected void onDestroy() {
+        if (predictiveMenuBack != null) {
+            predictiveMenuBack.close();
+            predictiveMenuBack = null;
+        }
+        super.onDestroy();
+    }
+
+    @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if (isSystemBack(event)) {
+            // System/hardware Back must have exactly one owner. Let Activity dispatch it to the
+            // API 33+ OnBackInvokedCallback or the API 26-32 onBackPressed fallback; never route it
+            // through menu/game input first.
+            return super.dispatchKeyEvent(event);
+        }
         MenuKey menuKey = menuKey(event);
         if (menuKey != null) {
             if (event.getAction() == KeyEvent.ACTION_MULTIPLE
@@ -293,13 +317,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     @Override
+    @SuppressLint("GestureBackNavigation")
+    @SuppressWarnings("deprecation")
     public void onBackPressed() {
-        if (menuController != null && menuController.visible()) {
-            menuController.onKeyDown(MenuKey.B, false);
-            menuController.onKeyUp(MenuKey.B);
+        // API 26-32 has no OnBackInvokedDispatcher. API 33+ must be owned exclusively by the
+        // dynamically registered predictive-back callback while the menu is visible.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && dispatchMenuBack()) {
             return;
         }
         super.onBackPressed();
+    }
+
+    private boolean dispatchMenuBack() {
+        return menuController != null && menuController.dispatchBackEdge();
     }
 
     @Override
@@ -372,6 +402,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void presentMenu(MenuPresentation presentation) {
         boolean wasVisible = menuVisible;
         menuVisible = presentation.visible();
+        if (predictiveMenuBack != null) {
+            predictiveMenuBack.setEnabled(menuVisible);
+        }
         if (menuVisible) {
             video.setMenuPresentation(presentation);
             menuButton.setContentDescription("Close Coffee GB menu");
@@ -760,8 +793,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case KeyEvent.KEYCODE_DPAD_RIGHT -> MenuKey.RIGHT;
             case KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_X,
                     KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> MenuKey.A;
-            case KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE,
-                    KeyEvent.KEYCODE_BACK -> MenuKey.B;
+            case KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE -> MenuKey.B;
             case KeyEvent.KEYCODE_BUTTON_Y, KeyEvent.KEYCODE_FORWARD_DEL,
                     KeyEvent.KEYCODE_DEL -> MenuKey.SECONDARY;
             case KeyEvent.KEYCODE_BUTTON_START -> MenuKey.START;
@@ -769,6 +801,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     KeyEvent.KEYCODE_NUMPAD_ENTER -> MenuKey.SELECT;
             default -> null;
         };
+    }
+
+    @SuppressLint("GestureBackNavigation")
+    private static boolean isSystemBack(KeyEvent event) {
+        // This does not intercept Back: it prevents menu/emulator input interception and delegates
+        // the event unchanged to Activity's platform back pipeline.
+        return event.getKeyCode() == KeyEvent.KEYCODE_BACK;
     }
 
     private void openRomDocument(View ignored) {
@@ -1248,6 +1287,36 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @FunctionalInterface
     private interface RuntimeAction {
         void run(AndroidEmulationRuntime runtime);
+    }
+
+    @TargetApi(Build.VERSION_CODES.TIRAMISU)
+    private static final class Api33MenuBackCallback {
+
+        private final OnBackInvokedDispatcher dispatcher;
+        private final OnBackInvokedCallback callback;
+        private boolean registered;
+
+        private Api33MenuBackCallback(Activity activity, Runnable action) {
+            dispatcher = activity.getOnBackInvokedDispatcher();
+            callback = action::run;
+        }
+
+        private void setEnabled(boolean enabled) {
+            if (enabled == registered) {
+                return;
+            }
+            if (enabled) {
+                dispatcher.registerOnBackInvokedCallback(
+                        OnBackInvokedDispatcher.PRIORITY_OVERLAY, callback);
+            } else {
+                dispatcher.unregisterOnBackInvokedCallback(callback);
+            }
+            registered = enabled;
+        }
+
+        private void close() {
+            setEnabled(false);
+        }
     }
 
     private record PendingDocumentResult(int requestCode, Uri uri, int flags) { }

@@ -62,6 +62,22 @@ public class MenuControllerTest {
         assertEquals("delete:0", controller.presentation().items().get(0).secondaryId());
     }
 
+    @Test
+    public void systemBackDispatchesExactlyOneBEdgeAndFallsThroughWhenHidden() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+        controller.push(MenuRoute.SETTINGS);
+
+        assertTrue(controller.dispatchBackEdge());
+        assertTrue(controller.visible());
+        assertEquals(MenuRoute.PAUSE_CONSOLE, controller.route());
+
+        assertTrue(controller.dispatchBackEdge());
+        assertFalse(controller.visible());
+        assertFalse(controller.dispatchBackEdge());
+    }
+
     private static MenuPageSpec page(MenuRoute route, int columns, List<MenuPageSpec.Item> items) {
         return new MenuPageSpec(route, "COFFEE GB", "TEST", "", "TEST", List.of("TEST"),
                 items, columns, List.of("[A] OK", "[B] BACK"));
