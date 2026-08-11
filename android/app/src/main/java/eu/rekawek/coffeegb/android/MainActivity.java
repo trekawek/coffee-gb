@@ -134,6 +134,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private int printerPreviewGeneration;
     private MenuStackSnapshot deferredMenuFocusRestore = MenuStackSnapshot.hidden();
     private boolean activityResumed;
+    // Android 6-8 can return from a cancelled permission Activity without delivering its result.
+    private MenuExternalSurfaceState legacyCameraPermissionFallbackSurface;
+    private boolean legacyCameraPermissionFallbackPosted;
     private long lifecycleGeneration;
 
     private final InputManager.InputDeviceListener inputDevices =
@@ -333,10 +336,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         super.onResume();
         activityResumed = true;
         consumePrinterExportContinuation();
+        postLegacyCameraPermissionFallback();
     }
 
     @Override
     protected void onPause() {
+        armLegacyCameraPermissionFallback(externalSurface);
         activityResumed = false;
         super.onPause();
     }
@@ -895,6 +900,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 MenuExternalSurfaceState.Action.CAMERA_PERMISSION, CAMERA_PERMISSION_REQUEST,
                 menuController.snapshot(), menuPauseOwned,
                 MenuExternalSurfaceState.RestorePolicy.ALWAYS);
+        clearLegacyCameraPermissionFallback();
         menuPauseOwned = false;
         menuController.hide();
         requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
@@ -1234,20 +1240,79 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (requestCode != CAMERA_PERMISSION_REQUEST) {
             return;
         }
+        MenuExternalSurfaceState pending = externalSurface;
+        clearLegacyCameraPermissionFallback();
         boolean granted = grantResults.length > 0
                 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        completeCameraPermission(pending, requestCode, granted);
+    }
+
+    private void postLegacyCameraPermissionFallback() {
+        MenuExternalSurfaceState pending = legacyCameraPermissionFallbackSurface;
+        if (pending == null || legacyCameraPermissionFallbackPosted) {
+            return;
+        }
+        legacyCameraPermissionFallbackPosted = true;
+        int requestCode = pending.requestCode();
+        mainHandler.post(() -> completeReturnedLegacyCameraPermission(pending, requestCode));
+    }
+
+    private void completeReturnedLegacyCameraPermission(MenuExternalSurfaceState pending,
+            int requestCode) {
+        if (!activityResumed || isFinishing() || isDestroyed()
+                || externalSurface != pending
+                || requestCode != CAMERA_PERMISSION_REQUEST
+                || pending.requestCode() != requestCode
+                || pending.restoreRequested()) {
+            return;
+        }
+        boolean granted = checkSelfPermission(Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+        completeCameraPermission(pending, requestCode, granted);
+    }
+
+    private void completeCameraPermission(MenuExternalSurfaceState pending, int requestCode,
+            boolean granted) {
+        if (externalSurface != pending || !ownsCameraPermissionSurface(pending)
+                || pending.requestCode() != requestCode || pending.restoreRequested()) {
+            return;
+        }
+        clearLegacyCameraPermissionFallback();
         getPreferences(MODE_PRIVATE).edit().putBoolean("devices.camera", granted).apply();
         if (runtime != null) {
             runtime.setCameraEnabled(granted);
         }
         optionalDevicesStatus = granted ? "CAMERA ENABLED" : "CAMERA DENIED / DISABLED";
-        if (externalSurface.active()
-                && externalSurface.action()
-                == MenuExternalSurfaceState.Action.CAMERA_PERMISSION) {
-            externalSurface = externalSurface.afterResult(granted);
-            restoreExternalSurfaceIfRequested();
-        }
+        externalSurface = pending.afterResult(granted);
+        restoreExternalSurfaceIfRequested();
         refreshMenuPages();
+    }
+
+    private void armLegacyCameraPermissionFallback(MenuExternalSurfaceState pending) {
+        if (!unresolvedLegacyCameraPermissionSurface(pending)) {
+            return;
+        }
+        legacyCameraPermissionFallbackSurface = pending;
+        legacyCameraPermissionFallbackPosted = false;
+    }
+
+    private void clearLegacyCameraPermissionFallback() {
+        legacyCameraPermissionFallbackSurface = null;
+        legacyCameraPermissionFallbackPosted = false;
+    }
+
+    private static boolean unresolvedLegacyCameraPermissionSurface(
+            MenuExternalSurfaceState pending) {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && Build.VERSION.SDK_INT <= Build.VERSION_CODES.O
+                && ownsCameraPermissionSurface(pending)
+                && pending.requestCode() == CAMERA_PERMISSION_REQUEST
+                && !pending.restoreRequested();
+    }
+
+    private static boolean ownsCameraPermissionSurface(MenuExternalSurfaceState pending) {
+        return pending.active()
+                && pending.action() == MenuExternalSurfaceState.Action.CAMERA_PERMISSION;
     }
 
     private void dispatchPendingDocumentResult() {
@@ -1779,6 +1844,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 externalSurface = MenuExternalSurfaceState.none();
             }
         }
+        armLegacyCameraPermissionFallback(externalSurface);
         restoreDrafts(state);
         String confirm = state.getString(STATE_CONFIRM_VARIANT);
         if (confirm != null) {

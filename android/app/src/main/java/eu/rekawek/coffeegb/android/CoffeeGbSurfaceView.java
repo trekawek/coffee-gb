@@ -299,7 +299,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             if (renderThread != null || !surfaceReady || frames == null) {
                 return;
             }
-            renderThread = new RenderThread();
+            renderThread = new RenderThread(getHolder());
             renderThread.start();
             renderThread.frameAvailable = true;
             renderLock.notifyAll();
@@ -310,17 +310,28 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         RenderThread retiring;
         synchronized (renderLock) {
             retiring = renderThread;
-            renderThread = null;
             if (retiring != null) {
                 retiring.running = false;
                 renderLock.notifyAll();
             }
         }
         if (retiring != null && Thread.currentThread() != retiring) {
-            try {
-                retiring.join(500L);
-            } catch (InterruptedException interrupted) {
+            // A Surface callback must not return while its renderer can still own a Canvas.
+            boolean interrupted = false;
+            while (retiring.isAlive()) {
+                try {
+                    retiring.join();
+                } catch (InterruptedException ignored) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
                 Thread.currentThread().interrupt();
+            }
+        }
+        synchronized (renderLock) {
+            if (renderThread == retiring) {
+                renderThread = null;
             }
         }
     }
@@ -330,11 +341,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     }
 
     private final class RenderThread extends Thread {
+        private final SurfaceHolder holder;
         private boolean running = true;
         private boolean frameAvailable;
 
-        private RenderThread() {
+        private RenderThread(SurfaceHolder holder) {
             super("coffee-gb-android-video");
+            this.holder = holder;
             setDaemon(true);
         }
 
@@ -373,12 +386,19 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
 
         private void draw(NativeFrameStore.Frame frame) {
-            Canvas canvas = null;
+            Canvas canvas;
             try {
-                canvas = getHolder().lockCanvas();
-                if (canvas == null) {
+                canvas = holder.lockCanvas();
+            } catch (IllegalArgumentException failure) {
+                if (surfaceLost()) {
                     return;
                 }
+                throw failure;
+            }
+            if (canvas == null) {
+                return;
+            }
+            try {
                 canvas.drawColor(Color.BLACK);
                 RasterSkin skin = skinFor(canvas.getWidth(), canvas.getHeight());
                 RectF display = skin.displayBounds(canvas.getWidth(), canvas.getHeight());
@@ -396,9 +416,15 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 }
                 skin.draw(canvas, skinPaint);
             } finally {
-                if (canvas != null) {
-                    getHolder().unlockCanvasAndPost(canvas);
-                }
+                holder.unlockCanvasAndPost(canvas);
+            }
+        }
+
+        private boolean surfaceLost() {
+            synchronized (renderLock) {
+                // isValid() alone is racy; retirement identity/state is authoritative.
+                return !running || renderThread != this || !surfaceReady
+                        || !holder.getSurface().isValid();
             }
         }
     }
