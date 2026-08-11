@@ -55,8 +55,10 @@ jobs:
         include:
           - api-level: 26
             arch: x86
+            emulator-options: -no-window -noaudio -gpu swiftshader_indirect -no-snapshot -no-boot-anim -prop qemu.hw.mainkeys=0
           - api-level: 36
             arch: x86_64
+            emulator-options: -no-window -noaudio -gpu swiftshader_indirect -no-snapshot -no-boot-anim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
@@ -79,6 +81,6 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           arch: ${{ matrix.arch }}
-          emulator-options: -no-window -noaudio -gpu swiftshader_indirect -no-snapshot -no-boot-anim
+          emulator-options: ${{ matrix.emulator-options }}
           script: >-
             set +e; ./android/gradlew -p android --no-daemon -PcoffeeGbMavenRepository="$GITHUB_WORKSPACE/build/android-m2" :app:connectedDebugAndroidTest; test_status=$?; if [ "$test_status" -ne 0 ]; then test_failure=$(grep -R -h -m 1 '<failure ' android/app/build/outputs/androidTest-results/connected 2>/dev/null | cut -c1-3500 || true); if [ -n "$test_failure" ]; then printf '%s\n' "$test_failure" | sed 's/%/%25/g; s/\r/%0D/g; s/\n/%0A/g' | sed '1s/^/::error title=Android instrumentation failure::/'; else echo '::error title=Android instrumentation failure::connectedDebugAndroidTest failed but no XML failure report was found'; fi; adb logcat -d -v threadtime; fi; exit "$test_status"

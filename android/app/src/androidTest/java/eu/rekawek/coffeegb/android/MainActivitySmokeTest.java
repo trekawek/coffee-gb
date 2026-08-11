@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import android.app.Instrumentation;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
@@ -279,10 +280,14 @@ public class MainActivitySmokeTest {
     public void deniedCameraPermissionUsesOneOwnerAndStatusSurvivesRecreation()
             throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
-        runShell(instrumentation,
-                "pm revoke eu.rekawek.coffeegb.android android.permission.CAMERA");
+        resetCameraPermissionForPrompt(instrumentation);
         AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        StablePermissionReadiness permissionReadiness = new StablePermissionReadiness();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> assertEquals(
+                    "camera permission must be denied before requesting it",
+                    android.content.pm.PackageManager.PERMISSION_DENIED,
+                    activity.checkSelfPermission(android.Manifest.permission.CAMERA)));
             await("runtime binding", () -> {
                 scenario.onActivity(activity -> runtime.set(runtime(activity)));
                 return runtime.get() != null;
@@ -290,6 +295,17 @@ public class MainActivitySmokeTest {
             runtime.get().openRom(FixtureRomProvider.URI, 0);
             await("fixture running", () -> runtime.get().state().phase()
                     == RuntimeState.Phase.RUNNING);
+            await("activity observes fixture running", () -> {
+                AtomicReference<Boolean> caughtUp = new AtomicReference<>(false);
+                scenario.onActivity(activity -> {
+                    RuntimeState current = runtime(activity).state();
+                    RuntimeState observed = observedState(activity);
+                    caughtUp.set(current.phase() == RuntimeState.Phase.RUNNING
+                            && observed.phase() == RuntimeState.Phase.RUNNING
+                            && observed.generation() >= current.generation());
+                });
+                return caughtUp.get();
+            });
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
             awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
@@ -309,16 +325,23 @@ public class MainActivitySmokeTest {
                 controller.onKeyUp(eu.rekawek.coffeegb.android.menu.MenuKey.A);
                 assertFalse(menuController(activity).visible());
                 assertFalse(booleanField(activity, "menuPauseOwned"));
-                assertTrue(externalPauseOwned(activity));
+                eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState surface =
+                        externalSurface(activity);
+                assertTrue("camera permission surface must retain menu pause ownership; "
+                                + pauseOwnershipDiagnostic(activity),
+                        surface.active() && surface.pauseOwned());
             });
-            await("native camera permission surface", () ->
-                    shellOutput(instrumentation, "dumpsys activity activities")
-                            .contains("GrantPermissionsActivity"));
-            sendSystemBack(instrumentation);
+            awaitStableCameraPermissionSurface(instrumentation, permissionReadiness);
+            cancelCameraPermissionSurface(instrumentation);
             awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitFocused(scenario, "optional-devices");
+            assertEquals(Lifecycle.State.RESUMED, scenario.getState());
             scenario.onActivity(activity -> {
+                assertFalse(externalSurface(activity).active());
                 assertEquals("CAMERA DENIED / DISABLED",
                         stringField(activity, "optionalDevicesStatus"));
+                assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
+                        activity.checkSelfPermission(android.Manifest.permission.CAMERA));
                 assertFalse(activity.getPreferences(MainActivity.MODE_PRIVATE)
                         .getBoolean("devices.camera", true));
             });
@@ -328,8 +351,12 @@ public class MainActivitySmokeTest {
             scenario.onActivity(activity -> assertEquals("CAMERA DENIED / DISABLED",
                     stringField(activity, "optionalDevicesStatus")));
         } finally {
-            if (runtime.get() != null) {
-                runtime.get().stop();
+            try {
+                dismissCameraPermissionIfReady(instrumentation);
+            } finally {
+                if (runtime.get() != null) {
+                    runtime.get().stop();
+                }
             }
         }
     }
@@ -435,11 +462,7 @@ public class MainActivitySmokeTest {
         String activities = shellOutput(instrumentation, "dumpsys activity activities");
         for (String line : activities.split("\\R")) {
             String trimmed = line.trim();
-            boolean resumed = trimmed.startsWith("mResumedActivity:")
-                    || trimmed.startsWith("mResumedActivity=")
-                    || trimmed.startsWith("topResumedActivity=")
-                    || trimmed.startsWith("ResumedActivity:");
-            if (resumed
+            if (currentResumedActivity(trimmed)
                     && (trimmed.contains("com.google.android.documentsui/")
                     || trimmed.contains("com.android.documentsui/"))
                     && trimmed.contains("PickActivity")) {
@@ -447,6 +470,612 @@ public class MainActivitySmokeTest {
             }
         }
         return false;
+    }
+
+    private static boolean cameraPermissionResumed(Instrumentation instrumentation)
+            throws IOException {
+        String activities = shellOutput(instrumentation, "dumpsys activity activities");
+        for (String line : activities.split("\\R")) {
+            String trimmed = line.trim();
+            if (currentResumedActivity(trimmed) && cameraPermissionActivity(trimmed)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static PermissionSurfaceObservation permissionSurfaceObservation(
+            Instrumentation instrumentation) throws IOException {
+        if (!cameraPermissionResumed(instrumentation)) {
+            return PermissionSurfaceObservation.notReady(
+                    "no current resumed GrantPermissionsActivity");
+        }
+        boolean legacyTransitionGate = Build.VERSION.SDK_INT <= Build.VERSION_CODES.O;
+        String windows = shellOutput(instrumentation,
+                legacyTransitionGate ? "dumpsys window -a" : "dumpsys window windows");
+        AppTransitionSnapshot transition = legacyTransitionGate
+                ? appTransitionSnapshot(windows) : AppTransitionSnapshot.notRequired();
+        FocusedWindow windowsCurrentFocus = currentFocusFromWindowDump(windows);
+        if (legacyTransitionGate && !transition.idle()) {
+            return PermissionSurfaceObservation.notReady(
+                    "legacy app transition=" + transition + ", wmCurrentFocus="
+                            + windowsCurrentFocus);
+        }
+        WindowManagerFocus windowManagerFocus;
+        if (legacyTransitionGate) {
+            windowManagerFocus = WindowManagerFocus.legacy(windowsCurrentFocus);
+        } else {
+            DisplayFocus displayFocus = displayZeroFocus(shellOutput(instrumentation,
+                    "dumpsys window displays"));
+            if (displayFocus.currentFocus().present() && windowsCurrentFocus.present()
+                    && !displayFocus.currentFocus().sameIdentity(windowsCurrentFocus)) {
+                return PermissionSurfaceObservation.notReady(
+                        "display/windows mCurrentFocus disagreement: display=" + displayFocus
+                                + ", windows=" + windowsCurrentFocus);
+            }
+            FocusedWindow currentFocus = displayFocus.currentFocus().present()
+                    ? displayFocus.currentFocus() : windowsCurrentFocus;
+            if (displayFocus.focusedWindow().present()
+                    && !displayFocus.focusedWindow().sameIdentityAndTitle(currentFocus)) {
+                return PermissionSurfaceObservation.notReady(
+                        "display mFocusedWindow disagreement: current=" + currentFocus
+                                + ", focused=" + displayFocus.focusedWindow());
+            }
+            windowManagerFocus = new WindowManagerFocus(currentFocus, windowsCurrentFocus,
+                    displayFocus.currentFocus(), displayFocus.focusedWindow());
+        }
+        FocusedWindow currentFocus = windowManagerFocus.currentFocus();
+        if (!currentFocus.cameraPermission(legacyTransitionGate)) {
+            return PermissionSurfaceObservation.notReady(
+                    "wmFocus=" + windowManagerFocus + ", expected="
+                            + expectedCameraPermissionWindow(legacyTransitionGate));
+        }
+        WindowBlockState windowState = windowBlockState(windows, currentFocus);
+        if (!windowState.ready()) {
+            return PermissionSurfaceObservation.notReady(
+                    "wmCurrentFocus=" + currentFocus + ", wmWindow=" + windowState);
+        }
+        String input = shellOutput(instrumentation, "dumpsys input");
+        InputFocusSignals inputFocusSignals = inputFocusSignals(input,
+                legacyTransitionGate);
+        if (!inputFocusSignals.agree()) {
+            return PermissionSurfaceObservation.notReady(
+                    "input focused-window disagreement=" + inputFocusSignals);
+        }
+        FocusedWindow inputFocus = inputFocusSignals.selected();
+        boolean inputIdentityMatches = currentFocus.sameIdentity(inputFocus);
+        InputWindowState inputState = inputWindowState(input, currentFocus,
+                legacyTransitionGate, inputIdentityMatches);
+        if (!inputFocus.cameraPermission(legacyTransitionGate)
+                || !inputIdentityMatches
+                || !inputState.ready()) {
+            return PermissionSurfaceObservation.notReady(
+                    "wmFocus=" + windowManagerFocus + ", inputFocus=" + inputFocusSignals
+                            + ", inputWindow=" + inputState + ", expected="
+                            + expectedCameraPermissionWindow(legacyTransitionGate));
+        }
+        PermissionSurfaceSnapshot snapshot = new PermissionSurfaceSnapshot(windowManagerFocus,
+                inputFocusSignals, windowState, inputState, transition.nextAppTransition(),
+                transition.appTransitionState());
+        return PermissionSurfaceObservation.ready(snapshot);
+    }
+
+    private static String expectedCameraPermissionWindow(boolean legacy) {
+        return legacy ? "com.android.packageinstaller/...GrantPermissionsActivity"
+                : "PackageInstaller/PermissionController GrantPermissionsActivity";
+    }
+
+    private static boolean cameraPermissionActivity(String line) {
+        return (line.contains("com.android.packageinstaller/")
+                || line.contains("com.google.android.packageinstaller/")
+                || line.contains("com.android.permissioncontroller/")
+                || line.contains("com.google.android.permissioncontroller/"))
+                && line.contains("GrantPermissionsActivity");
+    }
+
+    private static FocusedWindow parseFocusedWindow(String line) {
+        int opening = line.indexOf("Window{");
+        int closing = opening < 0 ? -1 : line.indexOf('}', opening);
+        if (opening >= 0 && closing >= 0) {
+            return parseFocusedWindowBody(
+                    line.substring(opening + "Window{".length(), closing));
+        }
+        int nameStart = line.indexOf("name='");
+        int nameEnd = nameStart < 0 ? -1 : line.indexOf('\'', nameStart + "name='".length());
+        if (nameStart < 0 || nameEnd < 0) {
+            return FocusedWindow.none();
+        }
+        return parseFocusedWindowBody(
+                line.substring(nameStart + "name='".length(), nameEnd));
+    }
+
+    private static FocusedWindow parseFocusedWindowBody(String value) {
+        String body = value.trim();
+        int identityEnd = body.indexOf(' ');
+        if (identityEnd < 0) {
+            return FocusedWindow.none();
+        }
+        String identity = body.substring(0, identityEnd);
+        if (!hexIdentity(identity)) {
+            identity = "";
+        }
+        String title = body.substring(identityEnd + 1).trim();
+        int userEnd = title.indexOf(' ');
+        if (userEnd > 0 && userToken(title.substring(0, userEnd))) {
+            title = title.substring(userEnd + 1).trim();
+        }
+        return new FocusedWindow(identity, title);
+    }
+
+    private static FocusedWindow currentFocusFromWindowDump(String windows) {
+        FocusedWindow currentFocus = FocusedWindow.none();
+        for (String line : windows.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("mCurrentFocus=")) {
+                currentFocus = parseFocusedWindow(trimmed);
+            }
+        }
+        return currentFocus;
+    }
+
+    private static DisplayFocus displayZeroFocus(String displays) {
+        boolean displayZero = false;
+        FocusedWindow currentFocus = FocusedWindow.none();
+        FocusedWindow focusedWindow = FocusedWindow.none();
+        for (String line : displays.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("Display: mDisplayId=")) {
+                displayZero = trimmed.equals("Display: mDisplayId=0")
+                        || trimmed.startsWith("Display: mDisplayId=0 ");
+                continue;
+            }
+            if (!displayZero) {
+                continue;
+            }
+            if (trimmed.startsWith("mCurrentFocus=")) {
+                currentFocus = parseFocusedWindow(trimmed);
+            } else if (trimmed.startsWith("mFocusedWindow=")) {
+                focusedWindow = parseFocusedWindow(trimmed);
+            }
+        }
+        return new DisplayFocus(currentFocus, focusedWindow);
+    }
+
+    private static InputFocusSignals inputFocusSignals(String input, boolean legacy) {
+        FocusedWindow singular = FocusedWindow.none();
+        for (String line : input.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("FocusedWindow:")) {
+                singular = parseFocusedWindow(trimmed);
+                break;
+            }
+        }
+        if (legacy) {
+            return new InputFocusSignals(FocusedWindow.none(), singular);
+        }
+
+        FocusedWindow plural = FocusedWindow.none();
+        boolean focusedWindows = false;
+        int sectionIndent = -1;
+        for (String line : input.split("\\R")) {
+            String trimmed = line.trim();
+            int indentation = leadingSpaces(line);
+            if (!focusedWindows) {
+                if (trimmed.equals("FocusedWindows:")) {
+                    focusedWindows = true;
+                    sectionIndent = indentation;
+                }
+                continue;
+            }
+            if (!trimmed.isEmpty() && indentation <= sectionIndent) {
+                break;
+            }
+            if (trimmed.startsWith("displayId=0,") && trimmed.contains("name='")) {
+                plural = parseFocusedWindow(trimmed);
+            }
+        }
+        return new InputFocusSignals(plural, singular);
+    }
+
+    private static boolean hexIdentity(String value) {
+        if (value.isEmpty()) {
+            return false;
+        }
+        for (int index = 0; index < value.length(); index++) {
+            char character = Character.toLowerCase(value.charAt(index));
+            if (!Character.isDigit(character) && (character < 'a' || character > 'f')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean userToken(String value) {
+        if (value.length() < 2 || value.charAt(0) != 'u') {
+            return false;
+        }
+        for (int index = 1; index < value.length(); index++) {
+            if (!Character.isDigit(value.charAt(index))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static AppTransitionSnapshot appTransitionSnapshot(String windows) {
+        String nextAppTransition = "";
+        String appTransitionState = "";
+        boolean layoutToAnim = false;
+        for (String line : windows.split("\\R")) {
+            if (!layoutToAnim) {
+                layoutToAnim = "  mLayoutToAnim:".equals(line);
+                continue;
+            }
+            int indentation = leadingSpaces(line);
+            if (indentation <= 2) {
+                break;
+            }
+            if (indentation != 4) {
+                continue;
+            }
+            String field = line.substring(4);
+            if (field.startsWith("mNextAppTransition=")) {
+                nextAppTransition = field.substring("mNextAppTransition=".length());
+            } else if (field.startsWith("mAppTransitionState=")) {
+                appTransitionState = field.substring("mAppTransitionState=".length());
+            }
+        }
+        return new AppTransitionSnapshot(nextAppTransition, appTransitionState);
+    }
+
+    private static int leadingSpaces(String line) {
+        int count = 0;
+        while (count < line.length() && line.charAt(count) == ' ') {
+            count++;
+        }
+        return count;
+    }
+
+    private static WindowBlockState windowBlockState(String windows, FocusedWindow target) {
+        if (target.identity().isEmpty()) {
+            return WindowBlockState.none();
+        }
+        boolean matching = false;
+        boolean found = false;
+        boolean hasSurface = false;
+        boolean readyForDisplay = false;
+        boolean surfaceShown = false;
+        boolean hasDrawn = false;
+        for (String line : windows.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("Window #")) {
+                FocusedWindow candidate = parseFocusedWindow(trimmed);
+                matching = target.sameIdentity(candidate)
+                        && target.title().equals(candidate.title());
+                found |= matching;
+                continue;
+            }
+            if (!matching) {
+                continue;
+            }
+            hasSurface |= trimmed.contains("mHasSurface=true");
+            readyForDisplay |= trimmed.contains("isReadyForDisplay()=true");
+            surfaceShown |= trimmed.startsWith("Surface:")
+                    && trimmed.contains("shown=true");
+            hasDrawn |= trimmed.contains("mDrawState=HAS_DRAWN");
+        }
+        return new WindowBlockState(found, hasSurface, readyForDisplay, surfaceShown, hasDrawn);
+    }
+
+    private static InputWindowState inputWindowState(String input, FocusedWindow target,
+            boolean legacy, boolean dispatcherFocused) {
+        if (!legacy) {
+            return modernInputWindowState(input, target, dispatcherFocused);
+        }
+        if (target.identity().isEmpty()) {
+            return InputWindowState.none();
+        }
+        boolean found = false;
+        boolean hasFocus = false;
+        boolean canReceiveKeys = false;
+        for (String line : input.split("\\R")) {
+            String trimmed = line.trim();
+            FocusedWindow candidate = parseFocusedWindow(trimmed);
+            if (!target.sameIdentity(candidate)) {
+                continue;
+            }
+            found = true;
+            hasFocus |= trimmed.contains("hasFocus=true");
+            canReceiveKeys |= trimmed.contains("canReceiveKeys=true");
+        }
+        return new InputWindowState(found, hasFocus, canReceiveKeys, canReceiveKeys,
+                canReceiveKeys, true);
+    }
+
+    private static InputWindowState modernInputWindowState(String input,
+            FocusedWindow target, boolean dispatcherFocused) {
+        if (target.identity().isEmpty()) {
+            return InputWindowState.none();
+        }
+        boolean displayZero = false;
+        int displayIndent = -1;
+        boolean windows = false;
+        boolean displayZeroWindows = false;
+        int sectionIndent = -1;
+        boolean matching = false;
+        int entryIndent = -1;
+        boolean found = false;
+        boolean inputConfigSeen = false;
+        boolean visible = true;
+        boolean focusable = true;
+        boolean hasInputChannel = true;
+        boolean dispatchReady = true;
+        for (String line : input.split("\\R")) {
+            String trimmed = line.trim();
+            int indentation = leadingSpaces(line);
+            if (trimmed.startsWith("Display: ")) {
+                displayZero = trimmed.equals("Display: 0")
+                        || trimmed.startsWith("Display: 0 ");
+                displayIndent = indentation;
+                windows = false;
+                continue;
+            }
+            if (!windows) {
+                if (trimmed.equals("Windows:")) {
+                    windows = true;
+                    sectionIndent = indentation;
+                    displayZeroWindows = displayZero && displayIndent >= 0
+                            && indentation > displayIndent;
+                }
+                continue;
+            }
+            if (!trimmed.isEmpty() && indentation <= sectionIndent) {
+                windows = false;
+                matching = false;
+                continue;
+            }
+            if (trimmed.contains("name=")) {
+                FocusedWindow candidate = parseInputWindowEntry(trimmed);
+                if (candidate.present()) {
+                    matching = (displayZeroWindows || displayZeroEntry(trimmed))
+                            && target.sameIdentityAndTitle(candidate);
+                    entryIndent = indentation;
+                    found |= matching;
+                    if (matching) {
+                        inputConfigSeen |= trimmed.contains("inputConfig=");
+                        visible &= !trimmed.contains("NOT_VISIBLE");
+                        focusable &= !trimmed.contains("NOT_FOCUSABLE");
+                        hasInputChannel &= !trimmed.contains("NO_INPUT_CHANNEL");
+                        dispatchReady &= inputDispatchReady(trimmed);
+                    }
+                    continue;
+                }
+            }
+            if (!matching) {
+                continue;
+            }
+            if (!trimmed.isEmpty() && indentation <= entryIndent) {
+                matching = false;
+                continue;
+            }
+            inputConfigSeen |= trimmed.contains("inputConfig=");
+            visible &= !trimmed.contains("NOT_VISIBLE");
+            focusable &= !trimmed.contains("NOT_FOCUSABLE");
+            hasInputChannel &= !trimmed.contains("NO_INPUT_CHANNEL");
+            dispatchReady &= inputDispatchReady(trimmed);
+        }
+        return new InputWindowState(found, dispatcherFocused,
+                inputConfigSeen && visible, inputConfigSeen && focusable,
+                inputConfigSeen && hasInputChannel, inputConfigSeen && dispatchReady);
+    }
+
+    private static boolean inputDispatchReady(String line) {
+        return !line.contains("PAUSE_DISPATCHING") && !line.contains("DROP_INPUT");
+    }
+
+    private static FocusedWindow parseInputWindowEntry(String line) {
+        FocusedWindow quoted = parseFocusedWindow(line);
+        if (quoted.present()) {
+            return quoted;
+        }
+        int nameStart = line.indexOf("name=");
+        if (nameStart < 0) {
+            return FocusedWindow.none();
+        }
+        nameStart += "name=".length();
+        int nameEnd = line.indexOf(',', nameStart);
+        if (nameEnd < 0) {
+            nameEnd = line.length();
+        }
+        return parseFocusedWindowBody(line.substring(nameStart, nameEnd));
+    }
+
+    private static boolean displayZeroEntry(String line) {
+        return line.contains("displayId=0,") || line.endsWith("displayId=0");
+    }
+
+    private static void dismissCameraPermissionIfReady(Instrumentation instrumentation)
+            throws IOException {
+        StablePermissionReadiness readiness = new StablePermissionReadiness();
+        readiness.ready(instrumentation);
+        if (readiness.ready(instrumentation)) {
+            cancelCameraPermissionSurface(instrumentation);
+        }
+    }
+
+    private static void awaitStableCameraPermissionSurface(Instrumentation instrumentation,
+            StablePermissionReadiness readiness) throws Exception {
+        try {
+            await("stable native camera permission surface", () ->
+                    readiness.ready(instrumentation));
+        } catch (AssertionError failure) {
+            AssertionError diagnostic = new AssertionError(failure.getMessage()
+                    + "; last permission observation: " + readiness.diagnostic());
+            diagnostic.initCause(failure);
+            throw diagnostic;
+        }
+    }
+
+    private static void cancelCameraPermissionSurface(Instrumentation instrumentation)
+            throws IOException {
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.O) {
+            runShell(instrumentation, "am force-stop com.android.packageinstaller");
+        } else {
+            sendSystemBack(instrumentation);
+        }
+    }
+
+    private record FocusedWindow(String identity, String title) {
+        private static FocusedWindow none() {
+            return new FocusedWindow("", "");
+        }
+
+        private boolean cameraPermission(boolean legacy) {
+            if (legacy) {
+                return title.startsWith("com.android.packageinstaller/")
+                        && title.endsWith("GrantPermissionsActivity");
+            }
+            return cameraPermissionActivity(title);
+        }
+
+        private boolean sameIdentity(FocusedWindow other) {
+            return !identity.isEmpty() && !other.identity.isEmpty()
+                    && identity.equals(other.identity);
+        }
+
+        private boolean sameIdentityAndTitle(FocusedWindow other) {
+            return sameIdentity(other) && title.equals(other.title);
+        }
+
+        private boolean present() {
+            return !identity.isEmpty() && !title.isEmpty();
+        }
+    }
+
+    private record DisplayFocus(FocusedWindow currentFocus,
+            FocusedWindow focusedWindow) {
+    }
+
+    private record WindowManagerFocus(FocusedWindow currentFocus,
+            FocusedWindow windowsCurrentFocus, FocusedWindow displaysCurrentFocus,
+            FocusedWindow displaysFocusedWindow) {
+
+        private static WindowManagerFocus legacy(FocusedWindow currentFocus) {
+            return new WindowManagerFocus(currentFocus, currentFocus,
+                    FocusedWindow.none(), FocusedWindow.none());
+        }
+    }
+
+    private record InputFocusSignals(FocusedWindow plural,
+            FocusedWindow singular) {
+
+        private FocusedWindow selected() {
+            return plural.present() ? plural : singular;
+        }
+
+        private boolean agree() {
+            return !plural.present() || !singular.present()
+                    || plural.sameIdentityAndTitle(singular);
+        }
+    }
+
+    private record WindowBlockState(boolean found, boolean hasSurface,
+            boolean readyForDisplay, boolean surfaceShown, boolean hasDrawn) {
+
+        private static WindowBlockState none() {
+            return new WindowBlockState(false, false, false, false, false);
+        }
+
+        private boolean ready() {
+            return found && hasSurface && readyForDisplay && surfaceShown && hasDrawn;
+        }
+    }
+
+    private record InputWindowState(boolean found, boolean focused,
+            boolean visible, boolean focusable, boolean hasInputChannel,
+            boolean dispatchReady) {
+
+        private static InputWindowState none() {
+            return new InputWindowState(false, false, false, false, false, false);
+        }
+
+        private boolean ready() {
+            return found && focused && visible && focusable && hasInputChannel
+                    && dispatchReady;
+        }
+    }
+
+    private record AppTransitionSnapshot(String nextAppTransition,
+            String appTransitionState) {
+
+        private static AppTransitionSnapshot notRequired() {
+            return new AppTransitionSnapshot("NOT_REQUIRED", "NOT_REQUIRED");
+        }
+
+        private boolean idle() {
+            return "TRANSIT_UNSET".equals(nextAppTransition)
+                    && "APP_STATE_IDLE".equals(appTransitionState);
+        }
+    }
+
+    private record PermissionSurfaceObservation(PermissionSurfaceSnapshot snapshot,
+            String diagnostic) {
+
+        private static PermissionSurfaceObservation ready(
+                PermissionSurfaceSnapshot snapshot) {
+            return new PermissionSurfaceObservation(snapshot, "ready " + snapshot);
+        }
+
+        private static PermissionSurfaceObservation notReady(String diagnostic) {
+            return new PermissionSurfaceObservation(null, diagnostic);
+        }
+    }
+
+    private record PermissionSurfaceSnapshot(WindowManagerFocus windowManagerFocus,
+            InputFocusSignals inputFocusSignals, WindowBlockState windowState,
+            InputWindowState inputWindowState, String nextAppTransition,
+            String appTransitionState) {
+    }
+
+    private static final class StablePermissionReadiness {
+        private PermissionSurfaceSnapshot previous;
+        private String diagnostic = "not sampled";
+
+        private boolean ready(Instrumentation instrumentation) throws IOException {
+            PermissionSurfaceObservation observation =
+                    permissionSurfaceObservation(instrumentation);
+            diagnostic = observation.diagnostic();
+            PermissionSurfaceSnapshot current = observation.snapshot();
+            if (current == null) {
+                previous = null;
+                return false;
+            }
+            boolean stable = current.equals(previous);
+            previous = current;
+            return stable;
+        }
+
+        private String diagnostic() {
+            return diagnostic;
+        }
+    }
+
+    private static void resetCameraPermissionForPrompt(Instrumentation instrumentation)
+            throws IOException {
+        String packageName = instrumentation.getTargetContext().getPackageName();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            runShell(instrumentation, "pm clear-permission-flags " + packageName
+                    + " android.permission.CAMERA user-set user-fixed");
+        }
+        runShell(instrumentation,
+                "pm revoke " + packageName + " android.permission.CAMERA");
+    }
+
+    private static boolean currentResumedActivity(String line) {
+        return line.startsWith("mResumedActivity:")
+                || line.startsWith("mResumedActivity=")
+                || line.startsWith("topResumedActivity=")
+                || line.startsWith("ResumedActivity:");
     }
 
     private static Button menuButton(MainActivity activity) {
@@ -484,30 +1113,41 @@ public class MainActivitySmokeTest {
 
     private static boolean externalSurfaceActive(ActivityScenario<MainActivity> scenario) {
         AtomicReference<Boolean> active = new AtomicReference<>(false);
-        scenario.onActivity(activity -> {
-            try {
-                Field field = MainActivity.class.getDeclaredField("externalSurface");
-                field.setAccessible(true);
-                eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState state =
-                        (eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState)
-                                field.get(activity);
-                active.set(state.active());
-            } catch (ReflectiveOperationException failure) {
-                throw new AssertionError(failure);
-            }
-        });
+        scenario.onActivity(activity -> active.set(externalSurface(activity).active()));
         return active.get();
     }
 
-    private static boolean externalPauseOwned(MainActivity activity) {
+    private static eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState externalSurface(
+            MainActivity activity) {
         try {
             Field field = MainActivity.class.getDeclaredField("externalSurface");
             field.setAccessible(true);
-            return ((eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState)
-                    field.get(activity)).pauseOwned();
+            return (eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState)
+                    field.get(activity);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
         }
+    }
+
+    private static String pauseOwnershipDiagnostic(MainActivity activity) {
+        AndroidEmulationRuntime active = runtime(activity);
+        RuntimeState runtimeState = active == null ? null : active.state();
+        RuntimeState observed = observedState(activity);
+        eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState surface =
+                externalSurface(activity);
+        return "sdk=" + Build.VERSION.SDK_INT
+                + ", permission=" + activity.checkSelfPermission(
+                        android.Manifest.permission.CAMERA)
+                + ", rationale=" + activity.shouldShowRequestPermissionRationale(
+                        android.Manifest.permission.CAMERA)
+                + ", runtimePhase=" + (runtimeState == null ? "null" : runtimeState.phase())
+                + ", observedPhase=" + observed.phase()
+                + ", observedGeneration=" + longField(activity, "observedGeneration")
+                + ", menuPauseOwned=" + booleanField(activity, "menuPauseOwned")
+                + ", externalActive=" + surface.active()
+                + ", externalAction=" + surface.action()
+                + ", externalPauseOwned=" + surface.pauseOwned()
+                + ", externalRestoreRequested=" + surface.restoreRequested();
     }
 
     private static boolean booleanField(MainActivity activity, String name) {
