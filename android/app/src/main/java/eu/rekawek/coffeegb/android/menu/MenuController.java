@@ -159,6 +159,15 @@ public final class MenuController implements MenuTouchInput {
         }
     }
 
+    /** Dispatches system back as one complete B edge and reports whether the menu consumed it. */
+    public boolean dispatchBackEdge() {
+        if (!onKeyDown(MenuKey.B, false)) {
+            return false;
+        }
+        onKeyUp(MenuKey.B);
+        return true;
+    }
+
     /** Converts joystick/hat values to edge-triggered menu movement with a stable dead zone. */
     public boolean onAxis(float x, float y) {
         EnumSet<MenuKey> nextAxis = EnumSet.noneOf(MenuKey.class);
