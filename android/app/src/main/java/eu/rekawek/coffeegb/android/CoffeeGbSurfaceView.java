@@ -11,6 +11,8 @@ import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import eu.rekawek.coffeegb.android.menu.MenuPresentation;
+import eu.rekawek.coffeegb.android.menu.MenuRenderer;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
 import java.util.List;
@@ -34,8 +36,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             NativeFrameStore.MAX_WIDTH, NativeFrameStore.MAX_HEIGHT, Bitmap.Config.ARGB_8888);
     private final RasterSkin portraitSkin;
     private final RasterSkin landscapeSkin;
+    private final MenuRenderer menuRenderer = new MenuRenderer();
 
     private volatile NativeFrameStore frames;
+    private volatile MenuPresentation menuPresentation;
     private final TouchControlsPreferences touchPreferences;
     private volatile TouchControlsLayout touchLayout;
     private AndroidInputRouter input;
@@ -69,6 +73,24 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     void resetTouchLayout() {
         touchPreferences.reset();
         touchLayout = touchPreferences.load();
+        onFrameAvailable();
+    }
+
+    /**
+     * Publishes an immutable in-screen menu snapshot for the render thread.
+     *
+     * <p>The volatile handoff does not retain a controller lock or wait for a frame. The existing
+     * frame signal only wakes the short-lived Surface renderer so the next canvas pass includes the
+     * new snapshot. Passing {@code null} is equivalent to {@link #clearMenuPresentation()}.
+     */
+    public void setMenuPresentation(MenuPresentation presentation) {
+        menuPresentation = presentation;
+        onFrameAvailable();
+    }
+
+    /** Clears the in-screen menu and schedules one redraw without changing frame ownership. */
+    public void clearMenuPresentation() {
+        menuPresentation = null;
         onFrameAvailable();
     }
 
@@ -272,6 +294,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     destination.set(Math.round(display.left), Math.round(display.top),
                             Math.round(display.right), Math.round(display.bottom));
                     canvas.drawBitmap(bitmap, source, destination, videoPaint);
+                }
+                MenuPresentation menu = menuPresentation;
+                if (menu != null) {
+                    menuRenderer.draw(canvas, menu, display);
                 }
                 skin.draw(canvas, skinPaint);
             } finally {
