@@ -76,6 +76,7 @@ internal data class DesktopCommandHandlers(
  */
 internal class DesktopActionRegistry(
     private val handlers: DesktopCommandHandlers,
+    private val proposal3MenuAvailable: Boolean = false,
 ) : PortableMenuCommandBridge {
   private var presentation = DesktopCommandPresentation()
   private var appliedShortcuts: DesktopShortcutRegistry? = null
@@ -218,7 +219,8 @@ internal class DesktopActionRegistry(
         DesktopCommand.NETPLAY,
         DesktopCommand.MUTE,
         DesktopCommand.SHOW_COMMAND_BAR -> !state.sessionBusy
-        DesktopCommand.OPEN_MENU -> state.gameLoaded && !state.sessionBusy
+        DesktopCommand.OPEN_MENU ->
+            proposal3MenuAvailable && state.gameLoaded && !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
       DesktopCommand.PAUSE ->

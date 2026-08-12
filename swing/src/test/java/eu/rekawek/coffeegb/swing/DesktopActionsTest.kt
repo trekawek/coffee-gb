@@ -107,6 +107,20 @@ class DesktopActionsTest {
   }
 
   @Test
+  fun `Proposal 3 command is unavailable unless the desktop feature is enabled`() {
+    val handlers = handlers(mutableListOf())
+    val hidden = DesktopActionRegistry(handlers, proposal3MenuAvailable = false)
+    val enabled = DesktopActionRegistry(handlers, proposal3MenuAvailable = true)
+    val playing = DesktopCommandPresentation(gameLoaded = true)
+
+    hidden.update(playing)
+    enabled.update(playing)
+
+    assertFalse(hidden[DesktopCommand.OPEN_MENU].isEnabled)
+    assertTrue(enabled[DesktopCommand.OPEN_MENU].isEnabled)
+  }
+
+  @Test
   fun `gameplay bindings withdraw only matching unmodified application shortcuts`() {
     val shortcuts =
         DesktopShortcutRegistry(
@@ -127,8 +141,10 @@ class DesktopActionsTest {
   }
 
   private fun registry(calls: MutableList<String>): DesktopActionRegistry =
-      DesktopActionRegistry(
-          DesktopCommandHandlers(
+      DesktopActionRegistry(handlers(calls))
+
+  private fun handlers(calls: MutableList<String>): DesktopCommandHandlers =
+      DesktopCommandHandlers(
               openRom = { calls += "open" },
               closeGame = { calls += "close" },
               preferences = { calls += "preferences" },
@@ -145,7 +161,7 @@ class DesktopActionsTest {
               screenshot = { calls += "screenshot" },
               setCommandBarVisible = { calls += "bar=$it" },
               selectStateSlot = { calls += "slot=$it" },
-          ))
+          )
 
   private fun event() = ActionEvent(this, ActionEvent.ACTION_PERFORMED, "test")
 }

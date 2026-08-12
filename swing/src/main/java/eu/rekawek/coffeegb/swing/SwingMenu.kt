@@ -47,6 +47,12 @@ internal data class DebuggerMenuActions(
 /** A dynamic Pause/Resume label is a command, not a checked state in the platform menu. */
 internal fun pauseResumeMenuItem(action: Action): JMenuItem = JMenuItem(action)
 
+internal fun addProposal3MenuItem(menu: JMenu, openMenuAction: Action, enabled: Boolean) {
+  if (!enabled) return
+  menu.add(JMenuItem(openMenuAction))
+  menu.addSeparator()
+}
+
 internal fun mobileAdapterConfigurationMenuItem(onShow: () -> Unit): JMenuItem =
     JMenuItem("Configure Mobile Adapter…").apply {
       accessibleContext.accessibleDescription =
@@ -134,6 +140,7 @@ internal class SwingMenu(
     private val desktopActions: DesktopActionRegistry,
     private val isLinkedControllerActive: () -> Boolean,
     private val onMobileAdapterConfiguration: () -> Unit,
+    private val proposal3MenuEnabled: Boolean,
     currentThemeTokens: () -> DesktopThemeTokens,
     private val onDesktopStatus: (String) -> Unit = {},
 ) {
@@ -356,8 +363,11 @@ internal class SwingMenu(
   private fun createGameMenu(): JMenu {
     val gameMenu = JMenu("Game")
 
-    gameMenu.add(JMenuItem(desktopActions[DesktopCommand.OPEN_MENU]))
-    gameMenu.addSeparator()
+    addProposal3MenuItem(
+        gameMenu,
+        desktopActions[DesktopCommand.OPEN_MENU],
+        proposal3MenuEnabled,
+    )
     gameMenu.add(pauseResumeMenuItem(desktopActions[DesktopCommand.PAUSE]))
     gameMenu.add(JMenuItem(desktopActions[DesktopCommand.RESET]))
 
