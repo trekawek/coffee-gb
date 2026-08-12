@@ -25,16 +25,16 @@ final class MenuPages {
                             item("reset", "RESET GAME"),
                             item("settings", "SETTINGS"),
                             item("stop", "STOP GAME")));
-            case SAVE_STATES -> page(route, "COFFEE GB", "SAVE STATES", "", "STATE BANK",
-                    List.of("SLOT 0 READY", "SLOT 1 EMPTY", "SLOT 2 EMPTY"),
+            case SAVE_STATES -> page(route, "COFFEE GB", "SAVE STATES", "", "SLOT 0",
+                    List.of("SAVED", "PLAY TIME", "01:24"),
                     items(
-                            item("slot-0-save", "SLOT 0", "SAVE / LOAD"),
-                            item("slot-1-save", "SLOT 1", "SAVE / LOAD"),
-                            item("slot-2-save", "SLOT 2", "SAVE / LOAD"),
-                            item("slot-3-save", "SLOT 3", "SAVE / LOAD"),
+                            item("slot-0-save", "SLOT 0", "SAVED"),
+                            item("slot-1-save", "SLOT 1", "EMPTY"),
+                            item("slot-2-save", "SLOT 2", "EMPTY"),
+                            item("slot-3-save", "SLOT 3", "EMPTY"),
                             item("delete-state", "DELETE STATE")));
-            case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "SETTINGS HUB",
-                    List.of("AUDIO + INPUT", "DEVICES + DATA", "SYSTEM PROFILE"),
+            case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "CONFIGURATION",
+                    List.of("SESSION READY", "", ""),
                     items(
                             item("audio", "AUDIO"),
                             item("touch-controls", "TOUCH CONTROLS"),
@@ -45,8 +45,8 @@ final class MenuPages {
                             item("rewind-save", "REWIND & SAVE"),
                             item("data-media", "DATA & MEDIA"),
                             item("about", "ABOUT")));
-            case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "AUDIO MIX",
-                    List.of("NO LIVE PREVIEW", "VOLUME  75%", "EMULATED AUDIO  ON"),
+            case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "AUDIO OUTPUT",
+                    List.of("VOLUME 75%", "ACTIVE", ""),
                     items(
                             item("volume", "VOLUME", "75%"),
                             item("mute-audio", "MUTE AUDIO", "OFF"),
@@ -54,16 +54,16 @@ final class MenuPages {
                             item("save-audio", "SAVE"),
                             item("cancel-audio", "CANCEL")), 1, DEFAULT_HINTS,
                     "mute-audio", MenuPreview.empty());
-            case TOUCH_CONTROLS -> page(route, "COFFEE GB", "TOUCH CONTROLS", "", "INPUT DECK",
-                    List.of("SKIN  CLASSIC", "HAPTICS  ON", "LAYOUT  SAVED"),
+            case TOUCH_CONTROLS -> page(route, "COFFEE GB", "TOUCH CONTROLS", "", "COFFEE GB SKIN",
+                    List.of("POSITIONS FIXED", "", ""),
                     items(
                             item("haptics", "HAPTIC FEEDBACK", "ON"),
                             item("button-opacity", "BUTTON OPACITY", "70%"),
                             item("reset-touch", "RESET DEFAULTS"),
                             item("save-touch", "SAVE"),
                             item("cancel-touch", "CANCEL")));
-            case CONTROLLER_MAPPING -> page(route, "COFFEE GB", "CONTROLLER MAPPING", "", "INPUT MAP",
-                    List.of("DEVICE  BLUETOOTH", "PROFILE  DEFAULT", "A + B TO CANCEL"),
+            case CONTROLLER_MAPPING -> page(route, "COFFEE GB", "CONTROLLER MAPPING", "", "GAMEPAD",
+                    List.of("CONNECTED", "PRESS [A] TO REMAP", ""),
                     items(
                             item("map-a", "A"),
                             item("map-b", "B"),
@@ -76,8 +76,8 @@ final class MenuPages {
                             item("invert-x", "HORIZONTAL AXIS", "NORMAL"),
                             item("invert-y", "VERTICAL AXIS", "NORMAL"),
                             item("reset-controller", "RESET MAPPINGS")));
-            case OPTIONAL_DEVICES -> page(route, "COFFEE GB", "OPTIONAL DEVICES", "", "ACCESSORIES",
-                    List.of("RUMBLE  READY", "CAMERA  PERMISSION", "PRINTER  READY"),
+            case OPTIONAL_DEVICES -> page(route, "COFFEE GB", "OPTIONAL DEVICES", "", "PERIPHERALS",
+                    List.of("CARTRIDGE DEPENDENT", "", ""),
                     items(
                             item("rumble", "RUMBLE", "OFF"),
                             item("live-camera", "LIVE CAMERA", "OFF"),
@@ -88,14 +88,13 @@ final class MenuPages {
                             item("save-devices", "SAVE"),
                             item("cancel-devices", "CANCEL")));
             case PRINTER_PAPER -> new MenuPage(route, "COFFEE GB", "PRINTER PAPER", "",
-                    "PRINTER ROLL", List.of("PAPER READY", "1 PAGE",
-                    "EXPORT IS NATIVE"), items(
+                    "GAME BOY PRINTER", List.of("PAPER READY", "1 PAGE", ""), items(
                             item("clear-paper", "CLEAR PAPER"),
                             item("export-share-paper", "EXPORT & SHARE"),
                             item("back", "BACK")), 1, DEFAULT_HINTS,
                     "export-share-paper", MenuPreview.empty());
-            case DATA_MEDIA -> page(route, "COFFEE GB", "DATA & MEDIA", "", "DATA DECK",
-                    List.of("BATTERY SAVE  READY", "STATE SLOT 0  READY", "SCREENSHOT  PNG"),
+            case DATA_MEDIA -> page(route, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
+                    List.of("PRIVATE SAVE DATA", "ANDROID PICKER", ""),
                     items(
                             item("import-battery", "IMPORT BATTERY SAVE"),
                             item("export-battery", "EXPORT BATTERY SAVE"),
@@ -104,35 +103,36 @@ final class MenuPages {
                             item("export-screenshot", "EXPORT NATIVE SCREENSHOT"),
                             item("preview-printer-paper", "PRINTER PAPER")));
             case LIBRARY -> page(route, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
-                    List.of("LAST OPENED  TODAY", "DOCUMENT PICKER  NATIVE", "ZIP  MULTI-SELECT"),
+                    List.of("ANDROID", "FILE PICKER", ""),
                     items(
                             item("recent-rom", "ADVENTURE BOY.GB", "TODAY"),
                             item("open-rom", "OPEN ROM"),
                             item("choose-rom", "POCKET CAMERA.GBC", "YESTERDAY"),
                             item("clear-recent", "COFFEE TEST.ZIP", "3 DAYS AGO")));
             case CHOOSE_ROM -> page(route, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
-                    List.of("3 ROMS FOUND", "SELECT ONE TO OPEN", "B BACK TO LIBRARY"),
+                    List.of("COFFEE TEST.ZIP", "3 ROMS FOUND", ""),
                     items(
                             item("rom-1", "ADVENTURE BOY.GB"),
                             item("rom-2", "POCKET CAMERA.GBC"),
                             item("rom-3", "COFFEE DEMO.GB")));
-            case SYSTEM -> page(route, "COFFEE GB", "SYSTEM", "", "SYSTEM PROFILE",
-                    List.of("VIDEO  RASTER SKIN", "PROFILE  AUTO", "REWIND  DISABLED"),
+            case SYSTEM -> page(route, "COFFEE GB", "SYSTEM", "", "RUNTIME",
+                    List.of("COFFEE GB ANDROID", "SESSION READY", ""),
                     items(
                             item("video-status", "VIDEO", "NEAREST NEIGHBOR / ASPECT FIT"),
                             item("profile-status", "SYSTEM PROFILE", "SELECTED ON OPEN"),
                             item("rewind-save-status", "REWIND & SAVE", "PORTABLE DEFAULTS"),
                             item("back", "BACK")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
-                    List.of("GAME BOY EMULATOR", "MIT LICENSE", "NO NETWORK"),
+                    List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(
                             item("privacy-notices", "PRIVACY & NOTICES"),
                             item("network", "NO NETWORK ACCESS"),
                             item("storage", "NO BROAD STORAGE ACCESS"),
                             item("live-camera", "CAMERA ONLY WHEN ENABLED"),
                             item("source-notices", "SOURCE & THIRD-PARTY NOTICES")));
-            case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM ACTION", "", "RESET GAME",
-                    List.of("UNSAVED PROGRESS MAY BE LOST", "A CONFIRM", "B CANCEL"),
+            case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM", "", "RESET GAME",
+                    List.of("UNSAVED PROGRESS MAY BE LOST", "SAME PAGE USED FOR",
+                            "STOP GAME AND DELETE STATE"),
                     items(item("cancel", "CANCEL"),
                             item("confirm", "CONFIRM", "RESET GAME")));
         };

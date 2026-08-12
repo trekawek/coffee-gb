@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Objects;
@@ -32,9 +34,28 @@ final class Proposal3WidgetSkins {
     private final Sprite audioSliderEmpty;
     private final Sprite audioSliderFilled;
     private final Sprite audioKnob;
+    private final Sprite dataArrowLeft;
+    private final Sprite dataArrowRight;
+    private final Sprite dataCamera;
+    private final Sprite dataPrinter;
+    private final Sprite aboutNetwork;
+    private final Sprite aboutStorage;
+    private final Sprite aboutCamera;
+    private final Sprite aboutSource;
+    private final Sprite actionSave;
+    private final Sprite actionLoad;
+    private final Sprite actionDelete;
+    private final Sprite actionOptionalSave;
+    private final Sprite actionOptionalCancel;
+    private final Sprite actionLibrary;
+    private final Sprite actionGithub;
 
     private Proposal3WidgetSkins(Sprite dark, Sprite paper, Sprite selected, Sprite focusArrow,
-            Sprite audioSliderEmpty, Sprite audioSliderFilled, Sprite audioKnob) {
+            Sprite audioSliderEmpty, Sprite audioSliderFilled, Sprite audioKnob,
+            Sprite dataArrowLeft, Sprite dataArrowRight, Sprite dataCamera, Sprite dataPrinter,
+            Sprite aboutNetwork, Sprite aboutStorage, Sprite aboutCamera, Sprite aboutSource,
+            Sprite actionSave, Sprite actionLoad, Sprite actionDelete, Sprite actionOptionalSave,
+            Sprite actionOptionalCancel, Sprite actionLibrary, Sprite actionGithub) {
         this.dark = dark;
         this.paper = paper;
         this.selected = selected;
@@ -42,6 +63,21 @@ final class Proposal3WidgetSkins {
         this.audioSliderEmpty = audioSliderEmpty;
         this.audioSliderFilled = audioSliderFilled;
         this.audioKnob = audioKnob;
+        this.dataArrowLeft = dataArrowLeft;
+        this.dataArrowRight = dataArrowRight;
+        this.dataCamera = dataCamera;
+        this.dataPrinter = dataPrinter;
+        this.aboutNetwork = aboutNetwork;
+        this.aboutStorage = aboutStorage;
+        this.aboutCamera = aboutCamera;
+        this.aboutSource = aboutSource;
+        this.actionSave = actionSave;
+        this.actionLoad = actionLoad;
+        this.actionDelete = actionDelete;
+        this.actionOptionalSave = actionOptionalSave;
+        this.actionOptionalCancel = actionOptionalCancel;
+        this.actionLibrary = actionLibrary;
+        this.actionGithub = actionGithub;
     }
 
     static Proposal3WidgetSkins load() throws IOException {
@@ -52,6 +88,21 @@ final class Proposal3WidgetSkins {
         Sprite audioSliderEmpty = load("audio-slider-empty.png");
         Sprite audioSliderFilled = load("audio-slider-filled.png");
         Sprite audioKnob = load("audio-knob.png");
+        Sprite dataArrowLeft = load("data-arrow-left.png");
+        Sprite dataArrowRight = load("data-arrow-right.png");
+        Sprite dataCamera = load("data-camera.png");
+        Sprite dataPrinter = load("data-printer.png");
+        Sprite aboutNetwork = load("about-network.png");
+        Sprite aboutStorage = load("about-storage.png");
+        Sprite aboutCamera = load("about-camera.png");
+        Sprite aboutSource = load("about-source.png");
+        Sprite actionSave = load("action-save.png");
+        Sprite actionLoad = load("action-load.png");
+        Sprite actionDelete = load("action-delete.png");
+        Sprite actionOptionalSave = load("action-optional-save.png");
+        Sprite actionOptionalCancel = load("action-optional-cancel.png");
+        Sprite actionLibrary = load("action-library.png");
+        Sprite actionGithub = load("action-github.png");
         requireDimensions("dark-widget.png", dark, 900, 160);
         requireDimensions("paper-widget.png", paper, 900, 160);
         requireDimensions("selected-widget.png", selected, 900, 160);
@@ -59,8 +110,26 @@ final class Proposal3WidgetSkins {
         requireDimensions("audio-slider-empty.png", audioSliderEmpty, 438, 59);
         requireDimensions("audio-slider-filled.png", audioSliderFilled, 438, 59);
         requireDimensions("audio-knob.png", audioKnob, 31, 59);
+        requireDimensions("data-arrow-left.png", dataArrowLeft, 45, 45);
+        requireDimensions("data-arrow-right.png", dataArrowRight, 45, 45);
+        requireDimensions("data-camera.png", dataCamera, 50, 50);
+        requireDimensions("data-printer.png", dataPrinter, 50, 50);
+        requireDimensions("about-network.png", aboutNetwork, 70, 58);
+        requireDimensions("about-storage.png", aboutStorage, 70, 58);
+        requireDimensions("about-camera.png", aboutCamera, 70, 58);
+        requireDimensions("about-source.png", aboutSource, 70, 58);
+        requireDimensions("action-save.png", actionSave, 39, 39);
+        requireDimensions("action-load.png", actionLoad, 39, 39);
+        requireDimensions("action-delete.png", actionDelete, 42, 46);
+        requireDimensions("action-optional-save.png", actionOptionalSave, 39, 38);
+        requireDimensions("action-optional-cancel.png", actionOptionalCancel, 44, 42);
+        requireDimensions("action-library.png", actionLibrary, 45, 39);
+        requireDimensions("action-github.png", actionGithub, 53, 53);
         return new Proposal3WidgetSkins(dark, paper, selected, arrow, audioSliderEmpty,
-                audioSliderFilled, audioKnob);
+                audioSliderFilled, audioKnob, dataArrowLeft, dataArrowRight, dataCamera,
+                dataPrinter, aboutNetwork, aboutStorage, aboutCamera, aboutSource, actionSave,
+                actionLoad, actionDelete, actionOptionalSave, actionOptionalCancel, actionLibrary,
+                actionGithub);
     }
 
     Sprite surface(Surface surface) {
@@ -85,6 +154,42 @@ final class Proposal3WidgetSkins {
 
     Sprite audioKnob() {
         return audioKnob;
+    }
+
+    Sprite dataRowIcon(int index) {
+        return switch (index) {
+            case 0, 2 -> dataArrowLeft;
+            case 1, 3 -> dataArrowRight;
+            case 4 -> dataCamera;
+            case 5 -> dataPrinter;
+            default -> null;
+        };
+    }
+
+    Sprite aboutRowIcon(int index) {
+        return switch (index) {
+            case 1 -> aboutNetwork;
+            case 2 -> aboutStorage;
+            case 3 -> aboutCamera;
+            case 4 -> aboutSource;
+            default -> null;
+        };
+    }
+
+    Sprite actionIcon(MenuRoute route, int index) {
+        return switch (route) {
+            case SAVE_STATES -> switch (index) {
+                case 0 -> actionSave;
+                case 1 -> actionLoad;
+                case 2 -> actionDelete;
+                default -> null;
+            };
+            case OPTIONAL_DEVICES -> index == 0 ? actionOptionalSave
+                    : index == 1 ? actionOptionalCancel : null;
+            case LIBRARY -> index == 0 ? actionLibrary : null;
+            case ABOUT -> index == 0 ? actionGithub : null;
+            default -> null;
+        };
     }
 
     private static Sprite load(String name) throws IOException {

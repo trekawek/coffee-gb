@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Mechanically derive Proposal 3 text-free runtime templates.
+
+The source crops remain immutable visual references.  This script removes paper-panel glyphs
+inside audited text bands and replaces complete row/action interiors with the packaged, text-free
+widget surfaces.  It intentionally leaves illustration lettering (the ZIP badge and printer
+wordmark) alone.
+
+Pillow and NumPy are build-time tooling only; neither is used or packaged at runtime.
+"""
+
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+
+MODULE = Path(__file__).resolve().parents[1]
+MAIN = MODULE / "src/main/resources/eu/rekawek/coffeegb/ui/menu/artwork/proposal3"
+TEST_RAW = MODULE / "src/test/resources/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw"
+MAIN_RAW = MAIN / "routes/raw"
+RAW = TEST_RAW if TEST_RAW.is_dir() else MAIN_RAW
+OUTPUT = MAIN / "routes/templates"
+WIDGETS = MAIN / "widgets"
+
+
+def rect(x: int, y: int, width: int, height: int) -> tuple[int, int, int, int]:
+    return x, y, x + width, y + height
+
+
+def inner(x: int, y: int, width: int, height: int) -> tuple[int, int, int, int]:
+    return rect(x + 3, y + 3, width - 6, height - 6)
+
+
+# Tight paper-only bands.  Borders, divider rules, icons, and previews sit outside these bounds.
+COMMON_PAPER_TEXT = [
+    rect(32, 31, 303, 49),       # COFFEE GB
+    rect(320, 31, 420, 49),      # / ROUTE (longest: CONTROLLER MAPPING)
+    rect(690, 36, 189, 38),      # BACK / OPEN ROM
+    rect(70, 669, 240, 43),      # D-PAD MOVE
+    rect(418, 675, 27, 27),      # A, preserving its keycap frame
+    rect(455, 669, 110, 43),     # OK
+    rect(671, 675, 28, 27),      # B, preserving its keycap frame
+    rect(708, 669, 128, 43),     # BACK
+]
+
+COMMON_PAPER_RESTORE = [
+    rect(16, 656, 896, 13),      # Footer inner top frame
+    rect(16, 711, 896, 10),      # Footer inner bottom frame
+    rect(333, 660, 17, 56),      # Footer separators
+    rect(585, 660, 17, 56),
+]
+
+
+ROUTE_PAPER_TEXT = {
+    "00-pause-console.png": [
+        rect(32, 409, 330, 34), rect(31, 506, 172, 29), rect(274, 506, 105, 29),
+        rect(108, 590, 279, 27), rect(370, 500, 20, 45),
+    ],
+    "01-save-states.png": [
+        rect(40, 146, 340, 50), rect(38, 202, 340, 42), rect(35, 490, 346, 38),
+        rect(35, 526, 346, 36),
+    ],
+    "02-settings.png": [
+        rect(38, 146, 342, 50), rect(36, 486, 342, 46), rect(36, 532, 342, 42),
+        rect(36, 574, 342, 44),
+    ],
+    "03-audio.png": [
+        rect(60, 156, 290, 32), rect(57, 407, 320, 30), rect(57, 498, 320, 30),
+        rect(57, 540, 320, 30), rect(405, 145, 180, 48),
+    ],
+    "04-touch-controls.png": [
+        rect(38, 146, 350, 54), rect(40, 504, 342, 46), rect(40, 548, 342, 42),
+        rect(40, 588, 342, 40),
+    ],
+    "05-controller-mapping.png": [
+        rect(38, 144, 310, 55), rect(38, 240, 310, 48), rect(38, 484, 310, 44),
+        rect(38, 526, 310, 44), rect(212, 596, 490, 48),
+    ],
+    "06-optional-devices.png": [
+        rect(36, 142, 304, 54), rect(36, 538, 304, 44), rect(36, 576, 304, 39),
+        rect(36, 610, 304, 30), rect(38, 286, 138, 40), rect(178, 286, 140, 40),
+        rect(55, 448, 118, 45), rect(176, 448, 146, 45),
+    ],
+    "07-data-media.png": [
+        rect(34, 138, 330, 55), rect(34, 396, 330, 50), rect(34, 442, 330, 52),
+        rect(34, 492, 330, 132),
+    ],
+    "08-library.png": [
+        rect(48, 158, 300, 52), rect(470, 116, 350, 52), rect(34, 412, 330, 50),
+        rect(34, 454, 330, 50), rect(34, 496, 330, 50),
+    ],
+    "09-choose-rom.png": [
+        rect(45, 114, 330, 56), rect(430, 114, 420, 56), rect(34, 382, 330, 52),
+        rect(34, 426, 330, 52), rect(34, 468, 330, 48),
+    ],
+    "10-system.png": [
+        rect(34, 146, 330, 54), rect(34, 438, 330, 40), rect(34, 520, 330, 40),
+        rect(34, 560, 330, 35), rect(390, 470, 500, 54), rect(390, 514, 500, 54),
+    ],
+    "11-about.png": [
+        rect(36, 134, 320, 112), rect(36, 388, 320, 68), rect(36, 470, 320, 72),
+        rect(170, 572, 720, 60),
+    ],
+    "12-confirm-action.png": [
+        rect(40, 152, 340, 49), rect(430, 160, 470, 83), rect(450, 274, 430, 102),
+        rect(450, 411, 430, 88),
+    ],
+    "13-printer-paper.png": [
+        rect(30, 144, 330, 58), rect(35, 474, 326, 54), rect(35, 516, 326, 54),
+        rect(35, 558, 326, 54),
+    ],
+}
+
+ROUTE_PAPER_RESTORE = {
+    "00-pause-console.png": [rect(20, 471, 370, 12), rect(20, 557, 370, 12)],
+    "05-controller-mapping.png": [rect(38, 476, 310, 13), rect(210, 596, 494, 13)],
+    "10-system.png": [rect(34, 486, 330, 18)],
+    "11-about.png": [rect(36, 455, 320, 15)],
+    "12-confirm-action.png": [rect(40, 202, 340, 15), rect(444, 255, 440, 15),
+                              rect(444, 387, 440, 15), rect(444, 497, 440, 15)],
+}
+
+
+# Complete widget interiors.  Tuple values are (surface, bounds).
+ROUTE_WIDGETS = {
+    "00-pause-console.png": [("dark", rect(424, 121, 484, 78)),
+        ("dark", rect(424, 209, 484, 74)), ("dark", rect(424, 292, 484, 77)),
+        ("dark", rect(424, 377, 484, 74)), ("dark", rect(424, 461, 484, 74)),
+        ("dark", rect(424, 545, 484, 90))],
+    "01-save-states.png": [("dark", inner(*value)) for value in
+        [(420, 118, 489, 93), (420, 214, 489, 94), (420, 311, 489, 93),
+         (420, 407, 489, 144)]] + [("paper", inner(*value)) for value in
+        [(17, 573, 285, 65), (315, 573, 285, 65), (613, 573, 293, 65)]],
+    "02-settings.png": [("dark", inner(*value)) for value in
+        [(423, 116, 487, 56), (423, 174, 487, 57), (423, 233, 487, 57),
+         (423, 292, 487, 57), (423, 351, 487, 57), (423, 410, 487, 56),
+         (423, 469, 487, 56), (423, 527, 487, 57), (423, 586, 487, 56)]],
+    "03-audio.png": [("dark", rect(387, 316, 519, 78)),
+        ("dark", rect(387, 403, 519, 77))] + [("paper", inner(*value)) for value in
+        [(417, 529, 190, 72), (684, 529, 190, 72)]],
+    "04-touch-controls.png": [("dark", inner(*value)) for value in
+        [(420, 118, 490, 109), (420, 231, 490, 108), (420, 343, 490, 108)]] +
+        [("paper", inner(*value)) for value in [(435, 477, 457, 59), (435, 563, 457, 59)]],
+    "05-controller-mapping.png": [("dark", inner(*value)) for value in
+        [(366, 115, 544, 41), (366, 161, 544, 40), (366, 203, 544, 40),
+         (366, 245, 544, 40), (366, 287, 544, 40), (366, 330, 544, 40),
+         (366, 372, 544, 40), (366, 414, 544, 40), (366, 457, 544, 40),
+         (366, 499, 544, 40), (366, 542, 544, 40)]],
+    "06-optional-devices.png": [("dark", inner(*value)) for value in
+        [(353, 117, 556, 67), (353, 187, 556, 66), (353, 256, 556, 66),
+         (353, 324, 556, 66), (353, 393, 556, 66), (353, 461, 556, 66)]] +
+        [("paper", inner(*value)) for value in [(370, 561, 239, 59), (643, 561, 241, 59)]],
+    "07-data-media.png": [("dark", inner(*value)) for value in
+        [(374, 119, 535, 85), (374, 207, 535, 84), (374, 293, 535, 83),
+         (374, 379, 535, 83), (374, 465, 535, 84), (374, 553, 535, 86)]],
+    "08-library.png": [("dark", inner(*value)) for value in
+        [(369, 175, 528, 61), (369, 240, 528, 62), (369, 305, 528, 62),
+         (369, 370, 528, 62), (369, 435, 528, 62), (369, 500, 528, 60)]] +
+        [("paper", inner(34, 583, 856, 52))],
+    "09-choose-rom.png": [("dark", inner(*value)) for value in
+        [(387, 179, 524, 75), (387, 257, 524, 75), (387, 335, 524, 75),
+         (13, 515, 898, 70), (13, 587, 898, 65)]],
+    "10-system.png": [("dark", inner(*value)) for value in
+        [(378, 124, 530, 95), (378, 223, 530, 103), (378, 329, 530, 103)]],
+    "11-about.png": [("dark", inner(*value)) for value in
+        [(352, 115, 558, 89), (352, 207, 558, 83), (352, 292, 558, 82),
+         (352, 376, 558, 83), (352, 461, 558, 87)]] +
+        [("paper", inner(18, 558, 888, 84))],
+    "12-confirm-action.png": [("paper", inner(*value)) for value in
+        [(440, 514, 198, 75), (665, 510, 213, 82)]],
+    "13-printer-paper.png": [("paper", inner(*value)) for value in
+        [(386, 574, 241, 53), (637, 574, 259, 53)]],
+}
+
+
+def clear_paper_text(image: np.ndarray, bounds: tuple[int, int, int, int],
+                     paper: np.ndarray) -> None:
+    left, top, right, bottom = bounds
+    height, width = bottom - top, right - left
+    image[top:bottom, left:right] = paper[:height, :width]
+
+
+def paste_surface(image: Image.Image, surface: Image.Image,
+                  bounds: tuple[int, int, int, int]) -> None:
+    left, top, right, bottom = bounds
+    image.paste(surface.crop((0, 0, right - left, bottom - top)), (left, top))
+
+
+def main() -> None:
+    if not RAW.is_dir():
+        raise SystemExit(f"Proposal 3 raw reference directory is missing: {RAW}")
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    surfaces = {
+        "dark": Image.open(WIDGETS / "dark-widget.png").convert("RGB"),
+        "paper": Image.open(WIDGETS / "paper-widget.png").convert("RGB"),
+    }
+    paper_pixels = np.array(surfaces["paper"])
+    for source in sorted(RAW.glob("*.png")):
+        if source.name not in ROUTE_WIDGETS or source.name not in ROUTE_PAPER_TEXT:
+            raise SystemExit(f"No audited template recipe for {source.name}")
+        template = Image.open(source).convert("RGB")
+        for surface, bounds in ROUTE_WIDGETS[source.name]:
+            paste_surface(template, surfaces[surface], bounds)
+        pixels = np.array(template)
+        for bounds in COMMON_PAPER_TEXT + ROUTE_PAPER_TEXT[source.name]:
+            clear_paper_text(pixels, bounds, paper_pixels)
+        reference = np.array(Image.open(source).convert("RGB"))
+        for left, top, right, bottom in COMMON_PAPER_RESTORE:
+            pixels[top:bottom, left:right] = reference[top:bottom, left:right]
+        for left, top, right, bottom in ROUTE_PAPER_RESTORE.get(source.name, []):
+            pixels[top:bottom, left:right] = reference[top:bottom, left:right]
+        Image.fromarray(pixels, "RGB").save(OUTPUT / source.name, optimize=True, compress_level=9)
+    expected = set(ROUTE_WIDGETS)
+    actual = {path.name for path in OUTPUT.glob("*.png")}
+    if actual != expected:
+        raise SystemExit(f"Unexpected template set: {sorted(actual ^ expected)}")
+
+
+if __name__ == "__main__":
+    main()

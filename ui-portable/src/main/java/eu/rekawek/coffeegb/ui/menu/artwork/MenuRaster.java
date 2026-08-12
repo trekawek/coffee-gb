@@ -104,6 +104,26 @@ final class MenuRaster {
         }
     }
 
+    /** Alpha-composites a packaged sprite while preserving its own approved pixel colors. */
+    void paintSprite(Proposal3WidgetSkins.Sprite sprite, int left, int top) {
+        Objects.requireNonNull(sprite, "sprite");
+        for (int y = 0; y < sprite.height(); y++) {
+            for (int x = 0; x < sprite.width(); x++) {
+                int source = sprite.pixel(x, y);
+                int alpha = source >>> 24;
+                if (alpha == 0) {
+                    continue;
+                }
+                int targetX = left + x;
+                int targetY = top + y;
+                if (targetX < 0 || targetX >= WIDTH || targetY < 0 || targetY >= HEIGHT) {
+                    continue;
+                }
+                blend(this, targetX, targetY, source | 0xff000000, alpha);
+            }
+        }
+    }
+
     void drawText(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role, String value,
             MenuRect target, int color, HorizontalAlignment alignment) {
         Objects.requireNonNull(atlas, "atlas");
