@@ -4,17 +4,16 @@ import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 
 import java.util.Collections;
 import java.util.EnumMap;
-import java.util.HashSet;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * The canonical Proposal 3 artwork catalog.
  *
- * <p>The source PNGs are complete 1672x941 compositions, but the test fixtures packaged by this
- * revision are already the fixed 924x736 crop declared by {@link #SOURCE_VISIBLE_CROP}. Runtime
- * route/atlas paths are reserved for the later sanitized compositor integration.
+ * <p>The source PNGs are complete 1672x941 compositions, while the internal raw reference inputs
+ * are already the fixed 924x736 crop declared by {@link #SOURCE_VISIBLE_CROP}. Raw resource paths
+ * and decoding remain package-private in {@link Proposal3RawFrameCatalog}; this public catalog only
+ * exposes route metadata.
  */
 public final class MenuArtworkCatalog {
 
@@ -35,9 +34,6 @@ public final class MenuArtworkCatalog {
 
     /** The complete bounds of each packaged image. */
     public static final MenuRect PACKAGED_BOUNDS = new MenuRect(0, 0, PACKAGED_WIDTH, PACKAGED_HEIGHT);
-
-    private static final String FIXTURE_RESOURCE_ROOT =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/source/";
 
     private static final Map<MenuRoute, MenuArtwork> ARTWORK = createCatalog();
 
@@ -74,10 +70,10 @@ public final class MenuArtworkCatalog {
         if (catalog.size() != MenuRoute.values().length) {
             throw new IllegalStateException("Proposal 3 artwork catalog does not cover every route");
         }
-        Set<String> paths = new HashSet<>();
+        java.util.Set<String> filenames = new java.util.HashSet<>();
         for (MenuRoute route : MenuRoute.values()) {
             MenuArtwork artwork = catalog.get(route);
-            if (artwork == null || !paths.add(artwork.resourcePath())) {
+            if (artwork == null || !filenames.add(artwork.sourceFilename())) {
                 throw new IllegalStateException("Proposal 3 artwork catalog contains a duplicate or missing route");
             }
         }
@@ -88,13 +84,7 @@ public final class MenuArtworkCatalog {
         if (catalog.containsKey(route)) {
             throw new IllegalStateException("Duplicate artwork route: " + route);
         }
-        MenuArtwork artwork = new MenuArtwork(route, filename, FIXTURE_RESOURCE_ROOT + filename,
-                SOURCE_VISIBLE_CROP);
-        for (MenuArtwork existing : catalog.values()) {
-            if (existing.resourcePath().equals(artwork.resourcePath())) {
-                throw new IllegalStateException("Duplicate artwork resource: " + artwork.resourcePath());
-            }
-        }
+        MenuArtwork artwork = new MenuArtwork(route, filename, SOURCE_VISIBLE_CROP);
         catalog.put(route, artwork);
     }
 }
