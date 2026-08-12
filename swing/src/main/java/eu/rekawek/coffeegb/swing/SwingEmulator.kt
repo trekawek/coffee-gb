@@ -233,7 +233,10 @@ class SwingEmulator(
   internal fun isLinkedControllerActive(): Boolean = linkedControllerActive
 
   /** Installs the portable Proposal 3 host after desktop actions and native dialogs exist. */
-  internal fun installPortableMenu(commands: PortableMenuCommandBridge): DesktopArchiveSelectionHost {
+  internal fun installPortableMenu(
+      commands: PortableMenuCommandBridge,
+      onVisibilityChanged: (Boolean) -> Unit = {},
+  ): SwingProposal3Menu {
     check(portableMenu == null) { "The portable menu is already installed" }
     val installedMenu =
         SwingProposal3Menu(
@@ -241,6 +244,7 @@ class SwingEmulator(
               if (frame == null) display.clearMenuOverlay() else display.setMenuOverlay(frame)
             },
             commands = commands,
+            onVisibilityChanged = onVisibilityChanged,
             releaseGameplay = {
               joypad.releaseForLifecycleChange()
               tiltInput.releaseForLifecycleChange()

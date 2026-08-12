@@ -399,7 +399,10 @@ class SwingGui private constructor(
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
             DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
-    val portableMenu = emulator.installPortableMenu(desktopActions)
+    val portableMenu =
+        emulator.installPortableMenu(desktopActions) { visible ->
+          if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
+        }
     romOpen.setArchiveSelectionHost(portableMenu)
     menu =
         SwingMenu(
@@ -561,7 +564,7 @@ class SwingGui private constructor(
           }
         })
 
-    installRomDropTarget()
+    installRomDropTarget(portableMenu::visible)
     mainWindow.pack()
     mainWindow.minimumSize =
         minimumFrameSize(
@@ -597,13 +600,15 @@ class SwingGui private constructor(
     requestDesktopStartupSmokeIfConfigured()
   }
 
-  private fun installRomDropTarget() {
+  private fun installRomDropTarget(menuVisible: () -> Boolean) {
     val root = mainWindow.rootPane
-    dropFeedback = RomDropFeedback(root)
+    val dropEnabled = { !menuVisible() }
+    dropFeedback = RomDropFeedback(root, dropEnabled)
     root.transferHandler =
         RomDropTransferHandler(
             submit = { inputs -> romOpen.open(inputs, RomOpenSource.DROP) },
             feedback = dropFeedback::update,
+            enabled = dropEnabled,
         )
   }
 

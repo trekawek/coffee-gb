@@ -713,7 +713,10 @@ internal class DesktopQuitBridge(
 }
 
 /** Visible and screen-reader feedback for a supported drag entering the ROM drop target. */
-internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
+internal class RomDropFeedback(
+    private val root: JRootPane,
+    private val enabled: () -> Boolean = { true },
+) : AutoCloseable {
   private var normalBorder = root.border
   private var activeDuringThemeChange = false
   private val idleDescription =
@@ -782,15 +785,16 @@ internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
   }
 
   fun update(active: Boolean) {
-    root.border = if (active) highlight else normalBorder
-    message.isVisible = active
+    val effectiveActive = active && enabled()
+    root.border = if (effectiveActive) highlight else normalBorder
+    message.isVisible = effectiveActive
     root.accessibleContext.accessibleDescription =
-        if (active) {
+        if (effectiveActive) {
           "ROM drop target active. Release to open the selected input."
         } else {
           idleDescription
         }
-    if (active) {
+    if (effectiveActive) {
       layoutMessage()
       clearTimer.restart()
     } else {
@@ -822,9 +826,14 @@ internal class RomDropFeedback(private val root: JRootPane) : AutoCloseable {
 internal class RomDropTransferHandler(
     private val submit: (List<RomOpenInput>) -> Unit,
     private val feedback: (Boolean) -> Unit = {},
+    private val enabled: () -> Boolean = { true },
 ) : TransferHandler() {
 
   override fun canImport(support: TransferSupport): Boolean {
+    if (!enabled()) {
+      feedback(false)
+      return false
+    }
     val accepted =
         support.isDataFlavorSupported(DataFlavor.javaFileListFlavor) ||
             support.isDataFlavorSupported(DataFlavor.stringFlavor)
@@ -836,7 +845,7 @@ internal class RomDropTransferHandler(
   }
 
   override fun importData(support: TransferSupport): Boolean {
-    if (!canImport(support)) {
+    if (!enabled() || !canImport(support)) {
       feedback(false)
       return false
     }
@@ -854,7 +863,7 @@ internal class RomDropTransferHandler(
                 support.transferable.getTransferData(DataFlavor.stringFlavor) as String)
           }
       feedback(false)
-      if (inputs.isEmpty()) {
+      if (inputs.isEmpty() || !enabled()) {
         false
       } else {
         submit(inputs)

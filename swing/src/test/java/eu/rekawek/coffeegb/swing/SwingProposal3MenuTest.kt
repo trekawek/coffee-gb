@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import java.util.EnumSet
 import java.util.concurrent.atomic.AtomicInteger
+import javax.swing.JRootPane
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -53,6 +54,46 @@ class SwingProposal3MenuTest {
     assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
     assertTrue(frames.any { it != null })
     assertTrue(frames.last() == null)
+  }
+
+  @Test
+  fun `opening Proposal 3 clears drag feedback before its first frame`() {
+    val root = JRootPane()
+    root.setSize(640, 480)
+    lateinit var menu: SwingProposal3Menu
+    val feedback = RomDropFeedback(root) { !menu.visible() }
+    val label =
+        root.layeredPane.components
+            .filterIsInstance<javax.swing.JLabel>()
+            .single { it.name == "romDropFeedback" }
+    val visibility = mutableListOf<Boolean>()
+    var feedbackVisibleAtFirstFrame: Boolean? = null
+    menu =
+        SwingProposal3Menu(
+            frameSink = { frame ->
+              if (frame != null && feedbackVisibleAtFirstFrame == null) {
+                feedbackVisibleAtFirstFrame = label.isVisible
+              }
+            },
+            commands = FakeBridge(),
+            releaseGameplay = {},
+            onVisibilityChanged = { visible ->
+              visibility += visible
+              if (visible) feedback.update(false)
+            },
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      feedback.update(true)
+      assertTrue(label.isVisible)
+      menu.openFromDesktop()
+      assertFalse(label.isVisible)
+      assertTrue(menu.onKeyDown(MenuKey.A, false))
+    }
+
+    assertEquals(false, feedbackVisibleAtFirstFrame)
+    assertEquals(listOf(true, false), visibility)
+    feedback.close()
   }
 
   @Test
