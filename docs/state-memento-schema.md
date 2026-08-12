@@ -1,6 +1,6 @@
 # Audited state-record schema
 
-This documents the captured fields for all 100 production record types admitted by
+This documents the captured fields for all 101 production record types admitted by
 `StateTypeRegistry`. Each bullet's one-based position is its stable StateFile-v1 record type ID;
 each line names the non-serializable `ComponentState` record and every component captured by
 `captureState`. `StateTypeRegistry`, the StateFile golden/schema tests, and capture/apply behavior
@@ -141,3 +141,4 @@ altering the 1.7.13/1.7.14 migration schema listed below.
 - `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointNetworkState`: engineState, sb, sendBitIndex
 - `eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint$MobileAdapterSerialEndpointWireState`: engineState, sb, sendBitIndex, byteTransferActive, wirePhaseId, currentReply, requestAcknowledgement, responsePacket, responseByteIndex, awaitingResponse, responseRetryCount
 - `eu.rekawek.coffeegb.core.memory.cart.type.Hitek$HitekState`: delegateMemento, dataSwapMode, bankSwapMode
+- `eu.rekawek.coffeegb.core.memory.cart.type.Gowin$GowinState`: delegateMemento, protectionResponse
