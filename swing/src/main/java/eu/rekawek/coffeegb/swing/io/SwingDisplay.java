@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
 
 import javax.swing.*;
 import java.awt.*;
@@ -40,6 +41,8 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private final PresentationFrameRateMeter presentationFrameRate =
             new PresentationFrameRateMeter();
+
+    private final SwingMenuOverlay menuOverlay = new SwingMenuOverlay();
 
     private PendingFrame pendingFrame;
 
@@ -314,6 +317,17 @@ public class SwingDisplay extends JPanel implements Runnable {
         return new StateImage(frame.width(), frame.height(), frame.copyRgb());
     }
 
+    /** Installs one immutable portable Proposal 3 frame over the display. */
+    public void setMenuOverlay(MenuArgbFrame frame) {
+        menuOverlay.setFrame(frame);
+        requestRepaint();
+    }
+
+    /** Clears the portable menu overlay and exposes the emulator frame again. */
+    public void clearMenuOverlay() {
+        setMenuOverlay(null);
+    }
+
     @Override
     protected void paintComponent(Graphics g) {
         requireEventDispatchThread("Display painting");
@@ -347,6 +361,15 @@ public class SwingDisplay extends JPanel implements Runnable {
         Graphics2D notificationGraphics = (Graphics2D) g.create();
         paintNotification(notificationGraphics, viewport);
         notificationGraphics.dispose();
+
+        if (menuOverlay.visible()) {
+            // The aspect-fit bars belong to the menu presentation, not the game frame beneath it.
+            // Clearing the component first prevents a narrow/tall host from leaking gameplay
+            // pixels around the exact 924x736 Proposal 3 artwork.
+            g.setColor(getBackground());
+            g.fillRect(0, 0, getWidth(), getHeight());
+            menuOverlay.paint((Graphics2D) g, getWidth(), getHeight());
+        }
     }
 
     private void showNotification(String text) {

@@ -366,6 +366,7 @@ class SwingGui private constructor(
                 closeGame = { menu.requestCloseGame() },
                 preferences = ::showPreferences,
                 quit = ::requestClose,
+                openMenu = emulator::openPortableMenu,
                 setPaused = { paused ->
                   eventBus.post(
                       if (paused) Controller.PauseEmulationEvent()
@@ -392,10 +393,14 @@ class SwingGui private constructor(
                   desktopUiCoordinator.stateSlot(slot)
                   stateUxController.selectSlot(slot)
                 },
+                preferencesForCategory = { category -> showPreferences(category) },
+                openAbout = { menu.showAbout() },
             ))
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
             DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
+    val portableMenu = emulator.installPortableMenu(desktopActions)
+    romOpen.setArchiveSelectionHost(portableMenu)
     menu =
         SwingMenu(
             properties,

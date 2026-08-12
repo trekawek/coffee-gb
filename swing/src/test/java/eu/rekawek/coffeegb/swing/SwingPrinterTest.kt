@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.Controller.SerialPeripheralSelection
 import eu.rekawek.coffeegb.controller.Controller.SetPrinterEvent
 import eu.rekawek.coffeegb.controller.Controller.SetSerialPeripheralEvent
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import java.awt.Component
 import java.nio.file.Files
 import java.util.concurrent.Executor
@@ -52,6 +53,38 @@ class SwingPrinterTest {
     assertEquals(1L, rejected.model.omittedStripCount)
     assertTrue(rejected.model.rollFull)
     assertEquals(RED, stable.rgbAt(0, 3), "A later overflow must not alter the old generation")
+  }
+
+  @Test
+  fun `portable preview is an immutable ARGB view of the current paper generation`() {
+    val source = IntArray(PRINTER_PAPER_WIDTH * 2) { index -> if (index < 160) RED else BLUE }
+    val model =
+        PrinterPaperModel.empty()
+            .append(printEvent(source, height = 2, topMargin = 1, bottomMargin = 1))
+            .model
+
+    val preview = model.snapshot().menuPreview()
+
+    assertEquals(MenuPreview.State.READY, preview.state())
+    assertEquals(PRINTER_PAPER_WIDTH, preview.width())
+    assertEquals(8, preview.height())
+    assertEquals(0xffffffff.toInt(), preview.copyPixels()[0])
+    assertEquals(0xffcc2211.toInt(), preview.copyPixels()[3 * PRINTER_PAPER_WIDTH])
+    assertEquals(0xff2244cc.toInt(), preview.copyPixels()[4 * PRINTER_PAPER_WIDTH])
+
+    val detached = preview.copyPixels()
+    detached[3 * PRINTER_PAPER_WIDTH] = 0xff000000.toInt()
+    assertEquals(0xffcc2211.toInt(), preview.copyPixels()[3 * PRINTER_PAPER_WIDTH])
+
+    val tall =
+        PrinterPaperModel.empty()
+            .append(solidStrip(height = 193, color = RED))
+            .model
+            .snapshot()
+            .menuPreview()
+    assertEquals(192, tall.height())
+    assertTrue(tall.width() < PRINTER_PAPER_WIDTH)
+    assertTrue(tall.width() * tall.height() <= MenuPreview.MAX_PIXELS)
   }
 
   @Test

@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
+import eu.rekawek.coffeegb.ui.menu.MenuKey
 import java.awt.Component
 import java.awt.KeyEventDispatcher
 import java.awt.KeyboardFocusManager
@@ -38,6 +40,8 @@ internal class DesktopInputRouter private constructor(
     private val belongsToMainWindow: (Component?) -> Boolean,
     private val yieldsToComponent: (Component?, Int) -> Boolean,
     private val isMenuActive: () -> Boolean,
+    private val portableMenu: DesktopMenuKeyboardInput?,
+    private val menuKeyForKeyCode: (Int) -> MenuKey?,
     private val joypadHandles: (Int) -> Boolean,
     private val joypadPressed: (KeyEvent) -> Unit,
     private val joypadReleased: (KeyEvent) -> Unit,
@@ -67,12 +71,16 @@ internal class DesktopInputRouter private constructor(
       releaseAll: () -> Unit,
       focusManager: KeyboardFocusManager =
           KeyboardFocusManager.getCurrentKeyboardFocusManager(),
+      portableMenu: DesktopMenuKeyboardInput? = null,
+      menuKeyForKeyCode: (Int) -> MenuKey? = { null },
   ) : this(
       DesktopKeyboardFocusManagerDispatcherRegistry(focusManager),
       WindowDesktopInputLifecycleRegistry(mainWindow, focusManager),
       belongsToMainWindow = { component -> component.belongsToInputWindow(mainWindow) },
       yieldsToComponent = ::componentOwnsDesktopKey,
       isMenuActive = { MenuSelectionManager.defaultManager().selectedPath.isNotEmpty() },
+      portableMenu,
+      menuKeyForKeyCode,
       joypadHandles,
       joypadPressed,
       joypadReleased,
@@ -97,12 +105,16 @@ internal class DesktopInputRouter private constructor(
       tiltReleased: (KeyEvent) -> Unit,
       releaseAll: () -> Unit,
       @Suppress("UNUSED_PARAMETER") testSeam: Unit = Unit,
+      portableMenu: DesktopMenuKeyboardInput? = null,
+      menuKeyForKeyCode: (Int) -> MenuKey? = { null },
   ) : this(
       registry,
       lifecycle,
       belongsToMainWindow,
       yieldsToComponent,
       isMenuActive,
+      portableMenu,
+      menuKeyForKeyCode,
       joypadHandles,
       joypadPressed,
       joypadReleased,
@@ -142,14 +154,33 @@ internal class DesktopInputRouter private constructor(
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     val keyCode = event.keyCode
     if (event.id == KeyEvent.KEY_TYPED) {
-      return synchronized(lock) { captured.isNotEmpty() }
+      return synchronized(lock) { captured.isNotEmpty() } || portableMenu?.visible() == true
     }
     if (keyCode == KeyEvent.VK_UNDEFINED) return false
 
-    if (!belongsToMainWindow(event.component) ||
-        yieldsToComponent(event.component, keyCode) ||
-        isMenuActive() ||
-        hasDesktopCommandModifier(event)) {
+    if (!belongsToMainWindow(event.component) || hasDesktopCommandModifier(event)) {
+      releaseScope()
+      return false
+    }
+
+    val currentPortableMenu = portableMenu
+    if (currentPortableMenu?.visible() == true) {
+      val menuKey = menuKeyForKeyCode(keyCode)
+      return when (event.id) {
+        KeyEvent.KEY_PRESSED ->
+            menuKey?.let { currentPortableMenu.onKeyDown(it, false) } ?: true
+        KeyEvent.KEY_RELEASED ->
+            menuKey?.let { currentPortableMenu.onKeyUp(it) } ?: true
+        else -> false
+      }
+    }
+
+    if (yieldsToComponent(event.component, keyCode)) {
+      releaseScope()
+      return false
+    }
+
+    if (isMenuActive()) {
       releaseScope()
       return false
     }
