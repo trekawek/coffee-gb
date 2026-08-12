@@ -99,6 +99,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case LI_CHENG -> new LiCheng(rom, battery);
             case VF001_ZOOK -> new Vf001Zook(rom, battery);
             case VF001_GENERAL -> new Vf001General(rom, battery);
+            case HITEK -> new Hitek(rom, battery);
             case BBD -> new Bbd(rom, battery);
             case SINTAX -> new Sintax(rom, battery);
             case SACHEN_MMC1 -> new SachenMmc(rom, false, true);

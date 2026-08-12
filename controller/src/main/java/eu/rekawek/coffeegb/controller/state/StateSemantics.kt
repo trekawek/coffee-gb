@@ -1645,6 +1645,11 @@ internal object StateSemantics {
           it.recordType("delegateMemento", MBC5_STATE)
           it.range("dataSwapMode", 0, 7); it.range("bankSwapMode", 0, 7)
         }
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Hitek\$HitekState"] =
+        constrained("HiTek data/bank permutation selectors index eight-entry tables.") {
+          it.recordType("delegateMemento", MBC5_STATE)
+          it.range("dataSwapMode", 0, 7); it.range("bankSwapMode", 0, 7)
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.Mmm01\$Mmm01State"] =
         constrained("MMM01 bank fields and masks retain their documented hardware bit widths.") {
           it.range("romBankLow", 0, 0x1f); it.range("romBankMid", 0, 3)
