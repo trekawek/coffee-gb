@@ -40,6 +40,16 @@ class StateInventoryTest {
             1,
     )
     assertEquals(
+        100,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.memory.cart.type.Hitek\$HitekState") + 1,
+    )
+    assertEquals(
+        101,
+        StateTypeRegistry.recordClassNames.indexOf(
+            "eu.rekawek.coffeegb.core.memory.cart.type.Gowin\$GowinState") + 1,
+    )
+    assertEquals(
         8,
         StatePayloadSectionCodec.serialPeripheralId(SerialPeripheralState.MOBILE_ADAPTER_GB),
     )

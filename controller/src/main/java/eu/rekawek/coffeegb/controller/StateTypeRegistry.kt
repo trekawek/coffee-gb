@@ -116,6 +116,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointNetworkState",
           "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint\$MobileAdapterSerialEndpointWireState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Hitek\$HitekState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Gowin\$GowinState",
       )
 
   val legacyRecordClassNames =

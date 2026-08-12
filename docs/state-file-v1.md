@@ -165,12 +165,12 @@ Every value starts with a one-byte tag:
 
 Float NaN payloads and signed zero are preserved with `doubleToRawLongBits`. Int32-map keys are
 strictly increasing and unique. Record type IDs are the one-based stable entries of the audited
-100-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
+101-record `StateTypeRegistry`; field count, name, and declaration order are encoded and checked.
 The 11 enum type IDs use the same audited ordering, while enum value IDs are an explicit v1
 one-based registry verified against the production enum names. Class names from input are never
 loaded or instantiated.
 
-The record ID/name/field registry is the exact ordered 100-record appendix in
+The record ID/name/field registry is the exact ordered 101-record appendix in
 [state-memento-schema.md](state-memento-schema.md), where each bullet's one-based position is its
 ID. IDs 88 through 91 deliberately name non-serializable normal-state leaves; the local legacy
 importer has ID-aligned historical descriptor classes with the same field schemas. StateFile does
@@ -188,9 +188,9 @@ parser/configuration/timing state, and restore as externally
 disconnected. An in-flight deterministic request byte may pair ID 99 with nested ID 97 so its
 latched reply finishes before the normalized disconnect takes effect. Other mid-byte external-I/O
 captures use ID 99 wire phase 11, retain only the already-latched reply byte, and reset the wire at
-that byte boundary. ID 100 appends the HiTek mapper state. None of IDs 92 through 100 has a legacy
-descriptor because no released
-Java-serialized snapshot could contain them. The v1 enum registry is:
+that byte boundary. ID 100 appends the HiTek mapper state. ID 101 appends the Gowin mapper's nested
+MBC1 state and protection response. None of IDs 92 through 101 has a legacy descriptor because no
+released Java-serialized snapshot could contain them. The v1 enum registry is:
 
 | Type ID | Enum | Value IDs in order starting at 1 |
 |---:|---|---|

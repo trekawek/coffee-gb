@@ -1554,6 +1554,13 @@ internal object StateSemantics {
           it.range("cachedRomBankFor0x0000", -1, 0x7f)
           it.range("cachedRomBankFor0x4000", -1, 0x7f)
         }
+    target["eu.rekawek.coffeegb.core.memory.cart.type.Gowin\$GowinState"] =
+        constrained("Gowin retains a high-set protection response with its nested MBC1 state.") {
+          it.recordType("delegateMemento", MBC1_STATE)
+          val response = it.int("protectionResponse")
+          it.require(response in 0..0xff && response and 0xf0 == 0xf0,
+              "has an invalid protection response $response")
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.BungEms\$BungEmsState"] =
         constrained("Bung/EMS ROM latches are bytes, its high bit is binary, and RAM has four banks.") {
           listOf("romBankLow", "romBankMask", "romBankLatch").forEach { name -> it.range(name, 0, 0xff) }
@@ -1775,6 +1782,7 @@ internal object StateSemantics {
       "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
   private const val FILE_BATTERY_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
+  private const val MBC1_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1State"
   private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
   private const val MBC7_EEPROM_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
