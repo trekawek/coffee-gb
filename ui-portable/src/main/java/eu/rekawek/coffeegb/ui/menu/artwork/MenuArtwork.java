@@ -2,7 +2,6 @@ package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 
-import java.io.InputStream;
 import java.util.Objects;
 
 /**
@@ -17,19 +16,14 @@ public final class MenuArtwork {
 
     private final MenuRoute route;
     private final String sourceFilename;
-    private final String resourcePath;
     private final MenuRect sourceVisibleCrop;
 
-    MenuArtwork(MenuRoute route, String sourceFilename, String resourcePath, MenuRect sourceVisibleCrop) {
+    MenuArtwork(MenuRoute route, String sourceFilename, MenuRect sourceVisibleCrop) {
         this.route = Objects.requireNonNull(route, "route");
         this.sourceFilename = Objects.requireNonNull(sourceFilename, "sourceFilename");
-        this.resourcePath = Objects.requireNonNull(resourcePath, "resourcePath");
         this.sourceVisibleCrop = Objects.requireNonNull(sourceVisibleCrop, "sourceVisibleCrop");
         if (sourceFilename.isEmpty()) {
             throw new IllegalArgumentException("sourceFilename must not be empty");
-        }
-        if (resourcePath.isEmpty() || resourcePath.charAt(0) != '/') {
-            throw new IllegalArgumentException("Artwork resource paths must be absolute classpath paths");
         }
     }
 
@@ -55,19 +49,5 @@ public final class MenuArtwork {
     /** Returns the dimensions of the already-cropped packaged image. */
     public int packagedHeight() {
         return MenuArtworkCatalog.PACKAGED_HEIGHT;
-    }
-
-    /* Fixture-only access; production runtime paths belong to the later compositor integration. */
-    String resourcePath() {
-        return resourcePath;
-    }
-
-    /* Fixture-only access; callers receive a 924x736 image and must close the stream. */
-    InputStream openStream() {
-        InputStream stream = MenuArtwork.class.getResourceAsStream(resourcePath);
-        if (stream == null) {
-            throw new IllegalStateException("Missing menu artwork resource: " + resourcePath);
-        }
-        return stream;
     }
 }
