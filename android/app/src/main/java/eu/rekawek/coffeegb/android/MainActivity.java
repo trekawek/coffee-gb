@@ -23,8 +23,8 @@ import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 import android.widget.FrameLayout;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -92,7 +92,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String SOURCE_URL = "https://github.com/trekawek/coffee-gb";
 
     private CoffeeGbSurfaceView video;
-    private Button menuButton;
+    private View menuButton;
     private AndroidEmulationRuntime runtime;
     private AndroidEmulationRuntime observedRuntime;
     private long observedGeneration = -1L;
@@ -133,6 +133,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private String systemPreferredFocus = "video-status";
     private MenuPreview printerPreview = MenuPreview.empty();
     private int printerPreviewGeneration;
+    private boolean printerPaperEntryPending;
+    private MenuRoute printerPaperEntryParent;
     private MenuStackSnapshot deferredMenuFocusRestore = MenuStackSnapshot.hidden();
     private boolean activityResumed;
     // Android 6-8 can return from a cancelled permission Activity without delivering its result.
@@ -215,6 +217,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             observedGeneration = -1L;
             bound = false;
             observedState = RuntimeState.stopped();
+            cancelPendingPrinterPaperEntry();
+            printerPreview = MenuPreview.empty();
             refreshMenuPages();
         }
     };
@@ -264,7 +268,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         root.addView(video, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        menuButton = new Button(this);
+        // The menu grille is already baked into the raster skin. Keep only an accessible,
+        // invisible hit target over it; a Button would add platform state/ripple pixels.
+        menuButton = new View(this);
         styleMenuButton();
         menuButton.setContentDescription("Open Coffee GB menu");
         menuButton.setOnClickListener(ignored -> toggleMenu());
@@ -351,6 +357,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     protected void onStop() {
         lifecycleGeneration++;
         printerPreviewGeneration++;
+        cancelPendingPrinterPaperEntry();
         printerContinuationPreferences.unregisterOnSharedPreferenceChangeListener(
                 printerContinuationListener);
         if (inputManager != null) {
@@ -529,12 +536,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void styleMenuButton() {
-        int target = menuButtonSize();
-        menuButton.setBackgroundColor(android.graphics.Color.TRANSPARENT);
-        menuButton.setText(null);
-        menuButton.setMinWidth(target);
-        menuButton.setMinHeight(target);
-        menuButton.setPadding(0, 0, 0, 0);
+        menuButton.setBackground(null);
+        menuButton.setForeground(null);
+        menuButton.setStateListAnimator(null);
+        menuButton.setElevation(0.0f);
+        menuButton.setTranslationZ(0.0f);
+        menuButton.setDefaultFocusHighlightEnabled(false);
+        menuButton.setWillNotDraw(true);
+        menuButton.setClickable(true);
+        menuButton.setFocusable(true);
+        menuButton.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
     }
 
     private int menuButtonSize() {
@@ -597,6 +608,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void onRouteExited(MenuRoute route) {
+        if (route == printerPaperEntryParent) {
+            cancelPendingPrinterPaperEntry();
+        }
         if (deferredMenuFocusRestore.visible()
                 && stackContains(deferredMenuFocusRestore, route)) {
             deferredMenuFocusRestore = MenuStackSnapshot.hidden();
@@ -635,6 +649,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void onMenuClosed() {
+        cancelPendingPrinterPaperEntry();
         if (selectionActionInFlight) {
             selectionActionInFlight = false;
         } else if (runtime != null && (observedState.phase()
@@ -872,7 +887,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
             case "preview-printer-paper" -> openPrinterPaper();
             case "export-share-paper" -> {
-                if (printerPreview.state() == MenuPreview.State.READY) {
+                if (runtime != null && AndroidMenuModel.printerPreviewReady(printerPreview)) {
                     showConfirmation(ConfirmVariant.EXPORT_PRINTER, -1);
                 }
             }
@@ -944,8 +959,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void handlePrinterPaperItem(String id) {
         switch (id) {
-            case "clear-paper" -> showConfirmation(ConfirmVariant.CLEAR_PRINTER, -1);
-            case "export-share-paper" -> showConfirmation(ConfirmVariant.EXPORT_PRINTER, -1);
+            case "clear-paper" -> {
+                if (runtime != null && AndroidMenuModel.printerPreviewReady(printerPreview)) {
+                    showConfirmation(ConfirmVariant.CLEAR_PRINTER, -1);
+                }
+            }
+            case "export-share-paper" -> {
+                if (runtime != null && AndroidMenuModel.printerPreviewReady(printerPreview)) {
+                    showConfirmation(ConfirmVariant.EXPORT_PRINTER, -1);
+                }
+            }
             case "back" -> menuController.back();
             default -> { }
         }
@@ -965,7 +988,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleAboutItem(String id) {
-        if ("source-notices".equals(id)) {
+        if ("privacy-notices".equals(id) || "source-notices".equals(id)) {
             try {
                 startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(SOURCE_URL)));
                 aboutStatus = "OPENED IN BROWSER";
@@ -1024,17 +1047,29 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 }
             }
             case CLEAR_PRINTER -> {
-                menuController.back();
-                if (active != null) {
-                    printerPreview = MenuPreview.loading();
-                    active.clearPrinter();
-                    printerStatus = "PAPER CLEARED";
+                if (active == null || !AndroidMenuModel.printerPreviewReady(printerPreview)) {
+                    leavePrinterPaperConfirmation();
+                    printerStatus = "NOTHING PRINTED";
                     refreshMenuPages();
-                    mainHandler.postDelayed(this::loadPrinterPreview, 100L);
+                    return;
                 }
+                leavePrinterPaperConfirmation();
+                printerPreview = MenuPreview.loading();
+                active.clearPrinter();
+                printerStatus = "PAPER CLEARED";
+                refreshMenuPages();
+                mainHandler.postDelayed(this::loadPrinterPreview, 100L);
             }
             case IMPORT_BATTERY, EXPORT_BATTERY, IMPORT_STATE, EXPORT_STATE,
                     EXPORT_SCREENSHOT, EXPORT_PRINTER -> {
+                if (variant == ConfirmVariant.EXPORT_PRINTER
+                        && (active == null
+                        || !AndroidMenuModel.printerPreviewReady(printerPreview))) {
+                    leavePrinterPaperConfirmation();
+                    printerStatus = "NOTHING PRINTED";
+                    refreshMenuPages();
+                    return;
+                }
                 menuController.back();
                 launchDocumentAction(variant.externalAction);
             }
@@ -1078,10 +1113,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void openPrinterPaper() {
+        if (menuController == null || !menuController.visible()) {
+            return;
+        }
+        printerPaperEntryPending = true;
+        printerPaperEntryParent = menuController.route();
         printerPreview = MenuPreview.loading();
         printerStatus = "READING BOUNDED PREVIEW";
         refreshMenuPages();
-        menuController.push(MenuRoute.PRINTER_PAPER);
         loadPrinterPreview();
     }
 
@@ -1090,6 +1129,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         long ownerGeneration = lifecycleGeneration;
         AndroidEmulationRuntime active = runtime;
         if (active == null) {
+            cancelPendingPrinterPaperEntry();
             printerPreview = MenuPreview.empty();
             printerStatus = "NO GAME";
             refreshMenuPages();
@@ -1105,9 +1145,29 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             printerPreview = preview;
             printerStatus = preview.state() == MenuPreview.State.EMPTY
                     ? "NOTHING PRINTED" : "BOUNDED PREVIEW / FULL EXPORT";
+            boolean openWhenReady = printerPaperEntryPending
+                    && AndroidMenuModel.printerPreviewReady(preview)
+                    && menuController != null && menuController.visible()
+                    && menuController.route() == printerPaperEntryParent;
+            cancelPendingPrinterPaperEntry();
             refreshMenuPages();
             restoreDeferredPaperFocusIfReady();
+            if (openWhenReady) {
+                menuController.push(MenuRoute.PRINTER_PAPER);
+            }
         });
+    }
+
+    private void cancelPendingPrinterPaperEntry() {
+        printerPaperEntryPending = false;
+        printerPaperEntryParent = null;
+    }
+
+    private void leavePrinterPaperConfirmation() {
+        menuController.back();
+        if (menuController.route() == MenuRoute.PRINTER_PAPER) {
+            menuController.back();
+        }
     }
 
     private void resumeAndClose(AndroidEmulationRuntime active) {
@@ -1440,6 +1500,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         MenuExternalSurfaceState restoring = externalSurface;
+        MenuStackSnapshot safeMenu = withoutPrinterPaper(restoring.menuStack());
         externalSurface = MenuExternalSurfaceState.none();
         runtime.input().releaseAll();
         menuPauseOwned = restoring.pauseOwned();
@@ -1447,9 +1508,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime.pause();
         }
         refreshMenuPages();
-        menuController.restore(restoring.menuStack());
-        deferFocusRestoreIfNeeded(restoring.menuStack());
-        refreshRestoredDynamicRoute(restoring.menuStack());
+        menuController.restore(safeMenu);
+        deferFocusRestoreIfNeeded(safeMenu);
+        refreshRestoredDynamicRoute(safeMenu);
     }
 
     private void restoreSuspendedMenu() {
@@ -1457,7 +1518,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 || menuController == null || menuController.visible()) {
             return;
         }
-        MenuStackSnapshot restoring = suspendedMenu;
+        MenuStackSnapshot restoring = withoutPrinterPaper(suspendedMenu);
         suspendedMenu = MenuStackSnapshot.hidden();
         runtime.input().releaseAll();
         menuPauseOwned = suspendedMenuPauseOwned;
@@ -1839,7 +1900,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (state == null) {
             return;
         }
-        suspendedMenu = readSnapshot(state, "menu");
+        suspendedMenu = withoutPrinterPaper(readSnapshot(state, "menu"));
         suspendedMenuPauseOwned = state.getBoolean(STATE_MENU_PAUSE);
         String actionName = state.getString(STATE_EXTERNAL_ACTION);
         String policyName = state.getString(STATE_EXTERNAL_POLICY);
@@ -1848,7 +1909,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 externalSurface = MenuExternalSurfaceState.restored(
                         MenuExternalSurfaceState.Action.valueOf(actionName),
                         state.getInt(STATE_EXTERNAL_REQUEST, -1),
-                        readSnapshot(state, "external"),
+                        withoutPrinterPaper(readSnapshot(state, "external")),
                         state.getBoolean(STATE_EXTERNAL_PAUSE),
                         MenuExternalSurfaceState.RestorePolicy.valueOf(policyName),
                         state.getBoolean(STATE_EXTERNAL_RESTORE));
@@ -1962,6 +2023,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
         }
         return new MenuStackSnapshot(frames);
+    }
+
+    private static MenuStackSnapshot withoutPrinterPaper(MenuStackSnapshot snapshot) {
+        if (!stackContains(snapshot, MenuRoute.PRINTER_PAPER)) {
+            return snapshot;
+        }
+        ArrayList<MenuStackSnapshot.Frame> frames = new ArrayList<>(snapshot.frames().size());
+        for (MenuStackSnapshot.Frame frame : snapshot.frames()) {
+            if (frame.route() != MenuRoute.PRINTER_PAPER) {
+                frames.add(frame);
+            }
+        }
+        return frames.isEmpty() ? MenuStackSnapshot.hidden() : new MenuStackSnapshot(frames);
     }
 
     @TargetApi(Build.VERSION_CODES.TIRAMISU)

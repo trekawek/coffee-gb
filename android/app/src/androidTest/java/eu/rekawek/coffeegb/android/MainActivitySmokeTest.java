@@ -9,12 +9,15 @@ import android.os.SystemClock;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 
 import androidx.lifecycle.Lifecycle;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
+
+import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -28,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /** Exercises the bound runtime through Activity recreation and a visibility transition. */
@@ -40,6 +44,74 @@ public class MainActivitySmokeTest {
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.moveToState(Lifecycle.State.RESUMED);
             scenario.recreate();
+        }
+    }
+
+    @Test
+    public void transparentMenuHitTargetHasNoFrameworkVisualsButRemainsAccessibleAndClickable() {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                View menu = menuButton(activity);
+                assertTrue(menu.isClickable());
+                assertTrue(menu.isFocusable());
+                assertEquals(View.IMPORTANT_FOR_ACCESSIBILITY_YES,
+                        menu.getImportantForAccessibility());
+                assertNotNull(menu.getContentDescription());
+                assertNull(menu.getBackground());
+                assertNull(menu.getForeground());
+                assertNull(menu.getStateListAnimator());
+                assertEquals(0.0f, menu.getElevation(), 0.0f);
+                assertEquals(0.0f, menu.getTranslationZ(), 0.0f);
+                assertFalse(menu.getDefaultFocusHighlightEnabled());
+
+                assertTrue(menu.performClick());
+                assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
+                assertTrue(menu.performClick());
+            });
+        }
+    }
+
+    @Test
+    public void unavailablePrinterPaperNeverConfirmsAndBackStillReturnsToParent()
+            throws Exception {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                MenuController controller = menuController(activity);
+                for (MenuPreview preview : List.of(MenuPreview.loading(), MenuPreview.empty())) {
+                    setObjectField(activity, "printerPreview", preview);
+                    invokeNoArgs(activity, "refreshMenuPages");
+                    controller.show(MenuRoute.DATA_MEDIA);
+                    controller.push(MenuRoute.PRINTER_PAPER);
+                    assertEquals(MenuRoute.PRINTER_PAPER, controller.route());
+                    assertEquals("back", focusedItemId(activity));
+
+                    invoke(activity, "handlePrinterPaperItem", new Class<?>[]{String.class},
+                            "clear-paper");
+                    invoke(activity, "handlePrinterPaperItem", new Class<?>[]{String.class},
+                            "export-share-paper");
+                    assertNull(objectField(activity, "confirmVariant"));
+                    assertEquals(MenuRoute.PRINTER_PAPER, controller.route());
+
+                    assertTrue(controller.dispatchBackEdge());
+                    assertEquals(MenuRoute.DATA_MEDIA, controller.route());
+                }
+            });
+        }
+    }
+
+    @Test
+    public void printerPaperEntryWaitsForReadyPreview() throws Exception {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> {
+                MenuController controller = menuController(activity);
+                controller.show(MenuRoute.DATA_MEDIA);
+                setObjectField(activity, "printerPreview", MenuPreview.loading());
+
+                invokeNoArgs(activity, "openPrinterPaper");
+
+                assertEquals(MenuRoute.DATA_MEDIA, controller.route());
+                assertNull(objectField(activity, "confirmVariant"));
+            });
         }
     }
 
@@ -97,7 +169,7 @@ public class MainActivitySmokeTest {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             scenario.onActivity(activity -> {
-                Button menu = menuButton(activity);
+                View menu = menuButton(activity);
                 assertEquals("Open Coffee GB menu", menu.getContentDescription().toString());
                 menu.performClick();
                 assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
@@ -144,6 +216,7 @@ public class MainActivitySmokeTest {
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.AUDIO);
 
+            moveFocusTo(scenario, instrumentation, "volume");
             press(instrumentation, KeyEvent.KEYCODE_DPAD_LEFT, 2);
             moveFocusTo(scenario, instrumentation, "mute-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
@@ -160,6 +233,7 @@ public class MainActivitySmokeTest {
             moveFocusTo(scenario, instrumentation, "audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.AUDIO);
+            moveFocusTo(scenario, instrumentation, "volume");
             press(instrumentation, KeyEvent.KEYCODE_DPAD_LEFT, 1);
             moveFocusTo(scenario, instrumentation, "mute-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
@@ -1088,10 +1162,10 @@ public class MainActivitySmokeTest {
                 || line.startsWith("ResumedActivity:");
     }
 
-    private static Button menuButton(MainActivity activity) {
-        Button button = findButton(activity.getWindow().getDecorView());
-        assertNotNull("menu button", button);
-        return button;
+    private static View menuButton(MainActivity activity) {
+        View menu = findMenuOverlay(activity.getWindow().getDecorView());
+        assertNotNull("menu button", menu);
+        return menu;
     }
 
     private static AndroidEmulationRuntime runtime(MainActivity activity) {
@@ -1210,6 +1284,42 @@ public class MainActivitySmokeTest {
         }
     }
 
+    private static Object objectField(MainActivity activity, String name) {
+        try {
+            Field field = MainActivity.class.getDeclaredField(name);
+            field.setAccessible(true);
+            return field.get(activity);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static void setObjectField(MainActivity activity, String name, Object value) {
+        try {
+            Field field = MainActivity.class.getDeclaredField(name);
+            field.setAccessible(true);
+            field.set(activity, value);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
+    private static void invokeNoArgs(MainActivity activity, String name) {
+        invoke(activity, name, new Class<?>[0]);
+    }
+
+    private static void invoke(MainActivity activity, String name, Class<?>[] parameterTypes,
+            Object... arguments) {
+        try {
+            java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod(name,
+                    parameterTypes);
+            method.setAccessible(true);
+            method.invoke(activity, arguments);
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        }
+    }
+
     private static void assertFocused(ActivityScenario<MainActivity> scenario, String expected) {
         scenario.onActivity(activity -> {
             eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot snapshot =
@@ -1281,15 +1391,17 @@ public class MainActivitySmokeTest {
         assertTrue("timed out waiting for " + action, condition.get());
     }
 
-    private static Button findButton(View view) {
-        if (view instanceof Button button) {
-            return button;
+    private static View findMenuOverlay(View view) {
+        CharSequence description = view.getContentDescription();
+        if (description != null && (description.equals("Open Coffee GB menu")
+                || description.equals("Close Coffee GB menu"))) {
+            return view;
         }
         if (view instanceof ViewGroup group) {
             for (int index = 0; index < group.getChildCount(); index++) {
-                Button button = findButton(group.getChildAt(index));
-                if (button != null) {
-                    return button;
+                View menu = findMenuOverlay(group.getChildAt(index));
+                if (menu != null) {
+                    return menu;
                 }
             }
         }

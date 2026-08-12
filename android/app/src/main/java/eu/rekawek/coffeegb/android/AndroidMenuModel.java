@@ -42,6 +42,10 @@ final class AndroidMenuModel {
                 draft.camera() && !cameraPermissionGranted);
     }
 
+    static boolean printerPreviewReady(MenuPreview preview) {
+        return preview != null && preview.state() == MenuPreview.State.READY;
+    }
+
     static MenuPageSpec settingsPage() {
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "CONFIGURATION",
                 List.of("AUDIO + INPUT", "DEVICES + DATA", "SYSTEM + ABOUT"), List.of(
@@ -67,15 +71,15 @@ final class AndroidMenuModel {
                         item("emulated-audio", "EMULATED AUDIO", "ON", false),
                         item("save-audio", "SAVE", "COMMIT", true),
                         item("cancel-audio", "CANCEL", "DISCARD", true)),
-                "volume", MenuPreview.empty());
+                "mute-audio", MenuPreview.empty());
     }
 
     static MenuPageSpec touchPage(TouchDraft draft) {
         return page(MenuRoute.TOUCH_CONTROLS, "COFFEE GB", "TOUCH CONTROLS", "", "INPUT DECK",
                 List.of("POSITIONS FIXED", "BAKED INTO SKIN", "SAVE COMMITS HAPTICS"), List.of(
                         item("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true),
-                        item("button-opacity", "OPACITY", "FIXED / BAKED INTO SKIN", false),
-                        item("reset-touch", "RESET", "HAPTICS ON", true),
+                        item("button-opacity", "BUTTON OPACITY", "70%", false),
+                        item("reset-touch", "RESET DEFAULTS", "HAPTICS ON", true),
                         item("save-touch", "SAVE", "COMMIT", true),
                         item("cancel-touch", "CANCEL", "DISCARD", true)),
                 "haptics", MenuPreview.empty());
@@ -83,7 +87,7 @@ final class AndroidMenuModel {
 
     static MenuPageSpec optionalDevicesPage(DevicesDraft draft, String status,
             MenuPreview paperPreview) {
-        boolean paperReady = paperPreview.state() == MenuPreview.State.READY;
+        boolean paperReady = printerPreviewReady(paperPreview);
         String paperState = switch (paperPreview.state()) {
             case LOADING -> "LOADING";
             case EMPTY -> "EMPTY";
@@ -179,18 +183,15 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec aboutPage(String version, String status) {
-        return page(MenuRoute.ABOUT, "COFFEE GB", "ABOUT", "", "COFFEE GB ANDROID",
-                List.of("VERSION " + version, "MIT LICENSE", "OPEN SOURCE"), List.of(
-                        item("version", "VERSION", version, false),
-                        item("license", "LICENSE", "MIT LICENSE", false),
-                        item("network", "NETWORK ACCESS", "NONE", false),
-                        item("storage", "STORAGE", "SAF / NO BROAD ACCESS", false),
-                        item("live-camera", "CAMERA", "OPT-IN ONLY", false),
-                        item("source", "SOURCE", "GITHUB.COM/TREKAWEK/COFFEE-GB", false),
-                        item("third-party", "THIRD-PARTY DEPENDENCIES", "OPEN SOURCE", false),
-                        item("source-notices", "SOURCE & NOTICES", status, true),
+        return page(MenuRoute.ABOUT, "COFFEE GB", "ABOUT", "", "COFFEE GB",
+                List.of("VERSION " + version, "MIT LICENSE", status), List.of(
+                        item("privacy-notices", "PRIVACY & NOTICES", "OPEN", true),
+                        item("network", "NO NETWORK ACCESS", "", false),
+                        item("storage", "NO BROAD STORAGE ACCESS", "", false),
+                        item("live-camera", "CAMERA ONLY WHEN ENABLED", "", false),
+                        item("source-notices", "SOURCE & THIRD-PARTY NOTICES", status, true),
                         item("back", "BACK", "RETURN", true)),
-                "source-notices", MenuPreview.empty());
+                "privacy-notices", MenuPreview.empty());
     }
 
     static MenuPageSpec printerPaperPage(MenuPreview preview, String status) {
@@ -199,7 +200,7 @@ final class AndroidMenuModel {
             case EMPTY -> "EMPTY";
             case READY -> "READY";
         };
-        boolean ready = preview.state() == MenuPreview.State.READY;
+        boolean ready = printerPreviewReady(preview);
         return page(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PRINTER PAPER", "",
                 "GAME BOY PRINTER", List.of("PAPER " + state, status, "EXPORT FULL RESOLUTION"),
                 List.of(
