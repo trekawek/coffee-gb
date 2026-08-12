@@ -28,6 +28,7 @@ public final class CartridgeProperties {
         LI_CHENG,
         VF001_ZOOK,
         VF001_GENERAL,
+        HITEK,
         BBD,
         SINTAX,
         SACHEN_MMC1,
@@ -122,6 +123,8 @@ public final class CartridgeProperties {
                     Mapper.VF001_ZOOK),
             mapper("Vast Fame VF001 protection", CartridgeProperties::isVf001General,
                     Mapper.VF001_GENERAL),
+            mapper("HiTek unlicensed mapper", CartridgeProperties::isHitek,
+                    Mapper.HITEK),
             mapper("BBD unlicensed mapper", CartridgeProperties::isBbd,
                     Mapper.BBD),
             mapper("Sintax unlicensed mapper", CartridgeProperties::isSintax,
@@ -413,6 +416,10 @@ public final class CartridgeProperties {
         int secondaryLogo = info.crc32(0x0184, 0x30);
         return (secondaryLogo == 0xc7d8c1df || secondaryLogo == 0x6d1ea662)
                 && info.byteAt(0x7fff) != 0x01;
+    }
+
+    private static boolean isHitek(RomInfo info) {
+        return info.crc32(0x0184, 0x30) == 0x4fdab691;
     }
 
     private static boolean isSintax(RomInfo info) {
