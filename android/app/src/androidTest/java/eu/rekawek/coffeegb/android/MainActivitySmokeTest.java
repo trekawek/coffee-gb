@@ -290,8 +290,8 @@ public class MainActivitySmokeTest {
             moveFocusTo(scenario, instrumentation, "confirm");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
 
-            await("native picker resumed", () -> externalSurfaceActive(scenario)
-                    && nativePickerResumed(instrumentation));
+            await("native picker input ready", () -> externalSurfaceActive(scenario)
+                    && nativePickerInputReady(instrumentation));
             sendSystemBack(instrumentation);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.DATA_MEDIA);
             awaitFocused(scenario, "import-battery");
@@ -546,14 +546,61 @@ public class MainActivitySmokeTest {
         String activities = shellOutput(instrumentation, "dumpsys activity activities");
         for (String line : activities.split("\\R")) {
             String trimmed = line.trim();
-            if (currentResumedActivity(trimmed)
-                    && (trimmed.contains("com.google.android.documentsui/")
-                    || trimmed.contains("com.android.documentsui/"))
-                    && trimmed.contains("PickActivity")) {
+            if (currentResumedActivity(trimmed) && nativePickerActivity(trimmed)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean nativePickerInputReady(Instrumentation instrumentation)
+            throws IOException {
+        if (!nativePickerResumed(instrumentation)) {
+            return false;
+        }
+        boolean legacy = Build.VERSION.SDK_INT <= Build.VERSION_CODES.O;
+        String windows = shellOutput(instrumentation,
+                legacy ? "dumpsys window -a" : "dumpsys window windows");
+        if (legacy && !appTransitionSnapshot(windows).idle()) {
+            return false;
+        }
+        FocusedWindow windowsCurrentFocus = currentFocusFromWindowDump(windows);
+        FocusedWindow currentFocus = windowsCurrentFocus;
+        if (!legacy) {
+            DisplayFocus displayFocus = displayZeroFocus(shellOutput(instrumentation,
+                    "dumpsys window displays"));
+            if (displayFocus.currentFocus().present()) {
+                if (windowsCurrentFocus.present()
+                        && !displayFocus.currentFocus().sameIdentity(windowsCurrentFocus)) {
+                    return false;
+                }
+                currentFocus = displayFocus.currentFocus();
+            }
+            if (displayFocus.focusedWindow().present()
+                    && !displayFocus.focusedWindow().sameIdentityAndTitle(currentFocus)) {
+                return false;
+            }
+        }
+        if (!nativePickerActivity(currentFocus.title())
+                || !windowBlockState(windows, currentFocus).ready()) {
+            return false;
+        }
+        String input = shellOutput(instrumentation, "dumpsys input");
+        InputFocusSignals inputFocusSignals = inputFocusSignals(input, legacy);
+        if (!inputFocusSignals.agree()) {
+            return false;
+        }
+        FocusedWindow inputFocus = inputFocusSignals.selected();
+        boolean inputIdentityMatches = currentFocus.sameIdentity(inputFocus);
+        return nativePickerActivity(inputFocus.title())
+                && inputIdentityMatches
+                && inputWindowState(input, currentFocus, legacy, inputIdentityMatches).ready();
+    }
+
+    private static boolean nativePickerActivity(String line) {
+        return (line.contains("com.google.android.documentsui/")
+                || line.contains("com.android.documentsui/"))
+                && line.contains("PickActivity");
     }
 
     private static boolean cameraPermissionResumed(Instrumentation instrumentation)
@@ -1384,8 +1431,10 @@ public class MainActivitySmokeTest {
     }
 
     private static void await(String action, CheckedCondition condition) throws Exception {
-        long deadline = SystemClock.uptimeMillis() + 60_000L;
-        while (!condition.get() && SystemClock.uptimeMillis() < deadline) {
+        for (int poll = 0; poll < 2_400; poll++) {
+            if (condition.get()) {
+                return;
+            }
             SystemClock.sleep(25L);
         }
         assertTrue("timed out waiting for " + action, condition.get());
@@ -1410,8 +1459,10 @@ public class MainActivitySmokeTest {
 
     private static void waitForState(ActivityScenario<?> scenario, Lifecycle.State expected,
             Instrumentation instrumentation) {
-        long deadline = SystemClock.uptimeMillis() + 3_000L;
-        while (scenario.getState() != expected && SystemClock.uptimeMillis() < deadline) {
+        for (int poll = 0; poll < 120; poll++) {
+            if (scenario.getState() == expected) {
+                return;
+            }
             instrumentation.waitForIdleSync();
             SystemClock.sleep(25L);
         }
