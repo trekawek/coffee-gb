@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1089,11 +1090,12 @@ class SerialPeripheralControllerTest {
     return field.get(controller)
   }
 
-  @Suppress("UNCHECKED_CAST")
   private fun eventBusChildren(eventBus: EventBusImpl): List<EventBusImpl> {
     val field = EventBusImpl::class.java.getDeclaredField("children")
     field.isAccessible = true
-    return (field.get(eventBus) as Collection<EventBusImpl>).toList()
+    return (field.get(eventBus) as CopyOnWriteArrayList<*>)
+        .toArray()
+        .map { it as EventBusImpl }
   }
 
   private fun eventBusRegistrationCount(eventBus: EventBusImpl): Int {
