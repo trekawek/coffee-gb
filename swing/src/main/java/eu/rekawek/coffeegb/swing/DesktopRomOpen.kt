@@ -28,18 +28,21 @@ import java.nio.file.Path
 import java.util.Locale
 import java.util.concurrent.Executor
 import javax.swing.BorderFactory
+import javax.swing.DefaultListCellRenderer
 import javax.swing.JButton
 import javax.swing.JDialog
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
 import javax.swing.JLayeredPane
+import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.JProgressBar
 import javax.swing.JRootPane
 import javax.swing.JScrollPane
 import javax.swing.JTextArea
 import javax.swing.JToggleButton
+import javax.swing.ListSelectionModel
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 import javax.swing.Timer
@@ -214,36 +217,23 @@ internal class DesktopRomOpen(
     when (update.stage) {
       RomOpenStage.AWAITING_ARCHIVE_SELECTION -> {
         progress.close(update.requestId)
-        val host = archiveSelectionHost
-        if (host == null) {
-          // The host is installed during SwingGui initialization, before a request can be
-          // submitted. Cancelling is the safe fallback if a lifecycle race reaches this point.
-          LOG.warn("Archive selection arrived before the Proposal 3 host was installed")
-          service.cancel(update.requestId)
-        } else {
-          host.showArchiveSelection(
+        presentArchiveSelection(
+            archiveSelectionHost,
+            update.requestId,
+            update.candidates,
+            chooseNative = { candidates ->
+              chooseArchiveCandidate(owner, candidates, dialogFactory)
+            },
+        ) { selected ->
+          applyArchiveSelectionIfCurrent(
               update.requestId,
-              update.candidates,
-              onSelected = { candidate ->
-                applyArchiveSelectionIfCurrent(
-                    update.requestId,
-                    candidate,
-                    service::ownsVisibleRequest,
-                    service::cancel,
-                ) { selected ->
-                  progress.show(update.requestId, "Opening ${selected.displayName()}…")
-                  service.selectArchive(update.requestId, selected.token())
-                }
-              },
-              onCancelled = {
-                applyArchiveSelectionIfCurrent(
-                    update.requestId,
-                    null,
-                    service::ownsVisibleRequest,
-                    service::cancel,
-                ) { error("Cancelled archive selection cannot be accepted") }
-              },
-          )
+              selected,
+              service::ownsVisibleRequest,
+              service::cancel,
+          ) { candidate ->
+            progress.show(update.requestId, "Opening ${candidate.displayName()}…")
+            service.selectArchive(update.requestId, candidate.token())
+          }
         }
       }
       RomOpenStage.AWAITING_PERSISTENCE_DECISION ->
@@ -355,6 +345,27 @@ internal class DesktopRomOpen(
       RomOpenStage.AWAITING_ARCHIVE_SELECTION,
       RomOpenStage.AWAITING_PERSISTENCE_DECISION -> error("Handled separately")
     }
+  }
+}
+
+/** Uses the portable archive page when installed, otherwise preserving the native Swing chooser. */
+internal fun presentArchiveSelection(
+    host: DesktopArchiveSelectionHost?,
+    requestId: Long,
+    candidates: List<RomSourceSnapshot.ArchiveCandidate>,
+    chooseNative: (List<RomSourceSnapshot.ArchiveCandidate>) ->
+        RomSourceSnapshot.ArchiveCandidate?,
+    onDecision: (RomSourceSnapshot.ArchiveCandidate?) -> Unit,
+) {
+  if (host == null) {
+    onDecision(chooseNative(candidates))
+  } else {
+    host.showArchiveSelection(
+        requestId,
+        candidates,
+        onSelected = onDecision,
+        onCancelled = { onDecision(null) },
+    )
   }
 }
 
@@ -488,6 +499,86 @@ internal class RomOpenProgressDialog(
       dialog.isVisible = true
     }
   }
+}
+
+internal fun chooseArchiveCandidate(
+    owner: Window,
+    candidates: List<RomSourceSnapshot.ArchiveCandidate>,
+    dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
+): RomSourceSnapshot.ArchiveCandidate? {
+  if (candidates.isEmpty()) return null
+  val list =
+      JList(candidates.toTypedArray()).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        selectedIndex = 0
+        visibleRowCount = minOf(candidates.size, 10)
+        getAccessibleContext().accessibleName = "ROMs in archive"
+        cellRenderer =
+            object : DefaultListCellRenderer() {
+              override fun getListCellRendererComponent(
+                  list: JList<*>?,
+                  value: Any?,
+                  index: Int,
+                  isSelected: Boolean,
+                  cellHasFocus: Boolean,
+              ) =
+                  super.getListCellRendererComponent(
+                          list,
+                          value,
+                          index,
+                          isSelected,
+                          cellHasFocus,
+                      )
+                      .also { component ->
+                        val candidate = value as RomSourceSnapshot.ArchiveCandidate
+                        (component as JLabel).text = archiveCandidateLabel(candidate)
+                        component.putClientProperty("html.disable", true)
+                        component.toolTipText =
+                            "<html>${escapeHtml(candidate.entryName())}</html>"
+                        component.accessibleContext.accessibleName =
+                            archiveCandidateAccessibleLabel(candidate)
+                      }
+            }
+      }
+  val content =
+      JScrollPane(list).apply {
+        preferredSize = Dimension(540, minOf(360, 75 + candidates.size * 28))
+        getAccessibleContext().accessibleName = "ROMs available in the archive"
+      }
+  val outcome =
+      dialogFactory.showForm(
+          owner,
+          DesktopFormSpec(
+              title = "Choose ROM — Coffee GB",
+              heading = "Choose a game from this archive",
+              description =
+                  "The archive contains more than one supported ROM. Select the game to open.",
+              contentAccessibleName = "ROM archive contents",
+              buttons =
+                  DesktopDialogButtons(
+                      primary =
+                          DesktopDialogAction(
+                              "Open selected ROM",
+                              ArchiveSelectionDecision.OPEN,
+                              mnemonic = KeyEvent.VK_O,
+                          ),
+                      cancel =
+                          DesktopDialogAction(
+                              "Cancel",
+                              ArchiveSelectionDecision.CANCEL,
+                          ),
+                      defaultButton = DesktopDialogDefaultButton.PRIMARY,
+                  ),
+              modality = DesktopOwnedDialogModality.DOCUMENT,
+          ),
+          content,
+      )
+  return list.selectedValue.takeIf { outcome == ArchiveSelectionDecision.OPEN }
+}
+
+private enum class ArchiveSelectionDecision {
+  OPEN,
+  CANCEL,
 }
 
 internal fun archiveCandidateLabel(candidate: RomSourceSnapshot.ArchiveCandidate): String {
@@ -989,6 +1080,9 @@ internal fun formatByteCount(bytes: Long): String =
       bytes < 1024 * 1024 -> String.format(Locale.ROOT, "%.1f KiB", bytes / 1024.0)
       else -> String.format(Locale.ROOT, "%.1f MiB", bytes / (1024.0 * 1024.0))
     }
+
+private fun escapeHtml(value: String): String =
+    value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 private val LOG = LoggerFactory.getLogger("DesktopRomOpen")
 

@@ -189,6 +189,7 @@ class SwingGui private constructor(
   }
 
   private fun startGui() {
+    val proposal3MenuEnabled = DesktopFeatureFlags.proposal3MenuEnabled()
     mainWindow = JFrame("Coffee GB")
     mainWindow.iconImages = listOf(16, 32, 48, 128, 256).map(CoffeeGbIcon::image)
     val minimumContentSize = emulator.minimumContentSize()
@@ -395,15 +396,19 @@ class SwingGui private constructor(
                 },
                 preferencesForCategory = { category -> showPreferences(category) },
                 openAbout = { menu.showAbout() },
-            ))
+            ),
+            proposal3MenuAvailable = proposal3MenuEnabled,
+        )
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
             DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
     val portableMenu =
-        emulator.installPortableMenu(desktopActions) { visible ->
-          if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
+        installDesktopProposal3Menu(proposal3MenuEnabled) {
+          emulator.installPortableMenu(desktopActions) { visible ->
+            if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
+          }
         }
-    romOpen.setArchiveSelectionHost(portableMenu)
+    portableMenu?.let(romOpen::setArchiveSelectionHost)
     menu =
         SwingMenu(
             properties,
@@ -420,6 +425,7 @@ class SwingGui private constructor(
             desktopActions,
             emulator::isLinkedControllerActive,
             mobileAdapterWindow::show,
+            proposal3MenuEnabled,
             { themeManager.current?.tokens ?: initialTheme.tokens },
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
@@ -564,7 +570,7 @@ class SwingGui private constructor(
           }
         })
 
-    installRomDropTarget(portableMenu::visible)
+    installRomDropTarget { portableMenu?.visible() == true }
     mainWindow.pack()
     mainWindow.minimumSize =
         minimumFrameSize(
@@ -1147,6 +1153,10 @@ class SwingGui private constructor(
     }
   }
 }
+
+/** Keeps Proposal 3 construction and its input capture out of the default desktop startup path. */
+internal fun <T> installDesktopProposal3Menu(enabled: Boolean, install: () -> T): T? =
+    if (enabled) install() else null
 
 internal fun ApplicationSettings.Appearance.toDesktopAppearance(): DesktopAppearance =
     when (this) {
