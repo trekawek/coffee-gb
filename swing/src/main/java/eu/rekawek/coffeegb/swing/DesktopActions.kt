@@ -14,6 +14,7 @@ internal enum class DesktopCommand {
   CLOSE_GAME,
   PREFERENCES,
   QUIT,
+  OPEN_MENU,
   PAUSE,
   RESET,
   SAVE_STATE,
@@ -64,6 +65,9 @@ internal data class DesktopCommandHandlers(
     val screenshot: () -> Unit,
     val setCommandBarVisible: (Boolean) -> Unit,
     val selectStateSlot: (Int) -> Unit,
+    val preferencesForCategory: ((PreferencesCategory) -> Unit)? = null,
+    val openMenu: () -> Unit = {},
+    val openAbout: (() -> Unit)? = null,
 )
 
 /**
@@ -72,12 +76,12 @@ internal data class DesktopCommandHandlers(
  */
 internal class DesktopActionRegistry(
     private val handlers: DesktopCommandHandlers,
-) {
+) : PortableMenuCommandBridge {
   private var presentation = DesktopCommandPresentation()
   private var appliedShortcuts: DesktopShortcutRegistry? = null
   private val actions =
       DesktopCommand.entries.associateWith { command ->
-        DesktopAction(commandMetadata(command)) { invoke(command) }
+        DesktopAction(commandMetadata(command)) { invokeCommand(command) }
       }
   val stateSlotActions: List<Action> =
       (0..9).map { slot ->
@@ -125,6 +129,56 @@ internal class DesktopActionRegistry(
     }
   }
 
+  override fun menuState(): DesktopPresentation =
+      DesktopPresentation(
+          gameTitle = if (presentation.gameLoaded) "loaded" else null,
+          commands = presentation,
+      )
+
+  override fun isEnabled(command: DesktopCommand): Boolean = actions.getValue(command).isEnabled
+
+  override fun invoke(command: DesktopCommand) {
+    val action = actions.getValue(command)
+    if (action.isEnabled) {
+      action.actionPerformed(
+          ActionEvent(this, ActionEvent.ACTION_PERFORMED, "portable-menu"),
+      )
+    }
+  }
+
+  override fun canOpenAbout(): Boolean = handlers.openAbout != null
+
+  override fun openAbout() {
+    handlers.openAbout?.invoke()
+  }
+
+  override fun setPaused(paused: Boolean) {
+    if (presentation.paused != paused && isEnabled(DesktopCommand.PAUSE)) {
+      handlers.setPaused(paused)
+    }
+  }
+
+  override fun openPreferences(category: PreferencesCategory) {
+    if (!isEnabled(DesktopCommand.PREFERENCES)) return
+    handlers.preferencesForCategory?.invoke(category) ?: handlers.preferences()
+  }
+
+  override fun canSaveState(slot: Int): Boolean =
+      slot in 0..9 && presentation.stateCommandsAvailable && !presentation.sessionBusy
+
+  override fun canLoadState(slot: Int): Boolean =
+      canSaveState(slot) && slot in presentation.loadableStateSlots
+
+  override fun saveState(slot: Int) {
+    if (canSaveState(slot)) handlers.saveState(slot)
+  }
+
+  override fun loadState(slot: Int) {
+    if (canLoadState(slot)) handlers.loadState(slot)
+  }
+
+  fun commandPresentation(): DesktopCommandPresentation = presentation
+
   fun current(): DesktopCommandPresentation = presentation
 
   /** The resolved shortcut, including a gameplay-conflict explanation, for Help surfaces. */
@@ -134,12 +188,13 @@ internal class DesktopActionRegistry(
   fun stateSlotShortcuts(): List<KeyStroke> =
       appliedShortcuts?.stateSlotShortcuts.orEmpty()
 
-  private fun invoke(command: DesktopCommand) {
+  private fun invokeCommand(command: DesktopCommand) {
     when (command) {
       DesktopCommand.OPEN_ROM -> handlers.openRom()
       DesktopCommand.CLOSE_GAME -> handlers.closeGame()
       DesktopCommand.PREFERENCES -> handlers.preferences()
       DesktopCommand.QUIT -> handlers.quit()
+      DesktopCommand.OPEN_MENU -> handlers.openMenu()
       DesktopCommand.PAUSE -> handlers.setPaused(!presentation.paused)
       DesktopCommand.RESET -> handlers.reset()
       DesktopCommand.SAVE_STATE -> handlers.saveState(presentation.stateSlot)
@@ -163,9 +218,10 @@ internal class DesktopActionRegistry(
         DesktopCommand.NETPLAY,
         DesktopCommand.MUTE,
         DesktopCommand.SHOW_COMMAND_BAR -> !state.sessionBusy
+        DesktopCommand.OPEN_MENU -> state.gameLoaded && !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
-        DesktopCommand.PAUSE ->
+      DesktopCommand.PAUSE ->
             state.gameLoaded && state.pauseSupported && !state.sessionBusy
         DesktopCommand.SAVE_STATE -> state.stateCommandsAvailable && !state.sessionBusy
         DesktopCommand.LOAD_STATE ->
@@ -209,6 +265,8 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
     when (command) {
       DesktopCommand.OPEN_ROM ->
           DesktopActionMetadata("Open ROM…", "Open a Game Boy ROM or supported archive")
+      DesktopCommand.OPEN_MENU ->
+          DesktopActionMetadata("On-screen Menu", "Open the controller-friendly Proposal 3 menu")
       DesktopCommand.CLOSE_GAME ->
           DesktopActionMetadata("Close Game", "Close the current game")
       DesktopCommand.PREFERENCES ->

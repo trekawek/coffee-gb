@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
+import eu.rekawek.coffeegb.ui.menu.MenuKey
 import java.awt.Component
 import java.awt.KeyEventDispatcher
 import java.awt.event.InputEvent
@@ -183,6 +185,33 @@ class DesktopInputRouterTest {
     fixture.router.close()
   }
 
+  @Test
+  fun `portable menu captures configured keys and returns ownership cleanly`() {
+    val menu = RecordingPortableMenu()
+    val text = JTextField()
+    val fixture =
+        Fixture(
+            joypadKeys = setOf(KeyEvent.VK_UP),
+            portableMenu = menu,
+            menuKeyForKeyCode = { if (it == KeyEvent.VK_UP) MenuKey.UP else null },
+            yieldsToComponent = { component, _ -> component === text },
+        )
+    fixture.router.install()
+
+    assertTrue(fixture.dispatch(press(KeyEvent.VK_UP)))
+    assertTrue(fixture.dispatch(release(KeyEvent.VK_UP)))
+    assertTrue(fixture.dispatch(press(KeyEvent.VK_UP, component = text)))
+    assertTrue(fixture.dispatch(release(KeyEvent.VK_UP, component = text)))
+    assertEquals(listOf("down:UP", "up:UP", "down:UP", "up:UP"), menu.events)
+    assertTrue(fixture.events.isEmpty())
+
+    menu.visible = false
+    assertTrue(fixture.dispatch(press(KeyEvent.VK_UP)))
+    assertTrue(fixture.dispatch(release(KeyEvent.VK_UP)))
+    assertEquals(listOf("joypad-press", "joypad-release"), fixture.events)
+    fixture.router.close()
+  }
+
   private class Fixture(
       joypadKeys: Set<Int> = emptySet(),
       tiltKeys: Set<Int> = emptySet(),
@@ -191,6 +220,8 @@ class DesktopInputRouterTest {
       belongsToMainWindow: (Component?) -> Boolean = { true },
       yieldsToComponent: (Component?, Int) -> Boolean = { _, _ -> false },
       isMenuActive: () -> Boolean = { false },
+      val portableMenu: DesktopMenuKeyboardInput? = null,
+      val menuKeyForKeyCode: (Int) -> MenuKey? = { null },
   ) {
     val events = mutableListOf<String>()
     var releaseAllCount = 0
@@ -201,6 +232,8 @@ class DesktopInputRouterTest {
             belongsToMainWindow = belongsToMainWindow,
             yieldsToComponent = yieldsToComponent,
             isMenuActive = isMenuActive,
+            portableMenu = portableMenu,
+            menuKeyForKeyCode = menuKeyForKeyCode,
             joypadHandles = { it in joypadKeys },
             joypadPressed = { events += "joypad-press" },
             joypadReleased = { events += "joypad-release" },
@@ -211,6 +244,23 @@ class DesktopInputRouterTest {
         )
 
     fun dispatch(event: KeyEvent): Boolean = registry.dispatch(event)
+  }
+
+  private class RecordingPortableMenu : DesktopMenuKeyboardInput {
+    var visible = true
+    val events = mutableListOf<String>()
+
+    override fun visible(): Boolean = visible
+
+    override fun onKeyDown(key: MenuKey, repeat: Boolean): Boolean {
+      events += "down:$key"
+      return true
+    }
+
+    override fun onKeyUp(key: MenuKey): Boolean {
+      events += "up:$key"
+      return true
+    }
   }
 
   private class RecordingRegistry : KeyEventDispatcherRegistry {

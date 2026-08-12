@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.controller.Controller.SetPrinterEvent
 import eu.rekawek.coffeegb.controller.Controller.SetSerialPeripheralEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -153,6 +154,64 @@ internal class PrinterPaperSnapshot internal constructor(
     var remaining = y
     for (segment in segments) {
       if (remaining < segment.height) return segment.rgbAt(x, remaining)
+      remaining -= segment.height
+    }
+    error("Paper snapshot height does not match its segments")
+  }
+
+  /**
+   * Creates the bounded immutable preview consumed by the portable Proposal 3 menu.
+   *
+   * The printer keeps its native 160-pixel roll width. A short roll is copied at native
+   * resolution; a taller roll is reduced to the largest aspect-preserving raster that fits the
+   * portable preview budget. MenuPreview defensively copies the generated ARGB array, so neither
+   * this snapshot nor the producer-owned row buffer can be mutated by the renderer.
+   */
+  internal fun menuPreview(): MenuPreview {
+    if (isEmpty || contentHeight <= 0) return MenuPreview.empty()
+
+    val maximumHeight = MenuPreview.MAX_PIXELS / PRINTER_PAPER_WIDTH
+    val previewHeight = min(contentHeight, maximumHeight)
+    val previewWidth =
+        if (contentHeight <= maximumHeight) {
+          PRINTER_PAPER_WIDTH
+        } else {
+          (PRINTER_PAPER_WIDTH.toLong() * previewHeight / contentHeight)
+              .toInt()
+              .coerceAtLeast(1)
+        }
+    val previewPixels = IntArray(Math.multiplyExact(previewWidth, previewHeight))
+    val sourceRow = IntArray(PRINTER_PAPER_WIDTH)
+    var copiedSourceRow = -1
+    for (destinationY in 0 until previewHeight) {
+      val sourceY =
+          (destinationY.toLong() * contentHeight / previewHeight)
+              .toInt()
+      if (sourceY != copiedSourceRow) {
+        copyRgbRow(sourceY, sourceRow)
+        copiedSourceRow = sourceY
+      }
+      val destinationOffset = destinationY * previewWidth
+      for (destinationX in 0 until previewWidth) {
+        val sourceX =
+            (destinationX.toLong() * PRINTER_PAPER_WIDTH / previewWidth)
+                .toInt()
+        previewPixels[destinationOffset + destinationX] =
+            0xff000000.toInt() or (sourceRow[sourceX] and 0x00ffffff)
+      }
+    }
+    return MenuPreview.ready(previewWidth, previewHeight, previewPixels)
+  }
+
+  private fun copyRgbRow(row: Int, destination: IntArray) {
+    require(row in 0 until contentHeight)
+    require(destination.size >= PRINTER_PAPER_WIDTH)
+    var remaining = row
+    for (segment in segments) {
+      if (remaining < segment.height) {
+        segment.copyRgbRow(remaining, destination)
+        return
+      }
       remaining -= segment.height
     }
     error("Paper snapshot height does not match its segments")
@@ -824,6 +883,24 @@ class SwingPrinter internal constructor(
       showOnEdt(raise = true)
     }
   }
+
+  /** Host bridge for the portable menu; both operations retain the native printer UI semantics. */
+  internal fun clearFromPortableMenu() {
+    requireEdt()
+    requestClear()
+  }
+
+  /** Host bridge for the portable menu; the file save dialog remains native Swing. */
+  internal fun exportFromPortableMenu() {
+    requireEdt()
+    requestSave()
+  }
+
+  /** Cheap availability query used to keep the portable printer route unreachable when empty. */
+  internal fun hasPaper(): Boolean = dependencies.store.model().hasContent
+
+  /** Returns the current immutable paper generation for the portable menu preview. */
+  internal fun menuPreview(): MenuPreview = dependencies.store.model().snapshot().menuPreview()
 
   /** Connects the retained tool to the main desktop owner before first use. */
   internal fun attachDesktopWindow(owner: Component, bounds: PrinterWindowBounds) {

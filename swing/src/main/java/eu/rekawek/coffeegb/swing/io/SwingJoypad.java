@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.properties.ControllerProperties;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.swing.DesktopKeyboardKeyAdapter;
+import eu.rekawek.coffeegb.ui.menu.MenuKey;
 
 import java.awt.event.KeyEvent;
 import java.awt.event.KeyListener;
@@ -76,6 +77,24 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
     /** True when an unmodified key belongs to a configured button or the fallback rewind key. */
     public synchronized boolean handlesKeyCode(int keyCode) {
         return mapping.containsKey(keyCode) || keyCode == REWIND_KEY;
+    }
+
+    /** Returns the configured player-one logical key for portable-menu capture, if any. */
+    public synchronized MenuKey menuKeyForKeyCode(int keyCode) {
+        ControllerProperties.PlayerButton binding = mapping.get(keyCode);
+        if (binding == null || binding.getPlayer() != 0) {
+            return null;
+        }
+        return switch (binding.getButton()) {
+            case RIGHT -> MenuKey.RIGHT;
+            case LEFT -> MenuKey.LEFT;
+            case UP -> MenuKey.UP;
+            case DOWN -> MenuKey.DOWN;
+            case A -> MenuKey.A;
+            case B -> MenuKey.B;
+            case SELECT -> MenuKey.SELECT;
+            case START -> MenuKey.START;
+        };
     }
 
     @Override

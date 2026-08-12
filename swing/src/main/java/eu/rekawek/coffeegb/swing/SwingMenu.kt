@@ -356,6 +356,8 @@ internal class SwingMenu(
   private fun createGameMenu(): JMenu {
     val gameMenu = JMenu("Game")
 
+    gameMenu.add(JMenuItem(desktopActions[DesktopCommand.OPEN_MENU]))
+    gameMenu.addSeparator()
     gameMenu.add(pauseResumeMenuItem(desktopActions[DesktopCommand.PAUSE]))
     gameMenu.add(JMenuItem(desktopActions[DesktopCommand.RESET]))
 
@@ -611,13 +613,17 @@ internal class SwingMenu(
               mnemonic = KeyEvent.VK_A
               getAccessibleContext().accessibleDescription =
                   "Show Coffee GB version, license, and source information"
-              addActionListener {
-                val version =
-                    SwingMenu::class.java.`package`.implementationVersion ?: "development build"
-                helpDialogs.showAbout(window, version)
-              }
+              addActionListener { showAbout() }
             })
       }
+
+  /** Opens the same native About/notices surface used by Help > About. */
+  internal fun showAbout() {
+    check(SwingUtilities.isEventDispatchThread()) { "About dialog must open on the EDT" }
+    val version =
+        SwingMenu::class.java.`package`.implementationVersion ?: "development build"
+    helpDialogs.showAbout(window, version)
+  }
 
   private fun enableWhenEmulationActive(item: JMenuItem) {
     eventBus.register<EmulationStartedEvent> { event ->

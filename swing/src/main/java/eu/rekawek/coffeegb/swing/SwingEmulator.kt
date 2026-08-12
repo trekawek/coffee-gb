@@ -75,6 +75,8 @@ class SwingEmulator(
   private val audioDeviceCatalog = AudioDeviceCatalog()
   private val accelerometer: SwingAccelerometer
 
+  private val playerInput: DesktopPlayerInput
+
   private val tiltInput: DesktopTiltInput
 
   private val tiltKeys: SwingTiltKeys
@@ -91,6 +93,8 @@ class SwingEmulator(
 
   private var inputRouter: DesktopInputRouter? = null
 
+  private var portableMenu: SwingProposal3Menu? = null
+
   private var preferredSizeChangedWhileFullscreen = false
 
   private val controllerLifecycle = ControllerLifecycleGate()
@@ -105,7 +109,7 @@ class SwingEmulator(
             eventBus,
             "main",
         )
-    val playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
+    playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
     tiltInput = DesktopTiltInput(eventBus)
     joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)
     gamepad = SwingGamepad(properties.playerInputMapping, playerInput, tiltInput, eventBus)
@@ -207,6 +211,9 @@ class SwingEmulator(
           closeControllerAfterLifecycleRelease(::releaseForLifecycleChange, controller::close)
         },
         finishTeardown = {
+          portableMenu?.closeForLifecycle()
+          portableMenu = null
+          playerInput.setMenuCapture(null)
           inputRouter?.close()
           inputRouter = null
           eventBus.post(ConnectionController.StopServerEvent())
@@ -224,6 +231,44 @@ class SwingEmulator(
   }
 
   internal fun isLinkedControllerActive(): Boolean = linkedControllerActive
+
+  /** Installs the portable Proposal 3 host after desktop actions and native dialogs exist. */
+  internal fun installPortableMenu(commands: PortableMenuCommandBridge): DesktopArchiveSelectionHost {
+    check(portableMenu == null) { "The portable menu is already installed" }
+    val installedMenu =
+        SwingProposal3Menu(
+            frameSink = { frame ->
+              if (frame == null) display.clearMenuOverlay() else display.setMenuOverlay(frame)
+            },
+            commands = commands,
+            releaseGameplay = {
+              joypad.releaseForLifecycleChange()
+              tiltInput.releaseForLifecycleChange()
+              gamepad.releaseForLifecycleChange()
+              inputRouter?.releaseForOwnershipChange()
+              playerInput.releaseAll()
+            },
+            printer =
+                object : PortableMenuPrinterBridge {
+                  override fun hasPaper() = printer.hasPaper()
+
+                  override fun paperPreview() = printer.menuPreview()
+
+                  override fun open() = printer.showWindow()
+
+                  override fun clear() = printer.clearFromPortableMenu()
+
+                  override fun export() = printer.exportFromPortableMenu()
+                },
+            )
+    portableMenu = installedMenu
+    playerInput.setMenuCapture(portableMenu)
+    return installedMenu
+  }
+
+  internal fun openPortableMenu() {
+    portableMenu?.openFromDesktop()
+  }
 
   internal fun attachPrinterWindow(owner: java.awt.Window, bounds: PrinterWindowBounds) {
     printer.attachDesktopWindow(owner, bounds)
@@ -258,6 +303,7 @@ class SwingEmulator(
   fun captureDisplayImage(): StateImage = display.captureStateImage()
 
   private fun releaseForLifecycleChange() {
+    portableMenu?.closeForLifecycle()
     joypad.releaseForLifecycleChange()
     tiltInput.releaseForLifecycleChange()
     gamepad.releaseForLifecycleChange()
@@ -300,6 +346,8 @@ class SwingEmulator(
                   joypad.releaseForLifecycleChange()
                   tiltInput.releaseForLifecycleChange()
                 },
+                portableMenu = portableMenu,
+                menuKeyForKeyCode = joypad::menuKeyForKeyCode,
             )
             .also(DesktopInputRouter::install)
 
