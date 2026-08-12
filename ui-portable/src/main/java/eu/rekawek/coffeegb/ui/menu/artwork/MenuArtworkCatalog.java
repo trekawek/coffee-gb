@@ -10,10 +10,9 @@ import java.util.Objects;
 /**
  * The canonical Proposal 3 artwork catalog.
  *
- * <p>The source PNGs are complete 1672x941 compositions, while the internal raw reference inputs
- * are already the fixed 924x736 crop declared by {@link #SOURCE_VISIBLE_CROP}. Raw resource paths
- * and decoding remain package-private in {@link Proposal3RawFrameCatalog}; this public catalog only
- * exposes route metadata.
+ * <p>The source PNGs are complete 1672x941 compositions, while packaged text-free templates use
+ * the fixed 924x736 crop declared by {@link #SOURCE_VISIBLE_CROP}. Template resource paths and
+ * decoding remain package-private; this public catalog exposes route metadata only.
  */
 public final class MenuArtworkCatalog {
 

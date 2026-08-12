@@ -157,7 +157,10 @@ public class MenuArtworkContractTest {
         Path classes = Paths.get(MenuArtwork.class.getProtectionDomain().getCodeSource()
                 .getLocation().toURI());
         if (Files.isDirectory(classes)) {
-            assertTrue(Files.exists(classes.resolve("eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw")));
+            assertTrue(Files.exists(classes.resolve(
+                    "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates")));
+            assertFalse(Files.exists(classes.resolve(
+                    "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw")));
             assertFalse(Files.exists(classes.resolve("eu/rekawek/coffeegb/ui/menu/artwork/proposal3/source")));
         }
     }

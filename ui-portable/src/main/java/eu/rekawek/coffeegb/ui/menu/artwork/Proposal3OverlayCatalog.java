@@ -12,7 +12,7 @@ import java.util.Objects;
 /**
  * Fixed, audited paint interiors for the Proposal 3 overlays.
  *
- * <p>The raw route PNG is immutable layer zero.  This catalog contains no panel-sized repair
+ * <p>The text-free route PNG is immutable layer zero. This catalog contains no panel-sized repair
  * rectangles: row/action interiors are used only for palette-class focus changes, and the other
  * rectangles are tight dynamic text, slider, preview, or confirmation regions.
  */

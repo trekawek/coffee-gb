@@ -13,15 +13,21 @@ final class Proposal3GlyphAtlas {
             "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-semibold-atlas.png";
     static final String DISPLAY_RESOURCE_PATH =
             "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-display-atlas.png";
+    static final String SMALL_RESOURCE_PATH =
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-small-atlas.png";
+    static final String NOTICE_RESOURCE_PATH =
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-notice-atlas.png";
     static final String CHARACTERS =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:/&-_%?+()[]!,'";
     enum Role {
         // The atlas cells retain generous transparent gutters, but Proposal 3's compact row
         // typography advances on a 17 px rhythm. Wide M/W glyphs end immediately before the
         // next cell's left bearing, so this remains overlap-free while matching the mockup.
-        MEDIUM(24, 36, 17, 10),
-        DISPLAY(24, 48, 18, 11),
-        SEMIBOLD(32, 48, 29, 17);
+        SMALL(22, 36, 11, 5),
+        NOTICE(28, 36, 15, 7),
+        MEDIUM(36, 36, 19, 8),
+        DISPLAY(36, 48, 20, 8),
+        SEMIBOLD(48, 48, 27, 9);
 
         private final int cellWidth;
         private final int cellHeight;
@@ -42,6 +48,10 @@ final class Proposal3GlyphAtlas {
         int height() {
             return ((CHARACTERS.length() + 15) / 16) * cellHeight;
         }
+
+        int cellHeight() {
+            return cellHeight;
+        }
     }
 
     private final int[][] pixels;
@@ -54,6 +64,8 @@ final class Proposal3GlyphAtlas {
         int[][] rolePixels = new int[Role.values().length][];
         for (Role role : Role.values()) {
             String path = switch (role) {
+                case SMALL -> SMALL_RESOURCE_PATH;
+                case NOTICE -> NOTICE_RESOURCE_PATH;
                 case MEDIUM -> MEDIUM_RESOURCE_PATH;
                 case DISPLAY -> DISPLAY_RESOURCE_PATH;
                 case SEMIBOLD -> SEMIBOLD_RESOURCE_PATH;

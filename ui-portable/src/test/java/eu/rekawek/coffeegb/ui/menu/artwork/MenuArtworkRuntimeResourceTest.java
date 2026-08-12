@@ -21,8 +21,8 @@ public class MenuArtworkRuntimeResourceTest {
     private static final long RUNTIME_ARTWORK_BUDGET = 14_680_064L;
     private static final String PROPOSAL3_ROOT =
             "eu/rekawek/coffeegb/ui/menu/artwork/proposal3";
-    private static final String RAW_ROOT =
-            "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw";
+    private static final String TEMPLATE_ROOT =
+            "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates";
     private static final Set<String> EXPECTED_RAW_FILES = Set.of(
             "00-pause-console.png",
             "01-save-states.png",
@@ -58,13 +58,16 @@ public class MenuArtworkRuntimeResourceTest {
     }
 
     @Test
-    public void rawRouteDirectoryContainsExactlyExpectedDirectPngFiles() throws Exception {
-        Path rawRoot = productionClasses().resolve(RAW_ROOT);
-        assertTrue(Files.isDirectory(rawRoot));
+    public void templateRouteDirectoryContainsExactlyExpectedDirectPngFiles() throws Exception {
+        Path templateRoot = productionClasses().resolve(TEMPLATE_ROOT);
+        assertTrue(Files.isDirectory(templateRoot));
         List<Path> entries;
-        try (java.util.stream.Stream<Path> stream = Files.list(rawRoot)) {
+        try (java.util.stream.Stream<Path> stream = Files.list(templateRoot)) {
             entries = stream.sorted().collect(Collectors.toList());
         }
+        assertFalse("baked-text raw routes must not ship at runtime",
+                Files.exists(productionClasses().resolve(
+                        "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw")));
         assertEquals(EXPECTED_RAW_FILES.size(), entries.size());
         Set<String> actualNames = entries.stream()
                 .map(path -> path.getFileName().toString())

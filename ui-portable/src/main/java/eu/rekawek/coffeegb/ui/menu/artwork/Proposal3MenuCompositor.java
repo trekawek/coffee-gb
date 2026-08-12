@@ -27,7 +27,7 @@ public final class Proposal3MenuCompositor {
 
     private final Object lock = new Object();
     private MenuRoute cachedRoute;
-    private int[] cachedRawPixels;
+    private int[] cachedTemplatePixels;
     private Proposal3GlyphAtlas cachedAtlas;
     private Proposal3WidgetSkins cachedSkins;
     private MenuPresentation cachedPresentation;
@@ -56,7 +56,7 @@ public final class Proposal3MenuCompositor {
             MenuRaster raster = new MenuRaster(working);
             Prepared prepared = prepare(route, presentation);
 
-            applyFocus(route, presentation, prepared, layout, raster);
+            drawChrome(route, presentation, prepared, raster);
             drawRows(route, presentation, prepared, layout, raster);
             drawActions(route, presentation, prepared, layout, raster);
             drawRouteWidgets(route, presentation, prepared, layout, raster);
@@ -73,6 +73,7 @@ public final class Proposal3MenuCompositor {
     static List<MenuRect> dynamicMasks(MenuRoute route) {
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
         ArrayList<MenuRect> masks = new ArrayList<>(layout.dynamicMasks());
+        masks.addAll(Proposal3TextCatalog.masks(route));
         for (Proposal3OverlayCatalog.Slot slot : layout.rows()) {
             masks.add(expand(slot.bounds(), 3));
         }
@@ -82,9 +83,36 @@ public final class Proposal3MenuCompositor {
         return List.copyOf(masks);
     }
 
-    int cachedRawRouteCount() {
+    /** Fixed major-row role; selection never participates in this decision. */
+    static Proposal3GlyphAtlas.Role rowTextRole(MenuRoute route, int rowIndex) {
+        return switch (route) {
+            case PAUSE_CONSOLE, SAVE_STATES -> Proposal3GlyphAtlas.Role.SEMIBOLD;
+            case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.DISPLAY;
+            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, LIBRARY, SYSTEM ->
+                    Proposal3GlyphAtlas.Role.SMALL;
+            case ABOUT -> rowIndex == 0 ? Proposal3GlyphAtlas.Role.SEMIBOLD
+                    : Proposal3GlyphAtlas.Role.NOTICE;
+            default -> Proposal3GlyphAtlas.Role.MEDIUM;
+        };
+    }
+
+    /** Fixed action role; selection never participates in this decision. */
+    static Proposal3GlyphAtlas.Role actionTextRole(MenuRoute route) {
+        return switch (route) {
+            case SAVE_STATES, CHOOSE_ROM -> Proposal3GlyphAtlas.Role.SEMIBOLD;
+            default -> Proposal3GlyphAtlas.Role.MEDIUM;
+        };
+    }
+
+    /** Route-aware chrome role; kept separate so canonical strings can be audited for fit. */
+    static Proposal3GlyphAtlas.Role chromeTextRole(MenuRoute route,
+            Proposal3TextCatalog.TextRegion region) {
+        return region.role();
+    }
+
+    int cachedTemplateRouteCount() {
         synchronized (lock) {
-            return cachedRawPixels == null ? 0 : 1;
+            return cachedTemplatePixels == null ? 0 : 1;
         }
     }
 
@@ -97,16 +125,16 @@ public final class Proposal3MenuCompositor {
     private int[] authorityPixels(MenuRoute route) {
         if (route != cachedRoute) {
             try {
-                cachedRawPixels = Proposal3RawFrameCatalog.decode(route).copyPixels();
+                cachedTemplatePixels = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
             } catch (IOException e) {
-                throw new IllegalStateException("Unable to decode Proposal 3 artwork for "
+                throw new IllegalStateException("Unable to decode Proposal 3 template for "
                         + route, e);
             }
             cachedRoute = route;
             cachedPresentation = null;
             cachedFrame = null;
         }
-        return cachedRawPixels;
+        return cachedTemplatePixels;
     }
 
     private Proposal3GlyphAtlas atlas() {
@@ -184,7 +212,8 @@ public final class Proposal3MenuCompositor {
             addSyntheticAction(prepared, actionIds, "cancel", "CANCEL", findSource(items, "cancel"));
         }
         if (route == MenuRoute.ABOUT) {
-            addSyntheticAction(prepared, actionIds, "source", "GITHUB.COM/TREKAW...",
+            addSyntheticAction(prepared, actionIds, "source",
+                    "GITHUB.COM/TREKAWEK/COFFEE-GB",
                     findSource(items, "source-notices"));
         }
         orderActions(route, prepared.actions);
@@ -341,6 +370,144 @@ public final class Proposal3MenuCompositor {
                 MenuRaster.HorizontalAlignment.CENTER);
     }
 
+    private void drawChrome(MenuRoute route, MenuPresentation presentation, Prepared prepared,
+            MenuRaster raster) {
+        for (MenuRect clear : Proposal3TextCatalog.footerClearRegions()) {
+            paintSurface(raster, clear, Proposal3OverlayCatalog.Surface.PAPER, false);
+        }
+        String[] footer = footerValues(presentation.footerHints());
+        String focused = focusedId(presentation, prepared);
+        for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
+            String value = textValue(region, presentation, prepared, footer);
+            boolean selected = route == MenuRoute.PAUSE_CONSOLE
+                    && region.key() == Proposal3TextCatalog.Key.HEADER_ACTION
+                    && "open-rom".equals(focused);
+            Proposal3OverlayCatalog.Surface surface = region.surface()
+                    == Proposal3TextCatalog.Surface.DARK
+                    ? Proposal3OverlayCatalog.Surface.DARK
+                    : Proposal3OverlayCatalog.Surface.PAPER;
+            if (selected) {
+                surface = Proposal3OverlayCatalog.Surface.DARK;
+            }
+            if (value.isEmpty()) {
+                continue;
+            }
+            if (selected) {
+                paintSurface(raster, inset(Proposal3OverlayCatalog.OPEN_ROM_HEADER, 4),
+                        Proposal3OverlayCatalog.Surface.PAPER, true);
+            }
+            int color = selected ? MenuRaster.PAPER_TEXT
+                    : surface == Proposal3OverlayCatalog.Surface.DARK
+                    ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
+            drawCatalogText(raster, region, chromeTextRole(route, region), value, color);
+        }
+    }
+
+    private void drawCatalogText(MenuRaster raster, Proposal3TextCatalog.TextRegion region,
+            Proposal3GlyphAtlas.Role role, String value, int color) {
+        String[] lines = value.split("\\n", -1);
+        if (lines.length == 1) {
+            raster.drawText(atlas(), role, value, region.bounds(), color,
+                    toAlignment(region.alignment().horizontal()));
+            return;
+        }
+        int lineHeight = Math.max(1, region.bounds().height() / lines.length);
+        for (int index = 0; index < lines.length; index++) {
+            MenuRect line = new MenuRect(region.bounds().x(),
+                    region.bounds().y() + index * lineHeight, region.bounds().width(),
+                    index == lines.length - 1
+                            ? region.bounds().bottom() - region.bounds().y() - index * lineHeight
+                            : lineHeight);
+            raster.drawText(atlas(), role, lines[index], line, color,
+                    toAlignment(region.alignment().horizontal()));
+        }
+    }
+
+    private static MenuRaster.HorizontalAlignment toAlignment(
+            Proposal3TextCatalog.Horizontal alignment) {
+        return switch (alignment) {
+            case LEFT -> MenuRaster.HorizontalAlignment.LEFT;
+            case CENTER -> MenuRaster.HorizontalAlignment.CENTER;
+            case RIGHT -> MenuRaster.HorizontalAlignment.RIGHT;
+        };
+    }
+
+    private static String[] footerValues(List<String> hints) {
+        String first = valueAt(hints, 0, "D-PAD MOVE");
+        String second = valueAt(hints, 1, "[A] OK");
+        String third = valueAt(hints, 2, "[B] BACK");
+        return new String[]{first, second, third};
+    }
+
+    private static String textValue(Proposal3TextCatalog.TextRegion region,
+            MenuPresentation presentation, Prepared prepared, String[] footer) {
+        if (region.literal() != null) {
+            return region.literal();
+        }
+        return switch (region.key()) {
+            case HEADER_TITLE -> display(presentation.title());
+            case HEADER_CONTEXT -> presentation.context().isEmpty()
+                    ? "/" : "/ " + display(presentation.context());
+            case HEADER_ACTION -> presentation.headerAction().isEmpty()
+                    ? "BACK" : display(presentation.headerAction());
+            case FOOTER_DPAD -> display(footer[0]);
+            case FOOTER_BUTTON -> footerButton(footer[region.index()]);
+            case FOOTER_LABEL -> footerLabel(footer[region.index()]);
+            case SIDE_HEADING -> display(presentation.sideHeading());
+            case SIDE_LINE -> display(valueAt(presentation.sideLines(), region.index(), ""));
+            case CONFIRM_TITLE -> confirmationTitle(presentation, prepared);
+            case CONFIRM_COPY_ONE, CONFIRM_COPY_TWO, CONFIRM_COPY_THREE ->
+                    confirmationCopy(region.key(), presentation);
+            case LITERAL -> "";
+        };
+    }
+
+    private static String footerButton(String hint) {
+        String value = display(hint);
+        int open = value.indexOf('[');
+        int close = value.indexOf(']');
+        if (open >= 0 && close > open + 1) {
+            return value.substring(open + 1, close);
+        }
+        return value.isEmpty() ? "" : value.substring(0, 1);
+    }
+
+    private static String footerLabel(String hint) {
+        String value = display(hint);
+        int close = value.indexOf(']');
+        if (close >= 0 && close + 1 < value.length()) {
+            return value.substring(close + 1).trim();
+        }
+        int space = value.indexOf(' ');
+        return space < 0 ? value : value.substring(space + 1).trim();
+    }
+
+    private static String confirmationTitle(MenuPresentation presentation, Prepared prepared) {
+        Entry confirm = find(prepared.actions, "confirm");
+        String action = confirm == null || confirm.detail.isEmpty()
+                ? valueAt(presentation.sideLines(), 0, "RESET GAME")
+                : display(confirm.detail);
+        if (action.isEmpty()) {
+            action = "RESET GAME";
+        }
+        return action.endsWith("?") ? action : action + "?";
+    }
+
+    private static String confirmationCopy(Proposal3TextCatalog.Key key,
+            MenuPresentation presentation) {
+        String description = valueAt(presentation.sideLines(), 0,
+                "UNSAVED PROGRESS MAY BE LOST");
+        String[] lines = twoLines(description);
+        return switch (key) {
+            case CONFIRM_COPY_ONE -> lines[0].isEmpty() ? "UNSAVED PROGRESS" : lines[0];
+            case CONFIRM_COPY_TWO -> lines[1].isEmpty() ? "MAY BE LOST." : lines[1];
+            case CONFIRM_COPY_THREE -> display(valueAt(presentation.sideLines(), 1,
+                    "SAME PAGE USED FOR")) + "\n" + display(valueAt(
+                    presentation.sideLines(), 2, "STOP GAME AND DELETE STATE"));
+            default -> "";
+        };
+    }
+
     private void paintSurface(MenuRaster raster, MenuRect bounds,
             Proposal3OverlayCatalog.Surface surface, boolean selected) {
         Proposal3WidgetSkins.Surface skin = selected ? Proposal3WidgetSkins.Surface.SELECTED
@@ -441,18 +608,36 @@ public final class Proposal3MenuCompositor {
         int color = selected || slot.surface() == Proposal3OverlayCatalog.Surface.DARK
                 ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
         String label = label(route, entry, entryIndex);
-        MenuRect labelBounds = labelBounds(route, slot.bounds());
-        drawWidgetText(raster, label, labelBounds, color, MenuRaster.HorizontalAlignment.LEFT);
         String detail = detail(route, entry, entryIndex);
-        if (supportsDetail(route, entry) && !detail.isEmpty()) {
+        boolean drawsDetail = supportsDetail(route, entry) && !detail.isEmpty();
+        MenuRect labelBounds = labelBounds(route, slot.bounds(), drawsDetail, entryIndex);
+        drawWidgetText(raster, label, labelBounds, color, MenuRaster.HorizontalAlignment.LEFT,
+                rowTextRole(route, entryIndex));
+        if (drawsDetail) {
             MenuRect detailBounds = detailBounds(route, slot.bounds());
             drawWidgetText(raster, detail, detailBounds, color,
-                    MenuRaster.HorizontalAlignment.RIGHT);
+                    MenuRaster.HorizontalAlignment.RIGHT, detailTextRole(route));
         }
+        paintRowIcon(route, entryIndex, slot, raster);
         if (selected && layout.marker() != null
                 && slot.surface() == Proposal3OverlayCatalog.Surface.DARK) {
             paintMarker(presentation, prepared, layout, slot, raster);
         }
+    }
+
+    private void paintRowIcon(MenuRoute route, int entryIndex,
+            Proposal3OverlayCatalog.Slot slot, MenuRaster raster) {
+        Proposal3WidgetSkins.Sprite icon = switch (route) {
+            case DATA_MEDIA -> skins().dataRowIcon(entryIndex);
+            case ABOUT -> skins().aboutRowIcon(entryIndex);
+            default -> null;
+        };
+        if (icon == null) {
+            return;
+        }
+        int left = slot.bounds().x() + 4;
+        int top = slot.bounds().y() + Math.max(0, (slot.bounds().height() - icon.height()) / 2);
+        raster.paintSprite(icon, left, top);
     }
 
     private void paintActionWidget(MenuRoute route, MenuPresentation presentation,
@@ -461,24 +646,37 @@ public final class Proposal3MenuCompositor {
             MenuRaster raster) {
         paintSurface(raster, expand(slot.bounds(), 3), slot.surface(), selected);
         MenuRect bounds = slot.bounds();
-        MenuRect text = new MenuRect(bounds.x() + 10, bounds.y() + 4,
-                Math.max(1, bounds.width() - 20), Math.max(1, bounds.height() - 8));
+        Proposal3WidgetSkins.Sprite icon = skins().actionIcon(route, actionIndex);
+        MenuRect text;
         int color = selected || slot.surface() == Proposal3OverlayCatalog.Surface.DARK
                 ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
-        drawWidgetText(raster, actionLabel(route, entry, actionIndex), text, color,
-                MenuRaster.HorizontalAlignment.CENTER);
+        String label = actionLabel(route, entry, actionIndex);
+        Proposal3GlyphAtlas.Role role = route == MenuRoute.PRINTER_PAPER && actionIndex == 1
+                ? Proposal3GlyphAtlas.Role.SMALL : actionTextRole(route);
+        int contentWidth = atlas().measure(role, display(label))
+                + (icon == null ? 0 : icon.width() + 12);
+        int contentLeft = bounds.x() + Math.max(10, (bounds.width() - contentWidth) / 2);
+        if (icon != null) {
+            int iconTop = bounds.y() + Math.max(0, (bounds.height() - icon.height()) / 2);
+            raster.paintSprite(icon, contentLeft, iconTop, color);
+            text = new MenuRect(contentLeft + icon.width() + 12, bounds.y() + 4,
+                    Math.max(1, bounds.right() - contentLeft - icon.width() - 22),
+                    Math.max(1, bounds.height() - 8));
+        } else {
+            text = new MenuRect(bounds.x() + 10, bounds.y() + 4,
+                    Math.max(1, bounds.width() - 20), Math.max(1, bounds.height() - 8));
+        }
+        drawWidgetText(raster, label, text, color, icon == null
+                        ? MenuRaster.HorizontalAlignment.CENTER : MenuRaster.HorizontalAlignment.LEFT,
+                role);
         if (selected && layout.actionMarker() && layout.marker() != null) {
             paintMarker(presentation, prepared, layout, slot, raster);
         }
     }
 
     private void drawWidgetText(MenuRaster raster, String value, MenuRect bounds, int color,
-            MenuRaster.HorizontalAlignment alignment) {
+            MenuRaster.HorizontalAlignment alignment, Proposal3GlyphAtlas.Role role) {
         Proposal3GlyphAtlas glyphs = atlas();
-        Proposal3GlyphAtlas.Role role = bounds.height() >= 36
-                && glyphs.measure(Proposal3GlyphAtlas.Role.DISPLAY, display(value))
-                <= bounds.width() ? Proposal3GlyphAtlas.Role.DISPLAY
-                : Proposal3GlyphAtlas.Role.MEDIUM;
         raster.drawText(glyphs, role, value, bounds, color, alignment);
     }
 
@@ -492,22 +690,14 @@ public final class Proposal3MenuCompositor {
         String focused = focusedId(presentation, prepared);
         for (int visible = 0; visible < layout.rows().size(); visible++) {
             int index = start + visible;
+            Proposal3OverlayCatalog.Slot slot = layout.rows().get(visible);
             if (index >= prepared.rows.size()) {
-                break;
+                paintSurface(raster, expand(slot.bounds(), 2), slot.surface(), false);
+                continue;
             }
             Entry entry = prepared.rows.get(index);
-            Proposal3OverlayCatalog.Slot slot = layout.rows().get(visible);
-            String label = label(route, entry, index);
-            String detail = detail(route, entry, index);
-            String canonicalLabel = canonicalLabel(route, entry, index);
-            String canonicalDetail = canonicalDetail(route, entry, index);
-            boolean detailSupported = supportsDetail(route, entry);
-            boolean labelChanged = !same(label, canonicalLabel);
-            boolean detailChanged = detailSupported && !same(detail, canonicalDetail);
-            if (labelChanged || detailChanged) {
-                paintRowWidget(route, presentation, prepared, layout, entry, index, slot,
-                        entry.id.equals(focused), raster);
-            }
+            paintRowWidget(route, presentation, prepared, layout, entry, index, slot,
+                    entry.id.equals(focused), raster);
         }
     }
 
@@ -521,14 +711,12 @@ public final class Proposal3MenuCompositor {
         for (int index = 0; index < layout.actions().size(); index++) {
             Entry entry = actionFor(route, actions, index);
             if (entry == null) {
+                paintSurface(raster, expand(layout.actions().get(index).bounds(), 3),
+                        layout.actions().get(index).surface(), false);
                 continue;
             }
-            String value = actionLabel(route, entry, index);
-            String canonical = canonicalActionLabel(route, entry, index);
-            if (!same(value, canonical)) {
-                paintActionWidget(route, presentation, prepared, layout, entry, index,
-                        layout.actions().get(index), entry.id.equals(focused), raster);
-            }
+            paintActionWidget(route, presentation, prepared, layout, entry, index,
+                    layout.actions().get(index), entry.id.equals(focused), raster);
         }
     }
 
@@ -554,27 +742,12 @@ public final class Proposal3MenuCompositor {
             return "OPEN ROM";
         }
         if (route == MenuRoute.ABOUT) {
-            return "GITHUB.COM/TREKAW...";
+            return "GITHUB.COM/TREKAWEK/COFFEE-GB";
         }
         if (route == MenuRoute.CONFIRM_ACTION && index == 1) {
             return confirmationVerb(entry.detail);
         }
         return display(entry.label);
-    }
-
-    private static String canonicalActionLabel(MenuRoute route, Entry entry, int index) {
-        return switch (route) {
-            case SAVE_STATES -> index == 0 ? "SAVE" : index == 1 ? "LOAD" : "DELETE";
-            case LIBRARY -> "OPEN ROM";
-            case CHOOSE_ROM -> index == 0 ? "OPEN SELECTED" : "CANCEL";
-            case AUDIO -> index == 0 ? "SAVE" : "CANCEL";
-            case TOUCH_CONTROLS -> index == 0 ? "SAVE" : "CANCEL";
-            case OPTIONAL_DEVICES -> index == 0 ? "SAVE" : "CANCEL";
-            case ABOUT -> "GITHUB.COM/TREKAW...";
-            case CONFIRM_ACTION -> index == 0 ? "CANCEL" : "RESET";
-            case PRINTER_PAPER -> index == 0 ? "CLEAR PAPER" : "EXPORT & SHARE";
-            default -> display(entry.label);
-        };
     }
 
     private static boolean supportsDetail(MenuRoute route, Entry entry) {
@@ -590,11 +763,10 @@ public final class Proposal3MenuCompositor {
         switch (route) {
             case SAVE_STATES -> drawSaveSide(presentation, raster);
             case AUDIO -> drawAudioSide(presentation, prepared, raster);
-            case CONFIRM_ACTION -> drawConfirm(presentation, prepared, raster);
             case PRINTER_PAPER -> drawPrinter(presentation, raster);
             case PAUSE_CONSOLE, SETTINGS, TOUCH_CONTROLS, CONTROLLER_MAPPING,
                     OPTIONAL_DEVICES, DATA_MEDIA, LIBRARY, CHOOSE_ROM, SYSTEM, ABOUT -> {
-                // Their route-specific chrome and explanatory copy are immutable layer zero.
+                // Their previews and route copy are handled by the text catalog above.
             }
         }
     }
@@ -619,31 +791,6 @@ public final class Proposal3MenuCompositor {
         }
     }
 
-    private void drawConfirm(MenuPresentation p, Prepared prepared, MenuRaster r) {
-        Entry confirm = find(prepared.actions, "confirm");
-        String action = confirm == null || confirm.detail.isEmpty() ? "RESET GAME"
-                : display(confirm.detail);
-        String title = action.endsWith("?") ? action : action + "?";
-        overlayChanged(r, title, "RESET GAME?", Proposal3OverlayCatalog.CONFIRM_TITLE,
-                true, MenuRaster.INK, MenuRaster.HorizontalAlignment.CENTER);
-
-        String description = valueAt(p.sideLines(), 0, "UNSAVED PROGRESS MAY BE LOST");
-        if (!same(action, "RESET GAME")
-                || !same(description, "UNSAVED PROGRESS MAY BE LOST")) {
-            String[] lines = twoLines(description);
-            overlayChanged(r, lines[0], "UNSAVED PROGRESS",
-                    Proposal3OverlayCatalog.CONFIRM_COPY_ONE, true, MenuRaster.INK,
-                    MenuRaster.HorizontalAlignment.CENTER);
-            overlayChanged(r, lines[1], "MAY BE LOST.",
-                    Proposal3OverlayCatalog.CONFIRM_COPY_TWO, true, MenuRaster.INK,
-                    MenuRaster.HorizontalAlignment.CENTER);
-            overlayChanged(r, "A CONFIRM / B CANCEL",
-                    "SAME PAGE USED FOR STOP GAME AND DELETE STATE",
-                    Proposal3OverlayCatalog.CONFIRM_COPY_THREE, true, MenuRaster.INK,
-                    MenuRaster.HorizontalAlignment.CENTER);
-        }
-    }
-
     private void drawPrinter(MenuPresentation p, MenuRaster r) {
         if (p.preview().state() == MenuPreview.State.READY) {
             r.copyPreview(p.preview(), Proposal3OverlayCatalog.PRINTER_PREVIEW, PAPER_MATTE);
@@ -651,7 +798,7 @@ public final class Proposal3MenuCompositor {
             r.fill(Proposal3OverlayCatalog.PRINTER_PREVIEW, PAPER_MATTE);
             drawWidgetText(r, "LOADING", Proposal3OverlayCatalog.PRINTER_PREVIEW,
                     MenuRaster.INK,
-                    MenuRaster.HorizontalAlignment.CENTER);
+                    MenuRaster.HorizontalAlignment.CENTER, Proposal3GlyphAtlas.Role.MEDIUM);
         }
     }
 
@@ -664,7 +811,8 @@ public final class Proposal3MenuCompositor {
         Proposal3WidgetSkins.Surface surface = paperSurface ? Proposal3WidgetSkins.Surface.PAPER
                 : Proposal3WidgetSkins.Surface.DARK;
         raster.paintWidget(skins().surface(surface), bounds);
-        drawWidgetText(raster, normalized, bounds, color, alignment);
+        drawWidgetText(raster, normalized, bounds, color, alignment,
+                Proposal3GlyphAtlas.Role.MEDIUM);
     }
 
     private static String[] twoLines(String value) {
@@ -710,17 +858,28 @@ public final class Proposal3MenuCompositor {
         return value;
     }
 
-    private static MenuRect labelBounds(MenuRoute route, MenuRect row) {
+    private static MenuRect labelBounds(MenuRoute route, MenuRect row, boolean drawsDetail,
+            int rowIndex) {
         int left = switch (route) {
             case DATA_MEDIA -> row.x() + 52;
+            // Notice rows reserve the left icon rail, but use the remaining full row width for
+            // normal-width Pixelify metrics.  Their labels have no detail column to reserve.
+            case ABOUT -> row.x() + (rowIndex == 0 ? 22 : 98);
             case CONTROLLER_MAPPING -> row.x() + 12;
-            case LIBRARY, SYSTEM -> row.x() + 20;
+            case LIBRARY -> row.x() + 20;
+            case SYSTEM -> row.x() + 16;
             default -> row.x() + 52;
         };
-        int detail = detailWidth(route);
-        int reserved = detail == 0 ? 20 : detail + 22;
+        int detail = drawsDetail ? detailWidth(route) : 0;
+        int reserved = route == MenuRoute.ABOUT && rowIndex > 0
+                ? 0 : detail == 0 ? 20 : detail + 22;
         return new MenuRect(left, row.y() + 4, Math.max(1, row.right() - left - reserved),
                 Math.max(1, row.height() - 8));
+    }
+
+    static MenuRect rowLabelBoundsForAudit(MenuRoute route, MenuRect row, boolean drawsDetail,
+            int rowIndex) {
+        return labelBounds(route, row, drawsDetail, rowIndex);
     }
 
     private static MenuRect detailBounds(MenuRoute route, MenuRect row) {
@@ -729,16 +888,25 @@ public final class Proposal3MenuCompositor {
                 Math.max(1, row.height() - 8));
     }
 
+    static MenuRect rowDetailBoundsForAudit(MenuRoute route, MenuRect row) {
+        return detailBounds(route, row);
+    }
+
     private static int detailWidth(MenuRoute route) {
         return switch (route) {
             case SAVE_STATES -> 130;
             case AUDIO, TOUCH_CONTROLS -> 105;
-            case CONTROLLER_MAPPING -> 260;
+            case CONTROLLER_MAPPING -> 180;
             case OPTIONAL_DEVICES -> 175;
             case LIBRARY -> 190;
-            case SYSTEM -> 315;
+            case SYSTEM -> 310;
             default -> 0;
         };
+    }
+
+    private static Proposal3GlyphAtlas.Role detailTextRole(MenuRoute route) {
+        return route == MenuRoute.SYSTEM ? Proposal3GlyphAtlas.Role.SMALL
+                : Proposal3GlyphAtlas.Role.MEDIUM;
     }
 
     private static String focusedId(MenuPresentation p, Prepared prepared) {

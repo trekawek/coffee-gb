@@ -3,9 +3,19 @@ Pixelify Sans bitmap atlas provenance and license
 
 The packaged pixelify-sans-medium-atlas.png and
 pixelify-sans-semibold-atlas.png files were rasterized from the approved
-build-time font source PixelifySans.ttf. pixelify-sans-display-atlas.png is a
-nearest-neighbour 75% horizontal derivative of the SemiBold atlas for the
-mockup's tall condensed menu labels.
+build-time Pixelify Sans Regular, Medium, and SemiBold sources.
+pixelify-sans-display-atlas.png is a nearest-neighbour 75% horizontal
+derivative of the SemiBold atlas for the mockup's tall condensed menu labels.
+pixelify-sans-small-atlas.png is a nearest-neighbour 61% horizontal
+derivative of the 36 px Regular atlas for dense rows without changing family
+or cap height.
+pixelify-sans-notice-atlas.png is a nearest-neighbour 78% horizontal
+derivative of the 36 px Medium atlas for the About notice rows. It preserves
+the mockup's icon gap and right margin while remaining visibly wider than the
+dense Small role.
+All roles use the same Pixelify Sans glyph design and never invoke a platform
+font renderer. The deterministic build recipe is
+tools/generate_pixelify_atlases.py.
 
 Source SHA-256:
 9ba86cd010a4de309d263ceff8e8044092c9db7efda869620cb9ff1c4389e8a5
@@ -13,17 +23,25 @@ Source SHA-256:
 The source TTF is intentionally not packaged in ui-portable. Both RGBA atlases
 contain the portable compositor's fixed glyph alphabet.
 
-Medium atlas: 384x144
-Cell: 24x36; glyph advance: 17; space advance: 10
-SHA-256: c0003e3e71ab58fd1ce79f18cac1b21edb2a812fbeff2c5b3badef0129c42a0d
+Medium atlas: 576x144
+Cell: 36x36; glyph advance: 19; space advance: 8
+SHA-256: 1981fe7c3dc64099c171570cd44e0e64599d7b2afd79dc6707942b459d72c5e7
 
-SemiBold atlas: 512x192
-Cell: 32x48; glyph advance: 29; space advance: 17
-SHA-256: 435074e7fffede8ca887333518a49ab944de9677aff135342f5a1d6dc47f6361
+SemiBold atlas: 768x192
+Cell: 48x48; glyph advance: 27; space advance: 9
+SHA-256: d6c6a831b6d5481fa42abe5c1c125d5efe5dca68d16caf819681f20ddca38949
 
-Display atlas: 384x192
-Cell: 24x48; glyph advance: 18; space advance: 11
-SHA-256: 1d95c6029f34c5ab957b4987cb33263e571a4fbb9f770ef8494807b151e5c689
+Display atlas: 576x192
+Cell: 36x48; glyph advance: 20; space advance: 8
+SHA-256: 7018dabbb1b26cd014e34b2e1f10b707beb3fd9d17c4bc6040f640c624e7e9c9
+
+Small atlas: 352x144
+Cell: 22x36; glyph advance: 11; space advance: 5
+SHA-256: a7d109b7dead9ad3d155c49276e1fb4014b51a5ea759e11dc3bdd00a475b587d
+
+Notice atlas: 448x144
+Cell: 28x36; glyph advance: 15; space advance: 7
+SHA-256: 16fd8d8fe29652cc65ab60ef8fead0827d415c2bca1b9be7746f4e340d62f3a2
 
 Pixelify Sans is Copyright 2021 The Pixelify Sans Project Authors
 (https://github.com/eifetx/Pixelify-Sans) and is distributed under the SIL Open
