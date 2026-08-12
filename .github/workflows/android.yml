@@ -25,7 +25,7 @@ jobs:
       - name: Install Android 36 SDK packages
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
       - name: Install same-checkout portable artifacts
-        run: mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
+        run: mvn -B -pl controller,ui-portable -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
       - name: Test, lint, and assemble debug and R8 release APKs
         run: >-
           ./android/gradlew -p android --no-daemon
@@ -70,7 +70,7 @@ jobs:
       - name: Install Android 36 SDK packages
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
       - name: Install same-checkout portable artifacts
-        run: mvn -B -pl controller -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
+        run: mvn -B -pl controller,ui-portable -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
       - name: Enable KVM for Android emulators
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

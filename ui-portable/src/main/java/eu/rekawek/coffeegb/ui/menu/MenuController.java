@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -13,8 +13,8 @@ import java.util.Objects;
  * Thread-safe coordinator for menu navigation and edge-triggered input.
  *
  * <p>All state transitions are immutable reducer transitions. The listener receives snapshots and
- * semantic actions after the lock is released, so an Android callback can safely call back into
- * this controller while a render thread retains the previous presentation.
+ * semantic actions after the lock is released, so a host callback can safely call back into this
+ * controller while a renderer retains the previous presentation.
  */
 public final class MenuController implements MenuTouchInput {
 
@@ -466,7 +466,7 @@ public final class MenuController implements MenuTouchInput {
         }
     }
 
-    /** Semantic menu callbacks; implementations normally run on Android's main thread. */
+    /** Semantic menu callbacks; implementations normally run on the host UI thread. */
     public interface Listener {
         void onPresentation(MenuPresentation presentation);
 

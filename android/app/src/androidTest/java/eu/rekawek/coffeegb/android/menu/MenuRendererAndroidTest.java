@@ -7,6 +7,8 @@ import android.graphics.RectF;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 

@@ -7,7 +7,7 @@ import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
-import eu.rekawek.coffeegb.android.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;

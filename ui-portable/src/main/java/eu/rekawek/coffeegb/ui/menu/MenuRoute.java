@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 /** Stable page identities used by the in-screen emulator menu. */
 public enum MenuRoute {

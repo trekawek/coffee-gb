@@ -163,6 +163,7 @@ android {
 dependencies {
   coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
   implementation("eu.rekawek.coffeegb:controller:$coffeeGbVersion")
+  implementation("eu.rekawek.coffeegb:ui-portable:$coffeeGbVersion")
   implementation("androidx.camera:camera-camera2:1.6.1")
   implementation("androidx.camera:camera-core:1.6.1")
   implementation("androidx.camera:camera-lifecycle:1.6.1")

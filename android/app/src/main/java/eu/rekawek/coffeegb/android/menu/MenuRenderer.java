@@ -7,6 +7,10 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+
 import java.util.Locale;
 import java.util.List;
 

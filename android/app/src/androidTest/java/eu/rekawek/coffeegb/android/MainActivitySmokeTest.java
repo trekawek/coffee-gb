@@ -136,20 +136,20 @@ public class MainActivitySmokeTest {
                     == RuntimeState.Phase.RUNNING);
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
             moveFocusTo(scenario, instrumentation, "settings");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             moveFocusTo(scenario, instrumentation, "audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.AUDIO);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.AUDIO);
 
             press(instrumentation, KeyEvent.KEYCODE_DPAD_LEFT, 2);
             moveFocusTo(scenario, instrumentation, "mute-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             moveFocusTo(scenario, instrumentation, "cancel-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             scenario.onActivity(activity -> {
                 assertEquals(100, activity.getPreferences(MainActivity.MODE_PRIVATE)
                         .getInt("audio.volume", 100));
@@ -159,13 +159,13 @@ public class MainActivitySmokeTest {
 
             moveFocusTo(scenario, instrumentation, "audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.AUDIO);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.AUDIO);
             press(instrumentation, KeyEvent.KEYCODE_DPAD_LEFT, 1);
             moveFocusTo(scenario, instrumentation, "mute-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             moveFocusTo(scenario, instrumentation, "save-audio");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             scenario.onActivity(activity -> {
                 assertEquals(95, activity.getPreferences(MainActivity.MODE_PRIVATE)
                         .getInt("audio.volume", 100));
@@ -174,7 +174,7 @@ public class MainActivitySmokeTest {
             });
 
             sendSystemBack(instrumentation);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
             sendSystemBack(instrumentation);
             scenario.onActivity(activity -> {
@@ -203,28 +203,28 @@ public class MainActivitySmokeTest {
                     == RuntimeState.Phase.RUNNING);
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
             moveFocusTo(scenario, instrumentation, "settings");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             moveFocusTo(scenario, instrumentation, "data-media");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.DATA_MEDIA);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.DATA_MEDIA);
             moveFocusTo(scenario, instrumentation, "import-battery");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.CONFIRM_ACTION);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.CONFIRM_ACTION);
             moveFocusTo(scenario, instrumentation, "confirm");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
 
             await("native picker resumed", () -> externalSurfaceActive(scenario)
                     && nativePickerResumed(instrumentation));
             sendSystemBack(instrumentation);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.DATA_MEDIA);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.DATA_MEDIA);
             awaitFocused(scenario, "import-battery");
             scenario.onActivity(activity -> assertFalse(activity.isFinishing()));
 
             scenario.recreate();
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.DATA_MEDIA);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.DATA_MEDIA);
             awaitFocused(scenario, "import-battery");
             scenario.onActivity(activity -> {
                 long latestGeneration = longField(activity, "observedGeneration");
@@ -265,19 +265,19 @@ public class MainActivitySmokeTest {
                     == RuntimeState.Phase.RUNNING);
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
             moveFocusTo(scenario, instrumentation, "settings");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             moveFocusTo(scenario, instrumentation, "about");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.ABOUT);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.ABOUT);
             moveFocusTo(scenario, instrumentation, "source-notices");
 
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.recreate();
             scenario.moveToState(Lifecycle.State.RESUMED);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.ABOUT);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.ABOUT);
             assertFocused(scenario, "source-notices");
         } finally {
             if (runtime.get() != null) {
@@ -318,21 +318,21 @@ public class MainActivitySmokeTest {
             });
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.PAUSE_CONSOLE);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
             moveFocusTo(scenario, instrumentation, "settings");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             moveFocusTo(scenario, instrumentation, "optional-devices");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.OPTIONAL_DEVICES);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTIONAL_DEVICES);
             moveFocusTo(scenario, instrumentation, "live-camera");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             moveFocusTo(scenario, instrumentation, "save-devices");
             scenario.onActivity(activity -> {
-                eu.rekawek.coffeegb.android.menu.MenuController controller =
+                eu.rekawek.coffeegb.ui.menu.MenuController controller =
                         menuController(activity);
-                controller.onKeyDown(eu.rekawek.coffeegb.android.menu.MenuKey.A, false);
-                controller.onKeyUp(eu.rekawek.coffeegb.android.menu.MenuKey.A);
+                controller.onKeyDown(eu.rekawek.coffeegb.ui.menu.MenuKey.A, false);
+                controller.onKeyUp(eu.rekawek.coffeegb.ui.menu.MenuKey.A);
                 assertFalse(menuController(activity).visible());
                 assertFalse(booleanField(activity, "menuPauseOwned"));
                 eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState surface =
@@ -343,7 +343,7 @@ public class MainActivitySmokeTest {
             });
             awaitStableCameraPermissionSurface(instrumentation, permissionReadiness);
             cancelCameraPermissionSurface(instrumentation);
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             awaitFocused(scenario, "optional-devices");
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
             scenario.onActivity(activity -> {
@@ -357,7 +357,7 @@ public class MainActivitySmokeTest {
             });
 
             scenario.recreate();
-            awaitRoute(scenario, eu.rekawek.coffeegb.android.menu.MenuRoute.SETTINGS);
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
             scenario.onActivity(activity -> assertEquals("CAMERA DENIED / DISABLED",
                     stringField(activity, "optionalDevicesStatus")));
         } finally {
@@ -1104,19 +1104,19 @@ public class MainActivitySmokeTest {
         }
     }
 
-    private static eu.rekawek.coffeegb.android.menu.MenuController menuController(
+    private static eu.rekawek.coffeegb.ui.menu.MenuController menuController(
             MainActivity activity) {
         try {
             Field field = MainActivity.class.getDeclaredField("menuController");
             field.setAccessible(true);
-            return (eu.rekawek.coffeegb.android.menu.MenuController) field.get(activity);
+            return (eu.rekawek.coffeegb.ui.menu.MenuController) field.get(activity);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
         }
     }
 
     private static String focusedItemId(MainActivity activity) {
-        eu.rekawek.coffeegb.android.menu.MenuStackSnapshot snapshot =
+        eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot snapshot =
                 menuController(activity).snapshot();
         return snapshot.frames().get(snapshot.frames().size() - 1).focusedItemId();
     }
@@ -1212,7 +1212,7 @@ public class MainActivitySmokeTest {
 
     private static void assertFocused(ActivityScenario<MainActivity> scenario, String expected) {
         scenario.onActivity(activity -> {
-            eu.rekawek.coffeegb.android.menu.MenuStackSnapshot snapshot =
+            eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot snapshot =
                     menuController(activity).snapshot();
             assertTrue(snapshot.visible());
             assertEquals(expected, snapshot.frames().get(snapshot.frames().size() - 1)
@@ -1225,7 +1225,7 @@ public class MainActivitySmokeTest {
         await("focus " + expected, () -> {
             AtomicReference<String> focused = new AtomicReference<>();
             scenario.onActivity(activity -> {
-                eu.rekawek.coffeegb.android.menu.MenuStackSnapshot snapshot =
+                eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot snapshot =
                         menuController(activity).snapshot();
                 if (snapshot.visible()) {
                     focused.set(snapshot.frames().get(snapshot.frames().size() - 1)
@@ -1248,7 +1248,7 @@ public class MainActivitySmokeTest {
         for (int attempt = 0; attempt < 20; attempt++) {
             AtomicReference<String> focused = new AtomicReference<>();
             scenario.onActivity(activity -> {
-                eu.rekawek.coffeegb.android.menu.MenuStackSnapshot snapshot =
+                eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot snapshot =
                         menuController(activity).snapshot();
                 if (snapshot.visible()) {
                     focused.set(snapshot.frames().get(snapshot.frames().size() - 1)
@@ -1264,9 +1264,9 @@ public class MainActivitySmokeTest {
     }
 
     private static void awaitRoute(ActivityScenario<MainActivity> scenario,
-            eu.rekawek.coffeegb.android.menu.MenuRoute expected) throws Exception {
+            eu.rekawek.coffeegb.ui.menu.MenuRoute expected) throws Exception {
         await("route " + expected, () -> {
-            AtomicReference<eu.rekawek.coffeegb.android.menu.MenuRoute> route =
+            AtomicReference<eu.rekawek.coffeegb.ui.menu.MenuRoute> route =
                     new AtomicReference<>();
             scenario.onActivity(activity -> route.set(menuController(activity).route()));
             return route.get() == expected;

@@ -1,8 +1,8 @@
 package eu.rekawek.coffeegb.android;
 
-import eu.rekawek.coffeegb.android.menu.MenuPageSpec;
-import eu.rekawek.coffeegb.android.menu.MenuPreview;
-import eu.rekawek.coffeegb.android.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
 import java.util.ArrayList;
