@@ -5,7 +5,6 @@ import android.graphics.PointF;
 import android.graphics.RectF;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -16,6 +15,7 @@ import org.junit.runner.RunWith;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(AndroidJUnit4.class)
@@ -34,15 +34,16 @@ public class RasterSkinAndroidTest {
     }
 
     @Test
-    public void activityMenuOverlayIsFortyEightDpAndCenteredOnMappedSpeaker() {
+    public void transparentMenuOverlayIsFortyEightDpAndCenteredOnBakedGrille() {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             InstrumentationRegistry.getInstrumentation().waitForIdleSync();
             scenario.onActivity(activity -> {
                 CoffeeGbSurfaceView video = findView(activity.getWindow().getDecorView(),
                         CoffeeGbSurfaceView.class);
-                Button menu = findView(activity.getWindow().getDecorView(), Button.class);
+                View menu = findMenuOverlay(activity.getWindow().getDecorView());
                 assertNotNull("video", video);
                 assertNotNull("menu button", menu);
+                assertEquals("plain transparent View", View.class, menu.getClass());
                 assertTrue("video laid out", video.getWidth() > 0 && video.getHeight() > 0);
 
                 PointF expected = video.menuControlCenter(video.getWidth(), video.getHeight());
@@ -55,8 +56,33 @@ public class RasterSkinAndroidTest {
                 assertEquals(target, menu.getHeight());
                 assertEquals(expected.x, actualX, 1f);
                 assertEquals(expected.y, actualY, 1f);
+                assertNull("transparent menu background", menu.getBackground());
+                assertNull("transparent menu foreground", menu.getForeground());
+                assertNull("transparent menu state animator", menu.getStateListAnimator());
+                assertEquals(0.0f, menu.getElevation(), 0.0f);
+                assertTrue("menu remains clickable", menu.isClickable());
+                assertTrue("menu remains focusable", menu.isFocusable());
+                assertTrue("menu remains accessibility-visible",
+                        menu.isImportantForAccessibility());
             });
         }
+    }
+
+    private static View findMenuOverlay(View view) {
+        CharSequence description = view.getContentDescription();
+        if (description != null && (description.equals("Open Coffee GB menu")
+                || description.equals("Close Coffee GB menu"))) {
+            return view;
+        }
+        if (view instanceof ViewGroup group) {
+            for (int index = 0; index < group.getChildCount(); index++) {
+                View found = findMenuOverlay(group.getChildAt(index));
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private static void assertResourceGeometry(RasterSkin skin, int viewWidth, int viewHeight,

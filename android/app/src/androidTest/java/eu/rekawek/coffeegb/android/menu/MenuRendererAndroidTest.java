@@ -2,59 +2,94 @@ package eu.rekawek.coffeegb.android.menu;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
-import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.RectF;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
-import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 
+/** Android-side contract tests for the PNG-only Proposal 3 adapter. */
 @RunWith(AndroidJUnit4.class)
 public class MenuRendererAndroidTest {
 
     @Test
-    public void shortWideThumbnailIsClippedToItsBounds() {
-        int untouched = Color.MAGENTA;
-        Bitmap bitmap = Bitmap.createBitmap(360, 100, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(untouched);
-        RectF bounds = new RectF(20, 30, 340, 58);
+    public void canonicalArtworkIsAspectFitWithoutStretchingInBothApertures() {
+        Rect portrait = MenuRenderer.fitDestination(new Rect(0, 0, 758, 685));
+        assertRect(portrait, 0, 41, 758, 644);
 
-        new MenuRenderer().drawThumbnail(new Canvas(bitmap), bounds);
-
-        for (int y = 0; y < bitmap.getHeight(); y++) {
-            for (int x = 0; x < bitmap.getWidth(); x++) {
-                boolean inside = x >= (int) bounds.left && x < (int) bounds.right
-                        && y >= (int) bounds.top && y < (int) bounds.bottom;
-                if (!inside) {
-                    assertEquals("pixel outside thumbnail at " + x + "," + y,
-                            untouched, bitmap.getPixel(x, y));
-                }
-            }
-        }
-        assertNotEquals(untouched, bitmap.getPixel(21, 31));
+        Rect landscape = MenuRenderer.fitDestination(new Rect(0, 0, 919, 717));
+        assertRect(landscape, 9, 0, 909, 717);
     }
 
     @Test
-    public void boundedPrinterPreviewIsAspectFitAndClippedToPanel() {
-        int untouched = Color.MAGENTA;
-        Bitmap bitmap = Bitmap.createBitmap(240, 180, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(untouched);
-        int[] pixels = new int[20 * 100];
-        java.util.Arrays.fill(pixels, Color.BLACK);
-        RectF bounds = new RectF(40, 20, 200, 160);
+    public void repeatedPresentationReusesBitmapForTheSameFrameIdentity() {
+        MenuRenderer renderer = new MenuRenderer();
+        MenuPresentation presentation = visiblePausePresentation();
+        Bitmap canvas = Bitmap.createBitmap(1000, 900, Bitmap.Config.ARGB_8888);
+        try {
+            renderer.draw(new Canvas(canvas), presentation, new RectF(50, 60, 950, 760));
+            Bitmap first = renderer.cachedBitmapForTest();
+            MenuArgbFrame firstFrame = renderer.cachedFrameForTest();
+            renderer.draw(new Canvas(canvas), presentation, new RectF(50, 60, 950, 760));
 
-        new MenuRenderer().drawPreview(
-                new Canvas(bitmap), MenuPreview.ready(20, 100, pixels), bounds);
+            assertNotNull(first);
+            assertNotNull(firstFrame);
+            assertSame(first, renderer.cachedBitmapForTest());
+            assertSame(firstFrame, renderer.cachedFrameForTest());
+        } finally {
+            canvas.recycle();
+        }
+    }
 
-        assertEquals(untouched, bitmap.getPixel(10, 10));
-        assertEquals(untouched, bitmap.getPixel(220, 170));
-        assertNotEquals(untouched, bitmap.getPixel(120, 90));
-        assertEquals(Color.rgb(239, 240, 211), bitmap.getPixel(45, 25));
+    @Test
+    public void matteFillsOnlyApertureLetterboxAndNeverTouchesTheShell() {
+        MenuRenderer renderer = new MenuRenderer();
+        MenuPresentation presentation = visiblePausePresentation();
+        Bitmap canvas = Bitmap.createBitmap(1000, 900, Bitmap.Config.ARGB_8888);
+        canvas.eraseColor(0xffff00ff);
+        try {
+            renderer.draw(new Canvas(canvas), presentation, new RectF(50, 60, 950, 760));
+
+            assertEquals(0xffff00ff, canvas.getPixel(20, 20));
+            assertEquals(MenuRenderer.MENU_MATTE, canvas.getPixel(55, 100));
+        } finally {
+            canvas.recycle();
+        }
+    }
+
+    private static MenuPresentation visiblePausePresentation() {
+        MenuController controller = new MenuController(new MenuController.Listener() {
+            @Override
+            public void onPresentation(MenuPresentation presentation) {
+            }
+
+            @Override
+            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
+            }
+
+            @Override
+            public void onHeaderSelected(MenuRoute route) {
+            }
+        });
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+        return controller.presentation();
+    }
+
+    private static void assertRect(Rect actual, int left, int top, int right, int bottom) {
+        assertEquals(left, actual.left);
+        assertEquals(top, actual.top);
+        assertEquals(right, actual.right);
+        assertEquals(bottom, actual.bottom);
     }
 }

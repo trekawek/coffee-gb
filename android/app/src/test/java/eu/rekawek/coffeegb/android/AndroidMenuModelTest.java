@@ -48,8 +48,8 @@ public class AndroidMenuModelTest {
                 "import-battery", "export-battery", "import-state-0", "export-state-0",
                 "export-screenshot", "preview-printer-paper", "back");
         assertIds(AndroidMenuModel.aboutPage("1.2.3", "OPEN"),
-                "version", "license", "network", "storage", "live-camera", "source",
-                "third-party", "source-notices", "back");
+                "privacy-notices", "network", "storage", "live-camera",
+                "source-notices", "back");
     }
 
     @Test
@@ -136,9 +136,21 @@ public class AndroidMenuModelTest {
         assertTrue(about.sideLines().contains("MIT LICENSE"));
         assertFalse(about.sideLines().stream().anyMatch(line -> line.contains("GPL")));
 
-        MenuPageSpec printer = AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "READY");
-        assertFalse(printer.items().get(0).enabled());
-        assertEquals("back", printer.preferredFocusId());
+        for (MenuPreview preview : List.of(MenuPreview.loading(), MenuPreview.empty())) {
+            MenuPageSpec printer = AndroidMenuModel.printerPaperPage(preview, "READY");
+            assertFalse(printer.items().get(0).enabled());
+            assertFalse(printer.items().get(1).enabled());
+            assertEquals("back", printer.preferredFocusId());
+            assertTrue(printer.items().get(2).enabled());
+        }
+    }
+
+    @Test
+    public void printerPreviewReadyIsTheOnlyStateThatEnablesPaperActions() {
+        assertFalse(AndroidMenuModel.printerPreviewReady(MenuPreview.loading()));
+        assertFalse(AndroidMenuModel.printerPreviewReady(MenuPreview.empty()));
+        assertTrue(AndroidMenuModel.printerPreviewReady(
+                MenuPreview.ready(1, 1, new int[]{0xffffffff})));
     }
 
     @Test
