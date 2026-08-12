@@ -29,6 +29,7 @@ internal class SwingProposal3Menu(
     private val commands: PortableMenuCommandBridge,
     private val releaseGameplay: () -> Unit,
     private val printer: PortableMenuPrinterBridge? = null,
+    private val onVisibilityChanged: (Boolean) -> Unit = {},
 ) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopArchiveSelectionHost {
 
   private data class PendingArchiveSelection(
@@ -797,7 +798,10 @@ internal class SwingProposal3Menu(
           compositor.compose(presentation).orElseThrow {
             IllegalStateException("Visible Proposal 3 presentation did not compose")
           }
-      renderedVisible = true
+      if (!renderedVisible) {
+        renderedVisible = true
+        onVisibilityChanged(true)
+      }
       frameSink(frame)
       return
     }
@@ -805,6 +809,7 @@ internal class SwingProposal3Menu(
     frameSink(null)
     if (renderedVisible) {
       renderedVisible = false
+      onVisibilityChanged(false)
       releaseGameplaySoon()
       if (pauseOwnedByMenu) {
         pauseOwnedByMenu = false
