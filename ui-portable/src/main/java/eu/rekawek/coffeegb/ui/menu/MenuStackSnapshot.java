@@ -1,11 +1,11 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Immutable route stack and per-route focus used across native Android surfaces. */
+/** Immutable route stack and per-route focus used across host surfaces. */
 public final class MenuStackSnapshot {
 
     private static final MenuStackSnapshot HIDDEN = new MenuStackSnapshot(List.of());

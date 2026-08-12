@@ -338,6 +338,7 @@
     <modules>
         <module>core</module>
         <module>android-portable</module>
+        <module>ui-portable</module>
         <module>controller</module>
         <module>cli</module>
         <module>swing</module>

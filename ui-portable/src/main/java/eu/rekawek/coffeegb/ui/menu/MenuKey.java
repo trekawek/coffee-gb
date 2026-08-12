@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 /** Logical controls understood by the in-screen menu. */
 public enum MenuKey {

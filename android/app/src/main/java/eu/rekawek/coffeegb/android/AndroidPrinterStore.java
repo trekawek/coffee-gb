@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.graphics.Bitmap;
-import eu.rekawek.coffeegb.android.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.controller.Controller;
 
 import java.util.ArrayList;

@@ -9,10 +9,10 @@ import android.os.Bundle;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 
-import eu.rekawek.coffeegb.android.menu.MenuController;
-import eu.rekawek.coffeegb.android.menu.MenuPageSpec;
-import eu.rekawek.coffeegb.android.menu.MenuPresentation;
-import eu.rekawek.coffeegb.android.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
@@ -73,12 +73,12 @@ public class NineRouteRendererAndroidTest {
             }
 
             @Override
-            public void onItemSelected(eu.rekawek.coffeegb.android.menu.MenuRoute route,
+            public void onItemSelected(eu.rekawek.coffeegb.ui.menu.MenuRoute route,
                     String id, boolean secondary) {
             }
 
             @Override
-            public void onHeaderSelected(eu.rekawek.coffeegb.android.menu.MenuRoute route) {
+            public void onHeaderSelected(eu.rekawek.coffeegb.ui.menu.MenuRoute route) {
             }
         });
         controller.setPage(page);

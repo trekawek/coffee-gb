@@ -1,4 +1,4 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 /** A small, allocation-free command vocabulary for the menu reducer. */
 final class MenuCommand {

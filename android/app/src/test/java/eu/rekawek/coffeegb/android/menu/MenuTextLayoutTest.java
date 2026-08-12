@@ -1,5 +1,9 @@
 package eu.rekawek.coffeegb.android.menu;
 
+import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+
 import org.junit.Test;
 
 import java.util.EnumSet;
@@ -21,7 +25,21 @@ public class MenuTextLayoutTest {
             float listLeft = portrait ? 8.0f : 123.0f;
             float listRight = portrait ? 232.0f : 312.0f;
             for (MenuRoute route : PR3_ROUTES) {
-                MenuPage page = MenuPages.forRoute(route);
+                MenuController controller = new MenuController(new MenuController.Listener() {
+                    @Override
+                    public void onPresentation(MenuPresentation presentation) {
+                    }
+
+                    @Override
+                    public void onItemSelected(MenuRoute route, String id, boolean secondary) {
+                    }
+
+                    @Override
+                    public void onHeaderSelected(MenuRoute route) {
+                    }
+                });
+                controller.show(route);
+                MenuPresentation page = controller.presentation();
                 float actionWidth = page.headerAction().isEmpty() ? 0.0f : 68.0f;
                 MenuTextLayout.HeaderColumns header = MenuTextLayout.header(5.0f,
                         headerRight, width(page.title(), 12.0f), !page.context().isEmpty(),
@@ -31,7 +49,7 @@ public class MenuTextLayoutTest {
                 assertFits(page.title(), header.title(), 12.0f);
                 assertFits(page.context(), header.context(), 8.0f);
 
-                for (MenuItem item : page.items()) {
+                for (MenuPresentation.Item item : page.items()) {
                     MenuTextLayout.RowColumns row = MenuTextLayout.row(listLeft, listRight,
                             !item.detail().isEmpty());
                     assertSeparated(route + " row " + item.id(), row.label(), row.detail());

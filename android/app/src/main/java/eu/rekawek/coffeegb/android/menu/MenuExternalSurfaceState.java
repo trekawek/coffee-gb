@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.android.menu;
 
+import eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot;
+
 import java.util.Objects;
 
 /**

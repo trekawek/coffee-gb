@@ -12,10 +12,10 @@ import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
-import eu.rekawek.coffeegb.android.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
-import eu.rekawek.coffeegb.android.menu.MenuKey;
-import eu.rekawek.coffeegb.android.menu.MenuTouchInput;
+import eu.rekawek.coffeegb.ui.menu.MenuKey;
+import eu.rekawek.coffeegb.ui.menu.MenuTouchInput;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
 import java.util.ArrayList;

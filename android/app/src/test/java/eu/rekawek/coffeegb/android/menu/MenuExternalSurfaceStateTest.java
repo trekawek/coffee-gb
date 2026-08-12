@@ -1,5 +1,8 @@
 package eu.rekawek.coffeegb.android.menu;
 
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot;
+
 import org.junit.Test;
 
 import java.util.List;

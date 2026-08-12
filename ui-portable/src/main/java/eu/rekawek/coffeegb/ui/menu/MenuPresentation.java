@@ -1,14 +1,14 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /**
- * Immutable render-thread handoff for one menu frame.
+ * Immutable renderer handoff for one menu frame.
  *
  * <p>The reducer owns construction. Consumers can retain a snapshot without synchronizing with
- * the controller or UI thread; all strings and collections exposed by this class are immutable.
+ * the controller or host thread; all strings and collections exposed by this class are immutable.
  */
 public final class MenuPresentation {
 
@@ -136,7 +136,7 @@ public final class MenuPresentation {
         return Collections.unmodifiableList(copy);
     }
 
-    /** Immutable row data used by the Canvas renderer. */
+    /** Immutable row data exposed to platform renderers. */
     public static final class Item {
 
         private final String id;

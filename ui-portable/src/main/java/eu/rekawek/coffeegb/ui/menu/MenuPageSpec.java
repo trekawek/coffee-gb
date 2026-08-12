@@ -1,11 +1,11 @@
-package eu.rekawek.coffeegb.android.menu;
+package eu.rekawek.coffeegb.ui.menu;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
-/** Immutable page data supplied by the Android coordinator, including dynamic runtime rows. */
+/** Immutable page data supplied by the host coordinator, including dynamic runtime rows. */
 public final class MenuPageSpec {
 
     private final MenuRoute route;
