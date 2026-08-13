@@ -551,7 +551,7 @@ class BasicControllerStateUxTest {
             RewindManager(enabled = false),
             StateWorkspaceFactory { paths -> workspace(paths, persistence) },
             StateOperationWorkerFactory.DEFAULT,
-            closeTimeoutMillis = 300,
+            closeTimeoutMillis = CLOSE_PERSISTENCE_TIMEOUT_MILLIS,
         )
     var closed = false
     controller.startController()
@@ -1469,6 +1469,9 @@ class BasicControllerStateUxTest {
   private companion object {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
     const val TIMEOUT_SECONDS = 10L
+    // The writer is deliberately held in flight. Leave enough time for the retry's real encode
+    // and file write after it is released on contended CI workers.
+    const val CLOSE_PERSISTENCE_TIMEOUT_MILLIS = 2_000L
   }
 
   private class ToggleFailWriter : AtomicFileWriter() {

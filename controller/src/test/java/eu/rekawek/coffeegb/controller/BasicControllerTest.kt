@@ -248,7 +248,13 @@ class BasicControllerTest {
           PreparedSession.Ready(config, gameboy)
         }
     val controller =
-        BasicController(eventBus, testProperties(), null, preparer, closeTimeoutMillis = 300)
+        BasicController(
+            eventBus,
+            testProperties(),
+            null,
+            preparer,
+            closeTimeoutMillis = CLOSE_PERSISTENCE_TIMEOUT_MILLIS,
+        )
 
     controller.startController()
     try {
@@ -336,7 +342,13 @@ class BasicControllerTest {
           PreparedSession.Ready(config, gameboy)
         }
     val controller =
-        BasicController(eventBus, testProperties(), null, preparer, closeTimeoutMillis = 300)
+        BasicController(
+            eventBus,
+            testProperties(),
+            null,
+            preparer,
+            closeTimeoutMillis = CLOSE_PERSISTENCE_TIMEOUT_MILLIS,
+        )
 
     controller.startController()
     try {
@@ -1623,6 +1635,9 @@ class BasicControllerTest {
     val ROM = Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile()
 
     const val TIMEOUT_SECONDS = 10L
+    // These tests intentionally keep a previous physical writer alive. The retry performs a
+    // real autosave, so it needs CI scheduling headroom once that writer is released.
+    const val CLOSE_PERSISTENCE_TIMEOUT_MILLIS = 2_000L
   }
 
   private class ToggleFailWriter : AtomicFileWriter() {
