@@ -120,7 +120,10 @@ public class NativePackageIT {
             assertTrue(Files.size(result.icon()) > 5_000);
             assertFalse(Files.exists(result.root().resolve("associations")));
             assertEquals(
-                    "arguments=--debug\nwin-console=true\n",
+                    "arguments=--debug\n"
+                            + "win-console=true\n"
+                            + "win-shortcut=false\n"
+                            + "win-menu=false\n",
                     Files.readString(result.windowsConsoleLauncher()));
             String inventory = Files.readString(result.inventory());
             assertTrue(inventory.contains("native.source-format=stored-zip\n"));

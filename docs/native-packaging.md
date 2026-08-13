@@ -3,8 +3,8 @@
 This document defines the native packaging and release-validation contract. Maven remains the
 authoritative application build. Target staging, minimized runtimes, application images, and native
 installers consume Maven outputs; they never compile a second application copy or resolve a second
-dependency graph. Windows release EXEs are self-extracting portable application images, not
-installers.
+dependency graph. Windows releases use MSI installers by default; self-extracting portable EXEs
+remain an explicit optional package type.
 
 ## Desktop artifacts
 
@@ -127,8 +127,8 @@ neutral JAR, universal JAR, and CycloneDX SBOM, and then invoke the same Java pa
 ```
 
 ```powershell
-# Windows x86-64 portable EXE (the target's default package)
-.\packaging\package-native.ps1 windows-x86-64 exe
+# Windows x86-64 MSI (the target's default installer)
+.\packaging\package-native.ps1 windows-x86-64 msi
 ```
 
 Both wrappers use the portable `mvn` command from `PATH`. Set `COFFEE_GB_MAVEN_COMMAND` to an
@@ -141,7 +141,7 @@ the host; after selection, the tool rejects a mismatched host OS or architecture
 | Target | Host | Default package | Other validated type | Host prerequisites |
 | --- | --- | --- | --- | --- |
 | `linux-x86-64` | Linux x86-64 | DEB | RPM, app-image | JDK 21+, `dpkg-deb` and `desktop-file-validate` for DEB, or `rpmbuild` for RPM |
-| `windows-x86-64` | Windows x86-64 | Portable EXE | MSI, app-image | JDK 21+, 7-Zip with `7z.sfx` |
+| `windows-x86-64` | Windows x86-64 | MSI | Portable EXE, app-image | JDK 21+, WiX 3.11 (`candle.exe`, `light.exe`) for MSI; 7-Zip with `7z.sfx` for the optional portable EXE |
 | `macos-x86-64` | macOS x86-64 | DMG | PKG, app-image | JDK 21+, Xcode command-line packaging tools |
 | `macos-aarch64` | macOS arm64 | DMG | PKG, app-image | arm64 JDK 21+, Xcode command-line packaging tools |
 
@@ -231,11 +231,13 @@ type. Linux packages install a freedesktop `Game;` menu shortcut while retaining
 section `games`. A DEB build extracts the package-owned
 `/opt/coffee-gb/lib/coffee-gb-Coffee_GB.desktop` payload, runs `desktop-file-validate`, and proves
 the bounded `postinst` script registers that exact file. It also verifies the section and expected
-`libasound2t64` dependency. The Windows portable EXE extracts to a temporary directory, launches
-Coffee GB, and creates no shortcut, uninstall identity, or registry entry; the optional MSI retains
-the fixed upgrade UUID, help/update URLs, and install-directory chooser. macOS packages set the Games
-application category and bundle identifier. The desktop ROM-open service remains available for
-explicit application-directed open-file events; packaging never claims those file types.
+`libasound2t64` dependency. The Windows MSI retains the fixed upgrade UUID, help/update URLs, and
+install-directory chooser, and installs Coffee GB's desktop and Start Menu shortcuts. Its secondary
+console launcher is intentionally not shortcut-eligible. The optional portable EXE extracts to a
+temporary directory, launches Coffee GB, and creates no shortcut, uninstall identity, or registry
+entry. macOS packages set the Games application category and bundle identifier. The desktop ROM-open
+service remains available for explicit application-directed open-file events; packaging never claims
+those file types.
 
 ## SBOM, checksums, and release signing
 
@@ -302,14 +304,14 @@ Protected release signing uses a two-stage image flow before any digest is final
 6. only then copy the verified Maven dependency SBOM and target-native SBOM and write the result
    manifest and checksums.
 
-On Windows the policy is deliberately EXE-only. It deterministically Authenticode-signs every
-visible executable/DLL in the app image with SHA-256 and an RFC 3161 HTTPS timestamp, appending
-rather than replacing an existing vendor signature, and requires `/pa /all /tw` verification
-before portable-EXE creation, in jpackage's app image, and after extraction. Digest-locked
-third-party native-source binaries are stored rather than compressed inside a deterministic ZIP;
-platform signing seals that resource without rewriting the upstream bytes later checked during
-runtime extraction. The policy then signs and verifies the outer EXE. On macOS the protected path
-is deliberately DMG-only: jpackage signs the `.app` with its JDK-enabling default entitlements,
+On Windows the policy supports MSI and portable EXE installers. It deterministically
+Authenticode-signs every visible executable/DLL in the app image with SHA-256 and an RFC 3161 HTTPS
+timestamp, appending rather than replacing an existing vendor signature, and requires `/pa /all /tw`
+verification before installer construction, in jpackage's app image, and after extraction.
+Digest-locked third-party native-source binaries are stored rather than compressed inside a
+deterministic ZIP; platform signing seals that resource without rewriting the upstream bytes later
+checked during runtime extraction. The policy then signs and verifies the outer MSI or EXE. On macOS
+the protected path is deliberately DMG-only: jpackage signs the `.app` with its JDK-enabling default entitlements,
 `codesign --deep --strict` verifies the complete bundle, and an explicit code requirement proves
 that the application signature contains
 `com.apple.security.cs.disable-library-validation=true`, which is required to load the separately
@@ -337,8 +339,8 @@ libraries have additional ABI and package requirements. Windows 10 x86-64 or new
 newer on the packaged architecture remain the other project release floors. These are conservative
 tested floors, not a claim that every older machine fails. Each native package bundles its Java
 runtime, so users do not install Java separately. Linux desktop integration depends on the
-distribution's ordinary menu/MIME tools, Windows portable-EXE creation depends on 7-Zip's SFX
-module, and macOS
+distribution's ordinary menu/MIME tools, Windows MSI creation depends on WiX 3.11, optional
+portable-EXE creation depends on 7-Zip's SFX module, and macOS
 Gatekeeper warns for unsigned local/PR builds; only protected release builds may be signed and
 notarized.
 
@@ -435,8 +437,8 @@ keyed by the POMs; `target/`, native caches, settings, ROMs, batteries, and stat
 never cached. Target artifacts expire after seven days and the complete gated bundle after
 fourteen.
 
-Every host verifies jpackage's pre-package payload, then extracts the actual DEB/portable EXE or
-mounts the actual DMG and repeats the checks. Inspection requires:
+Every host verifies jpackage's pre-package payload, then extracts the actual DEB, administratively
+extracts and installs the MSI, or mounts the actual DMG and repeats the checks. Inspection requires:
 
 - exactly one linked runtime and the locked ten-module closure;
 - the exact target-native allowlist and digests, with no foreign native;

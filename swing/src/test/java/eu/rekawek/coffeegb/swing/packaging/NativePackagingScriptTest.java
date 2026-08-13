@@ -60,6 +60,7 @@ public class NativePackagingScriptTest {
         assertTrue(ps.contains("COFFEE_GB_MAVEN_COMMAND"));
         assertTrue(ps.contains("COFFEE_GB_7ZIP_COMMAND"));
         assertTrue(ps.contains("7z.sfx"));
+        assertTrue(ps.contains("$Target -eq \"windows-x86-64\" -and $Type -eq \"exe\""));
         assertFalse(sh.contains("/opt/maven"));
 
         for (String contents :
@@ -76,16 +77,18 @@ public class NativePackagingScriptTest {
             assertFalse(contents.contains("wget "));
         }
         assertTrue(verifyPs.contains("Start-Process"));
-        assertTrue(verifyPs.contains("-Filter \"*.exe\""));
-        assertTrue(verifyPs.contains("-FilePath $Packages[0].FullName"));
-        assertTrue(verifyPs.contains("Get-Command \"7z.exe\""));
-        assertTrue(verifyPs.contains("portable-exe-ready.marker"));
-        assertTrue(verifyPs.contains("x \"-o$UnpackedRoot\" \"-y\" $Packages[0].FullName"));
-        assertTrue(verifyPs.contains("\"--type\", \"exe\""));
-        assertTrue(verifyPs.contains("-PassThru"));
-        assertTrue(verifyPs.contains("$Process.WaitForExit(45000)"));
-        assertTrue(verifyPs.contains("\"--root\", $UnpackedRoot"));
-        assertFalse(verifyPs.contains("msiexec.exe"));
+        assertTrue(verifyPs.contains("-Filter \"*.msi\""));
+        assertTrue(verifyPs.contains("msiexec.exe"));
+        assertTrue(verifyPs.contains("\"/a\""));
+        assertTrue(verifyPs.contains("\"/i\""));
+        assertTrue(verifyPs.contains("\"/x\""));
+        assertTrue(verifyPs.contains("INSTALLDIR="));
+        assertTrue(verifyPs.contains("\"--type\", \"msi\""));
+        assertTrue(verifyPs.contains("\"--root\", $Extracted"));
+        assertTrue(verifyPs.contains("Assert-OnlyCoffeeGbShortcuts"));
+        assertTrue(verifyPs.contains("Coffee GB Console.exe"));
+        assertFalse(verifyPs.contains("Get-Command \"7z.exe\""));
+        assertFalse(verifyPs.contains("portable-exe-ready.marker"));
 
         int normalization = verifyPs.indexOf(
                 "$BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {");
@@ -98,7 +101,8 @@ public class NativePackagingScriptTest {
                 "[System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $BuildRoot))"));
 
         assertFalse(verifyPs.contains("function Invoke-Package"));
-        assertFalse(verifyPs.contains("INSTALLDIR="));
+        assertTrue(verifyPs.contains("function Invoke-Msi"));
+        assertTrue(verifyPs.contains("Invoke-Msi -Operation \"MSI installation\" -Arguments"));
         assertTrue(verifySh.contains("grep -Eq '^MimeType='"));
         assertTrue(verifySh.contains("CFBundleDocumentTypes"));
         assertTrue(verifySh.contains("UTExportedTypeDeclarations"));

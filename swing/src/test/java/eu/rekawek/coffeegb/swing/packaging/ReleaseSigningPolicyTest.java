@@ -71,15 +71,15 @@ public class ReleaseSigningPolicyTest {
         windows.put("COFFEE_GB_WINDOWS_TIMESTAMP_URL", "https://timestamp.example");
         ReleaseSigningPolicy windowsPolicy = ReleaseSigningPolicy.require(
                 NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64),
-                NativePackageMetadata.PackageType.EXE,
+                NativePackageMetadata.PackageType.MSI,
                 "1.7.15",
                 windows);
         assertTrue(windowsPolicy.jpackageOptions().isEmpty());
         List<String> installerSigning =
-                windowsPolicy.postPackageCommands(Path.of("coffee-gb.exe")).get(0);
+                windowsPolicy.postPackageCommands(Path.of("coffee-gb.msi")).get(0);
         assertEquals("signtool", installerSigning.get(0));
         assertFalse(installerSigning.contains("/as"));
-        assertTrue(windowsPolicy.verificationCommands(Path.of("coffee-gb.exe"))
+        assertTrue(windowsPolicy.verificationCommands(Path.of("coffee-gb.msi"))
                 .get(0)
                 .contains("/tw"));
         Path appImage = temporaryFolder.newFolder("windows-app").toPath();
@@ -187,13 +187,6 @@ public class ReleaseSigningPolicyTest {
                 () -> ReleaseSigningPolicy.require(
                         NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64),
                         NativePackageMetadata.PackageType.APP_IMAGE,
-                        "1.7.15",
-                        releaseEnvironment()));
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> ReleaseSigningPolicy.require(
-                        NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64),
-                        NativePackageMetadata.PackageType.MSI,
                         "1.7.15",
                         releaseEnvironment()));
         assertThrows(

@@ -120,7 +120,7 @@ directory, and legacy `.sn0`–`.sn9` files remain available as read-only fallba
 
 Choose the package for your platform from the assets below:
 
-- **Windows x64:** portable EXE
+- **Windows x64:** MSI installer
 - **Linux x64:** DEB package
 - **macOS Intel:** x64 DMG
 - **macOS Apple silicon:** arm64 DMG

@@ -263,7 +263,7 @@ public final class NativePackageMetadata {
                         Architecture.X86_64,
                         "ico",
                         Set.of(PackageType.APP_IMAGE, PackageType.MSI, PackageType.EXE),
-                        PackageType.EXE));
+                        PackageType.MSI));
         targets.put(
                 NativeTarget.MACOS_X86_64,
                 new Target(

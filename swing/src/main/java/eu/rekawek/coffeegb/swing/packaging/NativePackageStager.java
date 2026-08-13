@@ -128,7 +128,11 @@ public final class NativePackageStager {
         writeUtf8(
                 windowsConsoleLauncher,
                 "arguments=--debug\n"
-                        + "win-console=true\n");
+                        + "win-console=true\n"
+                        // Additional launchers inherit the primary launcher's Windows shortcut
+                        // settings unless they explicitly override them.
+                        + "win-shortcut=false\n"
+                        + "win-menu=false\n");
 
         Map<String, String> inventory = new TreeMap<>();
         inventory.put("schema", "1");
