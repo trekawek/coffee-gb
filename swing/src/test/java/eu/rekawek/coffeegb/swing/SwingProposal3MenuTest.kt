@@ -34,7 +34,32 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `open rom header delegates to desktop native chooser command boundary`() {
+  fun `root pause retains its frozen frame through hidden page setup rendering`() {
+    val bridge = FakeBridge()
+    val frames = mutableListOf<MenuArgbFrame?>()
+    var captures = 0
+    val gameColor = 0xff2864d2.toInt()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+            capturePausePreview = {
+              captures++
+              MenuPreview.ready(160, 144, IntArray(160 * 144) { gameColor })
+            },
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
+
+    assertEquals(1, captures)
+    val pause = frames.filterNotNull().last()
+    // 160x144 aspect-fits as a 264x238 image centered in the 340x238 pause preview.
+    assertEquals(gameColor, pause.copyPixels()[140 * pause.width() + 78])
+  }
+
+  @Test
+  fun `open rom row delegates to desktop native chooser command boundary`() {
     val bridge = FakeBridge()
     val frames = mutableListOf<MenuArgbFrame?>()
     val menu =
@@ -46,9 +71,10 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
     javax.swing.SwingUtilities.invokeAndWait {
+      repeat(3) { press(menu, MenuKey.DOWN) }
+      assertEquals("open-rom", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.START, false))
       assertTrue(menu.onKeyUp(MenuKey.START))
-      assertTrue(menu.onKeyDown(MenuKey.START, false))
     }
 
     assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
@@ -202,7 +228,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 3)
+      moveToPauseItem(menu, 4)
       press(menu, MenuKey.A)
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
@@ -220,7 +246,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 5)
+      moveToPauseItem(menu, 6)
       press(menu, MenuKey.A)
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
@@ -239,7 +265,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 3)
+      moveToPauseItem(menu, 4)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
       press(menu, MenuKey.DOWN)
@@ -259,7 +285,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 5)
+      moveToPauseItem(menu, 6)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
       press(menu, MenuKey.DOWN)
@@ -287,7 +313,7 @@ class SwingProposal3MenuTest {
       menu.openFromDesktop()
     }
     javax.swing.SwingUtilities.invokeAndWait {
-      repeat(4) { press(menu, MenuKey.DOWN) }
+      repeat(5) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
 
@@ -315,7 +341,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
     javax.swing.SwingUtilities.invokeAndWait {
-      repeat(4) { press(menu, MenuKey.DOWN) }
+      repeat(5) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
       repeat(8) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
@@ -330,7 +356,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `save states secondary select loads the focused slot`() {
+  fun `select is inert while save states remain visible`() {
     val bridge = FakeBridge()
     val menu =
         SwingProposal3Menu(
@@ -346,10 +372,11 @@ class SwingProposal3MenuTest {
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
       assertEquals("slot-0", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.SELECT, false))
+      assertTrue(menu.onKeyUp(MenuKey.SELECT))
     }
 
-    assertEquals(0, bridge.loadedSlot)
-    assertFalse(menu.visible())
+    assertEquals(null, bridge.loadedSlot)
+    assertTrue(menu.visible())
   }
 
   @Test
@@ -367,7 +394,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      repeat(4) { press(menu, MenuKey.DOWN) }
+      repeat(5) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
       repeat(3) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
@@ -396,7 +423,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge, printer)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      repeat(4) { press(menu, MenuKey.DOWN) }
+      repeat(5) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
       repeat(3) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)

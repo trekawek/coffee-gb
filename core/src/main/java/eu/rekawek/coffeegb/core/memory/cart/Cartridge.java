@@ -321,19 +321,37 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         return new FileBattery(storage, ramSize);
     }
 
+    /**
+     * Whether this cartridge's mapper advertises battery-backed persistent data.
+     *
+     * <p>This is deliberately independent of the configured storage, dirty state, and whether a
+     * save file currently exists: user interfaces use it to describe the cartridge capability.
+     */
+    public static boolean supportsBatterySave(Rom rom) {
+        return batteryRamSize(rom) >= 0;
+    }
+
     /** Returns -1 when this cartridge has no live file-backed battery. */
     private static int batteryRamSize(Rom rom) {
-        boolean xploderGb = rom.getCartridgeProperties().getMapper()
+        CartridgeProperties.Mapper mapper = rom.getCartridgeProperties().getMapper();
+        boolean xploderGb = mapper
                 == CartridgeProperties.Mapper.XPLODER_GB;
-        if (rom.getType().isBattery() || xploderGb) {
+        // MBC6 persists both its SRAM and flash although its header type has no BATTERY segment.
+        // Pocket Camera likewise has 128 KiB of cartridge RAM, including compatibility-profiled
+        // dumps whose nominal header is not 0xFC. These are mapper capabilities, not a claim that
+        // a save file already exists.
+        boolean mapperPersists = rom.getType().isMbc6()
+                || rom.getType().isPocketCamera()
+                || mapper == CartridgeProperties.Mapper.POCKET_CAMERA;
+        if (rom.getType().isBattery() || xploderGb || mapperPersists) {
             // Existing MBC implementations expose RAM in 8 KiB banks. Plain ROM+RAM
             // is the exception: its 2 KiB header size is mirrored across A000-BFFF.
             int ramSize = rom.getType() == CartridgeType.ROM_RAM_BATTERY
                     ? rom.getRamSize() : 0x2000 * rom.getRamBanks();
-            if (rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.BUNG_EMS) {
+            if (mapper == CartridgeProperties.Mapper.BUNG_EMS) {
                 ramSize = 0x8000;
             }
-            if (rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.SL_MULTICART) {
+            if (mapper == CartridgeProperties.Mapper.SL_MULTICART) {
                 ramSize = 0x20000;
             }
             if (xploderGb) {
@@ -350,6 +368,10 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             }
             if (rom.getType().isMbc7()) {
                 ramSize = 0x100; // 93LC56 EEPROM
+            }
+            if (rom.getType().isPocketCamera()
+                    || mapper == CartridgeProperties.Mapper.POCKET_CAMERA) {
+                ramSize = 0x20000; // Pocket Camera's 128 KiB cartridge RAM
             }
             return ramSize;
         }

@@ -32,6 +32,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuController;
 import eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState;
 import eu.rekawek.coffeegb.ui.menu.MenuKey;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
@@ -517,6 +518,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (active != null) {
             active.input().releaseAll();
         }
+        boolean pauseTarget = isPauseMenuTarget(current);
+        if (active != null) {
+            if (pauseTarget) {
+                // Capture before pause() asks the controller to stop producing new frames. The
+                // runtime keeps this immutable root capture through Activity recreation.
+                active.capturePauseMenuSnapshot();
+            } else {
+                active.clearPauseMenuSnapshot();
+            }
+        }
         menuPauseOwned = current.phase() == RuntimeState.Phase.RUNNING;
         if (menuPauseOwned && active != null) {
             active.pause();
@@ -526,13 +537,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             menuController.show(MenuRoute.CHOOSE_ROM);
         } else if (current.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION) {
             menuController.show(MenuRoute.LIBRARY);
-        } else if (current.phase() == RuntimeState.Phase.PAUSED
-                || (current.transferReady() && current.paused())
-                || (current.transferReady() && current.phase() == RuntimeState.Phase.RUNNING)) {
+        } else if (pauseTarget) {
             menuController.show(MenuRoute.PAUSE_CONSOLE);
         } else {
             menuController.show(MenuRoute.LIBRARY);
         }
+    }
+
+    private static boolean isPauseMenuTarget(RuntimeState state) {
+        return state.phase() == RuntimeState.Phase.PAUSED
+                || (state.transferReady() && state.paused())
+                || (state.transferReady() && state.phase() == RuntimeState.Phase.RUNNING);
     }
 
     private void styleMenuButton() {
@@ -649,6 +664,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void onMenuClosed() {
+        AndroidEmulationRuntime active = runtime;
+        if (active != null) {
+            active.clearPauseMenuSnapshot();
+        }
         cancelPendingPrinterPaperEntry();
         if (selectionActionInFlight) {
             selectionActionInFlight = false;
@@ -666,7 +685,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleMenuHeader(MenuRoute route) {
-        if (route == MenuRoute.PAUSE_CONSOLE || route == MenuRoute.LIBRARY) {
+        if (route == MenuRoute.LIBRARY) {
             openRomFromMenu();
         }
     }
@@ -1507,6 +1526,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (menuPauseOwned) {
             runtime.pause();
         }
+        ensurePauseMenuSnapshot(safeMenu);
         refreshMenuPages();
         menuController.restore(safeMenu);
         deferFocusRestoreIfNeeded(safeMenu);
@@ -1526,10 +1546,22 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (menuPauseOwned) {
             runtime.pause();
         }
+        ensurePauseMenuSnapshot(restoring);
         refreshMenuPages();
         menuController.restore(restoring);
         deferFocusRestoreIfNeeded(restoring);
         refreshRestoredDynamicRoute(restoring);
+    }
+
+    /** Restores the service-owned root capture before rebuilding any pause-stack child page. */
+    private void ensurePauseMenuSnapshot(MenuStackSnapshot snapshot) {
+        if (runtime == null || !stackContains(snapshot, MenuRoute.PAUSE_CONSOLE)) {
+            return;
+        }
+        RuntimeState current = runtime.state();
+        if (isPauseMenuTarget(current) && runtime.pauseMenuSnapshot() == null) {
+            runtime.capturePauseMenuSnapshot();
+        }
     }
 
     private void refreshRestoredDynamicRoute(MenuStackSnapshot snapshot) {
@@ -1687,17 +1719,27 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private MenuPageSpec pausePage() {
-        return page(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "PAUSED", "OPEN ROM", "CURRENT GAME",
-                List.of(observedState.message(), "INPUT MENU CAPTURED", "A RESUME / B BACK"),
+        AndroidEmulationRuntime active = runtime;
+        PauseMenuSnapshot snapshot = active == null ? null : active.pauseMenuSnapshot();
+        String title = snapshot == null ? (observedState.romTitle().isBlank()
+                ? "NO GAME" : observedState.romTitle()) : snapshot.romTitle();
+        String elapsed = snapshot == null ? PauseMenuSnapshot.formatPlayTime(observedState.playTimeNanos())
+                : snapshot.formattedPlayTime();
+        boolean battery = snapshot != null ? snapshot.batterySaveActive()
+                : observedState.batterySaveActive();
+        MenuPreview preview = snapshot == null ? MenuPreview.empty() : snapshot.preview();
+        return new MenuPageSpec(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "", "", title,
+                List.of("PLAY TIME", elapsed,
+                        battery ? "BATTERY SAVE ACTIVE" : "NO BATTERY SAVE"),
                 List.of(
-                        item("resume", "RESUME", "RUN GAME", true),
-                        item("save-state", "SAVE STATE", "SAVE MODE", runtime != null),
-                        item("load-state", "LOAD STATE", "LOAD MODE", runtime != null),
+                        item("resume", "RESUME", "", true),
+                        item("save-state", "SAVE STATE", "", runtime != null),
+                        item("load-state", "LOAD STATE", "", runtime != null),
+                        item("open-rom", "OPEN ROM", "", runtime != null),
                         item("reset", "RESET GAME", "CONFIRM", runtime != null),
                         item("settings", "SETTINGS", "OPEN", true),
-                        item("stop", "STOP GAME", "CONFIRM", runtime != null),
-                        item("open-rom", "OPEN ROM", "NATIVE PICKER", runtime != null)),
-                List.of("D-PAD MOVE", "[A] OK", "[B] BACK", "[START] OPEN ROM"));
+                        item("stop", "STOP GAME", "CONFIRM", runtime != null)),
+                1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), null, preview);
     }
 
     private MenuPageSpec statePage() {
@@ -1715,9 +1757,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
         return page(MenuRoute.SAVE_STATES, "COFFEE GB", "SAVE STATES / " + mode, "",
                 "STATE BANK", List.of("SLOTS " + StateRef.MIN_SLOT + "-" + StateRef.MAX_SLOT,
-                        stateSlotsLoading ? "READING CATALOG" : "A SELECTS",
-                        "SELECT/Y DELETE"), items,
-                List.of("D-PAD MOVE", "[A] SELECT", "[SELECT] DELETE", "[B] BACK"));
+                        stateSlotsLoading ? "READING CATALOG" : "A CHOOSES",
+                        "Y DELETE"), items,
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private MenuPageSpec libraryPage() {
@@ -1737,7 +1779,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
                 List.of("DOCUMENT PICKER NATIVE", "RECENT METADATA PRIVATE", "ZIP MULTI-ROM"),
-                items, List.of("D-PAD MOVE", "[A] OPEN", "[B] BACK", "[START] OPEN ROM"));
+                items, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private MenuPageSpec chooseRomPage() {
@@ -1751,7 +1793,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         items.add(item("cancel", "BACK TO LIBRARY", "CANCEL", true));
         return page(MenuRoute.CHOOSE_ROM, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
                 List.of("SELECT ONE TO OPEN", "A OPENS ROM", "B CANCELS PENDING ZIP"), items,
-                List.of("D-PAD MOVE", "[A] OPEN", "[B] CANCEL"));
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private MenuPageSpec controllerPage() {
@@ -1772,7 +1814,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 List.of(variant.description, "A CONFIRM", "B CANCEL"),
                 List.of(item("cancel", "CANCEL", "RETURN", true),
                         item("confirm", "CONFIRM", variant.label, true)),
-                List.of("D-PAD MOVE", "[A] CONFIRM", "[B] CANCEL"));
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private static MenuPageSpec page(MenuRoute route, String title, String context,
@@ -1854,13 +1896,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case KeyEvent.KEYCODE_DPAD_LEFT -> MenuKey.LEFT;
             case KeyEvent.KEYCODE_DPAD_RIGHT -> MenuKey.RIGHT;
             case KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_X,
-                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE -> MenuKey.A;
+                    KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_SPACE,
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> MenuKey.A;
             case KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_ESCAPE -> MenuKey.B;
             case KeyEvent.KEYCODE_BUTTON_Y, KeyEvent.KEYCODE_FORWARD_DEL,
                     KeyEvent.KEYCODE_DEL -> MenuKey.SECONDARY;
             case KeyEvent.KEYCODE_BUTTON_START -> MenuKey.START;
-            case KeyEvent.KEYCODE_BUTTON_SELECT, KeyEvent.KEYCODE_DPAD_CENTER,
-                    KeyEvent.KEYCODE_NUMPAD_ENTER -> MenuKey.SELECT;
+            // Select is deliberately consumed by the portable menu but has no bound action.
+            case KeyEvent.KEYCODE_BUTTON_SELECT -> MenuKey.SELECT;
             default -> null;
         };
     }
@@ -1895,6 +1938,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             menuController.show(MenuRoute.LIBRARY);
         }
     }
+
 
     private void restoreActivityState(Bundle state) {
         if (state == null) {

@@ -513,7 +513,12 @@ class SwingGui private constructor(
         romSessionState.markStarted()
         desktopPlaybackState.sessionStarted(event.sessionGeneration)
         mainWindow.title = activeWindowTitle
-        desktopUiCoordinator.opened(event.romName)
+        desktopUiCoordinator.opened(event.romName, event.sessionGeneration)
+      }
+    }
+    eventBus.register<Controller.SessionPresentationEvent> { event ->
+      dispatchSwingMutation {
+        desktopUiCoordinator.sessionMetadata(event.batterySaveActive, event.sessionGeneration)
       }
     }
     eventBus.register<LoadRomFailedEvent> { event ->

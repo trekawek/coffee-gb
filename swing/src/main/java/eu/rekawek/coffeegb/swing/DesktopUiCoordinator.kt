@@ -46,11 +46,15 @@ internal class DesktopUiCoordinator(
     }
   }
 
-  fun opened(gameTitle: String) {
+  fun opened(gameTitle: String, sessionGeneration: Long? = null) {
     require(gameTitle.isNotBlank())
     update {
       it.copy(
           gameTitle = gameTitle,
+          // Capability metadata arrives as a separate controller event.  Never carry it from a
+          // replaced ROM while that event is still in flight.
+          batterySaveActive = false,
+          sessionGeneration = sessionGeneration ?: it.sessionGeneration,
           task = null,
           commands =
               it.commands.copy(
@@ -63,6 +67,18 @@ internal class DesktopUiCoordinator(
           persistentStatus = "$gameTitle is running",
           presentedFramesPerSecond = null,
           statusRecoveryCommand = null,
+      )
+    }
+  }
+
+  /** Applies mapper-derived menu metadata without consulting a save file or filesystem state. */
+  fun sessionMetadata(batterySaveActive: Boolean, sessionGeneration: Long?) {
+    // Metadata is emitted immediately after EmulationStarted, but it can still be queued behind
+    // a later ROM replacement on the Swing EDT. It belongs only to the active generation.
+    if (sessionGeneration != current.sessionGeneration) return
+    update {
+      it.copy(
+        batterySaveActive = batterySaveActive,
       )
     }
   }
@@ -84,6 +100,9 @@ internal class DesktopUiCoordinator(
     update {
       it.copy(
           gameTitle = null,
+          batterySaveActive = false,
+          sessionGeneration = null,
+          playTimeNanos = 0,
           task = null,
           commands =
               it.commands.copy(
@@ -203,6 +222,9 @@ internal class DesktopUiCoordinator(
   private fun normalize(value: DesktopPresentation): DesktopPresentation {
     val loaded = value.gameTitle != null
     return value.copy(
+        batterySaveActive = value.batterySaveActive && loaded,
+        sessionGeneration = value.sessionGeneration.takeIf { loaded },
+        playTimeNanos = value.playTimeNanos.takeIf { loaded } ?: 0,
         commands =
             value.commands.copy(
                 gameLoaded = loaded,

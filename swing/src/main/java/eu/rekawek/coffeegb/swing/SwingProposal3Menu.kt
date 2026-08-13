@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
 import eu.rekawek.coffeegb.ui.menu.MenuController
 import eu.rekawek.coffeegb.ui.menu.MenuKey
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec
+import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
@@ -30,6 +31,7 @@ internal class SwingProposal3Menu(
     private val releaseGameplay: () -> Unit,
     private val printer: PortableMenuPrinterBridge? = null,
     private val onVisibilityChanged: (Boolean) -> Unit = {},
+    private val capturePausePreview: () -> MenuPreview = { MenuPreview.empty() },
 ) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopArchiveSelectionHost {
 
   private data class PendingArchiveSelection(
@@ -57,9 +59,7 @@ internal class SwingProposal3Menu(
             }
 
             override fun onHeaderSelected(route: MenuRoute) {
-              if (route == MenuRoute.PAUSE_CONSOLE) {
-                openRoute(MenuRoute.LIBRARY)
-              } else if (route == MenuRoute.LIBRARY) {
+              if (route == MenuRoute.LIBRARY) {
                 runNativeRomChooser()
               }
             }
@@ -78,6 +78,9 @@ internal class SwingProposal3Menu(
   @Volatile private var chordLatched = false
 
   private var pauseOwnedByMenu = false
+
+  /** Captured before root pause stops the live frame source; retained through child routes. */
+  private var pauseSnapshot: PauseMenuSnapshot? = null
 
   private var pendingConfirmation: DesktopCommand? = null
 
@@ -98,6 +101,7 @@ internal class SwingProposal3Menu(
   internal fun closeForLifecycle() {
     runOnEdt {
       pauseOwnedByMenu = false
+      pauseSnapshot = null
       pendingConfirmation = null
       pendingArchiveSelection = null
       selectedArchiveItemId = null
@@ -165,8 +169,10 @@ internal class SwingProposal3Menu(
   }
 
   override fun onKeyUp(key: MenuKey): Boolean {
-    if (!visible()) return false
     if (opening) return true
+    // An activation can hide the menu synchronously (for example OPEN ROM).  Let the portable
+    // controller release its captured edge even after that transition so Start/A never leaks
+    // into the game or reports a spurious unhandled key-up to the host.
     return controller.onKeyUp(key)
   }
 
@@ -241,6 +247,15 @@ internal class SwingProposal3Menu(
     val current = commands.menuState()
     if (!current.commands.gameLoaded || current.commands.sessionBusy) return
 
+    val title = checkNotNull(current.gameTitle) { "Loaded session has no ROM title" }
+    // Freeze the actual display before requesting pause; a child route must reuse this snapshot.
+    pauseSnapshot =
+        PauseMenuSnapshot(
+            title,
+            current.playTimeNanos,
+            current.batterySaveActive,
+            capturePausePreview(),
+        )
     controller.setPage(pageFor(MenuRoute.PAUSE_CONSOLE, current))
     pauseOwnedByMenu = current.commands.pauseSupported && !current.commands.paused
     if (pauseOwnedByMenu) {
@@ -282,7 +297,7 @@ internal class SwingProposal3Menu(
         sideLines,
         items,
         1,
-        listOf("D-PAD MOVE", "[A] OK", "[B] BACK"),
+        listOf("D-PAD MOVE", "A CHOOSE", "B BACK"),
         preferredFocus ?: items.firstOrNull { it.enabled() }?.id() ?: items.first().id(),
         preview,
     )
@@ -291,25 +306,30 @@ internal class SwingProposal3Menu(
     val stateAvailable = state.stateCommandsAvailable && !state.sessionBusy
     val printerHasPaper = printer?.hasPaper() == true
     return when (route) {
-      MenuRoute.PAUSE_CONSOLE ->
-          page(
-              "PAUSED",
-              "CURRENT GAME",
-              listOf(
-                  if (presentation.gameTitle == null) "READY" else "PLAYING",
-                  "PAUSED",
-                  "CONTROLLER MENU",
-              ),
-              listOf(
-                  item("resume", "RESUME", enabled(DesktopCommand.PAUSE)),
-                  item("save-state", "SAVE STATE", stateAvailable),
-                  item("load-state", "LOAD STATE", stateAvailable),
-                  item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
-                  item("settings", "SETTINGS", enabled(DesktopCommand.PREFERENCES)),
-                  item("stop", "STOP GAME", enabled(DesktopCommand.CLOSE_GAME)),
-              ),
-              headerAction = if (enabled(DesktopCommand.OPEN_ROM)) "OPEN ROM" else "",
-          )
+      MenuRoute.PAUSE_CONSOLE -> {
+        val snapshot = requireNotNull(pauseSnapshot) {
+          "Pause menu must capture its immutable snapshot before building the root page"
+        }
+        page(
+            "",
+            snapshot.romTitle(),
+            listOf(
+                "PLAY TIME",
+                snapshot.formattedPlayTime(),
+                if (snapshot.batterySaveActive()) "BATTERY SAVE ACTIVE" else "NO BATTERY SAVE",
+            ),
+            listOf(
+                item("resume", "RESUME", enabled(DesktopCommand.PAUSE)),
+                item("save-state", "SAVE STATE", stateAvailable),
+                item("load-state", "LOAD STATE", stateAvailable),
+                item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
+                item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
+                item("settings", "SETTINGS", enabled(DesktopCommand.PREFERENCES)),
+                item("stop", "STOP GAME", enabled(DesktopCommand.CLOSE_GAME)),
+            ),
+            preview = snapshot.preview(),
+        )
+      }
 
       MenuRoute.SAVE_STATES -> {
         val slots =
@@ -558,6 +578,7 @@ internal class SwingProposal3Menu(
           when (id) {
             "resume" -> runOnEdt(::resumeAndHide)
             "save-state", "load-state" -> openRoute(MenuRoute.SAVE_STATES)
+            "open-rom" -> runNativeRomChooser()
             "reset" -> openConfirmation(DesktopCommand.RESET)
             "settings" -> openRoute(MenuRoute.SETTINGS)
             "stop" -> openConfirmation(DesktopCommand.CLOSE_GAME)
@@ -809,6 +830,9 @@ internal class SwingProposal3Menu(
     frameSink(null)
     if (renderedVisible) {
       renderedVisible = false
+      // A hidden setPage notification occurs while opening. Only discard the immutable capture
+      // after an actual visible-to-hidden transition, not during root-page preparation.
+      pauseSnapshot = null
       onVisibilityChanged(false)
       releaseGameplaySoon()
       if (pauseOwnedByMenu) {

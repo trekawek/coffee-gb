@@ -38,6 +38,12 @@ internal data class DesktopSessionTask(
 /** Complete immutable presentation consumed by the main frame content. */
 internal data class DesktopPresentation(
     val gameTitle: String? = null,
+    /** Mapper capability, not save-file state. */
+    val batterySaveActive: Boolean = false,
+    /** Controller-owned identity used to restart elapsed play time for a new ROM session. */
+    val sessionGeneration: Long? = null,
+    /** Snapshot-friendly value; the action bridge supplies a live value while the game runs. */
+    val playTimeNanos: Long = 0,
     val task: DesktopSessionTask? = null,
     val commands: DesktopCommandPresentation = DesktopCommandPresentation(),
     val netplaySummary: String = "Netplay: Off",
@@ -51,6 +57,8 @@ internal data class DesktopPresentation(
 ) {
   init {
     require(gameTitle == null || gameTitle.isNotBlank())
+    require(sessionGeneration == null || sessionGeneration >= 0)
+    require(playTimeNanos >= 0)
     require(netplaySummary.isNotBlank())
     require(persistentStatus.isNotBlank())
     require(presentedFramesPerSecond == null ||
@@ -126,7 +134,7 @@ internal class DesktopMainPanel(
       exactOneCommandBarSuppressed = false
     }
     presentation = next
-    actions.update(next.commands)
+    actions.updatePresentation(next)
     val playing = next.gameTitle != null
     cards.show(cardHost, if (playing) GAME_CARD else HOME_CARD)
     updateCommandBarVisibility(allowExactOneReveal = false)

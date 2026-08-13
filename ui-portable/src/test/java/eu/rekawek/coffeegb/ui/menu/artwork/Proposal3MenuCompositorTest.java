@@ -100,20 +100,68 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void pauseOpenRomIsRenderedAsHeaderAction() throws Exception {
+    public void pauseOpenRomIsRenderedAsAnEqualHeightMenuRow() throws Exception {
         MenuPresentation presentation = presentation(new MenuPageSpec(MenuRoute.PAUSE_CONSOLE,
-                "COFFEE GB", "PAUSED", "OPEN ROM", "CURRENT GAME", List.of("PLAYING"),
+                "COFFEE GB", "", "", "TETRIS", List.of("PLAY TIME", "00:42",
+                "BATTERY SAVE ACTIVE"),
                 List.of(
                         item("resume", "RESUME", true),
-                        item("open-rom", "OPEN ROM", true)), 1,
-                List.of("D-PAD MOVE", "[A] OK", "[B] BACK"), "open-rom",
+                        item("save-state", "SAVE STATE", true),
+                        item("load-state", "LOAD STATE", true),
+                        item("open-rom", "OPEN ROM", true),
+                        item("reset", "RESET GAME", true),
+                        item("settings", "SETTINGS", true),
+                        item("stop", "STOP GAME", true)), 1,
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "open-rom",
                 MenuPreview.empty()));
         int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
         int[] composed = new Proposal3MenuCompositor().compose(presentation).orElseThrow().copyPixels();
         assertFalse(Arrays.equals(template, composed));
-        assertTrue(differentInside(template, composed, Proposal3OverlayCatalog.OPEN_ROM_HEADER));
+        assertTrue(differentInside(template, composed, Proposal3OverlayCatalog.PAUSE_OPEN_ROM));
+        assertFalse(differentInside(template, composed, Proposal3OverlayCatalog.PAUSE_HEADER_ACTION));
         assertNoDifferenceOutside(template, composed,
                 Proposal3MenuCompositor.dynamicMasks(MenuRoute.PAUSE_CONSOLE));
+    }
+
+    @Test
+    public void pauseRailUsesSevenExactEqualRowsWithUntouchedDividers() {
+        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
+                MenuRoute.PAUSE_CONSOLE);
+        assertEquals(7, layout.rows().size());
+        for (int index = 0; index < layout.rows().size(); index++) {
+            MenuRect row = layout.rows().get(index).bounds();
+            assertEquals(424, row.x());
+            assertEquals(484, row.width());
+            assertEquals(72, row.height());
+            assertEquals(121 + index * 74, row.y());
+        }
+        assertEquals(6, Proposal3OverlayCatalog.PAUSE_DIVIDERS.size());
+        for (int index = 0; index < Proposal3OverlayCatalog.PAUSE_DIVIDERS.size(); index++) {
+            MenuRect divider = Proposal3OverlayCatalog.PAUSE_DIVIDERS.get(index);
+            assertEquals(193 + index * 74, divider.y());
+            assertEquals(2, divider.height());
+        }
+    }
+
+    @Test
+    public void pausePreviewClearsTheEntireBezelInnerAperture() throws Exception {
+        MenuRect aperture = Proposal3OverlayCatalog.PAUSE_PREVIEW;
+        assertEquals(new MenuRect(30, 139, 351, 243), aperture);
+
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
+        for (int y = aperture.y(); y < aperture.bottom(); y++) {
+            for (int x = aperture.x(); x < aperture.right(); x++) {
+                assertEquals("placeholder pixel survived at " + x + "," + y,
+                        0xff121b14, pixel(template, x, y));
+            }
+        }
+
+        MenuPresentation populated = withPreview(defaultPresentation(MenuRoute.PAUSE_CONSOLE),
+                MenuPreview.ready(160, 144, new int[160 * 144]));
+        int[] composed = new Proposal3MenuCompositor().compose(populated).orElseThrow().copyPixels();
+        // The 4:3 game frame is centered in this wider aperture, leaving matte at both corners.
+        assertEquals(0xff121b14, pixel(composed, aperture.x(), aperture.y()));
+        assertEquals(0xff121b14, pixel(composed, aperture.right() - 1, aperture.bottom() - 1));
     }
 
     @Test
@@ -329,9 +377,10 @@ public class Proposal3MenuCompositorTest {
         }
         return switch (region.key()) {
             case HEADER_TITLE -> presentation.title();
-            case HEADER_CONTEXT -> presentation.context().isEmpty() ? "/" : presentation.context();
-            case HEADER_ACTION -> presentation.headerAction().isEmpty()
-                    ? "BACK" : presentation.headerAction();
+            case HEADER_CONTEXT -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
+                    : presentation.context().isEmpty() ? "/" : presentation.context();
+            case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
+                    : presentation.headerAction().isEmpty() ? "BACK" : presentation.headerAction();
             case SIDE_HEADING -> presentation.sideHeading();
             case SIDE_LINE -> region.index() < presentation.sideLines().size()
                     ? presentation.sideLines().get(region.index()) : "";
@@ -684,6 +733,40 @@ public class Proposal3MenuCompositorTest {
                     .orElseThrow();
             writeFrame(directory.resolve(route.name().toLowerCase() + "-focus.png"), focused);
         }
+        // A deliberately non-placeholder Game Boy-sized image makes the pause-menu review
+        // artifact exercise the same aspect-fit and frozen-preview path as a live game frame.
+        int[] gameFrame = new int[160 * 144];
+        for (int y = 0; y < 144; y++) {
+            for (int x = 0; x < 160; x++) {
+                int color;
+                if (y < 36) {
+                    color = ((x / 8 + y / 6) & 1) == 0 ? 0xffb7dd79 : 0xff8fbe63;
+                } else if (y < 105) {
+                    color = ((x / 12 + y / 10) & 1) == 0 ? 0xff396e55 : 0xff28513f;
+                } else {
+                    color = ((x / 10 + y / 8) & 1) == 0 ? 0xff172c34 : 0xff0f2028;
+                }
+                if (x >= 61 && x < 99 && y >= 47 && y < 82) {
+                    color = (x + y) % 7 < 4 ? 0xffffd66b : 0xffdb7d46;
+                }
+                gameFrame[y * 160 + x] = color;
+            }
+        }
+        MenuPresentation populatedPause = presentation(new MenuPageSpec(MenuRoute.PAUSE_CONSOLE,
+                "COFFEE GB", "", "", "THE LEGEND OF ZELDA: LINK'S AWAKENING DX",
+                List.of("PLAY TIME", "1:23:45", "BATTERY SAVE ACTIVE"),
+                List.of(
+                        item("resume", "RESUME", true),
+                        item("save-state", "SAVE STATE", true),
+                        item("load-state", "LOAD STATE", true),
+                        item("open-rom", "OPEN ROM", true),
+                        item("reset", "RESET GAME", true),
+                        item("settings", "SETTINGS", true),
+                        item("stop", "STOP GAME", true)), 1,
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "open-rom",
+                MenuPreview.ready(160, 144, gameFrame)));
+        writeFrame(directory.resolve("pause_console-populated.png"),
+                compositor.compose(populatedPause).orElseThrow());
         MenuPresentation confirmation = defaultPresentation(MenuRoute.CONFIRM_ACTION);
         ArrayList<MenuPresentation.Item> stopItems = new ArrayList<>(confirmation.items());
         for (int index = 0; index < stopItems.size(); index++) {
@@ -948,7 +1031,14 @@ public class Proposal3MenuCompositorTest {
         Proposal3WidgetSkins.Surface skin = selected ? Proposal3WidgetSkins.Surface.SELECTED
                 : surface == Proposal3OverlayCatalog.Surface.DARK
                 ? Proposal3WidgetSkins.Surface.DARK : Proposal3WidgetSkins.Surface.PAPER;
-        new MenuRaster(background).paintWidget(skins.surface(skin), expand(slot.bounds(), 2));
+        MenuRect target = route == MenuRoute.PAUSE_CONSOLE ? slot.bounds()
+                : expand(slot.bounds(), 2);
+        new MenuRaster(background).paintWidget(skins.surface(skin), target);
+        if (route == MenuRoute.PAUSE_CONSOLE) {
+            for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
+                new MenuRaster(background).fill(divider, MenuRaster.PAPER);
+            }
+        }
         return background;
     }
 

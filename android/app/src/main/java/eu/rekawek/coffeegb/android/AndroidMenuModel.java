@@ -12,7 +12,7 @@ import java.util.Map;
 /** Pure Proposal 3 page and draft model; Android side effects stay in {@link MainActivity}. */
 final class AndroidMenuModel {
 
-    private static final List<String> HINTS = List.of("D-PAD MOVE", "[A] OK", "[B] BACK");
+    private static final List<String> HINTS = List.of("D-PAD MOVE", "A CHOOSE", "B BACK");
 
     private AndroidMenuModel() {
     }

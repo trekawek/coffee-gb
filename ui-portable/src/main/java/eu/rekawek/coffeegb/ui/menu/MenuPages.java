@@ -6,7 +6,7 @@ import java.util.List;
 /** Proposal 3 page catalog; side effects remain outside this foundation slice. */
 final class MenuPages {
 
-    private static final List<String> DEFAULT_HINTS = List.of("D-PAD MOVE", "[A] OK", "[B] BACK");
+    private static final List<String> DEFAULT_HINTS = List.of("D-PAD MOVE", "A CHOOSE", "B BACK");
 
     private MenuPages() {
     }
@@ -16,12 +16,13 @@ final class MenuPages {
             throw new IllegalArgumentException("route cannot be null");
         }
         return switch (route) {
-            case PAUSE_CONSOLE -> page(route, "COFFEE GB", "PAUSED", "OPEN ROM", "CURRENT GAME",
-                    List.of("PLAYING", "01:24", "BATTERY SAVE READY"),
+            case PAUSE_CONSOLE -> page(route, "COFFEE GB", "", "", "",
+                    List.of("PLAY TIME", "00:00", "NO BATTERY SAVE"),
                     items(
                             item("resume", "RESUME"),
                             item("save-state", "SAVE STATE"),
                             item("load-state", "LOAD STATE"),
+                            item("open-rom", "OPEN ROM"),
                             item("reset", "RESET GAME"),
                             item("settings", "SETTINGS"),
                             item("stop", "STOP GAME")));
@@ -63,7 +64,7 @@ final class MenuPages {
                             item("save-touch", "SAVE"),
                             item("cancel-touch", "CANCEL")));
             case CONTROLLER_MAPPING -> page(route, "COFFEE GB", "CONTROLLER MAPPING", "", "GAMEPAD",
-                    List.of("CONNECTED", "PRESS [A] TO REMAP", ""),
+                    List.of("CONNECTED", "PRESS A TO REMAP", ""),
                     items(
                             item("map-a", "A"),
                             item("map-b", "B"),

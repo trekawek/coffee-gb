@@ -38,9 +38,8 @@ COMMON_PAPER_TEXT = [
     rect(320, 31, 420, 49),      # / ROUTE (longest: CONTROLLER MAPPING)
     rect(690, 36, 189, 38),      # BACK / OPEN ROM
     rect(70, 669, 240, 43),      # D-PAD MOVE
-    rect(418, 675, 27, 27),      # A, preserving its keycap frame
-    rect(455, 669, 110, 43),     # OK
-    rect(671, 675, 28, 27),      # B, preserving its keycap frame
+    # Preserve the approved A/B keycap glyphs.  Runtime changes labels only.
+    rect(455, 669, 126, 43),     # OK -> CHOOSE
     rect(708, 669, 128, 43),     # BACK
 ]
 
@@ -56,6 +55,8 @@ ROUTE_PAPER_TEXT = {
     "00-pause-console.png": [
         rect(32, 409, 330, 34), rect(31, 506, 172, 29), rect(274, 506, 105, 29),
         rect(108, 590, 279, 27), rect(370, 500, 20, 45),
+        # Pause has neither a context trail nor a header action.
+        rect(340, 25, 325, 61), rect(688, 25, 207, 61),
     ],
     "01-save-states.png": [
         rect(40, 146, 340, 50), rect(38, 202, 340, 42), rect(35, 490, 346, 38),
@@ -121,13 +122,17 @@ ROUTE_PAPER_RESTORE = {
                               rect(444, 387, 440, 15), rect(444, 497, 440, 15)],
 }
 
+# Exact half-open inner pause-screen aperture.  It deliberately reaches under the stepped bezel
+# while stopping before every visible frame stroke.  The source crop contains an illustration in
+# this space, which must not survive behind an aspect-fitted live game frame at runtime.
+PAUSE_PREVIEW_APERTURE = rect(30, 139, 351, 243)
+PAUSE_PREVIEW_MATTE = (18, 27, 20)
+
 
 # Complete widget interiors.  Tuple values are (surface, bounds).
 ROUTE_WIDGETS = {
-    "00-pause-console.png": [("dark", rect(424, 121, 484, 78)),
-        ("dark", rect(424, 209, 484, 74)), ("dark", rect(424, 292, 484, 77)),
-        ("dark", rect(424, 377, 484, 74)), ("dark", rect(424, 461, 484, 74)),
-        ("dark", rect(424, 545, 484, 90))],
+    # A clean rail is repainted at runtime into seven 72px rows, with exact 2px dividers.
+    "00-pause-console.png": [("dark", rect(424, 121, 484, 516))],
     "01-save-states.png": [("dark", inner(*value)) for value in
         [(420, 118, 489, 93), (420, 214, 489, 94), (420, 311, 489, 93),
          (420, 407, 489, 144)]] + [("paper", inner(*value)) for value in
@@ -184,7 +189,13 @@ def clear_paper_text(image: np.ndarray, bounds: tuple[int, int, int, int],
 def paste_surface(image: Image.Image, surface: Image.Image,
                   bounds: tuple[int, int, int, int]) -> None:
     left, top, right, bottom = bounds
-    image.paste(surface.crop((0, 0, right - left, bottom - top)), (left, top))
+    # The pause rail is taller than the source texture.  Tile instead of allowing Pillow's
+    # out-of-bounds crop to introduce a black band into the generated authority image.
+    for y in range(top, bottom, surface.height):
+        for x in range(left, right, surface.width):
+            width = min(surface.width, right - x)
+            height = min(surface.height, bottom - y)
+            image.paste(surface.crop((0, 0, width, height)), (x, y))
 
 
 def main() -> None:
@@ -210,6 +221,9 @@ def main() -> None:
             pixels[top:bottom, left:right] = reference[top:bottom, left:right]
         for left, top, right, bottom in ROUTE_PAPER_RESTORE.get(source.name, []):
             pixels[top:bottom, left:right] = reference[top:bottom, left:right]
+        if source.name == "00-pause-console.png":
+            left, top, right, bottom = PAUSE_PREVIEW_APERTURE
+            pixels[top:bottom, left:right] = PAUSE_PREVIEW_MATTE
         Image.fromarray(pixels, "RGB").save(OUTPUT / source.name, optimize=True, compress_level=9)
     expected = set(ROUTE_WIDGETS)
     actual = {path.name for path in OUTPUT.glob("*.png")}

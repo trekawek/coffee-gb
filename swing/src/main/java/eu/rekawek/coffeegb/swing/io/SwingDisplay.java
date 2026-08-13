@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
 
 import javax.swing.*;
@@ -46,6 +47,9 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private PendingFrame pendingFrame;
 
+    /** Guarded by this component monitor; invalidates queued and in-flight old-session frames. */
+    private long frameEpoch;
+
     private volatile int displayWidth = DISPLAY_WIDTH;
 
     private volatile int displayHeight = DISPLAY_HEIGHT;
@@ -63,6 +67,9 @@ public class SwingDisplay extends JPanel implements Runnable {
     private boolean colorCorrection;
 
     private volatile int rotation;
+
+    /** Becomes true only after the display worker has published a complete emulation frame. */
+    private volatile boolean framePublished;
 
     private int[] previousFrame;
 
@@ -133,6 +140,9 @@ public class SwingDisplay extends JPanel implements Runnable {
         // visual rumble through the owner lifecycle while subscribers are still active.
         eventBus.register(e -> this.rumbling = false, Controller.RomLoadingEvent.class);
         eventBus.register(e -> this.rumbling = false, Controller.EmulationStoppedEvent.class);
+        eventBus.register(e -> invalidateFrameForLifecycle(), Controller.RomLoadingEvent.class);
+        eventBus.register(e -> invalidateFrameForLifecycle(), Controller.EmulationStartedEvent.class);
+        eventBus.register(e -> invalidateFrameForLifecycle(), Controller.EmulationStoppedEvent.class);
         eventBus.register(e -> resetPresentationFrameRate(), Controller.PauseEmulationEvent.class);
         eventBus.register(e -> resetPresentationFrameRate(), Controller.ResumeEmulationEvent.class);
         eventBus.register(e -> resetPresentationFrameRate(), Controller.RomLoadingEvent.class);
@@ -144,7 +154,22 @@ public class SwingDisplay extends JPanel implements Runnable {
     /** Resets host-only output state before a controller can quiesce or close its event bus. */
     public void releaseForLifecycleChange() {
         rumbling = false;
+        invalidateFrameForLifecycle();
         resetPresentationFrameRate();
+    }
+
+    /**
+     * Marks every pre-transition frame invalid. A worker may already have removed one from the
+     * coalescing slot, so each PendingFrame carries this epoch through to its final publication.
+     */
+    private void invalidateFrameForLifecycle() {
+        synchronized (this) {
+            frameEpoch++;
+            pendingFrame = null;
+            previousFrame = null;
+            framePublished = false;
+            notifyAll();
+        }
     }
 
     private void resetPresentationFrameRate() {
@@ -202,7 +227,7 @@ public class SwingDisplay extends JPanel implements Runnable {
         }
         int size = Math.multiplyExact(width, height);
         pendingFrame = new PendingFrame(
-                width, height, Arrays.copyOf(waitingFrame, size), resetBlend);
+                width, height, Arrays.copyOf(waitingFrame, size), resetBlend, frameEpoch);
         notifyAll();
     }
 
@@ -315,6 +340,55 @@ public class SwingDisplay extends JPanel implements Runnable {
     public StateImage captureStateImage() {
         DisplayFrameSnapshot frame = displayedFrame.get();
         return new StateImage(frame.width(), frame.height(), frame.copyRgb());
+    }
+
+    /**
+     * Captures the same completed frame currently presented to the player for the pause menu.
+     *
+     * <p>The copy is intentionally detached from the display's coalescing worker, is opaque, and
+     * reflects the player's configured quarter-turn rotation. Callers retain this immutable value
+     * for the lifetime of a single top-level pause menu visit.
+     */
+    public MenuPreview captureMenuPreview() {
+        if (!framePublished) {
+            return MenuPreview.empty();
+        }
+        DisplayFrameSnapshot frame = displayedFrame.get();
+        int localRotation = rotation;
+        int sourceWidth = frame.width();
+        int sourceHeight = frame.height();
+        int[] source = frame.copyRgb();
+        int targetWidth = localRotation == 90 || localRotation == 270
+                ? sourceHeight : sourceWidth;
+        int targetHeight = localRotation == 90 || localRotation == 270
+                ? sourceWidth : sourceHeight;
+        int[] target = new int[Math.multiplyExact(targetWidth, targetHeight)];
+        for (int y = 0; y < sourceHeight; y++) {
+            for (int x = 0; x < sourceWidth; x++) {
+                int targetX;
+                int targetY;
+                switch (localRotation) {
+                    case 90 -> {
+                        targetX = sourceHeight - 1 - y;
+                        targetY = x;
+                    }
+                    case 180 -> {
+                        targetX = sourceWidth - 1 - x;
+                        targetY = sourceHeight - 1 - y;
+                    }
+                    case 270 -> {
+                        targetX = y;
+                        targetY = sourceWidth - 1 - x;
+                    }
+                    default -> {
+                        targetX = x;
+                        targetY = y;
+                    }
+                }
+                target[targetY * targetWidth + targetX] = 0xff000000 | source[y * sourceWidth + x];
+            }
+        }
+        return MenuPreview.ready(targetWidth, targetHeight, target);
     }
 
     /** Installs one immutable portable Proposal 3 frame over the display. */
@@ -469,8 +543,17 @@ public class SwingDisplay extends JPanel implements Runnable {
                 }
             }
 
-            displayedFrame.set(DisplayFrameSnapshot.takeOwnership(
-                    frame.width(), frame.height(), frame.rgb()));
+            synchronized (this) {
+                if (frame.epoch() != frameEpoch) {
+                    // A lifecycle transition happened after this worker claimed the pending
+                    // frame. Never let an old ROM become the first supposedly valid preview of
+                    // the new session.
+                    continue;
+                }
+                displayedFrame.set(DisplayFrameSnapshot.takeOwnership(
+                        frame.width(), frame.height(), frame.rgb()));
+                framePublished = true;
+            }
             double framesPerSecond = presentationFrameRate.framePublished();
             if (!Double.isNaN(framesPerSecond)) {
                 eventBus.post(new PresentationFrameRateEvent(framesPerSecond));
@@ -608,6 +691,7 @@ public class SwingDisplay extends JPanel implements Runnable {
     public record PresentationFrameRateResetEvent() implements Event {
     }
 
-    private record PendingFrame(int width, int height, int[] rgb, boolean resetBlend) {
+    private record PendingFrame(int width, int height, int[] rgb, boolean resetBlend,
+            long epoch) {
     }
 }

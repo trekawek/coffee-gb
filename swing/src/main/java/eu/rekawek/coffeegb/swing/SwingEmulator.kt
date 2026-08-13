@@ -244,6 +244,7 @@ class SwingEmulator(
               if (frame == null) display.clearMenuOverlay() else display.setMenuOverlay(frame)
             },
             commands = commands,
+            capturePausePreview = { display.captureMenuPreview() },
             onVisibilityChanged = onVisibilityChanged,
             releaseGameplay = {
               joypad.releaseForLifecycleChange()
