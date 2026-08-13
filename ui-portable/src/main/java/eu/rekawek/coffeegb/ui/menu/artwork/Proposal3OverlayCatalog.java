@@ -24,12 +24,30 @@ final class Proposal3OverlayCatalog {
     static final MenuRect HEADER_CONTEXT = new MenuRect(365, 25, 300, 61);
     static final MenuRect HEADER_ACTION_TEXT = new MenuRect(704, 31, 175, 48);
 
-    static final MenuRect PAUSE_RESUME = new MenuRect(424, 121, 484, 78);
-    static final MenuRect PAUSE_SAVE = new MenuRect(424, 209, 484, 74);
-    static final MenuRect PAUSE_LOAD = new MenuRect(424, 292, 484, 77);
-    static final MenuRect PAUSE_RESET = new MenuRect(424, 377, 484, 74);
-    static final MenuRect PAUSE_SETTINGS = new MenuRect(424, 461, 484, 74);
-    static final MenuRect PAUSE_STOP = new MenuRect(424, 545, 484, 90);
+    /** Frozen game image shown while the top-level pause menu is open. */
+    // The display aperture extends beneath the stepped bezel.  This is the full half-open inner
+    // rectangle; keeping it exact prevents the source illustration from peeking out beside or
+    // below an aspect-fitted live frame.
+    static final MenuRect PAUSE_PREVIEW = new MenuRect(30, 139, 351, 243);
+
+    /*
+     * Pause is deliberately a strict seven-row rail.  Keeping the dividers outside the row
+     * interiors means a focus repaint can never eat into an adjacent row.
+     */
+    static final MenuRect PAUSE_MENU = new MenuRect(424, 121, 484, 516);
+    static final MenuRect PAUSE_RESUME = new MenuRect(424, 121, 484, 72);
+    static final MenuRect PAUSE_SAVE = new MenuRect(424, 195, 484, 72);
+    static final MenuRect PAUSE_LOAD = new MenuRect(424, 269, 484, 72);
+    static final MenuRect PAUSE_OPEN_ROM = new MenuRect(424, 343, 484, 72);
+    static final MenuRect PAUSE_RESET = new MenuRect(424, 417, 484, 72);
+    static final MenuRect PAUSE_SETTINGS = new MenuRect(424, 491, 484, 72);
+    static final MenuRect PAUSE_STOP = new MenuRect(424, 565, 484, 72);
+    static final List<MenuRect> PAUSE_DIVIDERS = List.of(
+            new MenuRect(424, 193, 484, 2), new MenuRect(424, 267, 484, 2),
+            new MenuRect(424, 341, 484, 2), new MenuRect(424, 415, 484, 2),
+            new MenuRect(424, 489, 484, 2), new MenuRect(424, 563, 484, 2));
+    static final MenuRect PAUSE_HEADER_CONTEXT = new MenuRect(340, 25, 325, 61);
+    static final MenuRect PAUSE_HEADER_ACTION = new MenuRect(688, 25, 207, 61);
 
     /** The inner rail remains an audit mask; the complete asset blit uses AUDIO_KNOB_TRAVEL. */
     static final MenuRect AUDIO_SLIDER = new MenuRect(429, 214, 436, 31);
@@ -86,12 +104,12 @@ final class Proposal3OverlayCatalog {
                 List.of(slot("resume", PAUSE_RESUME, Surface.DARK),
                         slot("save-state", PAUSE_SAVE, Surface.DARK),
                         slot("load-state", PAUSE_LOAD, Surface.DARK),
+                        slot("open-rom", PAUSE_OPEN_ROM, Surface.DARK),
                         slot("reset", PAUSE_RESET, Surface.DARK),
                         slot("settings", PAUSE_SETTINGS, Surface.DARK),
                         slot("stop", PAUSE_STOP, Surface.DARK)), List.of(),
-                masks(OPEN_ROM_HEADER, PAUSE_RESUME, PAUSE_SAVE, PAUSE_LOAD, PAUSE_RESET,
-                        PAUSE_SETTINGS, PAUSE_STOP), false, "resume",
-                new Marker(443, 148, 27, 20, 31), false));
+                masks(PAUSE_PREVIEW, PAUSE_MENU, PAUSE_HEADER_CONTEXT, PAUSE_HEADER_ACTION),
+                false, "resume", new Marker(443, 147, 26, 20, 31), false));
 
         layouts.put(MenuRoute.SAVE_STATES, layout(MenuRoute.SAVE_STATES,
                 rows(new int[][]{{420, 118, 489, 93}, {420, 214, 489, 94},

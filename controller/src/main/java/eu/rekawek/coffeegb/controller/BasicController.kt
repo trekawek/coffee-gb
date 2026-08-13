@@ -108,6 +108,7 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
+import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
@@ -4097,14 +4098,25 @@ class BasicController private constructor(
         session,
         Controller.SessionSnapshotSupportEvent(if (snapshotManager == null) null else this),
     )
+    val presentationTitle = session.config.rom.title.trim().ifBlank {
+      session.config.rom.origin.displayName().trim().ifBlank { "UNTITLED ROM" }
+    }
     postSessionEventSafely(
         session,
         Controller.EmulationStartedEvent(
-            session.config.rom.title,
+            presentationTitle,
             session.config.rom.origin,
             openRequestId,
             playbackSessionGeneration,
         ))
+    postSessionEventSafely(
+        session,
+        Controller.SessionPresentationEvent(
+            presentationTitle,
+            Cartridge.supportsBatterySave(session.config.rom),
+            playbackSessionGeneration,
+        ),
+    )
     publishPlaybackState()
     val context = stateContext
     postSessionEventSafely(

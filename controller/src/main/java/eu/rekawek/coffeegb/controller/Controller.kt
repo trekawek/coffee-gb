@@ -44,6 +44,18 @@ interface Controller : AutoCloseable {
       val sessionGeneration: Long? = null,
   ) : Event
 
+  /**
+   * Immutable cartridge presentation metadata for the active session.
+   *
+   * The battery flag expresses mapper capability only.  It intentionally does not reveal whether
+   * a file exists, whether the save is dirty, or whether a storage backend is configured.
+   */
+  data class SessionPresentationEvent(
+      val romTitle: String,
+      val batterySaveActive: Boolean,
+      val sessionGeneration: Long? = null,
+  ) : Event
+
   class EmulationStoppedEvent : Event
 
   data class LoadRomEvent

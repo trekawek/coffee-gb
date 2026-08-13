@@ -24,6 +24,14 @@ public class AndroidMenuModelTest {
     }
 
     @Test
+    public void sharedFooterAdvertisesTheThreeButtonMenuContract() {
+        assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"),
+                AndroidMenuModel.settingsPage().footerHints());
+        assertFalse(AndroidMenuModel.settingsPage().footerHints().stream()
+                .anyMatch(hint -> hint.contains("SELECT") || hint.contains("START")));
+    }
+
+    @Test
     public void everyPr3RouteUsesTheStableApprovedIds() {
         assertIds(AndroidMenuModel.audioPage(AndroidMenuModel.audioDraft(100, false)),
                 "volume", "mute-audio", "emulated-audio", "save-audio", "cancel-audio");

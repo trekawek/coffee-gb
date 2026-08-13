@@ -46,7 +46,7 @@ public class MenuControllerTest {
     }
 
     @Test
-    public void secondaryPointerActionUsesImmutablePageMetadata() {
+    public void selectIsInertAndSecondaryPointerActionUsesImmutablePageMetadata() {
         Events events = new Events();
         MenuController controller = new MenuController(events);
         controller.setPage(page(MenuRoute.SAVE_STATES, 1,
@@ -55,6 +55,10 @@ public class MenuControllerTest {
 
         controller.updatePointer(7, List.of(MenuKey.SELECT));
         controller.updatePointer(7, List.of(MenuKey.SELECT));
+        controller.releasePointer(7);
+
+        assertEquals(List.of(), events.items);
+        controller.updatePointer(7, List.of(MenuKey.SECONDARY));
         controller.releasePointer(7);
 
         assertEquals(List.of("delete:0:true"), events.items);
@@ -141,7 +145,7 @@ public class MenuControllerTest {
         Events events = new Events();
         MenuController controller = new MenuController(events);
         controller.show(MenuRoute.PAUSE_CONSOLE);
-        for (int index = 0; index < 4; index++) {
+        for (int index = 0; index < 5; index++) {
             controller.onKeyDown(MenuKey.DOWN, false);
             controller.onKeyUp(MenuKey.DOWN);
         }
@@ -194,9 +198,28 @@ public class MenuControllerTest {
                 controller.snapshot().frames().get(1).focusedItemId());
     }
 
+    @Test
+    public void startActivatesExactlyLikeAAndSelectNeverActivates() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setPage(page(MenuRoute.CONFIRM_ACTION, 1,
+                List.of(item("confirm", "CONFIRM", true, null))));
+        controller.show(MenuRoute.CONFIRM_ACTION);
+
+        controller.onKeyDown(MenuKey.SELECT, false);
+        controller.onKeyUp(MenuKey.SELECT);
+        controller.onKeyDown(MenuKey.START, false);
+        controller.onKeyDown(MenuKey.START, true);
+        controller.onKeyUp(MenuKey.START);
+        controller.onKeyDown(MenuKey.A, false);
+        controller.onKeyUp(MenuKey.A);
+
+        assertEquals(List.of("confirm:false", "confirm:false"), events.items);
+    }
+
     private static MenuPageSpec page(MenuRoute route, int columns, List<MenuPageSpec.Item> items) {
         return new MenuPageSpec(route, "COFFEE GB", "TEST", "", "TEST", List.of("TEST"),
-                items, columns, List.of("[A] OK", "[B] BACK"));
+                items, columns, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private static MenuPageSpec.Item item(String id, String label, boolean enabled,

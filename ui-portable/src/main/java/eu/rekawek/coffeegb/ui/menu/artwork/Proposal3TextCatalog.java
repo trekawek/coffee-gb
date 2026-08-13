@@ -23,15 +23,12 @@ final class Proposal3TextCatalog {
     static final MenuRect FOOTER = new MenuRect(18, 659, 888, 61);
 
     private static final MenuRect FOOTER_DPAD_CLEAR = new MenuRect(70, 669, 240, 43);
-    private static final MenuRect FOOTER_A_CLEAR = new MenuRect(418, 675, 27, 27);
-    private static final MenuRect FOOTER_OK_CLEAR = new MenuRect(455, 669, 110, 43);
-    private static final MenuRect FOOTER_B_CLEAR = new MenuRect(671, 675, 28, 27);
+    /* The A and B keycaps belong to the approved artwork and intentionally remain untouched. */
+    private static final MenuRect FOOTER_CHOOSE_CLEAR = new MenuRect(455, 669, 126, 43);
     private static final MenuRect FOOTER_BACK_CLEAR = new MenuRect(708, 669, 128, 43);
 
     private static final MenuRect FOOTER_DPAD = new MenuRect(73, 660, 226, 56);
-    private static final MenuRect FOOTER_A = new MenuRect(418, 660, 27, 56);
-    private static final MenuRect FOOTER_OK = new MenuRect(470, 660, 88, 56);
-    private static final MenuRect FOOTER_B = new MenuRect(672, 660, 27, 56);
+    private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 660, 123, 56);
     private static final MenuRect FOOTER_BACK = new MenuRect(722, 660, 94, 56);
 
     private static final EnumMap<MenuRoute, List<TextRegion>> ROUTES = createRoutes();
@@ -53,8 +50,7 @@ final class Proposal3TextCatalog {
     }
 
     static List<MenuRect> footerClearRegions() {
-        return List.of(FOOTER_DPAD_CLEAR, FOOTER_A_CLEAR, FOOTER_OK_CLEAR,
-                FOOTER_B_CLEAR, FOOTER_BACK_CLEAR);
+        return List.of(FOOTER_DPAD_CLEAR, FOOTER_CHOOSE_CLEAR, FOOTER_BACK_CLEAR);
     }
 
     private static EnumMap<MenuRoute, List<TextRegion>> createRoutes() {
@@ -92,12 +88,8 @@ final class Proposal3TextCatalog {
                 align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM));
         regions.add(region(Key.FOOTER_DPAD, 0, FOOTER_DPAD, Surface.PAPER,
                 align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM));
-        regions.add(region(Key.FOOTER_BUTTON, 1, FOOTER_A, Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM));
-        regions.add(region(Key.FOOTER_LABEL, 1, FOOTER_OK, Surface.PAPER,
+        regions.add(region(Key.FOOTER_LABEL, 1, FOOTER_CHOOSE, Surface.PAPER,
                 align(Horizontal.LEFT), Proposal3GlyphAtlas.Role.MEDIUM));
-        regions.add(region(Key.FOOTER_BUTTON, 2, FOOTER_B, Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM));
         regions.add(region(Key.FOOTER_LABEL, 2, FOOTER_BACK, Surface.PAPER,
                 align(Horizontal.LEFT), Proposal3GlyphAtlas.Role.MEDIUM));
     }

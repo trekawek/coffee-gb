@@ -353,25 +353,23 @@ public final class MenuController implements MenuTouchInput {
                     clearTransientInputsLocked(false);
                 }
             }
-            case A -> {
+            case A, START -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled()) {
                     return new Transition(state.presentation(), Event.item(
                             state.route(), item.id(), false));
                 }
             }
-            case SELECT, SECONDARY -> {
+            case SECONDARY -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled() && item.secondaryId() != null) {
                     return new Transition(state.presentation(), Event.item(
                             state.route(), item.secondaryId(), true));
                 }
             }
-            case START -> {
-                if (!state.page().headerAction().isEmpty()) {
-                    return new Transition(state.presentation(), Event.header(state.route()));
-                }
-            }
+            // Select is intentionally consumed but inert on every menu page.  SECONDARY keeps
+            // the distinct delete/remap route used by rows that explicitly declare one.
+            case SELECT -> { }
         }
         return new Transition(state.presentation(), null);
     }

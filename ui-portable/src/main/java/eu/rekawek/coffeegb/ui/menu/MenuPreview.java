@@ -5,7 +5,12 @@ import java.util.Arrays;
 /** Bounded immutable pixel preview published to the menu render thread. */
 public final class MenuPreview {
 
-    public static final int MAX_PIXELS = 160 * 192;
+    /**
+     * The largest native Game Boy image we can retain is a Super Game Boy frame including its
+     * border.  Keeping this bound here makes the hand-off safe for DMG, CGB, and SGB without
+     * making a menu preview a live display buffer.
+     */
+    public static final int MAX_PIXELS = 256 * 224;
 
     public enum State {
         LOADING,

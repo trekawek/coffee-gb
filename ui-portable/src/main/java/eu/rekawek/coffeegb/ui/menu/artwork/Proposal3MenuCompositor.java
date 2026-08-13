@@ -170,10 +170,6 @@ public final class Proposal3MenuCompositor {
             if ("back".equals(id)) {
                 continue;
             }
-            if (route == MenuRoute.PAUSE_CONSOLE && "open-rom".equals(id)) {
-                prepared.headerAction = entry(item, index, "open-rom", -1);
-                continue;
-            }
             if ("volume".equals(id)) {
                 prepared.volume = entry(item, index, "volume", -1);
                 continue;
@@ -307,29 +303,6 @@ public final class Proposal3MenuCompositor {
                 item.adjustable(), item.progress(), slotNumber);
     }
 
-    private void applyFocus(MenuRoute route, MenuPresentation presentation,
-            Prepared prepared, Proposal3OverlayCatalog.RouteLayout layout, MenuRaster raster) {
-        String focusedId = focusedId(presentation, prepared);
-        if (route == MenuRoute.PAUSE_CONSOLE && "open-rom".equals(focusedId)) {
-            paintById(route, presentation, prepared, layout, layout.canonicalFocusId(), false,
-                    raster);
-            paintHeaderAction(prepared.headerAction, true, raster);
-            return;
-        }
-        if (route == MenuRoute.AUDIO && "volume".equals(focusedId)) {
-            paintById(route, presentation, prepared, layout, layout.canonicalFocusId(), false,
-                    raster);
-            return;
-        }
-
-        String canonical = layout.canonicalFocusId();
-        if (canonical == null || canonical.equals(focusedId)) {
-            return;
-        }
-        paintById(route, presentation, prepared, layout, canonical, false, raster);
-        paintById(route, presentation, prepared, layout, focusedId, true, raster);
-    }
-
     private void paintById(MenuRoute route, MenuPresentation presentation, Prepared prepared,
             Proposal3OverlayCatalog.RouteLayout layout, String id, boolean selected,
             MenuRaster raster) {
@@ -359,45 +332,30 @@ public final class Proposal3MenuCompositor {
         }
     }
 
-    private void paintHeaderAction(Entry entry, boolean selected, MenuRaster raster) {
-        if (entry == null) {
-            return;
-        }
-        MenuRect bounds = inset(Proposal3OverlayCatalog.OPEN_ROM_HEADER, 4);
-        paintSurface(raster, bounds, Proposal3OverlayCatalog.Surface.PAPER, selected);
-        raster.drawText(atlas(), Proposal3GlyphAtlas.Role.MEDIUM, display(entry.label), bounds,
-                selected ? MenuRaster.PAPER_TEXT : MenuRaster.INK,
-                MenuRaster.HorizontalAlignment.CENTER);
-    }
-
     private void drawChrome(MenuRoute route, MenuPresentation presentation, Prepared prepared,
             MenuRaster raster) {
         for (MenuRect clear : Proposal3TextCatalog.footerClearRegions()) {
             paintSurface(raster, clear, Proposal3OverlayCatalog.Surface.PAPER, false);
         }
-        String[] footer = footerValues(presentation.footerHints());
-        String focused = focusedId(presentation, prepared);
+        if (route == MenuRoute.PAUSE_CONSOLE) {
+            // The pause menu has no context or header action.  Clear the original, now obsolete
+            // chrome once per frame so it cannot reappear when returning from a subpage.
+            paintSurface(raster, Proposal3OverlayCatalog.PAUSE_HEADER_CONTEXT,
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
+            paintSurface(raster, Proposal3OverlayCatalog.PAUSE_HEADER_ACTION,
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
+        }
+        String[] footer = footerValues(route, presentation.footerHints());
         for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
             String value = textValue(region, presentation, prepared, footer);
-            boolean selected = route == MenuRoute.PAUSE_CONSOLE
-                    && region.key() == Proposal3TextCatalog.Key.HEADER_ACTION
-                    && "open-rom".equals(focused);
             Proposal3OverlayCatalog.Surface surface = region.surface()
                     == Proposal3TextCatalog.Surface.DARK
                     ? Proposal3OverlayCatalog.Surface.DARK
                     : Proposal3OverlayCatalog.Surface.PAPER;
-            if (selected) {
-                surface = Proposal3OverlayCatalog.Surface.DARK;
-            }
             if (value.isEmpty()) {
                 continue;
             }
-            if (selected) {
-                paintSurface(raster, inset(Proposal3OverlayCatalog.OPEN_ROM_HEADER, 4),
-                        Proposal3OverlayCatalog.Surface.PAPER, true);
-            }
-            int color = selected ? MenuRaster.PAPER_TEXT
-                    : surface == Proposal3OverlayCatalog.Surface.DARK
+            int color = surface == Proposal3OverlayCatalog.Surface.DARK
                     ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
             drawCatalogText(raster, region, chromeTextRole(route, region), value, color);
         }
@@ -432,11 +390,21 @@ public final class Proposal3MenuCompositor {
         };
     }
 
-    private static String[] footerValues(List<String> hints) {
-        String first = valueAt(hints, 0, "D-PAD MOVE");
-        String second = valueAt(hints, 1, "[A] OK");
-        String third = valueAt(hints, 2, "[B] BACK");
-        return new String[]{first, second, third};
+    private static String[] footerValues(MenuRoute route, List<String> hints) {
+        // The pause screen establishes the console-wide physical-control contract. Other routes
+        // retain their page-specific text (for example SAVE/CANCEL), while keycap artwork stays
+        // untouched so no glyph is drawn over the approved A/B shapes.
+        if (route == MenuRoute.PAUSE_CONSOLE) {
+            return new String[]{"D-PAD MOVE", "A CHOOSE", "B BACK"};
+        }
+        String[] fallback = {"D-PAD MOVE", "A CHOOSE", "B BACK"};
+        for (int index = 0; index < fallback.length && index < hints.size(); index++) {
+            String hint = hints.get(index);
+            if (hint != null && !hint.isBlank()) {
+                fallback[index] = hint;
+            }
+        }
+        return fallback;
     }
 
     private static String textValue(Proposal3TextCatalog.TextRegion region,
@@ -446,9 +414,11 @@ public final class Proposal3MenuCompositor {
         }
         return switch (region.key()) {
             case HEADER_TITLE -> display(presentation.title());
-            case HEADER_CONTEXT -> presentation.context().isEmpty()
+            case HEADER_CONTEXT -> presentation.route() == MenuRoute.PAUSE_CONSOLE
+                    ? "" : presentation.context().isEmpty()
                     ? "/" : "/ " + display(presentation.context());
-            case HEADER_ACTION -> presentation.headerAction().isEmpty()
+            case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
+                    ? "" : presentation.headerAction().isEmpty()
                     ? "BACK" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
             case FOOTER_BUTTON -> footerButton(footer[region.index()]);
@@ -533,13 +503,6 @@ public final class Proposal3MenuCompositor {
         raster.paintSprite(skins().focusArrow(), x, y, MenuRaster.PAPER_TEXT);
     }
 
-    private static MenuRect inset(MenuRect bounds, int amount) {
-        int inset = Math.max(0, Math.min(amount,
-                Math.min((bounds.width() - 1) / 2, (bounds.height() - 1) / 2)));
-        return new MenuRect(bounds.x() + inset, bounds.y() + inset,
-                bounds.width() - inset * 2, bounds.height() - inset * 2);
-    }
-
     private static MenuRect expand(MenuRect bounds, int amount) {
         int left = Math.max(0, bounds.x() - amount);
         int top = Math.max(0, bounds.y() - amount);
@@ -604,7 +567,7 @@ public final class Proposal3MenuCompositor {
     private void paintRowWidget(MenuRoute route, MenuPresentation presentation, Prepared prepared,
             Proposal3OverlayCatalog.RouteLayout layout, Entry entry, int entryIndex,
             Proposal3OverlayCatalog.Slot slot, boolean selected, MenuRaster raster) {
-        paintSurface(raster, expand(slot.bounds(), 2), slot.surface(), selected);
+        paintSurface(raster, rowSurfaceBounds(route, slot), slot.surface(), selected);
         int color = selected || slot.surface() == Proposal3OverlayCatalog.Surface.DARK
                 ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
         String label = label(route, entry, entryIndex);
@@ -692,13 +655,24 @@ public final class Proposal3MenuCompositor {
             int index = start + visible;
             Proposal3OverlayCatalog.Slot slot = layout.rows().get(visible);
             if (index >= prepared.rows.size()) {
-                paintSurface(raster, expand(slot.bounds(), 2), slot.surface(), false);
+                paintSurface(raster, rowSurfaceBounds(route, slot), slot.surface(), false);
                 continue;
             }
             Entry entry = prepared.rows.get(index);
             paintRowWidget(route, presentation, prepared, layout, entry, index, slot,
                     entry.id.equals(focused), raster);
         }
+        if (route == MenuRoute.PAUSE_CONSOLE) {
+            // Draw these last: selection changes must not overpaint a separator, and the
+            // separators establish the intentional two-pixel gap between every equal-height row.
+            for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
+                raster.fill(divider, PAPER_MATTE);
+            }
+        }
+    }
+
+    private static MenuRect rowSurfaceBounds(MenuRoute route, Proposal3OverlayCatalog.Slot slot) {
+        return route == MenuRoute.PAUSE_CONSOLE ? slot.bounds() : expand(slot.bounds(), 2);
     }
 
     private void drawActions(MenuRoute route, MenuPresentation presentation, Prepared prepared,
@@ -761,14 +735,27 @@ public final class Proposal3MenuCompositor {
     private void drawRouteWidgets(MenuRoute route, MenuPresentation presentation, Prepared prepared,
             Proposal3OverlayCatalog.RouteLayout layout, MenuRaster raster) {
         switch (route) {
+            case PAUSE_CONSOLE -> drawPause(presentation, raster);
             case SAVE_STATES -> drawSaveSide(presentation, raster);
             case AUDIO -> drawAudioSide(presentation, prepared, raster);
             case PRINTER_PAPER -> drawPrinter(presentation, raster);
-            case PAUSE_CONSOLE, SETTINGS, TOUCH_CONTROLS, CONTROLLER_MAPPING,
+            case SETTINGS, TOUCH_CONTROLS, CONTROLLER_MAPPING,
                     OPTIONAL_DEVICES, DATA_MEDIA, LIBRARY, CHOOSE_ROM, SYSTEM, ABOUT -> {
                 // Their previews and route copy are handled by the text catalog above.
             }
         }
+    }
+
+    private void drawPause(MenuPresentation presentation, MenuRaster raster) {
+        if (presentation.preview().state() == MenuPreview.State.READY) {
+            raster.copyPreview(presentation.preview(), Proposal3OverlayCatalog.PAUSE_PREVIEW,
+                    0xff121b14);
+            return;
+        }
+        raster.fill(Proposal3OverlayCatalog.PAUSE_PREVIEW, 0xff121b14);
+        drawWidgetText(raster, "NO FRAME AVAILABLE", Proposal3OverlayCatalog.PAUSE_PREVIEW,
+                MenuRaster.PAPER_TEXT, MenuRaster.HorizontalAlignment.CENTER,
+                Proposal3GlyphAtlas.Role.SMALL);
     }
 
     private static void drawSaveSide(MenuPresentation p, MenuRaster r) {
@@ -911,9 +898,6 @@ public final class Proposal3MenuCompositor {
 
     private static String focusedId(MenuPresentation p, Prepared prepared) {
         int index = p.focusedIndex();
-        if (prepared.headerAction != null && prepared.headerAction.sourceIndex == index) {
-            return prepared.headerAction.id;
-        }
         if (prepared.volume != null && prepared.volume.sourceIndex == index) {
             return prepared.volume.id;
         }
@@ -1173,7 +1157,6 @@ public final class Proposal3MenuCompositor {
     private static final class Prepared {
         private final List<Entry> rows = new ArrayList<>();
         private final List<Entry> actions = new ArrayList<>();
-        private Entry headerAction;
         private Entry volume;
     }
 

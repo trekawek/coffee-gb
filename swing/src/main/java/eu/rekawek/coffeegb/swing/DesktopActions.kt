@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker
 import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
@@ -79,6 +80,10 @@ internal class DesktopActionRegistry(
     private val proposal3MenuAvailable: Boolean = false,
 ) : PortableMenuCommandBridge {
   private var presentation = DesktopCommandPresentation()
+  private var menuPresentation = DesktopPresentation()
+  private val playTime = PlayTimeTracker()
+  private var timedSessionGeneration: Long? = null
+  private var timedGameTitle: String? = null
   private var appliedShortcuts: DesktopShortcutRegistry? = null
   private val actions =
       DesktopCommand.entries.associateWith { command ->
@@ -95,7 +100,7 @@ internal class DesktopActionRegistry(
       }
 
   init {
-    update(presentation)
+    updatePresentation(menuPresentation)
   }
 
   operator fun get(command: DesktopCommand): Action = checkNotNull(actions[command])
@@ -111,30 +116,34 @@ internal class DesktopActionRegistry(
   }
 
   fun update(next: DesktopCommandPresentation) {
-    presentation = next
+    updatePresentation(menuPresentation.copy(commands = next))
+  }
+
+  /** Receives the full authoritative shell snapshot, including session-only menu metadata. */
+  fun updatePresentation(next: DesktopPresentation) {
+    updatePlayTime(next)
+    menuPresentation = next
+    presentation = next.commands
     actions.forEach { (command, action) ->
-      action.isEnabled = enabled(command, next)
-      action.putValue(Action.SELECTED_KEY, selected(command, next))
+      action.isEnabled = enabled(command, presentation)
+      action.putValue(Action.SELECTED_KEY, selected(command, presentation))
     }
     actions.getValue(DesktopCommand.PAUSE).putValue(
         Action.NAME,
-        if (next.paused) "Resume" else "Pause",
+        if (presentation.paused) "Resume" else "Pause",
     )
     actions.getValue(DesktopCommand.MUTE).putValue(
         Action.NAME,
-        if (next.muted) "Unmute" else "Mute",
+        if (presentation.muted) "Unmute" else "Mute",
     )
     stateSlotActions.forEachIndexed { slot, action ->
-      action.isEnabled = next.stateCommandsAvailable && !next.sessionBusy
-      action.putValue(Action.SELECTED_KEY, slot == next.stateSlot)
+      action.isEnabled = presentation.stateCommandsAvailable && !presentation.sessionBusy
+      action.putValue(Action.SELECTED_KEY, slot == presentation.stateSlot)
     }
   }
 
   override fun menuState(): DesktopPresentation =
-      DesktopPresentation(
-          gameTitle = if (presentation.gameLoaded) "loaded" else null,
-          commands = presentation,
-      )
+      menuPresentation.copy(commands = presentation, playTimeNanos = playTime.elapsedNanos())
 
   override fun isEnabled(command: DesktopCommand): Boolean = actions.getValue(command).isEnabled
 
@@ -188,6 +197,26 @@ internal class DesktopActionRegistry(
 
   fun stateSlotShortcuts(): List<KeyStroke> =
       appliedShortcuts?.stateSlotShortcuts.orEmpty()
+
+  private fun updatePlayTime(next: DesktopPresentation) {
+    val title = next.gameTitle
+    if (title == null) {
+      playTime.clear()
+      timedSessionGeneration = null
+      timedGameTitle = null
+      return
+    }
+    val sessionChanged =
+        timedGameTitle != title ||
+            (next.sessionGeneration != null && next.sessionGeneration != timedSessionGeneration)
+    if (sessionChanged) {
+      playTime.start()
+      timedSessionGeneration = next.sessionGeneration
+      timedGameTitle = title
+    }
+    // Paused is emitted by the controller, so it is the source of truth for elapsed play time.
+    playTime.setRunning(!next.commands.paused)
+  }
 
   private fun invokeCommand(command: DesktopCommand) {
     when (command) {

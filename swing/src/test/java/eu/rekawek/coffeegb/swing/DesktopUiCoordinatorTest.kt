@@ -46,6 +46,20 @@ class DesktopUiCoordinatorTest {
   }
 
   @Test
+  fun `late mapper metadata cannot overwrite the active session`() {
+    val coordinator = DesktopUiCoordinator(DesktopPresentation(), render = {}, edtCheck = { true })
+
+    coordinator.opened("Tetris", sessionGeneration = 11)
+    coordinator.sessionMetadata(batterySaveActive = true, sessionGeneration = 11)
+    coordinator.opened("Kirby", sessionGeneration = 12)
+    coordinator.sessionMetadata(batterySaveActive = true, sessionGeneration = 11)
+
+    assertEquals("Kirby", coordinator.current().gameTitle)
+    assertFalse(coordinator.current().batterySaveActive)
+    assertEquals(12, coordinator.current().sessionGeneration)
+  }
+
+  @Test
   fun `stop clears impossible game-only command state`() {
     val coordinator =
         DesktopUiCoordinator(

@@ -8,6 +8,8 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot;
+import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker;
 import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
@@ -73,8 +75,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             });
     private final CopyOnWriteArraySet<RuntimeObserver> observers = new CopyOnWriteArraySet<>();
     private final AtomicBoolean closed = new AtomicBoolean();
+    /** Serializes a UI-thread pause capture with owner-thread presentation publication. */
+    private final Object presentationLock = new Object();
     private final RuntimeLifecycleGate lifecycle = new RuntimeLifecycleGate();
     private final NativeFrameStore frames = new NativeFrameStore();
+    /** Session timing belongs to the service, not to a short-lived Activity attachment. */
+    private final PlayTimeTracker playTime = new PlayTimeTracker();
     private final EmulatorProperties properties = new EmulatorProperties();
     private final AndroidInputRouter input;
 
@@ -110,6 +116,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private long nextFlushRequestId;
     private long pendingFlushRequestId;
     private ScheduledFuture<?> flushDeadline;
+    /** Mapper-derived metadata for the active controller session; never inferred from files. */
+    private String activeRomTitle = "";
+    private boolean activeBatterySave;
+    private long activeSessionGeneration;
+    private boolean playbackTimerSessionActive;
+    private long playbackTimerSessionGeneration;
+    private boolean restartPlaybackTimerOnNextPublish;
+    /** Frozen root-pause presentation retained across Activity and picker recreation. */
+    private volatile PauseMenuSnapshot pauseMenuSnapshot;
+    private volatile long pauseSnapshotSessionGeneration;
+    private volatile String pauseSnapshotTitle = "";
 
     public AndroidEmulationRuntime(Context context) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
@@ -125,6 +142,50 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
     NativeFrameStore frames() {
         return frames;
+    }
+
+    /** Returns a detached, opaque copy of the latest native game frame for a frozen pause menu. */
+    MenuPreview capturePauseMenuPreview() {
+        NativeFrameStore.Snapshot snapshot = frames.snapshot();
+        return snapshot == null ? MenuPreview.empty()
+                : MenuPreview.ready(snapshot.width(), snapshot.height(), snapshot.pixels());
+    }
+
+    /**
+     * Freezes the currently active game for the root pause menu before a caller asks the
+     * controller to pause. The immutable capture is service-owned so an Activity recreation or
+     * a native picker round trip restores the exact same frame and elapsed time.
+     */
+    PauseMenuSnapshot capturePauseMenuSnapshot() {
+        synchronized (presentationLock) {
+            RuntimeState current = state;
+            if (!hasActiveSession(current)) {
+                return null;
+            }
+            PauseMenuSnapshot existing = pauseMenuSnapshotFor(current);
+            if (existing != null) {
+                return existing;
+            }
+            String title = current.romTitle().isBlank() ? "NO GAME" : current.romTitle();
+            PauseMenuSnapshot captured = new PauseMenuSnapshot(title, playTime.elapsedNanos(),
+                    current.batterySaveActive(), capturePauseMenuPreview());
+            pauseSnapshotSessionGeneration = current.sessionGeneration();
+            pauseSnapshotTitle = current.romTitle();
+            pauseMenuSnapshot = captured;
+            return captured;
+        }
+    }
+
+    /** Returns the retained root-pause capture only when it still belongs to the active session. */
+    PauseMenuSnapshot pauseMenuSnapshot() {
+        synchronized (presentationLock) {
+            return pauseMenuSnapshotFor(state);
+        }
+    }
+
+    /** Drops a root-pause capture after the user has actually left the menu or resumed play. */
+    void clearPauseMenuSnapshot() {
+        clearPauseMenuSnapshotInternal();
     }
 
     /** Service-owned source merger for transient Android touch and controller devices. */
@@ -421,6 +482,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Audio focus gain intentionally does not resume emulation without an explicit user command. */
     public void resume() {
+        clearPauseMenuSnapshot();
         submit(() -> {
             if (controller == null || activeLayout == null) {
                 return;
@@ -460,6 +522,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeLayout = null;
             activeStates = null;
             currentSource = null;
+            activeRomTitle = "";
+            activeBatterySave = false;
+            activeSessionGeneration = 0L;
+            clearPauseMenuSnapshotInternal();
             frames.clear();
             lifecycle.released();
             createController();
@@ -666,8 +732,20 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.RomLoadingEvent.class);
         eventBus.register(
                 (Controller.EmulationStartedEvent event) -> submit(() -> {
-                    if (event.getOpenRequestId() != null
-                            && event.getOpenRequestId() == activeOpenRequestId) {
+                    boolean requestedOpen = event.getOpenRequestId() != null
+                            && event.getOpenRequestId() == activeOpenRequestId;
+                    // Reset reloads the current cartridge without a host open-request id. Its
+                    // session generation is authoritative and must replace the just-ended one;
+                    // otherwise its following metadata event would be rejected as stale.
+                    boolean resetReload = isResetReload(event.getOpenRequestId(), activeLayout != null,
+                            event.getSessionGeneration(), activeSessionGeneration);
+                    if (requestedOpen || resetReload) {
+                        activeRomTitle = event.getRomName();
+                        activeBatterySave = false;
+                        activeSessionGeneration = event.getSessionGeneration() == null ? 0L
+                                : event.getSessionGeneration();
+                        restartPlaybackTimerOnNextPublish = true;
+                        clearPauseMenuSnapshotInternal();
                         AndroidTiltSink activeTilt = tilt;
                         if (activeTilt != null) {
                             activeTilt.setCartridgeActive(tiltOpenRequestId
@@ -691,6 +769,25 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     }
                 }),
                 Controller.EmulationStartedEvent.class);
+        eventBus.register(
+                (Controller.SessionPresentationEvent event) -> submit(() -> {
+                    if (activeLayout == null) {
+                        return;
+                    }
+                    Long eventGeneration = event.getSessionGeneration();
+                    if (eventGeneration != null && activeSessionGeneration != 0L
+                            && eventGeneration.longValue() != activeSessionGeneration) {
+                        return;
+                    }
+                    activeRomTitle = event.getRomTitle();
+                    activeBatterySave = event.getBatterySaveActive();
+                    if (eventGeneration != null) {
+                        activeSessionGeneration = eventGeneration;
+                    }
+                    publish(state.phase(), state.message(), state.selections(),
+                            state.transferReady(), state.paused(), state.flushPending());
+                }),
+                Controller.SessionPresentationEvent.class);
         eventBus.register(
                 (Controller.EmulationStoppedEvent event) -> submit(() -> {
                     if (!closed.get()) {
@@ -790,6 +887,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source) {
         try {
+            activeRomTitle = "";
+            activeBatterySave = false;
+            activeSessionGeneration = 0L;
+            clearPauseMenuSnapshotInternal();
             RomImage image = token == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
                     ? snapshot.loadSingle()
                     : snapshot.load(token);
@@ -1093,15 +1194,96 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             boolean transferReady,
             boolean paused,
             boolean flushPending) {
-        RuntimeState next = new RuntimeState(
-                phase, message, selections, transferReady, paused, flushPending,
-                Math.addExact(state.generation(), 1));
-        state = next;
+        RuntimeState next;
+        synchronized (presentationLock) {
+            boolean activeSession = phase == RuntimeState.Phase.RUNNING
+                    || phase == RuntimeState.Phase.PAUSED;
+            String romTitle = activeSession ? activeRomTitle : "";
+            long sessionGeneration = activeSession ? activeSessionGeneration : 0L;
+            long playTimeNanos = updatePlayTime(phase, sessionGeneration);
+            next = new RuntimeState(
+                    phase, message, selections, transferReady, paused, flushPending,
+                    romTitle,
+                    activeSession && activeBatterySave,
+                    sessionGeneration,
+                    playTimeNanos,
+                    Math.addExact(state.generation(), 1));
+            state = next;
+        }
         mainHandler.post(() -> {
             for (RuntimeObserver observer : observers) {
                 observer.onStateChanged(next);
             }
         });
+    }
+
+    private long updatePlayTime(RuntimeState.Phase phase, long sessionGeneration) {
+        if (phase != RuntimeState.Phase.RUNNING && phase != RuntimeState.Phase.PAUSED) {
+            playTime.clear();
+            playbackTimerSessionActive = false;
+            playbackTimerSessionGeneration = 0L;
+            restartPlaybackTimerOnNextPublish = false;
+            clearPauseMenuSnapshotInternal();
+            return 0L;
+        }
+        boolean sessionChanged = restartPlaybackTimerOnNextPublish || !playbackTimerSessionActive
+                || (sessionGeneration != 0L && sessionGeneration != playbackTimerSessionGeneration);
+        if (sessionChanged) {
+            playTime.start();
+            playbackTimerSessionActive = true;
+            playbackTimerSessionGeneration = sessionGeneration;
+            restartPlaybackTimerOnNextPublish = false;
+            clearPauseMenuSnapshotInternal();
+        } else if (playbackTimerSessionGeneration == 0L && sessionGeneration != 0L) {
+            // Legacy producers may initially omit the generation. Promoting it must retain,
+            // rather than restart, the interval that already began at EmulationStarted.
+            playbackTimerSessionGeneration = sessionGeneration;
+        }
+        playTime.setRunning(phase == RuntimeState.Phase.RUNNING);
+        return playTime.elapsedNanos();
+    }
+
+    /**
+     * A reset replaces the controller session without a host open-request id.  Its preceding
+     * {@code EmulationStoppedEvent} may already have reduced the Android presentation to
+     * STOPPED, so acceptance must be based on the monotonic controller generation—not phase.
+     */
+    static boolean isResetReload(Long openRequestId, boolean hasActiveLayout,
+            Long eventSessionGeneration, long activeSessionGeneration) {
+        return openRequestId == null && hasActiveLayout && eventSessionGeneration != null
+                && eventSessionGeneration > activeSessionGeneration;
+    }
+
+    private static boolean hasActiveSession(RuntimeState state) {
+        return state.phase() == RuntimeState.Phase.RUNNING
+                || state.phase() == RuntimeState.Phase.PAUSED;
+    }
+
+    private boolean matchesPauseSnapshotSession(RuntimeState current) {
+        long capturedGeneration = pauseSnapshotSessionGeneration;
+        if (capturedGeneration != 0L || current.sessionGeneration() != 0L) {
+            return capturedGeneration == current.sessionGeneration();
+        }
+        // Older controller adapters can omit a session generation. An empty legacy state is not
+        // enough evidence to invalidate a still-visible root pause menu, but a different title is.
+        return current.romTitle().isBlank() || pauseSnapshotTitle.equals(current.romTitle());
+    }
+
+    private PauseMenuSnapshot pauseMenuSnapshotFor(RuntimeState current) {
+        PauseMenuSnapshot captured = pauseMenuSnapshot;
+        if (captured == null || !hasActiveSession(current)
+                || !matchesPauseSnapshotSession(current)) {
+            return null;
+        }
+        return captured;
+    }
+
+    private void clearPauseMenuSnapshotInternal() {
+        synchronized (presentationLock) {
+            pauseMenuSnapshot = null;
+            pauseSnapshotSessionGeneration = 0L;
+            pauseSnapshotTitle = "";
+        }
     }
 
     private void submit(Runnable action) {

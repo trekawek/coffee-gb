@@ -1593,11 +1593,20 @@ class LinkedController(
     postHostEventSafely(Controller.SessionSnapshotSupportEvent(null))
     installUnsupportedDebugPort()
     playbackSessionGeneration = SessionPresentationGeneration.next()
+    val presentationTitle = replacement.event.config.rom.title.trim().ifBlank {
+      replacement.event.config.rom.origin.displayName().trim().ifBlank { "UNTITLED ROM" }
+    }
     postHostEventSafely(
         Controller.EmulationStartedEvent(
-            replacement.event.config.rom.title,
+            presentationTitle,
             replacement.event.config.rom.origin,
             replacement.token.event.openRequestId,
+            playbackSessionGeneration,
+        ))
+    postHostEventSafely(
+        Controller.SessionPresentationEvent(
+            presentationTitle,
+            Cartridge.supportsBatterySave(replacement.event.config.rom),
             playbackSessionGeneration,
         ))
     postHostEventSafely(

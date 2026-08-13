@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import org.junit.Test;
 
 import javax.swing.SwingUtilities;
@@ -296,6 +297,93 @@ public class SwingDisplayTest {
             assertEquals(new Dimension(777, 555), onEdt(() -> {
                 return display.getSize();
             }));
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void pauseCaptureUsesThePublishedFrameWithThePlayerRotation() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] frame = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        for (int index = 0; index < frame.length; index++) {
+            frame[index] = index & 3;
+        }
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            eventBus.post(new Display.DmgFrameReadyEvent(frame));
+            DisplayFrameSnapshot published = awaitDisplayedFrame(display, Display.DISPLAY_WIDTH,
+                    Display.DISPLAY_HEIGHT, dmgRgb(frame));
+
+            eventBus.post(new SwingDisplay.SetRotationEvent(90));
+            MenuPreview preview = display.captureMenuPreview();
+
+            assertEquals(MenuPreview.State.READY, preview.state());
+            assertEquals(Display.DISPLAY_HEIGHT, preview.width());
+            assertEquals(Display.DISPLAY_WIDTH, preview.height());
+            int[] pixels = preview.copyPixels();
+            assertEquals(0xff000000 | published.rgbAt(0, Display.DISPLAY_HEIGHT - 1), pixels[0]);
+            assertEquals(0xff000000 | published.rgbAt(Display.DISPLAY_WIDTH - 1, 0),
+                    pixels[(Display.DISPLAY_WIDTH - 1) * Display.DISPLAY_HEIGHT
+                            + Display.DISPLAY_HEIGHT - 1]);
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void pauseCaptureAcceptsTheFullBoundedSgbFrame() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] border = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        Arrays.fill(border, 0x123456);
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            eventBus.post(new SgbDisplay.SgbFrameReadyEvent(border, true));
+            awaitDisplayedFrame(display, SGB_DISPLAY_WIDTH, SGB_DISPLAY_HEIGHT, border);
+
+            MenuPreview preview = display.captureMenuPreview();
+
+            assertEquals(MenuPreview.State.READY, preview.state());
+            assertEquals(SGB_DISPLAY_WIDTH, preview.width());
+            assertEquals(SGB_DISPLAY_HEIGHT, preview.height());
+            assertEquals(0xff123456,
+                    preview.copyPixels()[preview.width() * preview.height() - 1]);
+        } finally {
+            display.stop();
+            displayThread.join(2_000);
+            eventBus.close();
+        }
+    }
+
+    @Test
+    public void lifecycleInvalidationDropsAQueuedOldSessionFrameBeforeItCanBecomeAPausePreview()
+            throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        int[] oldFrame = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        Arrays.fill(oldFrame, 3);
+        int[] newFrame = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        Arrays.fill(newFrame, 2);
+
+        eventBus.post(new Display.DmgFrameReadyEvent(oldFrame));
+        display.releaseForLifecycleChange();
+        Thread displayThread = daemonThread(display);
+        displayThread.start();
+        try {
+            assertEquals(MenuPreview.State.EMPTY, display.captureMenuPreview().state());
+
+            eventBus.post(new Display.DmgFrameReadyEvent(newFrame));
+            awaitDisplayedFrame(display, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT,
+                    dmgRgb(newFrame));
+            assertEquals(MenuPreview.State.READY, display.captureMenuPreview().state());
         } finally {
             display.stop();
             displayThread.join(2_000);
