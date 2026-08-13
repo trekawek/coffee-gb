@@ -76,13 +76,14 @@ class SwingPrinterTest {
     detached[3 * PRINTER_PAPER_WIDTH] = 0xff000000.toInt()
     assertEquals(0xffcc2211.toInt(), preview.copyPixels()[3 * PRINTER_PAPER_WIDTH])
 
+    val maximumPreviewHeight = MenuPreview.MAX_PIXELS / PRINTER_PAPER_WIDTH
     val tall =
         PrinterPaperModel.empty()
-            .append(solidStrip(height = 193, color = RED))
+            .append(solidStrip(height = maximumPreviewHeight + 1, color = RED))
             .model
             .snapshot()
             .menuPreview()
-    assertEquals(192, tall.height())
+    assertEquals(maximumPreviewHeight, tall.height())
     assertTrue(tall.width() < PRINTER_PAPER_WIDTH)
     assertTrue(tall.width() * tall.height() <= MenuPreview.MAX_PIXELS)
   }
