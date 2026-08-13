@@ -14,6 +14,8 @@ import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuRect;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuViewport;
 
 import javax.swing.*;
 import java.awt.*;
@@ -154,8 +156,11 @@ public class SwingDisplay extends JPanel implements Runnable {
     /** Resets host-only output state before a controller can quiesce or close its event bus. */
     public void releaseForLifecycleChange() {
         rumbling = false;
+        notificationText = null;
+        notificationExpiresAt = 0L;
         invalidateFrameForLifecycle();
         resetPresentationFrameRate();
+        repaintNotification(0);
     }
 
     /**
@@ -432,10 +437,6 @@ public class SwingDisplay extends JPanel implements Runnable {
         frame.paint(frameGraphics);
         frameGraphics.dispose();
 
-        Graphics2D notificationGraphics = (Graphics2D) g.create();
-        paintNotification(notificationGraphics, viewport);
-        notificationGraphics.dispose();
-
         if (menuOverlay.visible()) {
             // The aspect-fit bars belong to the menu presentation, not the game frame beneath it.
             // Clearing the component first prevents a narrow/tall host from leaking gameplay
@@ -444,6 +445,24 @@ public class SwingDisplay extends JPanel implements Runnable {
             g.fillRect(0, 0, getWidth(), getHeight());
             menuOverlay.paint((Graphics2D) g, getWidth(), getHeight());
         }
+
+        // Notifications are host feedback, so they must remain visible above the opaque portable
+        // menu overlay as well as above gameplay. State-operation completion messages retain their
+        // existing duration and wording on both surfaces.
+        Rectangle notificationBounds = viewport.paintBounds();
+        double notificationScale = viewport.scale();
+        if (menuOverlay.visible()) {
+            MenuRect menuBounds = MenuViewport.fit(getWidth(), getHeight()).contentBounds();
+            notificationBounds = new Rectangle(
+                    menuBounds.x(), menuBounds.y(), menuBounds.width(), menuBounds.height());
+            notificationScale = Math.min(
+                    (double) menuBounds.width() / MenuViewport.SOURCE_WIDTH,
+                    (double) menuBounds.height() / MenuViewport.SOURCE_HEIGHT);
+        }
+        Graphics2D notificationGraphics = (Graphics2D) g.create();
+        notificationGraphics.clip(notificationBounds);
+        paintNotification(notificationGraphics, notificationBounds, notificationScale);
+        notificationGraphics.dispose();
     }
 
     private void showNotification(String text) {
@@ -486,15 +505,14 @@ public class SwingDisplay extends JPanel implements Runnable {
         });
     }
 
-    private void paintNotification(Graphics2D g, DisplayViewport viewport) {
+    private void paintNotification(Graphics2D g, Rectangle bounds, double scale) {
         String persistentText = persistentNotificationText;
         String text = persistentText != null ? persistentText : notificationText;
         if (text == null || (persistentText == null && System.nanoTime() >= notificationExpiresAt)) {
             return;
         }
 
-        Rectangle bounds = viewport.paintBounds();
-        int localScale = Math.max(1, (int) Math.floor(viewport.scale()));
+        int localScale = Math.max(1, (int) Math.floor(scale));
         int fontSize = Math.max(12, 7 * localScale);
         g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, fontSize));
         FontMetrics metrics = g.getFontMetrics();

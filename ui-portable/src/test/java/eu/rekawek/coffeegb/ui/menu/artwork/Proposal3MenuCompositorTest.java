@@ -172,6 +172,33 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void stateSavedDateUsesOnlyTheBlankAreaBelowTheFocusedPreview() {
+        MenuPresentation empty = defaultPresentation(MenuRoute.SAVE_STATES);
+        MenuPresentation dated = presentation(new MenuPageSpec(
+                empty.route(), empty.title(), empty.context(), empty.headerAction(),
+                empty.sideHeading(), List.of("SAVED 2026-08-13 17:15"),
+                copyItems(empty.items()), empty.columns(), empty.footerHints(), "slot-0",
+                empty.preview()));
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] emptyPixels = compositor.compose(empty).orElseThrow().copyPixels();
+        int[] datedPixels = compositor.compose(dated).orElseThrow().copyPixels();
+        MenuRect savedDate = new MenuRect(30, 505, 352, 44);
+        int changed = 0;
+        for (int y = 0; y < MenuArtworkCatalog.PACKAGED_HEIGHT; y++) {
+            for (int x = 0; x < MenuArtworkCatalog.PACKAGED_WIDTH; x++) {
+                int offset = y * MenuArtworkCatalog.PACKAGED_WIDTH + x;
+                if (emptyPixels[offset] != datedPixels[offset]) {
+                    assertTrue("saved date escaped its reserved area at " + x + "," + y,
+                            x >= savedDate.x() && x < savedDate.right()
+                                    && y >= savedDate.y() && y < savedDate.bottom());
+                    changed++;
+                }
+            }
+        }
+        assertTrue("saved date did not render", changed > 0);
+    }
+
+    @Test
     public void pausePreviewClearsTheEntireBezelInnerAperture() throws Exception {
         MenuRect aperture = Proposal3OverlayCatalog.PAUSE_PREVIEW;
         assertEquals(new MenuRect(30, 139, 351, 243), aperture);

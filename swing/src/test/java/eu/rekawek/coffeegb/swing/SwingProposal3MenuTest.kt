@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuKey
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
+import java.time.Instant
 import java.util.EnumSet
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JRootPane
@@ -490,6 +491,49 @@ class SwingProposal3MenuTest {
       press(emptyMenu, MenuKey.A)
       assertEquals(null, bridge.loadedSlot)
       assertTrue(emptyMenu.visible())
+    }
+  }
+
+  @Test
+  fun `state date follows focus even when slots share the empty preview`() {
+    val bridge =
+        FakeBridge().also {
+          it.stateCatalog =
+              listOf(
+                  PortableMenuStateSlot(
+                      0,
+                      true,
+                      MenuPreview.empty(),
+                      Instant.parse("2026-08-13T12:34:00Z"),
+                  ),
+                  PortableMenuStateSlot(1, false, MenuPreview.empty(), null),
+              )
+        }
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      val dated = frames.filterNotNull().last()
+      press(menu, MenuKey.DOWN)
+      val empty = frames.filterNotNull().last()
+      assertFalse(savedDatePixels(dated).contentEquals(savedDatePixels(empty)))
+    }
+  }
+
+  private fun savedDatePixels(frame: MenuArgbFrame): IntArray {
+    val pixels = frame.copyPixels()
+    return IntArray(352 * 44) { offset ->
+      val x = 30 + offset % 352
+      val y = 505 + offset / 352
+      pixels[y * frame.width() + x]
     }
   }
 

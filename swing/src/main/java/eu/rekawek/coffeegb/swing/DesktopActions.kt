@@ -6,6 +6,9 @@ import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.swing.AbstractAction
 import javax.swing.Action
 import javax.swing.KeyStroke
@@ -74,10 +77,26 @@ internal data class DesktopCommandHandlers(
 
 /** Detached quick-state data consumed by the portable menu renderer. */
 internal data class PortableMenuStateSlot(
-    val index: Int,
-    val loadable: Boolean,
-    val preview: MenuPreview = MenuPreview.empty(),
+  val index: Int,
+  val loadable: Boolean,
+  val preview: MenuPreview = MenuPreview.empty(),
+  /** Authoritative managed-state metadata; null means the slot has no trustworthy saved time. */
+  val savedAt: Instant? = null,
 )
+
+private val PORTABLE_STATE_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+
+/** Formats only the persisted instant supplied by the state catalog. */
+internal fun portableStateSavedAt(instant: Instant?): String? {
+  if (instant == null) return null
+  return try {
+    "SAVED ${PORTABLE_STATE_TIME_FORMAT.format(instant)}"
+  } catch (_: RuntimeException) {
+    // A malformed/unsupported metadata instant must never become a misleading UI date.
+    null
+  }
+}
 
 /**
  * Creates every general desktop action exactly once and applies one immutable command snapshot.

@@ -2,12 +2,22 @@ package eu.rekawek.coffeegb.swing.io;
 
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
+import eu.rekawek.coffeegb.controller.state.StateOperation;
+import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
+import eu.rekawek.coffeegb.controller.state.StateRef;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuRect;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuViewport;
+import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor;
 import org.junit.Test;
 
 import javax.swing.SwingUtilities;
@@ -19,6 +29,7 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
@@ -115,6 +126,67 @@ public class SwingDisplayTest {
 
         session.post(new Controller.SnapshotRestoredEvent(7));
         assertEquals("State loaded (slot 7)", textField.get(display));
+        root.close();
+    }
+
+    @Test
+    public void stateCompletionFlashStaysAboveAndInsideTheVisibleMenu() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus session = root.fork("test");
+        SwingDisplay display = newDisplay(root);
+        root.post(new SwingDisplay.SetRotationEvent(90));
+        onEdt(() -> {
+            display.setSize(400, 1_000);
+            display.setMenuOverlay(composePauseFrame());
+        });
+        BufferedImage baseline = paintAtSize(display, 400, 1_000);
+
+        session.post(new StateOperationCompletedEvent(
+                1L,
+                1L,
+                StateOperation.SAVE,
+                new StateRef.Slot(0),
+                null,
+                "State saved (slot 0)",
+                List.of(),
+                null));
+        BufferedImage flashed = paintAtSize(display, 400, 1_000);
+
+        MenuRect menuBounds = MenuViewport.fit(400, 1_000).contentBounds();
+        int changedPixels = 0;
+        for (int y = 0; y < flashed.getHeight(); y++) {
+            for (int x = 0; x < flashed.getWidth(); x++) {
+                if (baseline.getRGB(x, y) != flashed.getRGB(x, y)) {
+                    changedPixels++;
+                    assertTrue("flash escaped menu viewport at " + x + "," + y,
+                            menuBounds.contains(x, y));
+                }
+            }
+        }
+        assertTrue("state completion was hidden behind the menu", changedPixels > 0);
+        root.close();
+    }
+
+    @Test
+    public void lifecycleReleaseClearsTransientStateFeedback() throws Exception {
+        EventBusImpl root = new EventBusImpl(null, null, false);
+        EventBus session = root.fork("test");
+        SwingDisplay display = newDisplay(root);
+        Field textField = SwingDisplay.class.getDeclaredField("notificationText");
+        textField.setAccessible(true);
+        Field expiryField = SwingDisplay.class.getDeclaredField("notificationExpiresAt");
+        expiryField.setAccessible(true);
+
+        session.post(new Controller.SnapshotSavedEvent(2));
+        assertEquals("State saved (slot 2)", textField.get(display));
+
+        display.releaseForLifecycleChange();
+        assertNull(textField.get(display));
+        assertEquals(0L, expiryField.getLong(display));
+
+        session.post(new Controller.RomLoadingEvent(new File("next.gb")));
+        session.post(new Controller.EmulationStartedEvent("NEXT"));
+        assertNull("old state feedback resurfaced after loading", textField.get(display));
         root.close();
     }
 
@@ -577,6 +649,43 @@ public class SwingDisplayTest {
             }
             return target;
         });
+    }
+
+    private static BufferedImage paintAtSize(SwingDisplay display, int width, int height)
+            throws Exception {
+        return onEdt(() -> {
+            display.setSize(width, height);
+            BufferedImage target = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            Graphics graphics = target.getGraphics();
+            try {
+                display.paintComponent(graphics);
+            } finally {
+                graphics.dispose();
+            }
+            return target;
+        });
+    }
+
+    private static MenuArgbFrame composePauseFrame() {
+        AtomicReference<MenuPresentation> presentation = new AtomicReference<>();
+        MenuController controller = new MenuController(new MenuController.Listener() {
+            @Override
+            public void onPresentation(MenuPresentation next) {
+                presentation.set(next);
+            }
+
+            @Override
+            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
+            }
+
+            @Override
+            public void onHeaderSelected(MenuRoute route) {
+            }
+        });
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+        return new Proposal3MenuCompositor()
+                .compose(presentation.get())
+                .orElseThrow(() -> new AssertionError("pause frame was not composed"));
     }
 
     private static Thread daemonThread(Runnable runnable) {

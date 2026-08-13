@@ -292,7 +292,13 @@ class SwingGui private constructor(
                             val argb = IntArray(rgb.size) { index -> 0xff000000.toInt() or rgb[index] }
                             eu.rekawek.coffeegb.ui.menu.MenuPreview.ready(image.width, image.height, argb)
                           }
-                          PortableMenuStateSlot(ref.index, entry.canLoad, preview)
+                          PortableMenuStateSlot(
+                              ref.index,
+                              entry.canLoad,
+                              preview,
+                              entry.catalogEntry?.metadata?.savedAt
+                                  ?.takeIf { entry.canLoad },
+                          )
                         })
               }
             },

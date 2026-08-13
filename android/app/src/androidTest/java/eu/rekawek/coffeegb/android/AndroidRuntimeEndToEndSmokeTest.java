@@ -48,7 +48,23 @@ public class AndroidRuntimeEndToEndSmokeTest {
             CountDownLatch stateSaved = new CountDownLatch(1);
             CountDownLatch stateRestored = new CountDownLatch(1);
             CountDownLatch stateSaveRequested = new CountDownLatch(1);
+            CountDownLatch stateSavedMessage = new CountDownLatch(1);
+            CountDownLatch stateLoadedMessage = new CountDownLatch(1);
             AtomicReference<StateOperationFailedEvent> stateFailure = new AtomicReference<>();
+            runtime.addObserver(new RuntimeObserver() {
+                @Override
+                public void onStateChanged(RuntimeState state) {
+                }
+
+                @Override
+                public void onTransientMessage(String message) {
+                    if (message.startsWith("State saved")) {
+                        stateSavedMessage.countDown();
+                    } else if (message.startsWith("State loaded")) {
+                        stateLoadedMessage.countDown();
+                    }
+                }
+            });
             events.register(event -> {
                 if (event.getRef() instanceof StateRef.Slot
                         && ((StateRef.Slot) event.getRef()).getIndex() == 0) {
@@ -89,9 +105,13 @@ public class AndroidRuntimeEndToEndSmokeTest {
             assertTrue("state save request", stateSaveRequested.await(
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             awaitStateOperation("state save", stateSaved, stateFailure);
+            assertTrue("state saved flash message", stateSavedMessage.await(
+                    STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             awaitSavedState(runtime, 0);
             runtime.restoreSnapshot(0);
             awaitStateOperation("state restore", stateRestored, stateFailure);
+            assertTrue("state loaded flash message", stateLoadedMessage.await(
+                    STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             assertFrame(runtime, "after state restore");
 
             runtime.onHostNotVisible();
