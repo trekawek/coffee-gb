@@ -71,12 +71,10 @@ The Android file browser remains a native boundary. Open/import actions hand off
 document picker; this portable UI never draws a filesystem browser.
 
 The Proposal 3 compositor's runtime glyph atlases are the Small, Notice, Medium, Display, and SemiBold
-bitmap atlases under `overlay/`, derived from the free Pixelify Sans build-time source. Pixelify
-Sans was selected as the closest freely licensed match to the approved mockups' blocky, Game Boy
-display lettering. The TTF is not packaged: hosts share the exact same dependency-free raster
-glyphs, so Android and desktop cannot substitute a platform font. Their source digest, atlas
-digests, role metrics, and the applicable SIL Open Font License 1.1 notice are recorded in
-`overlay/PixelifySans-OFL.txt`.
+bitmap atlases under `overlay/`, derived from the project's licensed ByteBounce build-time source.
+The TTF is not packaged: hosts share the exact same dependency-free raster glyphs, so Android and
+desktop cannot substitute a platform font. Their source digest, atlas digests, and role metrics are
+recorded in `overlay/ByteBounce-licensed-source.txt`.
 
 ## Integer aspect-fit placement
 

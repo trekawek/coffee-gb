@@ -668,26 +668,27 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void roleSpecificAtlasesArePinnedAndNoFontSourceShips() throws Exception {
+    public void roleSpecificByteBounceAtlasesArePinnedAndNoFontSourceShips() throws Exception {
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "pixelify-sans-medium-atlas.png", 576, 144,
-                "1981fe7c3dc64099c171570cd44e0e64599d7b2afd79dc6707942b459d72c5e7");
+                + "byte-bounce-medium-atlas.png", 576, 144,
+                "5eae79693a20ca63b9035984fb4eba2ab81f9facf3f06c128d1da817206c2f9a");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "pixelify-sans-semibold-atlas.png", 768, 192,
-                "d6c6a831b6d5481fa42abe5c1c125d5efe5dca68d16caf819681f20ddca38949");
+                + "byte-bounce-semibold-atlas.png", 768, 192,
+                "a895052d22f63c87d72dd64fb693f11d48c679538013aec3ffeea8ed278c5ef5");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "pixelify-sans-display-atlas.png", 576, 192,
-                "7018dabbb1b26cd014e34b2e1f10b707beb3fd9d17c4bc6040f640c624e7e9c9");
+                + "byte-bounce-display-atlas.png", 576, 192,
+                "b99d64929933538a958881be776ef3ffa7b79cde7b96d501c4b9c00de90aad02");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "pixelify-sans-small-atlas.png", 352, 144,
-                "a7d109b7dead9ad3d155c49276e1fb4014b51a5ea759e11dc3bdd00a475b587d");
+                + "byte-bounce-small-atlas.png", 352, 144,
+                "2c561819607ac2ddcf1e5a5be91f2b487618e8b4e2fa54d92b05b59784f6855c");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "pixelify-sans-notice-atlas.png", 448, 144,
-                "16fd8d8fe29652cc65ab60ef8fead0827d415c2bca1b9be7746f4e340d62f3a2");
+                + "byte-bounce-notice-atlas.png", 448, 144,
+                "15e379d7bf593df5742321df55a574dbe67f8b3eede60162c72dacb9dea6643a");
         assertNotNull(Proposal3MenuCompositor.class.getResource(
-                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/PixelifySans-OFL.txt"));
+                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
+                        + "ByteBounce-licensed-source.txt"));
         assertTrue(Proposal3MenuCompositor.class.getResource(
-                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/PixelifySans.ttf") == null);
+                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/ByteBounce.ttf") == null);
     }
 
     @Test

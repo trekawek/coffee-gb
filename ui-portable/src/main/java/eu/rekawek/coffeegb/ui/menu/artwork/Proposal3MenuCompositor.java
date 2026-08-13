@@ -842,7 +842,7 @@ public final class Proposal3MenuCompositor {
         int left = switch (route) {
             case DATA_MEDIA -> row.x() + 52;
             // Notice rows reserve the left icon rail, but use the remaining full row width for
-            // normal-width Pixelify metrics.  Their labels have no detail column to reserve.
+            // normal-width ByteBounce metrics. Their labels have no detail column to reserve.
             case ABOUT -> row.x() + (rowIndex == 0 ? 22 : 98);
             case CONTROLLER_MAPPING -> row.x() + 12;
             case LIBRARY -> row.x() + 20;
