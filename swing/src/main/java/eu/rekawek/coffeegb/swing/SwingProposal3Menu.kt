@@ -34,6 +34,8 @@ internal class SwingProposal3Menu(
     private val capturePausePreview: () -> MenuPreview = { MenuPreview.empty() },
 ) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopArchiveSelectionHost {
 
+  private enum class StateMenuMode { SAVE, LOAD }
+
   private data class PendingArchiveSelection(
       val requestId: Long,
       val candidates: List<RomSourceSnapshot.ArchiveCandidate>,
@@ -88,7 +90,22 @@ internal class SwingProposal3Menu(
 
   private var selectedArchiveItemId: String? = null
 
+  private var stateMenuMode = StateMenuMode.SAVE
+  private var stateFocusedItemId: String? = null
+
   private var renderedVisible = false
+
+  init {
+    // Catalog delivery is asynchronous.  The registry publishes only detached data; rebuild
+    // the visible state page when it arrives, while ignoring updates for other routes.
+    commands.addStateCatalogListener {
+      runOnEdt {
+        if (controller.visible() && controller.route() == MenuRoute.SAVE_STATES) {
+          controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
+        }
+      }
+    }
+  }
 
   override fun visible(): Boolean = controller.visible() || opening
 
@@ -265,6 +282,21 @@ internal class SwingProposal3Menu(
     releaseGameplaySoon()
   }
 
+  private fun openStateRoute(mode: StateMenuMode) {
+    runOnEdt {
+      // Physical controller input is delivered by the gamepad poller.  Keep the detached state
+      // catalog and all Swing-owned route state on the EDT, and discard an activation that became
+      // stale while it was queued.
+      if (!controller.visible() || controller.route() != MenuRoute.PAUSE_CONSOLE) return@runOnEdt
+      stateMenuMode = mode
+      stateFocusedItemId = "slot-0"
+      commands.refreshStateCatalog()
+      val current = commands.menuState()
+      controller.setPage(pageFor(MenuRoute.SAVE_STATES, current))
+      controller.push(MenuRoute.SAVE_STATES)
+    }
+  }
+
   private fun pageFor(
       route: MenuRoute,
       presentation: DesktopPresentation,
@@ -288,6 +320,7 @@ internal class SwingProposal3Menu(
         preferredFocus: String? = null,
         headerAction: String = "",
         preview: MenuPreview = MenuPreview.empty(),
+        footerHints: List<String> = listOf("D-PAD MOVE", "A CHOOSE", "B BACK"),
     ) = MenuPageSpec(
         route,
         "COFFEE GB",
@@ -297,7 +330,7 @@ internal class SwingProposal3Menu(
         sideLines,
         items,
         1,
-        listOf("D-PAD MOVE", "A CHOOSE", "B BACK"),
+        footerHints,
         preferredFocus ?: items.firstOrNull { it.enabled() }?.id() ?: items.first().id(),
         preview,
     )
@@ -334,22 +367,22 @@ internal class SwingProposal3Menu(
       MenuRoute.SAVE_STATES -> {
         val slots =
             (0..3).map { slot ->
-              val load = commands.canLoadState(slot)
-              item(
-                  "slot-$slot",
-                  "SLOT $slot",
-                  commands.canSaveState(slot),
-                  secondaryId = "load-slot-$slot".takeIf { load },
-              )
+              item("slot-$slot", "SLOT $slot", true)
             }
+        val mode = if (stateMenuMode == StateMenuMode.SAVE) "SAVE" else "LOAD"
+        val focused = stateFocusedItemId ?: "slot-0"
+        val preview =
+            commands.stateSlots().firstOrNull { "slot-${it.index}" == focused }?.preview
+                ?: MenuPreview.empty()
         page(
-            "SAVE STATES",
-            "STATE BANK",
-            listOf("SLOT 0 READY", "SLOT 1 EMPTY", "SLOT 2 EMPTY"),
-            slots +
-                item("manage-states", "MANAGE STATES", enabled(DesktopCommand.MANAGE_STATES)) +
-                item("back", "BACK", true),
-            preferredFocus = slots.firstOrNull { it.enabled() }?.id() ?: "manage-states",
+            "${mode} STATES",
+            "",
+            emptyList(),
+            slots,
+            preferredFocus = focused,
+            headerAction = "",
+            preview = preview,
+            footerHints = listOf("D-PAD MOVE", "A $mode", "B BACK"),
         )
       }
 
@@ -577,32 +610,33 @@ internal class SwingProposal3Menu(
       MenuRoute.PAUSE_CONSOLE ->
           when (id) {
             "resume" -> runOnEdt(::resumeAndHide)
-            "save-state", "load-state" -> openRoute(MenuRoute.SAVE_STATES)
+            "save-state" -> openStateRoute(StateMenuMode.SAVE)
+            "load-state" -> openStateRoute(StateMenuMode.LOAD)
             "open-rom" -> runNativeRomChooser()
             "reset" -> openConfirmation(DesktopCommand.RESET)
             "settings" -> openRoute(MenuRoute.SETTINGS)
             "stop" -> openConfirmation(DesktopCommand.CLOSE_GAME)
           }
       MenuRoute.SAVE_STATES ->
-          when {
-            id.startsWith("slot-") || id.startsWith("load-slot-") -> {
-              val slot =
-                  (if (id.startsWith("load-slot-")) {
-                    id.removePrefix("load-slot-")
-                  } else {
-                    id.removePrefix("slot-")
-                  }).toIntOrNull() ?: return
-              if (secondary || id.startsWith("load-slot-")) {
-                runOnEdt {
+          if (id.startsWith("slot-")) {
+            val slot = id.removePrefix("slot-").toIntOrNull() ?: return
+            runOnEdt {
+              if (!controller.visible() || controller.route() != MenuRoute.SAVE_STATES) {
+                return@runOnEdt
+              }
+              stateFocusedItemId = id
+              if (stateMenuMode == StateMenuMode.LOAD) {
+                // The detached catalog is authoritative for the on-screen four-slot page.  Do not
+                // fall back to the desktop toolbar's separately selected slot while the catalog is
+                // loading or when this focused slot is empty.
+                if (commands.stateSlots().firstOrNull { it.index == slot }?.loadable == true) {
                   hideAndResume()
                   commands.loadState(slot)
                 }
               } else {
-                runOnEdt { commands.saveState(slot) }
+                commands.saveState(slot)
               }
             }
-            id == "manage-states" -> runCommandAndHide(DesktopCommand.MANAGE_STATES)
-            id == "back" -> back()
           }
       MenuRoute.SETTINGS ->
           when (id) {
@@ -806,6 +840,30 @@ internal class SwingProposal3Menu(
   }
 
   private fun render(presentation: MenuPresentation) {
+    if (presentation.visible() &&
+        presentation.route() == MenuRoute.SAVE_STATES &&
+        !SwingUtilities.isEventDispatchThread()) {
+      // MenuController is thread-safe, but the detached catalog and mode/focus fields are Swing
+      // presentation state. Physical gamepad edges originate on the poller, so coalesce their
+      // state-page repaint onto the EDT before reading that state.
+      runOnEdt {
+        if (controller.visible() && controller.route() == MenuRoute.SAVE_STATES) {
+          render(controller.presentation())
+        }
+      }
+      return
+    }
+    if (presentation.visible() && presentation.route() == MenuRoute.SAVE_STATES) {
+      val focusedId = presentation.items().getOrNull(presentation.focusedIndex())?.id()
+      if (focusedId != null) stateFocusedItemId = focusedId
+      val desiredPreview =
+          commands.stateSlots().firstOrNull { "slot-${it.index}" == focusedId }?.preview
+              ?: MenuPreview.empty()
+      if (presentation.preview() !== desiredPreview) {
+        controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
+        return
+      }
+    }
     if (presentation.visible() && presentation.route() == MenuRoute.CHOOSE_ROM) {
       val pending = pendingArchiveSelection
       val focusedId =
@@ -914,6 +972,13 @@ internal interface PortableMenuCommandBridge {
   fun saveState(slot: Int)
 
   fun loadState(slot: Int)
+
+  fun stateSlots(): List<PortableMenuStateSlot> = emptyList()
+
+  fun refreshStateCatalog() = Unit
+
+  /** Called on the EDT when a detached catalog/thumbnail snapshot is replaced. */
+  fun addStateCatalogListener(listener: () -> Unit) = Unit
 }
 
 /** The printer keeps its existing modeless Swing window and native export chooser. */

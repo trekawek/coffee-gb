@@ -101,9 +101,8 @@ final class Proposal3TextCatalog {
     }
 
     private static void saveStates(List<TextRegion> regions) {
-        side(regions, new MenuRect(76, 151, 282, 43),
-                new MenuRect[]{new MenuRect(43, 207, 320, 35),
-                        new MenuRect(43, 496, 330, 31), new MenuRect(43, 530, 330, 31)});
+        // Save/load state pages deliberately contain only the selected thumbnail on the left.
+        // Slot status, metadata and action copy belong neither below nor beside the preview.
     }
 
     private static void settings(List<TextRegion> regions) {

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker
+import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
@@ -71,6 +72,13 @@ internal data class DesktopCommandHandlers(
     val openAbout: (() -> Unit)? = null,
 )
 
+/** Detached quick-state data consumed by the portable menu renderer. */
+internal data class PortableMenuStateSlot(
+    val index: Int,
+    val loadable: Boolean,
+    val preview: MenuPreview = MenuPreview.empty(),
+)
+
 /**
  * Creates every general desktop action exactly once and applies one immutable command snapshot.
  * Swing views receive [Action] instances and never attach a second controller listener.
@@ -78,7 +86,12 @@ internal data class DesktopCommandHandlers(
 internal class DesktopActionRegistry(
     private val handlers: DesktopCommandHandlers,
     private val proposal3MenuAvailable: Boolean = false,
+    private val stateCatalogProvider: () -> List<PortableMenuStateSlot> = { emptyList() },
+    private val stateCatalogRefresh: () -> Unit = {},
 ) : PortableMenuCommandBridge {
+  private var portableStateSlots: List<PortableMenuStateSlot> = emptyList()
+  private var portableStateSlotsPublished = false
+  private val stateCatalogListeners = mutableListOf<() -> Unit>()
   private var presentation = DesktopCommandPresentation()
   private var menuPresentation = DesktopPresentation()
   private val playTime = PlayTimeTracker()
@@ -177,7 +190,9 @@ internal class DesktopActionRegistry(
       slot in 0..9 && presentation.stateCommandsAvailable && !presentation.sessionBusy
 
   override fun canLoadState(slot: Int): Boolean =
-      canSaveState(slot) && slot in presentation.loadableStateSlots
+      canSaveState(slot) &&
+          (stateSlots().firstOrNull { it.index == slot }?.loadable
+              ?: (slot in presentation.loadableStateSlots))
 
   override fun saveState(slot: Int) {
     if (canSaveState(slot)) handlers.saveState(slot)
@@ -185,6 +200,21 @@ internal class DesktopActionRegistry(
 
   override fun loadState(slot: Int) {
     if (canLoadState(slot)) handlers.loadState(slot)
+  }
+
+  override fun stateSlots(): List<PortableMenuStateSlot> =
+      if (portableStateSlotsPublished) portableStateSlots else stateCatalogProvider().toList()
+
+  override fun refreshStateCatalog() = stateCatalogRefresh()
+
+  override fun addStateCatalogListener(listener: () -> Unit) {
+    stateCatalogListeners += listener
+  }
+
+  fun updatePortableStateSlots(slots: List<PortableMenuStateSlot>) {
+    portableStateSlots = slots.toList()
+    portableStateSlotsPublished = true
+    stateCatalogListeners.toList().forEach { it() }
   }
 
   fun commandPresentation(): DesktopCommandPresentation = presentation

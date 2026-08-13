@@ -217,6 +217,32 @@ public class MenuControllerTest {
         assertEquals(List.of("confirm:false", "confirm:false"), events.items);
     }
 
+    @Test
+    public void statePageVariantsUseExactCopyAndOnlyFourPrimarySlotRows() {
+        MenuPage save = MenuPages.statePage(false);
+        MenuPage load = MenuPages.statePage(true);
+
+        assertEquals("COFFEE GB", save.title());
+        assertEquals("SAVE STATES", save.context());
+        assertEquals("", save.headerAction());
+        assertEquals("", save.sideHeading());
+        assertEquals(List.of(), save.sideLines());
+        assertEquals(List.of("D-PAD MOVE", "A SAVE", "B BACK"), save.footerHints());
+
+        assertEquals("COFFEE GB", load.title());
+        assertEquals("LOAD STATES", load.context());
+        assertEquals("", load.headerAction());
+        assertEquals(List.of("D-PAD MOVE", "A LOAD", "B BACK"), load.footerHints());
+
+        List<String> expectedSlots = List.of("slot-0", "slot-1", "slot-2", "slot-3");
+        assertEquals(expectedSlots, save.items().stream().map(MenuItem::id).toList());
+        assertEquals(expectedSlots, load.items().stream().map(MenuItem::id).toList());
+        assertTrue(save.items().stream().allMatch(item -> item.enabled()
+                && item.detail().isEmpty() && item.secondaryId() == null));
+        assertTrue(load.items().stream().allMatch(item -> item.enabled()
+                && item.detail().isEmpty() && item.secondaryId() == null));
+    }
+
     private static MenuPageSpec page(MenuRoute route, int columns, List<MenuPageSpec.Item> items) {
         return new MenuPageSpec(route, "COFFEE GB", "TEST", "", "TEST", List.of("TEST"),
                 items, columns, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));

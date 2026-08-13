@@ -26,14 +26,7 @@ final class MenuPages {
                             item("reset", "RESET GAME"),
                             item("settings", "SETTINGS"),
                             item("stop", "STOP GAME")));
-            case SAVE_STATES -> page(route, "COFFEE GB", "SAVE STATES", "", "SLOT 0",
-                    List.of("SAVED", "PLAY TIME", "01:24"),
-                    items(
-                            item("slot-0-save", "SLOT 0", "SAVED"),
-                            item("slot-1-save", "SLOT 1", "EMPTY"),
-                            item("slot-2-save", "SLOT 2", "EMPTY"),
-                            item("slot-3-save", "SLOT 3", "EMPTY"),
-                            item("delete-state", "DELETE STATE")));
+            case SAVE_STATES -> statePage(false);
             case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "CONFIGURATION",
                     List.of("SESSION READY", "", ""),
                     items(
@@ -139,10 +132,33 @@ final class MenuPages {
         };
     }
 
+    /**
+     * The route identity is shared by save and load screens, but their page specs are not.  Hosts
+     * replace this page with their detached catalog snapshot before presenting the route.
+     */
+    static MenuPage statePage(boolean load) {
+        String context = load ? "LOAD STATES" : "SAVE STATES";
+        return page(MenuRoute.SAVE_STATES, "COFFEE GB", context, "", "", List.of(),
+                items(
+                        item("slot-0", "SLOT 0"),
+                        item("slot-1", "SLOT 1"),
+                        item("slot-2", "SLOT 2"),
+                        item("slot-3", "SLOT 3")),
+                1, List.of("D-PAD MOVE", "A " + (load ? "LOAD" : "SAVE"), "B BACK"),
+                "slot-0", MenuPreview.empty());
+    }
+
     private static MenuPage page(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<MenuItem> items) {
         return new MenuPage(route, title, context, headerAction, sideHeading, sideLines, items, 1,
                 DEFAULT_HINTS);
+    }
+
+    private static MenuPage page(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
+            List<String> footerHints, String preferredFocusId, MenuPreview preview) {
+        return new MenuPage(route, title, context, headerAction, sideHeading, sideLines, items,
+                columns, footerHints, preferredFocusId, preview);
     }
 
     private static List<MenuItem> items(MenuItem... items) {

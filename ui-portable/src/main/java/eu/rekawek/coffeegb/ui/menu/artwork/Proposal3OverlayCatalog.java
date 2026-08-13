@@ -60,7 +60,11 @@ final class Proposal3OverlayCatalog {
     static final MenuRect AUDIO_MUTE = new MenuRect(387, 316, 519, 78);
     static final MenuRect AUDIO_EMULATED = new MenuRect(387, 403, 519, 77);
 
-    static final MenuRect SAVE_PREVIEW = new MenuRect(77, 278, 307, 206);
+    /** Inner aperture of the left bezel; persisted 160:144 thumbnails are aspect-fitted here. */
+    static final MenuRect SAVE_PREVIEW = new MenuRect(30, 140, 352, 340);
+    static final List<MenuRect> SAVE_DIVIDERS = List.of(
+            new MenuRect(420, 220, 489, 4), new MenuRect(420, 328, 489, 4),
+            new MenuRect(420, 436, 489, 4));
 
     static final MenuRect AUDIO_LEFT_META = new MenuRect(62, 405, 315, 96);
     static final MenuRect TOUCH_LEFT_META = new MenuRect(61, 154, 315, 53);
@@ -112,15 +116,13 @@ final class Proposal3OverlayCatalog {
                 false, "resume", new Marker(443, 147, 26, 20, 31), false));
 
         layouts.put(MenuRoute.SAVE_STATES, layout(MenuRoute.SAVE_STATES,
-                rows(new int[][]{{420, 118, 489, 93}, {420, 214, 489, 94},
-                        {420, 311, 489, 93}, {420, 407, 489, 144}}, Surface.DARK),
-                actions(new int[][]{{17, 573, 285, 65}, {315, 573, 285, 65},
-                        {613, 573, 293, 65}}, Surface.PAPER),
+                rows(new int[][]{{420, 118, 489, 103}, {420, 226, 489, 103},
+                        {420, 334, 489, 103}, {420, 442, 489, 103}}, Surface.DARK),
+                List.of(),
                 masks(SAVE_PREVIEW,
-                        rowsMasks(new int[][]{{420, 118, 489, 93}, {420, 214, 489, 94},
-                                {420, 311, 489, 93}, {420, 407, 489, 144}}),
-                        inner(17, 573, 285, 65), inner(315, 573, 285, 65),
-                        inner(613, 573, 293, 65)), true, "slot-0",
+                        rowsMasks(new int[][]{{420, 118, 489, 103}, {420, 226, 489, 103},
+                                {420, 334, 489, 103}, {420, 442, 489, 103}}),
+                        SAVE_DIVIDERS.toArray(new MenuRect[0])), false, "slot-0",
                 new Marker(443, 151, 30, 20, 31), false));
 
         layouts.put(MenuRoute.SETTINGS, layout(MenuRoute.SETTINGS,

@@ -144,6 +144,34 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void stateRailUsesFourEqualRowsWithoutSyntheticActionsOrHeaderBack() {
+        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
+                MenuRoute.SAVE_STATES);
+        assertEquals(4, layout.rows().size());
+        assertTrue(layout.actions().isEmpty());
+        for (int index = 0; index < layout.rows().size(); index++) {
+            MenuRect row = layout.rows().get(index).bounds();
+            assertEquals(423, row.x());
+            assertEquals(483, row.width());
+            assertEquals(97, row.height());
+            assertEquals(121 + index * 108, row.y());
+        }
+        assertEquals(3, Proposal3OverlayCatalog.SAVE_DIVIDERS.size());
+        for (int index = 0; index < Proposal3OverlayCatalog.SAVE_DIVIDERS.size(); index++) {
+            MenuRect divider = Proposal3OverlayCatalog.SAVE_DIVIDERS.get(index);
+            assertEquals(220 + index * 108, divider.y());
+            assertEquals(4, divider.height());
+        }
+        MenuPresentation presentation = defaultPresentation(MenuRoute.SAVE_STATES);
+        assertEquals(4, presentation.items().size());
+        assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("manage")));
+        assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("back")));
+        assertTrue(presentation.sideHeading().isEmpty());
+        assertTrue(presentation.sideLines().isEmpty());
+        assertEquals("", presentation.headerAction());
+    }
+
+    @Test
     public void pausePreviewClearsTheEntireBezelInnerAperture() throws Exception {
         MenuRect aperture = Proposal3OverlayCatalog.PAUSE_PREVIEW;
         assertEquals(new MenuRect(30, 139, 351, 243), aperture);
@@ -267,8 +295,7 @@ public class Proposal3MenuCompositorTest {
             int rowCount = Math.min(layout.rows().size(), presentation.items().size());
             for (int index = 0; index < rowCount; index++) {
                 MenuPresentation.Item item = presentation.items().get(index);
-                boolean detail = route == MenuRoute.SAVE_STATES
-                        || route == MenuRoute.AUDIO
+                boolean detail = route == MenuRoute.AUDIO
                         || route == MenuRoute.TOUCH_CONTROLS
                         || route == MenuRoute.CONTROLLER_MAPPING
                         || route == MenuRoute.OPTIONAL_DEVICES
@@ -379,7 +406,8 @@ public class Proposal3MenuCompositorTest {
             case HEADER_TITLE -> presentation.title();
             case HEADER_CONTEXT -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
                     : presentation.context().isEmpty() ? "/" : presentation.context();
-            case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
+            case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
+                    || presentation.route() == MenuRoute.SAVE_STATES ? ""
                     : presentation.headerAction().isEmpty() ? "BACK" : presentation.headerAction();
             case SIDE_HEADING -> presentation.sideHeading();
             case SIDE_LINE -> region.index() < presentation.sideLines().size()
@@ -440,7 +468,7 @@ public class Proposal3MenuCompositorTest {
     public void everyRouteFocusMutationIsVisibleAndConfinedToAuditedMasks() {
         Map<MenuRoute, String> focusTargets = Map.ofEntries(
                 Map.entry(MenuRoute.PAUSE_CONSOLE, "save-state"),
-                Map.entry(MenuRoute.SAVE_STATES, "slot-1-save"),
+                Map.entry(MenuRoute.SAVE_STATES, "slot-1"),
                 Map.entry(MenuRoute.SETTINGS, "touch-controls"),
                 Map.entry(MenuRoute.AUDIO, "emulated-audio"),
                 Map.entry(MenuRoute.TOUCH_CONTROLS, "button-opacity"),
@@ -802,7 +830,7 @@ public class Proposal3MenuCompositorTest {
     private static String focusTarget(MenuRoute route) {
         return switch (route) {
             case PAUSE_CONSOLE -> "save-state";
-            case SAVE_STATES -> "slot-1-save";
+            case SAVE_STATES -> "slot-1";
             case SETTINGS -> "touch-controls";
             case AUDIO -> "emulated-audio";
             case TOUCH_CONTROLS -> "button-opacity";
@@ -821,7 +849,7 @@ public class Proposal3MenuCompositorTest {
     private static String firstRowFocusId(MenuRoute route) {
         return switch (route) {
             case PAUSE_CONSOLE -> "resume";
-            case SAVE_STATES -> "slot-0-save";
+            case SAVE_STATES -> "slot-0";
             case SETTINGS -> "audio";
             case AUDIO -> "mute-audio";
             case TOUCH_CONTROLS -> "haptics";
