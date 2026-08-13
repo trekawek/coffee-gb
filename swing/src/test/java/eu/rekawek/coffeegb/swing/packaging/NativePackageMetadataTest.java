@@ -38,7 +38,7 @@ public class NativePackageMetadataTest {
         NativePackageMetadata.Target windows =
                 NativePackageMetadata.target(NativeTarget.WINDOWS_X86_64);
         assertEquals("ico", windows.iconSuffix());
-        assertEquals(NativePackageMetadata.PackageType.EXE, windows.defaultPackageType());
+        assertEquals(NativePackageMetadata.PackageType.MSI, windows.defaultPackageType());
 
         NativePackageMetadata.Target macArm =
                 NativePackageMetadata.target(NativeTarget.MACOS_AARCH64);

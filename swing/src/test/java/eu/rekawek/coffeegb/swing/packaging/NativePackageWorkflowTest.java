@@ -44,25 +44,18 @@ public class NativePackageWorkflowTest {
         assertTrue(packages.contains("cache: maven"));
         assertTrue(packages.contains("cache-dependency-path: \"**/pom.xml\""));
         assertTrue(packages.contains("persist-credentials: false"));
-        assertTrue(packages.contains("7z.exe"));
-        assertTrue(packages.contains("7z.sfx"));
-        assertTrue(packages.contains("7zSD.sfx"));
-        assertTrue(packages.contains("lzma2602.7z"));
-        assertTrue(packages.contains(
-                "2878c85f5f43a4a4e0952b1fd4e5fe097c1c143997a8047c7e1e788892aa9357"));
-        assertTrue(packages.contains(
-                "89645457d40b0e6731014a61ee6ebedd22c01a92fc38618480d385461c4347bb"));
-        assertTrue(packages.contains(
-                "0fc21d175a0e4c7e4f10521f35f6e6effa9dbd3c0ea80895cc79e72a9fdde088"));
         assertEquals(2, occurrences(packages,
-                "name: Prepare pinned Windows portable-EXE tooling"));
+                "name: Install WiX toolset for Windows MSI packaging"));
         assertEquals(2, occurrences(packages,
-                "Join-Path $env:ProgramFiles \"7-Zip\""));
+                "choco install wixtoolset --version=3.11.2 --yes --no-progress"));
         assertEquals(2, occurrences(packages, "$env:GITHUB_PATH"));
-        assertFalse(packages.contains("candle.exe"));
-        assertFalse(packages.contains("light.exe"));
-        assertEquals(2, occurrences(packages, "package_type: exe"));
-        assertFalse(packages.contains("package_type: msi"));
+        assertTrue(packages.contains("candle.exe"));
+        assertTrue(packages.contains("light.exe"));
+        assertEquals(0, occurrences(packages, "package_type: exe"));
+        assertEquals(2, occurrences(packages, "package_type: msi"));
+        assertFalse(packages.contains("7z.sfx"));
+        assertFalse(packages.contains("7zSD.sfx"));
+        assertFalse(packages.contains("lzma2602.7z"));
         assertTrue(packages.contains("verify-native-package.sh"));
         assertTrue(packages.contains("verify-native-package.ps1"));
         assertFalse(packages.contains("verify-native-association"));

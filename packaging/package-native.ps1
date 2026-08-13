@@ -52,7 +52,7 @@ if (-not (Test-Path -LiteralPath $Sbom -PathType Leaf)) {
     throw "CycloneDX SBOM is missing: $Sbom"
 }
 
-if ($Target -eq "windows-x86-64" -and (-not $Type -or $Type -eq "exe")) {
+if ($Target -eq "windows-x86-64" -and $Type -eq "exe") {
     $SevenZip = Get-Command "7z.exe" -ErrorAction SilentlyContinue
     if (-not $SevenZip) {
         throw "Windows portable EXE packaging requires 7z.exe"

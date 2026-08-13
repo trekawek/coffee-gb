@@ -15,16 +15,16 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   package manifest and `--version`; its fully qualified ref peels to the full `source.commit`
   recorded in `NATIVE-PACKAGE-MATRIX.properties`.
 - [ ] All four required targets passed their unit/integration build, pre-package inspection,
-  final package extract/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
+  final package extract/install/mount, packaged `--version`, `--package-smoke`, normal and `--debug`
   production desktop launches, no-registration checks for `.gb`, `.gbc`, and `.rom`, bounded
-  shutdown, and portable-EXE cleanup where applicable. Each package smoke named the exact configured target after
+  shutdown, and MSI cleanup where applicable. Each package smoke named the exact configured target after
   starting from its own empty extraction cache.
 - [ ] If protected signing was requested, every target was rebuilt from the same immutable source
-  after the unsigned gate. Windows app-image executables and the portable EXE, macOS app bundles and DMGs,
+  after the unsigned gate. Windows app-image executables and the MSI, macOS app bundles and DMGs,
   and Linux detached signatures all passed their independent platform verification. The extracted
   macOS app retained `com.apple.security.cs.disable-library-validation=true`, passed Gatekeeper,
   and launched with its extracted locked natives; checksums were generated afterward.
-- [ ] The release bundle contains the portable JAR, Linux x64 DEB, Windows x64 EXE, macOS x64 DMG,
+- [ ] The release bundle contains the portable JAR, Linux x64 DEB, Windows x64 MSI, macOS x64 DMG,
   macOS arm64 DMG, `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached
   signature named by the matrix. It contains no `*.json` files; the matrix records the Maven and
   target-native SBOM digests validated before assembly.
@@ -65,9 +65,9 @@ has a named tester, target/architecture, date, and result. A tag push alone must
 - [ ] Launch through the packaged `--debug` path (the secondary console launcher on Windows) and
   confirm the production window starts and package-native fallback diagnostics contain no ROM,
   state, credential, or private path.
-- [ ] For the Windows portable EXE, confirm it starts directly without an installer, creates no
-  shortcuts or Installed Apps entry, and leaves no Coffee GB ROM association. For installable
-  packages, uninstall/remove the application and confirm launchers and shortcuts are removed.
+- [ ] For the Windows MSI, confirm that the Coffee GB desktop and Start Menu links launch
+  `Coffee GB.exe`, no `Coffee GB Console.exe` shortcut exists, and no Coffee GB ROM association was
+  added. Uninstall it and confirm the application and both Coffee GB shortcuts are removed.
 - [ ] Confirm ROMs, batteries, states, settings, screenshots, and other user data remain usable
   after closing and relaunching the package.
 

@@ -6,16 +6,14 @@ Linux. Each jpackage invocation runs on its target architecture:
 | Target | GitHub-hosted runner | Deliverable | Final-package check |
 | --- | --- | --- | --- |
 | Linux x64 | `ubuntu-24.04` | DEB | `dpkg-deb --extract` |
-| Windows x64 | `windows-2025` | Portable EXE | run the EXE, then extract into an isolated verification directory |
+| Windows x64 | `windows-2025` | MSI | administrative extraction plus an isolated install and shortcut inspection |
 | macOS x64 | `macos-15-intel` | DMG | read-only `hdiutil` mount |
 | macOS arm64 | `macos-15` | DMG | read-only `hdiutil` mount |
 
-JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image bootstraps a digest-pinned LZMA
-SDK archive, then exposes its x64 `7zr.exe` and configuration-aware `7zSD.sfx` installer module
-under the sibling names expected by the package interface. The archive and both extracted files
-must match reviewed SHA-256 values before building. Each job also fails if its architecture or
-required host tool is wrong. Oracle jpackage cannot cross-build these formats, so a missing target
-runner is a release blocker rather than permission to relabel another architecture.
+JDK 21 supplies `jdeps`, `jlink`, and `jpackage`. The Windows image provisions WiX 3.11 and exposes
+its `candle.exe` and `light.exe` tools to the subsequent package steps. Each job also fails if its
+architecture or required host tool is wrong. Oracle jpackage cannot cross-build these formats, so a
+missing target runner is a release blocker rather than permission to relabel another architecture.
 
 ## What CI proves
 
@@ -34,9 +32,9 @@ and launch gates. The package tool then:
 4. writes `PACKAGE-RESULT.properties`, one canonical byte-identical Maven dependency CycloneDX
    SBOM, one exact target-native CycloneDX SBOM generated from the locked inventory, and exhaustive
    `SHA256SUMS`;
-5. unpacks, extracts, or mounts the final package and repeats strict inspection and both launch smokes from
-   an isolated temporary home; and
-6. proves the final DEB desktop entry, portable-EXE registry state, and DMG application metadata
+5. unpacks, extracts, installs, or mounts the final package and repeats strict inspection and both launch
+   smokes from an isolated temporary home; and
+6. proves the final DEB desktop entry, MSI registry and shortcut state, and DMG application metadata
    do not register `.gb`, `.gbc`, or `.rom` with Coffee GB; and
 7. uploads the short-lived target validation inputs, including both SBOMs, checksums, result
    manifest, and (once, from Linux) the unchanged portable Maven JAR. The final gated release
@@ -62,9 +60,10 @@ Windows keeps the primary `Coffee GB.exe` GUI launcher console-free and uses the
 The no-registration gate inspects the exact final artifacts. Linux rejects any `MimeType` in the
 packaged Coffee GB desktop entry. macOS rejects `CFBundleDocumentTypes`,
 `UTExportedTypeDeclarations`, and `UTImportedTypeDeclarations` in the mounted application. Windows
-runs the portable EXE, extracts it into an isolated directory, and rejects any `.gb`, `.gbc`, or
-`.rom` extension class, `OpenWithProgids`, or `OpenWithList` entry that resolves to Coffee GB.
-These checks run again for protected signed builds.
+installs the MSI into an isolated directory, rejects any `.gb`, `.gbc`, or `.rom` extension class,
+`OpenWithProgids`, or `OpenWithList` entry that resolves to Coffee GB, and requires the desktop and
+Start Menu links to target only `Coffee GB.exe`, never `Coffee GB Console.exe`. These checks run again
+for protected signed builds.
 
 The content verifier bounds traversal and rejects symlinks in application input, a second runtime,
 foreign or altered target natives, ROM-like files, signing-store exports, private-key/token-shaped

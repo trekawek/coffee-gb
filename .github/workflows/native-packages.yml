@@ -22,13 +22,6 @@ on:
 permissions:
   contents: read
 
-env:
-  COFFEE_GB_LZMA_SDK_URL: >-
-    https://github.com/ip7z/7zip/releases/download/26.02/lzma2602.7z
-  COFFEE_GB_LZMA_SDK_SHA256: 2878c85f5f43a4a4e0952b1fd4e5fe097c1c143997a8047c7e1e788892aa9357
-  COFFEE_GB_7ZR_X64_SHA256: 89645457d40b0e6731014a61ee6ebedd22c01a92fc38618480d385461c4347bb
-  COFFEE_GB_7ZSD_SFX_SHA256: 0fc21d175a0e4c7e4f10521f35f6e6effa9dbd3c0ea80895cc79e72a9fdde088
-
 concurrency:
   group: native-packages-${{ inputs.checkout_ref || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
@@ -93,7 +86,7 @@ jobs:
             package_type: deb
             runner: ubuntu-24.04
           - target: windows-x86-64
-            package_type: exe
+            package_type: msi
             runner: windows-2025
           - target: macos-x86-64
             package_type: dmg
@@ -176,54 +169,25 @@ jobs:
               ;;
           esac
 
-      - name: Prepare pinned Windows portable-EXE tooling
+      - name: Install WiX toolset for Windows MSI packaging
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
             throw "windows-x86-64 requires an X64 runner"
           }
-          $SevenZipRoot = Join-Path $env:ProgramFiles "7-Zip"
-          $BootstrapSevenZip = Join-Path $SevenZipRoot "7z.exe"
-          if (-not (Test-Path -LiteralPath $BootstrapSevenZip -PathType Leaf) -or
-              (Get-Item -LiteralPath $BootstrapSevenZip).Length -eq 0) {
-            throw "windows-x86-64 requires the installed 7-Zip executable: $BootstrapSevenZip"
+          $WixBin = Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.11\bin"
+          $Candle = Join-Path $WixBin "candle.exe"
+          $Light = Join-Path $WixBin "light.exe"
+          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
+            choco install wixtoolset --version=3.11.2 --yes --no-progress
           }
-
-          $ToolRoot = Join-Path $env:RUNNER_TEMP "coffee-gb-lzma-sdk"
-          $ToolBin = Join-Path $ToolRoot "bin"
-          $Extracted = Join-Path $ToolRoot "extracted"
-          New-Item -ItemType Directory -Path $ToolBin -Force | Out-Null
-          New-Item -ItemType Directory -Path $Extracted -Force | Out-Null
-          $SdkArchive = Join-Path $ToolRoot "lzma-sdk.7z"
-          Invoke-WebRequest -Uri $env:COFFEE_GB_LZMA_SDK_URL -OutFile $SdkArchive
-          $SdkHash = (Get-FileHash -LiteralPath $SdkArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($SdkHash -ne $env:COFFEE_GB_LZMA_SDK_SHA256) {
-            throw "Pinned LZMA SDK archive SHA-256 mismatch: $SdkHash"
+          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
+            throw "WiX 3.11 candle.exe and light.exe are required by JDK 21 jpackage"
           }
-
-          & $BootstrapSevenZip e $SdkArchive `
-            "bin/x64/7zr.exe" `
-            "bin/7zSD.sfx" `
-            "-o$Extracted" `
-            -y
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to extract pinned Windows portable-EXE tooling"
-          }
-          $SourceArchiver = Join-Path $Extracted "7zr.exe"
-          $SourceSfx = Join-Path $Extracted "7zSD.sfx"
-          $ArchiverHash = (Get-FileHash -LiteralPath $SourceArchiver -Algorithm SHA256).Hash.ToLowerInvariant()
-          $SfxHash = (Get-FileHash -LiteralPath $SourceSfx -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($ArchiverHash -ne $env:COFFEE_GB_7ZR_X64_SHA256) {
-            throw "Pinned x64 7zr.exe SHA-256 mismatch: $ArchiverHash"
-          }
-          if ($SfxHash -ne $env:COFFEE_GB_7ZSD_SFX_SHA256) {
-            throw "Pinned 7zSD.sfx SHA-256 mismatch: $SfxHash"
-          }
-
-          Copy-Item -LiteralPath $SourceArchiver -Destination (Join-Path $ToolBin "7z.exe")
-          Copy-Item -LiteralPath $SourceSfx -Destination (Join-Path $ToolBin "7z.sfx")
-          $ToolBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $WixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux package validation prerequisites
         if: runner.os == 'Linux'
@@ -281,7 +245,7 @@ jobs:
               "swing/target/native-package-${PACKAGE_TARGET}-${PACKAGE_TYPE}"
           fi
 
-      - name: Run the portable EXE and repeat strict launch smokes
+      - name: Install the MSI and repeat strict launch smokes
         if: runner.os == 'Windows'
         shell: pwsh
         env:
@@ -473,7 +437,7 @@ jobs:
             package_type: deb
             runner: ubuntu-24.04
           - target: windows-x86-64
-            package_type: exe
+            package_type: msi
             runner: windows-2025
           - target: macos-x86-64
             package_type: dmg
@@ -550,51 +514,25 @@ jobs:
           "COFFEE_GB_MAVEN_COMMAND=$MavenWrapper" |
             Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Prepare pinned Windows portable-EXE tooling
+      - name: Install WiX toolset for Windows MSI packaging
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $SevenZipRoot = Join-Path $env:ProgramFiles "7-Zip"
-          $BootstrapSevenZip = Join-Path $SevenZipRoot "7z.exe"
-          if (-not (Test-Path -LiteralPath $BootstrapSevenZip -PathType Leaf) -or
-              (Get-Item -LiteralPath $BootstrapSevenZip).Length -eq 0) {
-            throw "windows-x86-64 requires the installed 7-Zip executable: $BootstrapSevenZip"
+          if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
+            throw "windows-x86-64 requires an X64 runner"
           }
-
-          $ToolRoot = Join-Path $env:RUNNER_TEMP "coffee-gb-lzma-sdk"
-          $ToolBin = Join-Path $ToolRoot "bin"
-          $Extracted = Join-Path $ToolRoot "extracted"
-          New-Item -ItemType Directory -Path $ToolBin -Force | Out-Null
-          New-Item -ItemType Directory -Path $Extracted -Force | Out-Null
-          $SdkArchive = Join-Path $ToolRoot "lzma-sdk.7z"
-          Invoke-WebRequest -Uri $env:COFFEE_GB_LZMA_SDK_URL -OutFile $SdkArchive
-          $SdkHash = (Get-FileHash -LiteralPath $SdkArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($SdkHash -ne $env:COFFEE_GB_LZMA_SDK_SHA256) {
-            throw "Pinned LZMA SDK archive SHA-256 mismatch: $SdkHash"
+          $WixBin = Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.11\bin"
+          $Candle = Join-Path $WixBin "candle.exe"
+          $Light = Join-Path $WixBin "light.exe"
+          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
+            choco install wixtoolset --version=3.11.2 --yes --no-progress
           }
-
-          & $BootstrapSevenZip e $SdkArchive `
-            "bin/x64/7zr.exe" `
-            "bin/7zSD.sfx" `
-            "-o$Extracted" `
-            -y
-          if ($LASTEXITCODE -ne 0) {
-            throw "Unable to extract pinned Windows portable-EXE tooling"
+          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
+            throw "WiX 3.11 candle.exe and light.exe are required by JDK 21 jpackage"
           }
-          $SourceArchiver = Join-Path $Extracted "7zr.exe"
-          $SourceSfx = Join-Path $Extracted "7zSD.sfx"
-          $ArchiverHash = (Get-FileHash -LiteralPath $SourceArchiver -Algorithm SHA256).Hash.ToLowerInvariant()
-          $SfxHash = (Get-FileHash -LiteralPath $SourceSfx -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($ArchiverHash -ne $env:COFFEE_GB_7ZR_X64_SHA256) {
-            throw "Pinned x64 7zr.exe SHA-256 mismatch: $ArchiverHash"
-          }
-          if ($SfxHash -ne $env:COFFEE_GB_7ZSD_SFX_SHA256) {
-            throw "Pinned 7zSD.sfx SHA-256 mismatch: $SfxHash"
-          }
-
-          Copy-Item -LiteralPath $SourceArchiver -Destination (Join-Path $ToolBin "7z.exe")
-          Copy-Item -LiteralPath $SourceSfx -Destination (Join-Path $ToolBin "7z.sfx")
-          $ToolBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $WixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Linux package validation prerequisites
         if: runner.os == 'Linux'
