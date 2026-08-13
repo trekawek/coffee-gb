@@ -41,6 +41,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -49,6 +50,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -79,6 +81,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 return thread;
             });
     private final CopyOnWriteArraySet<RuntimeObserver> observers = new CopyOnWriteArraySet<>();
+    /** Registration epochs prevent a queued message from a prior Activity attachment resurfacing. */
+    private final ConcurrentHashMap<RuntimeObserver, Long> observerRegistrations =
+            new ConcurrentHashMap<>();
+    private final AtomicLong nextObserverRegistration = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     /** Serializes a UI-thread pause capture with owner-thread presentation publication. */
     private final Object presentationLock = new Object();
@@ -394,6 +400,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void addObserver(RuntimeObserver observer) {
         RuntimeObserver checked = Objects.requireNonNull(observer, "observer");
         observers.add(checked);
+        observerRegistrations.put(checked, nextObserverRegistration.incrementAndGet());
         RuntimeState replay = state;
         mainHandler.post(() -> {
             if (observers.contains(checked)) {
@@ -405,6 +412,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Must be paired with {@link #addObserver(RuntimeObserver)} from Activity/service teardown. */
     public void removeObserver(RuntimeObserver observer) {
         observers.remove(observer);
+        observerRegistrations.remove(observer);
     }
 
     /** Opens the user-selected SAF document; all metadata, archive and ROM work stays off-main. */
@@ -711,6 +719,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        observers.clear();
+        observerRegistrations.clear();
         deadlines.shutdownNow();
         try {
             owner.execute(() -> {
@@ -744,8 +754,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus = new EventBusImpl();
         eventBus.register(
                 (StateOperationCompletedEvent event) -> {
-                    if (event.getOperation() == StateOperation.SAVE) {
-                        submit(() -> completeStateSave(event.getRequestId()));
+                    if (event.getOperation() == StateOperation.SAVE
+                            || event.getOperation() == StateOperation.LOAD) {
+                        // Controller callbacks run on the emulation thread. Keep runtime-owned
+                        // layout/session checks and save callback bookkeeping on the owner.
+                        submit(() -> {
+                            if (event.getOperation() == StateOperation.SAVE) {
+                                completeStateSave(event.getRequestId());
+                            }
+                            publishStateCompletionMessage(event);
+                        });
                     }
                 },
                 StateOperationCompletedEvent.class);
@@ -1080,6 +1098,40 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
+    /** Forwards only successful SAVE/LOAD completions belonging to the active managed session. */
+    private void publishStateCompletionMessage(StateOperationCompletedEvent event) {
+        long sessionId = event.getSessionId();
+        if (closed.get() || activeLayout == null || sessionId <= 0L
+                || sessionId != activeStateSessionId) {
+            return;
+        }
+        String message = event.getMessage();
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        List<ObserverRegistration> recipients = observers.stream()
+                .map(observer -> new ObserverRegistration(observer,
+                        observerRegistrations.get(observer)))
+                .filter(recipient -> recipient.registrationId() != null)
+                .collect(Collectors.toList());
+        mainHandler.post(() -> {
+            // Activity/service lifecycle changes can remove and later re-add the same observer;
+            // re-check both ownership and the state-session edge before delivering this queued
+            // callback so an old completion cannot flash in a replacement session.
+            if (closed.get() || activeStateSessionId != sessionId) {
+                return;
+            }
+            for (ObserverRegistration recipient : recipients) {
+                Long currentRegistration = observerRegistrations.get(recipient.observer());
+                if (currentRegistration != null
+                        && currentRegistration.equals(recipient.registrationId())
+                        && observers.contains(recipient.observer())) {
+                    recipient.observer().onTransientMessage(message);
+                }
+            }
+        });
+    }
+
     private void onFlushDeadline(long requestId) {
         if (pendingFlushRequestId != requestId) {
             return;
@@ -1404,6 +1456,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             this.thumbnail = thumbnail;
             this.onCompleted = onCompleted;
         }
+    }
+
+    private record ObserverRegistration(RuntimeObserver observer, Long registrationId) {
     }
 
     @FunctionalInterface

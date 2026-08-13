@@ -8,6 +8,9 @@ import android.graphics.Paint;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
@@ -22,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Dedicated nearest-neighbour native-frame surface.
@@ -39,6 +43,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint displayPaint = new Paint();
     private final Paint skinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint transientPanelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint transientTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Rect source = new Rect();
     private final Rect destination = new Rect();
     private final Bitmap bitmap = Bitmap.createBitmap(
@@ -47,12 +53,16 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final RasterSkin landscapeSkin;
     private final MenuRenderer menuRenderer = new MenuRenderer();
     private final Set<Integer> menuTouchPointers = new HashSet<>();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final AtomicLong transientRevision = new AtomicLong();
 
     private volatile NativeFrameStore frames;
     private volatile MenuPresentation menuPresentation;
     private volatile MenuTouchInput menuInput;
     private final TouchControlsPreferences touchPreferences;
     private volatile TouchControlsLayout touchLayout;
+    private volatile String transientMessage;
+    private volatile long transientExpiresAt;
     private AndroidInputRouter input;
     private RenderThread renderThread;
     private volatile boolean surfaceReady;
@@ -62,6 +72,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         videoPaint.setFilterBitmap(false);
         displayPaint.setColor(Color.BLACK);
         skinPaint.setFilterBitmap(true);
+        transientPanelPaint.setColor(Color.argb(210, 0, 0, 0));
+        transientTextPaint.setColor(Color.WHITE);
+        transientTextPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        transientTextPaint.setTextAlign(Paint.Align.LEFT);
         portraitSkin = RasterSkin.portrait(context);
         landscapeSkin = RasterSkin.landscape(context);
         touchPreferences = new TouchControlsPreferences(context);
@@ -106,6 +120,34 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         onFrameAvailable();
     }
 
+    /** Displays host feedback over gameplay or the opaque menu for the standard short duration. */
+    void showTransientMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        long revision = transientRevision.incrementAndGet();
+        transientMessage = message;
+        transientExpiresAt = SystemClock.uptimeMillis()
+                + TransientMessage.DURATION_MILLIS;
+        onFrameAvailable();
+        mainHandler.postDelayed(() -> {
+            if (transientRevision.get() != revision) {
+                return;
+            }
+            transientMessage = null;
+            transientExpiresAt = 0L;
+            onFrameAvailable();
+        }, TransientMessage.DURATION_MILLIS);
+    }
+
+    /** Clears feedback during surface/lifecycle teardown and invalidates pending expiry callbacks. */
+    void clearTransientMessage() {
+        transientRevision.incrementAndGet();
+        transientMessage = null;
+        transientExpiresAt = 0L;
+        onFrameAvailable();
+    }
+
     /** Installs the input bridge used to consume skin controls while the menu is visible. */
     public void setMenuInput(MenuTouchInput input) {
         MenuTouchInput previous = menuInput;
@@ -135,6 +177,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     /** Releases only the Surface subscription; the active emulator keeps running in its service. */
     public void detach() {
+        clearTransientMessage();
         NativeFrameStore active = frames;
         if (active != null) {
             active.removeListener(this);
@@ -437,9 +480,41 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 if (menu != null) {
                     menuRenderer.draw(canvas, menu, display);
                 }
+                drawTransientMessage(canvas, display);
                 skin.draw(canvas, skinPaint, transform);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
+            }
+        }
+
+        private void drawTransientMessage(Canvas canvas, RectF display) {
+            String text = transientMessage;
+            if (text == null || text.isBlank()
+                    || SystemClock.uptimeMillis() >= transientExpiresAt) {
+                return;
+            }
+            float scale = Math.max(1.0f, display.width() / 160.0f);
+            float textSize = Math.max(12.0f, 7.0f * scale);
+            transientTextPaint.setTextSize(textSize);
+            Paint.FontMetrics metrics = transientTextPaint.getFontMetrics();
+            float paddingX = Math.max(6.0f, 4.0f * scale);
+            float paddingY = Math.max(4.0f, 2.0f * scale);
+            float boxWidth = transientTextPaint.measureText(text) + 2.0f * paddingX;
+            float boxHeight = metrics.descent - metrics.ascent + 2.0f * paddingY;
+            float x = display.centerX() - boxWidth / 2.0f;
+            float y = display.bottom - boxHeight - Math.max(4.0f, 4.0f * scale);
+            int save = canvas.save();
+            try {
+                // The menu and message are host overlays, but neither may escape the exact
+                // display aperture into the raster skin or letterbox.
+                canvas.clipRect(display);
+                float radius = Math.max(6.0f, 4.0f * scale);
+                canvas.drawRoundRect(x, y, x + boxWidth, y + boxHeight, radius, radius,
+                        transientPanelPaint);
+                canvas.drawText(text, x + paddingX, y + paddingY - metrics.ascent,
+                        transientTextPaint);
+            } finally {
+                canvas.restoreToCount(save);
             }
         }
 
@@ -449,6 +524,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 return !running || renderThread != this || !surfaceReady
                         || !holder.getSurface().isValid();
             }
+        }
+    }
+
+    private static final class TransientMessage {
+        private static final long DURATION_MILLIS = 1_500L;
+
+        private TransientMessage() {
         }
     }
 }

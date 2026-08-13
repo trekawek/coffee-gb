@@ -371,13 +371,15 @@ internal class SwingProposal3Menu(
             }
         val mode = if (stateMenuMode == StateMenuMode.SAVE) "SAVE" else "LOAD"
         val focused = stateFocusedItemId ?: "slot-0"
+        val focusedSlot =
+            commands.stateSlots().firstOrNull { "slot-${it.index}" == focused }
         val preview =
-            commands.stateSlots().firstOrNull { "slot-${it.index}" == focused }?.preview
-                ?: MenuPreview.empty()
+            focusedSlot?.preview ?: MenuPreview.empty()
+        val savedAt = portableStateSavedAt(focusedSlot?.savedAt)
         page(
             "${mode} STATES",
             "",
-            emptyList(),
+            if (savedAt == null) emptyList() else listOf(savedAt),
             slots,
             preferredFocus = focused,
             headerAction = "",
@@ -859,7 +861,12 @@ internal class SwingProposal3Menu(
       val desiredPreview =
           commands.stateSlots().firstOrNull { "slot-${it.index}" == focusedId }?.preview
               ?: MenuPreview.empty()
-      if (presentation.preview() !== desiredPreview) {
+      val focusedSlot =
+          commands.stateSlots().firstOrNull { "slot-${it.index}" == focusedId }
+      val desiredSideLines = portableStateSavedAt(focusedSlot?.savedAt)
+          ?.let { listOf(it) }
+          ?: emptyList()
+      if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines) {
         controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
         return
       }

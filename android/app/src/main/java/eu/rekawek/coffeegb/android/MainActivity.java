@@ -40,6 +40,10 @@ import eu.rekawek.coffeegb.ui.menu.MenuStackSnapshot;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 
 import java.lang.ref.WeakReference;
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -94,6 +98,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String PRINTER_CONTINUATION_URI = "uri";
     private static final String PRINTER_CONTINUATION_PHASE = "phase";
     private static final String SOURCE_URL = "https://github.com/trekawek/coffee-gb";
+    private static final DateTimeFormatter STATE_TIME_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
 
     private CoffeeGbSurfaceView video;
     private View menuButton;
@@ -359,6 +365,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     protected void onPause() {
         armLegacyCameraPermissionFallback(externalSurface);
         activityResumed = false;
+        if (video != null) {
+            video.clearTransientMessage();
+        }
         super.onPause();
     }
 
@@ -514,6 +523,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         applyState(state);
     }
 
+    /** Shows current-session SAVE/LOAD completion feedback above gameplay or the menu. */
+    @Override
+    public void onTransientMessage(String message) {
+        // Runtime callbacks are posted to the main thread, but an Activity can be between
+        // onPause/onStop or service rebinding when a queued callback arrives. Do not let an old
+        // lifecycle paint feedback into a newly attached surface.
+        if (!activityResumed || !bound || runtime == null || video == null
+                || message == null || message.isBlank()) {
+            return;
+        }
+        video.showTransientMessage(message);
+    }
+
     private void toggleMenu() {
         if (menuController == null || externalSurface.active()) {
             return;
@@ -646,7 +668,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         int slot = parseSlot(focused.id().replace("slot:", ""));
         AndroidStateSlot selected = stateSlot(slot);
         MenuPreview preview = selected == null ? MenuPreview.empty() : selected.preview();
-        if (presentation.preview() == preview) {
+        List<String> sideLines = stateSavedAtLines(selected);
+        if (presentation.preview() == preview && presentation.sideLines().equals(sideLines)) {
             return false;
         }
         String focusId = focused.id();
@@ -1790,9 +1813,28 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
         return new MenuPageSpec(MenuRoute.SAVE_STATES, "COFFEE GB", mode + " STATES", "", "",
-                List.of(), items, 1,
+                stateSavedAtLines(stateSlot(preferredFocus == null
+                        ? StateRef.MIN_SLOT : parseSlot(preferredFocus.replace("slot:", "")))),
+                items, 1,
                 List.of("D-PAD MOVE", "A " + mode, "B BACK"),
                 preferredFocus == null ? "slot:" + StateRef.MIN_SLOT : preferredFocus, preview);
+    }
+
+    private static List<String> stateSavedAtLines(AndroidStateSlot slot) {
+        String formatted = formatStateSavedAt(slot == null ? null : slot.savedAt());
+        return formatted == null ? List.of() : List.of(formatted);
+    }
+
+    static String formatStateSavedAt(Instant savedAt) {
+        if (savedAt == null) {
+            return null;
+        }
+        try {
+            return "SAVED " + STATE_TIME_FORMAT.format(savedAt);
+        } catch (DateTimeException | ArithmeticException ignored) {
+            // Metadata is optional; unsupported/corrupt values must not become a fake date.
+            return null;
+        }
     }
 
     private MenuPageSpec libraryPage() {

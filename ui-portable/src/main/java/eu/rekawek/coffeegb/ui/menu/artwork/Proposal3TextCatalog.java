@@ -101,8 +101,11 @@ final class Proposal3TextCatalog {
     }
 
     private static void saveStates(List<TextRegion> regions) {
-        // Save/load state pages deliberately contain only the selected thumbnail on the left.
-        // Slot status, metadata and action copy belong neither below nor beside the preview.
+        // The blank area below the selected thumbnail is reserved for authoritative managed-state
+        // metadata. Empty/loading/unavailable slots simply provide no side line, leaving the
+        // approved artwork untouched.
+        regions.add(region(Key.SIDE_LINE, 0, new MenuRect(30, 505, 352, 44), Surface.PAPER,
+                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.SMALL));
     }
 
     private static void settings(List<TextRegion> regions) {
