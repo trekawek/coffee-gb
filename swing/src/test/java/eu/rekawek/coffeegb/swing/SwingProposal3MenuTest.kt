@@ -380,6 +380,120 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `save page has four stable rows and A or Start saves directly while B returns`() {
+    val bridge = FakeBridge()
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
+      assertEquals("slot-0", menu.focusedItemIdForTest())
+
+      press(menu, MenuKey.A)
+      assertEquals(0, bridge.savedSlot)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.START)
+      assertEquals(1, bridge.savedSlot)
+
+      repeat(2) { press(menu, MenuKey.DOWN) }
+      assertEquals("slot-3", menu.focusedItemIdForTest())
+      press(menu, MenuKey.DOWN)
+      assertEquals("slot-0", menu.focusedItemIdForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+    }
+  }
+
+  @Test
+  fun `physical controller state routes and actions are marshalled to the EDT`() {
+    val saveBridge = FakeBridge()
+    val saveMenu = newMenu(saveBridge)
+
+    physicalPress(saveMenu, Button.DOWN)
+    physicalPress(saveMenu, Button.A)
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertEquals(MenuRoute.SAVE_STATES, saveMenu.routeForTest())
+    assertEquals(true, saveBridge.catalogRefreshOnEdt)
+
+    physicalPress(saveMenu, Button.A)
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertEquals(0, saveBridge.savedSlot)
+    assertEquals(true, saveBridge.saveOnEdt)
+
+    val loadBridge =
+        FakeBridge().also {
+          it.stateCatalog = listOf(PortableMenuStateSlot(0, true, MenuPreview.empty()))
+        }
+    val loadMenu = newMenu(loadBridge)
+
+    physicalPress(loadMenu, Button.DOWN)
+    physicalPress(loadMenu, Button.DOWN)
+    physicalPress(loadMenu, Button.A)
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertEquals(MenuRoute.SAVE_STATES, loadMenu.routeForTest())
+    assertEquals(true, loadBridge.catalogRefreshOnEdt)
+
+    physicalPress(loadMenu, Button.A)
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertEquals(0, loadBridge.loadedSlot)
+    assertEquals(true, loadBridge.loadOnEdt)
+  }
+
+  @Test
+  fun `load page uses persisted preview and empty slot is a safe no-op`() {
+    val red = 0xffc02020.toInt()
+    val blue = 0xff2060c0.toInt()
+    val bridge = FakeBridge().also {
+      it.stateCatalog =
+          listOf(
+              PortableMenuStateSlot(0, true, MenuPreview.ready(1, 1, intArrayOf(red))),
+              PortableMenuStateSlot(1, true, MenuPreview.ready(1, 1, intArrayOf(blue))),
+          )
+    }
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
+      assertTrue(frames.filterNotNull().last().copyPixels().contains(red))
+
+      press(menu, MenuKey.DOWN)
+      assertEquals("slot-1", menu.focusedItemIdForTest())
+      assertTrue(frames.filterNotNull().last().copyPixels().contains(blue))
+      press(menu, MenuKey.A)
+      assertEquals(1, bridge.loadedSlot)
+      assertFalse(menu.visible())
+    }
+
+    bridge.loadedSlot = null
+    val emptyMenu = newMenu(bridge)
+    javax.swing.SwingUtilities.invokeAndWait {
+      press(emptyMenu, MenuKey.DOWN)
+      press(emptyMenu, MenuKey.DOWN)
+      press(emptyMenu, MenuKey.A)
+      assertEquals(MenuRoute.SAVE_STATES, emptyMenu.routeForTest())
+      repeat(2) { press(emptyMenu, MenuKey.DOWN) }
+      press(emptyMenu, MenuKey.A)
+      assertEquals(null, bridge.loadedSlot)
+      assertTrue(emptyMenu.visible())
+    }
+  }
+
+  @Test
   fun `printer route renders the bridge paper preview and keeps export native`() {
     val bridge = FakeBridge()
     val printer = FakePrinter(MenuPreview.ready(1, 1, intArrayOf(0xffd02020.toInt())))
@@ -465,6 +579,11 @@ class SwingProposal3MenuTest {
     assertTrue(menu.onKeyUp(key))
   }
 
+  private fun physicalPress(menu: SwingProposal3Menu, button: Button) {
+    assertTrue(menu.updatePlayerButtons(EnumSet.of(button)))
+    assertTrue(menu.updatePlayerButtons(emptySet()))
+  }
+
   private fun archiveCandidate(
       token: Long,
       entryName: String,
@@ -477,6 +596,11 @@ class SwingProposal3MenuTest {
     val pauseTransitions = mutableListOf<Boolean>()
     var aboutOpened = false
     var loadedSlot: Int? = null
+    var savedSlot: Int? = null
+    var stateCatalog: List<PortableMenuStateSlot> = emptyList()
+    var catalogRefreshOnEdt: Boolean? = null
+    var saveOnEdt: Boolean? = null
+    var loadOnEdt: Boolean? = null
     private val enabled =
         setOf(
             DesktopCommand.OPEN_ROM,
@@ -522,10 +646,26 @@ class SwingProposal3MenuTest {
 
     override fun canLoadState(slot: Int): Boolean = true
 
-    override fun saveState(slot: Int) = Unit
+    override fun saveState(slot: Int) {
+      saveOnEdt = javax.swing.SwingUtilities.isEventDispatchThread()
+      savedSlot = slot
+    }
 
     override fun loadState(slot: Int) {
+      loadOnEdt = javax.swing.SwingUtilities.isEventDispatchThread()
       loadedSlot = slot
+    }
+
+    override fun stateSlots(): List<PortableMenuStateSlot> {
+      check(javax.swing.SwingUtilities.isEventDispatchThread()) {
+        "State catalog snapshots must be read on the EDT"
+      }
+      return stateCatalog
+    }
+
+    override fun refreshStateCatalog() {
+      catalogRefreshOnEdt = javax.swing.SwingUtilities.isEventDispatchThread()
+      check(catalogRefreshOnEdt == true) { "State catalog refresh must run on the EDT" }
     }
   }
 

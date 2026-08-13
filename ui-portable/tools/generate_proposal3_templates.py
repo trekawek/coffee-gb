@@ -59,8 +59,10 @@ ROUTE_PAPER_TEXT = {
         rect(340, 25, 325, 61), rect(688, 25, 207, 61),
     ],
     "01-save-states.png": [
-        rect(40, 146, 340, 50), rect(38, 202, 340, 42), rect(35, 490, 346, 38),
-        rect(35, 526, 346, 36),
+        # State pages have no slot/status metadata beside or below the thumbnail.
+        rect(30, 140, 352, 340), rect(30, 486, 352, 66),
+        # The old three-button strip is now an intentionally blank paper band.
+        rect(14, 568, 897, 75), rect(688, 25, 207, 70),
     ],
     "02-settings.png": [
         rect(38, 146, 342, 50), rect(36, 486, 342, 46), rect(36, 532, 342, 42),
@@ -133,10 +135,7 @@ PAUSE_PREVIEW_MATTE = (18, 27, 20)
 ROUTE_WIDGETS = {
     # A clean rail is repainted at runtime into seven 72px rows, with exact 2px dividers.
     "00-pause-console.png": [("dark", rect(424, 121, 484, 516))],
-    "01-save-states.png": [("dark", inner(*value)) for value in
-        [(420, 118, 489, 93), (420, 214, 489, 94), (420, 311, 489, 93),
-         (420, 407, 489, 144)]] + [("paper", inner(*value)) for value in
-        [(17, 573, 285, 65), (315, 573, 285, 65), (613, 573, 293, 65)]],
+    "01-save-states.png": [("dark", inner(420, 118, 489, 427))],
     "02-settings.png": [("dark", inner(*value)) for value in
         [(423, 116, 487, 56), (423, 174, 487, 57), (423, 233, 487, 57),
          (423, 292, 487, 57), (423, 351, 487, 57), (423, 410, 487, 56),
@@ -183,7 +182,8 @@ def clear_paper_text(image: np.ndarray, bounds: tuple[int, int, int, int],
                      paper: np.ndarray) -> None:
     left, top, right, bottom = bounds
     height, width = bottom - top, right - left
-    image[top:bottom, left:right] = paper[:height, :width]
+    tiled = np.tile(paper, (height // paper.shape[0] + 1, width // paper.shape[1] + 1, 1))
+    image[top:bottom, left:right] = tiled[:height, :width]
 
 
 def paste_surface(image: Image.Image, surface: Image.Image,
@@ -224,6 +224,21 @@ def main() -> None:
         if source.name == "00-pause-console.png":
             left, top, right, bottom = PAUSE_PREVIEW_APERTURE
             pixels[top:bottom, left:right] = PAUSE_PREVIEW_MATTE
+        if source.name == "01-save-states.png":
+            # Remove all legacy left-side copy while preserving the stepped bezel around the
+            # thumbnail aperture.  The runtime fills this aperture with a detached thumbnail.
+            clear_paper_text(pixels, rect(30, 140, 352, 340), paper_pixels)
+            clear_paper_text(pixels, rect(30, 486, 352, 66), paper_pixels)
+            # The state route has no header action and no save/load/delete action strip.  These
+            # rectangles stop inside the surrounding panel frames, so the page still has one
+            # coherent paper surface rather than ghosted blank controls.
+            clear_paper_text(pixels, rect(688, 25, 207, 70), paper_pixels)
+            clear_paper_text(pixels, rect(14, 568, 897, 75), paper_pixels)
+            # Keep the preview well blank until a persisted thumbnail is supplied at runtime.
+            left, top, right, bottom = rect(30, 140, 352, 340)
+            clear_paper_text(pixels, (left, top, right, bottom), paper_pixels)
+            for divider_y in (220, 328, 436):
+                clear_paper_text(pixels, rect(420, divider_y, 489, 4), paper_pixels)
         Image.fromarray(pixels, "RGB").save(OUTPUT / source.name, optimize=True, compress_level=9)
     expected = set(ROUTE_WIDGETS)
     actual = {path.name for path in OUTPUT.glob("*.png")}

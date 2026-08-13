@@ -277,6 +277,25 @@ class SwingGui private constructor(
                 desktopUiCoordinator.stateSlotLoadAvailability(slot, available)
               }
             },
+            onPortableCatalog = { catalog ->
+              if (::desktopActions.isInitialized) {
+                desktopActions.updatePortableStateSlots(
+                    catalog.entries.filter { it.ref is eu.rekawek.coffeegb.controller.state.StateRef.Slot }
+                        .filter { (it.ref as eu.rekawek.coffeegb.controller.state.StateRef.Slot).index in 0..3 }
+                        .map { entry ->
+                          val ref = entry.ref as eu.rekawek.coffeegb.controller.state.StateRef.Slot
+                          val image = entry.thumbnail
+                          val preview = if (image == null) {
+                            eu.rekawek.coffeegb.ui.menu.MenuPreview.empty()
+                          } else {
+                            val rgb = image.copyRgb()
+                            val argb = IntArray(rgb.size) { index -> 0xff000000.toInt() or rgb[index] }
+                            eu.rekawek.coffeegb.ui.menu.MenuPreview.ready(image.width, image.height, argb)
+                          }
+                          PortableMenuStateSlot(ref.index, entry.canLoad, preview)
+                        })
+              }
+            },
             onRememberResumeDecision = { resume ->
               properties.updateApplicationSettings { current ->
                 current.copy(
@@ -398,6 +417,7 @@ class SwingGui private constructor(
                 openAbout = { menu.showAbout() },
             ),
             proposal3MenuAvailable = proposal3MenuEnabled,
+            stateCatalogRefresh = stateUxController::refreshPortableCatalog,
         )
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(

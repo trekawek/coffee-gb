@@ -28,6 +28,14 @@ import org.junit.Test
 class StateUxDesktopControllerTest {
 
   @Test
+  fun `catalog consumers accept a newer coalesced request but reject stale or unarmed results`() {
+    assertTrue(acceptsStateCatalogRequest(outstandingRequestId = 10, completedRequestId = 10))
+    assertTrue(acceptsStateCatalogRequest(outstandingRequestId = 10, completedRequestId = 11))
+    assertFalse(acceptsStateCatalogRequest(outstandingRequestId = 11, completedRequestId = 10))
+    assertFalse(acceptsStateCatalogRequest(outstandingRequestId = 0, completedRequestId = 11))
+  }
+
+  @Test
   fun `selected slot availability ignores stale probes and follows save delete and session state`() {
     var nextRequestId = 0L
     val requests = mutableListOf<StateSlotLoadAvailabilityRequestEvent>()

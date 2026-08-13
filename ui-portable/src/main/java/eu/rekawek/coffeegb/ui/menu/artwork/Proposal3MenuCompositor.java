@@ -190,14 +190,6 @@ public final class Proposal3MenuCompositor {
             }
         }
 
-        if (route == MenuRoute.SAVE_STATES) {
-            // The action strip is fixed artwork; its semantic focus can still be driven by the
-            // legacy delete-state id or the newer save/load action ids.
-            addSyntheticAction(prepared, actionIds, "save-state", "SAVE", -1);
-            addSyntheticAction(prepared, actionIds, "load-state", "LOAD", -1);
-            addSyntheticAction(prepared, actionIds, "delete-state", "DELETE", findSource(items,
-                    "delete-state"));
-        }
         if (route == MenuRoute.LIBRARY) {
             addSyntheticAction(prepared, actionIds, "open-rom", "OPEN ROM",
                     findSource(items, "open-rom"));
@@ -218,7 +210,7 @@ public final class Proposal3MenuCompositor {
 
     private static void orderActions(MenuRoute route, List<Entry> actions) {
         List<String> order = switch (route) {
-            case SAVE_STATES -> List.of("save-state", "load-state", "delete-state");
+            case SAVE_STATES -> List.of();
             case AUDIO -> List.of("save-audio", "cancel-audio");
             case TOUCH_CONTROLS -> List.of("save-touch", "cancel-touch");
             case OPTIONAL_DEVICES -> List.of("save-devices", "cancel-devices");
@@ -268,7 +260,7 @@ public final class Proposal3MenuCompositor {
 
     private static boolean isAction(MenuRoute route, String id) {
         return switch (route) {
-            case SAVE_STATES -> Set.of("save-state", "load-state", "delete-state").contains(id);
+            case SAVE_STATES -> false;
             case AUDIO -> id.equals("save-audio") || id.equals("cancel-audio");
             case TOUCH_CONTROLS -> id.equals("save-touch") || id.equals("cancel-touch");
             case OPTIONAL_DEVICES -> id.equals("save-devices") || id.equals("cancel-devices");
@@ -418,6 +410,7 @@ public final class Proposal3MenuCompositor {
                     ? "" : presentation.context().isEmpty()
                     ? "/" : "/ " + display(presentation.context());
             case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
+                    || presentation.route() == MenuRoute.SAVE_STATES
                     ? "" : presentation.headerAction().isEmpty()
                     ? "BACK" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
@@ -668,6 +661,13 @@ public final class Proposal3MenuCompositor {
             for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
                 raster.fill(divider, PAPER_MATTE);
             }
+        } else if (route == MenuRoute.SAVE_STATES) {
+            // State rows use the same fixed-height treatment as the pause rail.  The row skins
+            // are intentionally expanded for focus repaint cleanup, so restore the dividers
+            // after every row (including an empty/focused row) to keep all four slots equal.
+            for (MenuRect divider : Proposal3OverlayCatalog.SAVE_DIVIDERS) {
+                raster.fill(divider, PAPER_MATTE);
+            }
         }
     }
 
@@ -695,9 +695,6 @@ public final class Proposal3MenuCompositor {
     }
 
     private static Entry actionFor(MenuRoute route, List<Entry> actions, int index) {
-        if (route == MenuRoute.SAVE_STATES) {
-            return index < actions.size() ? actions.get(index) : null;
-        }
         if (route == MenuRoute.ABOUT && index == 0) {
             return actions.isEmpty() ? null : actions.get(0);
         }
@@ -705,13 +702,6 @@ public final class Proposal3MenuCompositor {
     }
 
     private static String actionLabel(MenuRoute route, Entry entry, int index) {
-        if (route == MenuRoute.SAVE_STATES) {
-            return switch (index) {
-                case 0 -> "SAVE";
-                case 1 -> "LOAD";
-                default -> "DELETE";
-            };
-        }
         if (route == MenuRoute.LIBRARY) {
             return "OPEN ROM";
         }
@@ -726,7 +716,7 @@ public final class Proposal3MenuCompositor {
 
     private static boolean supportsDetail(MenuRoute route, Entry entry) {
         return switch (route) {
-            case SAVE_STATES, AUDIO, TOUCH_CONTROLS, CONTROLLER_MAPPING,
+            case AUDIO, TOUCH_CONTROLS, CONTROLLER_MAPPING,
                     OPTIONAL_DEVICES, LIBRARY, SYSTEM -> true;
             default -> false;
         };
@@ -759,6 +749,8 @@ public final class Proposal3MenuCompositor {
     }
 
     private static void drawSaveSide(MenuPresentation p, MenuRaster r) {
+        // State thumbnails are detached page data; an empty/missing slot paints a blank well.
+        r.fill(Proposal3OverlayCatalog.SAVE_PREVIEW, PAPER_MATTE);
         if (p.preview().state() == MenuPreview.State.READY) {
             r.copyPreview(p.preview(), Proposal3OverlayCatalog.SAVE_PREVIEW, PAPER_MATTE);
         }
@@ -1041,7 +1033,7 @@ public final class Proposal3MenuCompositor {
 
     private static String canonicalDetail(MenuRoute route, Entry e, int index) {
         return switch (route) {
-            case SAVE_STATES -> e.slotNumber == 0 ? "SAVED" : "EMPTY";
+            case SAVE_STATES -> "";
             case AUDIO -> e.id.equals("mute-audio") ? "OFF"
                     : e.id.equals("emulated-audio") ? "ON" : "";
             case TOUCH_CONTROLS -> e.id.equals("haptics") ? "ON"

@@ -94,12 +94,15 @@ internal class StateUxDesktopController(
     onBoundsChanged: (Rectangle) -> Unit = {},
     private val onDesktopStatus: (String, DesktopCommand?) -> Unit = { _, _ -> },
     onSlotLoadAvailability: (slot: Int, available: Boolean) -> Unit = { _, _ -> },
+    private val onPortableCatalog: (StateBrowserCatalog) -> Unit = {},
     private val onRememberResumeDecision: (resume: Boolean) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
   private val requestIds = AtomicLong()
   private var currentSession: StateUxSessionEvent? = null
+  private var latestPortableCatalogRequest = 0L
+  private var latestPortableCatalogSessionId: Long? = null
   private val browser =
       StateBrowserWindowHost(
           initialSession = { currentSession },
@@ -134,10 +137,29 @@ internal class StateUxDesktopController(
         val current = currentSession
         if (current == null || event.sessionId >= current.sessionId) {
           currentSession = event
+          if (!event.available || latestPortableCatalogSessionId != event.sessionId) {
+            latestPortableCatalogRequest = 0L
+            latestPortableCatalogSessionId = null
+            publishEmptyPortableCatalog()
+          }
           pendingClose = null
           slotLoadAvailability.sessionChanged(event)
           browser.updateSession(event)
         }
+      }
+    }
+    eventBus.register<StateCatalogReadyEvent> { event ->
+      onEdt {
+        if (closed || !acceptsStateCatalogRequest(latestPortableCatalogRequest, event.requestId) ||
+            event.sessionId != latestPortableCatalogSessionId ||
+            event.sessionId != currentSession?.sessionId) {
+          return@onEdt
+        }
+        // BasicController coalesces browser and portable catalog requests into one global latest
+        // request. A newer same-session result is therefore also the authoritative answer for an
+        // older portable request; advance the high-water mark so an older late result is ignored.
+        latestPortableCatalogRequest = event.requestId
+        onPortableCatalog(event.catalog)
       }
     }
     eventBus.register<ControllerOwnershipChangingEvent> {
@@ -156,6 +178,9 @@ internal class StateUxDesktopController(
                     ),
             )
         currentSession = unavailable
+        latestPortableCatalogRequest = 0L
+        latestPortableCatalogSessionId = null
+        publishEmptyPortableCatalog()
         pendingClose = null
         slotLoadAvailability.sessionChanged(unavailable)
         browser.updateSession(unavailable)
@@ -165,6 +190,12 @@ internal class StateUxDesktopController(
       onEdt {
         if (closed) return@onEdt
         if (!isCurrent(event.sessionId)) return@onEdt
+        if (event.operation == StateOperation.SAVE &&
+            latestPortableCatalogSessionId == event.sessionId) {
+          // A quick save writes its thumbnail off-thread.  Only request a new catalog after the
+          // authoritative completion event, so the menu cannot race a still-old thumbnail.
+          refreshPortableCatalog()
+        }
         slotLoadAvailability.operationCompleted(event)
         browser.operationCompleted(event)
         if (event.recoveryMessages.isNotEmpty()) {
@@ -279,6 +310,29 @@ internal class StateUxDesktopController(
     requireEdt("State browser opening")
     if (closed) return
     browser.showOrRaise()
+  }
+
+  fun refreshPortableCatalog() {
+    requireEdt("Portable state catalog refresh")
+    val session = currentSession?.takeIf { it.available }
+    if (session == null || closed) {
+      latestPortableCatalogRequest = 0L
+      latestPortableCatalogSessionId = null
+      publishEmptyPortableCatalog()
+      return
+    }
+    latestPortableCatalogSessionId = session.sessionId
+    latestPortableCatalogRequest = nextRequestId()
+    publishEmptyPortableCatalog()
+    eventBus.post(
+        eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent(
+            latestPortableCatalogRequest,
+            session.sessionId,
+        ))
+  }
+
+  private fun publishEmptyPortableCatalog() {
+    onPortableCatalog(StateBrowserCatalog(emptyList(), false, null, emptyList()))
   }
 
   fun takeScreenshot() {
@@ -598,6 +652,14 @@ internal interface StateBrowserWindowView : AutoCloseable {
   fun operationFailed(event: StateOperationFailedEvent)
 }
 
+/**
+ * Catalog requests share one controller-level coalescing stream. Consumers accept their own
+ * request or any newer request from the same session, but never an older result or an unarmed
+ * callback.
+ */
+internal fun acceptsStateCatalogRequest(outstandingRequestId: Long, completedRequestId: Long): Boolean =
+    outstandingRequestId > 0L && completedRequestId >= outstandingRequestId
+
 internal fun interface StateBrowserWindowViewFactory {
   fun create(initialSession: StateUxSessionEvent?): StateBrowserWindowView
 }
@@ -772,11 +834,15 @@ internal class StateBrowserDialog(
 
     eventBus.register<StateCatalogReadyEvent> { event ->
       onEdt {
-        if (event.requestId != latestCatalogRequest ||
+        if (!acceptsStateCatalogRequest(latestCatalogRequest, event.requestId) ||
             event.sessionId != session?.sessionId ||
             closed) {
           return@onEdt
         }
+        // Catalog requests from the portable menu and this dialog share the controller's global
+        // coalescing key. A newer result superseding this dialog's request is still authoritative
+        // for the same session; remember its id to reject older late results.
+        latestCatalogRequest = event.requestId
         applyCatalog(event.catalog)
       }
     }

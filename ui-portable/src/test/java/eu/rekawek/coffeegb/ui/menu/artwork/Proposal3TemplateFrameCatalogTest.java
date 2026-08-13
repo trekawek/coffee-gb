@@ -21,7 +21,7 @@ public class Proposal3TemplateFrameCatalogTest {
             Map.entry(MenuRoute.PAUSE_CONSOLE,
                     "e44ebb3226d92abcf2c3be2e7862c16dedb71b46f0c837630379434aa37daefa"),
             Map.entry(MenuRoute.SAVE_STATES,
-                    "85822fc8d0d81f3377dfe1c3c49e07af585e485cda4bce10f1e28476a8c24814"),
+                    "d64ee12427f84e0492087052af0f621d7d2eda7903666dce35d97002c08ffb6f"),
             Map.entry(MenuRoute.SETTINGS,
                     "4faf75c2e08ddf76f30e06cac42cb838200f6a2b688bd4036d6ac205c07e9bc8"),
             Map.entry(MenuRoute.AUDIO,

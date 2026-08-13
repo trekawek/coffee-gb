@@ -48,6 +48,9 @@ import java.util.function.Consumer;
 /** Canvas-menu and native external-surface client for {@link EmulationService}. */
 public final class MainActivity extends Activity implements RuntimeObserver {
 
+    private static final int STATE_MENU_MIN_SLOT = 0;
+    private static final int STATE_MENU_MAX_SLOT = 3;
+
     private static final int OPEN_ROM_REQUEST = 1;
     private static final int IMPORT_BATTERY_REQUEST = 2;
     private static final int EXPORT_BATTERY_REQUEST = 3;
@@ -115,6 +118,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private ConfirmVariant confirmVariant;
     private int confirmSlot = -1;
     private boolean stateSlotsLoading;
+    /** Monotonic guard for owner-thread catalog reads crossing Activity/ROM transitions. */
+    private long stateCatalogGeneration;
     private boolean menuVisible;
     private boolean menuPauseOwned;
     private boolean selectionActionInFlight;
@@ -218,6 +223,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             observedGeneration = -1L;
             bound = false;
             observedState = RuntimeState.stopped();
+            stateCatalogGeneration++;
+            stateSlotsLoading = false;
+            stateSlots = List.of();
             cancelPendingPrinterPaperEntry();
             printerPreview = MenuPreview.empty();
             refreshMenuPages();
@@ -388,6 +396,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             bound = false;
             runtime = null;
         }
+        stateCatalogGeneration++;
+        stateSlotsLoading = false;
+        stateSlots = List.of();
         super.onStop();
     }
 
@@ -592,6 +603,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void presentMenu(MenuPresentation presentation) {
+        if (presentation.visible() && presentation.route() == MenuRoute.SAVE_STATES
+                && refreshStatePreviewForFocus(presentation)) {
+            return;
+        }
         boolean wasVisible = menuVisible;
         MenuRoute previous = presentedRoute;
         menuVisible = presentation.visible();
@@ -620,6 +635,23 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 }
             }
         }
+    }
+
+    /** Rebinds only the detached preview when focus moves between stable state slots. */
+    private boolean refreshStatePreviewForFocus(MenuPresentation presentation) {
+        if (menuController == null || stateSlotsLoading) {
+            return false;
+        }
+        MenuPresentation.Item focused = presentation.items().get(presentation.focusedIndex());
+        int slot = parseSlot(focused.id().replace("slot:", ""));
+        AndroidStateSlot selected = stateSlot(slot);
+        MenuPreview preview = selected == null ? MenuPreview.empty() : selected.preview();
+        if (presentation.preview() == preview) {
+            return false;
+        }
+        String focusId = focused.id();
+        menuController.setPage(statePage(preview, focusId));
+        return true;
     }
 
     private void onRouteExited(MenuRoute route) {
@@ -741,20 +773,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleStateItem(AndroidEmulationRuntime active, String id, boolean secondary) {
-        if ("back".equals(id)) {
-            menuController.back();
-            return;
-        }
         if (active == null) {
-            return;
-        }
-        if (secondary || id.startsWith("delete-slot:")) {
-            String value = id.startsWith("delete-slot:")
-                    ? id.substring("delete-slot:".length()) : id;
-            int slot = parseSlot(value);
-            if (slot >= 0) {
-                showConfirmation(ConfirmVariant.DELETE, slot);
-            }
             return;
         }
         if (!id.startsWith("slot:")) {
@@ -766,15 +785,23 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         if (stateMenuMode == StateMenuMode.LOAD) {
-            if (stateSlot != null && stateSlot.loadable()) {
+            // Empty/unloadable rows remain focusable but loading them is a safe no-op.
+            if (!stateSlotsLoading && stateSlot != null && stateSlot.loadable()) {
                 active.restoreSnapshot(slot);
                 closeMenuWithoutResume();
             }
-        } else if (stateSlot != null && stateSlot.loadable()) {
-            showConfirmation(ConfirmVariant.OVERWRITE, slot);
         } else {
-            active.saveSnapshot(slot);
-            refreshStateSlotsAfterMutation();
+            // Saving is deliberately a direct overwrite, including occupied slots.
+            stateSlotsLoading = true;
+            stateSlots = List.of();
+            refreshMenuPages();
+            long generation = lifecycleGeneration;
+            active.saveSnapshot(slot, () -> {
+                if (runtime != active || generation != lifecycleGeneration) {
+                    return;
+                }
+                loadStateSlots();
+            });
         }
     }
 
@@ -1098,16 +1125,31 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void showStateMenu(StateMenuMode mode) {
         stateMenuMode = mode;
         stateSlotsLoading = true;
+        stateSlots = List.of();
         refreshMenuPages();
         menuController.push(MenuRoute.SAVE_STATES);
         loadStateSlots();
     }
 
     private void loadStateSlots() {
+        long generation = ++stateCatalogGeneration;
+        long ownerGeneration = lifecycleGeneration;
+        AndroidEmulationRuntime active = runtime;
         stateSlotsLoading = true;
+        stateSlots = List.of();
         refreshMenuPages();
-        if (runtime != null) {
-            runtime.listStateSlots(slots -> {
+        if (active != null) {
+            long sessionGeneration = active.state().sessionGeneration();
+            active.listStateSlots(slots -> {
+                if (generation != stateCatalogGeneration
+                        || ownerGeneration != lifecycleGeneration
+                        || runtime != active
+                        || active.state().sessionGeneration() != sessionGeneration
+                        || menuController == null
+                        || !menuController.visible()
+                        || menuController.route() != MenuRoute.SAVE_STATES) {
+                    return;
+                }
                 stateSlots = List.copyOf(slots);
                 stateSlotsLoading = false;
                 refreshMenuPages();
@@ -1660,29 +1702,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void refreshStateSlotsAfterMutation() {
-        if (runtime == null) {
-            return;
-        }
-        stateSlotsLoading = true;
-        refreshMenuPages();
-        runtime.listStateSlots(slots -> {
-            stateSlots = List.copyOf(slots);
-            stateSlotsLoading = false;
-            refreshMenuPages();
-        });
-        mainHandler.postDelayed(this::refreshStateSlotsIfMenuVisible, 250L);
-        mainHandler.postDelayed(this::refreshStateSlotsIfMenuVisible, 750L);
-    }
-
-    private void refreshStateSlotsIfMenuVisible() {
-        if (!menuVisible || menuController.route() != MenuRoute.SAVE_STATES || runtime == null) {
-            return;
-        }
-        runtime.listStateSlots(slots -> {
-            stateSlots = List.copyOf(slots);
-            stateSlotsLoading = false;
-            refreshMenuPages();
-        });
+        loadStateSlots();
     }
 
     private AndroidStateSlot stateSlot(int index) {
@@ -1743,23 +1763,36 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private MenuPageSpec statePage() {
-        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
-        for (int index = StateRef.MIN_SLOT; index <= StateRef.MAX_SLOT; index++) {
-            AndroidStateSlot slot = stateSlot(index);
-            boolean loadable = slot != null && slot.loadable();
-            boolean enabled = !stateSlotsLoading
-                    && (stateMenuMode == StateMenuMode.SAVE || loadable);
-            String detail = stateSlotsLoading ? "LOADING" : slot == null ? "EMPTY" : slot.detail();
-            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index, detail, enabled,
-                    loadable ? "delete-slot:" + index : null));
+        String preferred = null;
+        if (menuController != null && menuController.visible()
+                && menuController.route() == MenuRoute.SAVE_STATES) {
+            MenuPresentation current = menuController.presentation();
+            if (current.focusedIndex() >= 0 && current.focusedIndex() < current.items().size()) {
+                preferred = current.items().get(current.focusedIndex()).id();
+            }
         }
-        items.add(item("back", "BACK", "RETURN", true));
+        return statePage(statePreview(preferred), preferred);
+    }
+
+    private MenuPreview statePreview(String preferredFocus) {
+        int slot = preferredFocus == null ? StateRef.MIN_SLOT
+                : parseSlot(preferredFocus.replace("slot:", ""));
+        AndroidStateSlot selected = stateSlot(slot);
+        return selected == null ? MenuPreview.empty() : selected.preview();
+    }
+
+    private MenuPageSpec statePage(MenuPreview preview, String preferredFocus) {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (int index = STATE_MENU_MIN_SLOT; index <= STATE_MENU_MAX_SLOT; index++) {
+            // Every stable slot remains focusable in both modes. LOAD treats an empty or
+            // unavailable slot as a no-op; SAVE overwrites directly without confirmation.
+            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index, "", true));
+        }
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
-        return page(MenuRoute.SAVE_STATES, "COFFEE GB", "SAVE STATES / " + mode, "",
-                "STATE BANK", List.of("SLOTS " + StateRef.MIN_SLOT + "-" + StateRef.MAX_SLOT,
-                        stateSlotsLoading ? "READING CATALOG" : "A CHOOSES",
-                        "Y DELETE"), items,
-                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
+        return new MenuPageSpec(MenuRoute.SAVE_STATES, "COFFEE GB", mode + " STATES", "", "",
+                List.of(), items, 1,
+                List.of("D-PAD MOVE", "A " + mode, "B BACK"),
+                preferredFocus == null ? "slot:" + StateRef.MIN_SLOT : preferredFocus, preview);
     }
 
     private MenuPageSpec libraryPage() {

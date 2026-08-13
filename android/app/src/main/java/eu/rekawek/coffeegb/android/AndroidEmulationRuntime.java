@@ -18,6 +18,11 @@ import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 import eu.rekawek.coffeegb.controller.state.StateRepository;
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
+import eu.rekawek.coffeegb.controller.state.StateOperation;
+import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
+import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent;
+import eu.rekawek.coffeegb.controller.state.StateImage;
+import eu.rekawek.coffeegb.controller.state.StatePngCodec;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
@@ -108,6 +113,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private long nextOpenRequestId;
     private long nextStateRequestId;
     private final List<PendingStateRequest> pendingStateRequests = new ArrayList<>();
+    private final AndroidStateSaveCompletionTracker stateSaveCompletions =
+            new AndroidStateSaveCompletionTracker();
     private long activeOpenRequestId;
     private long tiltOpenRequestId;
     private boolean tiltRequiredForOpenRequest;
@@ -301,8 +308,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Requests a portable quick-state save at the controller's safe point. */
     public void saveSnapshot(int slot) {
+        saveSnapshot(slot, null);
+    }
+
+    /** Requests a quick-state save and invokes the detached completion callback on the main thread. */
+    void saveSnapshot(int slot, Runnable onCompleted) {
         checkStateSlot(slot);
-        submit(() -> requestStateSave(slot));
+        submit(() -> requestStateSave(slot, onCompleted));
     }
 
     /** Requests a portable quick-state restore; controller errors remain typed/redacted. */
@@ -318,18 +330,47 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             List<AndroidStateSlot> slots = new ArrayList<>();
             if (activeStates != null) {
                 var entries = activeStates.catalog(null).getEntries();
-                for (int slot = StateRef.MIN_SLOT; slot <= StateRef.MAX_SLOT; slot++) {
+                // The on-screen save/load page intentionally exposes four stable slots.  Keep the
+                // catalog read bounded to those slots so a refresh cannot decode unused entries.
+                for (int slot = 0; slot <= 3; slot++) {
                     int index = slot;
                     var entry = entries.stream()
                             .filter(candidate -> candidate.getRef() instanceof StateRef.Slot
                                     && ((StateRef.Slot) candidate.getRef()).getIndex() == index)
                             .findFirst().orElse(null);
-                    slots.add(AndroidStateSlot.from(index, entry));
+                    slots.add(AndroidStateSlot.from(index, entry, readStatePreview(entry,
+                            new StateRef.Slot(index))));
                 }
             }
             List<AndroidStateSlot> snapshot = List.copyOf(slots);
             mainHandler.post(() -> checked.accept(snapshot));
         });
+    }
+
+    /** Decodes the hash-bound persisted thumbnail on the runtime owner thread. */
+    private MenuPreview readStatePreview(eu.rekawek.coffeegb.controller.state.StateCatalogEntry entry,
+            StateRef.Slot ref) {
+        if (entry == null || entry.getMetadata() == null || entry.getStateSha256() == null
+                || entry.getMetadata().getThumbnailSha256() == null || activeStates == null) {
+            return MenuPreview.empty();
+        }
+        try {
+            var read = activeStates.readThumbnail(ref, entry.getStateSha256(),
+                    entry.getMetadata().getThumbnailSha256());
+            byte[] bytes = read.copyBytes();
+            if (bytes == null) {
+                return MenuPreview.empty();
+            }
+            StateImage image = StatePngCodec.INSTANCE.decode(bytes);
+            int[] rgb = image.copyRgb();
+            int[] argb = new int[rgb.length];
+            for (int index = 0; index < rgb.length; index++) {
+                argb[index] = 0xff000000 | rgb[index];
+            }
+            return MenuPreview.ready(image.getWidth(), image.getHeight(), argb);
+        } catch (Exception ignored) {
+            return MenuPreview.empty();
+        }
     }
 
     void deleteSnapshot(int slot) {
@@ -702,6 +743,23 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private void createController() {
         eventBus = new EventBusImpl();
         eventBus.register(
+                (StateOperationCompletedEvent event) -> {
+                    if (event.getOperation() == StateOperation.SAVE) {
+                        submit(() -> completeStateSave(event.getRequestId()));
+                    }
+                },
+                StateOperationCompletedEvent.class);
+        eventBus.register(
+                (StateOperationFailedEvent event) -> {
+                    if (event.getOperation() == StateOperation.SAVE) {
+                        // Terminal failure also releases the menu's loading state so it can show
+                        // the last persisted catalog again; the callback itself is generation
+                        // guarded by MainActivity.
+                        submit(() -> completeStateSave(event.getRequestId()));
+                    }
+                },
+                StateOperationFailedEvent.class);
+        eventBus.register(
                 (StateUxSessionEvent event) -> {
                     activeStateSessionId = event.getAvailable() ? event.getSessionId() : 0L;
                     submit(this::drainPendingStateRequests);
@@ -938,11 +996,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void requestStateSave(int slot) {
-        requestState(new PendingStateRequest(slot, true));
+        requestStateSave(slot, null);
+    }
+
+    private void requestStateSave(int slot, Runnable onCompleted) {
+        requestState(new PendingStateRequest(slot, true, captureStateImage(), onCompleted));
     }
 
     private void requestStateLoad(int slot) {
-        requestState(new PendingStateRequest(slot, false));
+        requestState(new PendingStateRequest(slot, false, null, null));
     }
 
     private void requestState(PendingStateRequest request) {
@@ -979,7 +1041,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         long requestId = ++nextStateRequestId;
         StateRef.Slot ref = new StateRef.Slot(request.slot);
         if (request.save) {
-            eventBus.post(new StateSaveRequestEvent(requestId, stateSessionId, ref, null, null));
+            if (request.onCompleted != null) {
+                stateSaveCompletions.register(request.slot, requestId, request.onCompleted);
+            } else {
+                stateSaveCompletions.register(request.slot, requestId, null);
+            }
+            eventBus.post(new StateSaveRequestEvent(requestId, stateSessionId, ref, null,
+                    request.thumbnail));
         } else {
             eventBus.post(new StateLoadRefRequestEvent(requestId, stateSessionId, ref));
         }
@@ -997,6 +1065,19 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 requestBackgroundFlush();
             }
         };
+    }
+
+    private StateImage captureStateImage() {
+        NativeFrameStore.Snapshot snapshot = frames.snapshot();
+        return snapshot == null ? null
+                : new StateImage(snapshot.width(), snapshot.height(), snapshot.pixels());
+    }
+
+    private void completeStateSave(long requestId) {
+        Runnable callback = stateSaveCompletions.complete(requestId);
+        if (callback != null) {
+            mainHandler.post(callback);
+        }
     }
 
     private void onFlushDeadline(long requestId) {
@@ -1091,6 +1172,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             PocketCamera.setCameraSource(null);
             activeStateSessionId = 0L;
             pendingStateRequests.clear();
+            stateSaveCompletions.clear();
             return true;
         }
         try {
@@ -1111,6 +1193,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             lifecycle.released();
             activeStateSessionId = 0L;
             pendingStateRequests.clear();
+            stateSaveCompletions.clear();
             return true;
         } catch (RuntimeException failure) {
             // Retain the controller for an explicit retry; it may still own an unflushed battery.
@@ -1311,10 +1394,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private static final class PendingStateRequest {
         private final int slot;
         private final boolean save;
+        private final StateImage thumbnail;
+        private final Runnable onCompleted;
 
-        private PendingStateRequest(int slot, boolean save) {
+        private PendingStateRequest(int slot, boolean save, StateImage thumbnail,
+                Runnable onCompleted) {
             this.slot = slot;
             this.save = save;
+            this.thumbnail = thumbnail;
+            this.onCompleted = onCompleted;
         }
     }
 
