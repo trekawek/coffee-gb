@@ -8,15 +8,15 @@ import java.util.Objects;
 final class Proposal3GlyphAtlas {
 
     static final String MEDIUM_RESOURCE_PATH =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-medium-atlas.png";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/byte-bounce-medium-atlas.png";
     static final String SEMIBOLD_RESOURCE_PATH =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-semibold-atlas.png";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/byte-bounce-semibold-atlas.png";
     static final String DISPLAY_RESOURCE_PATH =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-display-atlas.png";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/byte-bounce-display-atlas.png";
     static final String SMALL_RESOURCE_PATH =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-small-atlas.png";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/byte-bounce-small-atlas.png";
     static final String NOTICE_RESOURCE_PATH =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/pixelify-sans-notice-atlas.png";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/byte-bounce-notice-atlas.png";
     static final String CHARACTERS =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:/&-_%?+()[]!,'";
     enum Role {

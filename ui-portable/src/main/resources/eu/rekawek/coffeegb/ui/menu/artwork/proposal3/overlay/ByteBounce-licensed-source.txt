@@ -1,0 +1,36 @@
+ByteBounce bitmap atlas provenance
+==================================
+
+The packaged byte-bounce-small-atlas.png, byte-bounce-notice-atlas.png,
+byte-bounce-medium-atlas.png, byte-bounce-display-atlas.png, and
+byte-bounce-semibold-atlas.png files were rasterized from the licensed
+ByteBounce Medium TTF supplied by the Coffee GB project owner.
+
+The supplied TTF is a build input only. It is intentionally neither committed
+to this repository nor packaged in ui-portable; the dependency-free RGBA
+atlases contain the portable compositor's fixed glyph alphabet instead.
+
+The deterministic build recipe is tools/generate_bytebounce_atlases.py.
+
+Source SHA-256:
+30c5ef6c64917d0fab52f84eb489c72f047ef4463042e2bc5f31b39ea35a8adb
+
+Small atlas: 352x144
+Cell: 22x36; glyph advance: 11; space advance: 5
+SHA-256: 2c561819607ac2ddcf1e5a5be91f2b487618e8b4e2fa54d92b05b59784f6855c
+
+Notice atlas: 448x144
+Cell: 28x36; glyph advance: 15; space advance: 7
+SHA-256: 15e379d7bf593df5742321df55a574dbe67f8b3eede60162c72dacb9dea6643a
+
+Medium atlas: 576x144
+Cell: 36x36; glyph advance: 19; space advance: 8
+SHA-256: 5eae79693a20ca63b9035984fb4eba2ab81f9facf3f06c128d1da817206c2f9a
+
+Display atlas: 576x192
+Cell: 36x48; glyph advance: 20; space advance: 8
+SHA-256: b99d64929933538a958881be776ef3ffa7b79cde7b96d501c4b9c00de90aad02
+
+SemiBold atlas: 768x192
+Cell: 48x48; glyph advance: 27; space advance: 9
+SHA-256: a895052d22f63c87d72dd64fb693f11d48c679538013aec3ffeea8ed278c5ef5
