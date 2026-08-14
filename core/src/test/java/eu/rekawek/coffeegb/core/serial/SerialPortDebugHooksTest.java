@@ -53,11 +53,39 @@ public class SerialPortDebugHooksTest {
         assertEquals(List.of(), hooks.events);
     }
 
+    @Test
+    public void shiftHooksSeeCommittedClockAndTheHardwareDividerPhase() {
+        SpeedMode speedMode = new SpeedMode(true);
+        SerialPort serial = new SerialPort(
+                new InterruptManager(true), true, speedMode);
+        serial.init(new BitEndpoint(0xff));
+        serial.setByte(0xff02, 0x83);
+        RecordingHooks hooks = new RecordingHooks(serial);
+        serial.setDebugHooks(hooks);
+
+        for (int i = 0; i < 16; i++) {
+            serial.tick();
+        }
+
+        assertEquals(List.of("phase=15:clock=false"), hooks.bitClockStates);
+
+        serial.setByte(0xff02, 0x83);
+        hooks.bitClockStates.clear();
+        for (int i = 0; i < 13; i++) {
+            serial.tick();
+        }
+        serial.onDivReset();
+
+        assertEquals(List.of("phase=0:clock=false"), hooks.bitClockStates);
+    }
+
     private static final class RecordingHooks implements DebugHooks {
 
         private final SerialPort serial;
 
         private final List<String> events = new ArrayList<>();
+
+        private final List<String> bitClockStates = new ArrayList<>();
 
         private RecordingHooks(SerialPort serial) {
             this.serial = serial;
@@ -70,6 +98,10 @@ public class SerialPortDebugHooksTest {
             if (kind == SerialIrTrace.Kind.BYTE_TRANSFERRED) {
                 event += ":SB=" + String.format("%02X", serial.getByte(0xff01))
                         + ":RUNNING=" + ((serial.getByte(0xff02) & 0x80) != 0);
+            } else if (kind == SerialIrTrace.Kind.BIT_SHIFTED) {
+                var inspection = serial.captureDebugSerialInspection();
+                bitClockStates.add("phase=" + inspection.clockPhase()
+                        + ":clock=" + inspection.clockSignal());
             }
             events.add(event);
         }

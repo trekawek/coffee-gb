@@ -72,9 +72,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (serialEndpoint == SerialEndpoint.NULL_ENDPOINT
                 && (sc & 0x80) == 0
                 && haltWakeDelay == 0) {
-            for (int i = 0; i < speed; i++) {
-                advanceSerialDivider();
-            }
+            serialDivider.advanceUnobserved(speed);
             return;
         }
         for (int i = 0; i < speed; i++) {
@@ -125,10 +123,12 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
         int halfPeriod = getInternalClockHalfPeriod();
         serialDivider.resolve(false, true);
-        if (serialDivider.fell(Integer.numberOfTrailingZeros(halfPeriod) - 1)) {
+        boolean togglesClock = serialDivider.fell(
+                Integer.numberOfTrailingZeros(halfPeriod) - 1);
+        serialDivider.commit();
+        if (togglesClock) {
             toggleSerialClock();
         }
-        serialDivider.commit();
     }
 
     private void tickCpuClock() {
@@ -161,10 +161,11 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
     private void toggleSerialClock() {
         serialClock.resolve(!serialClock.previousLevel());
-        if (serialClock.falling()) {
+        boolean falling = serialClock.falling();
+        serialClock.commit();
+        if (falling) {
             shiftBit(serialEndpoint.sendBit());
         }
-        serialClock.commit();
     }
 
     private void shiftBit(int incomingBit) {
