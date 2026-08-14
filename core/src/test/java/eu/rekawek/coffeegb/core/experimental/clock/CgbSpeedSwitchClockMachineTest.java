@@ -170,6 +170,40 @@ public class CgbSpeedSwitchClockMachineTest {
     }
 
     @Test
+    public void timerAccumulationWouldDistinguishFreeRunningAndGatedDivOnHardware()
+            throws IOException {
+        int productionDelta;
+        try (Gameboy current = newGameboy(timerSpeedSwitchRom())) {
+            advanceToCpuSwitch(current);
+            int before = current.getAddressSpace().getByte(0xff05);
+            int delayDots = 0;
+            while (current.getCpu().isSpeedSwitching() && delayDots < 70_000) {
+                current.tick();
+                delayDots++;
+            }
+
+            assertEquals(65_536, delayDots);
+            int after = current.getAddressSpace().getByte(0xff05);
+            productionDelta = (after - before) & 0xff;
+            // TAC bit 9 falls once per 1024 CPU clocks. The current loop emits 0x20000 clocks.
+            assertEquals(128, productionDelta);
+        }
+
+        CgbSpeedSwitchClockMachine gated = machine(NORMAL, 0);
+        gated.configureTimer(true, 9, 0);
+        gated.requestSpeedSwitch();
+        enterDelay(gated);
+        int before = gated.tima();
+        while (gated.state() == SWITCH_DELAY) {
+            gated.stepHalfDot();
+        }
+
+        assertEquals(0, (gated.tima() - before) & 0xff);
+        assertNotEquals("a hardware TIMA capture after STOP would decide the model",
+                productionDelta, (gated.tima() - before) & 0xff);
+    }
+
+    @Test
     public void naiveImmediateMuxAndNaiveGlobalStopAreBothFalsified() {
         CgbSpeedSwitchClockMachine candidate = machine(NORMAL, 0);
         candidate.requestSpeedSwitch();
@@ -315,16 +349,20 @@ public class CgbSpeedSwitchClockMachineTest {
     }
 
     private static Gameboy newGameboy(boolean shiftPpuByTwoDots) throws IOException {
-        Gameboy gameboy = new GameboyConfiguration(new Rom(speedSwitchRom()))
-                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-                .setGameboyType(GameboyType.CGB)
-                .setSupportBatterySave(false)
-                .build();
+        Gameboy gameboy = newGameboy(speedSwitchRom());
         if (shiftPpuByTwoDots) {
             gameboy.getGpu().tick();
             gameboy.getGpu().tick();
         }
         return gameboy;
+    }
+
+    private static Gameboy newGameboy(byte[] rom) throws IOException {
+        return new GameboyConfiguration(new Rom(rom))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setGameboyType(GameboyType.CGB)
+                .setSupportBatterySave(false)
+                .build();
     }
 
     private static void advanceToCpuSwitch(Gameboy gameboy) {
@@ -373,6 +411,30 @@ public class CgbSpeedSwitchClockMachineTest {
         rom[0x106] = 0x04; // inc b
         rom[0x107] = 0x18; // jr $106
         rom[0x108] = (byte) 0xfd;
+        rom[0x143] = (byte) 0x80;
+        rom[0x147] = 0;
+        return rom;
+    }
+
+    private static byte[] timerSpeedSwitchRom() {
+        byte[] rom = new byte[0x8000];
+        rom[0x100] = (byte) 0xaf; // xor a
+        rom[0x101] = (byte) 0xe0; // ldh [rDIV],a
+        rom[0x102] = 0x04;
+        rom[0x103] = (byte) 0xe0; // ldh [rTIMA],a
+        rom[0x104] = 0x05;
+        rom[0x105] = 0x3e; // ld a,$04: timer on, DIV bit 9
+        rom[0x106] = 0x04;
+        rom[0x107] = (byte) 0xe0; // ldh [rTAC],a
+        rom[0x108] = 0x07;
+        rom[0x109] = 0x3e; // ld a,1
+        rom[0x10a] = 0x01;
+        rom[0x10b] = (byte) 0xe0; // ldh [rKEY1],a
+        rom[0x10c] = 0x4d;
+        rom[0x10d] = 0x10; // stop
+        rom[0x10e] = 0x00;
+        rom[0x10f] = 0x18; // jr $10f
+        rom[0x110] = (byte) 0xfe;
         rom[0x143] = (byte) 0x80;
         rom[0x147] = 0;
         return rom;
