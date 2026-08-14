@@ -1,5 +1,8 @@
 package eu.rekawek.coffeegb.core.experimental.ppu_pipeline;
 
+import eu.rekawek.coffeegb.core.signal.Dff;
+import eu.rekawek.coffeegb.core.signal.SrLatch;
+
 /**
  * Detached DMG LCD-interface hypothesis.
  *
@@ -21,6 +24,11 @@ package eu.rekawek.coffeegb.core.experimental.ppu_pipeline;
  * output edge. The behavior follows from one local clock-start latch; no raster position or
  * special first-X branch exists.
  *
+ * <p>LCDC.7 belongs to a still smaller {@link DmgLcdPowerClockTopology}. Its low level
+ * asynchronously resets the scanout valid cells and the local clock-start latch, so disabling
+ * the LCD cancels a token at any age without inspecting X, LY, mode, or FIFO state. The panel
+ * timing pins independently switch to slow divider clocks while the PPU datapath is reset.
+ *
  * <p>The signal boundary is also visible in the offline DMG-CPU-B gate netlist: LCDC.0
  * ({@code ff40_d0}) gates the two background pixel bits through {@code rajy}/{@code tade};
  * the BGP latch outputs feed the {@code nelo}/{@code nura} palette muxes; and only the final
@@ -33,15 +41,13 @@ final class DmgLcdOutputSignalCone {
 
     static final int OUTSIDE_CGB = 1;
 
-    static final int OUTSIDE_LCD_DISABLE_WITH_TOKENS_IN_FLIGHT = 1 << 1;
-
-    static final int OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM = 1 << 2;
+    static final int OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM = 1 << 1;
 
     private static final int OUTPUT_CAPACITY = 512;
 
     private final RawPixel[] scanout = new RawPixel[RAW_TO_LCD_DOTS];
 
-    private final boolean[] scanoutValid = new boolean[RAW_TO_LCD_DOTS];
+    private final Dff[] scanoutValid = validCells(RAW_TO_LCD_DOTS);
 
     private final PaletteLatch bgp;
 
@@ -51,6 +57,8 @@ final class DmgLcdOutputSignalCone {
 
     private final LcdcEnableLatch lcdc;
 
+    private final DmgLcdPowerClockTopology powerClock;
+
     private final OutputPixel[] output = new OutputPixel[OUTPUT_CAPACITY];
 
     private RawPixel drivenRaw;
@@ -58,7 +66,8 @@ final class DmgLcdOutputSignalCone {
     private boolean rawDrive;
 
     /** Set by the first token reaching the consumer; this is the panel-clock start latch. */
-    private boolean panelClockRunning;
+    private final Dff panelClockRunning =
+            new Dff(SrLatch.Dominance.CLEAR, false);
 
     /** Consumer-local token and palette latches loaded by the panel-clock opening edge. */
     private RawPixel openingToken;
@@ -78,12 +87,11 @@ final class DmgLcdOutputSignalCone {
         this.obp0 = new PaletteLatch(obp0);
         this.obp1 = new PaletteLatch(obp1);
         this.lcdc = new LcdcEnableLatch(lcdc);
+        this.powerClock = new DmgLcdPowerClockTopology(true);
     }
 
     static int incompleteBehaviorMask() {
-        return OUTSIDE_CGB
-                | OUTSIDE_LCD_DISABLE_WITH_TOKENS_IN_FLIGHT
-                | OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM;
+        return OUTSIDE_CGB | OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM;
     }
 
     /** Drives at most one immutable raw token onto the first scanout register this dot. */
@@ -122,6 +130,15 @@ final class DmgLcdOutputSignalCone {
 
     /** Advances drive, capture, and commit once, without revisiting an earlier stage. */
     void tick() {
+        if (!powerClock.ppuResetN()) {
+            // Every state cleared here is a resettable cell in this bounded output cone.
+            // Register write latches and the free-running master dot are outside that tree.
+            applyPpuReset();
+            commitRegisterWrites();
+            dot++;
+            return;
+        }
+
         int liveBgp = bgp.panelValue();
         int liveObp0 = obp0.panelValue();
         int liveObp1 = obp1.panelValue();
@@ -137,10 +154,11 @@ final class DmgLcdOutputSignalCone {
         }
 
         int last = RAW_TO_LCD_DOTS - 1;
-        if (scanoutValid[last]) {
+        boolean openPanelClock = false;
+        if (scanoutValid[last].q()) {
             RawPixel raw = scanout[last];
-            if (!panelClockRunning) {
-                panelClockRunning = true;
+            if (!panelClockRunning.q()) {
+                openPanelClock = true;
                 openingToken = raw;
                 openingBgp = liveBgp;
                 openingObp0 = liveObp0;
@@ -153,38 +171,54 @@ final class DmgLcdOutputSignalCone {
 
         for (int stage = last; stage > 0; stage--) {
             scanout[stage] = scanout[stage - 1];
-            scanoutValid[stage] = scanoutValid[stage - 1];
+            scanoutValid[stage].resolve(
+                    scanoutValid[stage - 1].q(), true, false, false);
         }
         scanout[0] = drivenRaw;
-        scanoutValid[0] = rawDrive;
+        scanoutValid[0].resolve(rawDrive, true, false, false);
+        panelClockRunning.resolve(true, openPanelClock, false, false);
+        commitClockedCells();
         drivenRaw = null;
         rawDrive = false;
 
+        commitRegisterWrites();
+        dot++;
+    }
+
+    /** Drives FF40.7 low. The resulting reset wire clears every in-flight stage now. */
+    void disableLcd() {
+        powerClock.writeLcdc7(false);
+        applyPpuReset();
+    }
+
+    /** Releases the reset tree. No old valid cell can be reconstructed by this edge. */
+    void enableLcd() {
+        powerClock.writeLcdc7(true);
+    }
+
+    private void applyPpuReset() {
+        for (Dff valid : scanoutValid) {
+            valid.resolve(false, false, false, true);
+        }
+        panelClockRunning.resolve(false, false, false, true);
+        commitClockedCells();
+        drivenRaw = null;
+        rawDrive = false;
+        openingToken = null;
+    }
+
+    private void commitClockedCells() {
+        for (Dff valid : scanoutValid) {
+            valid.commit();
+        }
+        panelClockRunning.commit();
+    }
+
+    private void commitRegisterWrites() {
         bgp.commit();
         obp0.commit();
         obp1.commit();
         lcdc.commit();
-        dot++;
-    }
-
-    /**
-     * Refuses to invent an LCD-off behavior for already launched tokens. A later experiment
-     * needs the LCD pin clocks and panel reset cone, rather than a token-repair branch here.
-     */
-    void disableLcd() {
-        if (openingToken != null || rawDrive || hasScanoutToken()) {
-            throw new UnsupportedOperationException(
-                    "LCD disable with tokens in flight needs the panel-clock reset cone");
-        }
-    }
-
-    private boolean hasScanoutToken() {
-        for (boolean valid : scanoutValid) {
-            if (valid) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private void emit(RawPixel token, int bgp, int obp0, int obp1,
@@ -237,7 +271,11 @@ final class DmgLcdOutputSignalCone {
     }
 
     boolean panelClockRunning() {
-        return panelClockRunning;
+        return panelClockRunning.q();
+    }
+
+    boolean ppuResetN() {
+        return powerClock.ppuResetN();
     }
 
     boolean openingTokenPending() {
@@ -268,6 +306,14 @@ final class DmgLcdOutputSignalCone {
 
     record OutputPixel(int x, int dot, RawPixel source, boolean objectSelected,
                        int raw, int palette, int shade) {
+    }
+
+    private static Dff[] validCells(int count) {
+        Dff[] cells = new Dff[count];
+        for (int i = 0; i < count; i++) {
+            cells[i] = new Dff(SrLatch.Dominance.CLEAR, false);
+        }
+        return cells;
     }
 
     /** A transparent byte latch whose set path reaches the mux one delta before reset. */
