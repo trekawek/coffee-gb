@@ -86,6 +86,23 @@ public final class UnsignedRippleCounter {
         fallingMask = 0;
     }
 
+    /**
+     * Advances through clocks whose transition wires are provably unobserved.
+     *
+     * <p>This is a hot-path shortcut for a gated-off island. It commits the wrapped final value
+     * and deliberately publishes no intermediate bit edges. Callers must use {@link #resolve}
+     * while any tap consumer is enabled.
+     */
+    public void advanceUnobserved(long increments) {
+        if (increments < 0) {
+            throw new IllegalArgumentException("increments must not be negative");
+        }
+        value = (value + increments) & valueMask;
+        nextValue = value;
+        risingMask = 0;
+        fallingMask = 0;
+    }
+
     /** Restores portable state at a clock boundary and clears all derived transitions. */
     public void restore(long restoredValue) {
         if ((restoredValue & ~valueMask) != 0) {

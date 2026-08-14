@@ -102,6 +102,21 @@ public class UnsignedRippleCounterTest {
     }
 
     @Test
+    public void unobservedAdvanceWrapsWithoutPublishingIntermediateEdges() {
+        for (int width = 1; width <= 16; width++) {
+            long mask = (1L << width) - 1;
+            UnsignedRippleCounter counter = new UnsignedRippleCounter(width, mask);
+
+            counter.advanceUnobserved(mask + 3);
+
+            assertEquals(1, counter.value());
+            assertEquals(1, counter.nextValue());
+            assertEquals(0, counter.risingMask());
+            assertEquals(0, counter.fallingMask());
+        }
+    }
+
+    @Test
     public void validatesWidthsValuesAndBitIndices() {
         assertThrows(IllegalArgumentException.class, () -> new UnsignedRippleCounter(0, 0));
         assertThrows(IllegalArgumentException.class, () -> new UnsignedRippleCounter(33, 0));
@@ -112,5 +127,6 @@ public class UnsignedRippleCounterTest {
         assertThrows(IllegalArgumentException.class, () -> counter.rose(-1));
         assertThrows(IllegalArgumentException.class, () -> counter.fell(8));
         assertThrows(IllegalArgumentException.class, () -> counter.restore(0x100));
+        assertThrows(IllegalArgumentException.class, () -> counter.advanceUnobserved(-1));
     }
 }
