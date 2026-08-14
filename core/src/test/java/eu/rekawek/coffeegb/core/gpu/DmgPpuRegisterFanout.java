@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
+import eu.rekawek.coffeegb.core.signal.ByteSignalDelayLine;
+
 /**
  * A detached hypothesis for the DMG CPU-to-PPU register boundary.
  *
@@ -39,19 +41,19 @@ final class DmgPpuRegisterFanout {
 
     private int wxSource;
 
-    private final Delay8 lcdcWindowTap;
+    private final ByteSignalDelayLine lcdcWindowTap;
 
-    private final Delay8 scxFineTap;
+    private final ByteSignalDelayLine scxFineTap;
 
-    private final Delay8 wxPixelTap;
+    private final ByteSignalDelayLine wxPixelTap;
 
     DmgPpuRegisterFanout(int lcdc, int scx, int wx) {
         lcdcSource = byteValue(lcdc);
         scxSource = byteValue(scx);
         wxSource = byteValue(wx);
-        lcdcWindowTap = new Delay8(PIXEL_CAPTURE_EDGES, lcdcSource);
-        scxFineTap = new Delay8(PIXEL_CAPTURE_EDGES, scxSource);
-        wxPixelTap = new Delay8(PIXEL_CAPTURE_EDGES, wxSource);
+        lcdcWindowTap = new ByteSignalDelayLine(PIXEL_CAPTURE_EDGES, lcdcSource);
+        scxFineTap = new ByteSignalDelayLine(PIXEL_CAPTURE_EDGES, scxSource);
+        wxPixelTap = new ByteSignalDelayLine(PIXEL_CAPTURE_EDGES, wxSource);
     }
 
     /** Drives the CPU register write strobe. It has no mode, route, or raster input. */
@@ -161,60 +163,4 @@ final class DmgPpuRegisterFanout {
                  long lcdcWindowState, long scxFineState, long wxPixelState) {
     }
 
-    /** Packed, allocation-free bank of eight identical shift-register chains. */
-    private static final class Delay8 {
-
-        private final int stages;
-
-        private final int outputShift;
-
-        private final long mask;
-
-        private long q;
-
-        private long nextQ;
-
-        private Delay8(int stages, int initialValue) {
-            if (stages < 1 || stages > 7) {
-                throw new IllegalArgumentException("stages must be in 1..7");
-            }
-            this.stages = stages;
-            this.outputShift = (stages - 1) * Byte.SIZE;
-            this.mask = (1L << (stages * Byte.SIZE)) - 1;
-            fill(initialValue);
-        }
-
-        private void resolve(int input) {
-            nextQ = ((q << Byte.SIZE) | byteValue(input)) & mask;
-        }
-
-        private void commit() {
-            q = nextQ;
-        }
-
-        private int output() {
-            return (int) (q >>> outputShift) & 0xff;
-        }
-
-        private void fill(int value) {
-            long filled = 0;
-            for (int i = 0; i < stages; i++) {
-                filled |= (long) byteValue(value) << (i * Byte.SIZE);
-            }
-            q = filled;
-            nextQ = filled;
-        }
-
-        private long state() {
-            return q;
-        }
-
-        private void restore(long state) {
-            if ((state & ~mask) != 0) {
-                throw new IllegalArgumentException("state has bits outside the delay bank");
-            }
-            q = state;
-            nextQ = state;
-        }
-    }
 }
