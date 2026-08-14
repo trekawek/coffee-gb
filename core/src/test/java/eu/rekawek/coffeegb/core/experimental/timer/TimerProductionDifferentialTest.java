@@ -11,6 +11,12 @@ import static org.junit.Assert.assertEquals;
  * A CPU-clock-granular differential between the current counted overflow implementation and the
  * two-latch DMG timer topology.
  *
+ * <p>This is an equivalence test, not an independent silicon oracle. Cell wiring and dominance are
+ * asserted independently by {@link TimerSignalTopologyTest}; this class only asks whether that
+ * topology can encode every state transition exposed by the current legal callback schedule. In
+ * particular, its debug-delay comparisons and delayed publication of a reload-owned TMA write are
+ * adapter compatibility checks, not new hardware claims.
+ *
  * <p>The model deliberately has a BOGA phase independent of DIV. FF04 clears the divider stages,
  * but it does not re-anchor the 1 MHz CPU clock. This distinction is lost if reload timing is
  * reconstructed only from the low bits of {@code DIV}.
@@ -69,7 +75,7 @@ public class TimerProductionDifferentialTest {
     }
 
     @Test
-    public void tmaWritesMatchAtEveryPreReloadAndReloadClockPhase() {
+    public void tmaWritesRemainObservationallyEquivalentAtEveryReloadClockPhase() {
         for (int writeSlot = 0; writeSlot < 8; writeSlot++) {
             DifferentialTimer timer = naturallyOverflowingTimer();
             for (int clock = 0; clock < writeSlot; clock++) {
