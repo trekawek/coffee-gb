@@ -9,6 +9,8 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.debug.DebugHardwareInspection;
 import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.SerialIrTrace;
+import eu.rekawek.coffeegb.core.signal.EdgeDetector;
+import eu.rekawek.coffeegb.core.signal.UnsignedRippleCounter;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import org.slf4j.Logger;
@@ -31,10 +33,10 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     // the CGB clock-speed bit (bit 1) reads 1 at power-on (mooneye boot_hwio-C)
     private int sc = 0x02;
 
-    /** Free-running 8-bit link clock whose phase is reset by writes to DIV. */
-    private int serialClocks;
+    /** Free-running link divider whose phase is reset by writes to DIV. */
+    private final UnsignedRippleCounter serialDivider;
 
-    private boolean serialClockSignal;
+    private final EdgeDetector serialClock = new EdgeDetector(false);
 
     private int receivedBits;
 
@@ -52,7 +54,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         // The oscillator is already eight clocks into its phase when a DMG is
         // released from reset; CGB starts at zero. Authentic boot execution is
         // then captured in the integration runner's boot state.
-        this.serialClocks = gbc ? 0 : 8;
+        this.serialDivider = new UnsignedRippleCounter(8, gbc ? 0 : 8);
     }
 
     public void init(SerialEndpoint serialEndpoint) {
@@ -70,7 +72,9 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (serialEndpoint == SerialEndpoint.NULL_ENDPOINT
                 && (sc & 0x80) == 0
                 && haltWakeDelay == 0) {
-            serialClocks = (serialClocks + speed) & 0xff;
+            for (int i = 0; i < speed; i++) {
+                advanceSerialDivider();
+            }
             return;
         }
         for (int i = 0; i < speed; i++) {
@@ -86,8 +90,10 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         boolean internalTransfer = (sc & 0x81) == 0x81;
         if (internalTransfer) {
             int halfPeriod = getInternalClockHalfPeriod();
-            int clocksToNextToggle = halfPeriod - (serialClocks & (halfPeriod - 1));
-            int clocksToNextBit = clocksToNextToggle + (serialClockSignal ? 0 : halfPeriod);
+            int clocksToNextToggle = halfPeriod
+                    - ((int) serialDivider.value() & (halfPeriod - 1));
+            int clocksToNextBit = clocksToNextToggle
+                    + (serialClock.previousLevel() ? 0 : halfPeriod);
             int clocksToCompletion = clocksToNextBit
                     + 2 * halfPeriod * (7 - receivedBits);
             // Coffee GB reaches IRQ_PUSH_2 four clocks before Gambatte's
@@ -105,38 +111,24 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     /**
-     * Rephases the internal serial clock after a write to DIV. If a transfer is
-     * already running, hardware rounds its next falling edge around the reset
-     * point. Depending on the old phase, that edge is either immediate or one
-     * or two half-periods after the reset.
+     * Rephases the serial divider from the reset pulse shared with DIV. The
+     * output clock latch toggles when the divider stage immediately below the
+     * selected serial tap was high. A resulting falling edge shifts one bit.
      */
     public void onDivReset() {
         boolean internalTransfer = (sc & 0x81) == 0x81;
         if (!internalTransfer) {
-            serialClocks = 0;
-            serialClockSignal = false;
+            serialDivider.restore(0);
+            serialClock.restore(false);
             return;
         }
 
         int halfPeriod = getInternalClockHalfPeriod();
-        int clocksToNextToggle = halfPeriod - (serialClocks & (halfPeriod - 1));
-        int clocksToNextBit = clocksToNextToggle + (serialClockSignal ? 0 : halfPeriod);
-
-        // Gambatte's event-time formulation, applied to the next bit rather
-        // than the transfer-completion event (all later bits are a whole
-        // period apart, so they receive the same adjustment).
-        int phaseAdjustment = Math.floorMod(-clocksToNextBit, halfPeriod);
-        int adjustedClocksToNextBit = clocksToNextBit + phaseAdjustment
-                - 2 * (phaseAdjustment & (halfPeriod >> 1));
-
-        serialClocks = 0;
-        if (adjustedClocksToNextBit == 0) {
-            // The reset itself supplies the falling edge.
-            serialClockSignal = false;
-            shiftBit(serialEndpoint.sendBit());
-        } else {
-            serialClockSignal = adjustedClocksToNextBit == halfPeriod;
+        serialDivider.resolve(false, true);
+        if (serialDivider.fell(Integer.numberOfTrailingZeros(halfPeriod) - 1)) {
+            toggleSerialClock();
         }
+        serialDivider.commit();
     }
 
     private void tickCpuClock() {
@@ -151,16 +143,28 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
                 shiftBit(incomingBit);
             }
         } else if (transferInProgress) {
-            int flipClocks = getInternalClockHalfPeriod();
-            int oldPhase = serialClocks & (flipClocks - 1);
-            if (oldPhase == flipClocks - 1) {
-                serialClockSignal = !serialClockSignal;
-                if (!serialClockSignal) {
-                    shiftBit(serialEndpoint.sendBit());
-                }
+            int halfPeriod = getInternalClockHalfPeriod();
+            serialDivider.resolve(true, false);
+            if (serialDivider.fell(Integer.numberOfTrailingZeros(halfPeriod) - 1)) {
+                toggleSerialClock();
             }
+            serialDivider.commit();
+            return;
         }
-        serialClocks = (serialClocks + 1) & 0xff;
+        advanceSerialDivider();
+    }
+
+    private void advanceSerialDivider() {
+        serialDivider.resolve(true, false);
+        serialDivider.commit();
+    }
+
+    private void toggleSerialClock() {
+        serialClock.resolve(!serialClock.previousLevel());
+        if (serialClock.falling()) {
+            shiftBit(serialEndpoint.sendBit());
+        }
+        serialClock.commit();
     }
 
     private void shiftBit(int incomingBit) {
@@ -205,12 +209,13 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
             boolean startsTransfer = (value & (1 << 7)) != 0;
             if (startsTransfer) {
                 receivedBits = 0;
-                serialClockSignal = false;
+                serialClock.restore(false);
                 if (isColorMode() && (sc & 0x80) != 0 && ((sc ^ value) & 0x02) != 0) {
                     int oldClockMask = (sc & 0x02) != 0 ? 1 << 2 : 1 << 7;
                     int newClockMask = (value & 0x02) != 0 ? 1 << 2 : 1 << 7;
-                    if ((serialClocks & oldClockMask) != 0 && (serialClocks & newClockMask) == 0) {
-                        serialClockSignal = true;
+                    int divider = (int) serialDivider.value();
+                    if ((divider & oldClockMask) != 0 && (divider & newClockMask) == 0) {
+                        serialClock.restore(true);
                     }
                 }
                 serialEndpoint.startSending();
@@ -257,12 +262,15 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     public DebugHardwareInspection.Serial captureDebugSerialInspection() {
         int effectiveSc = sc | (isColorMode() ? 0b01111100 : 0b01111110);
         return new DebugHardwareInspection.Serial(
-                sb, effectiveSc, receivedBits, serialClocks, serialClockSignal, haltWakeDelay);
+                sb, effectiveSc, receivedBits, (int) serialDivider.value(),
+                serialClock.previousLevel(), haltWakeDelay);
     }
 
     @Override
     public ComponentState<SerialPort> captureState() {
-        return new SerialPortState(sb, sc, serialClocks, serialClockSignal, receivedBits, haltWakeDelay);
+        return new SerialPortState(
+                sb, sc, (int) serialDivider.value(), serialClock.previousLevel(), receivedBits,
+                haltWakeDelay);
     }
 
     @Override
@@ -273,8 +281,8 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         }
         this.sb = mem.sb;
         this.sc = mem.sc;
-        this.serialClocks = mem.serialClocks;
-        this.serialClockSignal = mem.serialClockSignal;
+        this.serialDivider.restore(mem.serialClocks);
+        this.serialClock.restore(mem.serialClockSignal);
         this.receivedBits = mem.receivedBits;
         this.haltWakeDelay = mem.haltWakeDelay;
     }
