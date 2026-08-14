@@ -13,7 +13,6 @@ import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.DmgLcdOutputSignalCone.OUTSIDE_CGB;
-import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.DmgLcdOutputSignalCone.OUTSIDE_LCD_DISABLE_WITH_TOKENS_IN_FLIGHT;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.DmgLcdOutputSignalCone.OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.DmgLcdOutputSignalCone.RAW_TO_LCD_DOTS;
 import static org.junit.Assert.assertEquals;
@@ -291,21 +290,27 @@ public class DmgLcdOutputSignalConeTest {
     }
 
     @Test
-    public void unknownPanelResetAndImpossibleDoubleDrivesAreExecutableFalsifiers() {
+    public void lcdResetIsBoundedWhileImpossibleDoubleDrivesRemainExecutableFalsifiers() {
         DmgLcdOutputSignalCone empty = cone(0, 0, 0, 0);
         empty.disableLcd();
 
         DmgLcdOutputSignalCone cone = cone(0, 0, 0, 0);
         cone.driveRaw(raw(0, 0, false, false));
-        assertThrows(UnsupportedOperationException.class, cone::disableLcd);
+        cone.disableLcd();
+        assertFalse(cone.ppuResetN());
+        assertFalse(cone.panelClockRunning());
+        assertFalse(cone.openingTokenPending());
+
+        cone.enableLcd();
         assertThrows(IllegalStateException.class,
-                () -> cone.driveRaw(raw(1, 0, false, false)));
+                () -> {
+                    cone.driveRaw(raw(0, 0, false, false));
+                    cone.driveRaw(raw(1, 0, false, false));
+                });
 
         cone.writeBgp(0x12);
         assertThrows(IllegalStateException.class, () -> cone.writeBgp(0x34));
-        assertEquals(OUTSIDE_CGB
-                        | OUTSIDE_LCD_DISABLE_WITH_TOKENS_IN_FLIGHT
-                        | OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM,
+        assertEquals(OUTSIDE_CGB | OUTSIDE_SUB_DOT_ANALOG_PAD_WAVEFORM,
                 DmgLcdOutputSignalCone.incompleteBehaviorMask());
     }
 
