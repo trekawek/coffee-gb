@@ -23,10 +23,14 @@ save states, debugger boundaries, and performance.
 | Timer/serial acknowledgement can be centralized inside the current master-tick loop | Falsified and rolled back | Timer runs before CPU while serial runs after it; no placement of one central callback preserves both physical windows. A unified CPU-edge/half-dot island is prerequisite. |
 | Java evaluation order can be made unobservable | Supported | A detached DRIVE/RESOLVE/COMMIT scheduler is invariant across every permutation tested. |
 | CPU opcode lookahead is intrinsic to accurate races | Rejected at the bus-cycle seam | Persistent T1-T4 state exposes the in-flight address, strobes, data, held byte, and acknowledge wire. The current one-M-cycle-late read anchor remains a deliberate migration debt. |
+| HDMA must decode opcodes and query future CPU/PPU state | Rejected at the request/grant seam | Retained lease cells and explicit bus intents reproduce representative arbitration without opcode knowledge; electrical and handoff profiles remain named blockers. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
 | DMG STAT behavior needs a large mode/line exception tree | Rejected for the ordinary raster/control plane | Independent mode, gate, LY, comparator, M2-enable, source-level, and IF latches match a complete steady frame. Several CPU/renderer boundary cases remain explicit falsifiers. |
 | The OAM bug is fundamentally a Boolean corruption formula | Partly rejected | Sticky word lines, bit-line precharge, column sharing, and keeper feedback generate row copy and the majority truth function. The coarse SRAM model does not yet reproduce every preserved column. |
 | APU frame clocks require an eight-step controller | Rejected for the selected DMG clock cone | Sampled divider and ripple latches generate length, sweep, and envelope pulses. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
+| Pulse-channel quirks require semantic trigger/sweep/length branches | Rejected for settled DMG control | Parallel-load priority, transparent clock gates, a feedback check strobe, and one reset-dominant status latch generate the tested length, sweep, envelope-load, and enable behavior. Active serial-adder and envelope-write timing remain outside the model. |
+| The four-dot PPU skew requires two independently running renderers | Rejected for the bounded DMG pixel path | One forward address/data/FIFO/scanout graph reproduces sampled-byte timing, calibrated OBJ stalls, OBJ abort, and retained window insertion without rewind, reread, refresh, or catch-up. Several output and overlap cones remain explicit falsifiers. |
+| CGB speed switching requires timer phase repair and tail-duration tables | Plausibly rejected, not yet proved | Explicit STOP-entry clocks, a gated switch sequencer, and a release phase ring fit the verified durations and remove the local repair in a detached model. Existing post-switch DIV tests cannot distinguish gated DIV from a free-running counter that wraps to the same value. |
 | Full DMG gate simulation is impractical even as a development oracle | Rejected | The external `dmg-sim` model was compiled and ran its source OAM-bug program to self-termination, producing an inspectable FST waveform and SRAM dump. It remains an offline, DMG-only oracle. |
 
 ## Serial: a successful production simplification
@@ -84,6 +88,36 @@ answers for otherwise equivalent timer-before-CPU and serial-after-CPU collision
 
 This supports the central architectural claim: simultaneous old-state drive plus one resolved
 signal vector is enough to remove Java callback order from the result.
+
+## CGB speed-switch clock topology
+
+`CgbSpeedSwitchClockMachine` explores a separate CGB clock profile on the half-dot lattice. The
+candidate has three retained pieces of control state: an explicit eight-T-state STOP-entry
+sequencer clocked from the destination source, a gated 17-bit switch-delay ripple chain, and a
+free-running three-bit fixed-domain release ring. PPU, the APU oscillator, and HBlank DMA remain on
+the fixed branch. CPU execution, DIV/timer, serial, and OAM DMA are on the selected branch and are
+gated during the long delay.
+
+This topology makes the normal-to-double timer adjustment local. Starting before STOP's last bus
+cycle, eight destination-speed T-state edges occupy four fixed dots, cross the selected timer tap,
+and then clear DIV. The detached result matches the current TIMA increment without
+`Timer.onSpeedSwitch(+4)`. Switching the DIV-to-APU input from bit 12 to bit 13 is another ordinary
+wire transition, so the candidate does not need a sound phase callback.
+
+The delay duration and current tests contain an important ambiguity. Production advances DIV twice
+per dot during the normal-to-double pause: FF04 is one after 128 dots. At the end, however, exactly
+`0x20000` clocks have elapsed, so the 16-bit counter aliases back to zero. A post-STOP DIV capture
+therefore cannot distinguish the current free-running implementation from a physically gated DIV.
+An immediate ungated mux would also produce eight bit-13 APU falling edges during the pause, while
+a global STOP is independently falsified because LY/STAT continue on the fixed branch.
+
+Nine candidate tests, a 51-test focused production differential, and all nine Daid captures pass.
+This remains a topology hypothesis rather than recovered CGB silicon. Public descriptions of an
+8200-T interval conflict with the empirically calibrated 17-bit delay; the two- and eight-dot tails
+fit a three-bit phase ring but do not identify its wiring; reverse entry is unverified; and the
+HBlank/OAM-conditioned tail adjustments require the retained DMA grant cells. A production cut
+would have to save router, entry, delay, and release phases and obtain an independent mid-pause
+hardware observation before changing DIV/APU behavior.
 
 ## Persistent CPU bus cycles
 
@@ -150,6 +184,37 @@ the selected gate cone emits step 0 where production suppresses it or injects st
 a wider reset/power cone or must remain board-profile adapters; hiding them in the ripple island
 would be another special-case layer.
 
+## DMG pulse-channel control topology
+
+`Pulse1GateTopology` asks whether the stable results of length, envelope, sweep, trigger, and
+channel-enable behavior need feature-level branches. Its inputs are register strobes, frame clocks,
+and old latch state; its outputs are load, calculation, writeback, overflow-check, and stop pulses.
+It deliberately does not pretend that a whole sweep calculation is instantaneous.
+
+The following behaviors emerge from ordinary cell connectivity:
+
+- the max-minus-one length reload is the same enable-gate level remaining transparent across a
+  trigger parallel load;
+- a trigger masks the transient length-zero stop, while a later frame pulse still stops the
+  channel;
+- period zero is the timer load mux selecting eight while the calculation gate remains closed;
+- shift zero leaves overflow checking connected but closes frequency writeback;
+- the second overflow calculation is feedback from the frequency-load strobe into the adder check
+  input;
+- NR10 writes replace field latches without reaching the running timer's load input;
+- clearing negate resets the channel only when a retained `negate-used` latch proves that a
+  subtract calculation occurred; and
+- DAC-off, sweep overflow, and length expiry are reset inputs on one reset-dominant channel-status
+  latch, so they naturally beat a simultaneous trigger set.
+
+The differential exhausts 2,080 length/enable/trigger/frame-phase combinations, all 256 NR12
+trigger loads through forty envelope clocks, 1,152 initial sweep profiles, and live NR10 rewrites
+across representative frequencies. It also checks settled `SoundMode1` status. This is not yet a
+production replacement: observation during the 1 MHz serial calculation, active retrigger at its
+reload edge, active NR12 write behavior, frequency/duty phase, power/reset wiring, CGB restart
+hold, and analog DAC transients are named falsifiers. The next useful cone is the serial adder
+itself, not another settled-result condition.
+
 ## DMG STAT/control topology
 
 `DmgStatControlPlane` is a detached raster/control island. It accepts only the terminal pixel dot
@@ -175,6 +240,43 @@ Unresolved boundaries are deliberately named rather than hidden in the raster is
 phase, physical `E+4` M0 versus production's earlier prediction signal, mid-transfer window cancel,
 divergent renderer/control tails, terminal WX166/X167 reads, HALT read muxing, and central IF
 acknowledge. Those belong at pixel-pipeline, CPU-readable-mux, or interrupt-synchronizer boundaries.
+
+The external full-gate waveform independently supports the split. After LCD enable, raw FF44, the
+two readable FF41 mode bits, and coincidence change on distinct propagation boundaries rather than
+as one atomic mode/line transition. Brief combinational hazards are also visible in the raw vector.
+Those observations should be represented by the owning latches and receiver sample edges, not by a
+larger `Mode` enum or by publishing every gate hazard as a CPU-visible event.
+
+## Forward-only DMG pixel path
+
+`ForwardDmgPixelPipeline` is a bounded datapath experiment with three coordinates: tile-fetch X,
+FIFO-pop X, and LCD X. One tile flight samples its low byte at launch, its high byte three dots
+later, reaches the FIFO at dot four, and produces an immutable raw token which crosses a three-dot
+scanout. An object fetch gates future FIFO pops but cannot stop or modify scanout tokens already in
+flight.
+
+That small spatial graph reproduces the current calibrated sprite costs for every background-fetch
+phase (`11,10,9,8,7,6,6,6` dots) and chained same-X sprites. More importantly, several present repair
+paths disappear:
+
+- the first window tile is an ordinary flight launched with a FIFO flush; a late LCDC.4 transition
+  selects the address seen by the one real high-byte transaction, so no reread or FIFO patch exists;
+- object low and high bytes are distinct transactions around the resume edge;
+- LCDC.1 abort invalidates the future object stage and releases the pop gate on that dot, with no
+  three-dot catch-up execution;
+- WX comparison emits a retained trigger token, while fine SCX controls raw-token validity on a
+  different coordinate; and
+- a delayed window-enable edge invalidates only matching tokens still inside scanout, flushes valid
+  fetch/FIFO stages, and launches a normal window flight. FIFO-pop remains monotonic and LCD-X does
+  not advance for invalid tokens. The observed three-dot desynchronization bound is simply scanout
+  depth.
+
+Thirteen graph tests plus the production sprite, SCX, and window timing fixtures pass. The graph
+refuses a mid-line fine-SCX rephase after raw popping has begun and expires a window trigger once
+its matching token crossed the irreversible LCD boundary. Disabled-window insertion glitches,
+palette/LCDC output muxing, overlapping object priority, mode-3/STAT completion, and all CGB paths
+remain explicit boundaries. This is the desired failure mode: add a derived latch or stage only
+when evidence identifies it; never recover a consumed pixel.
 
 ## OAM dynamic SRAM
 
@@ -248,6 +350,37 @@ reject a universal collision policy: CGB VRAM can clear a receiving latch, CGB c
 have different ownership/drop rules, I/O commonly returns masks or `0xff`, and DMG OAM includes
 dynamic cell/keeper feedback. The production architecture needs separate bus instances, grants,
 and receiver cells composed from small primitives.
+
+## DMA request and grant topology
+
+`DmaRequestGrantTopology` separates four responsibilities that are currently interleaved in
+`Gameboy.tick()` and the HDMA state machine:
+
+1. a three-cell PPU-to-CPU HBlank synchronizer;
+2. retained request, CPU/VRAM-DMA lease, and late-interrupt-eligibility cells;
+3. OAM and VRAM DMA sequencers which emit bus intents in their own clock domains; and
+4. a pure same-cycle resolver followed by a write-only commit edge.
+
+The CPU publishes claim, interrupt, retire, or relinquish signals. HALT is therefore a relinquish
+wire, not opcode `0x76`; DMA never fetches or decodes an instruction. The PPU publishes actual OAM
+and VRAM port-use intents rather than a visible mode or a retiring-instruction exception.
+
+The detached model matches all 160 OAM copy edges at normal and double speed, including a mid-copy
+speed change; all sixteen VRAM source strobes and the block commit for GDMA and HBlank DMA across
+speed/parity profiles; the ordinary three-edge HBlank synchronizer; representative CPU-retire,
+late-interrupt, and frame-start grants; DMG's merged main bus versus CGB's split cartridge/WRAM
+wires; and the shared source-mux collision where VRAM DMA redirects an OAM copy. All 120 orderings
+of a four-master intent set resolve identically. A simultaneous CPU and VRAM-DMA execution intent
+is reported as a handshake falsifier, because a valid lease makes it impossible; assigning a
+priority would conceal the bug.
+
+The topology does not pretend digital ownership explains every case. HALT-wake level history,
+STOP/speed-switch reverse phase, terminal or overlapping HBlank requests, HDMA disable/LCD-off
+handoffs, OAM restart/acquire history, partial address decoding, CGB's WRAM alias, delayed interrupt
+stack collisions, dynamic OAM write corruption, invalid-source open-bus decay, and VRAM block
+visibility remain explicit migration gates. The safe cut is passive intent tracing first, then the
+CPU/VRAM-DMA lease latch, then actual PPU port intents. The electrical collision and copy
+sequencers stay in production until each named profile has an oracle.
 
 ## Current migration decision
 
