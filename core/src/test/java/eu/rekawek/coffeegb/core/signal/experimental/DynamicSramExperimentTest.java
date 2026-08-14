@@ -64,6 +64,34 @@ public class DynamicSramExperimentTest {
     }
 
     @Test
+    public void retainedReadBitLinesCopyTwoRowsWithoutAnSramWriteStrobe() {
+        StickyDynamicSram sram = new StickyDynamicSram(3, 4, 8);
+        for (int column = 0; column < 4; column++) {
+            sram.write(PREVIOUS_ROW, column, 0x0c + 2 * column);
+            sram.write(CURRENT_ROW, column, 0x14 + 2 * column);
+            sram.write(THIRD_ROW, column, 0x1c + 2 * column);
+        }
+
+        // This is the control shape observed in the instrumented PUSH gate run. Row 0 first
+        // claims every floating bit line. The word-line driver is precharged between row 0, row
+        // 1, and row 2, but the bit lines are not. Enabling each later row therefore performs an
+        // ordinary dynamic read whose feedback writes the retained row-0 values into that row.
+        // No SRAM write-data input is represented or needed.
+        sram.prechargeWordAndBitLines();
+        sram.addressColumns(1 << FIRST_COLUMN);
+        sram.addressRow(PREVIOUS_ROW);
+        sram.prechargeWordLines();
+        sram.addressRow(CURRENT_ROW);
+        sram.prechargeWordLines();
+        sram.addressRow(THIRD_ROW);
+
+        for (int column = 0; column < 4; column++) {
+            assertEquals(sram.read(PREVIOUS_ROW, column), sram.read(CURRENT_ROW, column));
+            assertEquals(sram.read(PREVIOUS_ROW, column), sram.read(THIRD_ROW, column));
+        }
+    }
+
+    @Test
     public void sramAloneAlsoCorruptsTheContributingColumnSoIsNotYetAReplacement() {
         StickyDynamicSram sram = writeCorruptionSetup(
                 16, 0xaaaa, 0xcccc, 0xf0f0);
@@ -83,6 +111,8 @@ public class DynamicSramExperimentTest {
     private static final int PREVIOUS_ROW = 0;
 
     private static final int CURRENT_ROW = 1;
+
+    private static final int THIRD_ROW = 2;
 
     private static final int FIRST_COLUMN = 0;
 
