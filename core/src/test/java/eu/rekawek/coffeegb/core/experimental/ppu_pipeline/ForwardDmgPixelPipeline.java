@@ -9,8 +9,9 @@ package eu.rekawek.coffeegb.core.experimental.ppu_pipeline;
  * but do not stop the already launched scanout stages. Nothing in the graph can move a pixel
  * backwards or modify one after it has left the FIFO.
  *
- * <p>This is not a second renderer. It intentionally omits the comparators and palette/LCDC
- * output muxes listed by {@link #incompleteBehaviorMask()}; its purpose is to make the latency
+ * <p>This is not a second renderer. It intentionally omits the separately bounded cones
+ * listed by {@link #incompleteBehaviorMask()}; its immutable raw output composes with the
+ * {@link DmgLcdOutputSignalCone} palette/LCDC consumer. Its purpose is to make the latency
  * hypothesis executable before it is allowed anywhere near production.
  */
 final class ForwardDmgPixelPipeline {
