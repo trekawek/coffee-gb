@@ -113,6 +113,16 @@ public class SerialPortTest {
     }
 
     @Test
+    public void divResetIsASelectedRippleTapTransitionAtEveryFastPhase() {
+        assertDivResetRippleRule(true, 0x83, 16, 4);
+    }
+
+    @Test
+    public void divResetIsASelectedRippleTapTransitionAtEveryDmgPhase() {
+        assertDivResetRippleRule(false, 0x81, 512, 128);
+    }
+
+    @Test
     public void cgbInterruptAcknowledgeClearsSerialCompletionEightClocksAhead() {
         SpeedMode speedMode = new SpeedMode(true);
         InterruptManager interruptManager = new InterruptManager(true);
@@ -215,6 +225,36 @@ public class SerialPortTest {
         }
 
         return endpoint.sentBits;
+    }
+
+    private static void assertDivResetRippleRule(
+            boolean gbc, int sc, int elapsedClockCount, int precedingTapMask) {
+        for (int elapsed = 0; elapsed < elapsedClockCount; elapsed++) {
+            SpeedMode speedMode = new SpeedMode(gbc);
+            InterruptManager interruptManager = new InterruptManager(gbc);
+            SerialPort serialPort = new SerialPort(interruptManager, gbc, speedMode);
+            CountingEndpoint endpoint = new CountingEndpoint();
+            serialPort.init(endpoint);
+            serialPort.setByte(0xff02, sc);
+            for (int i = 0; i < elapsed; i++) {
+                serialPort.tick();
+            }
+
+            var before = serialPort.captureDebugSerialInspection();
+            int sentBitsBeforeReset = endpoint.sentBits;
+            boolean tapHigh = (before.clockPhase() & precedingTapMask) != 0;
+            boolean expectedClock = before.clockSignal() ^ tapHigh;
+            int expectedShiftCount = tapHigh && before.clockSignal() ? 1 : 0;
+
+            serialPort.onDivReset();
+
+            var after = serialPort.captureDebugSerialInspection();
+            assertEquals("divider phase at elapsed=" + elapsed, 0, after.clockPhase());
+            assertEquals("clock signal at elapsed=" + elapsed,
+                    expectedClock, after.clockSignal());
+            assertEquals("shift count at elapsed=" + elapsed,
+                    sentBitsBeforeReset + expectedShiftCount, endpoint.sentBits);
+        }
     }
 
     private static class CountingEndpoint implements SerialEndpoint {
