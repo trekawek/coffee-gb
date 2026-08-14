@@ -7,6 +7,10 @@ package eu.rekawek.coffeegb.core.gpu;
  * directly, while selected pixel consumers observe independent fixed-depth shift-register taps.
  * Every tap is clocked continuously, so rapid writes remain ordered without a pending-write
  * collection and without asking which renderer path happens to be active at write time.
+ * The DMG netlist supports the single-source part directly: SCX is one eight-latch bank
+ * ({@code daty/duzu/cyxu/gubo/bemy/cuzy/cabu/bake}) and WX is one bank
+ * ({@code mypa/nofe/noke/meby/mypu/myce/muvo/nuku}). The delayed values here are therefore
+ * receiver-boundary approximations, not a claim that the chip stores duplicate registers.
  *
  * <p>The five capture edges are the current Coffee boundary: four complete old-value dots lie
  * between the CPU source edge and the shifted pixel consumer, and the fifth edge publishes the
