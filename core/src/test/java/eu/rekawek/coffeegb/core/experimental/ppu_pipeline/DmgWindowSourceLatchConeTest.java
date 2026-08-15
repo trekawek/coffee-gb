@@ -26,6 +26,23 @@ public class DmgWindowSourceLatchConeTest {
     }
 
     @Test
+    public void coincidentRocoAndMeheEdgesDoNotCollapseTheTwoStages() {
+        DmgWindowSourceLatchCone cone = new DmgWindowSourceLatchCone();
+
+        var collision = cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .withMatch(true).onMatchEdge().onStartEdge());
+
+        assertTrue(collision.matchStage());
+        assertFalse("nunu samples old pyco on the coincident edge", collision.startStage());
+        assertFalse(collision.inWindow());
+
+        var followingMehe = cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .onStartEdge());
+        assertTrue(followingMehe.startStage());
+        assertTrue(followingMehe.inWindow());
+    }
+
+    @Test
     public void lcdcFiveDirectlyResetsAnAlreadyActiveWindowWithoutAClockEdge() {
         DmgWindowSourceLatchCone cone = activeCone();
 
@@ -50,6 +67,22 @@ public class DmgWindowSourceLatchConeTest {
         assertTrue(collision.startStage());
         assertFalse(collision.inWindow());
         assertFalse(collision.activated());
+    }
+
+    @Test
+    public void releasingLcdcResetReassertsTheSourceWhileNunuIsStillHigh() {
+        DmgWindowSourceLatchCone cone = activeCone();
+
+        var reset = cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .withLcdcWindowEnable(false));
+        assertTrue(reset.startStage());
+        assertFalse(reset.inWindow());
+
+        var released = cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled());
+        assertTrue("NOR-latch set remains driven by the retained nunu stage",
+                released.startStage());
+        assertTrue(released.inWindow());
+        assertTrue(released.activated());
     }
 
     @Test

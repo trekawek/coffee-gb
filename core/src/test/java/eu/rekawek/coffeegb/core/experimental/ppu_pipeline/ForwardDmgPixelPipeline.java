@@ -48,7 +48,7 @@ final class ForwardDmgPixelPipeline {
      */
     static final int OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT = 1 << 6;
 
-    /** An active window source cannot currently retire on a later LCDC.5 falling edge. */
+    /** A later window-source reset cannot currently invalidate an active window flight. */
     static final int OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION = 1 << 7;
 
     private static final int TILE_LOW_SAMPLE_OFFSET = 0;
@@ -264,7 +264,7 @@ final class ForwardDmgPixelPipeline {
         this.windowTriggerValid = false;
     }
 
-    /** Comparator enable only; retiring an active window source is a separately named boundary. */
+    /** Comparator enable only; invalidating an active window flight is a separate boundary. */
     void setWindowEnabled(boolean windowEnabled) {
         this.windowEnabled = windowEnabled;
     }
