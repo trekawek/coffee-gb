@@ -41,12 +41,13 @@ save states, debugger boundaries, and performance.
 | The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External gate-waveform-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, priority, acknowledge, and control latches symmetrically. The DMG gate trace further narrows selection to a transparent pending-bank aperture followed by held bits; the composition does not yet model that aperture. Timer writes, Serial pin generation, PPU, and CGB remain outside it. |
 | CPU opcode lookahead is intrinsic to accurate races | Constructive persistent-bus seam plus production differential | T1-T4 state can expose in-flight address, strobes, data, held byte, and acknowledge without re-decoding. No production lookahead is deleted yet, and the one-M-cycle-late read anchor remains a migration debt. |
 | HALT, wake, and interrupt acceptance require request provenance | External gate-model waveform plus production differential | Direct HALT decode removes HALT's own IDU increment while opcode load and PC write remain active; the delayed decode only sets the HALT latch. Separate local IF latches, a transparent `IE & IF` pending bank, and a wake DFF derive readable, accepted, and HALT-wake observations without provenance. Silicon equivalence and unprobed source phases remain open. |
-| HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition plus branch-accepted exact state reduction | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. Production now packs the independent interrupt-owner and late-interrupt request latches into one two-bit plane without deleting that semantic boundary. A contextual one-bit precursor was falsified and replaced. |
+| HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition; two production reductions rejected and rolled back | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. A contextual one-bit encoding lost an independently retained owner in a whole-machine FF0F race. An exact two-bit encoding preserved behavior but retained both logical latches and grew compiled/live conditional complexity, so production keeps the two booleans. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
 | DMG STAT behavior needs a large mode/line exception tree | Behavioral whole-plane partition; two bounded external gate cones | The broad model still encodes calibrated raster cases. Independently, a ripple/partial-decode reset derives LY 153/0 and transparent precharged FF41 latches derive the write glitch with neither `line == 153` nor a semantic `0x78`. |
 | The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require three independent semantic state fields | External-netlist-shaped clock cone plus branch-accepted reachable-state reduction | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. Production now represents its existing behavior with a ripple phase and sampled tap, using one sentinel for the powered-high blocked pulse. This deletes one live field but does not remove the CGB tap and reset/power profile rules. |
-| Pulse-channel quirks require semantic trigger/sweep/length branches | Branch-accepted CH1 trigger deletion plus behavioral remainder | The broad resolver still encodes settled truth tables, but the restart/adder trace independently falsifies `wasActive` as a causal aperture input. Production now uses the common shorter nonzero-shift path and deletes that semantic input/conditional; shift-zero behavior comes from retained BYTE state in the bounded cone. DMG is externally grounded and CGB remains differential-only. |
+| Each square channel needs two independent oscillator-phase booleans | Branch-accepted exact phase-ring reduction | For both square channels, `(clock2Mhz, lowFrequencyPhase)` is exactly one four-state ring with transition `(phase - 1) & 3`. The low two bits of one integer per channel replace four booleans, while released state records still expose and accept every old tuple. This is behavioral state reduction, not an APU netlist claim. |
+| Pulse-channel quirks require semantic trigger/sweep/length branches | Branch-accepted CH1 trigger deletion plus behavioral remainder | The broad resolver still encodes settled truth tables, but the restart/adder trace independently falsifies `wasActive` as a causal aperture input. Production now uses the common shorter nonzero-shift path and deletes that dependency/conditional while retaining the ignored public argument; shift-zero behavior comes from retained BYTE state in the bounded cone. DMG is externally grounded and CGB remains differential-only. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
 | CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone; production cut rejected | Complement-loaded prescaler and zero-reset XNOR wiring remove the local semantic cases, but both faithful and lean runtime replacements fail 8 of the 13 SameSuite CH4 ROMs because the trigger/live-write projection is not yet derived. |
 | The four-dot PPU skew requires two independently running renderers | Direct single-machine aliases rejected; fitted forward replacement remains constructive | An unshifted alias fails 24/26 strict Mealybug images. A shifted alias plus timing taps reaches 26/26 Mealybug and 129/130 Mooneye, but still fails the ten-sprite mode-0 boundary, grows production, retains every repair path, and cannot map the two released machine states safely. A new forward graph remains the viable migration seam. |
@@ -127,12 +128,18 @@ do not reverse the local result, but they keep performance acceptance at branch-
 
 The current branch retains seven production simplifications across eight core source files: the
 lean serial reset, common CH1 restart path, LCDC.4 reachable-state reduction, frame-sequencer
-ripple-state reduction, shared PPU register-conflict banks, independent HDMA request bit-plane, and
-interrupt-acknowledge bit-plane. Relative to `8560a6c2`, production core code is `+162/-206`, a net
-deletion of 44 lines. The branch has nine fewer live scalar storage fields: one in LCDC, one in the
-frame sequencer, three in `GpuRegisterValues`, one in HDMA, and three in `InterruptManager`.
-Released component-state record shapes remain unchanged; capture/restore projects each packed live
-representation onto the old fields.
+ripple-state reduction, shared PPU register-conflict banks, peripheral-acknowledge bit-plane, and
+the two square-channel phase rings. Relative to `8560a6c2`, production core code is `+135/-183`, a
+net deletion of 48 lines. The branch has ten fewer live scalar storage fields: one in LCDC, one in
+the frame sequencer, three in `GpuRegisterValues`, three in `InterruptManager`, and two across
+`SoundMode1`/`SoundMode2`. Released component-state record shapes remain unchanged; capture/restore
+projects each reduced live representation onto the old fields.
+
+These seven changes are not one evidence class. Serial and CH1 delete causal live-path logic with
+external DMG-model support. LCDC, frame sequencing, PPU conflict storage, interrupt acknowledgement,
+and the square phases are exact behavior-preserving state reductions at Coffee GB's already
+calibrated boundaries. They do not satisfy the independent-hardware-evidence condition for promoting
+a new architecture slice merely because their production diff is smaller.
 
 At the earlier three-cut checkpoint, after the rejected interrupt owner was rolled back, the
 following complete reruns finished with zero failures/errors:
@@ -147,19 +154,52 @@ following complete reruns finished with zero failures/errors:
 | GBC hardware + misc-gb + Daid | 247/247 |
 | RTC3 + MBC30 + cgb-acid-hell + Strikethrough + CasualPokePlayer + BullyGB | 15/15 |
 
-That is 5,707 integration cases in addition to the unit suite. Those full-ROM passes establish
-regression safety for the first three retained production cuts; they do not by themselves cover
+That is 5,707 integration cases in addition to the unit suite. Those earlier runs established
+regression safety for the first three retained production cuts; they did not by themselves cover
 the four later reductions or validate the output of test-only candidate PPU, APU, DMA, or scheduler
 models.
 
 | Current all-seven-cut branch | Result |
 | --- | ---: |
-| Final core unit suite | **PENDING FINAL RERUN** |
-| Final 5,707-case integration battery | **PENDING FINAL RERUN** |
+| Final core unit suite | **1,550 run, 0 failures/errors, 8 skipped** |
+| Final controller unit suite | **904 run, 0 failures/errors, 2 skipped** |
+| Final 5,707-case integration battery | **5,707/5,707** |
 
-The focused and isolated-candidate evidence for each later reduction is recorded in its section
-below. Replace the pending rows only with results from the final combined branch, not by summing
-isolated worktree runs.
+The final rows are direct runs from the combined branch, not sums of isolated worktree results.
+They establish regression safety for all seven retained cuts. They still do not turn test-only
+candidate outputs or external-model observations into silicon evidence.
+
+A final combined-branch `DebugDisabledBenchmarkTest` audit used detached baseline/current
+worktrees, fixed CPU affinity, alternating revision order, sibling-core monitoring, and a discard
+rule declared before measurement. Host contention triggered the stop rule: only one baseline timing
+sample and no current timing sample were acceptable, so wall-clock performance is **inconclusive**
+and no regression or improvement claim is made. Allocation is decision-grade: all six invocations
+of each revision reported exactly 128,600 bytes over 45 million measured ticks, with the same nine
+sample values. Thus the retained cuts show no measured allocation regression, while a quiet-host
+timing gate remains required.
+
+The timed JVM used Java 21.0.1, one affinity-visible processor, CGB SKIP boot, disabled LCD/APU,
+a deterministic `JR -2` loop, 30 million warm-up ticks, and nine five-million-tick samples. Its
+command shape was:
+
+```sh
+taskset -c 3 /opt/maven/bin/mvn -q -pl core -am \
+  -Dtest=DebugDisabledBenchmarkTest -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dcoffeegb.debug.benchmark=true test
+```
+
+`mpstat -P 3,7 1 9` monitored the SMT sibling. The predeclared rule rejected failure,
+`IQR/median > 5%`, `max/median > 1.50`, or sibling idle below 90% in at least two pre-result
+intervals, and required five accepted runs per revision. Twelve benchmark outputs—two pilots plus
+ten measured attempts—were split evenly between revisions. After restarting once from a contended
+CPU2/6 pair, only one baseline timing run and no current timing run survived; the gate therefore
+stopped without relaxing its thresholds.
+
+“Released-state compatibility” is directional here: saves emitted by released Coffee GB builds
+must load into the current branch. The format does not promise that a newer save loads into an older
+binary. For these reductions, controller validation accepts the documented state combinations
+released machines could emit, including legacy scalar-only PPU conflict state, and rejects the
+corresponding never-emitted combinations before mutation.
 
 ## Interrupt acknowledgement: the scheduler falsifier
 
@@ -570,6 +610,27 @@ the runtime can never emit. Production changes by `+19/-22`, deleting three net 
 scalar field. This proves equivalence to Coffee GB's calibrated sequencer behavior; it does not
 show that the sentinel or the exact Java reset projection is a physical DMG/CGB latch encoding.
 
+### Square-channel oscillator phase rings
+
+`SoundMode1` and `SoundMode2` previously stored `clock2Mhz` and `lowFrequencyPhase` as two
+booleans each. Their complete transition table is one four-state ring. With bit zero representing
+`clock2Mhz` and bit one representing `lowFrequencyPhase`, every oscillator/channel tick is simply
+`(phase - 1) & 3`; construction starts at zero and channel start/stop reset the phase to two.
+Trigger timing, frequency-divider gating, disabled ticks, and both DMG/CGB paths observe the same
+projected bits as before.
+
+The retained **branch-accepted exact phase-ring reduction** stores each phase in the low two bits of
+one integer. A finite algebraic contract enumerates all four released tuples, round-trips each one,
+checks its next transition, and verifies the trigger's low-frequency-phase observation. Static
+bisimulation covers construction/start/stop and repeated transitions; the existing channel tests
+and final sound ROM profiles exercise those production paths. Public method descriptors and the
+private released `State`/`Memento` component order are unchanged. Production changes by `+22/-33`,
+deleting eleven net lines and two live fields. The two hot tick methods shrink by 50 bytecode bytes
+in total and the combined conditional-site count falls by one; cold state projection makes the
+associated class files 327 bytes larger. That is an explicit released-state adapter cost, not hidden
+evidence of a faster or more physical APU. The final unit, SameSuite, and Blargg sound results are
+included in the combined matrix above.
+
 ## DMG pulse-channel control topology
 
 `Pulse1GateTopology` is a **behavioral decomposition plus production differential** for the stable
@@ -619,7 +680,8 @@ through DUPE, `CH1_START`, FYFO/FEKU, FARE, and FYTE. Channel-active state is do
 and has no connection into that request path. For shifts one, three, and seven the complete serial
 waveform is also identical; from synchronized `CH1_START` it matches production's shorter bucket,
 `8 + 4*shift` T. The branch now uses that common path for every nonzero-shift trigger and removes
-the channel-active input and conditional from `FrequencySweep`. This is a narrow production
+the channel-active dependency and conditional from `FrequencySweep`; the public `wasActive`
+argument remains as an ignored source-compatibility parameter. This is a narrow production
 deletion, not a claim that the bounded cone models the entire sweep unit.
 
 Shift zero exposes the real retained-state behavior. The initial trigger loads KALA's terminal
@@ -995,6 +1057,12 @@ them back into the common banks. Together with the API correction, the productio
 `+36/-38`, a net deletion of two lines. This is preservation of the existing receiver schedule;
 the fitted capture delays described above remain migration debt.
 
+Controller validation makes the reachable compatibility boundary explicit. It accepts released
+arrays with the SCX/WX slots clear and the conflict held in their scalar fields, or the exact current
+array mirrors of those scalars. It rejects never-emitted conflict values in unrelated slots and
+malformed array lengths before applying state. This preserves released-save-to-current loading;
+newer-save-to-older-binary loading is not part of the versioned state contract.
+
 `DmgLcdOutputSignalCone` is an **external-netlist-boundary plus fitted output hypothesis**. It takes
 immutable background/object tokens through three forward validity cells. BGP/OBP and LCDC.0/.1 are
 sampled only at the consumer mux, so palette and priority writes do
@@ -1174,30 +1242,23 @@ of a four-master intent set resolve identically. A simultaneous CPU and VRAM-DMA
 is reported as a handshake falsifier, because a valid lease makes it impossible; assigning a
 priority would conceal the bug.
 
-A bounded production cut now packs two already-existing request latches into one two-bit plane:
-`INTERRUPT_ENTRY_OWNER` records that interrupt entry independently retained the request, while
-`LATE_INTERRUPT_ALLOWED` records that a CPU-owned slot may promote a later interrupt when it
-retires. Transition sites set, clear, or promote those bits independently. The released
-`HdmaState` shape still exposes `interruptEntryWonArbitration` and
-`cpuRequestAllowsLateInterrupt`; capture expands the bits and restore preserves the released rule
-that the late-interrupt flag is meaningful only for a CPU arbitration owner.
+Two bounded production reductions were attempted and both were rejected. The first contextual
+one-boolean encoding treated the same bit as interrupt owner outside a CPU lease and late-interrupt
+eligibility inside it. It passed the initial suite but failed a whole-machine review falsifier:
+interrupt entry won an arriving HBlank request, software cleared FF0F before the next tick, and the
+CPU then claimed the slot. The released machine retains the already-latched interrupt owner across
+that ownership change; the contextual encoding silently reinterpreted and lost it, so a later IF
+reassertion let CPU and HDMA phases diverge. That abandoned precursor remains in history as
+`b4770a0e`.
 
-The independence is essential. An earlier contextual one-boolean reduction interpreted the same
-bit as interrupt owner outside a CPU lease and late-interrupt eligibility inside it. It passed the
-tests initially run against it but failed a whole-machine review falsifier: interrupt entry
-won an arriving HBlank request, software cleared FF0F before the next tick, and the CPU then claimed
-the slot. The released machine retains the already-latched interrupt owner across that ownership
-change; the contextual encoding silently reinterpreted and lost it, so a later IF reassertion let
-CPU and HDMA phases diverge. That precursor remains in history as `b4770a0e`; the retained
-two-bit replacement and regression test are `4de390a3`.
-
-This is a **branch-accepted exact state reduction**, not evidence for an HDMA gate topology.
-Exhaustive tests restore all four input-bit combinations under every CPU-request arbitration state
-and compare resolve, CPU-slot retirement, interrupt acceptance, and STOP-request transitions with a
-frozen two-boolean model. The whole-machine FF0F clear/reassert regression protects the cross-owner
-case. Relative to the baseline, `Hdma` changes by `+47/-54`, deleting seven net lines and one live
-scalar field while preserving two logical latch levels. Opcode lookahead, CPU phase predicates,
-and calibrated request timing remain untouched and therefore remain migration gates.
+The follow-up two-bit plane preserved the latches independently and passed exhaustive transition,
+restore, whole-machine, unit, Mooneye, Gambatte, GBC-HW, Daid, and acid tests. It was nevertheless a
+representation-only packing: both logical levels and their semantic transition branches remained,
+`Hdma.class` grew by 517 bytes with six additional conditional sites, and the source reduction was
+only seven net lines. It therefore failed the complexity/deletion spirit despite behavioral
+equivalence and was rolled back in `5070d997`. Production again stores the two booleans directly.
+The exhaustive independent-latch tests and the whole-machine FF0F clear/reassert regression remain
+as contract coverage.
 
 The decomposition does not pretend digital ownership explains every case. HALT-wake level history,
 STOP/speed-switch reverse phase, terminal or overlapping HBlank requests, HDMA disable/LCD-off
@@ -1226,13 +1287,23 @@ or reorders another subsystem's time.
 
 The experiments produce bounded candidates for the Clocked Signal Fabric hypothesis, but do not yet
 establish a simpler whole-core model. The seven retained production changes do establish a useful
-lower bar: exact reachability and state-plane reductions can delete 44 net production lines and
-nine scalar fields without pretending that their packed Java representation is recovered silicon.
-Only claims carrying their own external evidence may inform topology; the other retained cuts are
-behavior-preserving simplifications under the current calibrated callback boundaries.
+lower bar: causal local, reachable-state, and state-plane reductions can delete 48 net
+core-production lines and ten scalar fields without pretending that their packed Java
+representation is recovered silicon. The controller adds 29 net validation lines to reject
+never-emitted portable-state combinations; that compatibility safeguard is intentionally excluded
+from the core-production count. Only claims carrying their own external evidence may inform
+topology; the other retained cuts are behavior-preserving simplifications under the current
+calibrated callback boundaries.
+
+Source and live-state reduction are not the same as whole-class bytecode reduction. Several cuts
+move conditional work from hot transitions into cold released-state projection, and their nested
+class metadata can grow. The square-phase cut, for example, shrinks both hot tick methods while its
+compatibility adapters grow the associated class files. The retained set is therefore a tested
+production simplification portfolio, not a claim that all seven independently satisfy the
+four-part architecture-slice promotion rule below.
 
 The result also leaves the first architectural cut boundary unchanged. Packing four acknowledge
-levels into one integer did not centralize their sampling, and packing HDMA request bits did not
+levels into one integer did not centralize their sampling, and the rejected HDMA encodings did not
 remove its CPU/PPU semantic inputs. Do not next centralize one interrupt source inside
 `Gameboy.tickSubsystems()`. First introduce:
 
