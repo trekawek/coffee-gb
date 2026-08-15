@@ -42,7 +42,7 @@ save states, debugger boundaries, and performance.
 | HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition plus production differential | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
 | DMG STAT behavior needs a large mode/line exception tree | Production-equivalent behavioral partition; causal claim not established | Independent state cells match a steady frame, but the model still encodes calibrated line/dot cases and an explicit transient FF41 enable vector. |
-| The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The directional feedback split and exact mapping are fitted against production `SpriteBug`, not independently observed. |
+| The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral decomposition; selected follow-up cones are fitted circuit hypotheses | `Pulse1GateTopology` directly encodes settled feature truth tables; serial-adder and envelope-ripple cones provide narrower structural hypotheses with named apertures. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
@@ -105,7 +105,7 @@ lean-cut reruns completed with zero failures/errors:
 
 | Suite | Result |
 | --- | ---: |
-| Core unit tests, including detached experiments | 1,518 run, 8 skipped |
+| Core unit tests, including detached experiments | 1,519 run, 8 skipped |
 | Mooneye + dmg-acid2 + cgb-acid2 | 132/132 |
 | Blargg aggregate + individual | 54/54 |
 | SameSuite + Mealybug strict images | 103/103 |
@@ -736,12 +736,12 @@ that hardware-verified `SpriteBug` behavior preserves. It is therefore a mechani
 not a production replacement.
 
 `OamSramControlCone` is an **external-gate-trace mechanism plus fitted exact-data hypothesis**.
-Complete
-symbolic closure of the symmetric two-row/two-column model reaches 5,968 distinct transformations
-but cannot produce the exact verified write mapping: every reachable majority result also corrupts
-the contributing third column. Separating a column's common-line sample enable from its feedback
-enable is the minimum extra control. Columns zero and two sample the common line while only column
-zero receives feedback; the old keeper then resolves disagreement to the retained value. This
+Complete symbolic closure of the symmetric two-row/two-column model reaches 5,968 distinct
+transformations but cannot produce the exact verified write mapping: every reachable majority
+result also corrupts the contributing third column. Separating a column's common-line sample enable
+from its feedback enable is the minimum extra control. Columns zero and two sample the common line
+while only column zero receives feedback; the old keeper then resolves disagreement to the retained
+value. This
 matches all eight one-bit truth assignments and 4,096 randomized complete OAM images against
 production `SpriteBug.corruptOamWrite`, with no value-dependent path. That differential shows a
 compact fit to the existing formula; it is not an independent silicon oracle for the directional
@@ -776,6 +776,23 @@ The final copied OAM bytes were rows 0 and 2 becoming row 1; all other bytes rem
 sequence. This validates sticky selection and keeper/bit-line feedback as the source of the row-copy
 shape.
 
+A packed follow-up probe also establishes what this external model cannot answer. Each of the eight
+bit positions encoded one complete `(retained a, preceding-column b, preceding-column c)` truth
+assignment. With target column zero `a=F0`, preceding column zero `b=CC`, and preceding column two
+`c=AA`, the hardware-verified majority mapping would produce `E8` in target column zero while
+preserving column two. At scan rows 1, 2, and 4 the simulator instead copied the complete preceding
+row: target column zero became `CC`, column two remained `AA`, and every CPU/OAM SRAM write strobe
+stayed inactive.
+
+This is not evidence against a directional physical SRAM. The pinned `generic_sram` exposes one
+symmetric column mask: every selected bit line contributes to the common keeper and every selected
+bit line receives the same feedback. Separate sample and write-back gates do not exist at that
+abstraction. Surrounding decoder skew can select different rows or columns over time, but cannot
+recover a transistor-direction signal which the array model erased. The packed result therefore
+directly falsifies `generic_sram` as an exact blocked-write oracle and leaves the Java directional
+split **FITTED**. Promotion requires a transistor-level/licensed OAM model or controlled real-DMG
+bit-pattern captures.
+
 A second full run enabled the source program's `PUSH BC` corruption with `SP=FE01`. It
 self-terminated with rows 1 and 2 both equal to row 0, while every later byte remained intact.
 Instrumenting cell writes exposed a stronger result: neither OAM SRAM's `wr` input asserted during
@@ -784,11 +801,12 @@ the corruption. At time 33699216 the row-1 word line rose while all four bit lin
 word line rose before the retained bit lines were cleared and repeated the copy. No encoded PUSH,
 row-copy, or corruption equation exists in the simulator.
 
-This falsifies, for the external gate model, an implementation in which a forbidden CPU write
-invokes an SRAM corruption operation. The simulated event is a disturbed address/precharge/read
-sequence; writing the cells is what that dynamic read port normally does when retained lines and a
-newly selected word line disagree. Comparison with real DMG captures is still required before
-promoting the model's exact delay policy or directional feedback split to a hardware claim.
+The ordinary/PUSH traces falsify, for the external gate model, an implementation in which a
+forbidden CPU write invokes an SRAM corruption operation. The simulated event is a disturbed
+address/precharge/read sequence; writing the cells is what that dynamic read port normally does when
+retained lines and a newly selected word line disagree. Comparison with real DMG captures is still
+required before promoting the model's exact delay policy or directional feedback split to a
+hardware claim.
 
 ### Offline-oracle reproducibility
 
