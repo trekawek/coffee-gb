@@ -22,6 +22,40 @@ import org.junit.Test
 class ClockOwnedStateSemanticsTest {
 
   @Test
+  fun frameSequencerRejectsAnImpossibleBlockedNonZeroStep() {
+    session().use { session ->
+      val root = session.captureDetachedState().machine.root
+      val blockedStepZero =
+          root
+              .replaceRecordField(FRAME_SEQUENCER_STATE, "step", Int32State(0))
+              .replaceRecordField(FRAME_SEQUENCER_STATE, "skipNextEdge", BooleanState(true))
+      StateSemantics.validate(StateGraph.restore(blockedStepZero))
+
+      val impossible =
+          blockedStepZero.replaceRecordField(FRAME_SEQUENCER_STATE, "step", Int32State(1))
+      assertFailsWith<StateApplyException> {
+        StateSemantics.validate(StateGraph.restore(impossible))
+      }
+    }
+  }
+
+  @Test
+  fun lcdcRejectsConflictCountdownsOutsideTheirEmittedBinaryDomain() {
+    session().use { session ->
+      val root = session.captureDetachedState().machine.root
+      listOf("tileSelectGlitchTicks", "pendingTileSelectGlitchTicks").forEach { field ->
+        val asserted = root.replaceRecordField(LCDC_STATE, field, Int32State(1))
+        StateSemantics.validate(StateGraph.restore(asserted))
+
+        val impossible = root.replaceRecordField(LCDC_STATE, field, Int32State(2))
+        assertFailsWith<StateApplyException>(field) {
+          StateSemantics.validate(StateGraph.restore(impossible))
+        }
+      }
+    }
+  }
+
+  @Test
   fun customClockSoundBoundaryRestoresAndContinues() {
     val clock = ClockSpec(8_388_608, 60, 1)
     val capacity = Math.multiplyExact(clock.controllerTicksPerFrame(), 2)
@@ -309,6 +343,9 @@ class ClockOwnedStateSemanticsTest {
   }
 
   private companion object {
+    const val FRAME_SEQUENCER_STATE =
+        "eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerState"
+    const val LCDC_STATE = "eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState"
     const val SOUND_STATE = "eu.rekawek.coffeegb.core.sound.Sound\$SoundState"
     const val RTC_STATE =
         "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState"

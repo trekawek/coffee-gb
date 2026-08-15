@@ -192,7 +192,11 @@ internal object StateSemantics {
     buildMap {
       // Audio and timer phase/counter relationships.
       put("eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerState",
-          constrained("The 8-step frame-sequencer index is bounded.") { it.range("step", 0, 7) })
+          constrained("The 8-step index is bounded; a blocked input pulse retains step zero.") {
+            it.range("step", 0, 7)
+            it.require(!it.boolean("skipNextEdge") || it.int("step") == 0,
+                "has a blocked input pulse at non-zero step=${it.int("step")}")
+          })
       put("eu.rekawek.coffeegb.core.sound.FrequencySweep\$FrequencySweepState",
           constrained("Sweep register widths and pending pipeline counters are bounded.") {
             it.range("period", 0, 7); it.range("shift", 0, 7); it.range("timer", 0, 8)
@@ -591,10 +595,10 @@ internal object StateSemantics {
             it.range("scxOldValue", -1, 0xff); it.range("pendingScxOldValue", -1, 0xff)
           })
       put("eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState",
-          constrained("LCDC latches are bytes or the documented -1 mix sentinel; glitch timers are non-negative.") {
+          constrained("LCDC latches are bytes or the documented -1 mix sentinel; released glitch slots are binary strobes.") {
             it.range("value", 0, 0xff); it.range("mixValue", -1, 0xff)
-            it.range("pendingMixValue", -1, 0xff); it.nonNegative("tileSelectGlitchTicks")
-            it.nonNegative("pendingTileSelectGlitchTicks")
+            it.range("pendingMixValue", -1, 0xff); it.range("tileSelectGlitchTicks", 0, 1)
+            it.range("pendingTileSelectGlitchTicks", 0, 1)
           })
       put("eu.rekawek.coffeegb.core.gpu.phase.HBlankPhase\$HBlankPhaseState",
           constrained("HBlank elapsed-dot count cannot be negative.") { it.nonNegative("ticks") })
