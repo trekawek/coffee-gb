@@ -20,6 +20,8 @@ final class Proposal3OverlayCatalog {
 
     static final MenuRect OPEN_ROM_HEADER = new MenuRect(691, 27, 202, 57);
     static final MenuRect BACK_HEADER = new MenuRect(744, 25, 151, 61);
+    /** Full source-artwork footprint of the obsolete confirmation-page Back button. */
+    static final MenuRect CONFIRM_HEADER_CLEAR = new MenuRect(735, 25, 165, 61);
     static final MenuRect HEADER_TITLE = new MenuRect(45, 25, 290, 61);
     static final MenuRect HEADER_CONTEXT = new MenuRect(365, 25, 300, 61);
     static final MenuRect HEADER_ACTION_TEXT = new MenuRect(704, 31, 175, 48);
@@ -229,7 +231,8 @@ final class Proposal3OverlayCatalog {
 
         layouts.put(MenuRoute.CONFIRM_ACTION, layout(MenuRoute.CONFIRM_ACTION, List.of(),
                 actions(new int[][]{{440, 514, 198, 75}, {665, 510, 213, 82}}, Surface.PAPER),
-                masks(CONFIRM_TITLE, CONFIRM_COPY_ONE, CONFIRM_COPY_TWO, CONFIRM_COPY_THREE,
+                masks(CONFIRM_HEADER_CLEAR, CONFIRM_TITLE, CONFIRM_COPY_ONE, CONFIRM_COPY_TWO,
+                        CONFIRM_COPY_THREE,
                         inner(440, 514, 198, 75), inner(665, 510, 213, 82)),
                 false, "cancel", null, false));
 

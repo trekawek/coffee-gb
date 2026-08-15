@@ -124,6 +124,25 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void confirmationHasNoHeaderBackOrInjectedExtraCopy() throws Exception {
+        MenuPresentation presentation = defaultPresentation(MenuRoute.CONFIRM_ACTION);
+        assertEquals(2, presentation.columns());
+        assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), presentation.sideLines());
+
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.CONFIRM_ACTION).copyPixels();
+        int[] composed = new Proposal3MenuCompositor().compose(presentation).orElseThrow()
+                .copyPixels();
+        assertTrue("confirmation header Back artwork was not cleared",
+                differentInside(template, composed, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR));
+        assertEquals("confirmation header still contains dark Back artwork", 0,
+                inkPixels(composed, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR));
+        assertFalse("confirmation added copy beyond its warning",
+                differentInside(template, composed, Proposal3OverlayCatalog.CONFIRM_COPY_THREE));
+        assertNoDifferenceOutside(template, composed,
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.CONFIRM_ACTION));
+    }
+
+    @Test
     public void pauseRailUsesSevenExactEqualRowsWithUntouchedDividers() {
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
                 MenuRoute.PAUSE_CONSOLE);
@@ -529,13 +548,15 @@ public class Proposal3MenuCompositorTest {
             case HEADER_CONTEXT -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
                     : presentation.context().isEmpty() ? "/" : presentation.context();
             case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
-                    || presentation.route() == MenuRoute.SAVE_STATES ? ""
+                    || presentation.route() == MenuRoute.SAVE_STATES
+                    || presentation.route() == MenuRoute.CONFIRM_ACTION ? ""
                     : presentation.headerAction().isEmpty() ? "BACK" : presentation.headerAction();
             case SIDE_HEADING -> presentation.sideHeading();
             case SIDE_LINE -> region.index() < presentation.sideLines().size()
                     ? presentation.sideLines().get(region.index()) : "";
             case FOOTER_DPAD, FOOTER_BUTTON, FOOTER_LABEL, CONFIRM_TITLE,
-                    CONFIRM_COPY_ONE, CONFIRM_COPY_TWO, CONFIRM_COPY_THREE -> "RUNTIME";
+                    CONFIRM_COPY_ONE, CONFIRM_COPY_TWO -> "RUNTIME";
+            case CONFIRM_COPY_THREE -> presentation.sideLines().size() < 2 ? "" : "RUNTIME";
             case LITERAL -> "";
         };
     }

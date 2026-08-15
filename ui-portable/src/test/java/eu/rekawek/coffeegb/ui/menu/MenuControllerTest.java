@@ -243,6 +243,46 @@ public class MenuControllerTest {
                 && item.detail().isEmpty() && item.secondaryId() == null));
     }
 
+    @Test
+    public void confirmationDefaultsUseTwoColumnDecisionAndBReturnsToParent() {
+        MenuPage confirmation = MenuPages.forRoute(MenuRoute.CONFIRM_ACTION);
+        assertEquals(2, confirmation.columns());
+        assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), confirmation.sideLines());
+        assertEquals("", confirmation.headerAction());
+        assertEquals("cancel", confirmation.items().get(confirmation.initialFocusIndex()).id());
+
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+        controller.push(MenuRoute.CONFIRM_ACTION);
+        assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
+
+        controller.onKeyDown(MenuKey.UP, false);
+        controller.onKeyUp(MenuKey.UP);
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
+        assertEquals("confirm choices are horizontal", "cancel",
+                controller.snapshot().frames().get(1).focusedItemId());
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyUp(MenuKey.RIGHT);
+        assertEquals("confirm", controller.snapshot().frames().get(1).focusedItemId());
+        controller.onKeyDown(MenuKey.LEFT, false);
+        controller.onKeyUp(MenuKey.LEFT);
+        assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
+        controller.onKeyDown(MenuKey.A, false);
+        controller.onKeyUp(MenuKey.A);
+        assertEquals(List.of("cancel:false"), events.items);
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyUp(MenuKey.RIGHT);
+        controller.onKeyDown(MenuKey.START, false);
+        controller.onKeyUp(MenuKey.START);
+        assertEquals(List.of("cancel:false", "confirm:false"), events.items);
+
+        controller.onKeyDown(MenuKey.B, false);
+        controller.onKeyUp(MenuKey.B);
+        assertEquals(MenuRoute.PAUSE_CONSOLE, controller.route());
+    }
+
     private static MenuPageSpec page(MenuRoute route, int columns, List<MenuPageSpec.Item> items) {
         return new MenuPageSpec(route, "COFFEE GB", "TEST", "", "TEST", List.of("TEST"),
                 items, columns, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));

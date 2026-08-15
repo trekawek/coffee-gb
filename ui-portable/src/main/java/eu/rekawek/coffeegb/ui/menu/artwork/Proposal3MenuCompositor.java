@@ -336,6 +336,11 @@ public final class Proposal3MenuCompositor {
                     Proposal3OverlayCatalog.Surface.PAPER, false);
             paintSurface(raster, Proposal3OverlayCatalog.PAUSE_HEADER_ACTION,
                     Proposal3OverlayCatalog.Surface.PAPER, false);
+        } else if (route == MenuRoute.CONFIRM_ACTION) {
+            // Confirmation is a two-option decision page.  Its title bar has no Back action,
+            // including the source artwork's button outline.
+            paintSurface(raster, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR,
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
         }
         String[] footer = footerValues(route, presentation.footerHints());
         for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
@@ -411,6 +416,7 @@ public final class Proposal3MenuCompositor {
                     ? "/" : "/ " + display(presentation.context());
             case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
                     || presentation.route() == MenuRoute.SAVE_STATES
+                    || presentation.route() == MenuRoute.CONFIRM_ACTION
                     ? "" : presentation.headerAction().isEmpty()
                     ? "BACK" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
@@ -464,9 +470,20 @@ public final class Proposal3MenuCompositor {
         return switch (key) {
             case CONFIRM_COPY_ONE -> lines[0].isEmpty() ? "UNSAVED PROGRESS" : lines[0];
             case CONFIRM_COPY_TWO -> lines[1].isEmpty() ? "MAY BE LOST." : lines[1];
-            case CONFIRM_COPY_THREE -> display(valueAt(presentation.sideLines(), 1,
-                    "SAME PAGE USED FOR")) + "\n" + display(valueAt(
-                    presentation.sideLines(), 2, "STOP GAME AND DELETE STATE"));
+            case CONFIRM_COPY_THREE -> {
+                String extra = valueAt(presentation.sideLines(), 1, "");
+                String consequence = valueAt(presentation.sideLines(), 2, "");
+                if (extra.isEmpty() && consequence.isEmpty()) {
+                    yield "";
+                }
+                if (consequence.isEmpty()) {
+                    yield display(extra);
+                }
+                if (extra.isEmpty()) {
+                    yield display(consequence);
+                }
+                yield display(extra) + "\n" + display(consequence);
+            }
             default -> "";
         };
     }
