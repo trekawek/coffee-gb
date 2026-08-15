@@ -314,6 +314,22 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void screenshotMetadataUsesTheReadableNoticeRole() {
+        for (Proposal3TextCatalog.TextRegion region
+                : Proposal3TextCatalog.regions(MenuRoute.PAUSE_CONSOLE)) {
+            if (region.key() == Proposal3TextCatalog.Key.SIDE_LINE) {
+                assertEquals(Proposal3GlyphAtlas.Role.NOTICE, region.role());
+            }
+        }
+        Proposal3TextCatalog.TextRegion savedAt = Proposal3TextCatalog.regions(MenuRoute.SAVE_STATES)
+                .stream()
+                .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(Proposal3GlyphAtlas.Role.NOTICE, savedAt.role());
+    }
+
+    @Test
     public void canonicalRowsAndActionsFitWithoutEllipsizing() throws Exception {
         Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
         for (MenuRoute route : MenuRoute.values()) {
