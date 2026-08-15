@@ -61,7 +61,8 @@ public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
         if (finished) {
             return;
         }
-        if ((volume == 0 && envelopeDirection == -1) || (volume == 15 && envelopeDirection == 1)) {
+        if ((volume & ~0b1111) == 0
+                && ((volume + envelopeDirection) & ~0b1111) != 0) {
             finished = true;
             return;
         }
@@ -70,7 +71,7 @@ public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
         }
         if (--timer <= 0) {
             timer = sweep;
-            clockVolume();
+            volume += envelopeDirection;
         }
     }
 
@@ -80,7 +81,12 @@ public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
         if (pendingEnvelopeClock && (frameSequencerStep & 1) == 1) {
             pendingEnvelopeClock = false;
             timer = sweep;
-            clockVolume();
+            int nextVolume = volume + envelopeDirection;
+            if ((volume & ~0b1111) == 0 && (nextVolume & ~0b1111) != 0) {
+                finished = true;
+            } else {
+                volume = nextVolume;
+            }
         }
     }
 
@@ -109,14 +115,6 @@ public class VolumeEnvelope implements StatefulComponent<VolumeEnvelope> {
         if (shouldTick) {
             volume = (volume + ((newLow & 0b1000) != 0 ? 1 : -1)) & 0b1111;
         }
-    }
-
-    private void clockVolume() {
-        if ((volume == 0 && envelopeDirection == -1) || (volume == 15 && envelopeDirection == 1)) {
-            finished = true;
-            return;
-        }
-        volume += envelopeDirection;
     }
 
     public int getVolume() {
