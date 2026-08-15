@@ -53,7 +53,7 @@ final class DmgControlSignalFabric {
         INTERRUPT_ENABLE_LATCHES,
         RUNNING_PENDING_LATCHES,
         HALT_WAKE_LATCH,
-        HALT_DECODE_LATCH,
+        HALT_SET_DELAY_DFF,
         HALT_LATCH,
         IME_LATCH,
         EI_DELAY_LATCH
@@ -198,8 +198,10 @@ final class DmgControlSignalFabric {
                 retiredControl,
                 terminal && oldCpu.cycleKind()
                         == CpuBusCycleMachine.CycleKind.INTERRUPT_VECTOR,
-                terminal && oldCpu.cycleKind()
-                        == CpuBusCycleMachine.CycleKind.OPCODE_FETCH);
+                terminal && (oldCpu.cycleKind()
+                        == CpuBusCycleMachine.CycleKind.OPCODE_FETCH
+                        || oldCpu.cycleKind()
+                        == CpuBusCycleMachine.CycleKind.HALT_SAMPLE));
         DmgCpuControlLatchIsland.EvaluationOrder controlOrder =
                 order == EvaluationOrder.FORWARD
                         ? DmgCpuControlLatchIsland.EvaluationOrder.FORWARD
