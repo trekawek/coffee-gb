@@ -24,12 +24,12 @@ final class Proposal3TextCatalog {
 
     private static final MenuRect FOOTER_DPAD_CLEAR = new MenuRect(70, 669, 240, 43);
     /* The A and B keycaps belong to the approved artwork and intentionally remain untouched. */
-    private static final MenuRect FOOTER_CHOOSE_CLEAR = new MenuRect(455, 669, 126, 43);
-    private static final MenuRect FOOTER_BACK_CLEAR = new MenuRect(708, 669, 128, 43);
+    private static final MenuRect FOOTER_CHOOSE_CLEAR = new MenuRect(455, 669, 126, 48);
+    private static final MenuRect FOOTER_BACK_CLEAR = new MenuRect(708, 669, 128, 48);
 
     private static final MenuRect FOOTER_DPAD = new MenuRect(73, 660, 226, 56);
-    private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 660, 123, 56);
-    private static final MenuRect FOOTER_BACK = new MenuRect(722, 660, 94, 56);
+    private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 670, 123, 48);
+    private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 94, 48);
 
     private static final EnumMap<MenuRoute, List<TextRegion>> ROUTES = createRoutes();
 
@@ -96,8 +96,8 @@ final class Proposal3TextCatalog {
 
     private static void pause(List<TextRegion> regions) {
         side(regions, new MenuRect(32, 405, 330, 45),
-                new MenuRect[]{new MenuRect(31, 502, 172, 40),
-                        new MenuRect(274, 502, 105, 40), new MenuRect(108, 585, 279, 39)},
+                new MenuRect[]{new MenuRect(31, 496, 172, 48),
+                        new MenuRect(220, 496, 159, 48), new MenuRect(102, 577, 285, 52)},
                 Proposal3GlyphAtlas.Role.NOTICE);
     }
 

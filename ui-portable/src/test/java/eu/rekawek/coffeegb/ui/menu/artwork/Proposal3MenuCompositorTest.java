@@ -144,7 +144,7 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void stateRailUsesFourEqualRowsWithoutSyntheticActionsOrHeaderBack() {
+    public void stateRailUsesFourEqualRowsWithoutSyntheticActionsOrHeaderBack() throws Exception {
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
                 MenuRoute.SAVE_STATES);
         assertEquals(4, layout.rows().size());
@@ -153,13 +153,13 @@ public class Proposal3MenuCompositorTest {
             MenuRect row = layout.rows().get(index).bounds();
             assertEquals(423, row.x());
             assertEquals(483, row.width());
-            assertEquals(97, row.height());
-            assertEquals(121 + index * 108, row.y());
+            assertEquals(123, row.height());
+            assertEquals(121 + index * 134, row.y());
         }
         assertEquals(3, Proposal3OverlayCatalog.SAVE_DIVIDERS.size());
         for (int index = 0; index < Proposal3OverlayCatalog.SAVE_DIVIDERS.size(); index++) {
             MenuRect divider = Proposal3OverlayCatalog.SAVE_DIVIDERS.get(index);
-            assertEquals(220 + index * 108, divider.y());
+            assertEquals(246 + index * 134, divider.y());
             assertEquals(4, divider.height());
         }
         MenuPresentation presentation = defaultPresentation(MenuRoute.SAVE_STATES);
@@ -169,6 +169,85 @@ public class Proposal3MenuCompositorTest {
         assertTrue(presentation.sideHeading().isEmpty());
         assertTrue(presentation.sideLines().isEmpty());
         assertEquals("", presentation.headerAction());
+
+        MenuRect lastRow = layout.rows().get(layout.rows().size() - 1).bounds();
+        assertEquals("state rail must reach the footer without a synthetic action row", 646,
+                lastRow.bottom());
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES).copyPixels();
+        assertTrue("legacy action-strip frame survived at its left edge",
+                paperish(pixel(template, 14, 568)));
+        assertTrue("legacy action-strip frame survived at its center",
+                paperish(pixel(template, 305, 568)));
+        assertTrue("legacy action-strip frame survived at its right edge",
+                paperish(pixel(template, 906, 568)));
+    }
+
+    @Test
+    public void pauseMetadataUsesExpandedNoticeRegionsThatFitCanonicalCopy() throws Exception {
+        List<Proposal3TextCatalog.TextRegion> metadata = Proposal3TextCatalog
+                .regions(MenuRoute.PAUSE_CONSOLE).stream()
+                .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
+                .toList();
+        assertEquals(3, metadata.size());
+        assertEquals(new MenuRect(31, 496, 172, 48), metadata.get(0).bounds());
+        assertEquals(new MenuRect(220, 496, 159, 48), metadata.get(1).bounds());
+        assertEquals(new MenuRect(102, 577, 285, 52), metadata.get(2).bounds());
+
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+        String[] values = {"PLAY TIME", "00:00", "NO BATTERY SAVE"};
+        for (int index = 0; index < values.length; index++) {
+            MenuRect bounds = metadata.get(index).bounds();
+            assertTrue(values[index] + " would exceed its metadata width",
+                    glyphInkFits(atlas, Proposal3GlyphAtlas.Role.NOTICE, values[index],
+                            bounds.width()));
+            assertTrue(values[index] + " would exceed its metadata height",
+                    glyphInkHeightFits(atlas, Proposal3GlyphAtlas.Role.NOTICE, values[index],
+                            bounds.height()));
+        }
+    }
+
+    @Test
+    public void pauseFooterLabelsAreLoweredWithoutMovingDpadOrKeycaps() throws Exception {
+        List<Proposal3TextCatalog.TextRegion> footer = Proposal3TextCatalog
+                .regions(MenuRoute.PAUSE_CONSOLE).stream()
+                .filter(region -> region.key() == Proposal3TextCatalog.Key.FOOTER_LABEL)
+                .toList();
+        assertEquals(2, footer.size());
+        assertEquals(670, footer.get(0).bounds().y());
+        assertEquals(670, footer.get(1).bounds().y());
+        Proposal3TextCatalog.TextRegion dpad = Proposal3TextCatalog
+                .regions(MenuRoute.PAUSE_CONSOLE).stream()
+                .filter(region -> region.key() == Proposal3TextCatalog.Key.FOOTER_DPAD)
+                .findFirst().orElseThrow();
+        assertEquals(660, dpad.bounds().y());
+
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
+        int[] composed = compositor.compose(defaultPresentation(MenuRoute.PAUSE_CONSOLE))
+                .orElseThrow().copyPixels();
+        int[] aKeycap = inkBounds(template, new MenuRect(405, 660, 55, 56));
+        int[] bKeycap = inkBounds(template, new MenuRect(660, 660, 55, 56));
+        for (int index = 0; index < footer.size(); index++) {
+            int[] label = inkBounds(composed, footer.get(index).bounds());
+            int[] keycap = index == 0 ? aKeycap : bKeycap;
+            assertTrue("footer label should not rise above its keycap", label[1] >= keycap[1]);
+            assertTrue("footer label should not fall below its keycap", label[3] <= keycap[3]);
+        }
+    }
+
+    @Test
+    public void dashGlyphIsVerticallyAlignedWithCapHeightAcrossByteBounceRoles() throws Exception {
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+        for (Proposal3GlyphAtlas.Role role : Proposal3GlyphAtlas.Role.values()) {
+            int[] cap = glyphBounds(atlas, role, 'A');
+            int[] dash = glyphBounds(atlas, role, '-');
+            int capCenter = (cap[1] + cap[3]) / 2;
+            int dashCenter = (dash[1] + dash[3]) / 2;
+            assertTrue(role + " dash is not aligned with cap height: " + Arrays.toString(dash),
+                    Math.abs(capCenter - dashCenter) <= 1);
+            assertTrue(role + " dash must remain below the cap top", dash[1] > cap[1]);
+            assertTrue(role + " dash was clipped by its cell", dash[3] < atlas.cellHeight(role));
+        }
     }
 
     @Test
@@ -687,19 +766,19 @@ public class Proposal3MenuCompositorTest {
     public void roleSpecificByteBounceAtlasesArePinnedAndNoFontSourceShips() throws Exception {
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                 + "byte-bounce-medium-atlas.png", 576, 144,
-                "5eae79693a20ca63b9035984fb4eba2ab81f9facf3f06c128d1da817206c2f9a");
+                "38e3864c385f17fca89c3adb94e9ab34d4d66bba3bf84a69994f5171561ad45f");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                 + "byte-bounce-semibold-atlas.png", 768, 192,
-                "a895052d22f63c87d72dd64fb693f11d48c679538013aec3ffeea8ed278c5ef5");
+                "a8c278084120e4100626a51f7dc32cdc976888eafe3a12196676de3809a8ffba");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                 + "byte-bounce-display-atlas.png", 576, 192,
-                "b99d64929933538a958881be776ef3ffa7b79cde7b96d501c4b9c00de90aad02");
+                "b89c0d788c66feff71a7f8ed31c8feaadb90851b6df65491e13ca1dfe522a1d4");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                 + "byte-bounce-small-atlas.png", 352, 144,
-                "2c561819607ac2ddcf1e5a5be91f2b487618e8b4e2fa54d92b05b59784f6855c");
+                "dee0e554f5be7a4cb24a09d9a4f107b612448ce780bc7a8335277309caa9de4c");
         assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                 + "byte-bounce-notice-atlas.png", 448, 144,
-                "15e379d7bf593df5742321df55a574dbe67f8b3eede60162c72dacb9dea6643a");
+                "f8d1f2744192418c9d4a57f3fbe7d52950b3bfd98ec00aca4412d9e88eacc1b1");
         assertNotNull(Proposal3MenuCompositor.class.getResource(
                 "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
                         + "ByteBounce-licensed-source.txt"));
@@ -1059,6 +1138,13 @@ public class Proposal3MenuCompositorTest {
         });
     }
 
+    private static boolean paperish(int value) {
+        int red = value >>> 16 & 0xff;
+        int green = value >>> 8 & 0xff;
+        int blue = value & 0xff;
+        return red + green + blue > 450;
+    }
+
     private static int countPixels(int[] pixels, MenuRect bounds, PixelPredicate predicate) {
         int result = 0;
         for (int y = bounds.y(); y < bounds.bottom(); y++) {
@@ -1157,6 +1243,69 @@ public class Proposal3MenuCompositorTest {
             cursor += atlas.advance(role, value.charAt(index));
         }
         return right <= width;
+    }
+
+    private static boolean glyphInkHeightFits(Proposal3GlyphAtlas atlas,
+            Proposal3GlyphAtlas.Role role, String value, int height) {
+        int top = Integer.MAX_VALUE;
+        int bottom = -1;
+        for (int index = 0; index < value.length(); index++) {
+            int glyph = atlas.index(value.charAt(index));
+            for (int y = 0; y < atlas.cellHeight(role); y++) {
+                for (int x = 0; x < atlas.cellWidth(role); x++) {
+                    if ((atlas.pixel(role, glyph, x, y) >>> 24) != 0) {
+                        top = Math.min(top, y);
+                        bottom = Math.max(bottom, y);
+                    }
+                }
+            }
+        }
+        return bottom < height && top >= 0;
+    }
+
+    private static int[] glyphBounds(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role,
+            char value) {
+        int glyph = atlas.index(value);
+        int left = Integer.MAX_VALUE;
+        int top = Integer.MAX_VALUE;
+        int right = -1;
+        int bottom = -1;
+        for (int y = 0; y < atlas.cellHeight(role); y++) {
+            for (int x = 0; x < atlas.cellWidth(role); x++) {
+                if ((atlas.pixel(role, glyph, x, y) >>> 24) == 0) {
+                    continue;
+                }
+                left = Math.min(left, x);
+                top = Math.min(top, y);
+                right = Math.max(right, x);
+                bottom = Math.max(bottom, y);
+            }
+        }
+        return new int[]{left, top, right, bottom};
+    }
+
+    private static int[] inkBounds(int[] pixels, MenuRect bounds) {
+        int left = Integer.MAX_VALUE;
+        int top = Integer.MAX_VALUE;
+        int right = -1;
+        int bottom = -1;
+        for (int y = bounds.y(); y < bounds.bottom(); y++) {
+            for (int x = bounds.x(); x < bounds.right(); x++) {
+                int value = pixel(pixels, x, y);
+                int red = value >>> 16 & 0xff;
+                int green = value >>> 8 & 0xff;
+                int blue = value & 0xff;
+                if ((red + green + blue) / 3 >= 45) {
+                    continue;
+                }
+                left = Math.min(left, x);
+                top = Math.min(top, y);
+                right = Math.max(right, x);
+                bottom = Math.max(bottom, y);
+            }
+        }
+        assertTrue("expected ink in " + bounds, right >= left && bottom >= top);
+        return new int[]{left, top, right, bottom};
     }
 
     /** Returns the first actual lit glyph row, i.e. the rendered baseline anchor, not a constant. */

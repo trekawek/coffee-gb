@@ -63,8 +63,8 @@ final class Proposal3OverlayCatalog {
     /** Inner aperture of the left bezel; persisted 160:144 thumbnails are aspect-fitted here. */
     static final MenuRect SAVE_PREVIEW = new MenuRect(30, 140, 352, 340);
     static final List<MenuRect> SAVE_DIVIDERS = List.of(
-            new MenuRect(420, 220, 489, 4), new MenuRect(420, 328, 489, 4),
-            new MenuRect(420, 436, 489, 4));
+            new MenuRect(420, 246, 489, 4), new MenuRect(420, 380, 489, 4),
+            new MenuRect(420, 514, 489, 4));
 
     static final MenuRect AUDIO_LEFT_META = new MenuRect(62, 405, 315, 96);
     static final MenuRect TOUCH_LEFT_META = new MenuRect(61, 154, 315, 53);
@@ -116,12 +116,12 @@ final class Proposal3OverlayCatalog {
                 false, "resume", new Marker(443, 147, 26, 20, 31), false));
 
         layouts.put(MenuRoute.SAVE_STATES, layout(MenuRoute.SAVE_STATES,
-                rows(new int[][]{{420, 118, 489, 103}, {420, 226, 489, 103},
-                        {420, 334, 489, 103}, {420, 442, 489, 103}}, Surface.DARK),
+                rows(new int[][]{{420, 118, 489, 129}, {420, 252, 489, 129},
+                        {420, 386, 489, 129}, {420, 520, 489, 129}}, Surface.DARK),
                 List.of(),
                 masks(SAVE_PREVIEW,
-                        rowsMasks(new int[][]{{420, 118, 489, 103}, {420, 226, 489, 103},
-                                {420, 334, 489, 103}, {420, 442, 489, 103}}),
+                        rowsMasks(new int[][]{{420, 118, 489, 129}, {420, 252, 489, 129},
+                                {420, 386, 489, 129}, {420, 520, 489, 129}}),
                         SAVE_DIVIDERS.toArray(new MenuRect[0])), false, "slot-0",
                 new Marker(443, 151, 30, 20, 31), false));
 

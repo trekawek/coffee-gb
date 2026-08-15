@@ -39,8 +39,8 @@ COMMON_PAPER_TEXT = [
     rect(690, 36, 189, 38),      # BACK / OPEN ROM
     rect(70, 669, 240, 43),      # D-PAD MOVE
     # Preserve the approved A/B keycap glyphs.  Runtime changes labels only.
-    rect(455, 669, 126, 43),     # OK -> CHOOSE
-    rect(708, 669, 128, 43),     # BACK
+    rect(455, 669, 126, 48),     # OK -> CHOOSE
+    rect(708, 669, 128, 48),     # BACK
 ]
 
 COMMON_PAPER_RESTORE = [
@@ -53,16 +53,15 @@ COMMON_PAPER_RESTORE = [
 
 ROUTE_PAPER_TEXT = {
     "00-pause-console.png": [
-        rect(32, 409, 330, 34), rect(31, 506, 172, 29), rect(274, 506, 105, 29),
-        rect(108, 590, 279, 27), rect(370, 500, 20, 45),
+        rect(32, 409, 330, 34), rect(31, 496, 172, 48), rect(220, 496, 159, 48),
+        rect(102, 577, 285, 52), rect(370, 500, 20, 45),
         # Pause has neither a context trail nor a header action.
         rect(340, 25, 325, 61), rect(688, 25, 207, 61),
     ],
     "01-save-states.png": [
         # State pages have no slot/status metadata beside or below the thumbnail.
         rect(30, 140, 352, 340), rect(30, 486, 352, 66),
-        # The old three-button strip is now an intentionally blank paper band.
-        rect(14, 568, 897, 75), rect(688, 25, 207, 70),
+        rect(688, 25, 207, 70),
     ],
     "02-settings.png": [
         rect(38, 146, 342, 50), rect(36, 486, 342, 46), rect(36, 532, 342, 42),
@@ -135,7 +134,7 @@ PAUSE_PREVIEW_MATTE = (18, 27, 20)
 ROUTE_WIDGETS = {
     # A clean rail is repainted at runtime into seven 72px rows, with exact 2px dividers.
     "00-pause-console.png": [("dark", rect(424, 121, 484, 516))],
-    "01-save-states.png": [("dark", inner(420, 118, 489, 427))],
+    "01-save-states.png": [("dark", inner(420, 118, 489, 531))],
     "02-settings.png": [("dark", inner(*value)) for value in
         [(423, 116, 487, 56), (423, 174, 487, 57), (423, 233, 487, 57),
          (423, 292, 487, 57), (423, 351, 487, 57), (423, 410, 487, 56),
@@ -178,12 +177,32 @@ ROUTE_WIDGETS = {
 }
 
 
-def clear_paper_text(image: np.ndarray, bounds: tuple[int, int, int, int],
-                     paper: np.ndarray) -> None:
+def clear_surface(image: np.ndarray, bounds: tuple[int, int, int, int],
+                  surface: np.ndarray) -> None:
     left, top, right, bottom = bounds
     height, width = bottom - top, right - left
-    tiled = np.tile(paper, (height // paper.shape[0] + 1, width // paper.shape[1] + 1, 1))
+    tiled = np.tile(surface, (height // surface.shape[0] + 1,
+                              width // surface.shape[1] + 1, 1))
     image[top:bottom, left:right] = tiled[:height, :width]
+
+
+def clear_paper_text(image: np.ndarray, bounds: tuple[int, int, int, int],
+                     paper: np.ndarray) -> None:
+    clear_surface(image, bounds, paper)
+
+
+def tile_reference_vertical(image: np.ndarray, reference: np.ndarray,
+                            destination: tuple[int, int, int, int],
+                            source: tuple[int, int, int, int]) -> None:
+    """Continue a narrow authored vertical bezel edge without inventing new artwork."""
+    destination_left, destination_top, destination_right, destination_bottom = destination
+    source_left, source_top, source_right, source_bottom = source
+    tile = reference[source_top:source_bottom, source_left:source_right]
+    if tile.shape[0] == 0 or tile.shape[1] != destination_right - destination_left:
+        raise ValueError("Invalid vertical bezel continuation")
+    for top in range(destination_top, destination_bottom, tile.shape[0]):
+        bottom = min(destination_bottom, top + tile.shape[0])
+        image[top:bottom, destination_left:destination_right] = tile[:bottom - top]
 
 
 def paste_surface(image: Image.Image, surface: Image.Image,
@@ -229,11 +248,19 @@ def main() -> None:
             # thumbnail aperture.  The runtime fills this aperture with a detached thumbnail.
             clear_paper_text(pixels, rect(30, 140, 352, 340), paper_pixels)
             clear_paper_text(pixels, rect(30, 486, 352, 66), paper_pixels)
-            # The state route has no header action and no save/load/delete action strip.  These
-            # rectangles stop inside the surrounding panel frames, so the page still has one
-            # coherent paper surface rather than ghosted blank controls.
+            # The state route has no header action and no save/load/delete action strip. Remove
+            # the entire legacy framed strip and let the screenshot/date panel and state rail
+            # continue to the controls footer as one coherent page.
             clear_paper_text(pixels, rect(688, 25, 207, 70), paper_pixels)
-            clear_paper_text(pixels, rect(14, 568, 897, 75), paper_pixels)
+            clear_paper_text(pixels, rect(8, 552, 906, 101), paper_pixels)
+            clear_surface(pixels, inner(420, 552, 489, 97), np.array(surfaces["dark"]))
+            # The legacy full-width action strip also contained the side rails of the state
+            # list. Continue those authored rails down to the footer so the new fourth row
+            # does not look like a detached dark widget.
+            tile_reference_vertical(pixels, reference, rect(407, 552, 14, 101),
+                                    rect(407, 500, 14, 52))
+            tile_reference_vertical(pixels, reference, rect(908, 552, 6, 101),
+                                    rect(908, 500, 6, 52))
             # Keep the preview well blank until a persisted thumbnail is supplied at runtime.
             left, top, right, bottom = rect(30, 140, 352, 340)
             clear_paper_text(pixels, (left, top, right, bottom), paper_pixels)
