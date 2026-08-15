@@ -169,13 +169,12 @@ public class CpuBusCycleMachineTest {
         assertEquals(T4, acknowledge.get(0).tState());
         assertEquals(0, machine.interruptRequests());
 
-        // Production's IRQ_PUSH_2 callback performs three logically concurrent operations. IF
-        // and IE should instead be internal wires; putting them on the external bus would conflict
-        // with the low-byte stack write represented above.
-        assertEquals(List.of(
-                new Access(16, AccessType.READ, 0xff0f, 0xe5),
-                new Access(16, AccessType.READ, 0xffff, timer),
-                new Access(16, AccessType.WRITE, 0xcffe, 0x34)),
+        // IE&IF are internal wires, so their T1/T2 transparent aperture does not appear on
+        // the external bus. The held one-hot owner drives the existing T4 clear alongside
+        // the only external operation, the low-byte stack write.
+        assertTrue(fixture.bus.accesses.stream()
+                .noneMatch(access -> access.tick() == 13 || access.tick() == 14));
+        assertEquals(List.of(new Access(16, AccessType.WRITE, 0xcffe, 0x34)),
                 fixture.bus.accesses.stream().filter(access -> access.tick() == 16).toList());
     }
 

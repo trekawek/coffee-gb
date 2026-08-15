@@ -95,10 +95,6 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private int opContext;
 
-    private int interruptFlag;
-
-    private int interruptEnabled;
-
     private InterruptManager.InterruptType requestedIrq;
 
     private int clockCycle = 0;
@@ -187,6 +183,16 @@ public class Cpu implements StatefulComponent<Cpu> {
                 state = State.OPCODE;
             }
             return;
+        }
+
+        // On DMG the IE&IF priority bank is transparent only during the first
+        // half of the low-byte push/acknowledge machine cycle. Hold its owner
+        // after that aperture so the same source drives both the existing T4 IF
+        // clear and the following Java vector cycle. CGB uses the same first-half
+        // projection; its exact gate placement is differential/fitted territory.
+        if (state == State.IRQ_PUSH_2
+                && clockCycle < 2 / speedMode.getSpeedMode()) {
+            sampleInterruptOwner();
         }
 
         if (++clockCycle >= (4 / speedMode.getSpeedMode())) {
@@ -547,15 +553,6 @@ public class Cpu implements StatefulComponent<Cpu> {
                 break;
 
             case IRQ_PUSH_2:
-                interruptFlag = addressSpace.getByte(0xff0f);
-                interruptEnabled = addressSpace.getByte(0xffff);
-                requestedIrq = null;
-                for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
-                    if ((interruptFlag & interruptEnabled & (1 << irq.ordinal()) & 0x1f) != 0) {
-                        requestedIrq = irq;
-                        break;
-                    }
-                }
                 registers.decrementSP();
                 addressSpace.setByte(registers.getSP(), registers.getPC() & 0x00ff);
                 if (requestedIrq != null) {
@@ -565,7 +562,6 @@ public class Cpu implements StatefulComponent<Cpu> {
                 break;
 
             case IRQ_JUMP:
-                applyLateInterruptPriority();
                 if (requestedIrq != null) {
                     notifyInterruptAccepted(requestedIrq);
                     registers.setPC(requestedIrq.getHandler());
@@ -579,24 +575,12 @@ public class Cpu implements StatefulComponent<Cpu> {
         }
     }
 
-    /**
-     * The interrupt priority gate remains live through the final vector cycle. If a
-     * higher-priority source arrives after the stack pushes selected and acknowledged
-     * a lower source, vector to the new source and leave the old one pending.
-     */
-    private void applyLateInterruptPriority() {
-        if (requestedIrq == null) {
-            return;
-        }
+    private void sampleInterruptOwner() {
+        int pending = interruptManager.getPendingInterruptFlags();
+        requestedIrq = null;
         for (InterruptManager.InterruptType irq : InterruptManager.InterruptType.VALUES) {
-            if (irq.ordinal() >= requestedIrq.ordinal()) {
-                return;
-            }
             int mask = 1 << irq.ordinal();
-            if ((interruptEnabled & mask) != 0
-                    && interruptManager.isInterruptFlagSet(irq)) {
-                interruptManager.requestInterrupt(requestedIrq);
-                interruptManager.clearInterrupt(irq);
+            if ((pending & mask) != 0) {
                 requestedIrq = irq;
                 return;
             }
@@ -629,8 +613,6 @@ public class Cpu implements StatefulComponent<Cpu> {
         opIndex = 0;
         opContext = 0;
 
-        interruptFlag = 0;
-        interruptEnabled = 0;
         requestedIrq = null;
     }
 
@@ -1208,7 +1190,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         operand[0] = this.operand[0];
         operand[1] = this.operand[1];
         return new CpuState(registers.captureState(), opcode1, opcode2, operand, operandIndex, opIndex,
-                state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
+                state, opContext, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
                 ordinaryHaltWakeStatPhase, haltedCpuCycles,
                 hdmaOpcodePrefetched, hdmaArbitrationOpcode, hdmaArbitrationOpcodeValid,
@@ -1220,7 +1202,7 @@ public class Cpu implements StatefulComponent<Cpu> {
     @Override
     public ComponentState<Cpu> captureState(MachineStateCapture capture) {
         return new CpuState(registers.captureState(), opcode1, opcode2, capture.ints(operand), operandIndex, opIndex,
-                state, opContext, interruptFlag, interruptEnabled, requestedIrq, clockCycle, haltBugMode,
+                state, opContext, requestedIrq, clockCycle, haltBugMode,
                 haltEntrySampleTicks, synchronousHaltEntryStatPhase, asynchronousHaltEntryStatPhase,
                 ordinaryHaltWakeStatPhase, haltedCpuCycles,
                 hdmaOpcodePrefetched, hdmaArbitrationOpcode, hdmaArbitrationOpcodeValid,
@@ -1243,8 +1225,6 @@ public class Cpu implements StatefulComponent<Cpu> {
         this.opIndex = mem.opIndex;
         this.state = mem.state;
         this.opContext = mem.opContext;
-        this.interruptFlag = mem.interruptFlag;
-        this.interruptEnabled = mem.interruptEnabled;
         this.requestedIrq = mem.requestedIrq;
         this.clockCycle = mem.clockCycle;
         this.haltBugMode = mem.haltBugMode;
@@ -1289,8 +1269,8 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     private record CpuState(ComponentState<Registers> registersMemento, int opcode1, int opcode2, int[] operand,
-                              int operandIndex, int opIndex, State state, int opContext, int interruptFlag,
-                              int interruptEnabled, InterruptManager.InterruptType requestedIrq, int clockCycle,
+                              int operandIndex, int opIndex, State state, int opContext,
+                              InterruptManager.InterruptType requestedIrq, int clockCycle,
                               boolean haltBugMode, int haltEntrySampleTicks,
                               boolean synchronousHaltEntryStatPhase,
                               boolean asynchronousHaltEntryStatPhase,
