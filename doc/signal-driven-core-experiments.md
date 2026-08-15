@@ -168,6 +168,8 @@ models.
 The final rows are direct runs from the combined branch, not sums of isolated worktree results.
 They establish regression safety for all seven retained cuts. They still do not turn test-only
 candidate outputs or external-model observations into silicon evidence.
+The exact reactor/profile sequence is retained in
+[`scripts/verify-signal-reduction-battery.sh`](../scripts/verify-signal-reduction-battery.sh).
 
 A final combined-branch `DebugDisabledBenchmarkTest` audit used detached baseline/current
 worktrees, fixed CPU affinity, alternating revision order, sibling-core monitoring, and a discard
