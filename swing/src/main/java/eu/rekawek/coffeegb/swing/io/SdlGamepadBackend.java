@@ -1,8 +1,13 @@
 package eu.rekawek.coffeegb.swing.io;
 
+import com.sun.jna.Library;
+import com.sun.jna.Memory;
+import com.sun.jna.Native;
 import com.sun.jna.NativeLibrary;
+import com.sun.jna.Pointer;
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap;
 import io.github.libsdl4j.api.gamecontroller.SDL_GameController;
+import io.github.libsdl4j.api.joystick.SDL_JoystickGUID;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -23,10 +28,17 @@ import static io.github.libsdl4j.api.joystick.SdlJoystick.*;
 final class SdlGamepadBackend implements GamepadBackend {
 
     private boolean initialized;
+    private GuidApi guidApi;
 
     @Override
     public void initialize() {
         locateSystemSdl();
+        // SDL_JoystickGetDeviceGUID returns SDL_JoystickGUID by value.  The direct JNA mapping
+        // used by libsdl4j corrupts the following native call for this struct-return ABI on
+        // macOS arm64 when SDL2 is provided by Homebrew's sdl2-compat layer.  Use JNA's proxy
+        // mapper for this one ABI-sensitive pair instead; the byte representation remains the
+        // same as SDL_JoystickGetGUIDString and therefore preserves stable device IDs.
+        guidApi = Native.load("SDL2", GuidApi.class);
         if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0) {
             throw new IllegalStateException("SDL game-controller initialization failed");
         }
@@ -47,7 +59,7 @@ final class SdlGamepadBackend implements GamepadBackend {
             }
             String name = nullToEmpty(SDL_GameControllerNameForIndex(index));
             String path = nullToEmpty(SDL_GameControllerPathForIndex(index));
-            String guid = SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(index));
+            String guid = deviceGuid(index);
             long instance = SDL_JoystickGetDeviceInstanceID(index).longValue();
             devices.add(new DeviceInfo(stableId(guid, path, name, instance), name, index));
         }
@@ -99,8 +111,22 @@ final class SdlGamepadBackend implements GamepadBackend {
         return value == null ? "" : value;
     }
 
+    private String deviceGuid(int index) {
+        SDL_JoystickGUID guid = guidApi.SDL_JoystickGetDeviceGUID(index);
+        try (Memory textBuffer = new Memory(33L)) {
+            guidApi.SDL_JoystickGetGUIDString(guid, textBuffer, (int) textBuffer.size());
+            return textBuffer.getString(0L, StandardCharsets.US_ASCII.name());
+        }
+    }
+
     private static boolean isMac() {
         return System.getProperty("os.name", "").toLowerCase().contains("mac");
+    }
+
+    private interface GuidApi extends Library {
+        SDL_JoystickGUID SDL_JoystickGetDeviceGUID(int deviceIndex);
+
+        void SDL_JoystickGetGUIDString(SDL_JoystickGUID guid, Pointer text, int textLength);
     }
 
     private static void locateSystemSdl() {
