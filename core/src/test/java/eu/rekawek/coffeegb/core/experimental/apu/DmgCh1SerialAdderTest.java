@@ -11,7 +11,8 @@ import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsif
 import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.NR10_WRITE_DURING_RESTART_OR_CALCULATION;
 import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.SUB_T_GATE_PROPAGATION;
 import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.SWEEP_TERMINAL_DURING_RESTART_PIPELINE;
-import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.UPSTREAM_CH1_START_APERTURE_MAPPING;
+import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.NATURAL_BEXA_CLOCK_ALIGNMENT;
+import static eu.rekawek.coffeegb.core.experimental.apu.DmgCh1SerialAdder.Falsifier.RAW_NR14_WRITE_TO_CH1_START_FRONT_END;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -71,7 +72,7 @@ public class DmgCh1SerialAdderTest {
                 expectedCounter = 7;
             }
             assertEquals("shift counter at T=" + tick, expectedCounter, state.shiftCounter());
-            assertEquals("LD_SUM at T=" + tick, tick < 4 || tick >= 16, state.loadSum());
+            assertEquals("LD_SUM at T=" + tick, tick >= 16, state.loadSum());
             assertEquals("calculation latch at T=" + tick,
                     tick >= 4 && tick < 16, state.calculationLatch());
             assertEquals("shift clock at T=" + tick,
@@ -92,27 +93,73 @@ public class DmgCh1SerialAdderTest {
         Harness trigger = new Harness(0x10, 0x600);
         trigger.startBeforeCurrentClockEdge();
         completed = trigger.runUntilSumLoad();
+        assertEquals("external trace: KALA terminal reaches BYTE two T after CH1_START",
+                2, trigger.tick);
         assertFalse(completed.overflowCheckPulse());
         assertFalse(trigger.state.overflow());
+        assertFalse(trigger.state.calculationLatch());
     }
 
     @Test
-    public void freeRunningRestartApertureSpansBothProductionDelayBuckets() {
-        // Production labels these buckets with channel activity because it has no CH1_START
-        // aperture input. The equality pins a possible replacement, not the unproven mapping
-        // from channel status to which side of FEKU's edge the real write reaches.
+    public void fixedCpuWritePhaseFalsifiesActivitySelectedRestartApertures() {
+        // From CH1_START onward the topology agrees with production's shorter delay. The longer
+        // inactive bucket remains a compatibility rule: the external netlist has neither an
+        // active-state input to this cone nor a second CPU-write phase that could produce it.
         for (int shift = 1; shift <= 7; shift++) {
             int nr10 = 0x10 | shift;
-            int productionMetEdge = productionTriggerOverflowTicks(nr10, true);
-            int productionMissedEdge = productionTriggerOverflowTicks(nr10, false);
+            int downstreamTicks = topologyTriggerOverflowTicks(nr10, true);
+            int productionActive = productionTriggerOverflowTicks(nr10, true);
+            int productionInactive = productionTriggerOverflowTicks(nr10, false);
 
-            assertEquals("met FEKU edge, shift=" + shift,
-                    productionMetEdge, topologyTriggerOverflowTicks(nr10, true));
-            assertEquals("missed FEKU edge, shift=" + shift,
-                    productionMissedEdge, topologyTriggerOverflowTicks(nr10, false));
-            assertEquals("one free-running 1 MHz period", 4,
-                    productionMissedEdge - productionMetEdge);
+            assertEquals("CH1_START to overflow, shift=" + shift,
+                    8 + 4 * shift, downstreamTicks);
+            assertEquals("active compatibility bucket, shift=" + shift,
+                    downstreamTicks, productionActive);
+            assertEquals("unexplained inactive compatibility bucket, shift=" + shift,
+                    downstreamTicks + 4, productionInactive);
         }
+
+        // Default-delay offsets are relative to the NR14 write edge, in simulator T-cycles.
+        // The first member is inactive and the second is the later active retrigger. Shift zero
+        // has only the initial +3.993 T edge: the active retrigger leaves BYTE/LD_SUM high.
+        assertEquals(4, Math.round(3.993));
+        assertDefaultDelayPair(1, 13.993, 13.993);
+        assertDefaultDelayPair(3, 21.993, 21.993);
+        assertDefaultDelayPair(7, 37.993, 37.993);
+
+        // The nodelay trace has the same T ordering exactly: NR14 -> CH1_START = 2 T,
+        // NR14 -> FEKU = 3 T, NR14 -> FYTE = 11 T; an initial zero-shift load is +4 T,
+        // and nonzero NR14 -> LD_SUM is 10 + 4*shift.
+        assertEquals(4, nodelayLoadSumOffset(0));
+        assertEquals(22, nodelayLoadSumOffset(3));
+        assertEquals(38, nodelayLoadSumOffset(7));
+    }
+
+    @Test
+    public void zeroShiftActiveRetriggerRetainsByteInsteadOfRaisingAnotherLoadEdge() {
+        Harness harness = new Harness(0x10, 0x400);
+        harness.startBeforeCurrentClockEdge();
+        harness.runUntilSumLoad();
+        assertTrue(harness.state.loadSum());
+
+        // Match the generated program's 44 T CH1_START-to-CH1_START spacing.
+        while (harness.tick < 44) {
+            harness.advanceIdle();
+        }
+        harness.startBeforeCurrentClockEdge();
+        assertTrue("same-phase CH1_START immediately enters FEKU in this boundary model",
+                harness.state.restart());
+
+        int delayedRises = 0;
+        int loadRises = 0;
+        for (int i = 0; i < 24; i++) {
+            DmgCh1SerialAdder.Resolution resolution = harness.advanceIdle();
+            delayedRises += resolution.restartDelayedRise() ? 1 : 0;
+            loadRises += resolution.loadSumRise() ? 1 : 0;
+        }
+        assertEquals(1, delayedRises);
+        assertEquals("external shift-zero trace has no second LD_SUM edge", 0, loadRises);
+        assertTrue(harness.state.loadSum());
     }
 
     @Test
@@ -196,10 +243,27 @@ public class DmgCh1SerialAdderTest {
 
     @Test
     public void cgbAndTransistorDelayRemainSeparateProfiles() {
-        assertEquals(EnumSet.of(UPSTREAM_CH1_START_APERTURE_MAPPING,
+        assertEquals(EnumSet.of(RAW_NR14_WRITE_TO_CH1_START_FRONT_END,
+                        NATURAL_BEXA_CLOCK_ALIGNMENT,
                         INTERMEDIATE_SUM_NODE_OBSERVATION,
                         CGB_RESTART_PROFILE, SUB_T_GATE_PROPAGATION),
                 DmgCh1SerialAdder.profileFalsifiers());
+        assertEquals(EnumSet.allOf(DmgCh1SerialAdder.Evidence.class),
+                DmgCh1SerialAdder.evidence());
+        assertEquals("ee559e1d963e1cc522df512e3bae1b4e5ff96fb5",
+                DmgCh1SerialAdder.NETLIST_REVISION);
+    }
+
+    private static void assertDefaultDelayPair(int shift, double inactive, double active) {
+        int expectedOffset = shift == 0 ? 4 : 10 + 4 * shift;
+        assertEquals("inactive LD_SUM offset, shift=" + shift,
+                expectedOffset, Math.round(inactive));
+        assertEquals("active LD_SUM offset, shift=" + shift,
+                inactive, active, 0.001);
+    }
+
+    private static int nodelayLoadSumOffset(int shift) {
+        return shift == 0 ? 4 : 10 + 4 * shift;
     }
 
     private static void assertTriggerTrace(
@@ -223,7 +287,7 @@ public class DmgCh1SerialAdderTest {
             expectedCounter = 7;
         }
         assertEquals("SHIFTCOUNT at T=" + tick, expectedCounter, state.shiftCounter());
-        assertEquals("LD_SUM at T=" + tick, tick < 1 || tick >= 20, state.loadSum());
+        assertEquals("LD_SUM at T=" + tick, tick >= 20, state.loadSum());
         assertEquals("calculation latch at T=" + tick,
                 tick >= 9 && tick < 20, state.calculationLatch());
         assertEquals("RESTART edge at T=" + tick, tick == 1, resolution.restartRise());

@@ -100,6 +100,7 @@ git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
 | `SERIAL-DIV-RESET` | `dmg_cpu_b/dmg_cpu_b.sv`; instances `tape`, `ufol`, `tama`, `uvyn`, `coty`, `cave`, `dawa`, `edyl`, `elys` | FF04 reset clears the divider stage feeding the internal serial-clock toggle DFF; the shift DFF clocks only on the resulting falling SCK transition | The full-hierarchy cone below establishes DMG-B external-model ownership, not CGB or physical-silicon equivalence |
 | `TIMER-OVERFLOW` | `dmg_cpu_b/dmg_cpu_b.sv`; expression `(boga|mery|moba|nydu)_inst` | Instances at lines 7887, 24503, 24584, and 26046; inspect their pins to recover the sampled-TIMA-MSB/fall/reload cone | The dynamic probe below verifies selected CPU-write and IF/acknowledge apertures in this external model; silicon and unprobed phases remain outside it |
 | `APU-FRAME-CLOCK` | same file; expression `(ajer|bara|bufy|byfe|bylu|caru|cate|coke|horu)_inst` | Instances at lines 4934, 7035, 8425, 8891, 9012, 9560, 9602, 10255, and 20124 form the selected DMG divider/ripple cone | Does not establish CGB tap/offset, power-on suppression, or speed-switch phase |
+| `CH1-RESTART-ADDER` | same file; instances `deby/doge/dupe/ezec/fyfo/feku/fare/fyte/kala/evol/femu/copy/byte/adad/bexa` | NR14 write synchronization, restart delay, serial-counter load, retained sum capture, and feedback form a bounded CH1 cone with no channel-active input | Does not explain production's inactive extra-four-T projection, arbitrary write/BEXA phases, or CGB |
 | `CH3-PORT` | same file; expression `(afum|agyl|axol|azet|azus|bano|bole|busa)_inst` | Address-owner/fetch-related instances at lines 4656, 4817, 6533, 6606, 6668, 6982, 7991, and 8658 | The two Java fetch-valid stages are fitted; retrigger and electrical collision are not established |
 | `CH4-STEADY-TRIGGER` | same file; expression `(apu_phi|cary|cexo|dova|esep|gary|gaty|gone|gora|gysu|hazo|hezu|hoga|jaky|jare|jepe|jero|joto|jyco|jyfu|jyre|kavu|komu)_inst` | Named ratio, prescaler, tap, zero-reset/XNOR LFSR, CPU-write latch, GYSU sample, and restart cells form a bounded raw-clock path | The nodelay probe below verifies two DMG alignments; default-delay/sub-T collisions, other write apertures, and CGB remain outside it |
 | `STAT-SPLIT` | `dmg_cpu_b_gameboy.sv:666-674,696-704`; `dmg_cpu_b/dmg_cpu_b.sv` expression `lyc_int|lyc_int_en|ff41|ff44` | CPU-visible FF41 and LY vectors are assembled from distinct internal nodes; coincidence and internal STAT state have separate signals | Does not establish the Java line/dot table or FF41 transient mask |
@@ -444,6 +445,72 @@ other CPU-write apertures, STOP/non-CPU writes, simultaneous APU reset or DAC di
 collisions, test mode, CGB, or double speed. It also does not falsify Coffee GB's externally correct
 `PolynomialCounter`; it only rejects treating that behavioral countdown as an internal gate-node
 timestamp.
+
+## DMG CH1 restart and serial-adder probe
+
+A **VERIFIED external gate-model run** in isolated checkout `/tmp/coffee-gb-dmg-sim-ch1` used
+revision `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`, Icarus 14.0-devel `1d2aa1b`, and both
+`TIMING=default` and `TIMING=nodelay`. The external harness modifies only
+`dmg_cpu_b_gameboy.sv` (136 insertions, 2 deletions); its binary-diff SHA-256 is
+`a21a9aea187108d88c761f6e1c71fee6c7aa0f4c3ddfc74f60dec5ee4a5e1e48`. It adds monitors and
+synthetic register stimuli, not DUT logic. No external source, generated ROM, or waveform was
+copied into Coffee GB, and binary artifact checksums are intentionally omitted.
+
+The exact build/run shape was:
+
+```sh
+test ! -e /tmp/coffee-gb-dmg-sim-ch1 && \
+  git clone --local /tmp/dmg-sim /tmp/coffee-gb-dmg-sim-ch1
+cd /tmp/coffee-gb-dmg-sim-ch1
+
+make -B dmg_cpu_b_gameboy.vvp DUMP= TIMING=default \
+  IVERILOG=/tmp/coffee-gb-iverilog-master/bin/iverilog \
+  VVP=/tmp/coffee-gb-iverilog-master/bin/vvp
+
+/tmp/coffee-gb-iverilog-master/bin/vvp -N dmg_cpu_b_gameboy.vvp \
+  -none +BOOTROM=boot/quickboot.bin +SECS=0.01 \
+  +CH1_SHIFT=3 +CH1_FREQ=400 +CH1_MODE=0
+```
+
+Repeat the last run for shifts 0, 1, 3, and 7, and repeat the build with `TIMING=nodelay`.
+`CH1_MODE=1`, shift 1, frequency `400`, and `SECS=0.03` captures natural BEXA feedback;
+`CH1_MODE=2`, shift 7, and `SECS=0.01` captures the NR10 shift-seven-to-one collision.
+
+Static connectivity is:
+
+```text
+NR14.7:  DEBY/DOGE -> DUPE write latch -> EZEC(APU_PHI) -> CH1_START
+restart: FYFO -> FEKU(CH1_1MHZ) -> CH1_RESTART -> FARE -> FYTE(RESTART_DLY)
+counter: KALA(load) -> COPA/CAJA/BYRA -> COPY(terminal) -> BYTE(AJER) -> ADAD(LD_SUM)
+request: EVOL(RESTART_DLY/BEXA) -> FEMU; EPUK/LD_SUM resets FEMU
+feedback: BEXA writes settled sum and reopens FEMU; BUSO/BOJE expose FREQ_UPD1/2
+```
+
+CYTO/channel-active is set downstream by `CH1_RESTART` and has no connection to the request/restart
+cone. At identical CPU write phases, default timing observed the following offsets from both the
+inactive and active NR14 writes:
+
+```text
+CH1_START +1.984 T; FEKU +3.005 T; FARE +6.992 T; FYTE +10.994 T
+shift 1: LD_SUM +13.993 T on both writes
+shift 3: LD_SUM +21.993 T on both writes
+shift 7: LD_SUM +37.993 T on both writes
+shift 0 inactive: KALA +3.005 T; BYTE +3.990 T; LD_SUM +3.993 T
+shift 0 active: identical request/restart offsets, but no second LD_SUM edge before BEXA
+```
+
+The nodelay trace preserves the same ordering exactly: `CH1_START` at +2 T, FEKU +3 T, FARE +7 T,
+FYTE/FEMU +11 T, and shift-three LD_SUM +22 T. Natural shift-one BEXA first moves the accumulator
+from `400` to `600`, raises the second request, and produces the second LD_SUM about six T later;
+the overflow line follows from the updated value. The NR10 collision changes the live field while
+the previously loaded serial counter keeps its original shift-seven schedule.
+
+This **FALSIFIES `wasActive` AS THE CAUSE OF TWO RESTART APERTURES** in the pinned model. It does not
+prove Coffee GB's inactive production bucket wrong as externally observed behavior; that timing is
+a projection whose missing upstream boundary remains unresolved. The model is reverse-engineered
+DMG-B rather than silicon, default delays are estimated, and arbitrary write/BEXA phases, close
+NR10 carry/negate collisions, frequency/retrigger overlap, CGB, and analog/sub-T behavior remain
+open.
 
 ## SM83 HALT waveform probe
 
@@ -964,6 +1031,7 @@ artifact in either inspected checkout:
 | Five PPU register receiver delays, output write envelope, and scanout reset fanout | **FITTED, not external evidence** | Trace each receiver/reset pin or obtain hardware phase sweeps; the static source-bank/reset-root/window-source observations are insufficient |
 | Active-window downstream retirement | **Bounded in external nodelay/default-delay models; silicon race unresolved** | Obtain a physical phase sweep or another independent gate model to choose whether the pre-edge shared transaction survives; extend source-tagged replay across sprite/window/SCX overlaps before migration |
 | CH4 trigger aperture | **Two DMG nodelay alignments traced; wider timing unresolved** | Reproduce the SameSuite invocation, run default-delay/sub-T collision probes, sweep other CPU-write/reset phases, and treat CGB as a separate topology |
+| CH1 inactive extra-four-T production bucket | **Falsified as a channel-active-selected aperture in the DMG external model** | Locate the missing production projection boundary with CPU-write/BEXA phase sweeps and hardware captures; do not restore `wasActive` as a gate-cone input |
 
 Mealybug images and Coffee GB ROM profiles remain integration oracles documented by the repository's
 test configuration. Their passing result is not evidence that a detached experimental cone rendered
