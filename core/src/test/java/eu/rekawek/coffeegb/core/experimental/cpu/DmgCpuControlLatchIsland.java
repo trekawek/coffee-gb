@@ -16,8 +16,11 @@ import static eu.rekawek.coffeegb.core.signal.SrLatch.Dominance.CLEAR;
  * open; {@code int_pending} is its reduction; YOII clocks that level before it reaches the
  * reset-dominant {@code halt} SR latch. The direct HALT decode is absent from decoder2's
  * {@code ctl_idu_inc} product sum (where NOP/STOP is present), and is separately clocked into
- * {@code ctl_op_halt_delayed}. That topology can create the HALT bug as a short decode/IDU
- * conflict rather than a mode. IME is likewise a control latch followed by an exec-phase
+ * {@code ctl_op_halt_delayed}. The direct decode suppresses the HALT instruction's own IDU
+ * increment while the delayed copy only feeds the HALT-latch set input. A pending YOII reset can
+ * therefore prevent the latch from setting after the next opcode was sampled with an unchanged
+ * PC. That topology creates the HALT bug without a mode or a delayed next-fetch gate. IME is
+ * likewise a control latch followed by an exec-phase
  * observation point ({@code ime_state -> ime_n}). There is no per-request "halt blocked" or
  * "instruction blocked" provenance in this cone.</p>
  *
@@ -58,8 +61,6 @@ final class DmgCpuControlLatchIsland {
         EARLY_IE_WRITE_REQUIRES_BUS_REANCHOR,
         /** Priority capture and the delayed IF reset strobe belong to the interrupt-entry machine. */
         VECTOR_AND_ACKNOWLEDGE_PHASES,
-        /** The exact delta path from HALT decode to the one-fetch PC gate still needs a gate trace. */
-        HALT_PC_GATE_DELTA_PATH,
         /** CGB's direct PPU interrupt path is not the DMG SM83 topology modeled here. */
         CGB_DIRECT_INTERRUPT_PATH
     }
@@ -169,9 +170,12 @@ final class DmgCpuControlLatchIsland {
             boolean ime,
             boolean eiPending,
             boolean halted,
-            boolean haltDecodeHeld,
+            boolean directHaltDecode,
+            boolean haltSetDelayed,
             boolean dispatchRequest,
             boolean instructionRegisterLoad,
+            boolean iduIncrement,
+            boolean pcWrite,
             boolean pcIncrement) {
     }
 
@@ -182,7 +186,7 @@ final class DmgCpuControlLatchIsland {
             boolean haltWakePending,
             boolean ime,
             boolean eiPending,
-            boolean haltDecodeHeld,
+            boolean haltSetDelayed,
             boolean halted) {
 
         State {
@@ -206,10 +210,10 @@ final class DmgCpuControlLatchIsland {
     private final SrLatch ime = new SrLatch(CLEAR, false);
 
     /**
-     * Coarse phase-held image of the direct-HALT-decode / {@code ctl_op_halt_delayed} cut.
-     * The exact sub-clock delta path is intentionally retained as a falsifier.
+     * SM83 {@code ctl_op_halt_delayed}: a clocked copy used only to set the HALT SR latch.
+     * It is not on decoder2's IDU-increment or PC-write path.
      */
-    private final Dff haltDecodeHeld = new Dff(CLEAR, false);
+    private final Dff haltSetDelayed = new Dff(CLEAR, false);
 
     /** SM83 {@code halt}; reset wins if its delayed pending input overlaps the set input. */
     private final SrLatch halted = new SrLatch(CLEAR, false);
@@ -290,28 +294,31 @@ final class DmgCpuControlLatchIsland {
             nextEiPending = false;
         }
 
-        boolean nextHaltDecode = inputs.cpuClockEdge()
-                ? inputs.control() == Control.HALT
-                : haltDecodeHeld.q();
+        boolean directHaltDecode = inputs.instructionBoundary()
+                && inputs.control() == Control.HALT;
+        boolean nextHaltSetDelayed = inputs.cpuClockEdge()
+                ? directHaltDecode
+                : haltSetDelayed.q();
         boolean nextHalted = resolveClearDominant(
-                halted.q(), nextHaltDecode, nextHaltWake || inputs.interruptEntry());
+                halted.q(), nextHaltSetDelayed, nextHaltWake || inputs.interruptEntry());
 
-        // The candidate bus gate observes a held HALT-decode node, not a semantic "halt bug" flag.
-        // Decoder2's IDU-increment equation supports this shape by omitting direct HALT decode.
-        // A pending request can prevent the HALT latch from setting while that node still blocks
-        // precisely one PC increment. Its exact delta timing remains a falsifier; if HALT really
-        // latched, IR load is closed instead.
+        // The gate-model waveform keeps PC write and next-opcode sampling active on HALT. Decoder2
+        // omits direct HALT decode from ctl_idu_inc, so that write stores the unchanged PC. The
+        // separately delayed decode has no PC fanout; it only reaches the HALT-latch set input.
         boolean dispatch = nextIme && nextRunningPending != 0 && !nextHalted;
-        boolean instructionLoad = inputs.opcodeFetchStrobe() && !nextHalted && !dispatch;
-        boolean incrementPc = instructionLoad && !haltDecodeHeld.q();
+        boolean fetchGateOpen = directHaltDecode || !nextHalted;
+        boolean instructionLoad = inputs.opcodeFetchStrobe() && fetchGateOpen;
+        boolean pcWrite = inputs.opcodeFetchStrobe() && fetchGateOpen;
+        boolean iduIncrement = pcWrite && !directHaltDecode;
+        boolean incrementPc = pcWrite && iduIncrement;
 
         resolveBits(order, ifSet, ifClear, pendingInput, inputs.dataSampleEdge());
         haltWakePending.resolve(currentRunningPending != 0, inputs.cpuClockEdge(), false, false);
         eiPending.resolve(nextEiPending, true, false, false);
         ime.resolve(controlSet, controlClear);
-        haltDecodeHeld.resolve(inputs.control() == Control.HALT,
+        haltSetDelayed.resolve(directHaltDecode,
                 inputs.cpuClockEdge(), false, false);
-        halted.resolve(nextHaltDecode, nextHaltWake || inputs.interruptEntry());
+        halted.resolve(nextHaltSetDelayed, nextHaltWake || inputs.interruptEntry());
 
         resolvedObservation = new Observation(
                 0xe0 | resolvedIf,
@@ -321,9 +328,12 @@ final class DmgCpuControlLatchIsland {
                 nextIme,
                 nextEiPending,
                 nextHalted,
-                nextHaltDecode,
+                directHaltDecode,
+                nextHaltSetDelayed,
                 dispatch,
                 instructionLoad,
+                iduIncrement,
+                pcWrite,
                 incrementPc);
         resolutionPending = true;
     }
@@ -337,11 +347,11 @@ final class DmgCpuControlLatchIsland {
             haltWakePending.commit();
             eiPending.commit();
             ime.commit();
-            haltDecodeHeld.commit();
+            haltSetDelayed.commit();
             halted.commit();
         } else {
             halted.commit();
-            haltDecodeHeld.commit();
+            haltSetDelayed.commit();
             ime.commit();
             eiPending.commit();
             haltWakePending.commit();
@@ -370,8 +380,11 @@ final class DmgCpuControlLatchIsland {
                 ime.q(),
                 eiPending.q(),
                 halted.q(),
-                haltDecodeHeld.q(),
+                false,
+                haltSetDelayed.q(),
                 dispatch,
+                false,
+                false,
                 false,
                 false);
     }
@@ -387,7 +400,7 @@ final class DmgCpuControlLatchIsland {
                 haltWakePending.q(),
                 ime.q(),
                 eiPending.q(),
-                haltDecodeHeld.q(),
+                haltSetDelayed.q(),
                 halted.q());
     }
 
@@ -407,7 +420,7 @@ final class DmgCpuControlLatchIsland {
         haltWakePending.restore(state.haltWakePending());
         ime.restore(state.ime());
         eiPending.restore(state.eiPending());
-        haltDecodeHeld.restore(state.haltDecodeHeld());
+        haltSetDelayed.restore(state.haltSetDelayed());
         halted.restore(state.halted());
         resolvedObservation = null;
     }

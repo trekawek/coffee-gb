@@ -181,6 +181,13 @@ public class DmgControlSignalFabricTest {
         assertFalse("wake reset dominates the simultaneous HALT set",
                 observation.control().halted());
         assertTrue(observation.control().dispatchRequest());
+        assertTrue(observation.control().directHaltDecode());
+        assertTrue(observation.control().haltSetDelayed());
+        assertTrue("HALT samples the next opcode before interrupt entry",
+                observation.control().instructionRegisterLoad());
+        assertTrue(observation.control().pcWrite());
+        assertFalse(observation.control().iduIncrement());
+        assertFalse(observation.control().pcIncrement());
     }
 
     @Test

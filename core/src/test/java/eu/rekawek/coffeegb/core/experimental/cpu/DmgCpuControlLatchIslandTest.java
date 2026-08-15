@@ -56,29 +56,40 @@ public class DmgCpuControlLatchIslandTest {
     }
 
     @Test
-    public void haltBugIsTheFailedPcGateWhenPendingPreventsTheHaltLatchFromSetting() {
+    public void haltBugIsHaltOwnMissingIduIncrementWhenPendingWinsItsLatchRace() {
         int timer = 1 << Timer.ordinal();
         DmgCpuControlLatchIsland island = pendingIsland(timer, false);
 
         DmgCpuControlLatchIsland.Observation halt = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(HALT));
+                DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
         assertFalse("pending reset dominates HALT set", halt.halted());
-        assertTrue(halt.haltDecodeHeld());
+        assertTrue(halt.directHaltDecode());
+        assertTrue("the delayed copy only reaches the HALT-latch set input",
+                halt.haltSetDelayed());
+        assertTrue("HALT still samples the next opcode", halt.instructionRegisterLoad());
+        assertTrue("the PC write pulse is physically present", halt.pcWrite());
+        assertFalse("direct HALT decode is absent from decoder2 ctl_idu_inc",
+                halt.iduIncrement());
+        assertFalse("writing the non-incremented IDU value leaves PC unchanged",
+                halt.pcIncrement());
 
-        DmgCpuControlLatchIsland.Observation duplicatedFetch = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(NONE).withOpcodeFetch());
-        assertTrue(duplicatedFetch.instructionRegisterLoad());
-        assertFalse("the held HALT decode suppresses exactly this PC pulse",
-                duplicatedFetch.pcIncrement());
+        DmgCpuControlLatchIsland.Observation followingFetch = island.step(
+                DmgCpuControlLatchIsland.Inputs.idle().withOpcodeFetch());
+        assertTrue("the delayed copy still overlaps the following fetch",
+                followingFetch.haltSetDelayed());
+        assertTrue(followingFetch.instructionRegisterLoad());
+        assertTrue(followingFetch.iduIncrement());
+        assertTrue(followingFetch.pcWrite());
+        assertTrue("there is no delayed next-fetch PC gate", followingFetch.pcIncrement());
 
-        DmgCpuControlLatchIsland.Observation ordinaryFetch = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(NONE).withOpcodeFetch());
-        assertTrue(ordinaryFetch.instructionRegisterLoad());
-        assertTrue(ordinaryFetch.pcIncrement());
+        DmgCpuControlLatchIsland.Observation followingBoundary = island.step(
+                DmgCpuControlLatchIsland.Inputs.boundary(NONE));
+        assertFalse("the delayed set copy decays at the following CPU boundary",
+                followingBoundary.haltSetDelayed());
     }
 
     @Test
-    public void productionHaltBugDuplicatesTheFetchWhosePcGateTheIslandCloses() {
+    public void productionHaltBugMatchesTheUnchangedAddressLeftByHaltOwnIduCycle() {
         CpuFixture production = cpuFixture(0x76, 0x04, 0x00); // HALT; INC B; NOP
         int timer = 1 << Timer.ordinal();
         production.interrupts.setByte(IE, timer);
@@ -96,31 +107,39 @@ public class DmgCpuControlLatchIslandTest {
         assertEquals(PROGRAM + 2, production.cpu.getRegisters().getPC());
 
         DmgCpuControlLatchIsland island = pendingIsland(timer, false);
-        island.step(DmgCpuControlLatchIsland.Inputs.boundary(HALT));
-        var duplicate = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(NONE).withOpcodeFetch());
+        var halt = island.step(
+                DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
         var following = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(NONE).withOpcodeFetch());
-        assertFalse(duplicate.pcIncrement());
+                DmgCpuControlLatchIsland.Inputs.idle().withOpcodeFetch());
+        assertTrue(halt.pcWrite());
+        assertFalse(halt.iduIncrement());
+        assertFalse(halt.pcIncrement());
+        assertTrue(following.haltSetDelayed());
+        assertTrue(following.iduIncrement());
+        assertTrue(following.pcWrite());
         assertTrue(following.pcIncrement());
     }
 
     @Test
-    public void aRealHaltClosesInstructionLoadWhileItsDecodeHoldDecays() {
+    public void aRealHaltPreloadsTheNextOpcodeThenItsDelayedSetDecays() {
         int timer = 1 << Timer.ordinal();
         DmgCpuControlLatchIsland island = new DmgCpuControlLatchIsland();
         island.step(DmgCpuControlLatchIsland.Inputs.idle().withBusWrite(to(IE, timer)));
 
         DmgCpuControlLatchIsland.Observation entry = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(HALT));
+                DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
         assertTrue(entry.halted());
+        assertTrue(entry.instructionRegisterLoad());
+        assertTrue(entry.pcWrite());
+        assertFalse(entry.iduIncrement());
+        assertFalse(entry.pcIncrement());
 
-        // The CPU clock keeps running like a NOP stream. The one-cycle decode hold clears even
-        // though the instruction register itself is gated and still contains HALT.
+        // The delayed copy is only a one-cycle set pulse. The HALT SR latch retains the state
+        // after that pulse decays; the already loaded next opcode remains ready for wake.
         DmgCpuControlLatchIsland.Observation idle = island.step(
-                DmgCpuControlLatchIsland.Inputs.idle().atCpuClock().withOpcodeFetch());
+                DmgCpuControlLatchIsland.Inputs.idle().atCpuClock());
         assertTrue(idle.halted());
-        assertFalse(idle.haltDecodeHeld());
+        assertFalse(idle.haltSetDelayed());
         assertFalse(idle.instructionRegisterLoad());
 
         island.step(DmgCpuControlLatchIsland.Inputs.idle()
@@ -129,6 +148,8 @@ public class DmgCpuControlLatchIslandTest {
                 DmgCpuControlLatchIsland.Inputs.idle().atCpuClock().withOpcodeFetch());
         assertFalse(wake.halted());
         assertTrue(wake.instructionRegisterLoad());
+        assertTrue(wake.iduIncrement());
+        assertTrue(wake.pcWrite());
         assertTrue("ordinary wake has no leftover halt-bug gate", wake.pcIncrement());
     }
 
@@ -148,7 +169,7 @@ public class DmgCpuControlLatchIslandTest {
 
         DmgCpuControlLatchIsland island = new DmgCpuControlLatchIsland();
         island.step(DmgCpuControlLatchIsland.Inputs.idle().withBusWrite(to(IE, timer)));
-        island.step(DmgCpuControlLatchIsland.Inputs.boundary(HALT));
+        island.step(DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
         island.step(DmgCpuControlLatchIsland.Inputs.idle().atCpuClock());
         island.step(DmgCpuControlLatchIsland.Inputs.idle()
                 .withRawRequests(timer).atDataSample());
@@ -172,12 +193,16 @@ public class DmgCpuControlLatchIslandTest {
         island.step(DmgCpuControlLatchIsland.Inputs.idle().atCpuClock());
 
         DmgCpuControlLatchIsland.Observation halt = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(HALT));
+                DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
         assertTrue(halt.ime());
         assertFalse(halt.eiPending());
         assertFalse(halt.halted());
-        assertTrue("the sequencer sees the dispatch level instead of loading an opcode",
-                halt.dispatchRequest());
+        assertTrue("the sequencer sees the dispatch level", halt.dispatchRequest());
+        assertTrue("the HALT bus cycle still samples the next opcode",
+                halt.instructionRegisterLoad());
+        assertTrue(halt.pcWrite());
+        assertFalse(halt.iduIncrement());
+        assertFalse(halt.pcIncrement());
     }
 
     @Test
@@ -232,11 +257,14 @@ public class DmgCpuControlLatchIslandTest {
                 .withRawRequests(timer).atDataSample());
         island.step(DmgCpuControlLatchIsland.Inputs.idle().atCpuClock());
         DmgCpuControlLatchIsland.Observation candidate = island.step(
-                DmgCpuControlLatchIsland.Inputs.boundary(HALT));
+                DmgCpuControlLatchIsland.Inputs.boundary(HALT).withOpcodeFetch());
 
         assertEquals(interrupts.isIme(), candidate.ime());
         assertFalse(candidate.halted());
         assertTrue(candidate.dispatchRequest());
+        assertTrue(candidate.instructionRegisterLoad());
+        assertTrue(candidate.pcWrite());
+        assertFalse(candidate.iduIncrement());
     }
 
     @Test
@@ -329,7 +357,6 @@ public class DmgCpuControlLatchIslandTest {
                         DmgCpuControlLatchIsland.Falsifier.PPU_SOURCE_INPUT_PHASES,
                         DmgCpuControlLatchIsland.Falsifier.EARLY_IE_WRITE_REQUIRES_BUS_REANCHOR,
                         DmgCpuControlLatchIsland.Falsifier.VECTOR_AND_ACKNOWLEDGE_PHASES,
-                        DmgCpuControlLatchIsland.Falsifier.HALT_PC_GATE_DELTA_PATH,
                         DmgCpuControlLatchIsland.Falsifier.CGB_DIRECT_INTERRUPT_PATH),
                 Arrays.asList(DmgCpuControlLatchIsland.Falsifier.values()));
     }
