@@ -31,12 +31,12 @@ save states, debugger boundaries, and performance.
 
 | Hypothesis | Result | Consequence |
 | --- | --- | --- |
-| Serial DIV-reset timing is a forecast problem | Production replacement/deletion plus production differential | The old arithmetic reduces exactly to a local counter-stage fall and output-clock transition. The ownership is a model interpretation, not an independently observed silicon claim. |
-| Timer overflow needs an explicit 4/8-tick state machine | External-netlist-shaped fitted hypothesis plus production differential | Two sampled latches around TIMA bit 7 reproduce overflow detection, reload ownership, cancellation, and the request edge at the current boundary. |
+| Serial DIV-reset timing is a forecast problem | DMG external-netlist-anchored production replacement/deletion; CGB production differential | The old arithmetic reduces exactly to a local divider-stage fall, SCK toggle, and falling-edge shift. CGB normal/fast use the same tested algebra but lack an external topology oracle. |
+| Timer overflow needs an explicit 4/8-tick state machine | External gate-model waveform plus production differential | A selected-input fall, sampled TIMA-MSB fall, next-BOGA request, shared load/reset cone, and live TMA reload bus reproduce the apparent timeline without an explicit deadline. Exact Java phase alignment remains fitted. |
 | Timer/serial acknowledgement can be centralized inside the current master-tick loop | Falsified and rolled back | Timer runs before CPU while serial runs after it; no placement of one central callback preserves both physical windows. A unified CPU-edge/half-dot island is prerequisite. |
 | Java evaluation order can be made unobservable | Self-test support for two bounded contracts | A single-resolve edge-triggered scheduler and a separate fixed-point transparent/async oracle are traversal-order invariant. The allocation-heavy oracle is not a runtime implementation. |
 | The existing callback boundary is too opaque to shadow a signal scheduler | Production-differential compatibility harness | Immutable CPU/timer/serial/IF snapshots replay current races, but still carry projected timer state and a source-profile acknowledge countdown. |
-| The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External-netlist-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, live priority, acknowledge, and control latches symmetrically. Timer writes, Serial pin generation, physical acknowledge placement, transparent settling, PPU, and CGB remain outside it. |
+| The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External gate-waveform-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, live priority, acknowledge, and control latches symmetrically. Timer writes, Serial pin generation, physical acknowledge placement, transparent settling, PPU, and CGB remain outside it. |
 | CPU opcode lookahead is intrinsic to accurate races | Constructive persistent-bus seam plus production differential | T1-T4 state can expose in-flight address, strobes, data, held byte, and acknowledge without re-decoding. No production lookahead is deleted yet, and the one-M-cycle-late read anchor remains a migration debt. |
 | HALT, wake, and interrupt acceptance require request provenance | External gate-model waveform plus production differential | Direct HALT decode removes HALT's own IDU increment while opcode load and PC write remain active; the delayed decode only sets the HALT latch. The halt bug is an unchanged next-opcode address, not a delayed next-fetch gate. Exact interrupt-source apertures and silicon equivalence remain open. |
 | HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition plus production differential | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. |
@@ -46,8 +46,8 @@ save states, debugger boundaries, and performance.
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral decomposition; selected follow-up cones are fitted circuit hypotheses | `Pulse1GateTopology` directly encodes settled feature truth tables; serial-adder and envelope-ripple cones provide narrower structural hypotheses with named apertures. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
-| CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady-state cone; trigger migration falsified | Complement-loaded prescaler cells and a zero-reset XNOR bank remove both semantic cases in steady state, but exhaustive trigger timing cannot be reconciled by one phase offset. |
-| The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath plus bounded self-tests/differentials | One forward graph reproduces selected byte, OBJ, and window observations, but several fitted rules and all hardest output/overlap/control cases remain outside it. |
+| CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone plus external nodelay trigger traces | Complement-loaded prescaler cells and a zero-reset XNOR bank remove both semantic cases. A raw write/APU-clock cone derives two observed trigger alignments without a phase input; production countdowns are not physical node timestamps. |
+| The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
 | Mid-mode-3 writes require pending-write queues and duplicate register views | Production differential at one CPU-reachable cadence | One source register and fitted consumer delays reproduce selected LCDC/SCX/WX views; the receiver stages and half-dot capture phase are not netlist-derived. |
 | LCD disable must inspect raster/pixel state to cancel output | External-netlist reset root plus fitted output/fanout hypothesis | XONA/XEBE/XODO/XAPO reduce to one reset root, but the Java cone manually assigns that reset to candidate scanout stages and encodes write envelopes explicitly. |
 | CGB speed switching requires timer phase repair and tail-duration tables | Fitted timing hypothesis; gated-DIV routing falsified by contrary emulator evidence | STOP-entry/release counters fit verified durations, but the candidate's gated DIV disagrees with production and SameBoy; hardware capture is required before routing claims. |
@@ -63,17 +63,59 @@ enumeration showed that it is exactly equivalent to the local circuit action:
 3. toggle that flip-flop on the fall; and
 4. shift only when the output transition is falling.
 
-The retained `SerialPort` implementation uses `UnsignedRippleCounter` and `EdgeDetector`; it no
-longer predicts clocks-to-next-toggle. This is **production replacement/deletion** supported by a
-**production differential**: all divider phases, both internal clock periods, both old output
-levels, save/restore, debug callbacks, and the optimized idle path were exercised. The full unit
-and ROM battery run after the change remained green. One local baseline/branch throughput sample
-showed no measurable median regression; that sample is not a benchmark for an integrated signal
-fabric.
+The retained `SerialPort` keeps its scalar eight-bit divider and output-clock latch. Only the reset
+path changed: it tests the preceding divider stage, clears the divider, toggles the output latch if
+that stage was high, and shifts if the resulting transition falls. The production diff against the
+baseline is one file, nine insertions and twenty deletions. `UnsignedRippleCounter` and
+`EdgeDetector` remain test-only specification tools rather than unused runtime framework.
+
+This is **production replacement/deletion** supported by a **production differential**: all divider
+phases, both internal clock periods, both old output levels, save/restore, debug callbacks, and the
+optimized idle path were exercised. `SerialPortReplayTest` additionally captures and restores every
+reachable active transfer phase for DMG normal, CGB normal, and CGB fast clocks, then compares both
+ordinary and immediate-DIV-reset continuations. A stateful external `SerialEndpoint` remains outside
+the `SerialPort` memento and therefore outside that replay claim.
+
+The DMG interpretation is independently anchored in the pinned external netlist. FF04 write decode
+clears the divider cell immediately below the serial clock toggle DFF. Clearing that cell while it
+is high produces the edge which toggles SCK; the shift-register clock sees only the resulting SCK
+high-to-low transition. The full-hierarchy cone produces all three distinguishing cases: high stage
+plus high SCK toggles low and shifts, high stage plus low SCK toggles high without shifting, and a
+low stage does neither. Exact nodes, harness digests, commands, and limits are recorded in
+[signal-oracle-repro.md](signal-oracle-repro.md#dmg-serial-div-reset-cone). This is evidence about
+the DMG-B external model, not a physical capture or CGB topology proof.
 
 This is the desired shape: an apparent timing quirk disappeared when represented as a local stage
-transition. The tests establish equivalence and deletion, not that this Java stage is the exact
-physical owner in CGB silicon.
+transition. The production comparison against `8560a6c2` is one file, `+9/-20` lines. Compiled
+`SerialPort` size falls from 9,023 to 8,853 bytes; conditional-transfer count remains 77; construction
+allocation is unchanged at about 57.87 bytes per instance; and the idle 100-million-tick audit
+allocates zero bytes. The abandoned generic-primitives cut was `+224/-45`, 13,514 compiled bytes,
+92 conditional transfers, and about 129.94 construction bytes, so it failed the deletion gate.
+
+The final CPU2-pinned alternating ROM benchmark measured baseline ticks/s of
+`6,407,205 / 6,365,119 / 6,772,777` and replacement ticks/s of
+`6,518,713 / 6,477,688 / 6,442,723`. The medians differ by nominal `+1.10%`, but the baseline spread
+is 6.4%; the defensible conclusion is only **no measured regression greater than 3%**, not a speedup.
+An observed contended baseline sample and an earlier unpinned drifting series were excluded.
+
+### Lean-branch acceptance matrix
+
+All production code outside `SerialPort.java` is byte-identical to the baseline. The following
+lean-cut reruns completed with zero failures/errors:
+
+| Suite | Result |
+| --- | ---: |
+| Core unit tests, including detached experiments | 1,518 run, 8 skipped |
+| Mooneye + dmg-acid2 + cgb-acid2 | 132/132 |
+| Blargg aggregate + individual | 54/54 |
+| SameSuite + Mealybug strict images | 103/103 |
+| Gambatte hardware + GBMicrotest | 5,156/5,156 |
+| GBC hardware + misc-gb + Daid | 247/247 |
+| RTC3 + MBC30 + cgb-acid-hell + Strikethrough + CasualPokePlayer + BullyGB | 15/15 |
+
+That is 5,707 integration cases in addition to the unit suite. Full-ROM passes establish regression
+safety for the lean production cut; they do not validate the output of test-only candidate PPU,
+APU, DMA, or scheduler models.
 
 ## Interrupt acknowledgement: the scheduler falsifier
 
@@ -175,14 +217,16 @@ HALT-wake distance for both Timer and Serial, and exact arbitrary-boundary save/
 They establish that the selected edge-triggered seams can share one causal boundary without opcode
 identity or a peripheral deadline query.
 
-`DmgTimerControlCompositionTest` narrows one of those upstream cuts. A separate
-**external-netlist-shaped fitted** island retains DIV, TIMA, the NYDU sampled-MSB cell, the MOBA
-reload level, and BOGA phase. Its natural request edge arrives at half-dot seven and enters the same
-resolved source vector as CPU acknowledge. A same-edge request/ack collision is consequently one
-clear-dominant IF equation, while acknowledge cannot suppress the independent Timer reload level.
-The raw request is a pulse and reload ownership lasts one BOGA period. Four composition tests also
-replay Timer and control state from all sixteen half-dot snapshot phases. No deadline or scripted
-Timer source is present in that bounded path.
+`DmgTimerControlCompositionTest` narrows one of those upstream cuts. A separate **external
+gate-waveform-shaped** island retains DIV, TIMA, the NYDU sampled-MSB cell, the MOBA reload level,
+and BOGA phase. Its production-aligned natural request edge arrives at half-dot seven and enters the
+same resolved source vector as CPU acknowledge. A same-edge request/ack collision is consequently
+one clear-dominant IF equation, while acknowledge cannot suppress the independent Timer reload
+level. The raw request is a pulse and reload ownership lasts one BOGA period. A distinct phase test
+now places the TIMA ripple on the BOGA boundary: both latches capture the committed old vector, so
+the new TIMA MSB fall cannot reach MOBA until half-dot nine, one full four-T-state period later.
+Five composition tests also replay Timer and control state from all sixteen half-dot snapshot
+phases. No deadline or scripted Timer source is present in that bounded path.
 
 Serial remains a raw upstream pin, and the Timer projection does not yet accept CPU timer-register
 writes or reproduce the observable DIV ripple transient. The calibrated one-M-cycle-late CPU bus,
@@ -307,8 +351,8 @@ terms). The Java test contains no external source, ROM, or waveform artifact.
 
 ## Timer overflow topology
 
-`TimerSignalTopology` is an **external-netlist-shaped fitted hypothesis plus production
-differential** which replaces the flattened overflow timeline with two 1 MHz-edge latches:
+`TimerSignalTopology` is an **external gate-model waveform plus production differential** which
+replaces the flattened overflow timeline with two 1 MHz-edge latches:
 
 ```text
 NYDU <- sampled TIMA bit 7
@@ -324,6 +368,16 @@ TMA reload asynchronously resets the sampled-MSB latch. Consequently:
 - a TIMA write before reload cancels it through the same load wire; and
 - reload cannot retrigger itself.
 
+The independent default-delay gate trace observes this exact causal ordering. On a natural
+overflow, the selected TIMA input falls, the ripple takes TIMA.7 low and raises MERY, and the next
+BOGA edge raises MOBA. MEXU then owns TIMA for one BOGA interval, IF.2 rises, and TIMA follows TMA.
+A pre-reload FF05 write raises the same MEXU/load cone, clears NYDU/MERY, and prevents MOBA. An FF06
+write while MEXU is high changes TMA from `A5` to `3C`, and TIMA follows one simulator nanosecond
+later. Resetting DIV while its selected stage is high creates the same falling TIMA input and the
+same downstream overflow cone. A later CPU Timer acknowledge clears IF.2 asynchronously while the
+already-completed Timer reload remains independent. Exact nodes, commands, timestamps, and limits
+are recorded in [signal-oracle-repro.md](signal-oracle-repro.md#dmg-timer-waveform-probe).
+
 An independent topology test sweeps all TIMA/TMA byte values at selected write/reload phases. A
 separate production differential samples all four TAC selectors, four low DIV phases around one
 selected falling edge, write slots zero through seven, reload ownership, debug delay, and IF state.
@@ -333,8 +387,16 @@ and the shared IF latch are first-class signals.
 
 The composed half-dot experiment above supplies that shared IF boundary for one natural overflow:
 MOBA's rising request and a simultaneous CPU acknowledge are resolved together, clear dominance is
-owned only by IF, and Timer reload remains asserted independently. This is composition evidence for
-the selected fitted topology, not proof of the write apertures or a production replacement.
+owned only by IF, and Timer reload remains asserted independently. The external static reset cone
+supports collision clear-dominance, while the dynamic run verifies a later acknowledge-to-IF clear;
+it does not dynamically exercise exact request/ack overlap. The model's 16 ns FF0F-clear transient
+is explicitly downgraded as an unsampled default-delay artifact, not a CPU-visible or silicon quirk.
+
+This evidence corrects only the detached island's atomic same-edge rule. Its half-dot phase zero
+remains fitted to the current production boundary, whose CPU reads are one M-cycle late and whose
+timing constants are integration-calibrated. Production migration remains deferred until physical
+T4/BOGA and CPU write/reset phases are first-class, then passes the ROM battery; CGB and a silicon
+capture remain separate falsifiers.
 
 ## APU clock topology
 
@@ -454,14 +516,32 @@ one of the 32,768 states in both width modes and agrees on the next state and di
 is a useful representation equivalence, not by itself a reason to rewrite the tiny production
 `Lfsr`.
 
-The trigger path is an **architecture falsifier**. The candidate HAZO→GONE/GORA/GATY chain gives a
-one-HAMA-period restart and a two-sample delayed release while preserving the free-running frequency
-ripple. But sweeping the first two post-trigger LFSR clocks over all 112 clocked NR43 fields, four
-production alignments, inactive/active retrigger, and all eight candidate CH4/HAMA phases finds no
-single phase-plus-offset mapping in seven of eight alignment classes. One concrete witness is
-inactive alignment zero: candidate phase zero would need offset -5 for ratio zero and -9 for ratio
-one. The current trigger arithmetic cannot be replaced by this bounded cone; the upstream
-CPU-write→APU_PHI/GYSU/control aperture is missing.
+The original trigger comparison was an **architecture falsifier of using production scheduler
+events as physical node timestamps**, not of the gate cone. Sweeping the first two post-trigger
+LFSR clocks over all 112 clocked NR43 fields, four production alignments, inactive/active retrigger,
+and all eight candidate CH4/HAMA phases finds no single phase-plus-offset mapping in seven of eight
+alignment classes. The concrete inactive/alignment-zero witness needs offset -5 for ratio zero and
+-9 for ratio one. That proves the two projections cannot be aligned by a magic constant.
+
+`DmgNoiseTriggerWriteCone` then supplies the missing upstream path as an **external-netlist-anchored
+constructive cone**. A caller queues only an ordinary NR44.7 write and supplies raw fixed-speed T
+ticks. A four-state reset-seeded clock ring derives the CPU write aperture, DOVA/APU_PHI edge, GYSU
+sample, retained HAMA half, HAZO restart, delayed release, ratio terminal, and LFSR clock. There is
+no public phase, countdown, alignment, or offset input.
+
+Two independent Icarus nodelay traces distinguish the retained HAMA state. With HAMA low at the
+write, GYSU samples at +2 T and the first two LFSR rises are +33/+49 T. Advancing the same raw island
+one four-T interval leaves HAMA high at the write and produces +29/+45 T, matching the SameSuite
+fixture's internal gate nodes. The executable wrapper derives both vectors. Exact source anchors,
+stimulus, tool provenance, commands, and finite falsifiers are recorded in the class Javadoc and
+[signal-oracle-repro.md](signal-oracle-repro.md#dmg-ch4-trigger-clock-probe). The minimal probe was
+rerun from that manifest; the SameSuite invocation remains observed but not command-reproduced.
+
+This does not invalidate `PolynomialCounter` as an externally correct production scheduler and is
+not a production replacement. It means its countdown events are a projection across GYSU/restart,
+not timestamps for the internal LFSR clock nodes. Timed sub-T propagation, reset/clock-gate seeding,
+other write apertures, STOP, live NR43 collisions, test-mode bypass, CGB, and double speed remain
+explicit falsifiers.
 
 The experiment also separates unobservable projection choices. The selected DMG clock cone keeps
 its LFSR running behind a length-stop output mask, while production freezes that internal state;
@@ -546,26 +626,53 @@ cannot establish that the dual production renderer and its repair paths are dele
 `ForwardDmgPixelReplayContractTest` makes one of those missing seams executable against the real
 `m3_lcdc_win_en_change_multiple_wx` ROM. At deterministic post-FAST_FORWARD tick 128,703, line 1
 dot 92, the CPU-visible LCDC changes from `E1` to `C1` while the shifted physical pixel machine has
-an active window source. That source retires eight ticks later on the same line (observed at dot
-101). Lowering the candidate's existing comparator-enable input leaves its already-active source
-alive for at least sixteen dots. The replay contract therefore requires a distinct clocked
-`WINDOW_SOURCE_DEACTIVATE` input and records it as an unsupported cone instead of treating the
-unchanged production image as candidate evidence. This is an **architecture blocker**, not a
-candidate pixel differential.
+an active window source. Coffee GB's downstream `pixelMachine.window` path retires eight ticks
+later on the same line (observed at dot 101). This is a production trace, not hardware truth.
 
 `DmgWindowSourceLatchCone` then recovers a smaller **external-netlist-shaped control cone** behind
 that missing input. In the pinned DMG model, `pyco` samples `wxy_match` on `roco`, `nunu` samples
 `pyco` on `mehe`, and the `pynu` NOR latch retains the resulting `in_window` level. Its reset input
-reduces to `xofo = NAND(ff40_d5, xahy, ppu_reset_n)`. A falling LCDC.5 can therefore clear an
-already-active source asynchronously through ordinary latch wiring; no renderer callback, pixel
-rewind, or repaired FIFO token is required. Six tests cover activation, reset dominance, unrelated
-clock edges, reset release, and arbitrary-phase replay.
+reduces to `xofo = NAND(ff40_d5, xahy, ppu_reset_n)`. FF40.D5 is the CPU-write latch output and
+reaches `xofo` without a sampled receiver. A falling LCDC.5 can therefore clear an already-active
+source asynchronously through ordinary latch wiring; no renderer callback, pixel rewind, or
+repaired FIFO token is required. `xahy` reduces to
+`(anel || !start_oam_parsing) && ppu_reset_n`; it can reset the source independently, but cannot
+delay a low FF40.D5 reset. Eight tests cover two-stage old-state sampling, activation, reset
+dominance, reset release/reassertion, unrelated clock edges, and arbitrary-phase replay.
 
-That static topology does not yet explain the measured eight-tick Coffee GB retirement interval.
-The CPU-write receiver aperture, the polarity and phase history represented by `xahy`, and the
-mapping from `roco`/`mehe` into the emulator's dot boundary remain unresolved. The cone is evidence
-that `WINDOW_SOURCE_DEACTIVATE` can be a real local wire, not evidence that the current Java timing
-or its proposed latch placement is exact.
+This static topology proves that the measured eight-tick Coffee GB retirement interval cannot
+belong to the source latch: the external model's estimated FF40.D5-Q-to-`in_window` propagation is
+about 1.78 ns, or 0.0075 DMG dot, and contains no PPU-clocked stage. A source-tagged production
+trace locates the software compensation more precisely. On the falling edge the shifted fetcher is
+at `GET_TILE_T1` and its FIFO already contains eight WINDOW tokens. The pre-edge window map/push
+occurred at -3/-1. Those committed tokens pop at offsets 0 through 7, so an immediately selected BG
+replacement can naturally reach the raw boundary at +8 and the three-dot LCD boundary at +11.
+
+Coffee GB currently reaches the same +8 control observation by the wrong causal path: after the
+source reset it reads another WINDOW map (`9C01`) at +3, pushes that row at +7, and does not issue
+the first BG map (`9801`) until +11. The detached forward graph now carries immutable source tags
+through tile, FIFO, raw, scanout, and LCD stages. Its composition test switches the source
+immediately, keeps the eight already-committed tokens, and derives the +8/+11 handoff with no
+semantic deactivation delay, reread, patch, rewind, or catch-up loop.
+
+An independent **external gate-model waveform** confirms the causal direction while adding a
+necessary qualification. In both nodelay and default-delay builds, FF40.D5 asynchronously clears
+`in_window`, the live address mux selects BG, `win_start` does not reassert, and no new window-map
+transaction launches. Already captured shared fetch/bitplane/shifter state can still retire. The
+default-delay model preserves almost two tile payloads in one CPU alignment (BG reaches LD after
+15.410 dots) and one staged payload in the other (11.410 dots); nodelay reaches BG after 6.5/10.5
+dots. The timing disagreement prevents a silicon latency claim, but both traces reduce the
+mechanism to immediate source selection plus at most one retained transaction and one eight-bit
+shifter. See [signal-oracle-repro.md](signal-oracle-repro.md#dmg-window-source-handoff-probe).
+
+This is the strongest constructive PPU evidence in the spike, but still not a cut-over proof. It
+covers one hard edge and shows that Coffee GB's dual renderer can preserve the correct image while
+using a causally wrong extra fetch. The candidate's fixed eight-token composition is only one
+subcase of the externally observed bounded in-flight topology; it must also represent a retained
+tile/bitplane flight and shifter state. It still lacks broad source-tagged replay across all
+Mealybug cases, overlapping objects/window/SCX writes, mode-3/STAT integration, autonomous address
+generation, and CGB. The hand-written source-latch cone also omits the separate `nopa`/`nuny`
+`win_start` pulse; its Java `activated` field observes only a Q transition.
 
 ## PPU register fanout and LCD output/reset
 
