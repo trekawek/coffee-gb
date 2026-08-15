@@ -50,14 +50,15 @@ public class ForwardDmgPixelReplayContractTest {
             gameboy.init(EventBus.NULL_EVENT_BUS, SerialEndpoint.NULL_ENDPOINT, null);
             Gpu gpu = gameboy.getGpu();
             PixelTransfer pixelMachine = physicalPixelMachine(gpu);
-            observation = captureWindowDeactivate(gameboy, gpu, pixelMachine);
+            observation = captureWindowPathRetirement(gameboy, gpu, pixelMachine);
         } finally {
             gameboy.closeSilently();
         }
 
         assertEquals("current trace anchor after FAST_FORWARD construction", 128_703L,
                 observation.cpuEdgeTick());
-        assertEquals(8L, observation.windowDeactivateTick() - observation.cpuEdgeTick());
+        assertEquals(8L,
+                observation.productionPathDeactivateTick() - observation.cpuEdgeTick());
         assertEquals(1, observation.line());
         assertEquals(92, observation.dot());
         assertEquals(101, observation.deactivateDot());
@@ -65,11 +66,22 @@ public class ForwardDmgPixelReplayContractTest {
                 (observation.lcdcBefore() & WINDOW_ENABLE) != 0);
         assertEquals("the new CPU-visible value must have LCDC.5 low", 0,
                 observation.lcdcAfter() & WINDOW_ENABLE);
-        assertTrue("the delayed pixel-domain path was active on the source edge",
-                observation.windowActiveOnCpuEdge());
-        assertTrue("the source must retire on the same physical scanline",
-                observation.windowDeactivateTick() > observation.cpuEdgeTick());
+        assertTrue("the delayed production path was active on the FF40 source edge",
+                observation.productionPathActiveOnCpuEdge());
+        assertTrue("the production path must retire on the same physical scanline",
+                observation.productionPathDeactivateTick() > observation.cpuEdgeTick());
         assertEquals(observation.line(), observation.deactivateLine());
+
+        // The pinned gate path has no clocked receiver after the FF40.D5 storage latch:
+        // D5 feeds xofo, which asynchronously resets pynu/in_window. Driving the real ROM's
+        // new D5 value into that cone therefore clears the source on the write edge while the
+        // production fetch path remains alive for eight ticks. These cannot be the same state.
+        DmgWindowSourceLatchCone sourceCone = activeSourceCone();
+        var sourceEdge = sourceCone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .withLcdcWindowEnable(
+                        (observation.lcdcAfter() & WINDOW_ENABLE) != 0));
+        assertTrue(sourceEdge.deactivated());
+        assertFalse(sourceEdge.inWindow());
 
         ForwardDmgPixelReplayContract.UnsupportedReplaySignalException failure = assertThrows(
                 ForwardDmgPixelReplayContract.UnsupportedReplaySignalException.class,
@@ -79,7 +91,7 @@ public class ForwardDmgPixelReplayContractTest {
         assertEquals(OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION,
                 failure.cone().incompleteBehaviorBit());
         assertTrue(failure.cone().requiredCandidateInterface()
-                .contains("window-source-active input"));
+                .contains("asynchronous window-source reset"));
     }
 
     /** The existing enable setter cannot clear a window flight after activation. */
@@ -106,7 +118,7 @@ public class ForwardDmgPixelReplayContractTest {
         assertFalse(candidate.windowActivationLastDot());
     }
 
-    private static WindowDeactivateObservation captureWindowDeactivate(
+    private static WindowDeactivateObservation captureWindowPathRetirement(
             Gameboy gameboy, Gpu gpu, PixelTransfer pixelMachine) {
         long pendingCpuEdgeTick = -1;
         int pendingLine = -1;
@@ -180,15 +192,27 @@ public class ForwardDmgPixelReplayContractTest {
         return transfer;
     }
 
+    private static DmgWindowSourceLatchCone activeSourceCone() {
+        DmgWindowSourceLatchCone cone = new DmgWindowSourceLatchCone();
+        cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .withMatch(true).onMatchEdge());
+        var activated = cone.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .onStartEdge());
+        if (!activated.inWindow()) {
+            throw new AssertionError("window-source audit fixture did not activate");
+        }
+        return cone;
+    }
+
     private record WindowDeactivateObservation(
             long cpuEdgeTick,
-            long windowDeactivateTick,
+            long productionPathDeactivateTick,
             int line,
             int dot,
             int deactivateLine,
             int deactivateDot,
             int lcdcBefore,
             int lcdcAfter,
-            boolean windowActiveOnCpuEdge) {
+            boolean productionPathActiveOnCpuEdge) {
     }
 }

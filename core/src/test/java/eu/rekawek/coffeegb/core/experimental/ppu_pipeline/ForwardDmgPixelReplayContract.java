@@ -56,8 +56,8 @@ final class ForwardDmgPixelReplayContract {
                 new UnsupportedCone(
                         RequiredTraceSignal.WINDOW_SOURCE_DEACTIVATE,
                         OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION,
-                        "a clocked window-source-active input which can clear an already-active "
-                                + "window flight without rewinding committed scanout tokens"));
+                        "an asynchronous window-source reset wired to active fetch-stage "
+                                + "validity without rewinding committed scanout tokens"));
         return Map.copyOf(cones);
     }
 

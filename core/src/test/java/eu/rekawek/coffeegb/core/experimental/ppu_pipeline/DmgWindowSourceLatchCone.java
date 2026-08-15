@@ -13,12 +13,19 @@ import static eu.rekawek.coffeegb.core.signal.SrLatch.Dominance.CLEAR;
  * {@code pyco} on {@code mehe}, and the NOR latch {@code pynu} is set by {@code nunu}. Two
  * inverters expose {@code pynu} as {@code in_window}. The latch reset is {@code xofo =
  * NAND(ff40_d5, xahy, ppu_reset_n)}, so a falling LCDC.5 is an ordinary asynchronous reset of an
- * already-active window source, not a renderer callback or pixel repair.
+ * already-active window source, not a renderer callback or pixel repair. {@code ff40_d5} is the
+ * output of the FF40 CPU-write latch ({@code wymo}); there is no sampled receiver between that Q
+ * and {@code xofo}. Also, {@code xahy} reduces to {@code (anel || !start_oam_parsing) &&
+ * ppu_reset_n}. It can independently reset the source at the OAM-parser boundary, but cannot
+ * delay the reset caused by a low {@code ff40_d5}.
  *
  * <p>The source anchors are {@code dmg_cpu_b.sv:25651-25760,25890-25902,26955,27253-27360,
- * 36439-36442}. This class preserves only that Boolean/storage topology. The CPU-write receiver
- * phase, the meaning and timing of {@code xahy}, and the production renderer's observed eight-dot
- * delay remain outside this cone.
+ * 36439-36442}. The direct FF40 path is at {@code 34020-34031,35505-35520}; the {@code xahy}
+ * reduction is at {@code 4180-4225,6030-6075,8890-8950,9590-9630,35790-35793}. This class
+ * preserves only that Boolean/storage topology. The exact {@code ppu_wr} aperture and downstream
+ * fetch/data-valid stages remain outside this cone. In particular, the production renderer's
+ * observed eight-dot window-path retirement cannot be assigned to this source latch: its
+ * asynchronous reset path contains no PPU-clocked stage.
  */
 final class DmgWindowSourceLatchCone {
 
