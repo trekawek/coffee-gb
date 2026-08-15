@@ -36,9 +36,9 @@ save states, debugger boundaries, and performance.
 | Timer/serial acknowledgement can be centralized inside the current master-tick loop | Falsified and rolled back | Timer runs before CPU while serial runs after it; no placement of one central callback preserves both physical windows. A unified CPU-edge/half-dot island is prerequisite. |
 | Java evaluation order can be made unobservable | Self-test support for two bounded contracts | A single-resolve edge-triggered scheduler and a separate fixed-point transparent/async oracle are traversal-order invariant. The allocation-heavy oracle is not a runtime implementation. |
 | The existing callback boundary is too opaque to shadow a signal scheduler | Production-differential compatibility harness | Immutable CPU/timer/serial/IF snapshots replay current races, but still carry projected timer state and a source-profile acknowledge countdown. |
-| The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | Constructive edge-triggered composition plus bounded production differentials | One half-dot fabric resolves raw request pins, persistent bus intent, live priority, acknowledge, and control latches symmetrically. Peripheral pin generation, physical acknowledge placement, transparent settling, PPU, and CGB remain outside it. |
+| The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External-netlist-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, live priority, acknowledge, and control latches symmetrically. Timer writes, Serial pin generation, physical acknowledge placement, transparent settling, PPU, and CGB remain outside it. |
 | CPU opcode lookahead is intrinsic to accurate races | Constructive persistent-bus seam plus production differential | T1-T4 state can expose in-flight address, strobes, data, held byte, and acknowledge without re-decoding. No production lookahead is deleted yet, and the one-M-cycle-late read anchor remains a migration debt. |
-| HALT, wake, and interrupt acceptance require request provenance | External-netlist-anchored fitted hypothesis plus production differential | Candidate IF/sample/wake/IME/HALT cells reproduce representative observations, but the one-fetch PC gate and exact apertures are still fitted boundaries. |
+| HALT, wake, and interrupt acceptance require request provenance | External gate-model waveform plus production differential | Direct HALT decode removes HALT's own IDU increment while opcode load and PC write remain active; the delayed decode only sets the HALT latch. The halt bug is an unchanged next-opcode address, not a delayed next-fetch gate. Exact interrupt-source apertures and silicon equivalence remain open. |
 | HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition plus production differential | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
 | DMG STAT behavior needs a large mode/line exception tree | Production-equivalent behavioral partition; causal claim not established | Independent state cells match a steady frame, but the model still encodes calibrated line/dot cases and an explicit transient FF41 enable vector. |
@@ -175,12 +175,21 @@ HALT-wake distance for both Timer and Serial, and exact arbitrary-boundary save/
 They establish that the selected edge-triggered seams can share one causal boundary without opcode
 identity or a peripheral deadline query.
 
-Raw request pins are explicitly an upstream cut, not solved Timer/Serial timing. The calibrated
-one-M-cycle-late CPU bus, BOGA/NYDU/MOBA timer cells, external serial input, physical acknowledge
-and vector-capture phases, PPU source paths, CGB subedges/direct interrupts, and transparent or
-asynchronous delta settling remain blockers. Consequently this test can name a future deletion
-set—both peripheral acknowledge forecasts and their `InterruptManager` flags—but it cannot yet
-delete them safely.
+`DmgTimerControlCompositionTest` narrows one of those upstream cuts. A separate
+**external-netlist-shaped fitted** island retains DIV, TIMA, the NYDU sampled-MSB cell, the MOBA
+reload level, and BOGA phase. Its natural request edge arrives at half-dot seven and enters the same
+resolved source vector as CPU acknowledge. A same-edge request/ack collision is consequently one
+clear-dominant IF equation, while acknowledge cannot suppress the independent Timer reload level.
+The raw request is a pulse and reload ownership lasts one BOGA period. Four composition tests also
+replay Timer and control state from all sixteen half-dot snapshot phases. No deadline or scripted
+Timer source is present in that bounded path.
+
+Serial remains a raw upstream pin, and the Timer projection does not yet accept CPU timer-register
+writes or reproduce the observable DIV ripple transient. The calibrated one-M-cycle-late CPU bus,
+external serial input, physical acknowledge and vector-capture phases, PPU source paths, CGB
+subedges/direct interrupts, and transparent or asynchronous delta settling remain blockers.
+Consequently these tests can name a future deletion set—both peripheral acknowledge forecasts and
+their `InterruptManager` flags—but cannot yet delete it safely.
 
 ## CGB speed-switch clock topology
 
@@ -251,39 +260,50 @@ large timing regression.
 
 ## DMG interrupt, IME, and HALT control cone
 
-`DmgCpuControlLatchIsland` is an **external-netlist-anchored fitted hypothesis plus production
-differential** for a second CPU cut. Five
-clear-dominant IF latches feed data-phase samples of `IE & INT`; their reduction is sampled once
-more by the YOII wake DFF before reaching the reset side of the HALT latch. EI/DI/RETI operate an
-IME control latch and a separate execution-phase observation cell. Direct HALT decode is clocked
-into the set side of the reset-dominant HALT latch.
+`DmgCpuControlLatchIsland` is an **external gate-model waveform plus production differential** for
+a second CPU cut. Five clear-dominant IF latches feed data-phase samples of `IE & INT`; their
+reduction is sampled once more by the YOII wake DFF before reaching the reset side of the HALT
+latch. EI/DI/RETI operate an IME control latch and a separate execution-phase observation cell.
+Direct HALT decode and its delayed copy now have deliberately different ownership.
 
-The decoder supplies a particularly useful structural clue. In the generated decoder2 cone,
-NOP/STOP participates in the IDU-increment product sum while HALT does not; HALT instead has its
-own delayed latch path. The detached island therefore represents the halt bug as a short interval
-where HALT decode closes one PC-increment pulse but a pending interrupt prevents the HALT latch
-from setting. It does not store a semantic `haltBugMode`, rewind PC, or attach blocked/wake
-provenance to the request. The Java `haltDecodeHeld` DFF and direct PC-increment gate are candidate
-placements chosen to reproduce that interval; the exact decode-to-IDU propagation path has not
-been observed.
+The generated decoder2 cone omits HALT from the `ctl_idu_inc` product sum where NOP/STOP
+participates. A default-delay `dmg-sim` run then made the dynamic consequence observable. During
+HALT, `ctl_fetch` and `ctl_reg_pc_we` are asserted while `ctl_idu_inc` stays low. The PC therefore
+writes the non-incremented IDU value and remains on the address from which the next opcode is
+sampled. `ctl_op_halt_delayed` rises only after direct HALT decode falls and has no fanout into the
+IDU/PC cone; it feeds the HALT SR-latch set input. Thus the gate model does **not** suppress a
+PC-write pulse on the following instruction. It omits one effective increment on HALT's own IDU
+interval, and the unchanged address makes the sampled opcode execute twice when YOII prevents the
+HALT latch from setting.
 
-Eleven tests cover all five request sources through readable, running-acceptance, and wake stages;
-ordinary HALT/wake and halt-bug instruction traces against production; EI followed by HALT; all
-625 four-instruction sequences over EI/DI/RETI/HALT/no-control against `InterruptManager`; and
-forward/reverse primitive evaluation and commit orders. A physical limitation is deliberately
-visible: the island cannot react to an IE write before address FFFF and WR actually exist. The
-current early-IE predictor can therefore only be removed together with persistent, re-anchored CPU
-bus cycles.
+Three bounded runs fix this contract. In the halt-bug case, direct HALT decode rises at
+`32,009.149 us`; its fetch/PC-write interval has no IDU increment, the delayed copy rises at
+`32,010.004 us`, and the following instruction has normal IDU increment and PC write before PC
+settles from `0009` to `000A` at `32,010.984 us`; `INC B` consequently retires twice. In ordinary
+HALT, the next opcode is loaded before the HALT latch rises at `32,023.670 us`; the delayed copy
+falls at `32,024.642 us` while HALT remains retained, and YOII clears HALT at `32,028.549 us`
+before one normal `INC B`. For pending `EI; HALT`, observed IME becomes active before direct HALT
+decode, interrupt entry overlaps the delayed set at `32,013.910 us`, HALT never sets, and the ISR
+runs once. These are external-model times: `$time` was picoseconds and the displayed microseconds
+are raw values divided by `1,000,000`. The exact patch, commands, nodes, and terminal observations
+are in [signal-oracle-repro.md](signal-oracle-repro.md#sm83-halt-waveform-probe).
 
-This is a bounded control cone, not a causal explanation or complete interrupt replacement.
-Terminal production differentials cannot distinguish the candidate DFF lifetime from another
-implementation that yields the same one-fetch result. Its named falsifiers are the
-FF0F source-set/write aperture, PPU request-input phases, early IE bus timing, vector/acknowledge
-capture, the exact HALT-decode-to-IDU delta lifetime, and CGB's different direct-interrupt path.
-The generated-netlist anchors used for the cut are `sm83/sm83.sv:4649-4795` (IE and IRQ sample
-bank), `:8698-8774` (YOII and HALT paths), `:8812-8886` (IME controls), and
-`sm83/cells/decoder2.sv:205-213` (IDU-increment terms). The test itself depends only on
-independently implemented signal primitives and Coffee GB public behavior.
+The earlier Java `haltDecodeHeld` interpretation is therefore falsified by this external model.
+The test-only island now names that DFF `haltSetDelayed`, lets only direct HALT decode remove the
+HALT interval's IDU increment, and lets the delayed copy feed only the HALT-latch set equation. It
+does not store a semantic `haltBugMode`, rewind PC, or attach blocked/wake provenance to a request.
+Eleven tests cover all five request sources; the waveform-derived halt-bug, ordinary-wake, and
+`EI; HALT` contracts; production instruction outcomes; all 625 four-instruction IME sequences; and
+forward/reverse primitive evaluation and commit orders.
+
+This remains a bounded external-model explanation, not a silicon capture or complete interrupt
+replacement. The island cannot react to an IE write before address FFFF and WR actually exist, so
+the current early-IE predictor can only be removed together with persistent, re-anchored CPU bus
+cycles. Its remaining named falsifiers are the FF0F source-set/write aperture, PPU request-input
+phases, early IE bus timing, vector/acknowledge capture, and CGB's different direct-interrupt path.
+The source anchors are `sm83/sm83.sv:4649-4795` (IE and IRQ sample bank), `:8698-8774` (YOII and
+HALT paths), `:8812-8886` (IME controls), and `sm83/cells/decoder2.sv:205-213` (IDU-increment
+terms). The Java test contains no external source, ROM, or waveform artifact.
 
 ## Timer overflow topology
 
@@ -310,6 +330,11 @@ selected falling edge, write slots zero through seven, reload ownership, debug d
 This is broad **production-differential** coverage, not an exhaustive product of every legal DIV
 and write phase. Production migration is intentionally deferred until T4/BOGA, CPU write strobes,
 and the shared IF latch are first-class signals.
+
+The composed half-dot experiment above supplies that shared IF boundary for one natural overflow:
+MOBA's rising request and a simultaneous CPU acknowledge are resolved together, clear dominance is
+owned only by IF, and Timer reload remains asserted independently. This is composition evidence for
+the selected fitted topology, not proof of the write apertures or a production replacement.
 
 ## APU clock topology
 
@@ -527,6 +552,20 @@ alive for at least sixteen dots. The replay contract therefore requires a distin
 `WINDOW_SOURCE_DEACTIVATE` input and records it as an unsupported cone instead of treating the
 unchanged production image as candidate evidence. This is an **architecture blocker**, not a
 candidate pixel differential.
+
+`DmgWindowSourceLatchCone` then recovers a smaller **external-netlist-shaped control cone** behind
+that missing input. In the pinned DMG model, `pyco` samples `wxy_match` on `roco`, `nunu` samples
+`pyco` on `mehe`, and the `pynu` NOR latch retains the resulting `in_window` level. Its reset input
+reduces to `xofo = NAND(ff40_d5, xahy, ppu_reset_n)`. A falling LCDC.5 can therefore clear an
+already-active source asynchronously through ordinary latch wiring; no renderer callback, pixel
+rewind, or repaired FIFO token is required. Six tests cover activation, reset dominance, unrelated
+clock edges, reset release, and arbitrary-phase replay.
+
+That static topology does not yet explain the measured eight-tick Coffee GB retirement interval.
+The CPU-write receiver aperture, the polarity and phase history represented by `xahy`, and the
+mapping from `roco`/`mehe` into the emulator's dot boundary remain unresolved. The cone is evidence
+that `WINDOW_SOURCE_DEACTIVATE` can be a real local wire, not evidence that the current Java timing
+or its proposed latch placement is exact.
 
 ## PPU register fanout and LCD output/reset
 
