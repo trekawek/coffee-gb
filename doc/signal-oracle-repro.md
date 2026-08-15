@@ -38,6 +38,7 @@ Suggested ephemeral roots:
 
 ```sh
 ORACLE_DMG=/tmp/coffee-gb-dmg-sim
+ORACLE_DMG_HALT=/tmp/coffee-gb-halt-sim
 ORACLE_SAMEBOY=/tmp/coffee-gb-sameboy-signal
 ORACLE_IVERILOG_SRC=/tmp/coffee-gb-iverilog-src
 ORACLE_IVERILOG_PREFIX=/tmp/coffee-gb-iverilog-master
@@ -54,7 +55,7 @@ Do not substitute a repository or home-directory path for these artifact roots.
 | DMG model | `https://github.com/msinger/dmg-sim.git` at `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5` | **VERIFIED** remote, revision, dirty status, source anchors, and retained artifacts | CC BY-SA 4.0; never copy its source/generated output into Coffee GB |
 | SameBoy | `https://github.com/LIJI32/SameBoy.git` at `213a12ce93d66b105a113debd9396306066a7cfc` | **VERIFIED** clean tracked tree, local harness build, and result | Expat for `Core/`; harness remains local because it synthesizes a probe image |
 | SM83 binutils | `https://github.com/msinger/binutils-sm83.git` at `32a405949ca49563370108273a10285a17ade344` | **VERIFIED** revision, config arguments, tool versions, and probe rebuild | Build tool only; generated probe artifacts remain external |
-| Icarus Verilog | `https://github.com/steveicarus/iverilog.git` at `1d2aa1b6fa0add7723c99d624a9df01d3dec9282` | **VERIFIED** revision and installed version `14.0 (devel) (1d2aa1b)`; gate compile only dry-run here | GPLv2 tool; VVP output remains external |
+| Icarus Verilog | `https://github.com/steveicarus/iverilog.git` at `1d2aa1b6fa0add7723c99d624a9df01d3dec9282` | **VERIFIED** revision and installed version `14.0 (devel) (1d2aa1b)`; HALT gate compile and three runs completed, while the retained OAM compile below was only dry-run | GPLv2 tool; VVP output remains external |
 | FST converter source | `https://github.com/gtkwave/gtkwave.git` at `7d7b4db9e2f5485afe2aeeab0ad112f5b6a9b94b` | **OBSERVED** nearby checkout and `/tmp/coffee-gb-fst2vcd`; binary-to-revision provenance is not cryptographically established | Tool and waveform remain external |
 
 Recorded host: Linux `7.0.0-29-generic` x86-64, GCC `15.2.0`, GNU Make `4.4.1`, Git
@@ -92,18 +93,144 @@ git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
 
 | Claim ID | Source anchor and grep expression | Concise expected finding | Limit |
 | --- | --- | --- | --- |
-| `SM83-IRQ-HALT` | `sm83/sm83.sv:4649-4795,8698-8774,8812-8886`; `sm83/cells/decoder2.sv:205-213`; expression `irq|yoii|halt|ime|idu` | Separate IE/IRQ sample bank, YOII/HALT paths, IME controls, and different decoder participation for HALT versus NOP/STOP | Does not prove the Java `haltDecodeHeld` lifetime or one-fetch PC gate |
+| `SM83-IRQ-HALT` | `sm83/sm83.sv:4649-4795,8698-8774,8812-8886`; `sm83/cells/decoder2.sv:205-213`; expression `irq|yoii|halt|ime|idu` | Separate IE/IRQ sample bank, YOII/HALT paths, IME controls, and different decoder participation for HALT versus NOP/STOP | The dynamic probe below rejects a delayed PC gate in this external model; neither source nor simulation establishes silicon equivalence |
 | `TIMER-OVERFLOW` | `dmg_cpu_b/dmg_cpu_b.sv`; expression `(boga|mery|moba|nydu)_inst` | Instances at lines 7887, 24503, 24584, and 26046; inspect their pins to recover the sampled-TIMA-MSB/fall/reload cone | Static connectivity only; CPU-write and IF capture apertures remain outside it |
 | `APU-FRAME-CLOCK` | same file; expression `(ajer|bara|bufy|byfe|bylu|caru|cate|coke|horu)_inst` | Instances at lines 4934, 7035, 8425, 8891, 9012, 9560, 9602, 10255, and 20124 form the selected DMG divider/ripple cone | Does not establish CGB tap/offset, power-on suppression, or speed-switch phase |
 | `CH3-PORT` | same file; expression `(afum|agyl|axol|azet|azus|bano|bole|busa)_inst` | Address-owner/fetch-related instances at lines 4656, 4817, 6533, 6606, 6668, 6982, 7991, and 8658 | The two Java fetch-valid stages are fitted; retrigger and electrical collision are not established |
 | `CH4-STEADY` | same file; expression `(cary|cexo|esep|gary|gaty|gone|gora|hazo|hezu|jaky|jare|jepe|jero|joto|jyco|jyfu|jyre|kavu|komu)_inst` | Named ratio, prescaler, tap, and zero-reset/XNOR LFSR cells exist at the pinned lines; compare their pins, not just names | Supports the steady cone only; the upstream GYSU/APU-PHI trigger aperture is missing |
 | `STAT-SPLIT` | `dmg_cpu_b_gameboy.sv:666-674,696-704`; `dmg_cpu_b/dmg_cpu_b.sv` expression `lyc_int|lyc_int_en|ff41|ff44` | CPU-visible FF41 and LY vectors are assembled from distinct internal nodes; coincidence and internal STAT state have separate signals | Does not establish the Java line/dot table or FF41 transient mask |
 | `PPU-REG-BANKS` | `dmg_cpu_b/dmg_cpu_b.sv`; expressions `ff43_d[0-7]` and `ff4b_d[0-7]` | One eight-bit SCX storage family and one eight-bit WX storage family are present | Does not derive five Java receiver delays or their half-dot capture phase |
+| `PPU-WINDOW-SOURCE` | same file at `25651-25760,25890-25902,26955,27253-27360,36439-36442`; expression `(mehe|nunu|pyco|pynu|roco|wxy_match|xahy|xofo|in_window)` | `wxy_match` crosses two sampled stages into a retained source latch; `ff40_d5`, `xahy`, and `ppu_reset_n` form its asynchronous reset cone | Static connectivity only; CPU-write capture, `xahy` timing, clock polarity, and Coffee GB's observed eight-dot retirement remain unresolved |
 | `LCD-MUX-RESET` | same file; expression `(kahe|kupa|nelo|nura|paty|pero|rajy|tade|xapo|xebe|xodo|xona)_inst` | Output-mux cells occur at lines 25511-30904, panel-clock muxes at 21471/22350, and reset-root cells at 35904-36541 | Establishes named external-model roots, not reset fanout through proposed Java scanout stages or the `old | data` envelope |
 | `OAM-PORT` | `dmg_cpu_b/cells/generic_sram.sv`, `dmg_cpu_b/cells/oam.sv`, and scope `dmg_cpu_b_gameboy.dmg.oam_a_inst.sram_inst` | Separate address rails, sticky word-line state, four retained bit-line groups, common line, column select, precharge controls, and `wr` are observable | Directional sample/feedback split remains fitted; dynamic evidence is below |
 
 For every static row, save only the command and a concise connectivity assertion in Coffee GB.
 Do not paste the matching external source lines into issues, commits, or review comments.
+
+## SM83 HALT waveform probe
+
+Status: **VERIFIED** at DMG-model revision
+`ee559e1d963e1cc522df512e3bae1b4e5ff96fb5` with Icarus
+`14.0 (devel) (1d2aa1b)`. All build products and traces remained in
+`/tmp/coffee-gb-halt-sim`; no external source, ROM image, save, waveform, or generated artifact was
+copied into Coffee GB.
+
+The probe used an isolated clone so that the retained OAM experiment remained untouched. Its one
+tracked temporary patch is identified without embedding CC BY-SA source:
+
+```text
+sha256(git diff --binary)
+  44c5d8ed6ab32ac2b47acebbcae5b2394343f2774c53767bd2996e496368425a
+numstat
+  155  3  dmg_cpu_b_gameboy.sv
+```
+
+The patch has four mechanical parts:
+
+1. Relocate `vid_dump` after its wildcard-connected signal declarations for compatibility with
+   the retained Icarus build.
+2. Accept `+HALT_SCENARIO`, clear the modeled internal boot mask ROM, and install one of three
+   minimal programs without producing a ROM file: pending interrupt with IME disabled then
+   `HALT; INC B`; timer-driven ordinary `HALT; INC B`; or pending interrupt then `EI; HALT`, with
+   a timer-vector body that increments C and terminates.
+3. Print stable CPU-phase samples and transition events for the named control nodes, internal CPU
+   address, PC, instruction register, IME, and B/C.
+4. Print a concise register/control result at the existing `E5A5` self-termination port.
+
+Inspect the patch only in the isolated external checkout:
+
+```sh
+git -C "$ORACLE_DMG_HALT" rev-parse HEAD
+git -C "$ORACLE_DMG_HALT" diff --check
+git -C "$ORACLE_DMG_HALT" diff --numstat
+git -C "$ORACLE_DMG_HALT" diff --binary | sha256sum
+```
+
+The following build command is **VERIFIED**:
+
+```sh
+cd "$ORACLE_DMG_HALT"
+make dmg_cpu_b_gameboy.vvp \
+  IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
+  TIMING=default SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+```
+
+The three simulation commands are **VERIFIED**:
+
+```sh
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp -none \
+  +HALT_SCENARIO=halt_bug +SECS=0.002 +MBC_TYPE=00 +RAM_SIZE=00
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp -none \
+  +HALT_SCENARIO=ordinary_wake +SECS=0.002 +MBC_TYPE=00 +RAM_SIZE=00
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp -none \
+  +HALT_SCENARIO=ei_halt +SECS=0.002 +MBC_TYPE=00 +RAM_SIZE=00
+```
+
+The transition monitor reads these external-model nodes:
+
+```text
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_op_halt
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_op_halt_delayed
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_idu_inc
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_fetch
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_reg_pc_to_idu_en
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_idu_to_reg_pc_en
+dmg_cpu_b_gameboy.dmg.cpu_inst.ctl_reg_pc_we
+dmg_cpu_b_gameboy.dmg.cpu_inst.opcode
+dmg_cpu_b_gameboy.dmg.cpu_inst.reg_pcl
+dmg_cpu_b_gameboy.dmg.cpu_inst.reg_pch
+dmg_cpu_b_gameboy.dmg.cpu_inst.int_pending
+dmg_cpu_b_gameboy.dmg.cpu_inst.yoii
+dmg_cpu_b_gameboy.dmg.cpu_inst.halt
+dmg_cpu_b_gameboy.dmg.cpu_inst.ime_state
+dmg_cpu_b_gameboy.dmg.cpu_inst.ime_n
+dmg_cpu_b_gameboy.dmg.cpu_inst.int_take
+dmg_cpu_b_gameboy.dmg.cpu_inst.int_entry
+dmg_cpu_b_gameboy.dmg.cpu_inst.irq_latch
+dmg_cpu_b_gameboy.dmg.cpu_inst.data_phase
+dmg_cpu_b_gameboy.dmg.cpu_inst.exec_phase
+dmg_cpu_b_gameboy.dmg.cpu_inst.write_phase
+dmg_cpu_b_gameboy.dmg.cpu_port_a
+```
+
+Icarus reports `$time` in picoseconds for this model. The converted microseconds below are
+`raw ps / 1,000,000`; the large absolute offset is reset/startup time, not a HALT latency. The
+concise **VERIFIED external gate-model observations** are:
+
+| Scenario | Raw time (ps) | Time (us) | Expected observation |
+| --- | ---: | ---: | --- |
+| halt bug | 32009149000 | 32,009.149 | Direct `ctl_op_halt` rises at PC `0009`, with pending and YOII already high. |
+| halt bug | 32009158000 / 32009162000 | 32,009.158 / 32,009.162 | `ctl_fetch` and `ctl_reg_pc_we` rise while `ctl_idu_inc` remains low; CPU address and PC are `0009`. |
+| halt bug | 32010003000 / 32010004000 | 32,010.003 / 32,010.004 | Direct HALT falls, then `ctl_op_halt_delayed` rises; the HALT latch remains clear. |
+| halt bug | 32010019000 | 32,010.019 | The instruction register has settled to `INC B` while PC remains `0009`. |
+| halt bug | 32010128000 / 32010136000 | 32,010.128 / 32,010.136 | The following instruction has ordinary IDU increment and PC write even while delayed HALT is high. |
+| halt bug | 32010980000 / 32010984000 | 32,010.980 / 32,010.984 | Delayed HALT falls; PC then settles from `0009` to `000A`. |
+| halt bug | 32016714000 | 32,016.714 | Terminal result is B=`02`, C=`00`, HALT=`0`: the unchanged fetch address duplicated `INC B`. |
+| ordinary wake | 32022813000 / 32022826000 | 32,022.813 / 32,022.826 | Direct HALT rises and PC write follows at PC/address `0014`; IDU increment remains low. |
+| ordinary wake | 32023668000 / 32023670000 | 32,023.668 / 32,023.670 | Delayed HALT and then the HALT latch rise; the instruction register subsequently settles to `INC B`. |
+| ordinary wake | 32024642000 | 32,024.642 | Delayed HALT falls while the HALT latch remains set and retains the sleep state. |
+| ordinary wake | 32027582000 / 32028547000 / 32028549000 | 32,027.582 / 32,028.547 / 32,028.549 | Timer pending rises, YOII samples it, and the HALT latch clears. |
+| ordinary wake | 32028671000 / 32028680000 / 32029528000 | 32,028.671 / 32,028.680 / 32,029.528 | Resumed `INC B` has normal IDU increment and PC write, then PC advances `0014` to `0015`. |
+| ordinary wake | 32035258000 | 32,035.258 | Terminal result is B=`01`, C=`00`: the preloaded instruction runs once after wake. |
+| `EI; HALT` | 32012440000 / 32012932000 | 32,012.440 / 32,012.932 | `ime_state` rises and active-low `ime_n` falls before HALT decode. |
+| `EI; HALT` | 32013053000 / 32013066000 | 32,013.053 / 32,013.066 | Direct HALT and PC write rise at PC/address `000D`; IDU increment remains low. |
+| `EI; HALT` | 32013908000 / 32013910000 | 32,013.908 / 32,013.910 | Delayed HALT rises and interrupt entry begins; the HALT latch never sets. |
+| `EI; HALT` | 32013923000 | 32,013.923 | The instruction register has settled to the mainline `INC B` during entry. |
+| `EI; HALT` | 32017816000 | 32,017.816 | PC reaches timer vector `0050`. |
+| `EI; HALT` | 32024522000 | 32,024.522 | Terminal result is B=`00`, C=`01`: the ISR, not the preloaded mainline opcode, runs once. |
+
+This falsifies the prior `haltDecodeHeld` placement in the Coffee GB test hypothesis. Exactly one
+effective PC increment is absent, but it is not a suppressed PC-write pulse: direct HALT decode
+removes HALT's own `ctl_idu_inc` interval while PC write remains asserted. The delayed DFF has the
+lifetime expected of `ctl_op_halt_delayed`, but its observed fanout is only the HALT SR-latch set
+cone; it does not gate the next instruction's PC path. Ordinary wake and `EI; HALT` bound the same
+interpretation on both sides of the halt-bug race.
+
+These relationships are evidence about the pinned default-delay external model, not a physical
+DMG capture. Absolute propagation delays, reset offset, CGB behavior, peripheral-to-IRQ source
+apertures, interrupt acknowledge/vector capture, and equivalence between each Java coarse step and
+one gate phase remain outside the claim. The Coffee GB repository intentionally retains only this
+manifest and independently written bounded tests.
 
 ## Exact retained `dmg-sim` working state
 
@@ -400,7 +527,8 @@ artifact in either inspected checkout:
 | Public descriptions of an 8200-T speed-switch interval | **TODO** | Add a precise citation and define whether its observation window is comparable to the 0x20000 selected-clock calibration |
 | Actual CGB TIMA behavior during the generated STOP probe | **TODO hardware capture** | Run an authorized physical CGB capture with a machine-readable result; record board revision, boot mode, probe source provenance, and sampling point |
 | Directional OAM feedback split | **FITTED, not external evidence** | Observe the control split in a licensed netlist/transistor trace or falsify it across physical row/data/phase sweeps |
-| Five PPU register receiver delays, output write envelope, and scanout reset fanout | **FITTED, not external evidence** | Trace each receiver/reset pin or obtain hardware phase sweeps; the static source-bank/reset-root observations are insufficient |
+| Five PPU register receiver delays, output write envelope, and scanout reset fanout | **FITTED, not external evidence** | Trace each receiver/reset pin or obtain hardware phase sweeps; the static source-bank/reset-root/window-source observations are insufficient |
+| Active-window deactivation latency | **Static external cone found; dynamic timing unresolved** | Probe `ff40_d5`, `xahy`, `xofo`, `pynu`, `roco`, and `mehe` across the CPU write and compare their transitions with the eight-dot Coffee GB trace without inserting a semantic delay |
 | CH4 trigger aperture | **FALSIFIED bounded cone** | Recover and probe the upstream CPU-write to APU-PHI/GYSU/control path before proposing migration |
 
 Mealybug images and Coffee GB ROM profiles remain integration oracles documented by the repository's
