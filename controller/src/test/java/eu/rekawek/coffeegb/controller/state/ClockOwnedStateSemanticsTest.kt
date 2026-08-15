@@ -62,6 +62,13 @@ class ClockOwnedStateSemanticsTest {
       val state = session.captureDetachedState().machine.root.record(GPU_REGISTER_VALUES_STATE)
       StateSemantics.validate(StateGraph.restore(state))
 
+      val activeLegacy =
+          state
+              .replaceField("scxOldValue", Int32State(0x12))
+              .replaceField("pendingScxOldValue", Int32State(0x34))
+              .replaceField("wxJustChangedTicks", Int32State(2))
+      StateSemantics.validate(StateGraph.restore(activeLegacy))
+
       val mix = state.intArray("mixValues").clone()
       val pending = state.intArray("pendingMixValues").clone()
       mix[GpuRegister.SCX.ordinal] = 0x12
