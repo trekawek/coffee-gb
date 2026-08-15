@@ -76,6 +76,21 @@ public class GpuRegisterValuesTest {
         assertFalse(registers.isWxJustChanged());
     }
 
+    @Test
+    public void nonPaletteEffectiveReadsIgnoreScxAndWxConflictLatches() {
+        GpuRegisterValues registers = configured(true);
+        registers.put(GpuRegister.SCX, 0x12);
+        registers.setByte(GpuRegister.SCX.getAddress(), 0x34);
+        registers.setByte(GpuRegister.WX.getAddress(), 0x27);
+
+        registers.tickConflicts();
+
+        assertEquals(0x12, registers.getForFetcher(GpuRegister.SCX));
+        assertTrue(registers.isWxJustChanged());
+        assertEquals(0x34, registers.getEffective(GpuRegister.SCX));
+        assertEquals(0x27, registers.getEffective(GpuRegister.WX));
+    }
+
     private static void verifySequences(boolean gbc, int remaining,
                                         LegacyConflictModel expected,
                                         GpuRegisterValues actual) {
@@ -110,9 +125,6 @@ public class GpuRegisterValuesTest {
                                          GpuRegisterValues actual) {
         for (GpuRegister reg : GpuRegister.values()) {
             assertEquals(expected.values[reg.ordinal()], actual.get(reg));
-        }
-        for (GpuRegister reg : new GpuRegister[]{GpuRegister.BGP, GpuRegister.OBP0,
-                GpuRegister.OBP1}) {
             assertEquals(expected.effective(reg), actual.getEffective(reg));
         }
         assertEquals(expected.fetcherScx(), actual.getForFetcher(GpuRegister.SCX));
