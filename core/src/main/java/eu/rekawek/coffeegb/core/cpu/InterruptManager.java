@@ -13,6 +13,10 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     private static final int PPU_INTERRUPT_MASK =
             (1 << InterruptType.VBlank.ordinal()) | (1 << InterruptType.LCDC.ordinal());
 
+    private static final int ACKNOWLEDGE_INTERRUPT_MASK = PPU_INTERRUPT_MASK
+            | (1 << InterruptType.Timer.ordinal())
+            | (1 << InterruptType.Serial.ordinal());
+
     public static final int PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE = 1;
 
     public static final int PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE = 1 << 1;
@@ -85,18 +89,10 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     // before their IF latch and interrupt-acceptance paths settle.
     private int cpuReadInterruptPreview;
 
-    // The CPU acknowledges an interrupt near the middle of its final dispatch
-    // machine cycle. Serial events in the remaining part of that cycle are
-    // evaluated before the acknowledge clears IF.
-    private boolean serialInterruptAcknowledge;
-
-    // TIMA events in the peripheral look-ahead portion of the CPU acknowledge
-    // cycle are evaluated before the acknowledge clears IF.
-    private boolean timerInterruptAcknowledge;
-
-    private boolean lcdcInterruptAcknowledge;
-
-    private boolean vBlankInterruptAcknowledge;
+    // Peripherals consume their acknowledge bits at different points in the tick.
+    // Keeping the signals as one bit-plane preserves those phases while allowing
+    // same-slot events to resolve before each source clears IF.
+    private int interruptAcknowledges;
 
     // Records an explicit FF0F write that drove LCDC low during this CPU slot.
     // The PPU resolves same-slot set/clear precedence on its following tick.
@@ -260,15 +256,8 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     }
 
     public void clearInterrupt(InterruptType type) {
-        if (type == InterruptType.VBlank) {
-            vBlankInterruptAcknowledge = true;
-        } else if (type == InterruptType.Serial) {
-            serialInterruptAcknowledge = true;
-        } else if (type == InterruptType.Timer) {
-            timerInterruptAcknowledge = true;
-        } else if (type == InterruptType.LCDC) {
-            lcdcInterruptAcknowledge = true;
-        }
+        int mask = 1 << type.ordinal();
+        interruptAcknowledges |= mask & ACKNOWLEDGE_INTERRUPT_MASK;
         clearInterruptState(type);
     }
 
@@ -300,9 +289,7 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     }
 
     public boolean consumeSerialInterruptAcknowledge() {
-        boolean result = serialInterruptAcknowledge;
-        serialInterruptAcknowledge = false;
-        return result;
+        return consumeInterruptAcknowledge(InterruptType.Serial);
     }
 
     public void finishSerialInterruptAcknowledge() {
@@ -310,20 +297,21 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     }
 
     public boolean consumeTimerInterruptAcknowledge() {
-        boolean result = timerInterruptAcknowledge;
-        timerInterruptAcknowledge = false;
-        return result;
+        return consumeInterruptAcknowledge(InterruptType.Timer);
     }
 
     public boolean consumeLcdcInterruptAcknowledge() {
-        boolean result = lcdcInterruptAcknowledge;
-        lcdcInterruptAcknowledge = false;
-        return result;
+        return consumeInterruptAcknowledge(InterruptType.LCDC);
     }
 
     public boolean consumeVBlankInterruptAcknowledge() {
-        boolean result = vBlankInterruptAcknowledge;
-        vBlankInterruptAcknowledge = false;
+        return consumeInterruptAcknowledge(InterruptType.VBlank);
+    }
+
+    private boolean consumeInterruptAcknowledge(InterruptType type) {
+        int mask = 1 << type.ordinal();
+        boolean result = (interruptAcknowledges & mask) != 0;
+        interruptAcknowledges &= ~mask;
         return result;
     }
 
@@ -334,18 +322,13 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
     }
 
     public int consumePpuTickSignals() {
-        int result = 0;
-        if (lcdcInterruptAcknowledge) {
-            result |= PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE;
-        }
-        if (vBlankInterruptAcknowledge) {
-            result |= PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE;
-        }
+        int ppuAcknowledges = interruptAcknowledges & PPU_INTERRUPT_MASK;
+        int result = ((ppuAcknowledges & (1 << InterruptType.LCDC.ordinal())) >> 1)
+                | ((ppuAcknowledges & (1 << InterruptType.VBlank.ordinal())) << 1);
         if (lcdcInterruptFlagWriteClear) {
             result |= PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR;
         }
-        lcdcInterruptAcknowledge = false;
-        vBlankInterruptAcknowledge = false;
+        interruptAcknowledges &= ~PPU_INTERRUPT_MASK;
         lcdcInterruptFlagWriteClear = false;
         return result;
     }
@@ -572,9 +555,11 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
                 cpuInstructionBlockedInterrupts,
                 maskVBlankOnNextRead, maskLcdcUntilNextPeripheralTick,
                 maskMode0LcdcReadTicks, cpuReadInterruptPreview,
-                serialInterruptAcknowledge,
-                timerInterruptAcknowledge, lcdcInterruptAcknowledge,
-                vBlankInterruptAcknowledge, lcdcInterruptFlagWriteClear);
+                (interruptAcknowledges & (1 << InterruptType.Serial.ordinal())) != 0,
+                (interruptAcknowledges & (1 << InterruptType.Timer.ordinal())) != 0,
+                (interruptAcknowledges & (1 << InterruptType.LCDC.ordinal())) != 0,
+                (interruptAcknowledges & (1 << InterruptType.VBlank.ordinal())) != 0,
+                lcdcInterruptFlagWriteClear);
     }
 
     @Override
@@ -596,10 +581,11 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         this.maskLcdcUntilNextPeripheralTick = mem.maskLcdcUntilNextPeripheralTick;
         this.maskMode0LcdcReadTicks = mem.maskMode0LcdcReadTicks;
         this.cpuReadInterruptPreview = mem.cpuReadInterruptPreview;
-        this.serialInterruptAcknowledge = mem.serialInterruptAcknowledge;
-        this.timerInterruptAcknowledge = mem.timerInterruptAcknowledge;
-        this.lcdcInterruptAcknowledge = mem.lcdcInterruptAcknowledge;
-        this.vBlankInterruptAcknowledge = mem.vBlankInterruptAcknowledge;
+        this.interruptAcknowledges =
+                (mem.serialInterruptAcknowledge ? 1 << InterruptType.Serial.ordinal() : 0)
+                        | (mem.timerInterruptAcknowledge ? 1 << InterruptType.Timer.ordinal() : 0)
+                        | (mem.lcdcInterruptAcknowledge ? 1 << InterruptType.LCDC.ordinal() : 0)
+                        | (mem.vBlankInterruptAcknowledge ? 1 << InterruptType.VBlank.ordinal() : 0);
         this.lcdcInterruptFlagWriteClear = mem.lcdcInterruptFlagWriteClear;
     }
 
