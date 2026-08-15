@@ -384,13 +384,9 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         return interruptEnabled & 0x1f;
     }
 
-    int getPendingInterruptFlags() {
-        return interruptFlag & interruptEnabled & 0x1f;
-    }
-
     /** Pending sources before IME and CPU synchronizer timing are applied. */
     public int getDebugPendingInterruptFlags() {
-        return getPendingInterruptFlags();
+        return interruptFlag & interruptEnabled & 0x1f;
     }
 
     public boolean isInterruptRequested() {

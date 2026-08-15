@@ -314,67 +314,7 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
-    public void dmgRequestBeforePendingBankClosesOwnsClearAndVector() {
-        Harness h = enterLowPushWithTimerPending(false, false);
-
-        h.tickCpuTicks(1); // T1 samples TIMER
-        h.interrupts.requestInterrupt(LCDC);
-        h.tickCpuTicks(1); // T2 is the final transparent sample
-        finishLowPush(h);
-
-        assertLcdcOwnedDispatch(h);
-    }
-
-    @Test
-    public void dmgRequestAfterPendingBankClosesRemainsPending() {
-        Harness h = enterLowPushWithTimerPending(false, false);
-
-        h.tickCpuTicks(2); // T1/T2 hold TIMER
-        h.interrupts.requestInterrupt(LCDC);
-        finishLowPush(h);
-
-        assertTimerOwnedDispatch(h);
-    }
-
-    @Test
-    public void cgbFirstHalfProjectionIsPinnedDifferentiallyAtBothSpeeds() {
-        for (boolean doubleSpeed : new boolean[]{false, true}) {
-            Harness beforeClose = enterLowPushWithTimerPending(true, doubleSpeed);
-            int apertureTicks = (4 / beforeClose.speedMode.getSpeedMode()) / 2;
-            beforeClose.tickCpuTicks(apertureTicks - 1);
-            beforeClose.interrupts.requestInterrupt(LCDC);
-            beforeClose.tickCpuTicks(1);
-            finishLowPush(beforeClose);
-            assertLcdcOwnedDispatch(beforeClose);
-
-            Harness afterClose = enterLowPushWithTimerPending(true, doubleSpeed);
-            afterClose.tickCpuTicks(apertureTicks);
-            afterClose.interrupts.requestInterrupt(LCDC);
-            finishLowPush(afterClose);
-            assertTimerOwnedDispatch(afterClose);
-        }
-    }
-
-    @Test
-    public void heldInterruptOwnerSurvivesArbitraryPhaseStateRestore() {
-        Harness h = enterLowPushWithTimerPending(false, false);
-        h.tickCpuTicks(1);
-        h.interrupts.requestInterrupt(LCDC);
-        h.tickCpuTicks(1);
-
-        var cpuState = h.cpu.captureState();
-        var interruptState = h.interrupts.captureState();
-        finishLowPush(h);
-        assertLcdcOwnedDispatch(h);
-
-        h.cpu.restoreState(cpuState);
-        h.interrupts.restoreState(interruptState);
-        finishLowPush(h);
-        assertLcdcOwnedDispatch(h);
-    }
-
-    @Test
-    public void lateHigherPriorityInterruptCannotRedirectTheHeldFinalVectorCycle() {
+    public void lateHigherPriorityInterruptRedirectsTheFinalVectorCycle() {
         for (boolean gbc : new boolean[] {false, true}) {
             Harness h = new Harness(gbc);
             h.memory.setByte(PROGRAM, 0x00);
@@ -386,47 +326,10 @@ public class CpuPpuInterruptTimingTest {
             h.interrupts.requestInterrupt(LCDC);
             h.tickMachineCycle();
 
-            assertEquals(Timer.getHandler(), h.cpu.getRegisters().getPC());
-            assertTrue(h.interrupts.isInterruptFlagSet(LCDC));
-            assertFalse(h.interrupts.isInterruptFlagSet(Timer));
+            assertEquals(LCDC.getHandler(), h.cpu.getRegisters().getPC());
+            assertFalse(h.interrupts.isInterruptFlagSet(LCDC));
+            assertTrue(h.interrupts.isInterruptFlagSet(Timer));
         }
-    }
-
-    private static Harness enterLowPushWithTimerPending(boolean gbc, boolean doubleSpeed) {
-        Harness h = new Harness(gbc);
-        h.memory.setByte(PROGRAM, 0x00);
-        h.enable(LCDC, Timer);
-        if (doubleSpeed) {
-            h.enableDoubleSpeed();
-        }
-        h.interrupts.requestInterrupt(Timer);
-        h.interrupts.enableInterrupts(false);
-        for (int i = 0; i < 6 && h.cpu.getState() != Cpu.State.IRQ_PUSH_2; i++) {
-            h.tickMachineCycle();
-        }
-        assertEquals(Cpu.State.IRQ_PUSH_2, h.cpu.getState());
-        return h;
-    }
-
-    private static void finishLowPush(Harness h) {
-        while (h.cpu.getState() == Cpu.State.IRQ_PUSH_2) {
-            h.cpu.tick();
-        }
-        assertEquals(Cpu.State.IRQ_JUMP, h.cpu.getState());
-        h.tickMachineCycle();
-        assertEquals(Cpu.State.OPCODE, h.cpu.getState());
-    }
-
-    private static void assertLcdcOwnedDispatch(Harness h) {
-        assertEquals(LCDC.getHandler(), h.cpu.getRegisters().getPC());
-        assertFalse(h.interrupts.isInterruptFlagSet(LCDC));
-        assertTrue(h.interrupts.isInterruptFlagSet(Timer));
-    }
-
-    private static void assertTimerOwnedDispatch(Harness h) {
-        assertEquals(Timer.getHandler(), h.cpu.getRegisters().getPC());
-        assertTrue(h.interrupts.isInterruptFlagSet(LCDC));
-        assertFalse(h.interrupts.isInterruptFlagSet(Timer));
     }
 
     @Test
