@@ -1,7 +1,7 @@
 package eu.rekawek.coffeegb.core.signal;
 
 /**
- * An unsigned clocked counter that exposes the individual bit transitions caused by a tick.
+ * Test-only unsigned clocked counter that exposes the individual bit transitions caused by a tick.
  *
  * <p>Increment and asynchronous clear are resolved from the same committed value. Clear is
  * dominant when both wires are asserted. Until {@link #commit()}, {@link #value()} remains the

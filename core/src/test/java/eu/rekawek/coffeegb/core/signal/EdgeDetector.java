@@ -1,7 +1,8 @@
 package eu.rekawek.coffeegb.core.signal;
 
 /**
- * Detects edges between a committed input level and the level resolved for the current clock.
+ * Test-only primitive that detects edges between a committed input level and the level resolved
+ * for the current clock.
  */
 public final class EdgeDetector {
 
