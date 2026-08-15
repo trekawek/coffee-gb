@@ -9,6 +9,13 @@ import java.util.Set;
 /**
  * Test-only OAM control/bit-line experiment.
  *
+ * <p><strong>Evidence label: external gate trace for the coarse mechanism plus a fitted exact-data
+ * hypothesis.</strong> The trace supports sticky word lines, carry-skewed address rails, retained
+ * bit lines, and read feedback. The directional sample/feedback split and regular-row carry
+ * aperture are inferred to fit verified behavior; the exact-data differential uses production
+ * {@code SpriteBug} as its oracle. It is therefore not independent evidence that the fitted split
+ * exists in silicon.
+ *
  * <p>The model intentionally has no corruption operation and no row-number cases. A scan address
  * advances through a two-stage transparent carry window. Word lines are sticky inside that
  * window, so the intermediate binary addresses become ordinary SRAM selections. The data port has

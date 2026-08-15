@@ -12,11 +12,13 @@ import eu.rekawek.coffeegb.core.signal.UnsignedRippleCounter;
  * four T states at double speed. There is no {@code Timer.onSpeedSwitch(+4)} operation. Likewise,
  * resume latency is the distance to wrap of a free-running phase ring, not a 2/8-dot lookup.
  *
- * <p><strong>Hardware-derived constraints:</strong> the PPU and APU oscillator stay on the fixed
- * branch; CPU, DIV/timer, serial, and OAM DMA share the selected-speed branch; DIV is cleared and
- * held while the CPU clock is stopped; the DIV-APU tap is bit 12 in normal speed and bit 13 in
- * double speed. These constraints come from public CGB timing documentation and independently
- * observable register behavior.
+ * <p><strong>Evidence label: calibrated timing hypothesis plus architecture falsifier.</strong>
+ * The fixed PPU/APU oscillator domain and speed-selected CPU domain are externally observable
+ * constraints. Routing DIV/timer, serial, and OAM DMA through the stopped gate is only this
+ * candidate's hypothesis. In particular, its cleared-and-held DIV predicts a different TIMA result
+ * from both production and SameBoy for the generated STOP probe. That contrary emulator evidence
+ * is not hardware proof either, so the branch routing remains unresolved pending a hardware
+ * capture.
  *
  * <p><strong>Empirically pinned structure:</strong> a 17-stage switch sequencer reproduces Coffee
  * GB's and Daid's 0x20000 selected-clock pause, and a three-stage release phase ring spans the

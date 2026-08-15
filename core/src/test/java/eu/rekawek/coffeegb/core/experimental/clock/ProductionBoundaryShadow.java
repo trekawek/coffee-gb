@@ -14,14 +14,21 @@ import java.util.EnumSet;
  *
  * <p>The adapter is test-only on purpose. It reads existing side-effect-free debugger views and
  * turns them into an immutable old-state vector. Local timer and serial request wires can then be
- * derived without executing either component or asking it for a deadline. A {@link Cycle} accepts
- * commutative drives, freezes them, captures the IF latch's next value, and finally commits it.
+ * replayed without executing either component. The vector still contains projected production
+ * state such as {@code clocksUntilReload}, and acknowledgement is represented by a retained 3/8-
+ * clock countdown. A {@link Cycle} accepts commutative drives, freezes them, captures the IF
+ * latch's next value, and finally commits it.
  * No drive can observe another drive from the same boundary.</p>
  *
  * <p>This is a migration seam rather than a second emulator. It models only dependencies already
  * observable at a production callback boundary. {@link #migrationBlockers()} lists the signals
  * that today's public debug boundary cannot expose and that therefore need real production
  * latches before the scheduler can replace {@code Gameboy.tick()}.</p>
+ *
+ * <p><strong>Evidence label: passive production-differential compatibility harness.</strong> It
+ * proves that an immutable boundary can replay today's races and that drive order is irrelevant
+ * for this small resolved vector. It is not evidence that deadline forecasts or source-specific
+ * acknowledge timing have already been eliminated.</p>
  */
 final class ProductionBoundaryShadow {
 
@@ -39,7 +46,7 @@ final class ProductionBoundaryShadow {
     enum MissingSignal {
         /** T1..T4, address, RD, WR, and data are not persistent production CPU state. */
         CPU_BUS_T_STATE,
-        /** IRQ_PUSH_2 clears IF before the physically constrained acknowledge edge. */
+        /** IRQ_PUSH_2 clears IF before the candidate acknowledge boundary. */
         INTERRUPT_ACKNOWLEDGE_HALF_DOT,
         /** Cpu.requestedIrq is private and is also replaced by a live-priority late path. */
         INTERRUPT_SELECTED_SOURCE_LATCH,
@@ -289,7 +296,7 @@ final class ProductionBoundaryShadow {
         }
     }
 
-    /** Captures the physically placed CPU acknowledge strobe as a local delay line. */
+    /** Replays the calibrated CPU acknowledge strobe as a local delay line. */
     static final class CpuAcknowledgeDelay {
 
         private int selectedMask;

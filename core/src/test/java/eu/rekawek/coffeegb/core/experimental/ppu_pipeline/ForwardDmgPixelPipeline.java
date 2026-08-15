@@ -13,6 +13,13 @@ package eu.rekawek.coffeegb.core.experimental.ppu_pipeline;
  * listed by {@link #incompleteBehaviorMask()}; its immutable raw output composes with the
  * {@link DmgLcdOutputSignalCone} palette/LCDC consumer. Its purpose is to make the latency
  * hypothesis executable before it is allowed anywhere near production.
+ *
+ * <p><strong>Evidence label: fitted hypothesis, self-test, and bounded production
+ * differential.</strong> The fixed byte/scanout latencies, object-wait threshold, and token
+ * invalidation operations are candidate rules, not recovered gates. Existing Mealybug integration
+ * results still exercise the production renderer. This graph cannot support deleting the dual
+ * renderer until it shadows complete hardware-reference traces, including every behavior named by
+ * {@link #incompleteBehaviorMask()}.
  */
 final class ForwardDmgPixelPipeline {
 

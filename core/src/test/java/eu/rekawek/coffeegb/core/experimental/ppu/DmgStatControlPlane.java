@@ -11,6 +11,13 @@ import java.util.Set;
  * request, LY/LYC, and STAT-line latches. State changes are first resolved into a {@link Next}
  * vector and then committed together; the only local delta iteration is the documented line-start
  * comparator edge after retiring line sources have settled.
+ *
+ * <p><strong>Evidence label: fitted behavioral partition plus production differential.</strong>
+ * The independent state cells are useful ownership candidates, and an external gate trace supports
+ * non-atomic mode/LY/coincidence boundaries. However, {@code resolveNext} still encodes calibrated
+ * line/dot transitions (including line 153), and the STAT-write glitch is supplied as an explicit
+ * transient enable vector. Passing tests therefore establish compatibility at this boundary, not
+ * that those behaviors emerge from recovered silicon topology.
  */
 final class DmgStatControlPlane {
 
