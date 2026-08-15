@@ -331,7 +331,7 @@ public class Pulse1GateTopologyTest {
             production.setNr13(frequency & 0xff);
             apply(Pulse1GateTopology.SweepSignals.writeNr13(frequency & 0xff));
             production.setNr14(0x80 | frequency >>> 8);
-            production.trigger(false, false);
+            production.trigger(false, false, false);
             apply(Pulse1GateTopology.SweepSignals.writeNr14(
                     0x80 | frequency >>> 8));
             settle();
