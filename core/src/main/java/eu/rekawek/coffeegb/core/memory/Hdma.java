@@ -63,10 +63,6 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     // synchronizer tick that elapsed before HALT gated the CPU clock.
     private static final int LATCHED_HALT_MODE2_STARTUP_HANDOFF_TICK = 64;
 
-    private static final int INTERRUPT_ENTRY_OWNER = 1;
-
-    private static final int LATE_INTERRUPT_ALLOWED = 2;
-
     private final AddressSpace addressSpace;
 
     private final SpeedMode speedMode;
@@ -139,9 +135,11 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
     private boolean requestOverlappedCpuWrite;
 
+    private boolean interruptEntryWonArbitration;
+
     private CpuRequestArbitration cpuRequestArbitration = CpuRequestArbitration.NONE;
 
-    private int cpuRequestFlags;
+    private boolean cpuRequestAllowsLateInterrupt;
 
     private boolean haltOpcodeRequestLatched;
 
@@ -175,13 +173,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     private void setCpuRequestArbitration(CpuRequestArbitration arbitration) {
         cpuRequestArbitration = arbitration;
         if (arbitration != CpuRequestArbitration.CPU) {
-            cpuRequestFlags &= ~LATE_INTERRUPT_ALLOWED;
+            cpuRequestAllowsLateInterrupt = false;
         }
-    }
-
-    private void resetCpuRequestArbitration(CpuRequestArbitration arbitration) {
-        cpuRequestFlags = 0;
-        setCpuRequestArbitration(arbitration);
     }
 
     @Override
@@ -252,11 +245,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             boolean cancelled = stopAfterCurrentBlock;
             notifyDmaEvent(cancelled ? DmaTrace.Kind.CANCELLED : DmaTrace.Kind.COMPLETED);
             transferInProgress = false;
-            resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
             length = preserveLengthAfterCurrentBlock ? length : 0x7f;
             stopAfterCurrentBlock = false;
             preserveLengthAfterCurrentBlock = false;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
@@ -267,13 +261,14 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             // block is not postponed by an entire line.
             boolean overlappingRequest = nextHblankRequestTicks == 0;
             hblankRequestTicks = overlappingRequest && nextHblankRequestAge == 0 ? 0 : -1;
-            resetCpuRequestArbitration(hblankRequestTicks == 0
+            setCpuRequestArbitration(hblankRequestTicks == 0
                     ? CpuRequestArbitration.UNRESOLVED
                     : CpuRequestArbitration.NONE);
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
         }
         return true;
@@ -375,14 +370,16 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             hblankRequestTicks = wakeRequestArbitration == WakeRequestArbitration.REVERSE_PENDING
                     ? Math.max(1, 251 - gpuTicksInLine)
                     : 3;
-            resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
             hblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
         } else if (newGpuMode != Mode.HBlank && hblankTransfer
                 && hblankRequestTicks > 0) {
             hblankRequestTicks = -1;
-            resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
             hblankRequestAge = 0;
+            interruptEntryWonArbitration = false;
         }
         if (newGpuMode != Mode.HBlank && nextHblankRequestTicks > 0) {
             nextHblankRequestTicks = -1;
@@ -421,8 +418,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         if (!cpuHalted && hblankRequestTicks > 0) {
             if (--hblankRequestTicks == 0) {
                 requestOverlappedCpuWrite = cpuWriteCycleInFlight;
+                interruptEntryWonArbitration = cpuInterruptEntryInFlight;
                 setCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
-                cpuRequestFlags = cpuInterruptEntryInFlight ? INTERRUPT_ENTRY_OWNER : 0;
                 hblankRequestAge = 0;
                 if (wakeRequestArbitration == WakeRequestArbitration.REVERSE_PENDING) {
                     // The CPU/HDMA arbiter resumes on the opposite half-cycle after
@@ -443,7 +440,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 // HALT restores an unsynchronized request directly on wake. If the
                 // wake/interrupt input arrives within the request's two-tick HBlank
                 // arbitration window, interrupt entry owns the slot first.
-                cpuRequestFlags |= INTERRUPT_ENTRY_OWNER;
+                interruptEntryWonArbitration = true;
             }
             hblankRequestAge++;
         }
@@ -515,11 +512,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                     && !requestWasAlreadyActive;
             if (hblankTransfer) {
                 hblankRequestTicks = -1;
-                resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+                setCpuRequestArbitration(CpuRequestArbitration.NONE);
                 hblankRequestAge = 0;
                 nextHblankRequestTicks = -1;
                 nextHblankRequestAge = 0;
                 requestOverlappedCpuWrite = false;
+                interruptEntryWonArbitration = false;
             }
         } else if (transferInProgress && hblankTransfer
                 && (haltHdmaState == HaltHdmaState.REQUESTED
@@ -531,11 +529,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 tick++;
             }
             hblankRequestTicks = 0;
-            resetCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
+            setCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
         }
         if (!halted) {
@@ -552,11 +551,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             // paused until the display is enabled again.
             gpuMode = Mode.HBlank;
             hblankRequestTicks = 0;
-            resetCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
+            setCpuRequestArbitration(CpuRequestArbitration.UNRESOLVED);
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
         }
     }
@@ -583,9 +583,10 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             // STOP won before the synchronized request was stable. Lose this
             // scanline's grant but leave the programmed HBlank transfer armed.
             hblankRequestTicks = -1;
-            resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
             hblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
         } else if (speedMode.getSpeedMode() == 2 && hblankRequestTicks == 0) {
             stopAfterCurrentBlock = true;
             preserveLengthAfterCurrentBlock = true;
@@ -606,7 +607,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 // first resumed CPU edge. A wake near the end of HBlank still has
                 // to cross the ordinary three-tick hand-off.
                 hblankRequestTicks = gpuTicksInLine <= 446 ? 0 : 3;
-                resetCpuRequestArbitration(hblankRequestTicks == 0
+                setCpuRequestArbitration(hblankRequestTicks == 0
                         ? CpuRequestArbitration.UNRESOLVED
                         : CpuRequestArbitration.NONE);
                 if (hblankRequestTicks == 0
@@ -621,6 +622,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 }
                 hblankRequestAge = 0;
                 requestOverlappedCpuWrite = false;
+                interruptEntryWonArbitration = false;
             } else {
                 // If STOP releases during mode 3, remember that the next HBlank
                 // arrives on the rephased CPU/HDMA arbitration half-cycle.
@@ -658,7 +660,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     public boolean isInterruptEntryRequestOwner() {
-        return (cpuRequestFlags & INTERRUPT_ENTRY_OWNER) != 0;
+        return interruptEntryWonArbitration;
     }
 
     public boolean isCpuRequestUnresolved() {
@@ -668,18 +670,17 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     /** Resolves a newly active request once; the selected owner is retained. */
     public void resolveCpuRequest(boolean cpuClaimedSlot,
                                   boolean interruptPendingAtResolution) {
-        if (!isCpuRequestUnresolved()) {
+        if (cpuRequestArbitration != CpuRequestArbitration.UNRESOLVED) {
             return;
         }
-        setCpuRequestArbitration(!cpuClaimedSlot
-                || wakeRequestArbitration == WakeRequestArbitration.PREEMPT_CPU
-                || hblankTransfer && lcdEnabled && gpuLine == 0
-                ? CpuRequestArbitration.DMA
-                : CpuRequestArbitration.CPU);
-        cpuRequestFlags = cpuRequestArbitration == CpuRequestArbitration.CPU
-                && !interruptPendingAtResolution
-                ? cpuRequestFlags | LATE_INTERRUPT_ALLOWED
-                : cpuRequestFlags & ~LATE_INTERRUPT_ALLOWED;
+        boolean frameStartDmaPhase = hblankTransfer && lcdEnabled && gpuLine == 0;
+        setCpuRequestArbitration(cpuClaimedSlot
+                && wakeRequestArbitration != WakeRequestArbitration.PREEMPT_CPU
+                && !frameStartDmaPhase
+                ? CpuRequestArbitration.CPU
+                : CpuRequestArbitration.DMA);
+        cpuRequestAllowsLateInterrupt = cpuRequestArbitration == CpuRequestArbitration.CPU
+                && !interruptPendingAtResolution;
     }
 
     public boolean isCpuInstructionRequestOwner() {
@@ -696,19 +697,19 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     public void onCpuRequestSlotRetired() {
-        if (isCpuInstructionRequestOwner()) {
+        if (cpuRequestArbitration == CpuRequestArbitration.CPU) {
             setCpuRequestArbitration(CpuRequestArbitration.DMA);
         }
     }
 
     /** Retire the CPU slot, preserving only an interrupt that arrived after its grant. */
     public void onInterruptEntryAcceptedByCpu() {
-        if (!isCpuInstructionRequestOwner()) {
+        if (cpuRequestArbitration != CpuRequestArbitration.CPU) {
             return;
         }
-        boolean promoteInterruptEntry = (cpuRequestFlags & LATE_INTERRUPT_ALLOWED) != 0;
+        boolean promoteInterruptEntry = cpuRequestAllowsLateInterrupt;
         setCpuRequestArbitration(CpuRequestArbitration.DMA);
-        cpuRequestFlags = promoteInterruptEntry ? INTERRUPT_ENTRY_OWNER : 0;
+        interruptEntryWonArbitration = promoteInterruptEntry;
     }
 
     /** A request already asserted while STOP holds the CPU owns the wake boundary. */
@@ -785,11 +786,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         speedSwitchStartedWithoutRequest = false;
         wakeRequestArbitration = WakeRequestArbitration.NONE;
         requestOverlappedCpuWrite = false;
+        interruptEntryWonArbitration = false;
         nextHblankRequestTicks = -1;
         nextHblankRequestAge = 0;
         tick = -startupTicks() - (resumedDoubleSpeedGdma ? 2 : 0);
         hblankRequestTicks = hblankTransfer && (!isCurrentHblankRequestable()) ? -1 : 0;
-        resetCpuRequestArbitration(hblankRequestTicks == 0
+        setCpuRequestArbitration(hblankRequestTicks == 0
                 ? CpuRequestArbitration.UNRESOLVED
                 : CpuRequestArbitration.NONE);
         hblankRequestAge = 0;
@@ -835,11 +837,12 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
             notifyDmaEvent(DmaTrace.Kind.CANCELLED);
             transferInProgress = false;
             hblankRequestTicks = -1;
-            resetCpuRequestArbitration(CpuRequestArbitration.NONE);
+            setCpuRequestArbitration(CpuRequestArbitration.NONE);
             hblankRequestAge = 0;
             nextHblankRequestTicks = -1;
             nextHblankRequestAge = 0;
             requestOverlappedCpuWrite = false;
+            interruptEntryWonArbitration = false;
             wakeRequestArbitration = WakeRequestArbitration.NONE;
         }
     }
@@ -922,8 +925,8 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 gpuLine, gpuTicksInLine, gpuCpuClockRephased,
                 hblankStartTicksInLine, cpuHalted, haltHdmaState,
                 haltEnteredThisTick, requestOverlappedCpuWrite,
-                (cpuRequestFlags & INTERRUPT_ENTRY_OWNER) != 0, cpuRequestArbitration,
-                (cpuRequestFlags & LATE_INTERRUPT_ALLOWED) != 0,
+                interruptEntryWonArbitration, cpuRequestArbitration,
+                cpuRequestAllowsLateInterrupt,
                 haltOpcodeRequestLatched);
     }
 
@@ -962,12 +965,16 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         this.haltHdmaState = mem.haltHdmaState;
         this.haltEnteredThisTick = mem.haltEnteredThisTick;
         this.requestOverlappedCpuWrite = mem.requestOverlappedCpuWrite;
-        this.cpuRequestArbitration = mem.cpuRequestArbitration != null
-                ? mem.cpuRequestArbitration
-                : hblankRequestTicks == 0 ? CpuRequestArbitration.DMA : CpuRequestArbitration.NONE;
-        this.cpuRequestFlags = (mem.interruptEntryWonArbitration ? INTERRUPT_ENTRY_OWNER : 0)
-                | (cpuRequestArbitration == CpuRequestArbitration.CPU
-                && mem.cpuRequestAllowsLateInterrupt ? LATE_INTERRUPT_ALLOWED : 0);
+        this.interruptEntryWonArbitration = mem.interruptEntryWonArbitration;
+        if (mem.cpuRequestArbitration != null) {
+            this.cpuRequestArbitration = mem.cpuRequestArbitration;
+        } else if (hblankRequestTicks == 0) {
+            this.cpuRequestArbitration = CpuRequestArbitration.DMA;
+        } else {
+            this.cpuRequestArbitration = CpuRequestArbitration.NONE;
+        }
+        this.cpuRequestAllowsLateInterrupt = cpuRequestArbitration == CpuRequestArbitration.CPU
+                && mem.cpuRequestAllowsLateInterrupt;
         this.haltOpcodeRequestLatched = mem.haltOpcodeRequestLatched;
         if (debugHooks != null && transferInProgress) {
             alignDebugDmaObservation();
