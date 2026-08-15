@@ -13,12 +13,14 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
-does not yet establish that replacement for the whole core. Three narrow production reductions were
-completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, and redundant LCDC
-conflict countdown state. Together they remove 18 net production lines and one net live scalar
-field without adding a runtime framework. The other subsystem results are
-constructive, fitted, differential, or falsifying experiments whose exact evidence strength is
-recorded in the companion log.
+does not yet establish that replacement for the whole core. Seven narrow production reductions were
+completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, redundant LCDC conflict
+countdown state, frame-sequencer ripple state, shared PPU register-conflict banks, independent HDMA
+request bits, and peripheral acknowledge bits. Across eight core source files they remove 44 net
+production lines and nine live scalar storage fields without adding a runtime framework. Released
+state-record shapes remain compatible. Most of the later cuts are exact reachability or state-plane
+reductions under the current calibrated behavior, not recovered hardware topology; the evidence
+strength and final combined-battery status are recorded in the companion log.
 
 The candidate is not a shorter formula for PPU modes, interrupt delays, or APU counters.
 
