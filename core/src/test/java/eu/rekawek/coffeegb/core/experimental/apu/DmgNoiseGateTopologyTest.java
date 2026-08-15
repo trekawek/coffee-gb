@@ -164,7 +164,7 @@ public class DmgNoiseGateTopologyTest {
     }
 
     @Test
-    public void triggerTransientCannotBeCollapsedToOnePhaseOffsetAcrossNr43() {
+    public void productionTriggerProjectionIsNotAGateNodeOracleAcrossNr43() {
         // The production API and this cone start on opposite sides of GYSU, so first try every
         // possible CH4_1MHZ/HAMA seed rather than declaring a convenient offset. Each vector
         // contains the first two post-reset LFSR clocks for all 112 clocked NR43 fields.
@@ -210,8 +210,10 @@ public class DmgNoiseGateTopologyTest {
         }
 
         // Executable witness: with inactive alignment zero and candidate phase zero, ratio zero
-        // would require offset -5 while ratio one would require -9. A scheduler offset cannot
-        // reconcile both, even though each channel's second clock has the correct steady period.
+        // would require offset -5 while ratio one would require -9. The production scheduler's
+        // countdown events therefore cannot be treated as gate-node timestamps. This is a
+        // projection boundary, not a falsifier of the netlist cone: the adjacent GYSU experiment
+        // now derives externally traced write alignments from raw clocks.
         assertArrayEquals(new int[]{11, 19}, production[0][0][0]);
         assertArrayEquals(new int[]{16, 24}, topology[0][0][0]);
         assertArrayEquals(new int[]{19, 35}, production[0][0][1]);

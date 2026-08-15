@@ -186,6 +186,16 @@ final class DmgNoiseGateTopology {
     }
 
     /**
+     * Reset-cell seed used by the upstream CPU-write/GYSU experiment. Unlike {@link #steady(int)}
+     * and {@link #triggerDifferentialSeed(int, int, boolean)}, this does not preload the ratio
+     * cells or import a retained clock half: all DFF-backed clock state remains at its physical
+     * zero-reset value.
+     */
+    static DmgNoiseGateTopology resetSeed(int nr43) {
+        return new DmgNoiseGateTopology(nr43, true);
+    }
+
+    /**
      * A legal settled state just after restart has loaded the ratio cells and JERY has enabled
      * their clock. This avoids importing trigger phase into steady-state divider comparisons.
      */
@@ -406,6 +416,16 @@ final class DmgNoiseGateTopology {
 
     boolean channelActive() {
         return channelActive;
+    }
+
+    /** Raw ATYK/AVOK divide phase, exposed only to compose adjacent detached gate islands. */
+    int masterPhase() {
+        return masterPhase;
+    }
+
+    /** Raw JESO/HAMA retained half, exposed only to compose adjacent detached gate islands. */
+    boolean hama() {
+        return hama;
     }
 
     static int ratioParallelLoad(int nr43) {
