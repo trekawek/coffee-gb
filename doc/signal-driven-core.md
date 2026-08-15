@@ -15,12 +15,14 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
 does not yet establish that replacement for the whole core. Seven narrow production reductions were
 completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, redundant LCDC conflict
-countdown state, frame-sequencer ripple state, shared PPU register-conflict banks, independent HDMA
-request bits, and peripheral acknowledge bits. Across eight core source files they remove 44 net
-production lines and nine live scalar storage fields without adding a runtime framework. Released
-state-record shapes remain compatible. Most of the later cuts are exact reachability or state-plane
+countdown state, frame-sequencer ripple state, shared PPU register-conflict banks, peripheral
+acknowledge bits, and the two square-channel oscillator phase rings. Across eight core source files
+they remove 48 net core-production lines and ten live scalar storage fields without adding a runtime
+framework. Released state-record shapes remain compatible. The controller adds 29 net validation
+lines to reject never-emitted portable-state combinations; that compatibility safeguard is separate
+from the core-production count. Most of the later cuts are exact reachability or state-plane
 reductions under the current calibrated behavior, not recovered hardware topology; the evidence
-strength and final combined-battery status are recorded in the companion log.
+strength and final combined-battery results are recorded in the companion log.
 
 The candidate is not a shorter formula for PPU modes, interrupt delays, or APU counters.
 
@@ -717,7 +719,8 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-Three narrow production slices passed the behavior and deletion gates within this research branch:
+The branch retains seven narrow production reductions in two evidence tiers. Two delete causal
+live-path logic with external DMG-model support:
 
 - Serial DIV-reset handling is now one local divider-stage observation, output-clock toggle, and
   falling-edge shift. It removes eleven net lines of future-event arithmetic, preserves the
@@ -727,20 +730,34 @@ Three narrow production slices passed the behavior and deletion gates within thi
   retained interoperability testbench is independently authored and contains no DUT implementation,
   but its MIT classification must still receive project-owner/legal review before an upstream merge
   because it names internal CC BY-SA model nodes.
-- CH1 sweep trigger no longer accepts channel-active state or chooses an activity-dependent delay.
+- CH1 sweep trigger no longer depends on channel-active state or chooses an activity-dependent delay.
   Every nonzero shift follows the shorter restart/adder path observed for identical-phase inactive
-  and active DMG writes. This deletes one semantic input and conditional without adding state or
-  changing mementos. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg
-  sound cases pass. The gate evidence is DMG-only; CGB is still production-differential.
-- The CGB LCDC.4 collision now stores one pending write strobe directly into the already-existing
-  consumer history. The separate active and pending duration counters were redundant for every
-  reachable state: once active, the pulse was already authoritative in that history. This removes
-  one live field and countdown branch while retaining released integer slots for import. It is a
-  behavior-preserving state reduction, not independent evidence for the CGB collision waveform.
+  and active DMG writes. This deletes the semantic dependency and conditional without adding state
+  or changing mementos; the public `wasActive` argument remains, ignored, for source and descriptor
+  compatibility. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg sound
+  cases pass. The gate evidence is DMG-only; CGB is still production-differential.
 
-The combined branch still needs a reproducible upstream performance acceptance run. Reusable
-latch/bus/scheduler primitives remain test-only because landing a generic framework for these
-local formulas would have increased production complexity.
+Five further changes are exact behavior-preserving state reductions at Coffee GB's existing
+calibrated boundaries. The CGB LCDC.4 collision stores one pending write strobe directly into the
+already-existing consumer history, removing redundant active/pending counters. The frame sequencer
+stores a ripple phase plus sampled tap; PPU palette, SCX, and WX conflicts share visible/pending
+banks; four peripheral acknowledge levels share one bit-plane without moving their consumers; and
+each square channel stores its four-state oscillator phase in the low two bits of one integer.
+These five cuts reduce fields and live transition logic, but are not independent hardware-topology
+claims and do not by themselves pass the external-evidence condition
+for a promoted architecture slice. Cold released-state projection can add bytecode even when hot
+transition code and source state shrink.
+
+The combined branch passes 1,550 core unit tests with no failures/errors (8 skipped), 904 controller
+unit tests with no failures/errors (2 skipped), and the complete 5,707/5,707 hardware-verified
+integration matrix. Released compatibility is directional: saves emitted by older released builds
+load in the current branch. Newer saves are not promised to load in older binaries.
+
+The final fixed-rule benchmark audit found exactly equal allocation—128,600 bytes over 45 million
+measured ticks in every one of six invocations per revision—but host contention left wall-clock
+timing inconclusive. A quiet-host timing acceptance run is still required. Reusable
+latch/bus/scheduler primitives remain test-only because landing a generic framework for these local
+formulas would have increased production complexity.
 
 The external traces strengthen the architectural diagnosis without proving the whole replacement:
 
@@ -769,7 +786,7 @@ The external traces strengthen the architectural diagnosis without proving the w
 - CH1 channel-active state does not feed the restart/adder request cone. Identical-phase inactive
   and active writes have identical nonzero-shift waveforms; shift-zero retrigger differs because the
   BYTE/LD_SUM latch is already high, not because an activity branch selects another deadline. The
-  production trigger path now reflects that topology and deletes the former {@code wasActive}
+  production trigger path now reflects that topology and deletes the former `wasActive`
   timing branch.
 - OAM demonstrates the limit of the available abstraction: its external `generic_sram` erases
   directional sensing/write-back and directly fails the exact blocked-write mapping. That part
