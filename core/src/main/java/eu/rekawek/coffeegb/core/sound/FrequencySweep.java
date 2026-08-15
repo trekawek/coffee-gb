@@ -143,11 +143,10 @@ public class FrequencySweep implements StatefulComponent<FrequencySweep> {
     private int calculate() {
         int freq = shadowFreq >> shift;
         if (negate) {
-            freq = shadowFreq - freq;
+            freq = -freq;
             negging = true;
-        } else {
-            freq = shadowFreq + freq;
         }
+        freq += shadowFreq;
         if (freq > 2047) {
             overflow = true;
         }
