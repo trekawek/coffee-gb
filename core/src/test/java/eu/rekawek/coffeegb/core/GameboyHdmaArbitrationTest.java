@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.cpu.Cpu;
+import eu.rekawek.coffeegb.core.gpu.Mode;
+import eu.rekawek.coffeegb.core.memory.Hdma;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import org.junit.Test;
 
@@ -78,6 +80,88 @@ public class GameboyHdmaArbitrationTest {
             fixture.finishHdma();
             assertEquals((PROGRAM + 2) & 0xff, fixture.readVram(0x800c));
             assertEquals(PROGRAM >> 8, fixture.readVram(0x800d));
+        }
+    }
+
+    @Test
+    public void clearedThenReassertedInterruptRetainsPreviouslyLatchedOwner() throws IOException {
+        byte[] rom = new byte[0x8000];
+        rom[0x143] = (byte) 0x80;
+        try (Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(rom))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setGameboyType(GameboyType.CGB)
+                .setSupportBatterySave(false)
+                .build()) {
+            Cpu cpu = gameboy.getCpu();
+            AddressSpace bus = gameboy.getAddressSpace();
+
+            gameboy.getGpu().setByte(0xff40, 0);
+            gameboy.tick();
+            gameboy.getGpu().setByte(0xff40, 0x91);
+            gameboy.tick();
+
+            bus.setByte(0xff0f, 0);
+            bus.setByte(0xffff, 0);
+            int[] program = {0xfb, 0x00, 0x00, 0x18, 0xfd}; // EI; NOP; NOP; JR -3
+            for (int i = 0; i < program.length; i++) {
+                bus.setByte(PROGRAM + i, program[i]);
+            }
+            cpu.getRegisters().setPC(PROGRAM);
+            for (int i = 0; i < 18; i++) {
+                cpu.tick();
+            }
+
+            int guard = 2000;
+            while (guard-- > 0) {
+                Hdma.HdmaState state = (Hdma.HdmaState) gameboy.getHdma().captureState();
+                if (state.gpuMode() == Mode.PixelTransfer && state.gpuLine() >= 1
+                        && state.gpuTicksInLine() < 220) {
+                    break;
+                }
+                gameboy.tick();
+            }
+            assertTrue(guard > 0);
+            bus.setByte(0xff51, 0xc1);
+            bus.setByte(0xff52, 0);
+            bus.setByte(0xff53, 0);
+            bus.setByte(0xff54, 0);
+            bus.setByte(0xff55, 0x80);
+
+            guard = 2000;
+            while (guard-- > 0) {
+                gameboy.tick();
+                Hdma.HdmaState state = (Hdma.HdmaState) gameboy.getHdma().captureState();
+                if (state.hblankRequestTicks() == 1) {
+                    break;
+                }
+            }
+            assertTrue(guard > 0);
+            assertEquals(Cpu.State.RUNNING, cpu.getState());
+            assertEquals(1, cpu.getDebugMachineCycle());
+
+            bus.setByte(0xffff, 1);
+            bus.setByte(0xff0f, 1);
+            gameboy.tick();
+            assertTrue(gameboy.getHdma().isCpuRequestUnresolved());
+            assertTrue(gameboy.getHdma().isInterruptEntryRequestOwner());
+
+            bus.setByte(0xff0f, 0);
+            gameboy.tick();
+            assertTrue(gameboy.getHdma().isCpuInstructionRequestOwner());
+            assertTrue(gameboy.getHdma().isInterruptEntryRequestOwner());
+
+            while (gameboy.getHdma().isCpuInstructionRequestOwner()) {
+                gameboy.tick();
+            }
+            assertTrue(gameboy.getHdma().isInterruptEntryRequestOwner());
+            int dmaTick = ((Hdma.HdmaState) gameboy.getHdma().captureState()).tick();
+            int cpuPhase = cpu.getDebugMachineCycle();
+
+            bus.setByte(0xff0f, 1);
+            gameboy.tick();
+            assertEquals(dmaTick, ((Hdma.HdmaState) gameboy.getHdma().captureState()).tick());
+            assertEquals(cpuPhase + 1, cpu.getDebugMachineCycle());
+            assertFalse(gameboy.getHdma().isCpuInstructionRequestOwner());
         }
     }
 
