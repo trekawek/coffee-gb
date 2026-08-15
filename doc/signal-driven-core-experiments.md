@@ -41,7 +41,7 @@ save states, debugger boundaries, and performance.
 | HALT, wake, and interrupt acceptance require request provenance | External gate-model waveform plus production differential | Direct HALT decode removes HALT's own IDU increment while opcode load and PC write remain active; the delayed decode only sets the HALT latch. The halt bug is an unchanged next-opcode address, not a delayed next-fetch gate. Exact interrupt-source apertures and silicon equivalence remain open. |
 | HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition plus production differential | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
-| DMG STAT behavior needs a large mode/line exception tree | Production-equivalent behavioral partition; causal claim not established | Independent state cells match a steady frame, but the model still encodes calibrated line/dot cases and an explicit transient FF41 enable vector. |
+| DMG STAT behavior needs a large mode/line exception tree | Behavioral whole-plane partition; two bounded external gate cones | The broad model still encodes calibrated raster cases. Independently, a ripple/partial-decode reset derives LY 153/0 and transparent precharged FF41 latches derive the write glitch with neither `line == 153` nor a semantic `0x78`. |
 | The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral decomposition; selected follow-up cones are fitted circuit hypotheses | `Pulse1GateTopology` directly encodes settled feature truth tables; serial-adder and envelope-ripple cones provide narrower structural hypotheses with named apertures. |
@@ -582,12 +582,25 @@ phase, physical `E+4` M0 versus production's earlier prediction signal, mid-tran
 divergent renderer/control tails, terminal WX166/X167 reads, HALT read muxing, and central IF
 acknowledge. Those belong at pixel-pipeline, CPU-readable-mux, or interrupt-synchronizer boundaries.
 
-The **external netlist/gate trace** independently supports only the split. After LCD enable, raw FF44, the
-two readable FF41 mode bits, and coincidence change on distinct propagation boundaries rather than
-as one atomic mode/line transition. Brief combinational hazards are also visible in the raw vector.
-Those observations motivate owning latches and receiver sample edges, but do not establish the
-Java model's line schedule or FF41 transient mask. A causal replacement must remove those semantic
-cases rather than merely placing them behind latches.
+The follow-up **external gate-model waveform** resolves two of those cases causally. LY is an
+eight-bit ripple whose terminal path decodes only `v7 & v4 & v3 & v0`; a DFF samples that level and
+asynchronously resets the ripple. Mode 1 is sampled independently from `v7 & v4`, so it remains set
+after readable LY has already returned to zero. On the next line, readable M2/OAM parsing starts
+before the separate mode-1 sample clears. There is no eight-bit line-153 equality operation.
+
+The FF41 write glitch is similarly ordinary connectivity in the model. Four transparent enable
+latches open while the shared CPU data bus is still precharged high, briefly enabling every STAT
+source. With HBlank active, the shared STAT level rises and sets IF.1; the requested zero then
+propagates through the still-open latches. FF45 uses the same kind of transparent receiver bank,
+followed by a comparator and a separately clocked coincidence latch. No semantic `0x78` event is
+needed.
+
+`DmgStatGateConeTest` is a bounded executable extraction of those paths. Its four tests pin the
+transition ordering for an ordinary line, terminal ripple reset/mode handoff, FF41 precharge, and
+FF45 comparator sampling; its model contains neither `0x78` nor `== 153`. This upgrades those two
+local explanations only. It does not replace the broad raster model or establish absolute silicon
+delay, LCD startup/disable, every CPU write phase, all source combinations, the sub-nanosecond
+mode-1/OAM handoff, CGB, or central IF acknowledgement.
 
 ## Forward-only DMG pixel path
 

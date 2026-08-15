@@ -834,28 +834,73 @@ controlled real-DMG captures.
 relationships above, and fails on extra affected rows. Until that exists and reruns from a clean
 checkout, the dynamic OAM claims are `OBSERVED`, not fully reproducible.
 
-## STAT waveform claim
+## STAT/LY gate waveform
 
-The ordinary OAM run also contains the full LCD/STAT trace. These paths are **OBSERVED** in the VCD
-header:
+A dedicated **VERIFIED external gate-model run** replaced the earlier unretained STAT observation.
+It used isolated checkout `/tmp/coffee-gb-dmg-sim-stat`, detached at
+`ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`, Icarus 14.0-devel `1d2aa1b`, and the retained
+binutils-sm83 `32a405949ca49563370108273a10285a17ade344`. The tracked instrumentation changes only
+`dmg_cpu_b_gameboy.sv` (51 insertions, 2 deletions): it moves `vid_dump` after wildcard declarations
+for Icarus and adds a `+STAT_TRACE` monitor without changing DUT logic. Its binary-diff SHA-256 is
+`78e63e1fd656ed2517a333e7797f0ff47002064d6167e833a6318dd63621a3e3`. The probe source SHA-256 is
+`fd1c0824be62af45db0c3dbcf3bdceb53100eb0cc94c9417a6cd6cb9d788e1e4`; the external AWK checker is
+`efe89de2109507622c44e6133a78b954a1c76d7a11712cfc15bf21bef098a032`. Generated ROM and waveform
+artifacts remain external and their contents/checksums are intentionally not recorded.
 
-```text
-dmg_cpu_b_gameboy.reg_ff44[7:0]
-dmg_cpu_b_gameboy.reg_ff41[7:0]
-dmg_cpu_b_gameboy.dmg.lyc_int
-dmg_cpu_b_gameboy.dmg.lyc_int_en
-dmg_cpu_b_gameboy.dmg.ff44
+The exact successful build and run were:
+
+```sh
+cd /tmp/coffee-gb-dmg-sim-stat/sim-tests
+/tmp/coffee-gb-binutils-sm83-build/gas/as-new -o stat-cone.o stat-cone.s
+/tmp/coffee-gb-binutils-sm83-build/ld/ld-new \
+  -o stat-cone.coff -T oam-bug.ld stat-cone.o
+/tmp/coffee-gb-binutils-sm83-build/binutils/objcopy \
+  -O binary -j .text stat-cone.coff stat-cone.bootrom
+/tmp/coffee-gb-binutils-sm83-build/binutils/objcopy \
+  -O binary -j .rom stat-cone.coff stat-cone.cartrom
+
+cd /tmp/coffee-gb-dmg-sim-stat
+make dmg_cpu_b_gameboy.vvp \
+  IVERILOG=/tmp/coffee-gb-iverilog-master/bin/iverilog \
+  TIMING=default SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+/tmp/coffee-gb-iverilog-master/bin/vvp -N ./dmg_cpu_b_gameboy.vvp \
+  -none +STAT_TRACE \
+  +BOOTROM=sim-tests/stat-cone.bootrom +ROM=sim-tests/stat-cone.cartrom \
+  +SECS=0.05 +MBC_TYPE=00 +RAM_SIZE=00 | awk -f /tmp/stat-cone-extract.awk
 ```
 
-The experiment log's narrow expected observation is that, after LCD enable, the LY vector,
-readable FF41 mode bits, and coincidence-related nodes do not all change on one atomic timestamp;
-brief raw-vector hazards may occur before the readable boundary settles. This supports separate
-receiver boundaries only. It does not validate `DmgStatControlPlane`'s line schedule or transient
-enable mask.
+The checker exited zero with `STAT_CONE_PASS`. Its ordered observations, in raw simulator ps with
+relative propagation shown here, were:
 
-**TODO:** the exact extraction interval, LCD-enable marker, transition transcript, and automated
-assertion were not retained. This claim must remain non-promotable until an MIT-side extractor emits
-a concise ordered transition table from a clean rerun.
+```text
+ordinary VCLK 32134323000: LY=1 +3 ns; readable M2 +245 ns;
+                           NYPE and coincidence sample +487 ns
+FF41 gate     32217405000: enables=1111 +0; STAT level +1 ns; IF.1 +3 ns;
+                           requested zero settled +17 ns; gate off +364 ns
+FF45 gate     32264253000: requested LYC=2 +18 ns; comparator match +20 ns;
+                           sampled coincidence +365 ns
+line-153 VCLK 49046451000: LY=153 +3 ns; terminal sample +1464 ns;
+                           vertical reset +1465 ns; LY=0 +1467 ns
+line-0 VCLK   49157715000: readable M2 while M1 remains high +245 ns;
+                           M1 off +489 ns; OAM source on +490 ns
+```
+
+The clean-source structural anchors are:
+
+- LY ripple `muwy -> myro -> lexa -> lydo -> lovu -> lema -> mato -> lafo`;
+- partial terminal decode `noko(v7,v4,v3,v0) -> myta` sampled on `nype_n -> lama` vertical reset;
+- VBlank `xyvo(v4&v7) -> popu` sampled on NYPE -> `paru` M1, independent of `besu/acyl` M2;
+- OAM STAT source `tolu(!mode1) -> tapa(int_oam & vclk2)`;
+- FF41 decode `sepa -> ryve/pupu` and transparent enables `roxe/rufo/refe/rugu`, then
+  `suko -> tuva/voty -> lalu` IF latch; and
+- FF45 decode `xufa -> wane/voze`, eight transparent data latches, XOR/NOR comparator, `ropo`
+  HCLK sample, and `rupo` readable coincidence.
+
+This demonstrates topology in the pinned reverse-engineered DMG-B model, not measured silicon.
+Only one normal-speed frame and one CPU phase for FF41/FF45 were exercised. Default timing uses
+extracted/guessed delays; a one-nanosecond modeled hazard at the M1-to-OAM shared-STAT handoff does
+not establish physical `stat_irq_blocking`. LCD startup/disable, other write phases, CGB, all STAT
+source combinations, and central interrupt acknowledgement remain open.
 
 ## SameBoy CGB speed-switch timer probe
 
