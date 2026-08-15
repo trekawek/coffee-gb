@@ -34,7 +34,7 @@ save states, debugger boundaries, and performance.
 | Serial DIV-reset timing is a forecast problem | Branch-accepted DMG external-netlist-anchored production replacement/deletion; CGB production differential | The old arithmetic reduces exactly to a local divider-stage fall, SCK toggle, and falling-edge shift. CGB normal/fast use the same tested algebra but lack an external topology oracle. The independently authored hierarchy driver is now reproducible from the branch, but its license classification still needs review before merge. |
 | Timer overflow needs an explicit 4/8-tick state machine | External gate-model waveform; local production cut rejected | A selected-input fall, sampled TIMA-MSB fall, next-BOGA request, shared load/reset cone, and live TMA reload bus reproduce the apparent timeline without an explicit deadline. A runtime replacement cannot preserve arbitrary released states because Timer does not own or serialize the independent BOGA/T4 phase; that clock must migrate above Timer first. |
 | Timer/serial acknowledgement can be centralized inside the current master-tick loop | Falsified and rolled back | Timer runs before CPU while serial runs after it; no placement of one central callback preserves both physical windows. A unified CPU-edge/half-dot island is prerequisite. |
-| Interrupt entry must reread FF0F/FFFF and repair priority at the vector callback | Branch-accepted held-owner production deletion | The CPU samples its internal pending bank during the first half of `IRQ_PUSH_2`, then uses the held owner for the existing T4 clear and later vector. Fake bus reads, late re-request/clear repair, and two snapshot integers disappear. DMG sampling/evaluation is externally grounded; callback alignment and CGB remain fitted. |
+| Interrupt entry must reread FF0F/FFFF and repair priority at the vector callback | External topology established; production mapping rejected and rolled back | A held owner is the right raw topology, but sampling it in the first half of Coffee GB's current `IRQ_PUSH_2` fails eight Gambatte late STAT-vs-Timer precedence cases. The CPU callback/bus timeline must be re-anchored before the raw T1/T2 aperture can replace the repair. |
 | Java evaluation order can be made unobservable | Self-test support for two bounded contracts | A single-resolve edge-triggered scheduler and a separate fixed-point transparent/async oracle are traversal-order invariant. The allocation-heavy oracle is not a runtime implementation. |
 | The existing callback boundary is too opaque to shadow a signal scheduler | Production-differential compatibility harness | Immutable CPU/timer/serial/IF snapshots replay current races, but still carry projected timer state and a source-profile acknowledge countdown. |
 | The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External gate-waveform-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, priority, acknowledge, and control latches symmetrically. The DMG gate trace further narrows selection to a transparent pending-bank aperture followed by held bits; the composition does not yet model that aperture. Timer writes, Serial pin generation, PPU, and CGB remain outside it. |
@@ -129,7 +129,7 @@ lean-cut reruns completed with zero failures/errors:
 
 | Suite | Result |
 | --- | ---: |
-| Core unit tests, including detached experiments | 1,538 run, 8 skipped |
+| Core unit tests, including detached experiments | 1,534 run, 8 skipped |
 | Mooneye + dmg-acid2 + cgb-acid2 | 132/132 |
 | Blargg aggregate + individual | 54/54 |
 | SameSuite + Mealybug strict images | 103/103 |
@@ -259,15 +259,20 @@ three-clock DMG countdown, so this correction exposes a one-clock callback-align
 than hiding it in another fitted phase constant. CGB's later eight-clock placement remains
 explicitly fitted and receives no support from this DMG trace.
 
-The branch promotes one bounded vertical part of this result. During production `IRQ_PUSH_2`, CPU
-samples the internal pending flags during the first half of the machine cycle and retains one
-priority owner. The existing T4 clear and later Java vector both use that owner. This removes the
-external FF0F/FFFF reads from the stack-write callback, `applyLateInterruptPriority` and its
-old-source re-request/new-source clear, plus two live CPU snapshot integers. The legacy importer
-record retains its old shape. Focused CPU/interrupt/memento tests (83/83), the unit suite, Mooneye
-and acid profiles (132/132), and aggregate plus individual Blargg profiles (54/54) pass. DMG's raw
-T1/T2 and T4 topology is externally grounded; applying the same first-half projection to CGB normal
-and double speed is explicitly differential/fitted.
+A bounded production attempt mapped this result directly onto the current `IRQ_PUSH_2` callback.
+It sampled internal pending flags during the first half of that Java machine cycle and retained one
+owner for the existing T4 clear and later vector, deleting the external FF0F/FFFF reads,
+`applyLateInterruptPriority`, its re-request/clear repair, and two live snapshot integers. Focused
+CPU/interrupt/memento tests (83/83), the unit suite, Mooneye and acid profiles (132/132), and
+aggregate plus individual Blargg profiles (54/54) all passed.
+
+The larger Gambatte hardware profile then **falsified and rolled back** that placement. Eight
+`irq_precedence/late_m0irq_vs_tima_scx{2,3}` cases, with and without HALT and in both DMG/CGB modes,
+reported Timer (`2`) where hardware expects STAT (`4`). The raw external bank still closes after
+T1/T2; widening it in the present Java state would only install another fitted phase exception.
+The failure shows that Coffee GB's `IRQ_PUSH_2`/PPU callback anchor is not the physical M6 aperture.
+Persistent CPU T-state and bus timing must be re-anchored before the held bank can become production
+state. The worktree was restored by reverting the cut.
 
 The same external cone makes Timer and Serial request/acknowledge collisions local. Each IF cell is
 reset-dominant, so a request asserted while its one-hot acknowledge reset is active is swallowed;
