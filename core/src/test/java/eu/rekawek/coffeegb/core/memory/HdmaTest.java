@@ -4,6 +4,10 @@ import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import org.junit.Test;
 
+import java.lang.reflect.RecordComponent;
+import java.util.Arrays;
+import java.util.function.Consumer;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -155,7 +159,7 @@ public class HdmaTest {
     }
 
     @Test
-    public void interruptOwnedRequestResumesArbitrationAfterStateRestore() {
+    public void interruptOwnedRequestRetainsItsIndependentLatchAfterStateRestore() {
         Fixture fixture = new Fixture();
         fixture.hdma.onLcdSwitch(true);
         fixture.hdma.onGpuTiming(1, 240);
@@ -172,7 +176,53 @@ public class HdmaTest {
         fixture.hdma.resolveCpuRequest(true, false);
 
         assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
-        assertFalse(fixture.hdma.isInterruptEntryRequestOwner());
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
+    }
+
+    @Test
+    public void cpuRequestStateRestoreMatchesLegacyMappingForAllFourLatchInputs() {
+        for (Hdma.HdmaState arbitrationState : cpuRequestArbitrationStates()) {
+            String arbitration = String.valueOf(arbitrationState.cpuRequestArbitration());
+            for (int flags = 0; flags < 4; flags++) {
+                boolean interruptOwner = (flags & 1) != 0;
+                boolean lateInterrupt = (flags & 2) != 0;
+                var state = withCpuRequestFlags(arbitrationState, interruptOwner, lateInterrupt);
+
+                Fixture restored = new Fixture();
+                restored.hdma.restoreState(state);
+
+                assertLegacyCpuRequestState(arbitration + "/" + flags, restored,
+                        LegacyCpuRequestState.restored(arbitration,
+                                interruptOwner, lateInterrupt));
+            }
+        }
+    }
+
+    @Test
+    public void cpuRequestTransitionsMatchTheTwoIndependentLegacyLatchesExhaustively() {
+        for (Hdma.HdmaState arbitrationState : cpuRequestArbitrationStates()) {
+            String arbitration = String.valueOf(arbitrationState.cpuRequestArbitration());
+            for (int flags = 0; flags < 4; flags++) {
+                boolean interruptOwner = (flags & 1) != 0;
+                boolean lateInterrupt = (flags & 2) != 0;
+                var state = withCpuRequestFlags(arbitrationState, interruptOwner, lateInterrupt);
+                var legacy = LegacyCpuRequestState.restored(arbitration,
+                        interruptOwner, lateInterrupt);
+
+                assertCpuRequestTransition("resolve CPU/open", state,
+                        legacy.resolve(true, false), h -> h.resolveCpuRequest(true, false));
+                assertCpuRequestTransition("resolve CPU/pending", state,
+                        legacy.resolve(true, true), h -> h.resolveCpuRequest(true, true));
+                assertCpuRequestTransition("resolve DMA", state,
+                        legacy.resolve(false, false), h -> h.resolveCpuRequest(false, false));
+                assertCpuRequestTransition("retire CPU slot", state,
+                        legacy.retireCpuSlot(), Hdma::onCpuRequestSlotRetired);
+                assertCpuRequestTransition("accept interrupt", state,
+                        legacy.acceptInterrupt(), Hdma::onInterruptEntryAcceptedByCpu);
+                assertCpuRequestTransition("STOP request", state,
+                        legacy.stopRequest(), Hdma::onStoppedCpuRequest);
+            }
+        }
     }
 
     @Test
@@ -371,6 +421,109 @@ public class HdmaTest {
 
     private Hdma.HdmaState hdmaState(Fixture fixture) {
         return (Hdma.HdmaState) fixture.hdma.captureState();
+    }
+
+    private Hdma.HdmaState[] cpuRequestArbitrationStates() {
+        Fixture none = new Fixture();
+        Fixture unresolved = synchronizedHblankRequest(1);
+        Fixture cpu = synchronizedHblankRequest(1);
+        cpu.hdma.resolveCpuRequest(true, false);
+        Fixture dma = synchronizedHblankRequest(1);
+        dma.hdma.resolveCpuRequest(false, false);
+        return new Hdma.HdmaState[]{hdmaState(none), hdmaState(unresolved),
+                hdmaState(cpu), hdmaState(dma)};
+    }
+
+    private Hdma.HdmaState withCpuRequestFlags(Hdma.HdmaState state,
+                                                boolean interruptOwner,
+                                                boolean lateInterrupt) {
+        try {
+            RecordComponent[] components = Hdma.HdmaState.class.getRecordComponents();
+            Class<?>[] parameterTypes = Arrays.stream(components)
+                    .map(RecordComponent::getType)
+                    .toArray(Class<?>[]::new);
+            Object[] values = new Object[components.length];
+            for (int i = 0; i < components.length; i++) {
+                values[i] = switch (components[i].getName()) {
+                    case "interruptEntryWonArbitration" -> interruptOwner;
+                    case "cpuRequestAllowsLateInterrupt" -> lateInterrupt;
+                    default -> components[i].getAccessor().invoke(state);
+                };
+            }
+            var constructor = Hdma.HdmaState.class.getDeclaredConstructor(parameterTypes);
+            constructor.setAccessible(true);
+            return (Hdma.HdmaState) constructor.newInstance(values);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private void assertCpuRequestTransition(String transition,
+                                            Hdma.HdmaState initialState,
+                                            LegacyCpuRequestState expected,
+                                            Consumer<Hdma> operation) {
+        Fixture fixture = new Fixture();
+        fixture.hdma.restoreState(initialState);
+        operation.accept(fixture.hdma);
+        assertLegacyCpuRequestState(transition + " from "
+                + initialState.cpuRequestArbitration(), fixture, expected);
+    }
+
+    private void assertLegacyCpuRequestState(String message,
+                                             Fixture fixture,
+                                             LegacyCpuRequestState expected) {
+        Hdma.HdmaState actual = hdmaState(fixture);
+        assertEquals(message, expected.arbitration,
+                String.valueOf(actual.cpuRequestArbitration()));
+        assertEquals(message, expected.interruptOwner,
+                actual.interruptEntryWonArbitration());
+        assertEquals(message, expected.lateInterrupt,
+                actual.cpuRequestAllowsLateInterrupt());
+        assertEquals(message, expected.interruptOwner,
+                fixture.hdma.isInterruptEntryRequestOwner());
+        assertEquals(message, "UNRESOLVED".equals(expected.arbitration),
+                fixture.hdma.isCpuRequestUnresolved());
+        assertEquals(message, "CPU".equals(expected.arbitration),
+                fixture.hdma.isCpuInstructionRequestOwner());
+    }
+
+    private record LegacyCpuRequestState(String arbitration,
+                                         boolean interruptOwner,
+                                         boolean lateInterrupt) {
+
+        static LegacyCpuRequestState restored(String arbitration,
+                                              boolean interruptOwner,
+                                              boolean lateInterrupt) {
+            return new LegacyCpuRequestState(arbitration, interruptOwner,
+                    "CPU".equals(arbitration) && lateInterrupt);
+        }
+
+        LegacyCpuRequestState resolve(boolean cpuClaimedSlot, boolean interruptPending) {
+            if (!"UNRESOLVED".equals(arbitration)) {
+                return this;
+            }
+            String owner = cpuClaimedSlot ? "CPU" : "DMA";
+            return new LegacyCpuRequestState(owner, interruptOwner,
+                    "CPU".equals(owner) && !interruptPending);
+        }
+
+        LegacyCpuRequestState retireCpuSlot() {
+            return "CPU".equals(arbitration)
+                    ? new LegacyCpuRequestState("DMA", interruptOwner, false)
+                    : this;
+        }
+
+        LegacyCpuRequestState acceptInterrupt() {
+            return "CPU".equals(arbitration)
+                    ? new LegacyCpuRequestState("DMA", lateInterrupt, false)
+                    : this;
+        }
+
+        LegacyCpuRequestState stopRequest() {
+            return "UNRESOLVED".equals(arbitration)
+                    ? new LegacyCpuRequestState("DMA", interruptOwner, false)
+                    : this;
+        }
     }
 
     private void assertIgnoredCpuPhaseFlags(Hdma.HdmaState initialState) {
