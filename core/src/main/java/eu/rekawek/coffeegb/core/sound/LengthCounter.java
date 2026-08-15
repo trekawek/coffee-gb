@@ -24,19 +24,11 @@ public class LengthCounter implements StatefulComponent<LengthCounter> {
      * @return true when the counter just reached 0 (the channel gets disabled)
      */
     public boolean clockTick() {
-        if (enabled && length > 0) {
-            length--;
-            return length == 0;
-        }
-        return false;
+        return enabled && length > 0 && --length == 0;
     }
 
     public void setLength(int length) {
-        if (length == 0) {
-            this.length = fullLength;
-        } else {
-            this.length = length;
-        }
+        this.length = length == 0 ? fullLength : length;
     }
 
     /**
@@ -52,16 +44,11 @@ public class LengthCounter implements StatefulComponent<LengthCounter> {
         boolean trigger = (value & (1 << 7)) != 0;
         boolean firstHalf = frameSequencer.isFirstHalfOfLengthPeriod();
 
-        boolean zeroed = false;
-        if (firstHalf && !enabled && enable && length > 0) {
-            length--;
-            zeroed = length == 0;
-        }
+        boolean zeroed = firstHalf && !enabled && enable && length > 0 && --length == 0;
         this.enabled = enable;
 
         if (trigger && length == 0) {
             length = (firstHalf && enable) ? fullLength - 1 : fullLength;
-            zeroed = false;
         }
         return zeroed && !trigger;
     }
