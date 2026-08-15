@@ -155,6 +155,27 @@ public class HdmaTest {
     }
 
     @Test
+    public void interruptOwnedRequestResumesArbitrationAfterStateRestore() {
+        Fixture fixture = new Fixture();
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(1, 240);
+        fixture.startTransfer(0x80);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.hdma.advanceHblankRequest(false, false, false);
+        fixture.hdma.advanceHblankRequest(false, false, false);
+        fixture.hdma.advanceHblankRequest(false, false, true);
+        var interruptOwnedRequest = fixture.hdma.captureState();
+
+        fixture.hdma.restoreState(interruptOwnedRequest);
+        assertTrue(fixture.hdma.isInterruptEntryRequestOwner());
+        assertTrue(fixture.hdma.isCpuRequestUnresolved());
+        fixture.hdma.resolveCpuRequest(true, false);
+
+        assertTrue(fixture.hdma.isCpuInstructionRequestOwner());
+        assertFalse(fixture.hdma.isInterruptEntryRequestOwner());
+    }
+
+    @Test
     public void cpuHdmaPhaseFlagsAreSampledOnlyAtObservableRequestEdges() {
         Fixture inactive = new Fixture();
         assertFalse(inactive.hdma.requiresCpuHdmaPhaseFlags());
