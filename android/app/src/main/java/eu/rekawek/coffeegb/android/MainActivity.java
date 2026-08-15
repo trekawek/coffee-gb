@@ -1886,17 +1886,23 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuPageSpec confirmationPage() {
         ConfirmVariant variant = confirmVariant == null ? ConfirmVariant.RESET : confirmVariant;
         return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", variant.label,
-                List.of(variant.description, "A CONFIRM", "B CANCEL"),
+                List.of(variant.description),
                 List.of(item("cancel", "CANCEL", "RETURN", true),
                         item("confirm", "CONFIRM", variant.label, true)),
-                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
+                2, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private static MenuPageSpec page(MenuRoute route, String title, String context,
             String headerAction, String sideHeading, List<String> sideLines,
             List<MenuPageSpec.Item> items, List<String> hints) {
+        return page(route, title, context, headerAction, sideHeading, sideLines, items, 1, hints);
+    }
+
+    private static MenuPageSpec page(MenuRoute route, String title, String context,
+            String headerAction, String sideHeading, List<String> sideLines,
+            List<MenuPageSpec.Item> items, int columns, List<String> hints) {
         return new MenuPageSpec(route, title, context, headerAction, sideHeading, sideLines,
-                items, 1, hints);
+                items, columns, hints);
     }
 
     private static MenuPageSpec.Item item(String id, String label, String detail,

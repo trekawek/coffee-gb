@@ -224,7 +224,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `reset opens the onscreen confirmation and back returns to pause without invoking`() {
+  fun `reset confirmation uses left right selection and cancel returns without invoking`() {
     val bridge = FakeBridge()
     val menu = newMenu(bridge)
 
@@ -233,7 +233,12 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.A)
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      press(menu, MenuKey.B)
+      assertEquals("cancel", menu.focusedItemIdForTest())
+      press(menu, MenuKey.RIGHT)
+      assertEquals("confirm", menu.focusedItemIdForTest())
+      press(menu, MenuKey.LEFT)
+      assertEquals("cancel", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
       assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
     }
 
@@ -242,7 +247,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `stop opens the onscreen confirmation and cancel returns to pause without invoking`() {
+  fun `stop confirmation B returns to pause without invoking`() {
     val bridge = FakeBridge()
     val menu = newMenu(bridge)
 
@@ -252,7 +257,7 @@ class SwingProposal3MenuTest {
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
       assertEquals("cancel", menu.focusedItemIdForTest())
-      press(menu, MenuKey.A)
+      press(menu, MenuKey.B)
       assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
     }
 
@@ -269,7 +274,11 @@ class SwingProposal3MenuTest {
       moveToPauseItem(menu, 4)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.RIGHT)
+      assertEquals("confirm", menu.focusedItemIdForTest())
+      press(menu, MenuKey.LEFT)
+      assertEquals("cancel", menu.focusedItemIdForTest())
+      press(menu, MenuKey.RIGHT)
       assertEquals("confirm", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.A, false))
       menu.onKeyUp(MenuKey.A)
@@ -289,7 +298,7 @@ class SwingProposal3MenuTest {
       moveToPauseItem(menu, 6)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.RIGHT)
       assertEquals("confirm", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.A, false))
       menu.onKeyUp(MenuKey.A)

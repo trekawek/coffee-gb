@@ -125,10 +125,10 @@ final class MenuPages {
                             item("live-camera", "CAMERA ONLY WHEN ENABLED"),
                             item("source-notices", "SOURCE & THIRD-PARTY NOTICES")));
             case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM", "", "RESET GAME",
-                    List.of("UNSAVED PROGRESS MAY BE LOST", "SAME PAGE USED FOR",
-                            "STOP GAME AND DELETE STATE"),
+                    List.of("UNSAVED PROGRESS MAY BE LOST"),
                     items(item("cancel", "CANCEL"),
-                            item("confirm", "CONFIRM", "RESET GAME")));
+                            item("confirm", "CONFIRM", "RESET GAME")), 2, DEFAULT_HINTS,
+                    "cancel", MenuPreview.empty());
         };
     }
 

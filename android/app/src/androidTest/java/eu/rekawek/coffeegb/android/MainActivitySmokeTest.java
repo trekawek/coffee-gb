@@ -287,7 +287,8 @@ public class MainActivitySmokeTest {
             moveFocusTo(scenario, instrumentation, "import-battery");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.CONFIRM_ACTION);
-            moveFocusTo(scenario, instrumentation, "confirm");
+            press(instrumentation, KeyEvent.KEYCODE_DPAD_RIGHT, 1);
+            awaitFocused(scenario, "confirm");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
 
             await("native picker input ready", () -> externalSurfaceActive(scenario)

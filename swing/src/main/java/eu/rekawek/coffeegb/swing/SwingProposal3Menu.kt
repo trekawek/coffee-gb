@@ -321,6 +321,7 @@ internal class SwingProposal3Menu(
         headerAction: String = "",
         preview: MenuPreview = MenuPreview.empty(),
         footerHints: List<String> = listOf("D-PAD MOVE", "A CHOOSE", "B BACK"),
+        columns: Int = 1,
     ) = MenuPageSpec(
         route,
         "COFFEE GB",
@@ -329,7 +330,7 @@ internal class SwingProposal3Menu(
         sideHeading,
         sideLines,
         items,
-        1,
+        columns,
         footerHints,
         preferredFocus ?: items.firstOrNull { it.enabled() }?.id() ?: items.first().id(),
         preview,
@@ -597,11 +598,12 @@ internal class SwingProposal3Menu(
         page(
             "CONFIRM ACTION",
             actionLabel,
-            listOf("UNSAVED PROGRESS MAY BE LOST", "A CONFIRM", "B CANCEL"),
+            listOf("UNSAVED PROGRESS MAY BE LOST"),
             listOf(
                 MenuPageSpec.Item("cancel", "CANCEL", "RETURN", true),
                 MenuPageSpec.Item("confirm", "CONFIRM", actionLabel, true),
             ),
+            columns = 2,
         )
       }
     }
