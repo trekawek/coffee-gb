@@ -46,7 +46,7 @@ save states, debugger boundaries, and performance.
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral whole-control decomposition; bounded CH1 external gate trace | The broad resolver encodes settled truth tables. The restart/adder trace independently falsifies `wasActive` as a causal aperture input and derives shift-zero retrigger behavior from retained BYTE state. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
-| CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone plus external nodelay trigger traces | Complement-loaded prescaler cells and a zero-reset XNOR bank remove both semantic cases. A raw write/APU-clock cone derives two observed trigger alignments without a phase input; production countdowns are not physical node timestamps. |
+| CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone; production cut rejected | Complement-loaded prescaler and zero-reset XNOR wiring remove the local semantic cases, but both faithful and lean runtime replacements fail all eight SameSuite CH4 tests because the trigger/live-write projection is not yet derived. |
 | The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
 | Mid-mode-3 writes require pending-write queues and duplicate register views | Production differential at one CPU-reachable cadence | One source register and fitted consumer delays reproduce selected LCDC/SCX/WX views; the receiver stages and half-dot capture phase are not netlist-derived. |
 | LCD disable must inspect raster/pixel state to cancel output | External-netlist reset root plus fitted output/fanout hypothesis | XONA/XEBE/XODO/XAPO reduce to one reset root, but the Java cone manually assigns that reset to candidate scanout stages and encodes write envelopes explicitly. |
@@ -105,7 +105,7 @@ lean-cut reruns completed with zero failures/errors:
 
 | Suite | Result |
 | --- | ---: |
-| Core unit tests, including detached experiments | 1,519 run, 8 skipped |
+| Core unit tests, including detached experiments | 1,524 run, 8 skipped |
 | Mooneye + dmg-acid2 + cgb-acid2 | 132/132 |
 | Blargg aggregate + individual | 54/54 |
 | SameSuite + Mealybug strict images | 103/103 |
@@ -559,6 +559,26 @@ not a production replacement. It means its countdown events are a projection acr
 not timestamps for the internal LFSR clock nodes. Timed sub-T propagation, reset/clock-gate seeding,
 other write apertures, STOP, live NR43 collisions, test-mode bypass, CGB, and double speed remain
 explicit falsifiers.
+
+An isolated production-cut attempt makes that boundary quantitative. A faithful raw-clock model
+kept HOGA/GYSU, GONE/GORA/GATY, the complement-loaded prescaler, and fourteen ripple stages. It
+reduced compiled branch transfers from 31 to 27 but changed production by `+96/-67`, expanded
+retained state from seven to ten fields, and failed eight of 77 SameSuite cases—all eight CH4 ROMs.
+A lean immediate-restart projection was `+53/-67`, reduced branches to 19, and still failed the same
+eight cases for every raw phase seed. Blargg's 54 aggregate/individual cases passed, showing why the
+stricter channel-phase suite is needed.
+
+The exhaustive separating test covered both activity states, four production alignments, and all
+112 clocked NR43 fields: 896 vectors with the first two LFSR events. No faithful-cone seed matched a
+single complete alignment group even after allowing one constant offset; the lean cone's best seed
+matched only 168/896. For inactive alignment zero and NR43 zero, production emits `+11/+19` T while
+the lean and faithful phase-zero candidates emit `+4/+12` and `+16/+24`. The missing projection is
+frequency/alignment dependent, not a global skew.
+
+Both candidates were discarded. Restoring correctness would reintroduce the existing trigger
+alignment/countdown cases and `countdownReloaded` live-write aperture (or equivalent branches), the
+faithful model was not a net deletion, save-state mapping was not bijective, and CGB remained
+ungrounded. Performance work was intentionally skipped after correctness and deletion gates failed.
 
 The experiment also separates unobservable projection choices. The selected DMG clock cone keeps
 its LFSR running behind a length-stop output mask, while production freezes that internal state;
