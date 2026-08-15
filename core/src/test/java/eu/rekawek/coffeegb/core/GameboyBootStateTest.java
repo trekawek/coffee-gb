@@ -8,10 +8,45 @@ import org.junit.Test;
 
 import java.util.concurrent.CancellationException;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThrows;
 
 public class GameboyBootStateTest {
+
+    @Test
+    public void authenticBootStartsFromRawInterruptAndSoundPowerState() throws Exception {
+        Rom rom = new Rom(mbc1BatteryRom());
+        for (GameboyType type : new GameboyType[]{GameboyType.DMG, GameboyType.CGB}) {
+            try (Gameboy gameboy = new GameboyConfiguration(rom)
+                    .setGameboyType(type)
+                    .setBootstrapMode(BootstrapMode.NORMAL)
+                    .build()) {
+                AddressSpace bus = gameboy.getAddressSpace();
+
+                assertArrayEquals(
+                        new int[]{0xe0, 0x00, 0x00, 0x70},
+                        new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
+                                bus.getByte(0xff25), bus.getByte(0xff26)});
+            }
+        }
+    }
+
+    @Test
+    public void skippedBootKeepsPostBootInterruptAndSoundPresets() throws Exception {
+        Rom rom = new Rom(mbc1BatteryRom());
+        try (Gameboy gameboy = new GameboyConfiguration(rom)
+                .setGameboyType(GameboyType.DMG)
+                .setBootstrapMode(BootstrapMode.SKIP)
+                .build()) {
+            AddressSpace bus = gameboy.getAddressSpace();
+
+            assertArrayEquals(
+                    new int[]{0xe1, 0x77, 0x00, 0xf0},
+                    new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
+                            bus.getByte(0xff25), bus.getByte(0xff26)});
+        }
+    }
 
     @Test
     public void bootStateRestoresMachineButKeepsFreshCartridgeData() throws Exception {
@@ -51,6 +86,20 @@ public class GameboyBootStateTest {
                 .setBootCancellation(() -> true);
 
         assertThrows(CancellationException.class, configuration::build);
+    }
+
+    @Test
+    public void dmgSkipBootExplicitlyDisablesTheBootRom() throws Exception {
+        byte[] bytes = new byte[0x8000];
+        bytes[0] = 0x42;
+        Rom rom = new Rom(bytes);
+
+        try (Gameboy gameboy = new GameboyConfiguration(rom)
+                .setGameboyType(GameboyType.DMG)
+                .setBootstrapMode(BootstrapMode.SKIP)
+                .build()) {
+            assertEquals(0x42, gameboy.getAddressSpace().getByte(0x0000));
+        }
     }
 
     private static Gameboy skipped(Rom rom) {

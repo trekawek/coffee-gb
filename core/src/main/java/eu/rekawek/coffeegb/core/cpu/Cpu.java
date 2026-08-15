@@ -221,7 +221,14 @@ public class Cpu implements StatefulComponent<Cpu> {
             display.enableLcd();
         }
 
-        if (state == State.OPCODE || state == State.STOPPED) {
+        // On DMG the ZUMN STOP latch is reset only by ZWLM/WAKE, whose AWOB
+        // source is the physical JOYP input. An enabled IF source therefore
+        // cannot release STOP or re-enable the LCD. Keep the existing CGB
+        // interrupt-wake path; its STOP/speed-switch machine is separate from
+        // the DMG circuit represented by that cone.
+        boolean mayAcceptInterrupt = state == State.OPCODE
+                || (state == State.STOPPED && speedMode.isGbc());
+        if (mayAcceptInterrupt) {
             // A request restored while mode 3 owns the shared VRAM-DMA arbitration
             // slot before interrupt dispatch. Retire HALT's sampled opcode first;
             // mode-2 wake-up still lets interrupt acceptance preempt that sample.
@@ -1266,8 +1273,10 @@ public class Cpu implements StatefulComponent<Cpu> {
         this.stopFrameBlankRequested = false;
         this.debugInstructionKnown = false;
 
-        setCurrentOpcode((opcode1 == 0xcb)
-                ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1));
+        // EXT_OPCODE after CB means the second byte has not reached the decoder yet.
+        boolean extendedOpcodePending = opcode1 == 0xcb && this.state == State.EXT_OPCODE;
+        setCurrentOpcode(extendedOpcodePending ? null : (opcode1 == 0xcb
+                ? Opcodes.EXT_COMMANDS.get(opcode2) : Opcodes.COMMANDS.get(opcode1)));
         this.ops = (currentOpcode == null) ? null : currentOpcode.getOps();
     }
 

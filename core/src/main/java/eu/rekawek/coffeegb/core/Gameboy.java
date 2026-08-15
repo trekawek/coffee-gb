@@ -380,6 +380,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         interruptManager.disableInterrupts(false);
         if (configuration.bootstrapMode != BootstrapMode.SKIP) {
+            // Component constructors retain the post-boot defaults used by direct fixtures
+            // and SKIP bootstrap. An authentic boot starts before the boot ROM has asserted
+            // VBlank IF or powered the APU, so drive those existing register boundaries to
+            // raw reset before the first CPU tick.
+            interruptManager.setByte(0xff0f, 0x00);
+            sound.setByte(0xff26, 0x00);
             // at power-on the LCD is off; the boot ROM enables it, anchoring the PPU
             // line grid to that write; the CGB divider phase accounts for the boot
             // ROM's accurately paced HDMA setup. Later revisions start 10 T into the
@@ -507,7 +513,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private void applyPostBootState(boolean nonCgbCart) {
         speedMode.setDmgCompat(gbc && nonCgbCart);
         gpu.prepareForTick();
-        biosShadow.setByte(0xff50, 0);
+        biosShadow.setByte(0xff50, 1);
         // DIV counter value at PC=0x0100 after the boot ROM (mooneye boot_div tests)
         timer.presetDiv(hardwareProfile.bootSpec().postBootDivPreset());
         var r = cpu.getRegisters();
@@ -773,9 +779,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             if (dmaCpuState == Cpu.State.HALTED
                     || dmaCpuState == Cpu.State.STOPPED) {
                 // HBlank DMA is suspended while the CPU clock is halted or
-                // stopped. Keep ticking the CPU so an interrupt or asserted joypad
-                // line can wake it; the HDMA request is restored according to the
-                // request level captured when HALT was entered.
+                // stopped. Keep ticking the CPU so an asserted joypad line can wake
+                // STOP; the separately calibrated CGB path can also accept an interrupt.
+                // The HDMA request is restored according to the request level captured
+                // when HALT was entered.
                 if (dmaCpuState == Cpu.State.STOPPED) {
                     hdma.onStoppedCpuRequest();
                 }

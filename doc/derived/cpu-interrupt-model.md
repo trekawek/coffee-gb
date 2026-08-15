@@ -1,12 +1,16 @@
-# SM83 interrupt / HALT model
+# SM83 interrupt / HALT / STOP model
 
-Behavioral model of the SM83 CPU's interrupt dispatch and HALT, derived from the SM83
+Behavioral model of the SM83 CPU's interrupt dispatch, HALT, and STOP, derived from the SM83
 schematics (`dmg-schematics/sm83/intr.kicad_sch`, `sequencer.kicad_sch`) and calibrated
 cycle-exactly against the mooneye acceptance tests. This is the specification implemented by
 `Cpu` and `InterruptManager`.
 
 ## Interrupt sampling and dispatch
 
+- Raw console reset clears all five SoC IF latches, so FF0F initially reads `E0`; the boot process
+  later produces the familiar post-boot `E1`. Standalone `InterruptManager` construction retains
+  the post-boot fixture default, while a full NORMAL/FAST_FORWARD `Gameboy` drives FF0F to the raw
+  reset value before its first CPU tick. SKIP bootstrap keeps the post-boot preset.
 - At every machine-cycle boundary where the CPU would fetch an opcode, it samples
   `IME && (IE & IF & 0x1F) != 0`; if set, the 5 M-cycle dispatch starts instead of the fetch:
 
@@ -55,6 +59,16 @@ keeps cycling. Consequently **a halted CPU behaves exactly as if it were executi
 - Halt bug: executing HALT with IME=0 and a wake-synchronized `(IE & IF) != 0` prevents the sleep
   latch from setting after HALT's own missing IDU increment. The next opcode has already been
   sampled from the unchanged address and is fetched/executed again (`halt_bug`).
+
+## STOP
+
+On DMG, STOP and HALT do not share a wake condition. The sequencer's retained STOP latch is cleared
+only by reset or the WAKE port. The DMG wrapper drives WAKE from the JOYP `AWOB` latch, so an
+ordinary enabled IF source cannot release STOP even when IME is set. Coffee therefore leaves a DMG
+CPU stopped, keeps the LCD disabled, and retains the IF bit until a physical P10-P13 line goes low.
+That JOYP-low transition releases STOP independently of IE/IME and restores the LCD before normal
+fetch/interrupt selection resumes. The CGB STOP/speed-switch projection retains its separately
+calibrated behavior because its circuitry is outside the DMG source corpus.
 
 ## RST
 

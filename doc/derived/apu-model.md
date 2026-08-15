@@ -254,6 +254,12 @@ Hardware: NR52 bit 7 write strobe is `HAWU` = NAND(`APU_WR`, `FF26`, `D7`); the 
 drives `APU_RESET` (buffer `KEBA`) plus the per-sheet copies `~{APU_RESET2..6}` and
 `~{FF24_FF25_FF26_RESET}` (which also resets NR50/NR51 in `ff24_ff25.kicad_sch`).
 
+At raw console reset, `~RESET2` clears the NR52 master latch before the boot ROM runs. The APU
+therefore starts powered off with NR50=`00`, NR51=`00`, and NR52=`70`; the boot ROM later writes
+NR52 bit 7. Coffee retains post-boot defaults in standalone component construction, but a full
+NORMAL/FAST_FORWARD `Gameboy` now drives this raw boundary before its first CPU tick. SKIP bootstrap
+continues to install the post-boot preset directly.
+
 **Powering off (write NR52 with bit 7 = 0):**
 - All registers NR10-NR51 are reset to 0x00; subsequent reads return the OR-mask values of §5.1
   (i.e. as if the register were 0).
@@ -344,8 +350,14 @@ trigger actions. This happens *only* on DMG.
 
 ### 6.4 Position / buffer semantics
 
-- `wavePosition` (0..31 nibbles) resets to 0 on trigger; the **sample buffer keeps its old
-  value** and is what the DAC outputs until the first fetch (period + ~6 T after trigger, §3).
+- `wavePosition` (0..31 nibbles) and the `WAVE_NIBBLE_SEL` flip-flop reset to 0 on trigger; the
+  **sample buffer keeps its old byte**, but its high nibble is selected immediately and passes
+  through the current NR32 shift. That stale high-nibble value is what the DAC outputs until the
+  first fetch (period + ~6 T after trigger, §3). In the pinned netlist `CH3_RESTART` resets `EFAR`,
+  whose Q selects the four stale-buffer nibble muxes.
+- The four digital CH3 output bits are each AND-gated by `CH3_ACTIVE`. When length expiry or
+  another stop path clears the active latch, the digital DAC input becomes zero even if NR30 keeps
+  the DAC enabled; a retained sample byte is not audible while the channel is inactive.
 - On each timer expiry: `wavePosition = (wavePosition + 1) & 31`, then the byte
   `waveRam[wavePosition >> 1]` is fetched into the buffer; the output nibble is the high nibble
   for even positions, low nibble for odd (`WAVE_NIBBLE_SEL`), then shifted per NR32

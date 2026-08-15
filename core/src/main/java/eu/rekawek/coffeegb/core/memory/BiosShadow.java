@@ -15,6 +15,14 @@ public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
 
     private boolean isEnabled = true;
 
+    /**
+     * Constructs the boot-ROM overlay and its sticky FF50 disable latch.
+     *
+     * <p>On DMG, {@code dmg_cpu_b/sys_decode.kicad_sch} nodes SATO, TEPU, and TUGE implement
+     * {@code TEPU.D = TEPU.Q | D0} on an FF50 write. Consequently only a set D0 can disable the
+     * boot ROM and the disable remains sticky. SameBoy independently applies the same D0 rule to
+     * CGB hardware.
+     */
     public BiosShadow(Bios bios, Cartridge cartridge) {
         this.bios = bios;
         this.cartridge = cartridge;
@@ -35,7 +43,9 @@ public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
     @Override
     public void setByte(int address, int value) {
         if (address == 0xff50) {
-            isEnabled = false;
+            if ((value & 0x01) != 0) {
+                isEnabled = false;
+            }
         } else if (cartridge.accepts(address)) {
             cartridge.setByte(address, value);
         }
@@ -44,7 +54,7 @@ public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
     @Override
     public int getByte(int address) {
         if (address == 0xff50) {
-            return 0xff;
+            return isEnabled ? 0xfe : 0xff;
         } else if (isEnabled && bios.accepts(address)) {
             return bios.getByte(address);
         } else {

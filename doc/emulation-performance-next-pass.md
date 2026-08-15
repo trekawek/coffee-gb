@@ -767,6 +767,11 @@ Acceptance:
 
 ### PR 10: add a settled-input joypad path
 
+> Historical note: the later DMG schematic audit retained this settled-input optimization but
+> corrected the receiver to one aggregate BATU/ACEF/AGEM/APUG pipeline clocked at 1 MHz. The
+> four-sample timing statements below describe this PR's pre-audit baseline, not current master-tick
+> latency; see `dmg-schematic-class-map.md`.
+
 Branch: `codex/perf-joypad-settled-input`
 
 Risk: medium. Primary purpose: real throughput; expected exact-count reduction in headless runs is

@@ -477,14 +477,23 @@ The sibling `/home/newton/dev/dmg-schematics` checkout contains parsable cells/w
 SystemVerilog through `nlconv`. It is unusually useful, but it should not become a naively
 interpreted production core.
 
-Approximate netlist sizes are:
+The complete pinned sheet/category inventory and bidirectional Coffee GB class cross-reference are
+maintained in [`dmg-schematic-class-map.md`](dmg-schematic-class-map.md). Its repository-local
+indexer also makes the source count and hierarchy checks reproducible without copying the
+CC BY-SA connectivity graph into this MIT tree.
 
-| Scope | Cells | Naive full scan at 4.194 MHz |
+The repository-local indexer reports these reviewed source-declaration sizes (the subsystem rows
+are declared logical-category sums, while the whole-chip row also includes uncategorized pads,
+wrappers, and spare/virtual cells). Conditional `codegen` and `-codegen` declarations are mutually
+exclusive, so the rate column is a deliberately conservative declaration-count upper bound rather
+than the number of simultaneously active cells:
+
+| Scope | Source cell declarations | Upper-bound scan at 4.194 MHz |
 | --- | ---: | ---: |
-| Whole chip | 4,736 | 19.9 billion cell evaluations/s |
+| Whole chip | 4,756 | 19.95 billion cell evaluations/s |
 | Clock + timer + interrupt | 228 | 0.96 billion/s |
-| PPU | 2,116 | 8.88 billion/s |
-| APU | 1,237 | 5.19 billion/s |
+| PPU | 2,118 | 8.88 billion/s |
+| APU | 1,257 | 5.27 billion/s |
 
 A raw evaluator also needs four-state/tri-state resolution, transparent latches, asynchronous
 resets, combinational feedback settling, held/bidirectional buses, and custom RAM behavior. Analog
