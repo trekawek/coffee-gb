@@ -44,7 +44,7 @@ save states, debugger boundaries, and performance.
 | DMG STAT behavior needs a large mode/line exception tree | Behavioral whole-plane partition; two bounded external gate cones | The broad model still encodes calibrated raster cases. Independently, a ripple/partial-decode reset derives LY 153/0 and transparent precharged FF41 latches derive the write glitch with neither `line == 153` nor a semantic `0x78`. |
 | The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
-| Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral decomposition; selected follow-up cones are fitted circuit hypotheses | `Pulse1GateTopology` directly encodes settled feature truth tables; serial-adder and envelope-ripple cones provide narrower structural hypotheses with named apertures. |
+| Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral whole-control decomposition; bounded CH1 external gate trace | The broad resolver encodes settled truth tables. The restart/adder trace independently falsifies `wasActive` as a causal aperture input and derives shift-zero retrigger behavior from retained BYTE state. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
 | CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone plus external nodelay trigger traces | Complement-loaded prescaler cells and a zero-reset XNOR bank remove both semantic cases. A raw write/APU-clock cone derives two observed trigger alignments without a phase input; production countdowns are not physical node timestamps. |
 | The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
@@ -454,19 +454,36 @@ attributed to this settled resolver.
 ## Active CH1 adder and envelope-write cones
 
 Two follow-up models expand the places where the settled control experiment deliberately stopped.
-`DmgCh1SerialAdder` is an **external-netlist-shaped fitted hypothesis plus production
-differential** representing the FYFO request latch through FEKU `RESTART`, FARE, and FYTE
+`DmgCh1SerialAdder` is a **bounded external gate-model waveform plus production differential**
+representing the FYFO request latch through FEKU `RESTART`, FARE, and FYTE
 `RESTART_DLY`; KALA's shift load; FEMU's retained calculation request; the serial sum; BYTE's
-settled-sum capture; accumulator writeback; and the feedback overflow check. The active/inactive
-trigger delays are fitted as whether `CH1_START` meets or misses the free-running FEKU aperture. No
-`wasActive` input is required inside that bounded cone.
+settled-sum capture; accumulator writeback; and the feedback overflow check.
 
-The model matches trigger delays for shifts one through seven, exhaustive representative
-add/subtract/shift/frequency results, writeback, and both overflow checks. The second check is not a
-scheduled second calculation: the frequency-load pulse feeds the updated accumulator back into the
-same calculation path. Direct timed-simulator evidence is still needed to prove exactly how the
-production channel-active state reaches the FEKU aperture and to settle NR10/write collisions
-during the serial calculation.
+A pinned default-delay and nodelay trace falsifies the earlier active/inactive aperture hypothesis.
+At the same ordinary CPU write phase, inactive and active NR14.7 writes take the same path and time
+through DUPE, `CH1_START`, FYFO/FEKU, FARE, and FYTE. Channel-active state is downstream of restart
+and has no connection into that request path. For shifts one, three, and seven the complete serial
+waveform is also identical; from synchronized `CH1_START` it matches production's shorter bucket,
+`8 + 4*shift` T. Production's inactive extra four T therefore remains a compatibility projection
+outside this cone, not a gate-level consequence of `wasActive`.
+
+Shift zero exposes the real retained-state behavior. The initial trigger loads KALA's terminal
+count, BYTE samples it, and LD_SUM rises before FYTE. An active retrigger has the same request and
+restart waveform but produces no second LD_SUM edge: KALA loads terminal seven again while BYTE is
+still high. BYTE remains asserted until a nonterminal KALA load or BEXA reset. The detached model
+now owns that state instead of inventing another aperture.
+
+The model continues to match representative add/subtract/shift/frequency results, writeback, and
+both overflow checks. A natural BEXA trace confirms that the first sum is written to the accumulator
+and the same retained request path immediately calculates the second overflow check; it is not a
+scheduled second operation. One NR10 shift-seven-to-one collision also confirms that a live register
+write does not reload the in-flight serial counter.
+
+This is still not a production replacement. The external model is DMG-B, not silicon, and the
+dynamic coverage is four shifts, one frequency, one active-retrigger spacing, one natural BEXA
+phase, and one NR10 collision. Raw/asynchronous write phases, other BEXA alignments, close negate and
+carry collisions, frequency-write/retrigger overlap, intermediate analog timing, and CGB remain
+explicit falsifiers.
 
 `DmgEnvelopeWriteRipple` is an **external-netlist-shaped fitted hypothesis plus production
 differential** for the four DMG envelope counter cells as master/slave toggles whose

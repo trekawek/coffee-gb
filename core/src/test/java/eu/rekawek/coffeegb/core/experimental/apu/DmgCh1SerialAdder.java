@@ -18,11 +18,34 @@ import java.util.Set;
  *       FEMU again, so the written-back frequency becomes the operand of the overflow check.</li>
  * </ul>
  *
- * <p>The model consumes clock <em>levels</em>, not a number of scheduler ticks. Consequently a
- * request which reaches FEKU just before a 1 MHz edge and one which reaches it just after that
- * edge naturally differ by four T-cycles; there is no {@code wasActive} timing input.
+ * <p>The modeled boundary begins at synchronized {@code CH1_START}, not at the CPU's NR14 write.
+ * A pinned dmg-sim trace shows that ordinary CPU writes always reach that boundary on one fixed
+ * phase: inactive and active triggers both take two T from NR14 to {@code CH1_START}, and their
+ * request/restart waveforms are identical. For nonzero shifts the serial-adder waveform is also
+ * identical. Shift zero is the useful exception: the inactive trigger raises BYTE/LD_SUM early,
+ * while an active retrigger before BEXA has no second LD_SUM edge because BYTE is still high.
+ * That history dependence is produced by BYTE's retained state, not by channel-active status;
+ * channel-active has no connection to DUPE, EZEC, FYFO, FEKU, FARE, or FYTE. The model can still
+ * execute a deliberately late request, but that is now a counterfactual phase probe rather than
+ * an explanation for production's {@code wasActive} timing branch.
+ *
+ * <p>Static and dynamic provenance: {@code https://github.com/msinger/dmg-sim} revision
+ * {@value #NETLIST_REVISION}, {@code dmg_cpu_b/dmg_cpu_b.sv}; Icarus Verilog 14.0-devel
+ * (1d2aa1b), both {@code TIMING=default} and {@code TIMING=nodelay}. The minimal generated boot
+ * program issued a trigger while inactive and the same CPU-phase trigger while active for shifts
+ * 0, 1, 3, and 7. These are logic-model observations, not measured silicon.
  */
 final class DmgCh1SerialAdder {
+
+    static final String NETLIST_REVISION = "ee559e1d963e1cc522df512e3bae1b4e5ff96fb5";
+
+    enum Evidence {
+        STATIC_NETLIST_HAS_NO_ACTIVE_TO_TRIGGER_PATH,
+        DEFAULT_DELAY_FIXED_PHASE_RETRIGGER_TRACE,
+        DEFAULT_DELAY_SHIFT_ZERO_STICKY_BYTE_TRACE,
+        NODELAY_FIXED_PHASE_RETRIGGER_TRACE,
+        DEFAULT_DELAY_BEXA_FEEDBACK_TRACE
+    }
 
     enum Falsifier {
         ACTIVE_RETRIGGER_BEFORE_RESTART_PIPE_DRAINS,
@@ -30,16 +53,22 @@ final class DmgCh1SerialAdder {
         FREQUENCY_WRITE_DURING_RESTART_PIPELINE,
         SWEEP_TERMINAL_DURING_RESTART_PIPELINE,
         SWEEP_TERMINAL_BEFORE_PREVIOUS_SUM_SETTLES,
-        UPSTREAM_CH1_START_APERTURE_MAPPING,
+        RAW_NR14_WRITE_TO_CH1_START_FRONT_END,
+        NATURAL_BEXA_CLOCK_ALIGNMENT,
         INTERMEDIATE_SUM_NODE_OBSERVATION,
         CGB_RESTART_PROFILE,
         SUB_T_GATE_PROPAGATION
     }
 
     static Set<Falsifier> profileFalsifiers() {
-        return Set.of(Falsifier.UPSTREAM_CH1_START_APERTURE_MAPPING,
+        return Set.of(Falsifier.RAW_NR14_WRITE_TO_CH1_START_FRONT_END,
+                Falsifier.NATURAL_BEXA_CLOCK_ALIGNMENT,
                 Falsifier.INTERMEDIATE_SUM_NODE_OBSERVATION,
                 Falsifier.CGB_RESTART_PROFILE, Falsifier.SUB_T_GATE_PROPAGATION);
+    }
+
+    static Set<Evidence> evidence() {
+        return Set.copyOf(EnumSet.allOf(Evidence.class));
     }
 
     record State(
@@ -78,7 +107,7 @@ final class DmgCh1SerialAdder {
 
         static State initial(int nr10, int frequency, boolean oneMhz, boolean ajer2Mhz) {
             return new State(nr10, frequency, frequency, false,
-                    false, false, false, false, 7, true, false,
+                    false, false, false, false, 7, false, false,
                     frequency, 0, false, false,
                     false, 0, false, false, false,
                     oneMhz, ajer2Mhz, false);
@@ -198,26 +227,31 @@ final class DmgCh1SerialAdder {
 
         boolean loadSumRise = false;
         boolean overflowCheckPulse = false;
-        // BYTE samples the terminal detector on AJER. If BEXA falls on that same edge its
-        // asynchronous reset was still asserted, so the following AJER edge performs the load.
-        if (ajer2MhzRise && old.terminalPending()
-                && !old.sweepTerminal() && !signals.bexa()) {
-            loadSum = true;
-            loadSumRise = !old.loadSum();
-            terminalPending = false;
-            calculationLatch = false;
-            if (old.overflowCheckEnabled()) {
-                Calculation calculation = calculate(
-                        old.calculationOperand(), old.calculationShift(), old.calculationNegate());
-                sumValid = true;
-                sumResult = calculation.result();
-                sumOverflow = calculation.overflow();
-                overflow |= calculation.overflow();
-                negateUsed |= old.calculationNegate();
-                overflowCheckPulse = true;
-            } else {
-                sumValid = false;
-                sumOverflow = false;
+        // BYTE samples the terminal detector on every AJER edge. Once the counter is terminal,
+        // COPY remains high and therefore BYTE/LD_SUM remains high until KALA loads a nonterminal
+        // shift count or BEXA asserts BYTE's asynchronous reset. This is observable on a
+        // shift-zero active retrigger: KALA loads seven again, so there is no second LD_SUM edge.
+        if (ajer2MhzRise && !old.sweepTerminal() && !signals.bexa()) {
+            boolean sampledTerminal = old.terminalPending()
+                    || (old.loadSum() && old.shiftCounter() == 7);
+            loadSum = sampledTerminal;
+            loadSumRise = sampledTerminal && !old.loadSum();
+            if (sampledTerminal) {
+                terminalPending = false;
+                calculationLatch = false;
+                if (loadSumRise && old.overflowCheckEnabled()) {
+                    Calculation calculation = calculate(old.calculationOperand(),
+                            old.calculationShift(), old.calculationNegate());
+                    sumValid = true;
+                    sumResult = calculation.result();
+                    sumOverflow = calculation.overflow();
+                    overflow |= calculation.overflow();
+                    negateUsed |= old.calculationNegate();
+                    overflowCheckPulse = true;
+                } else if (loadSumRise) {
+                    sumValid = false;
+                    sumOverflow = false;
+                }
             }
         }
 
@@ -276,17 +310,24 @@ final class DmgCh1SerialAdder {
             restartDelayedRise = restartDelayed && !old.restartDelayed();
             if (restartRise) {
                 shiftCounter = 7 - shift(nr10);
-                loadSum = false;
-                terminalPending = false;
+                // KALA itself presents terminal count 7 for shift zero. BYTE captures it on the
+                // next AJER edge if it was low. If it was already high, no new edge occurs.
+                terminalPending = shift(nr10) == 0;
                 calculationShift = shift(nr10);
                 calculationNegate = negate(nr10);
+                overflowCheckEnabled = false;
             }
             if (restartDelayedRise) {
-                calculationLatch = true;
-                calculationOperand = triggerShadow;
-                // BU GE / BUSO disconnect a zero shift from the trigger-time overflow path.
-                overflowCheckEnabled = calculationShift != 0;
-                terminalPending = calculationShift == 0;
+                if (calculationShift != 0) {
+                    calculationLatch = true;
+                    calculationOperand = triggerShadow;
+                    overflowCheckEnabled = true;
+                } else {
+                    // The zero-shift BYTE pulse already happened at KALA; its asserted LD_SUM
+                    // reset keeps FYTE from reopening FEMU.
+                    calculationLatch = false;
+                    terminalPending = false;
+                }
             }
         }
 
