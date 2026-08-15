@@ -44,10 +44,13 @@ save states, debugger boundaries, and performance.
 | HDMA must decode opcodes and query future CPU/PPU state | Behavioral request/grant decomposition; two production reductions rejected and rolled back | The detached fabric avoids opcode bytes, but semantic preemption/retire/late-accept inputs and calibrated startup profiles still carry equivalent knowledge. A contextual one-bit encoding lost an independently retained owner in a whole-machine FF0F race. An exact two-bit encoding preserved behavior but retained both logical latches and grew compiled/live conditional complexity, so production keeps the two booleans. |
 | One generic held bus explains all collisions | Falsified | Low-dominant held lines are useful primitives, but VRAM, OAM, cartridge/WRAM, and I/O need distinct grant and receiver topologies. |
 | DMG STAT behavior needs a large mode/line exception tree | Behavioral whole-plane partition; two bounded external gate cones | The broad model still encodes calibrated raster cases. Independently, a ripple/partial-decode reset derives LY 153/0 and transparent precharged FF41 latches derive the write glitch with neither `line == 153` nor a semantic `0x78`. |
+| STAT write-trigger timing needs a mode/line/speed selector in the live-line branch | Branch-accepted exact dead-control-cone reduction | Both sides of that selector drove the same LYC contribution. Removing it deletes a false timing dependency and five conditional sites without moving the interrupt request or changing state. |
 | The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require three independent semantic state fields | External-netlist-shaped clock cone plus branch-accepted reachable-state reduction | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. Production now represents its existing behavior with a ripple phase and sampled tap, using one sentinel for the powered-high blocked pulse. This deletes one live field but does not remove the CGB tap and reset/power profile rules. |
+| Length expiry needs separate decrement and mutable zero bookkeeping | Branch-accepted exact gated-counter reduction | The gated pre-decrement terminal pulse is the stop signal. Trigger masks that pulse while the reload mux owns the counter, eliminating redundant local control bookkeeping without changing the released counter shape. |
 | Each square channel needs two independent oscillator-phase booleans | Branch-accepted exact phase-ring reduction | For both square channels, `(clock2Mhz, lowFrequencyPhase)` is exactly one four-state ring with transition `(phase - 1) & 3`. The low two bits of one integer per channel replace four booleans, while released state records still expose and accept every old tuple. This is behavioral state reduction, not an APU netlist claim. |
 | Envelope saturation needs duplicated semantic endpoint decoders | Branch-accepted exact carry/borrow reduction | The four-bit next-volume carry/borrow is the stop signal. Sharing it across ordinary and pending envelope clocks removes the duplicate decoder/helper while retaining the independent stop, pending-clock, and timer latches. A compatibility guard preserves arbitrary public `int` register writes. This is exact production-boundary algebra, not independent gate evidence. |
+| Sweep add/subtract needs two result suffixes | Branch-accepted exact two's-complement reduction | The shifted delta is signed once and enters one shared adder suffix. Java's modulo-2^32 arithmetic makes it exact even for negative/extreme public inputs; no sweep latch or timing boundary moves. |
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Branch-accepted CH1 trigger deletion plus behavioral remainder | The broad resolver still encodes settled truth tables, but the restart/adder trace independently falsifies `wasActive` as a causal aperture input. Production now uses the common shorter nonzero-shift path and deletes that dependency/conditional while retaining the ignored public argument; shift-zero behavior comes from retained BYTE state in the bounded cone. DMG is externally grounded and CGB remains differential-only. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
 | CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone; production cut rejected | Complement-loaded prescaler and zero-reset XNOR wiring remove the local semantic cases, but both faithful and lean runtime replacements fail 8 of the 13 SameSuite CH4 ROMs because the trigger/live-write projection is not yet derived. |
@@ -127,19 +130,21 @@ do not reverse the local result, but they keep performance acceptance at branch-
 
 ### Combined retained-cut acceptance matrix
 
-The current branch retains eight production simplifications across nine core source files: the
+The current branch retains eleven production simplifications across eleven core source files: the
 lean serial reset, common CH1 restart path, LCDC.4 reachable-state reduction, frame-sequencer
 ripple-state reduction, shared PPU register-conflict banks, peripheral-acknowledge bit-plane, and
-the two square-channel phase rings, plus the envelope carry/borrow decoder reduction. Relative to
-`8560a6c2`, production core code is `+144/-194`, a net deletion of 50 lines. The branch has ten fewer live scalar storage fields: one in LCDC, one in
+the two square-channel phase rings, plus the envelope carry/borrow decoder, STAT dead-control cone,
+length terminal gate, and sweep shared-adder reductions. Relative to `8560a6c2`, production core
+code is `+151/-219`, a net deletion of 68 lines. The branch has ten fewer live scalar storage fields: one in LCDC, one in
 the frame sequencer, three in `GpuRegisterValues`, three in `InterruptManager`, and two across
 `SoundMode1`/`SoundMode2`. Released component-state record shapes remain unchanged; capture/restore
 projects each reduced live representation onto the old fields.
 
-These eight changes are not one evidence class. Serial and CH1 delete causal live-path logic with
+These eleven changes are not one evidence class. Serial and CH1 delete causal live-path logic with
 external DMG-model support. The envelope cut deletes causal decoder logic by exact four-bit algebra.
-LCDC, frame sequencing, PPU conflict storage, interrupt acknowledgement, and the square phases are
-exact behavior-preserving state reductions at Coffee GB's already calibrated boundaries. Those six
+STAT, length, and the second sweep cut remove exact dead/gated/algebraic control cones. LCDC, frame
+sequencing, PPU conflict storage, interrupt acknowledgement, and the square phases are exact
+behavior-preserving state reductions at Coffee GB's already calibrated boundaries. Those nine
 non-externally-grounded cuts do not satisfy the independent-hardware-evidence condition for
 promoting a new architecture slice merely because their production diff is smaller.
 
@@ -158,17 +163,17 @@ following complete reruns finished with zero failures/errors:
 
 That is 5,707 integration cases in addition to the unit suite. Those earlier runs established
 regression safety for the first three retained production cuts; they did not by themselves cover
-the five later reductions or validate the output of test-only candidate PPU, APU, DMA, or scheduler
+the eight later reductions or validate the output of test-only candidate PPU, APU, DMA, or scheduler
 models.
 
-| Current all-eight-cut branch | Result |
+| Current all-eleven-cut branch | Result |
 | --- | ---: |
-| Final core unit suite | 1,559 run, 0 failures/errors, 8 skipped |
+| Final core unit suite | 1,565 run, 0 failures/errors, 8 skipped |
 | Final controller unit suite | 904 run, 0 failures/errors, 2 skipped |
 | Final 5,707-case integration battery | 5,707/5,707 |
 
 The final rows are direct runs from the combined branch, not sums of isolated worktree results.
-They establish regression safety for all eight retained cuts. They still do not turn test-only
+They establish regression safety for all eleven retained cuts. They still do not turn test-only
 candidate outputs or external-model observations into silicon evidence.
 The exact reactor/profile sequence is retained in
 [`scripts/verify-signal-reduction-battery.sh`](../scripts/verify-signal-reduction-battery.sh).
@@ -182,10 +187,15 @@ of each revision reported exactly 128,600 bytes over 45 million measured ticks, 
 sample values. Thus those seven cuts show no measured allocation regression, while a quiet-host
 timing gate remains required.
 
-One unpaired run on the exact all-eight-cut HEAD again reported 128,600 bytes over 45 million
+One unpaired run on the then-current all-eight-cut HEAD again reported 128,600 bytes over 45 million
 measured ticks (`2,857.778` bytes per million ticks). That is only an allocation confirmation for
 the same workload: it is not comparative timing evidence, and the workload disables the APU, so it
 does not exercise the new envelope decoder.
+
+The same allocation-only command was repeated on the exact all-eleven-cut HEAD after the final
+battery and again reported 128,600 bytes over 45 million measured ticks (`2,857.778` bytes per
+million ticks). This confirms the allocation total for that disabled-LCD/APU workload only. It is
+not a paired timing result and does not exercise the retained APU or PPU transition paths.
 
 The timed JVM used Java 21.0.1, one affinity-visible processor, CGB SKIP boot, disabled LCD/APU,
 a deterministic `JR -2` loop, 30 million warm-up ticks, and nine five-million-tick samples. Its
@@ -619,6 +629,24 @@ the runtime can never emit. Production changes by `+19/-22`, deleting three net 
 scalar field. This proves equivalence to Coffee GB's calibrated sequencer behavior; it does not
 show that the sentinel or the exact Java reset projection is a physical DMG/CGB latch encoding.
 
+### Length terminal-count gate
+
+`LengthCounter` has a separate **branch-accepted exact gated-counter reduction**. Its normal clock
+and NRx4 extra-clock path previously decremented, then separately decoded zero, carried that result
+in a mutable local, and cleared the local again when trigger reloaded the counter. Production now
+exposes the gated pre-decrement terminal pulse directly. Trigger masks that pulse at the return
+while the zero-load mux owns the reload, so the redundant clear disappears without moving enable,
+reload, or channel-stop ordering.
+
+The differential executes 1,728,172 transitions across ordinary clocks, every signed-low-word
+load, representative signed boundary/extreme length and full-length values, load muxes,
+first-half/enable/trigger combinations, and out-of-byte NRx4 integers. Java decrement and
+`fullLength - 1` overflow behavior remain identical. Public method
+descriptors and the released State/Memento shape are unchanged. Production changes by `+3/-16`,
+`LengthCounter.class` shrinks from 3,484 to 3,458 bytes, and the control-transfer count stays 28.
+This is an exact local terminal-gate simplification, not independent evidence for the physical
+length-counter implementation.
+
 ### Square-channel oscillator phase rings
 
 `SoundMode1` and `SoundMode2` previously stored `clock2Mhz` and `lowFrequencyPhase` as two
@@ -712,6 +740,18 @@ one frequency, one active-retrigger spacing, one natural BEXA phase, and one NR1
 Raw/asynchronous write phases, other BEXA alignments, close negate and carry collisions,
 frequency-write/retrigger overlap, intermediate analog timing, and CGB topology remain explicit
 falsifiers; CGB is supported by differential tests only.
+
+A second, evidence-separate `FrequencySweep` reduction simplifies only the settled integer adder.
+The shifted delta is negated for subtract mode and then enters one shared `+= shadowFreq` suffix.
+Java's two's-complement `int` arithmetic is modulo 2^32, so this is identical to the previous
+separate add/subtract arms even for `Integer.MIN_VALUE`, wraparound, negative public values, and
+masked shift distances. The `negging` and overflow latches remain in the same observable order.
+
+The algebraic differential covers 262,144 controller-accepted restored-state tuples and 1,835,078
+wide/extreme public calculations. Public descriptors and State/Memento components are unchanged.
+Production changes by `+2/-3`, `FrequencySweep.class` shrinks from 4,714 to 4,706 bytes, and one
+control-transfer instruction disappears. This is a **branch-accepted exact shared-adder reduction**,
+not additional evidence for the physical CH1 serial adder.
 
 `DmgEnvelopeWriteRipple` is an **external-netlist-shaped fitted hypothesis plus production
 differential** for the four DMG envelope counter cells as master/slave toggles whose
@@ -896,6 +936,15 @@ FF45 comparator sampling; its model contains neither `0x78` nor `== 153`. This u
 local explanations only. It does not replace the broad raster model or establish absolute silicon
 delay, LCD startup/disable, every CPU write phase, all source combinations, the sub-nanosecond
 mode-1/OAM handoff, CGB, or central IF acknowledgement.
+
+A separate production cleanup removes one exact dead control cone from
+`StatRegister.statChangeTriggersStatIrq`. Inside the unchanged live-line branch, the old
+mode-0-window/line/speed predicate selected the same LYC contribution in both arms. The predicate
+contains only field reads and integer arithmetic, so deleting it cannot move an interrupt request,
+callback, debugger event, or state mutation. Public descriptors and State/Memento components are
+unchanged. Production changes by `+2/-6`; `StatRegister.class` shrinks from 39,220 to 39,100 bytes,
+and five conditional sites disappear. This is a **branch-accepted exact dead-control-cone
+reduction**, not another gate/netlist claim.
 
 ## Forward-only DMG pixel path
 
@@ -1321,8 +1370,8 @@ or reorders another subsystem's time.
 ## Current migration decision
 
 The experiments produce bounded candidates for the Clocked Signal Fabric hypothesis, but do not yet
-establish a simpler whole-core model. The eight retained production changes do establish a useful
-lower bar: causal local, reachable-state, and state-plane reductions can delete 50 net
+establish a simpler whole-core model. The eleven retained production changes do establish a useful
+lower bar: causal local, reachable-state, and state-plane reductions can delete 68 net
 core-production lines and ten scalar fields without pretending that their packed Java
 representation is recovered silicon. The controller adds 29 net validation lines to reject
 never-emitted portable-state combinations; that compatibility safeguard is intentionally excluded
@@ -1334,7 +1383,7 @@ Source and live-state reduction are not the same as whole-class bytecode reducti
 move conditional work from hot transitions into cold released-state projection, and their nested
 class metadata can grow. The square-phase cut, for example, shrinks both hot tick methods while its
 compatibility adapters grow the associated class files. The retained set is therefore a tested
-production simplification portfolio, not a claim that all eight independently satisfy the
+production simplification portfolio, not a claim that all eleven independently satisfy the
 four-part architecture-slice promotion rule below.
 
 The result also leaves the first architectural cut boundary unchanged. Packing four acknowledge

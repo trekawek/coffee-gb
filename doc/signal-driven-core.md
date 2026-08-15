@@ -13,11 +13,12 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
-does not yet establish that replacement for the whole core. Eight narrow production reductions were
+does not yet establish that replacement for the whole core. Eleven narrow production reductions were
 completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, redundant LCDC conflict
 countdown state, frame-sequencer ripple state, shared PPU register-conflict banks, peripheral
-acknowledge bits, the two square-channel oscillator phase rings, and duplicated envelope endpoint
-decoders. Across nine core source files they remove 50 net core-production lines and ten live scalar
+acknowledge bits, the two square-channel oscillator phase rings, duplicated envelope endpoint
+decoders, a dead STAT timing cone, gated length-terminal logic, and a shared sweep-adder suffix.
+Across eleven core source files they remove 68 net core-production lines and ten live scalar
 storage fields without adding a runtime framework. Released state-record shapes remain compatible.
 The controller adds 29 net validation
 lines to reject never-emitted portable-state combinations; that compatibility safeguard is separate
@@ -720,7 +721,7 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-The branch retains eight narrow production reductions in two evidence tiers. Two causal live-path
+The branch retains eleven narrow production reductions in two evidence tiers. Two causal live-path
 cuts have external DMG-model support:
 
 - Serial DIV-reset handling is now one local divider-stage observation, output-clock toggle, and
@@ -738,11 +739,19 @@ cuts have external DMG-model support:
   compatibility. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg sound
   cases pass. The gate evidence is DMG-only; CGB is still production-differential.
 
-Six further changes are exact current-boundary reductions without independent hardware evidence.
+Nine further changes are exact current-boundary reductions without independent hardware evidence.
 `VolumeEnvelope` uses the four-bit counter's next-value carry/borrow as its saturation signal
 instead of two duplicated endpoint equality trees. A range guard preserves the public method's
 historical behavior for out-of-byte `int` inputs. The accepted released-state domain, public API,
 and State/Memento shapes are unchanged; this is exact algebra, not an independent netlist claim.
+
+Three more remove exact local control/algebra redundancy. `StatRegister` no longer evaluates a
+mode/line/speed predicate whose two arms selected the same LYC contribution. `LengthCounter`
+publishes its gated pre-decrement terminal pulse directly and masks it at trigger without a
+redundant mutable local flag. `FrequencySweep` signs the shifted delta and feeds one shared adder
+suffix.
+All three preserve arbitrary public-input behavior and released state shapes; none is a new
+hardware-topology claim.
 
 The other five are behavior-preserving state reductions at Coffee GB's existing calibrated
 boundaries. The CGB LCDC.4 collision stores one pending write strobe directly into the
@@ -750,12 +759,12 @@ already-existing consumer history, removing redundant active/pending counters. T
 stores a ripple phase plus sampled tap; PPU palette, SCX, and WX conflicts share visible/pending
 banks; four peripheral acknowledge levels share one bit-plane without moving their consumers; and
 each square channel stores its four-state oscillator phase in the low two bits of one integer.
-These six cuts reduce decoder/state transition logic or fields, but are not independent hardware-topology
+These nine cuts reduce decoder/state transition logic or fields, but are not independent hardware-topology
 claims and do not by themselves pass the external-evidence condition
 for a promoted architecture slice. Cold released-state projection can add bytecode even when hot
 transition code and source state shrink.
 
-The combined branch passes 1,559 core unit tests with no failures/errors (8 skipped), 904 controller
+The combined branch passes 1,565 core unit tests with no failures/errors (8 skipped), 904 controller
 unit tests with no failures/errors (2 skipped), and the complete 5,707/5,707 hardware-verified
 integration matrix. Released compatibility is directional: saves emitted by older released builds
 load in the current branch. Newer saves are not promised to load in older binaries.
@@ -766,9 +775,14 @@ timing inconclusive. A quiet-host timing acceptance run is still required. Reusa
 latch/bus/scheduler primitives remain test-only because landing a generic framework for these local
 formulas would have increased production complexity.
 
-One unpaired confirmation on the exact all-eight-cut HEAD reported the same 128,600-byte allocation
+One unpaired confirmation on the then-current all-eight-cut HEAD reported the same 128,600-byte allocation
 total for that workload. It is not comparative timing evidence, and the workload disables the APU,
 so it does not measure the envelope path itself.
+
+The exact all-eleven-cut HEAD was also checked once after the final battery and again reported
+128,600 bytes over 45 million measured ticks (`2,857.778` bytes per million ticks). This is only an
+allocation confirmation for the disabled-LCD/APU workload; it is neither paired timing evidence nor
+coverage of the retained APU/PPU transition paths.
 
 The external traces strengthen the architectural diagnosis without proving the whole replacement:
 
