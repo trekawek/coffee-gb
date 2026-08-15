@@ -21,6 +21,11 @@ class Recipe:
     horizontal_scale: float
     filename: str
 
+    @property
+    def dash_offset(self) -> int:
+        """Align ByteBounce's short dash with the cap-height glyphs in its cell."""
+        return 6 if self.cell_height == 36 else 8
+
 
 def atlas(font_path: Path, recipe: Recipe) -> Image.Image:
     font = ImageFont.truetype(str(font_path), recipe.font_size)
@@ -42,6 +47,8 @@ def atlas(font_path: Path, recipe: Recipe) -> Image.Image:
         top = (index // 16) * recipe.cell_height
         x = left + (recipe.cell_width - glyph.width) // 2
         y = top + (recipe.cell_height - glyph.height) // 2
+        if character == "-":
+            y += recipe.dash_offset
         result.alpha_composite(glyph, (x, y))
     return result
 

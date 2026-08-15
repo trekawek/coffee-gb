@@ -19,9 +19,9 @@ public class Proposal3TemplateFrameCatalogTest {
 
     private static final Map<MenuRoute, String> EXPECTED_TEMPLATE_PNG_SHA256 = Map.ofEntries(
             Map.entry(MenuRoute.PAUSE_CONSOLE,
-                    "e44ebb3226d92abcf2c3be2e7862c16dedb71b46f0c837630379434aa37daefa"),
+                    "bd1721e79d2f7e701a79643a39f572c654195aff15503159cf854d75b722b044"),
             Map.entry(MenuRoute.SAVE_STATES,
-                    "d64ee12427f84e0492087052af0f621d7d2eda7903666dce35d97002c08ffb6f"),
+                    "fb0ca423d9402a662a2509cf32dbf8795211a6c3412dedde3f66a7f5902a362f"),
             Map.entry(MenuRoute.SETTINGS,
                     "4faf75c2e08ddf76f30e06cac42cb838200f6a2b688bd4036d6ac205c07e9bc8"),
             Map.entry(MenuRoute.AUDIO,
