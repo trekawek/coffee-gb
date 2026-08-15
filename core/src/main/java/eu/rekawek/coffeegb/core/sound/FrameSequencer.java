@@ -16,11 +16,13 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
 
     private static final int DIV_BIT = 1 << 12;
 
-    private int step;
+    private static final int BLOCKED_STEP = -1;
 
-    private boolean previousBit;
+    /** Next ripple phase; -1 represents the powered-high clock pulse blocked at the input. */
+    private int rippleStep;
 
-    private boolean skipNextEdge;
+    /** BARA.q, sampling the selected DIV tap before it clocks the ripple. */
+    private boolean bara;
 
     /**
      * @param divCounter the current value of the internal 16-bit divider
@@ -31,15 +33,11 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
     public int tick(int divCounter, boolean apuEnabled, boolean doubleSpeed) {
         boolean bit = (divCounter & (doubleSpeed ? DIV_BIT << 1 : DIV_BIT)) != 0;
         int firedStep = -1;
-        if (previousBit && !bit && apuEnabled) {
-            if (skipNextEdge) {
-                skipNextEdge = false;
-            } else {
-                firedStep = step;
-                step = (step + 1) & 7;
-            }
+        if (bara && !bit && apuEnabled) {
+            firedStep = rippleStep;
+            rippleStep = (rippleStep + 1) & 7;
         }
-        previousBit = bit;
+        bara = bit;
         return firedStep;
     }
 
@@ -48,17 +46,16 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
      * Writing NRx4 in this phase causes the extra length clocking.
      */
     public boolean isFirstHalfOfLengthPeriod() {
-        return skipNextEdge || (step & 1) == 1;
+        return rippleStep == BLOCKED_STEP || (rippleStep & 1) == 1;
     }
 
     /** Owner-thread debugger view of the next sequencer step. */
     int getDebugStep() {
-        return step;
+        return Math.max(rippleStep, 0);
     }
 
     public void reset() {
-        step = 0;
-        skipNextEdge = false;
+        rippleStep = 0;
     }
 
     /**
@@ -73,14 +70,15 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
         // sequencer has already crossed into step 1 by the time channel writes can
         // observe it. This changes both the NRx4 extra-length clock and which later
         // falling edges clock length (Gambatte ch2_late_reset_nr52_2b).
-        step = phase >= selectedBit - 4 && phase < selectedBit ? 1 : 0;
-        previousBit = (divCounter & selectedBit) != 0;
-        skipNextEdge = previousBit;
+        int step = phase >= selectedBit - 4 && phase < selectedBit ? 1 : 0;
+        bara = (divCounter & selectedBit) != 0;
+        rippleStep = bara ? BLOCKED_STEP : step;
     }
 
     @Override
     public ComponentState<FrameSequencer> captureState() {
-        return new FrameSequencerState(step, previousBit, skipNextEdge);
+        return new FrameSequencerState(Math.max(rippleStep, 0), bara,
+                rippleStep == BLOCKED_STEP);
     }
 
     @Override
@@ -88,9 +86,8 @@ public class FrameSequencer implements StatefulComponent<FrameSequencer> {
         if (!(state instanceof FrameSequencerState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
-        this.step = mem.step;
-        this.previousBit = mem.previousBit;
-        this.skipNextEdge = mem.skipNextEdge;
+        this.rippleStep = mem.skipNextEdge ? BLOCKED_STEP : mem.step;
+        this.bara = mem.previousBit;
     }
 
     private record FrameSequencerState(int step, boolean previousBit,
