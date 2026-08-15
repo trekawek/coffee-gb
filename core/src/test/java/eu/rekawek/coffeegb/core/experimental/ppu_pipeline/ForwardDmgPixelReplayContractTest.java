@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION;
+import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.PixelSource.BACKGROUND;
+import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.PixelSource.WINDOW;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelReplayContract.RequiredTraceSignal.WINDOW_SOURCE_DEACTIVATE;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -68,6 +70,65 @@ public class ForwardDmgPixelReplayContractTest {
         assertEquals("the fixed three-dot scanout preserves the same source handoff",
                 ForwardDmgPixelPipeline.PixelSource.BACKGROUND, graph.lcdSource(8));
         assertEquals(8 + ForwardDmgPixelPipeline.RAW_TO_LCD_DOTS, graph.lastLcdDot());
+    }
+
+    /**
+     * Composes the external-netlist-shaped source latch with the fitted forward data path. The
+     * gate trace permits one pre-edge transaction to finish in retained data latches, but no new
+     * window launch after the source clears. This is a bounded contract, not a silicon timing.
+     */
+    @Test
+    public void immediateSourceResetRetiresOneWindowFlightThenSelectsBackground() {
+        DmgWindowSourceLatchCone source = activeSourceCone();
+        ForwardDmgPixelPipeline graph = new ForwardDmgPixelPipeline();
+        graph.writeVram(0x8010, 0xff);
+        graph.writeVram(0x8011, 0xff);
+        graph.writeVram(0x8000, 0x00);
+        graph.writeVram(0x8001, 0x00);
+
+        List<SourceDot> raw = new ArrayList<>();
+        List<SourceDot> lcd = new ArrayList<>();
+
+        var preEdgeSource = source.capture().inWindow()
+                ? WINDOW : BACKGROUND;
+        assertEquals(WINDOW, preEdgeSource);
+        graph.launchTile(1, 0, preEdgeSource);
+        recordTick(graph, raw, lcd); // the WINDOW flight has sampled its low byte
+
+        int resetDot = graph.dot();
+        var reset = source.step(DmgWindowSourceLatchCone.Inputs.idleEnabled()
+                .withLcdcWindowEnable(false));
+        assertTrue(reset.deactivated());
+        assertFalse(reset.inWindow());
+
+        while (graph.tileFlightValid()) {
+            recordTick(graph, raw, lcd);
+        }
+        assertEquals("the pre-edge flight still samples the WINDOW high byte", 1,
+                graph.vramReadCount(0x8011));
+
+        var nextSource = source.capture().inWindow()
+                ? WINDOW : BACKGROUND;
+        assertEquals("the cleared source cannot select a second WINDOW map/flight",
+                BACKGROUND, nextSource);
+        graph.launchTile(0, 0, nextSource);
+
+        while (lcd.size() < 16) {
+            recordTick(graph, raw, lcd);
+        }
+
+        assertEquals(1, graph.vramReadCount(0x8010));
+        assertEquals(1, graph.vramReadCount(0x8000));
+        assertEquals(1, graph.vramReadCount(0x8001));
+
+        assertSourceRun(raw, WINDOW, 0, 8);
+        assertSourceRun(raw, BACKGROUND, 8, 16);
+        assertSourceRun(lcd, WINDOW, 0, 8);
+        assertSourceRun(lcd, BACKGROUND, 8, 16);
+        assertEquals("one retained flight reaches the FIFO within a finite handoff", 11,
+                raw.get(8).dot() - resetDot);
+        assertEquals("scanout adds only its fixed forward latency", 14,
+                lcd.get(8).dot() - resetDot);
     }
 
     /**
@@ -350,6 +411,33 @@ public class ForwardDmgPixelReplayContractTest {
             throw new AssertionError("window-source audit fixture did not activate");
         }
         return cone;
+    }
+
+    private static void recordTick(
+            ForwardDmgPixelPipeline graph, List<SourceDot> raw, List<SourceDot> lcd) {
+        int previousPopDot = graph.lastFifoPopDot();
+        int previousLcdX = graph.lcdX();
+        graph.tick();
+        if (graph.lastFifoPopDot() != previousPopDot) {
+            raw.add(new SourceDot(graph.lastPoppedSource(), graph.lastFifoPopDot()));
+        }
+        for (int x = previousLcdX; x < graph.lcdX(); x++) {
+            lcd.add(new SourceDot(graph.lcdSource(x), graph.lastLcdDot()));
+        }
+    }
+
+    private static void assertSourceRun(
+            List<SourceDot> trace,
+            ForwardDmgPixelPipeline.PixelSource expected,
+            int from,
+            int to) {
+        assertTrue("trace is shorter than the asserted source run", trace.size() >= to);
+        for (int i = from; i < to; i++) {
+            assertEquals("source token " + i, expected, trace.get(i).source());
+        }
+    }
+
+    private record SourceDot(ForwardDmgPixelPipeline.PixelSource source, int dot) {
     }
 
     private record WindowDeactivateObservation(
