@@ -16,6 +16,11 @@ import eu.rekawek.coffeegb.core.signal.SrLatch;
  * VCLK while FF40.7 is high and the inverted 8192 Hz divider output while it is low; KUPA
  * similarly selects the ordinary gate clock or the inverted 4096 Hz divider output. These
  * slow off-state clocks keep the physical LCD driven independently of the reset PPU datapath.
+ *
+ * <p><strong>Evidence label: external-netlist Boolean root plus fitted consumer fanout.</strong>
+ * The XONA/XEBE/XODO/XAPO reduction and panel-clock muxes are netlist observations. This class does
+ * not prove that every candidate Java scanout/fetch stage has a physical reset pin on XAPO; that
+ * fanout must be traced independently or falsified with LCD-off phase sweeps.
  */
 final class DmgLcdPowerClockTopology {
 

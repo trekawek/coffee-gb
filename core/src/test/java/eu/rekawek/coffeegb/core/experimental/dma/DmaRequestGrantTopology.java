@@ -26,8 +26,15 @@ import java.util.Set;
  * <p>The DMA fabric never sees an opcode byte, a future micro-op, a PPU mode number, or Java
  * callback order. The CPU says whether its current slot is claimed, relinquished (HALT/STOP), or
  * an interrupt lease. The PPU submits an intent only while a physical OAM/VRAM port is actually in
- * use. That is enough to replace the current HDMA opcode lookahead and the GPU's
- * "retiring-instruction" access override in this detached slice.
+ * use.
+ *
+ * <p><strong>Evidence label: behavioral request/grant decomposition, self-test, and production
+ * differential.</strong> Inputs such as {@code dmaPreemptsThisPhase},
+ * {@code lateInterruptAccepted}, lease retirement, and PPU port intent are still semantic oracles;
+ * calibrated startup/profile logic also remains in the sequencers. The experiment demonstrates a
+ * candidate dependency direction, but it cannot yet claim to replace opcode lookahead or access
+ * overrides until persistent raw CPU/PPU strobes derive those inputs and the profile tables can be
+ * deleted.
  */
 final class DmaRequestGrantTopology {
 

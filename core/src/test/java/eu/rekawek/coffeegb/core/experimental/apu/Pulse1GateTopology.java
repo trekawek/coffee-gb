@@ -4,12 +4,19 @@ import java.util.EnumSet;
 import java.util.Set;
 
 /**
- * Settled DMG channel-1 control topology.
+ * Settled DMG channel-1 control decomposition.
  *
  * <p>This experiment models register and frame-clock effects as signals feeding four retained
  * cells. It intentionally omits the waveform timer and the time taken by the serial sweep adder;
  * observations are made after that adder has settled. There are no opcode, ROM-test, or callback
  * identities in the model.
+ *
+ * <p><strong>Evidence label: behavioral decomposition plus production differential.</strong>
+ * {@code resolveLength}, {@code resolveSweep}, and {@code resolveEnvelope} directly encode the
+ * settled feature truth tables with semantic branches. Signal-shaped inputs and retained records
+ * make responsibilities clearer, but do not by themselves show that the quirks emerge from gate
+ * connectivity. The separate serial-adder and envelope-ripple experiments carry their own, more
+ * circuit-specific evidence boundaries.
  */
 final class Pulse1GateTopology {
 

@@ -24,7 +24,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/** Tests causal topology, not the production exception tree. */
+/** Tests the candidate partition and its production compatibility, not recovered causal topology. */
 public class DmgStatControlPlaneTest {
 
     private static final int PIXEL_END = 248;

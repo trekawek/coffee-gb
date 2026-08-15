@@ -12,10 +12,11 @@ import eu.rekawek.coffeegb.core.signal.SrLatch;
  * index to a shade. Register writes therefore affect tokens already in flight without
  * rewriting, replaying, or otherwise reaching back into the scanout registers.
  *
- * <p>The DMG palette registers are represented as transparent write latches with an
- * asymmetric close: on the write dot the output cone sees {@code old | data}; at commit it
- * sees {@code data}. This is the digital envelope of the old and new latch nodes briefly
- * driving the palette mux together. LCDC.0 has the same set-before-reset envelope. LCDC.1
+ * <p>The DMG palette registers are represented by a <em>fitted</em> transparent-write envelope:
+ * on the write dot the output cone explicitly computes {@code old | data}; at commit it sees
+ * {@code data}. That formula captures an observed boundary result but does not yet prove which
+ * latch nodes or propagation delays produce it. LCDC.0 has the same fitted set-before-reset
+ * envelope. LCDC.1
  * normally closes one dot later, while a separate asynchronous clear wire can suppress the
  * object mux immediately. That wire is driven by object-fetch control, not inferred here.
  *
@@ -34,6 +35,12 @@ import eu.rekawek.coffeegb.core.signal.SrLatch;
  * the BGP latch outputs feed the {@code nelo}/{@code nura} palette muxes; and only the final
  * {@code pero}/{@code paty} sums drive the two LCD data pads. No palette signal feeds back
  * into the pixel shift registers.
+ *
+ * <p><strong>Evidence label: external-netlist boundary plus fitted hypothesis and production
+ * differential.</strong> The netlist supports the final-mux placement; it does not establish the
+ * Java write-envelope formula, object-clear aperture, or reset fanout through every proposed
+ * scanout stage. Hardware-reference image tests exercise the unchanged production renderer unless
+ * this cone is explicitly used as the renderer's output path.
  */
 final class DmgLcdOutputSignalCone {
 
