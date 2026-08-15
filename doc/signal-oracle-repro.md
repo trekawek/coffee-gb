@@ -781,6 +781,55 @@ Do not include final byte arrays or save contents in the extractor output. Absol
 diagnostic only; acceptance is based on ordering, absence of precharge/write strobe, and row
 relationships.
 
+### Directional-array falsifier
+
+The retained ordinary/PUSH traces establish sticky row selection and ordinary read feedback, but
+they cannot establish the fitted directional sample/write-back split. A separate **VERIFIED** packed
+probe in isolated checkout `/tmp/coffee-gb-dmg-sim-oam-directional` tested that boundary directly.
+The checkout remained at `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`; the tracked diagnostic diff
+over `generic_sram.sv` and `dmg_cpu_b_gameboy.sv` has binary-diff SHA-256
+`dfe5eb724f03174f0e133b57947cb2f88e266cc2f2b9ed099b30bb66f160b2e0` and numstat `7/1` plus
+`1/3`. The external VCD extractor `oam_directional_extract.pl` has SHA-256
+`db9dd013d1a451802ab4c56d09f9827d912d62f4b6bdde5a710597edb3ebdc7e`. Neither the generated ROM,
+save data, waveform, nor its checksum is recorded here.
+
+The build used the same retained assembler/linker/objcopy and Icarus binaries described above:
+
+```sh
+make -C /tmp/coffee-gb-dmg-sim-oam-directional -B dmg_cpu_b_gameboy.vvp \
+  IVERILOG=/tmp/coffee-gb-iverilog-master/bin/iverilog \
+  TIMING=default SIMPLIFIED_OAM= SIMPLIFIED_WAVERAM=y
+
+/tmp/coffee-gb-iverilog-master/bin/vvp -N \
+  /tmp/coffee-gb-dmg-sim-oam-directional/dmg_cpu_b_gameboy.vvp \
+  -fst-speed +DUMPFILE=/tmp/oam-bug-directional-rowN.fst \
+  +SAV_FILE=/tmp/oam-bug-directional-rowN.sav \
+  +BOOTROM=build-directional/oam-bug-inc-rowN.bootrom \
+  +ROM=build-directional/oam-bug-inc-rowN.cartrom \
+  +SECS=0.005 +MBC_TYPE=03 +RAM_SIZE=02
+
+/tmp/coffee-gb-fst2vcd \
+  -f /tmp/oam-bug-directional-rowN.fst \
+  -o /tmp/oam-bug-directional-rowN.vcd
+./oam_directional_extract.pl TRACE.vcd START END
+```
+
+`rowN` was instantiated for scan rows 1, 2, and 4. Each bit packed one of all eight Boolean
+assignments. The byte-level witness set target column zero to retained `a=F0`, preceding column zero
+to `b=CC`, and preceding column two to `c=AA`. The hardware-verified majority relation predicts
+target column zero `E8`; all three external-model runs instead copied the complete preceding row,
+making it `CC`. Column two remained `AA`, and CPU plus both OAM SRAM write strobes stayed inactive.
+For row 2 the address sequence was `1 -> 0 -> 2`, the column sequence `0100 -> 0000 -> 0001`, and
+the common keeper changed `AA -> CC` before the target word line rose. Row 4 similarly traversed
+`3 -> 2 -> 0 -> 4` before only row 4's word line rose.
+
+Static inspection explains the negative result: `dmg_cpu_b/cells/oam.sv` exports only one column
+mask, while `generic_sram.sv` makes every selected bit line both drive the common line and receive
+its keeper fallback. It has no separate sensing/write-back pins. This probe therefore **FALSIFIES
+THE EXTERNAL MODEL AS AN EXACT BLOCKED-WRITE ORACLE**; it does not falsify directional storage in
+real silicon. The fitted Java cone can only be promoted with a lower-level physical model or
+controlled real-DMG captures.
+
 **TODO:** commit an MIT-side extractor which resolves full VCD scope paths, emits only the concise
 relationships above, and fails on extra affected rows. Until that exists and reruns from a clean
 checkout, the dynamic OAM claims are `OBSERVED`, not fully reproducible.
