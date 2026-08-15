@@ -13,10 +13,12 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
-does not yet establish that replacement for the whole core. Two narrow production cuts were
-completed: the local Serial DIV-reset path and CH1 sweep-trigger scheduling. The other subsystem
-results are constructive, fitted, differential, or falsifying experiments whose exact evidence
-strength is recorded in the companion log.
+does not yet establish that replacement for the whole core. Four narrow production reductions were
+completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, a held interrupt-priority
+owner, and one redundant LCDC conflict counter. Together they remove 34 net production lines and
+three net live scalar fields without adding a runtime framework. The other subsystem results are
+constructive, fitted, differential, or falsifying experiments whose exact evidence strength is
+recorded in the companion log.
 
 The candidate is not a shorter formula for PPU modes, interrupt delays, or APU counters.
 
@@ -713,7 +715,7 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-Two narrow production slices passed the behavior and deletion gates within this research branch:
+Four narrow production slices passed the behavior and deletion gates within this research branch:
 
 - Serial DIV-reset handling is now one local divider-stage observation, output-clock toggle, and
   falling-edge shift. It removes eleven net lines of future-event arithmetic, preserves the
@@ -728,10 +730,20 @@ Two narrow production slices passed the behavior and deletion gates within this 
   and active DMG writes. This deletes one semantic input and conditional without adding state or
   changing mementos. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg
   sound cases pass. The gate evidence is DMG-only; CGB is still production-differential.
+- Interrupt entry samples the internal `IE & IF` priority bank during the first half of
+  `IRQ_PUSH_2` and holds that source for the existing T4 clear and later Java vector. This removes
+  the fake external FF0F/FFFF reads, the late-priority re-request/clear repair, and two snapshot
+  integers. DMG T1/T2 sampling and T4 evaluation are grounded in the external model; Coffee GB's
+  exact callback alignment and all CGB placement remain fitted/differential.
+- The CGB LCDC.4 collision now stores one pending write strobe directly into the already-existing
+  consumer history. The separate active and pending duration counters were redundant for every
+  reachable state: once active, the pulse was already authoritative in that history. This removes
+  one live field and countdown branch while retaining released integer slots for import. It is a
+  behavior-preserving state reduction, not independent evidence for the CGB collision waveform.
 
-The observed performance of both cuts still needs a reproducible upstream acceptance run. Reusable
-latch/bus/scheduler primitives remain test-only because landing a generic framework for either
-local formula would have increased production complexity.
+The combined branch still needs a reproducible upstream performance acceptance run. Reusable
+latch/bus/scheduler primitives remain test-only because landing a generic framework for these
+local formulas would have increased production complexity.
 
 The external traces strengthen the architectural diagnosis without proving the whole replacement:
 
@@ -739,6 +751,9 @@ The external traces strengthen the architectural diagnosis without proving the w
   deadline is a projection of those cells.
 - HALT's direct decode suppresses its own IDU increment, while a delayed copy drives only the sleep
   latch; the halt bug is not a special next-fetch PC gate.
+- Five local IF latches feed a T1/T2-transparent priority bank; its held owner drives both one-hot
+  acknowledge and vector during T4. Priority is neither frozen at the old Java callback nor live
+  through the final vector cycle.
 - LY 153/0 is a ripple, partial decoder, sample, and asynchronous reset, while M1 is sampled on an
   independent path. Precharged transparent FF41 latches create the write glitch without a semantic
   all-enable event.
