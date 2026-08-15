@@ -191,6 +191,10 @@ public class SoundMode3 extends AbstractSoundMode {
     @Override
     public void trigger() {
         i = 0;
+        // CH3_RESTART asynchronously resets the wave nibble selector.  The sample
+        // buffer itself remains stale, but its high nibble is immediately routed
+        // through the current NR32 volume shifter.
+        lastOutput = applyVolume((buffer >> 4) & 0x0f);
         // the first wave position advance is delayed by 3 extra APU cycles and does not
         // fetch a sample; the stale buffer keeps playing until the second advance
         freqDivider = frequencyPeriod + 3;
@@ -208,7 +212,7 @@ public class SoundMode3 extends AbstractSoundMode {
         ticksSinceRead++;
         clock2Mhz = !clock2Mhz;
         if (!channelEnabled) {
-            return lastOutput;
+            return 0;
         }
         if (clock2Mhz && --freqDivider == 0) {
             resetFreqDivider();
@@ -225,7 +229,7 @@ public class SoundMode3 extends AbstractSoundMode {
 
     @Override
     public int getCurrentOutput() {
-        return lastOutput;
+        return channelEnabled ? lastOutput : 0;
     }
 
     private int getWaveEntry() {

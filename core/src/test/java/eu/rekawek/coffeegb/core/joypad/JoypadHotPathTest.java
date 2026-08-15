@@ -147,7 +147,7 @@ public class JoypadHotPathTest {
     }
 
     @Test
-    public void playerInputHubChangesAreBoundedAndRetainFourSampleFilterTiming() {
+    public void playerInputHubChangesAreBoundedAndRetainOneMegahertzFilterTiming() {
         InterruptManager interrupts = new InterruptManager(false);
         interrupts.setByte(0xff0f, 0);
         PlayerInputHub hub = new PlayerInputHub();
@@ -168,7 +168,8 @@ public class JoypadHotPathTest {
         joypad.tick(); // next 64-tick poll adopts the new physical latch
         assertSame(pressed, joypad.getSampledInput());
         assertFalse(interrupts.isInterruptFlagSet(InterruptManager.InterruptType.P10_13));
-        for (int sample = 0; sample < 3; sample++) {
+        int fourthReceiverEdgeOffset = 4 * Joypad.JOYP_CLOCK_TICKS - 1;
+        for (int elapsed = 1; elapsed < fourthReceiverEdgeOffset; elapsed++) {
             joypad.tick();
             assertFalse(interrupts.isInterruptFlagSet(InterruptManager.InterruptType.P10_13));
         }
@@ -185,7 +186,7 @@ public class JoypadHotPathTest {
         assertSame(pressed, joypad.getSampledInput());
         joypad.tick(); // next poll adopts release; the filter starts on its following tick
         assertSame(released, joypad.getSampledInput());
-        for (int sample = 0; sample < 3; sample++) {
+        for (int elapsed = 1; elapsed < fourthReceiverEdgeOffset; elapsed++) {
             joypad.tick();
             assertEquals(0x0e, filteredInputLines(joypad.captureState()));
         }
@@ -291,7 +292,9 @@ public class JoypadHotPathTest {
         joypad.seedDeterministicReplayInput(Set.of(Button.A), PlayerInputSnapshot.RELEASED);
         assertFalse(releasedInputFastPathEligible(joypad));
 
-        joypad.tick();
+        for (int tick = 0; tick < Joypad.JOYP_CLOCK_TICKS; tick++) {
+            joypad.tick();
+        }
 
         assertEquals(1, inputHistory(joypad.captureState()));
     }
@@ -307,7 +310,9 @@ public class JoypadHotPathTest {
             joypad.setByte(JOYP, 0x30);
             joypad.tick(); // consume the selector transition
 
-            joypad.tick();
+            for (int tick = 1; tick < Joypad.JOYP_CLOCK_TICKS; tick++) {
+                joypad.tick();
+            }
 
             assertEquals(1, inputHistory(joypad.captureState()));
         }
@@ -336,7 +341,9 @@ public class JoypadHotPathTest {
                 new InterruptManager(false), EventBus.NULL_EVENT_BUS, false);
         original.setPressedButtons(Set.of(Button.A));
         original.tick(); // consume the input transition
-        original.tick(); // first pressed sample
+        for (int tick = 1; tick < Joypad.JOYP_CLOCK_TICKS; tick++) {
+            original.tick();
+        }
         ComponentState<Joypad> partialFilter = original.captureState();
         assertEquals(1, inputHistory(partialFilter));
 
@@ -344,7 +351,9 @@ public class JoypadHotPathTest {
                 new InterruptManager(false), EventBus.NULL_EVENT_BUS, false);
         restored.restoreState(partialFilter);
         assertFalse(releasedInputFastPathEligible(restored));
-        restored.tick();
+        for (int tick = 0; tick < Joypad.JOYP_CLOCK_TICKS; tick++) {
+            restored.tick();
+        }
 
         assertEquals(2, inputHistory(restored.captureState()));
     }
@@ -555,7 +564,7 @@ public class JoypadHotPathTest {
 
     private static void settlePlayerInputHub(Joypad joypad) {
         joypad.tick(); // initial hub poll adopts the source and consumes its change flag
-        for (int sample = 0; sample < 4; sample++) {
+        for (int tick = 1; tick < 4 * Joypad.JOYP_CLOCK_TICKS; tick++) {
             joypad.tick();
         }
     }

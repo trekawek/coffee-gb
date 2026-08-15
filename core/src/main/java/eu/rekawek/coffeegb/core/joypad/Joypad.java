@@ -34,6 +34,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     private static final int INPUT_FILTER_MASK = (1 << INPUT_FILTER_SAMPLES) - 1;
 
+    /** BOGA clocks the DMG JOYP receiver once per four 4.194304 MHz master ticks. */
+    static final int JOYP_CLOCK_TICKS = 4;
+
     /**
      * Host input is stable between GUI updates, so the thread-safe live hub needs polling only at
      * this master-tick cadence. The initial tick is a poll boundary and later boundaries reuse the
@@ -282,9 +285,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             }
         }
         // JOYP writes happen after the joypad clock edge represented by this emulator
-        // tick. Start sampling a changed input on the following tick, then require four
-        // consecutive samples. This models the four flip-flop input filter visible in
-        // the DMG joypad circuit and keeps short selector glitches from raising IF.
+        // tick. Start sampling a changed input on the following tick. BATU, ACEF, AGEM,
+        // and APUG are all clocked by BOGA's 1 MHz output, rather than by every master tick.
         if (inputChangedSinceLastTick) {
             inputChangedSinceLastTick = false;
             refreshReleasedInputFastPathEligibility();
@@ -310,32 +312,73 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 inputLines = applyButtons(inputLines, buttons);
             }
         }
+        if (!isJoypadClockRising()) {
+            refreshReleasedInputFastPathEligibility();
+            refreshPlayerInputHubFastPathEligibility(inputLines);
+            return;
+        }
         if (inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines) {
             refreshReleasedInputFastPathEligibility();
             refreshPlayerInputHubFastPathEligibility(inputLines);
             return;
         }
+        boolean oldInterruptLine = joypadInterruptLine(inputHistory);
         int nextFilteredInputLines = filteredInputLines;
+        inputHistory = sampleInputHistory(inputHistory, inputLines);
         for (int line = 0; line < 4; line++) {
             int shift = line * INPUT_FILTER_SAMPLES;
             int history = (inputHistory >>> shift) & INPUT_FILTER_MASK;
-            boolean inputLow = (inputLines & (1 << line)) == 0;
-            history = ((history << 1) | (inputLow ? 1 : 0)) & INPUT_FILTER_MASK;
-            inputHistory = (inputHistory & ~(INPUT_FILTER_MASK << shift)) | (history << shift);
             if (history == INPUT_FILTER_MASK) {
                 nextFilteredInputLines &= ~(1 << line);
             } else if (history == 0) {
                 nextFilteredInputLines |= 1 << line;
             }
         }
-        int fallingEdges = filteredInputLines & ~nextFilteredInputLines & 0x0f;
         filteredInputLines = nextFilteredInputLines;
-        if (fallingEdges != 0) {
+        // KERY ORs all four active-low pad inputs before the four-stage receiver. ASOK is
+        // BATU & APUG, so pad identity is gone before interrupt filtering and the middle
+        // two samples are not part of its Boolean equation. ORing the four packed per-line
+        // histories reconstructs that aggregate receiver without changing portable state.
+        boolean interruptLine = joypadInterruptLine(inputHistory);
+        if (!oldInterruptLine && interruptLine) {
             interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         }
         refreshReleasedInputFastPathEligibility();
         refreshPlayerInputHubFastPathEligibility(inputLines);
+    }
+
+    private boolean isJoypadClockRising() {
+        // BOGA/CLK_1MHz is anchored to the fixed master-clock/reset grid. Do not derive this
+        // phase from Cpu.clockCycle: interrupt-entry and CGB clock-mux compensation can rephase
+        // Coffee's semantic CPU boundary without moving the physical JOYP receiver clock.
+        return (tick & (JOYP_CLOCK_TICKS - 1L)) == 0;
+    }
+
+    static int sampleInputHistory(int histories, int inputLines) {
+        int sampled = histories;
+        for (int line = 0; line < 4; line++) {
+            int shift = line * INPUT_FILTER_SAMPLES;
+            int history = (histories >>> shift) & INPUT_FILTER_MASK;
+            boolean inputLow = (inputLines & (1 << line)) == 0;
+            history = ((history << 1) | (inputLow ? 1 : 0)) & INPUT_FILTER_MASK;
+            sampled = (sampled & ~(INPUT_FILTER_MASK << shift)) | (history << shift);
+        }
+        return sampled;
+    }
+
+    static int aggregateInputHistory(int histories) {
+        int aggregateHistory = histories
+                | histories >>> INPUT_FILTER_SAMPLES
+                | histories >>> (2 * INPUT_FILTER_SAMPLES)
+                | histories >>> (3 * INPUT_FILTER_SAMPLES);
+        return aggregateHistory & INPUT_FILTER_MASK;
+    }
+
+    static boolean joypadInterruptLine(int histories) {
+        int aggregateHistory = aggregateInputHistory(histories);
+        // Bit 0 is BATU's current KERY sample; bit 3 is APUG's three-edge-old sample.
+        return (aggregateHistory & 0b1001) == 0b1001;
     }
 
     private PlayerInputSnapshot sampleInputForTick() {

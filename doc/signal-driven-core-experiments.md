@@ -1356,12 +1356,15 @@ electrical collision and copy sequencers stay in production until each named pro
 
 ## Existing positive controls
 
-The architectural diagnosis is selective. The DMG-facing part of `Joypad` already has the desired
-shape: four packed sample stages per P10-P13 line, one retained filtered level, and a falling-edge
-request. Its remaining size is mostly host-input ownership, deterministic replay, debugger hooks,
-fast paths, and the separate SGB ICD2 packet protocol. `InfraredPort` is similarly a small stored RP
-output feeding a combinational input mux; its external Full Changer protocol is behavioral device
-logic. Neither needs to be rewritten into a general gate graph.
+The architectural diagnosis is selective. The DMG-facing part of `Joypad` now has a bounded
+circuit-shaped interrupt boundary: the released record's four packed per-line history nibbles
+remain as a structural compatibility projection, but their OR reconstructs the single physical KERY aggregate sampled by the
+BATU/ACEF/AGEM/APUG 1 MHz receiver, and IF is requested only on the ASOK rising edge. Its remaining
+size is mostly host-input ownership, deterministic replay, debugger hooks, fast paths, and the
+separate SGB ICD2 packet protocol. The independent AWOB STOP-wake phase remains a future shared-clock
+task. `InfraredPort` is similarly a small stored RP output feeding a combinational input mux; its
+external Full Changer protocol is behavioral device logic. Neither needs to be rewritten into a
+general gate graph.
 
 These are useful controls for the proposal. A large source file is not itself evidence of a bad
 hardware abstraction, and behavioral algorithms are not targets merely because they live in
