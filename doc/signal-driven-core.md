@@ -1,6 +1,6 @@
 # A signal-driven core for Coffee GB
 
-Status: architectural hypothesis and migration design
+Status: architectural hypothesis and migration design; not a merge-ready whole-core replacement
 
 Baseline: `8560a6c2` (2026-08-13)
 
@@ -8,8 +8,12 @@ Scope: `core/`, with DMG as the first implementation target and CGB retained dur
 
 ## Executive conclusion
 
-There is a substantially simpler model available, but it is not a shorter formula for PPU modes,
-interrupt delays, or APU counters.
+The evidence supports a promising route to a substantially simpler model, but the overnight spike
+does not yet establish that replacement for the whole core. The only production cut completed so
+far is the local Serial DIV-reset path; the other subsystems are constructive, fitted, differential,
+or falsifying experiments whose exact evidence strength is recorded in the companion log.
+
+The candidate is not a shorter formula for PPU modes, interrupt delays, or APU counters.
 
 The simplifying change is to stop treating CPU, PPU, timer, APU, serial, and DMA as sequential
 objects that each own a notion of "now" and mutate one another once per Java callback. The Game
@@ -691,13 +695,21 @@ values become visible, not about implementing every signal as a Java object.
 
 ## Decision
 
-Proceed with the Clocked Signal Fabric as an experimentally gated replacement architecture.
+Continue the Clocked Signal Fabric as an experimentally gated research architecture, not as a
+merge-ready framework. Keep primitives and candidate islands in test sources until one vertical
+slice replaces production behavior and deletes more prediction/provenance/repair state than it
+adds.
 
-The first code spike should be Slice 0 plus Slice 1: a half-dot trace and a serial/IF vertical slice.
-It is small enough to finish and benchmark, but broad enough to prove the central claim by deleting
-real lookahead. Do not begin with a wholesale PPU rewrite or a production full-netlist evaluator.
+The attempted Serial/IF cut established the next prerequisite more sharply than the original plan:
+the existing master-tick callback cannot centralize acknowledge because Timer and Serial sit on
+opposite sides of the CPU. The next production experiment must move persistent CPU T-state/bus
+intent, Timer and Serial request generation, IF/IE/IME/HALT control, live priority, and physical
+acknowledge into one CPU-subedge island. A detached composition shows those edge-triggered seams can
+fit; it does not yet supply timer latches, the serial input pin, transparent/asynchronous settling,
+PPU source paths, CGB wiring, or the physical acknowledge/vector phase.
 
-If the serial/IF and timer slices cannot eliminate future-event prediction, or if they require
-source/test-specific phase exceptions, stop and revise the model before touching the PPU. If they
-succeed, proceed to explicit CPU bus cycles; those are the prerequisite for removing the largest
-STAT and HDMA dependency webs.
+Do not begin with a wholesale PPU rewrite or a production full-netlist evaluator. Promote a slice
+only under the evidence and deletion rule in `signal-driven-core-experiments.md`: semantic oracle
+inputs must disappear, independent hardware/netlist evidence must distinguish the topology,
+production complexity must actually be removed, and arbitrary-phase save/restore plus performance
+and the complete hardware-verified battery must pass.

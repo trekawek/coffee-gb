@@ -201,6 +201,9 @@ public class CgbSpeedSwitchClockMachineTest {
         assertEquals(0, (gated.tima() - before) & 0xff);
         assertNotEquals("a hardware TIMA capture after STOP would decide the model",
                 productionDelta, (gated.tima() - before) & 0xff);
+        // An external run of SameBoy 213a12ce also produces a $80 delta: it exits STOP into a
+        // separate speed-switch halt and keeps its timer running. That independent emulator is
+        // contrary evidence, not hardware truth; retain this split until a CGB capture decides it.
     }
 
     @Test
