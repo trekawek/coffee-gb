@@ -82,7 +82,8 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     /** Register value as seen by the LCD output stage (with the DMG write-conflict mix). */
     public int getEffective(GpuRegister reg) {
-        int mix = mixValues[reg.ordinal()];
+        int mix = reg.ordinal() >= GpuRegister.BGP.ordinal() && reg.ordinal() <= GpuRegister.OBP1.ordinal()
+                ? mixValues[reg.ordinal()] : -1;
         return mix >= 0 ? mix : values[reg.ordinal()];
     }
 
