@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.cpu.InterruptManager
 import eu.rekawek.coffeegb.core.cpu.SpeedMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.gpu.GpuRegister
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock
@@ -50,6 +51,38 @@ class ClockOwnedStateSemanticsTest {
         val impossible = root.replaceRecordField(LCDC_STATE, field, Int32State(2))
         assertFailsWith<StateApplyException>(field) {
           StateSemantics.validate(StateGraph.restore(impossible))
+        }
+      }
+    }
+  }
+
+  @Test
+  fun gpuConflictArraysAcceptLegacyOrExactSharedLatchMirrorsOnly() {
+    session().use { session ->
+      val state = session.captureDetachedState().machine.root.record(GPU_REGISTER_VALUES_STATE)
+      StateSemantics.validate(StateGraph.restore(state))
+
+      val mix = state.intArray("mixValues").clone()
+      val pending = state.intArray("pendingMixValues").clone()
+      mix[GpuRegister.SCX.ordinal] = 0x12
+      pending[GpuRegister.WX.ordinal] = 0
+      val mirrored =
+          state
+              .replaceField("mixValues", Int32ArrayState(mix))
+              .replaceField("pendingMixValues", Int32ArrayState(pending))
+              .replaceField("scxOldValue", Int32State(0x12))
+              .replaceField("wxJustChangedTicks", Int32State(2))
+      StateSemantics.validate(StateGraph.restore(mirrored))
+
+      val invalidStates = listOf(
+          mirrored.replaceField("scxOldValue", Int32State(0x34)),
+          mirrored.replaceField("wxJustChangedTicks", Int32State(1)),
+          state.replaceField("mixValues", Int32ArrayState(
+              state.intArray("mixValues").clone().also { it[GpuRegister.SCY.ordinal] = 0 })),
+      )
+      invalidStates.forEach { invalid ->
+        assertFailsWith<StateApplyException> {
+          StateSemantics.validate(StateGraph.restore(invalid))
         }
       }
     }
@@ -318,6 +351,9 @@ class ClockOwnedStateSemanticsTest {
   private fun RecordState.long(name: String): Long =
       (fields.single { it.name == name }.value as Int64State).value
 
+  private fun RecordState.intArray(name: String): IntArray =
+      (fields.single { it.name == name }.value as Int32ArrayState).copyValue()
+
   private fun SessionState.withMachineRoot(root: RecordState): SessionState =
       SessionState(
           MachineState(root, machine.rtcRuntime, machine.hardware, machine.dmgFifoRuntime),
@@ -346,6 +382,8 @@ class ClockOwnedStateSemanticsTest {
     const val FRAME_SEQUENCER_STATE =
         "eu.rekawek.coffeegb.core.sound.FrameSequencer\$FrameSequencerState"
     const val LCDC_STATE = "eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState"
+    const val GPU_REGISTER_VALUES_STATE =
+        "eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState"
     const val SOUND_STATE = "eu.rekawek.coffeegb.core.sound.Sound\$SoundState"
     const val RTC_STATE =
         "eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock\$RealTimeClockState"
