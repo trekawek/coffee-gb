@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.CONTROL_TO_FIFO_DOTS;
+import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.OUTSIDE_CGB;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.OUTSIDE_DISABLED_WINDOW_INSERTION;
 import static eu.rekawek.coffeegb.core.experimental.ppu_pipeline.ForwardDmgPixelPipeline.OUTSIDE_MIDLINE_FINE_SCX_REPHASE;
@@ -290,7 +291,8 @@ public class ForwardDmgPixelPipelineTest {
                         | OUTSIDE_OVERLAPPING_OBJECT_PRIORITY
                         | OUTSIDE_CGB
                         | OUTSIDE_MODE3_END_AND_STAT
-                        | OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT,
+                        | OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT
+                        | OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION,
                 ForwardDmgPixelPipeline.incompleteBehaviorMask());
     }
 

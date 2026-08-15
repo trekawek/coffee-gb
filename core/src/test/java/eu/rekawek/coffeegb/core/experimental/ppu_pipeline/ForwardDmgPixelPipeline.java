@@ -48,6 +48,9 @@ final class ForwardDmgPixelPipeline {
      */
     static final int OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT = 1 << 6;
 
+    /** An active window source cannot currently retire on a later LCDC.5 falling edge. */
+    static final int OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION = 1 << 7;
+
     private static final int TILE_LOW_SAMPLE_OFFSET = 0;
 
     private static final int TILE_HIGH_SAMPLE_OFFSET = 3;
@@ -227,7 +230,8 @@ final class ForwardDmgPixelPipeline {
                 | OUTSIDE_OVERLAPPING_OBJECT_PRIORITY
                 | OUTSIDE_CGB
                 | OUTSIDE_MODE3_END_AND_STAT
-                | OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT;
+                | OUTSIDE_WINDOW_TRIGGER_AFTER_SCANOUT_COMMIT
+                | OUTSIDE_ACTIVE_WINDOW_SOURCE_DEACTIVATION;
     }
 
     void writeVram(int address, int value) {
@@ -260,6 +264,7 @@ final class ForwardDmgPixelPipeline {
         this.windowTriggerValid = false;
     }
 
+    /** Comparator enable only; retiring an active window source is a separately named boundary. */
     void setWindowEnabled(boolean windowEnabled) {
         this.windowEnabled = windowEnabled;
     }
