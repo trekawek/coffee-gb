@@ -896,13 +896,15 @@ ACK/vector evaluation are grounded in the pinned external model. Aligning raw M6
 current `IRQ_PUSH_2` callback remains fitted. Every CGB phase in the Java experiment is behavioral;
 this probe supplies no CGB gate or silicon evidence.
 
-The branch implements the bounded held-owner consequence without moving the existing clear:
-production samples its internal pending bank during the first half of `IRQ_PUSH_2`, retains one
-source, and uses it for both that cycle's T4 clear and the following Java vector. This deletes the
-fake external FF0F/FFFF reads, late-priority re-request/clear repair, and two live snapshot integers.
-The old importer record shape remains. Focused CPU/interrupt/memento tests (83/83), the unit suite,
-Mooneye plus acid profiles (132/132), and aggregate plus individual Blargg profiles (54/54) pass.
-That production result does not upgrade CGB or Coffee's exact callback anchor to external evidence.
+The branch tried the bounded held-owner consequence without moving the existing clear: sample the
+internal pending bank during the first half of `IRQ_PUSH_2`, retain one source, and use it for both
+that cycle's T4 clear and the following Java vector. The cut deleted fake FF0F/FFFF reads,
+late-priority repair, and two live snapshot integers, while passing focused CPU/interrupt/memento,
+unit, Mooneye, acid, and Blargg suites. It was nevertheless **rejected and reverted** when the
+Gambatte hardware profile failed eight late STAT-vs-Timer precedence cases in both DMG and CGB
+modes. This does not contradict the raw external T1/T2 bank; it falsifies Coffee GB's current
+`IRQ_PUSH_2` first half as the physical aperture. The CPU callback/bus timeline must be re-anchored
+before this cone can replace production selection.
 
 Finite limits are forced rather than natural Timer/Serial source generation, one CPU write/entry
 phase, Timer and Serial only, reverse-engineered DMG-B default/nodelay policies rather than silicon,

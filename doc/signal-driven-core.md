@@ -13,10 +13,10 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
-does not yet establish that replacement for the whole core. Four narrow production reductions were
-completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, a held interrupt-priority
-owner, and one redundant LCDC conflict counter. Together they remove 34 net production lines and
-three net live scalar fields without adding a runtime framework. The other subsystem results are
+does not yet establish that replacement for the whole core. Three narrow production reductions were
+completed: local Serial DIV-reset handling, CH1 sweep-trigger scheduling, and redundant LCDC
+conflict countdown state. Together they remove 18 net production lines and one net live scalar
+field without adding a runtime framework. The other subsystem results are
 constructive, fitted, differential, or falsifying experiments whose exact evidence strength is
 recorded in the companion log.
 
@@ -715,7 +715,7 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-Four narrow production slices passed the behavior and deletion gates within this research branch:
+Three narrow production slices passed the behavior and deletion gates within this research branch:
 
 - Serial DIV-reset handling is now one local divider-stage observation, output-clock toggle, and
   falling-edge shift. It removes eleven net lines of future-event arithmetic, preserves the
@@ -730,11 +730,6 @@ Four narrow production slices passed the behavior and deletion gates within this
   and active DMG writes. This deletes one semantic input and conditional without adding state or
   changing mementos. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg
   sound cases pass. The gate evidence is DMG-only; CGB is still production-differential.
-- Interrupt entry samples the internal `IE & IF` priority bank during the first half of
-  `IRQ_PUSH_2` and holds that source for the existing T4 clear and later Java vector. This removes
-  the fake external FF0F/FFFF reads, the late-priority re-request/clear repair, and two snapshot
-  integers. DMG T1/T2 sampling and T4 evaluation are grounded in the external model; Coffee GB's
-  exact callback alignment and all CGB placement remain fitted/differential.
 - The CGB LCDC.4 collision now stores one pending write strobe directly into the already-existing
   consumer history. The separate active and pending duration counters were redundant for every
   reachable state: once active, the pulse was already authoritative in that history. This removes
@@ -786,6 +781,15 @@ IE/IME/HALT control, and acknowledge/vector decode into one CPU-subedge island. 
 composition shows the edge-triggered seams can fit; the external DMG trace supplies the missing
 selection topology, but the experiment still lacks complete timer/serial inputs, integrated
 transparent/asynchronous settling, PPU source paths, and CGB wiring.
+
+A narrower held-interrupt-owner cut was also rolled back. It sampled the internal pending bank in
+the first half of Coffee GB's current `IRQ_PUSH_2`, removed the fake FF0F/FFFF reads and
+late-priority repair, and passed unit, Mooneye, acid, and Blargg suites. The broader Gambatte
+hardware suite then failed eight late STAT-vs-Timer priority cases in both DMG and CGB modes: the
+held Timer owner won where hardware reports STAT. Extending the Java aperture would contradict the
+externally observed raw T1/T2 close and merely fit another constant. This pins the real
+prerequisite: re-anchor persistent CPU T-state/bus timing before mapping the external pending bank,
+then delete selection and peripheral forecasts together.
 
 Do not begin with a wholesale PPU rewrite or a production full-netlist evaluator. Promote a slice
 only under the evidence and deletion rule in `signal-driven-core-experiments.md`: semantic oracle
