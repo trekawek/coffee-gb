@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.core.experimental.cpu;
 /**
  * Test-only CPU-clock projection of the DMG timer's NUGA/NYDU/MERY/MOBA request cone.
  *
- * <p><strong>Evidence label: external-netlist-shaped fitted hypothesis.</strong> NYDU samples
+ * <p><strong>Evidence label: external-gate-waveform-shaped hypothesis.</strong> NYDU samples
  * TIMA bit 7 on BOGA, MERY detects the sampled-MSB fall, and MOBA captures that level at the next
  * BOGA edge. A MOBA rising edge is the raw timer-request wire; the shared IF latch is deliberately
  * outside this island. The topology is anchored in dmg-sim revision {@code ee559e1} at instances
@@ -91,10 +91,12 @@ final class DmgTimerRequestIsland {
 
         int nextBogaPhase = (state.bogaPhase() + 1) & 3;
         if (nextBogaPhase == 0) {
-            boolean mery = state.sampledTimaMsb() && !msb(nextTima);
+            // NYDU and MOBA capture the committed input vector. A TIMA ripple launched by this
+            // same BOGA edge cannot feed MERY back into MOBA until the following BOGA edge.
+            boolean mery = state.sampledTimaMsb() && !msb(state.tima());
             nextReload = mery;
             requestPulse = !oldReload && nextReload;
-            nextSampledMsb = oldReload || nextReload ? false : msb(nextTima);
+            nextSampledMsb = oldReload || nextReload ? false : msb(state.tima());
         }
 
         // The old or newly captured MOBA level owns TIMA through this adapter boundary.
