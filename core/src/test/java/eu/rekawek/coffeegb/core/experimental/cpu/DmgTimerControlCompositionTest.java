@@ -31,6 +31,29 @@ public class DmgTimerControlCompositionTest {
     }
 
     @Test
+    public void aTimaRippleCoincidentWithBogaCannotReachMobaOnTheSameEdge() {
+        Composition composition = new Composition(
+                DmgTimerRequestIsland.State.stable(0x000f, 0x05, 0xff, 0x42, 3),
+                fabric(0, internalCycles(8)));
+
+        composition.step();
+        CombinedObservation overflowEdge = composition.step();
+
+        assertEquals(1, overflowEdge.fabric().halfDot());
+        assertTrue(overflowEdge.timer().timerInputFell());
+        assertEquals(0, overflowEdge.timer().state().tima());
+        assertTrue(overflowEdge.timer().state().sampledTimaMsb());
+        assertFalse(overflowEdge.timer().state().reloadLevel());
+        assertFalse(overflowEdge.timer().requestPulse());
+
+        CombinedObservation request = stepUntilRequest(composition);
+        assertEquals("the next BOGA edge is one full four-T-state period later",
+                9, request.fabric().halfDot());
+        assertEquals(0x42, request.timer().state().tima());
+        assertTrue(request.timer().state().reloadLevel());
+    }
+
+    @Test
     public void sameEdgeNaturalRequestAndCpuAcknowledgeMeetAtOneClearDominantIfLatch() {
         Composition composition = new Composition(
                 overflowingTimer(),
