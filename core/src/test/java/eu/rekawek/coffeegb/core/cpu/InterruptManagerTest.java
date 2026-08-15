@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.debug.DebugMemoryAccess;
 import org.junit.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.LCDC;
@@ -146,6 +147,62 @@ public class InterruptManagerTest {
         interrupts.restoreState(memento);
         assertTrue(interrupts.consumeVBlankInterruptAcknowledge());
         assertFalse(interrupts.consumeVBlankInterruptAcknowledge());
+    }
+
+    @Test
+    public void everyAcknowledgeCombinationAndConsumptionOrderSurvivesCaptureRestore() {
+        for (int pending = 0; pending < 0x10; pending++) {
+            for (int first = 0; first < 5; first++) {
+                for (int second = 0; second < 5; second++) {
+                    for (int third = 0; third < 5; third++) {
+                        for (int fourth = 0; fourth < 5; fourth++) {
+                            for (int fifth = 0; fifth < 5; fifth++) {
+                                int[] order = {first, second, third, fourth, fifth};
+                                if (Arrays.stream(order).distinct().count() != order.length) {
+                                    continue;
+                                }
+                                assertEveryCapturePoint(pending, order);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void joypadClearDoesNotCreateAPeripheralAcknowledge() {
+        InterruptManager interrupts = new InterruptManager(false);
+
+        interrupts.clearInterrupt(InterruptManager.InterruptType.P10_13);
+
+        assertEquals(0, consumeOutput(interrupts, 0));
+        assertEquals(0, consumeOutput(interrupts, 1));
+        assertEquals(0, consumeOutput(interrupts, 2));
+        assertEquals(0, consumeOutput(interrupts, 3));
+        assertEquals(0, consumeOutput(interrupts, 4));
+    }
+
+    @Test
+    public void interruptStateAndImporterMementoKeepTheirReleasedRecordShapes() {
+        List<String> expected = List.of(
+                "ime:boolean", "interruptFlag:int", "interruptEnabled:int",
+                "pendingEnableInterrupts:int", "haltBlockedInterrupts:int",
+                "cpuBlockedInterrupts:int", "cpuPhasedPpuInterrupts:int",
+                "cpuPhasedMode2Interrupts:int", "cpuFirstLineMode2Interrupts:int",
+                "cpuInstructionBlockedInterrupts:int", "maskVBlankOnNextRead:boolean",
+                "maskLcdcUntilNextPeripheralTick:boolean", "maskMode0LcdcReadTicks:int",
+                "cpuReadInterruptPreview:int", "serialInterruptAcknowledge:boolean",
+                "timerInterruptAcknowledge:boolean", "lcdcInterruptAcknowledge:boolean",
+                "vBlankInterruptAcknowledge:boolean", "lcdcInterruptFlagWriteClear:boolean");
+        InterruptManager interrupts = new InterruptManager(false);
+
+        assertEquals(expected, recordShape(interrupts.captureState().getClass()));
+        Class<?> importerMemento = Arrays.stream(InterruptManager.class.getDeclaredClasses())
+                .filter(type -> type.getSimpleName().equals("InterruptManagerMemento"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(expected, recordShape(importerMemento));
     }
 
     @Test
@@ -436,6 +493,71 @@ public class InterruptManagerTest {
         interrupts.setByte(0xff0f, 0);
         interrupts.setByte(0xffff, 1 << type.ordinal());
         return interrupts;
+    }
+
+    private static void assertEveryCapturePoint(int pending, int[] order) {
+        for (int capturePoint = 0; capturePoint <= order.length; capturePoint++) {
+            InterruptManager interrupts = acknowledgements(pending);
+            int remaining = pending;
+            for (int i = 0; i < capturePoint; i++) {
+                int operation = order[i];
+                assertEquals(expectedOutput(remaining, operation),
+                        consumeOutput(interrupts, operation));
+                remaining = remainingAfter(remaining, operation);
+            }
+
+            InterruptManager restored = new InterruptManager(false);
+            restored.restoreState(interrupts.captureState());
+            for (int i = capturePoint; i < order.length; i++) {
+                int operation = order[i];
+                int expected = expectedOutput(remaining, operation);
+                assertEquals(expected, consumeOutput(interrupts, operation));
+                assertEquals(expected, consumeOutput(restored, operation));
+                remaining = remainingAfter(remaining, operation);
+            }
+            assertEquals(0, remaining);
+        }
+    }
+
+    private static InterruptManager acknowledgements(int pending) {
+        InterruptManager interrupts = new InterruptManager(false);
+        for (InterruptManager.InterruptType type : List.of(
+                VBlank, LCDC, Timer, InterruptManager.InterruptType.Serial)) {
+            if ((pending & (1 << type.ordinal())) != 0) {
+                interrupts.clearInterrupt(type);
+            }
+        }
+        return interrupts;
+    }
+
+    private static int expectedOutput(int pending, int operation) {
+        if (operation < 4) {
+            return (pending & (1 << operation)) != 0 ? 1 : 0;
+        }
+        int ppuAcknowledges = pending & 0x03;
+        return ((ppuAcknowledges & (1 << LCDC.ordinal())) >> 1)
+                | ((ppuAcknowledges & (1 << VBlank.ordinal())) << 1);
+    }
+
+    private static int remainingAfter(int pending, int operation) {
+        return operation < 4 ? pending & ~(1 << operation) : pending & ~0x03;
+    }
+
+    private static int consumeOutput(InterruptManager interrupts, int operation) {
+        return switch (operation) {
+            case 0 -> interrupts.consumeVBlankInterruptAcknowledge() ? 1 : 0;
+            case 1 -> interrupts.consumeLcdcInterruptAcknowledge() ? 1 : 0;
+            case 2 -> interrupts.consumeTimerInterruptAcknowledge() ? 1 : 0;
+            case 3 -> interrupts.consumeSerialInterruptAcknowledge() ? 1 : 0;
+            case 4 -> interrupts.consumePpuTickSignals();
+            default -> throw new IllegalArgumentException("Unknown operation " + operation);
+        };
+    }
+
+    private static List<String> recordShape(Class<?> recordType) {
+        return Arrays.stream(recordType.getRecordComponents())
+                .map(component -> component.getName() + ":" + component.getType().getSimpleName())
+                .toList();
     }
 
     private static final class RecordingDebugHooks implements DebugHooks {
