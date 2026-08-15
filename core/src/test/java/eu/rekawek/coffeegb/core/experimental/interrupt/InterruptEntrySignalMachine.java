@@ -6,17 +6,18 @@ import java.util.List;
 /**
  * Detached half-dot model of the interrupt-entry control cone.
  *
- * <p>The model deliberately separates three things that the production CPU currently performs in
- * one {@code IRQ_PUSH_2} callback: the end of the low-byte stack bus cycle, the live priority/vector
- * capture, and the selected source's IF-reset strobe. Peripheral request wires are accepted only at
- * the half-dot on which they occur; no component can inspect a future request.</p>
+ * <p>The model deliberately separates things that the production CPU currently performs in one
+ * {@code IRQ_PUSH_2} callback: the end of the low-byte stack bus cycle, the phase-transparent
+ * {@code IE & IF} pending bank, vector capture, and the selected source's IF-reset strobe.
+ * Peripheral request wires are accepted only at the half-dot on which they occur; no component can
+ * inspect a future request.</p>
  *
- * <p>The acknowledge phases are current-implementation constraints, not a claim that the DMG and
- * CGB use identical gates. Relative to the production clear callback (the {@code IRQ_PUSH_2 ->
- * IRQ_JUMP} boundary), the observable races require the DMG reset strobe three CPU clocks later and
- * the CGB strobe eight clocks later. Making those placements explicit exposes an important result:
- * the CGB IF reset completes after vector capture, so vector selection and IF acknowledgement cannot
- * be represented by one atomic operation.</p>
+ * <p>On DMG, the sampled-pending bank and local clear-dominant IF latches are derived from the pinned
+ * external gate model. The CGB phase placements remain behavioral constraints, not a claim that CGB
+ * uses the same gates. In both cases, the held pending bits are the common input to the one-hot
+ * acknowledge and vector paths; no semantic "late priority" repair is needed. The exact mapping of
+ * the DMG aperture, acknowledge, and vector to Java T1-T4 labels is production-aligned and fitted;
+ * the default-delay trace establishes causal ordering, not those coarse phase constants.</p>
  */
 final class InterruptEntrySignalMachine {
 
@@ -111,20 +112,16 @@ final class InterruptEntrySignalMachine {
             BusSignals bus,
             int requestWires,
             int interruptFlags,
+            int sampledPending,
+            boolean pendingBankTransparent,
             int acknowledgeWires,
-            Source livePriority,
+            Source sampledPriority,
             Source vectorSource,
             boolean vectorCapture,
             boolean productionClearBoundary) {
     }
 
     private static final Source[] SOURCES = Source.values();
-
-    /** IRQ_JUMP/T3: three clocks after the legacy IRQ_PUSH_2/T4 callback. */
-    private static final int DMG_ACK_PHASE = 18;
-
-    /** First handler-fetch T4: eight clocks after the legacy IRQ_PUSH_2/T4 callback. */
-    private static final int CGB_ACK_PHASE = 23;
 
     private final Model model;
 
@@ -140,15 +137,17 @@ final class InterruptEntrySignalMachine {
 
     private int requestWires;
 
+    /** Active-high {@code IE & IF} bits held when the CPU data phase closes. */
+    private int sampledPending;
+
     private int acknowledgeWires;
+
+    private boolean acknowledgeIssued;
 
     private long productionClearCpuClock = Long.MIN_VALUE;
 
-    /** The source captured by the vector gate; this also owns a later CGB reset strobe. */
+    /** The source captured by the vector gate. */
     private Source vectorSource;
-
-    /** DMG reset precedes vector capture by one clock, so retain its selected source. */
-    private Source acknowledgedSource;
 
     private boolean vectorCapture;
 
@@ -165,19 +164,32 @@ final class InterruptEntrySignalMachine {
     }
 
     Observation stepHalfDot(int rawRequestWires) {
+        return stepHalfDot(rawRequestWires, false, 0);
+    }
+
+    Observation stepHalfDot(int rawRequestWires, boolean cpuIfWrite, int cpuIfData) {
         halfDot++;
         requestWires = rawRequestWires & 0x1f;
         acknowledgeWires = 0;
         vectorCapture = false;
 
-        // Raw peripheral wires set their IF latches immediately. A later acknowledge on this same
-        // half-dot is clear-dominant, matching the detached timer and serial latch experiments.
+        // Each physical IF bit is a local set/reset latch. A CPU FF0F write drives its set/reset
+        // inputs directly; an acknowledge below remains clear-dominant over either write-data=1 or
+        // a raw request on the same modeled instant.
         int nextInterruptFlags = interruptFlags | requestWires;
+        if (cpuIfWrite) {
+            nextInterruptFlags = cpuIfData & 0x1f;
+        }
 
         boolean cpuClockEdge = halfDot % model.halfDotsPerCpuClock() == 0;
         MachineCycle cycle = machineCycle();
         TState tState = tState();
+        boolean pendingBankTransparent = isPendingBankTransparent(cycle, tState);
         boolean productionClearBoundary = false;
+
+        if (pendingBankTransparent) {
+            sampledPending = nextInterruptFlags & interruptEnable;
+        }
 
         if (cpuClockEdge) {
             cpuClock++;
@@ -187,27 +199,22 @@ final class InterruptEntrySignalMachine {
                 productionClearBoundary = true;
             }
 
-            // Current behavior constrains this CPU microphase to IRQ_JUMP/T3 on DMG and the first
-            // handler-fetch T4 on CGB. The peripheral is neither consulted nor asked to forecast.
-            if (isAcknowledgePhase()) {
-                Source owner = vectorSource != null
-                        ? vectorSource
-                        : highestPriority(nextInterruptFlags & interruptEnable);
+            // The one-hot acknowledge is decoded from the held pending bank. The peripheral is
+            // neither consulted nor asked to forecast a later request.
+            if (!acknowledgeIssued && isAcknowledgePhase(cycle, tState)) {
+                acknowledgeIssued = true;
+                Source owner = highestPriority(sampledPending);
                 if (owner != null) {
                     acknowledgeWires = owner.mask();
-                    acknowledgedSource = owner;
                     nextInterruptFlags &= ~acknowledgeWires;
                 }
             }
 
-            // The priority gate remains live through IRQ_JUMP. On DMG, the immediately preceding
-            // reset strobe already captured its owner; on CGB the live gate is sampled here and
-            // that selected source is carried to the later reset strobe.
-            if (cycle == MachineCycle.IRQ_JUMP && tState == TState.T4) {
+            // Vector capture uses the same held bank as acknowledge. DMG's IF reset may already
+            // have cleared the readable flag, but it does not retroactively change the held bits.
+            if (isVectorCapturePhase(cycle, tState)) {
                 vectorCapture = true;
-                vectorSource = acknowledgedSource != null
-                        ? acknowledgedSource
-                        : highestPriority(nextInterruptFlags & interruptEnable);
+                vectorSource = highestPriority(sampledPending);
             }
         }
 
@@ -221,8 +228,10 @@ final class InterruptEntrySignalMachine {
                 busSignals(cycle, tState),
                 requestWires,
                 interruptFlags,
+                sampledPending,
+                pendingBankTransparent,
                 acknowledgeWires,
-                highestPriority(interruptFlags & interruptEnable),
+                highestPriority(sampledPending),
                 vectorSource,
                 vectorCapture,
                 productionClearBoundary);
@@ -234,13 +243,20 @@ final class InterruptEntrySignalMachine {
     }
 
     Observation stepCpuClock(int rawRequestWires) {
+        return stepCpuClock(rawRequestWires, false, 0);
+    }
+
+    Observation stepCpuClock(int rawRequestWires, boolean cpuIfWrite, int cpuIfData) {
         Observation observation;
         do {
             boolean nextHalfDotIsCpuClock =
                     (halfDot + 1) % model.halfDotsPerCpuClock() == 0;
             // This convenience method denotes a request coincident with the next enabled CPU
             // clock. Normal-speed models may first traverse an idle half-dot.
-            observation = stepHalfDot(nextHalfDotIsCpuClock ? rawRequestWires : 0);
+            observation = stepHalfDot(
+                    nextHalfDotIsCpuClock ? rawRequestWires : 0,
+                    nextHalfDotIsCpuClock && cpuIfWrite,
+                    cpuIfData);
         } while (!observation.cpuClockEdge());
         return observation;
     }
@@ -265,8 +281,26 @@ final class InterruptEntrySignalMachine {
         return productionClearCpuClock;
     }
 
-    private boolean isAcknowledgePhase() {
-        return phase == (model.cgb() ? CGB_ACK_PHASE : DMG_ACK_PHASE);
+    private boolean isPendingBankTransparent(MachineCycle cycle, TState tState) {
+        if (cycle.ordinal() < MachineCycle.IRQ_JUMP.ordinal()) {
+            return true;
+        }
+        if (cycle != MachineCycle.IRQ_JUMP) {
+            return false;
+        }
+        // The DMG data-phase latch closes before the T3 acknowledge. CGB's held owner is only
+        // constrained by the later-ack behavior after its T4 vector capture.
+        return model.cgb() || tState == TState.T1 || tState == TState.T2;
+    }
+
+    private boolean isAcknowledgePhase(MachineCycle cycle, TState tState) {
+        return model.cgb()
+                ? cycle == MachineCycle.HANDLER_FETCH && tState == TState.T4
+                : cycle == MachineCycle.IRQ_JUMP && tState == TState.T3;
+    }
+
+    private static boolean isVectorCapturePhase(MachineCycle cycle, TState tState) {
+        return cycle == MachineCycle.IRQ_JUMP && tState == TState.T4;
     }
 
     private MachineCycle machineCycle() {

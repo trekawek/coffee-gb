@@ -19,15 +19,17 @@ import java.util.Set;
  * </ul>
  *
  * <p>The modeled boundary begins at synchronized {@code CH1_START}, not at the CPU's NR14 write.
- * A pinned dmg-sim trace shows that ordinary CPU writes always reach that boundary on one fixed
- * phase: inactive and active triggers both take two T from NR14 to {@code CH1_START}, and their
+ * A pinned dmg-sim trace shows that the probed ordinary CPU-write phase reaches that boundary at
+ * one fixed alignment: inactive and active triggers both take two T from NR14 to
+ * {@code CH1_START}, and their
  * request/restart waveforms are identical. For nonzero shifts the serial-adder waveform is also
  * identical. Shift zero is the useful exception: the inactive trigger raises BYTE/LD_SUM early,
  * while an active retrigger before BEXA has no second LD_SUM edge because BYTE is still high.
  * That history dependence is produced by BYTE's retained state, not by channel-active status;
  * channel-active has no connection to DUPE, EZEC, FYFO, FEKU, FARE, or FYTE. The model can still
  * execute a deliberately late request, but that is now a counterfactual phase probe rather than
- * an explanation for production's {@code wasActive} timing branch.
+ * an explanation for production's {@code wasActive} timing branch. Other CPU-write phases remain
+ * an explicit falsifier.
  *
  * <p>Static and dynamic provenance: {@code https://github.com/msinger/dmg-sim} revision
  * {@value #NETLIST_REVISION}, {@code dmg_cpu_b/dmg_cpu_b.sv}; Icarus Verilog 14.0-devel

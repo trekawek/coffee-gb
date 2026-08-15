@@ -17,7 +17,9 @@ import static eu.rekawek.coffeegb.core.signal.HalfDotClockRouter.Phase.BETWEEN_F
  * the more useful boundary: both pins, the CPU's persistent bus intent, and its unqualified
  * acknowledge gate are resolved from one immutable half-dot before any state element commits.
  * The one-hot acknowledge is selected from settled {@code (IF | rawRequests) & IE}; its source is
- * not supplied by the scripted bus cycle.</p>
+ * not supplied by the scripted bus cycle. This is a constructive pre-aperture edge abstraction,
+ * not the traced DMG entry topology: the external model first holds the complete pending vector in
+ * a phase-transparent bank, then derives acknowledge and vector from those held bits.</p>
  *
  * <p>A decoded {@link CpuBusCycleMachine.Cycle} is loaded before it becomes active. After launch,
  * this class sees only held cycle kind/control, T1..T4, address, RD, WR, data, and terminal strobes;
@@ -63,7 +65,7 @@ final class DmgControlSignalFabric {
     enum Blocker {
         /** Coffee's CPU currently samples reads one M-cycle late; moving it changes all anchors. */
         CALIBRATED_ONE_M_CYCLE_LATE_CPU_BUS,
-        /** The physical acknowledge gate and vector-capture phases are still scripted bus intent. */
+        /** The transparent pending aperture plus acknowledge/vector phases are not integrated. */
         INTERRUPT_ACKNOWLEDGE_AND_VECTOR_PHASES,
         /** STAT/VBlank have source-specific gates and half-dot phases inside the PPU. */
         PPU_STAT_AND_VBLANK_SOURCE_PATHS,

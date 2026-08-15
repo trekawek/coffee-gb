@@ -15,11 +15,16 @@ cycle-exactly against the mooneye acceptance tests. This is the specification im
   | 1 | internal delay; IME cleared |
   | 2 | internal delay |
   | 3 | SP--, push PC high |
-  | 4 | SP--, push PC low; IE/IF sampled **after** the high push, and the highest-priority set bit selected and cleared |
+  | 4 | SP--, push PC low; the held pending bank selects the highest-priority source and drives its local IF acknowledge |
   | 5 | PC := handler vector |
 
 - Because the selection samples IE *after* the high-byte push, a push that overwrites IE can
   cancel the dispatch: no IF bit is cleared and PC := 0x0000 (`ie_push`).
+- In the external DMG gate model, the five `IE & IF` latches are transparent during a CPU data-phase
+  aperture. When that aperture closes, the complete pending vector is held; both vector priority
+  and the one-hot IF acknowledge are derived from those same bits. A source can redirect selection
+  only before closure. Production currently projects this as an atomic post-push action, so exact
+  gate-to-Java phase integration remains future work.
 - `DI` takes effect at the end of its own fetch cycle — an interrupt requested during the DI
   instruction is not dispatched (`di_timing-GS`).
 - `EI` enables IME after the *following* instruction. The pending enable also commits when the
@@ -33,9 +38,11 @@ cycle-exactly against the mooneye acceptance tests. This is the specification im
 
 ## HALT
 
-The schematic's halt latch only gates the instruction-register load/PC increment — the
-sequencer keeps cycling. Consequently **a halted CPU behaves exactly as if it were executing
-NOPs**:
+The external DMG gate model separates direct HALT decode from the retained sleep latch. Direct HALT
+decode is omitted from the instruction's own IDU-increment equation while instruction-register load
+and PC write stay active, so HALT samples the following opcode while writing the unchanged IDU value
+back to PC. A separately delayed decode sets the reset-dominant sleep latch; once set, the sequencer
+keeps cycling. Consequently **a halted CPU behaves exactly as if it were executing NOPs**:
 
 - Wake condition: `(IE & IF & 0x1F) != 0`, regardless of IME, after the peripheral edge has
   crossed the HALT wake synchronizer. IF itself can become CPU-readable slightly earlier:
@@ -45,8 +52,9 @@ NOPs**:
   a NOP stream (`halt_ime1_timing2-GS`).
 - With IME=0, the instruction after HALT is fetched at that same cycle — no extra delay
   (`halt_ime0_nointr_timing`).
-- Halt bug: executing HALT with IME=0 and a wake-synchronized `(IE & IF) != 0` skips the PC
-  increment of the next fetch (`halt_bug`).
+- Halt bug: executing HALT with IME=0 and a wake-synchronized `(IE & IF) != 0` prevents the sleep
+  latch from setting after HALT's own missing IDU increment. The next opcode has already been
+  sampled from the unchanged address and is fetched/executed again (`halt_bug`).
 
 ## RST
 

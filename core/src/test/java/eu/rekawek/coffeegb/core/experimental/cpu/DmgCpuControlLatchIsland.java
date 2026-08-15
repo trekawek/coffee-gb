@@ -24,11 +24,13 @@ import static eu.rekawek.coffeegb.core.signal.SrLatch.Dominance.CLEAR;
  * observation point ({@code ime_state -> ime_n}). There is no per-request "halt blocked" or
  * "instruction blocked" provenance in this cone.</p>
  *
- * <p>This model retains those independently clocked nodes but deliberately does not reproduce the
- * transistor netlist. Its purpose is to test whether the behavioral corner cases can be expressed
- * as ordinary values at those nodes. All next-state wires are derived from one immutable committed
- * snapshot before any primitive is resolved, so reversing Java evaluation and commit order cannot
- * alter a result.</p>
+ * <p>This model retains coarse observations of those nodes but deliberately does not reproduce the
+ * transistor netlist. In particular, {@code runningPending} is edge-captured at a scripted sample
+ * boundary; the external DMG trace shows that the physical {@code IE & IF} bank is transparent for
+ * a data-phase aperture before holding its bits. Its purpose is to test whether the behavioral
+ * corner cases can be expressed as ordinary values at those nodes. All next-state wires are derived
+ * from one immutable committed snapshot before any primitive is resolved, so reversing Java
+ * evaluation and commit order cannot alter a result.</p>
  */
 final class DmgCpuControlLatchIsland {
 
@@ -53,10 +55,12 @@ final class DmgCpuControlLatchIsland {
 
     /** Boundaries that this deliberately small DMG cone does not claim to solve. */
     enum Falsifier {
-        /** The exact source-set versus CPU FF0F-write aperture is outside the SM83 core. */
+        /** Timer/Serial are bounded externally; other sources, phases, CGB, and silicon are open. */
         SOURCE_SET_VS_FF0F_WRITE_APERTURE,
         /** STAT/VBlank reach the CPU through source-specific gates that belong to the PPU cone. */
         PPU_SOURCE_INPUT_PHASES,
+        /** This coarse DFF bank does not implement the traced data-phase-transparent aperture. */
+        TRANSPARENT_PENDING_BANK_APERTURE,
         /** The calibrated early IE-write forecast cannot move until the CPU bus is phase-correct. */
         EARLY_IE_WRITE_REQUIRES_BUS_REANCHOR,
         /** Priority capture and the delayed IF reset strobe belong to the interrupt-entry machine. */

@@ -13,8 +13,10 @@ import static eu.rekawek.coffeegb.core.signal.SrLatch.Dominance.CLEAR;
  *
  * <p>The model contains no event deadlines. The serial request is a wire produced by the eighth
  * shift, the CPU acknowledge is another wire, and their collision is resolved by the IF latch.
- * HALT sees the stored request through four clocked stages while ordinary code and the IF data bus
- * see the latch directly.</p>
+ * HALT sees the stored request through a fitted four-CPU-clock delay line while ordinary code and
+ * the IF data bus see the latch directly. The external DMG gate trace instead contains a
+ * phase-transparent pending bank, a combinational pending path, and one wake DFF; this experiment's
+ * four stages are a production-equivalence projection, not a recovered gate topology.</p>
  */
 final class SerialSignalMachine {
 
