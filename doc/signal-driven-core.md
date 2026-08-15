@@ -6,6 +6,10 @@ Baseline: `8560a6c2` (2026-08-13)
 
 Scope: `core/`, with DMG as the first implementation target and CGB retained during migration
 
+Evidence log: [signal-driven-core-experiments.md](signal-driven-core-experiments.md)
+
+External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
+
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
@@ -727,7 +731,9 @@ The external traces strengthen the architectural diagnosis without proving the w
   flight accounts for delayed pixels; the current renderer instead launches one post-reset window
   transaction.
 - CH4's zero divisor and second LFSR form reduce to complement-loaded ripple and XNOR wiring, and a
-  raw write/clock cone—not an activity flag—selects the observed trigger alignment.
+  raw write/clock cone—not an activity flag—selects the observed trigger alignment. A faithful and
+  a lean production rewrite both failed all eight SameSuite CH4 cases, so the projection boundary
+  remains unresolved and production was left untouched.
 - CH1 channel-active state does not feed the restart/adder request cone. Identical-phase inactive
   and active writes have identical nonzero-shift waveforms; shift-zero retrigger differs because the
   BYTE/LD_SUM latch is already high, not because an activity branch selects another deadline.
