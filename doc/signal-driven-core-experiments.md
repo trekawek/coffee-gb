@@ -48,7 +48,7 @@ save states, debugger boundaries, and performance.
 | Pulse-channel quirks require semantic trigger/sweep/length branches | Branch-accepted CH1 trigger deletion plus behavioral remainder | The broad resolver still encodes settled truth tables, but the restart/adder trace independently falsifies `wasActive` as a causal aperture input. Production now uses the common shorter nonzero-shift path and deletes that semantic input/conditional; shift-zero behavior comes from retained BYTE state in the bounded cone. DMG is externally grounded and CGB remains differential-only. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
 | CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone; production cut rejected | Complement-loaded prescaler and zero-reset XNOR wiring remove the local semantic cases, but both faithful and lean runtime replacements fail 8 of the 13 SameSuite CH4 ROMs because the trigger/live-write projection is not yet derived. |
-| The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
+| The four-dot PPU skew requires two independently running renderers | Direct single-machine aliases rejected; fitted forward replacement remains constructive | An unshifted alias fails 24/26 strict Mealybug images. A shifted alias plus timing taps reaches 26/26 Mealybug and 129/130 Mooneye, but still fails the ten-sprite mode-0 boundary, grows production, retains every repair path, and cannot map the two released machine states safely. A new forward graph remains the viable migration seam. |
 | LCDC.1 object disable must abort the fetch and catch the renderer up three dots | Bounded external DMG-B ownership trace; local production cut rejected | FF40.D1 gates future X matches and final object output, not the byte latches or physical shift banks. A pre-byte fall launches nothing; after low-byte capture, high-byte capture/load/shift retire normally while output is masked. Removing the production catch-up still fails the strict companion image exactly three pixels late: the remaining correction is a dual-renderer phase debt, not object-flight ownership. |
 | Mid-mode-3 writes require pending-write queues and duplicate register views | Production differential at one CPU-reachable cadence | One source register and fitted consumer delays reproduce selected LCDC/SCX/WX views; the receiver stages and half-dot capture phase are not netlist-derived. |
 | A CGB LCDC.4 collision needs active and pending duration counters | Branch-accepted reachable-state reduction | The pending write strobe is sampled directly into the existing consumer-history bank. Once active, that history was already authoritative, so one field and the countdown branch disappear while released integer slots remain importer-compatible. The CGB waveform itself is still not independently grounded. |
@@ -122,10 +122,11 @@ The construction-allocation figures came from a one-off `/tmp` harness which was
 only the zero-allocation idle path is directly inspectable in the current code. These limitations
 do not reverse the local result, but they keep performance acceptance at branch-observation level.
 
-### Lean-branch acceptance matrix
+### Combined retained-cut acceptance matrix
 
-All production code outside `SerialPort.java` is byte-identical to the baseline. The following
-lean-cut reruns completed with zero failures/errors:
+The current branch differs from the baseline in four production files: the lean serial reset,
+the common CH1 restart path, and the LCDC.4 reachable-state reduction. After the rejected interrupt
+owner was rolled back, the following complete reruns finished with zero failures/errors:
 
 | Suite | Result |
 | --- | ---: |
@@ -138,8 +139,8 @@ lean-cut reruns completed with zero failures/errors:
 | RTC3 + MBC30 + cgb-acid-hell + Strikethrough + CasualPokePlayer + BullyGB | 15/15 |
 
 That is 5,707 integration cases in addition to the unit suite. Full-ROM passes establish regression
-safety for the lean production cut; they do not validate the output of test-only candidate PPU,
-APU, DMA, or scheduler models.
+safety for the three retained production cuts; they do not validate the output of test-only
+candidate PPU, APU, DMA, or scheduler models.
 
 ## Interrupt acknowledgement: the scheduler falsifier
 
@@ -162,6 +163,19 @@ the old forecasts into the scheduler.
 The production attempt was therefore fully rolled back. The retained executable falsifier is
 `InterruptAcknowledgeSchedulerFalsificationTest`. The required cut is one complete CPU-edge island
 that drives Timer, CPU interrupt control, Serial, and the IF latches once per CPU subedge.
+
+A later minimal production retry preserved the existing interrupt owner/late-priority behavior and
+moved only Timer/Serial acknowledge into a clear-dominant end-of-tick resolver. It passed the local
+source tests but failed one of 4,674 Gambatte cases:
+`serial/start_wait_trigger_int8_read_if_2_dmg08_outE8_cgb04c_outE0.gbc` in DMG mode returned `E0`
+instead of `E8`. Deferring the clear made acknowledge incorrectly dominate a Serial completion
+which hardware places after it; resolving at the CPU callback instead loses the corresponding
+Timer-side window because Timer has already run. Re-labelling the current Java interrupt cycle as
+raw T1/T2/T4 was separately rejected by 34 Gambatte cases. Both retries were reverted. The missing
+interface is therefore an immutable intra-master-tick edge snapshot, not another source-specific
+deadline or callback placement. Released snapshots can also contain a pending Timer acknowledge;
+that state must remain representable until the new edge fabric has a versioned mapping to its
+physical acknowledge latch.
 
 ## Half-dot scheduler and order independence
 
@@ -769,6 +783,22 @@ its matching token crossed the irreversible LCD boundary. Disabled-window insert
 palette/LCDC output muxing, overlapping object priority, mode-3/STAT completion, and all CGB paths
 remain explicit boundaries. Until the graph shadows raw-token and pixel traces for those cases, it
 cannot establish that the dual production renderer and its repair paths are deletable.
+
+A separate **direct-alias falsifier** tried collapsing production onto each existing machine. Using
+only the unshifted timing machine passed 2/26 strict Mealybug images. Using only the shifted `+4`
+pixel machine preserved 26/26 Mealybug, but passed just 279/282 focused PPU/STAT cases and 119/130
+Mooneye/DMG-acid cases because the control plane moved four dots late. Adding read-only timing and
+terminal-object stage taps recovered 282/282 focused cases and 129/130 Mooneye cases. The remaining
+failure was `intr_2_mode0_timing_sprites` test 20 with ten sprites at screen X=3, despite matching
+the logged X=160 output and visible/internal HBlank events around dots 310--314.
+
+That best alias still added 63 and removed only 14 production lines, retained rewind, refresh, and
+catch-up semantics, and had no safe save-state mapping: released snapshots contain two independent
+46-field `PixelTransfer` states, while the alias necessarily overwrote one with the other. It was
+therefore reverted rather than kept as a near-pass. Migration now requires a typed per-dot shadow
+of source-latch changes, tile-byte transactions, FIFO pushes/pops, object flights, raw/LCD commits,
+and mode-3 completion into the forward graph. Only after those events agree for every strict
+Mealybug image can the two mementos collapse to one causal pipeline state plus a legacy importer.
 
 `DmgObjectFlightGateCone` supplies **bounded external DMG-B gate-model evidence** for the object
 case. Static fanout gives FF40.D1 only three direct consumers: one gate shared by all ten OAM-X
