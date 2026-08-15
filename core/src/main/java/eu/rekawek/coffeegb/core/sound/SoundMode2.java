@@ -16,9 +16,8 @@ public class SoundMode2 extends AbstractSoundMode {
 
     private boolean activeBeforeTrigger;
 
-    private boolean clock2Mhz;
-
-    private boolean lowFrequencyPhase;
+    // bit 0 = clock2Mhz, bit 1 = lowFrequencyPhase; tick decrements modulo 4
+    private int phase;
 
     private int justReloadedTicks;
 
@@ -33,8 +32,7 @@ public class SoundMode2 extends AbstractSoundMode {
     public void start() {
         i = 0;
         sampleSuppressed = true;
-        clock2Mhz = false;
-        lowFrequencyPhase = true;
+        phase = 0b10;
         justReloadedTicks = 0;
         if (gbc) {
             length.reset();
@@ -48,8 +46,7 @@ public class SoundMode2 extends AbstractSoundMode {
         i = 0;
         lastOutput = 0;
         sampleSuppressed = true;
-        clock2Mhz = false;
-        lowFrequencyPhase = true;
+        phase = 0b10;
         justReloadedTicks = 0;
         volumeEnvelope.setNr2(0);
     }
@@ -58,7 +55,7 @@ public class SoundMode2 extends AbstractSoundMode {
     public void trigger() {
         // the duty position is not changed by the trigger, only the timer is reloaded
         int triggerDelay = activeBeforeTrigger ? 4 : 6;
-        freqDivider = (getFrequency() - 1) * 2 + triggerDelay - (lowFrequencyPhase ? 1 : 0);
+        freqDivider = (getFrequency() - 1) * 2 + triggerDelay - ((phase & 2) != 0 ? 1 : 0);
         if (!activeBeforeTrigger) {
             sampleSuppressed = true;
             lastOutput = 0;
@@ -83,14 +80,10 @@ public class SoundMode2 extends AbstractSoundMode {
 
     @Override
     public int tick(boolean divReset) {
-        clock2Mhz = !clock2Mhz;
+        phase = (phase - 1) & 3;
         if (justReloadedTicks > 0) {
             justReloadedTicks--;
         }
-        if (clock2Mhz) {
-            lowFrequencyPhase = !lowFrequencyPhase;
-        }
-
         boolean e;
         e = channelEnabled;
         e = dacEnabled && e;
@@ -98,7 +91,7 @@ public class SoundMode2 extends AbstractSoundMode {
             return 0;
         }
 
-        if (clock2Mhz && freqDivider-- == 0) {
+        if ((phase & 1) != 0 && freqDivider-- == 0) {
             resetFreqDivider();
             i = (i + 1) % 8;
             lastOutput = ((getDuty() & (1 << i)) >> i);
@@ -171,7 +164,8 @@ public class SoundMode2 extends AbstractSoundMode {
     @Override
     public ComponentState<AbstractSoundMode> captureState() {
         return new SoundMode2State(super.captureState(), freqDivider, lastOutput, i, sampleSuppressed,
-                activeBeforeTrigger, clock2Mhz, lowFrequencyPhase, volumeEnvelope.captureState(),
+                activeBeforeTrigger, (phase & 1) != 0, (phase & 2) != 0,
+                volumeEnvelope.captureState(),
                 justReloadedTicks);
     }
 
@@ -186,8 +180,8 @@ public class SoundMode2 extends AbstractSoundMode {
         this.i = mem.i;
         this.sampleSuppressed = mem.sampleSuppressed;
         this.activeBeforeTrigger = mem.activeBeforeTrigger;
-        this.clock2Mhz = mem.clock2Mhz;
-        this.lowFrequencyPhase = mem.lowFrequencyPhase;
+        this.phase = Boolean.compare(mem.clock2Mhz, false)
+                | (Boolean.compare(mem.lowFrequencyPhase, false) << 1);
         this.justReloadedTicks = mem.justReloadedTicks;
         this.volumeEnvelope.restoreState(mem.volumeEnvelopeMemento);
     }
