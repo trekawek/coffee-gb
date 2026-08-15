@@ -104,11 +104,11 @@ git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
 | Claim ID | Source anchor and grep expression | Concise expected finding | Limit |
 | --- | --- | --- | --- |
 | `SM83-IRQ-HALT` | `sm83/sm83.sv:4649-4795,8698-8774,8812-8886`; `sm83/cells/decoder2.sv:205-213`; expression `irq|yoii|halt|ime|idu` | Separate IE/IRQ sample bank, YOII/HALT paths, IME controls, and different decoder participation for HALT versus NOP/STOP | The dynamic probe below rejects a delayed PC gate in this external model; neither source nor simulation establishes silicon equivalence |
-| `IRQ-IF-ACK` | `dmg_cpu_b/cells/dffsr.sv`; `dmg_cpu_b/dmg_cpu_b.sv`; `sm83/sm83.sv`; expressions `nybo|ubul|cpu_irq_ack|irq_latch|irq_prio|data_phase` | Local reset-dominant IF cells feed a data-phase-transparent `IE & IF` bank; its held bits drive both vector priority and one-hot acknowledge | The dynamic probe below covers forced Timer/Serial requests and one DMG CPU phase in the default-delay external model, not silicon, CGB, or all sources/phases |
+| `IRQ-IF-ACK` | `dmg_cpu_b/cells/dffsr.sv`; `dmg_cpu_b/dmg_cpu_b.sv`; `sm83/sm83.sv`; expressions `nybo|ubul|cpu_irq_ack|irq_latch|irq_prio|data_phase` | Local reset-dominant IF cells feed a data-phase-transparent `IE & IF` bank; its held bits drive both vector priority and one-hot acknowledge | The dynamic probe below covers forced Timer/Serial requests and one DMG CPU phase under default and nodelay policies, not silicon, CGB, or all sources/phases |
 | `SERIAL-DIV-RESET` | `dmg_cpu_b/dmg_cpu_b.sv`; instances `tape`, `ufol`, `tama`, `uvyn`, `coty`, `cave`, `dawa`, `edyl`, `elys` | FF04 reset clears the divider stage feeding the internal serial-clock toggle DFF; the shift DFF clocks only on the resulting falling SCK transition | The full-hierarchy cone below establishes DMG-B external-model ownership, not CGB or physical-silicon equivalence |
 | `TIMER-OVERFLOW` | `dmg_cpu_b/dmg_cpu_b.sv`; expression `(boga|mery|moba|nydu)_inst` | Instances at lines 7887, 24503, 24584, and 26046; inspect their pins to recover the sampled-TIMA-MSB/fall/reload cone | The dynamic probe below verifies selected CPU-write and IF/acknowledge apertures in this external model; silicon and unprobed phases remain outside it |
 | `APU-FRAME-CLOCK` | same file; expression `(ajer|bara|bufy|byfe|bylu|caru|cate|coke|horu)_inst` | Instances at lines 4934, 7035, 8425, 8891, 9012, 9560, 9602, 10255, and 20124 form the selected DMG divider/ripple cone | Does not establish CGB tap/offset, power-on suppression, or speed-switch phase |
-| `CH1-RESTART-ADDER` | same file; instances `deby/doge/dupe/ezec/fyfo/feku/fare/fyte/kala/evol/femu/copy/byte/adad/bexa` | NR14 write synchronization, restart delay, serial-counter load, retained sum capture, and feedback form a bounded CH1 cone with no channel-active input | Does not explain production's inactive extra-four-T projection, arbitrary write/BEXA phases, or CGB |
+| `CH1-RESTART-ADDER` | same file; instances `deby/doge/dupe/ezec/fyfo/feku/fare/fyte/kala/evol/femu/copy/byte/adad/bexa` | NR14 write synchronization, restart delay, serial-counter load, retained sum capture, and feedback form a bounded CH1 cone with no channel-active input | Grounds the branch's narrow removal of the activity-selected trigger schedule; arbitrary write/BEXA phases, physical silicon, and CGB topology remain outside it |
 | `CH3-PORT` | same file; expression `(afum|agyl|axol|azet|azus|bano|bole|busa)_inst` | Address-owner/fetch-related instances at lines 4656, 4817, 6533, 6606, 6668, 6982, 7991, and 8658 | The two Java fetch-valid stages are fitted; retrigger and electrical collision are not established |
 | `CH4-STEADY-TRIGGER` | same file; expression `(apu_phi|cary|cexo|dova|esep|gary|gaty|gone|gora|gysu|hazo|hezu|hoga|jaky|jare|jepe|jero|joto|jyco|jyfu|jyre|kavu|komu)_inst` | Named ratio, prescaler, tap, zero-reset/XNOR LFSR, CPU-write latch, GYSU sample, and restart cells form a bounded raw-clock path | The nodelay probe below verifies two DMG alignments; default-delay/sub-T collisions, other write apertures, and CGB remain outside it |
 | `STAT-SPLIT` | `dmg_cpu_b_gameboy.sv:666-674,696-704`; `dmg_cpu_b/dmg_cpu_b.sv` expression `lyc_int|lyc_int_en|ff41|ff44` | CPU-visible FF41 and LY vectors are assembled from distinct internal nodes; coincidence and internal STAT state have separate signals | Does not establish the Java line/dot table or FF41 transient mask |
@@ -589,12 +589,14 @@ from `400` to `600`, raises the second request, and produces the second LD_SUM a
 the overflow line follows from the updated value. The NR10 collision changes the live field while
 the previously loaded serial counter keeps its original shift-seven schedule.
 
-This **FALSIFIES `wasActive` AS THE CAUSE OF TWO RESTART APERTURES** in the pinned model. It does not
-prove Coffee GB's inactive production bucket wrong as externally observed behavior; that timing is
-a projection whose missing upstream boundary remains unresolved. The model is reverse-engineered
-DMG-B rather than silicon, default delays are estimated, and arbitrary write/BEXA phases, close
-NR10 carry/negate collisions, frequency/retrigger overlap, CGB, and analog/sub-T behavior remain
-open.
+This **FALSIFIES `wasActive` AS THE CAUSE OF TWO RESTART APERTURES** in the pinned model. The branch
+therefore removes that input and uses the common shorter nonzero-shift trigger schedule. Focused
+sweep/trigger/memento tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg sound
+cases pass without new state or a memento change. This promotes only that narrow DMG-grounded
+production deletion: the model is reverse-engineered DMG-B rather than silicon, default delays are
+estimated, and arbitrary write/BEXA phases, close NR10 carry/negate collisions,
+frequency/retrigger overlap, CGB topology, and analog/sub-T behavior remain open. CGB correctness
+is production-differential only.
 
 ## SM83 HALT waveform probe
 
@@ -717,14 +719,14 @@ interpretation on both sides of the halt-bug race.
 
 These relationships are evidence about the pinned default-delay external model, not a physical
 DMG capture. Absolute propagation delays, reset offset, CGB behavior, peripheral-to-IRQ source
-apertures, interrupt acknowledge/vector capture, and equivalence between each Java coarse step and
-one gate phase remain outside the claim. The Coffee GB repository intentionally retains only this
-manifest and independently written bounded tests.
+apertures, and equivalence between each Java coarse step and one gate phase remain outside the HALT
+claim. The dedicated interrupt probe below separately bounds acknowledge/vector timing. The Coffee
+GB repository intentionally retains only this manifest and independently written bounded tests.
 
 ## DMG interrupt request/acknowledge probe
 
-Status: **VERIFIED external default-delay model trace with manual transition reduction**, not
-silicon evidence and not checker-verified automation. The isolated checkout is
+Status: **VERIFIED external default- and nodelay-model traces with manual transition reduction**,
+not silicon evidence and not checker-verified automation. The isolated checkout is
 `/tmp/coffee-gb-dmg-sim-irq`, pinned at
 `ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`. Icarus was
 `14.0 (devel) (1d2aa1b)` and the SM83 assembler was GNU Binutils
@@ -732,19 +734,39 @@ silicon evidence and not checker-verified automation. The isolated checkout is
 
 The one tracked instrumentation patch is identified without copying external source:
 
-```text
-sha256(git diff --binary)
-  2562309c3b0a4e8c8fe5521f0a14b50c08c37d9d5600baefe4a65cbe82702c04
-numstat
-  98  3  dmg_cpu_b_gameboy.sv
+```sh
+git -C "$ORACLE_DMG_IRQ" rev-parse HEAD
+git -C "$ORACLE_DMG_IRQ" diff --check
+git -C "$ORACLE_DMG_IRQ" diff --numstat
+git -C "$ORACLE_DMG_IRQ" diff --binary | sha256sum
 ```
 
-`git diff --check` is clean. The independently authored non-ROM inputs are
-`sim-tests/irq-probe.s`, `sim-tests/irq-probe.ld`, and
-`sim-tests/irq-halt-probe.s`; together with the instrumented wrapper their ordered SHA-256 manifest
-is `b9df7581f5a8b7df1f15588f7e7534afdc28b3d1235923f83f6a3b6e5451f471`.
-No standalone checker was written. Generated object, COFF, boot/cart image, VVP, waveform, and save
-hashes are intentionally omitted.
+```text
+sha256(git diff --binary)
+  9ace6377f5c63a6ed4cf44a202565865d56318b06c68de13b91c21d81dd5b9d0
+numstat
+  136  3  dmg_cpu_b_gameboy.sv
+```
+
+`git diff --check` is clean. Exact source-file SHA-256 values are:
+
+```sh
+cd "$ORACLE_DMG_IRQ"
+sha256sum dmg_cpu_b_gameboy.sv sim-tests/irq-probe.s \
+  sim-tests/irq-probe.ld sim-tests/irq-halt-probe.s
+```
+
+```text
+4f851f72f51699e08e89c46176953b61b92b957dd90442698f996b981f36e50a  dmg_cpu_b_gameboy.sv
+b0a7555bb9743cbd0d1d3f14aeb44393876da58d3985be65080581a7749fae24  sim-tests/irq-probe.s
+dc2a2d130155ade74d9c58dd048a2a0fd1b54a51e70eed6794f0ab90cce01ca1  sim-tests/irq-probe.ld
+57c18014e758442275e9dc11d9c8f7d666e53f6863541cee37bab99764f8ebbb  sim-tests/irq-halt-probe.s
+```
+
+The last three are independently authored non-ROM probe inputs. No standalone checker or manifest
+file was written, so the observations below do not claim checker verification. Generated object,
+COFF, boot/cart image, VVP, waveform, ROM, and save hashes are intentionally omitted; this probe did
+not generate a save.
 
 The probe images were assembled locally with the pinned tools, then the hierarchy was built with:
 
@@ -777,12 +799,19 @@ cd "$ORACLE_DMG_IRQ"
 make -B dmg_cpu_b_gameboy.vvp \
   IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
   TIMING=default SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+cp dmg_cpu_b_gameboy.vvp /tmp/irq-phase-default.vvp
+
+make -B dmg_cpu_b_gameboy.vvp \
+  IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
+  TIMING=nodelay SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+cp dmg_cpu_b_gameboy.vvp /tmp/irq-phase-nodelay.vvp
 ```
 
-Each row below was run with this exact command shape:
+The earlier request/acknowledge, FF0F-write, and HALT rows below used the default-delay image with
+this exact command shape (`probe_name` is `irq-probe` except for mode 6):
 
 ```sh
-"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp \
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N /tmp/irq-phase-default.vvp -none \
   +BOOTROM="sim-tests/${probe_name}.bootrom" \
   +ROM="sim-tests/${probe_name}.cartrom" \
   +SECS=0.01 +MBC_TYPE=00 +RAM_SIZE=00 \
@@ -790,16 +819,45 @@ Each row below was run with this exact command shape:
   +IRQ_PULSE_NS=1000
 ```
 
-The decisive matrix was Timer acknowledge mode 1 at offsets 610/850/852, Serial acknowledge mode 2
-at 610/850/852, late-priority mode 3 at 3406/3407, Timer FF0F collision mode 4 at 360/365, Serial
-FF0F collision mode 5 at 360/365, and the HALT fixture mode 6 at offset 0. Modes 1/2 force a raw
-peripheral request at the interrupt-M6 anchor; mode 3 starts with Serial pending and forces Timer
-from `int_entry`; modes 4/5 force the request around FF0F write gate `rotu`; mode 6 forces Timer
-after the HALT latch rises.
+The raw-phase aperture was rerun with these exact commands. The default `+3406` run records
+within-T4 propagation only; the nodelay `+3415/+3417` pair is the bounded before/after close
+falsifier and is not a source-code countdown constant:
 
-The monitor observes `cpu_irq[4:0]`, `cpu_irq_ack[4:0]`, `irq_latch[4:0]`, `int_pending`, `yoii`,
-`halt`, `int_entry`, `ctl_int_entry_m6`, `data_phase`, `write_phase`, `rotu`, and vector bits 3-5.
-Static cell `dffsr` updates both internal and output state as
+```sh
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N /tmp/irq-phase-default.vvp -none \
+  +BOOTROM=sim-tests/irq-probe.bootrom +ROM=sim-tests/irq-probe.cartrom \
+  +SECS=0.01 +MBC_TYPE=00 +RAM_SIZE=00 \
+  +IRQ_PROBE_MODE=3 +IRQ_OFFSET_NS=3406 +IRQ_PULSE_NS=1000
+
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N /tmp/irq-phase-nodelay.vvp -none \
+  +BOOTROM=sim-tests/irq-probe.bootrom +ROM=sim-tests/irq-probe.cartrom \
+  +SECS=0.01 +MBC_TYPE=00 +RAM_SIZE=00 \
+  +IRQ_PROBE_MODE=3 +IRQ_OFFSET_NS=3415 +IRQ_PULSE_NS=1000
+
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N /tmp/irq-phase-nodelay.vvp -none \
+  +BOOTROM=sim-tests/irq-probe.bootrom +ROM=sim-tests/irq-probe.cartrom \
+  +SECS=0.01 +MBC_TYPE=00 +RAM_SIZE=00 \
+  +IRQ_PROBE_MODE=3 +IRQ_OFFSET_NS=3417 +IRQ_PULSE_NS=1000
+```
+
+The full collision matrix was Timer acknowledge mode 1 at offsets 610/850/852, Serial acknowledge
+mode 2 at 610/850/852, Timer FF0F collision mode 4 at 360/365, Serial FF0F collision mode 5 at
+360/365, and the HALT fixture mode 6 at offset 0. Modes 1/2 force a raw peripheral request at the
+interrupt-M6 anchor; mode 3 starts with Serial pending and forces Timer from `int_entry`; modes 4/5
+force the request around FF0F write gate `rotu`; mode 6 forces Timer after the HALT latch rises.
+
+Static anchors in the pinned source are `sm83/sm83.sv:4680-4793` for
+`irq_latch_inst[0..7]` (`ena=data_phase_n`, `ena_n=data_phase`,
+`pch_n=write_phase`), `sm83/sm83.sv:4899-5215` for the priority/`inta` cells gated by
+`ctl_int_entry_m6`, and `sm83/sm83.sv:7013-7173` where `int_vector[7:3]` feed the PC input network
+directly. There is no separate vector-source capture latch in that cone.
+`dmg_cpu_b/dmg_cpu_b.sv:10708-10709` wires SM83 `write_phase` to SoC `clk_t4`.
+
+The dynamic monitor observes CPU `clk`, `data_phase`, `exec_phase`, `write_phase`, `mcyc[2:0]`,
+`in_intr`, `ctl_int_entry_m0/m4/m5/m6`, `ctl_op_rst_t_m2`, `ctl_reg_pc_we`, `irq_latch[7:0]`,
+`irq_latch_gated_q_n[7:0]`, `cpu_irq[4:0]`, `cpu_irq_ack[4:0]`, `int_vector[7:3]`, `reg_pcl`,
+`int_pending`, `yoii`, `halt`, and FF0F write gate `rotu`. Static cell `dffsr` updates both internal
+and output state as
 `(old_or_data | !set_n) & reset_n`, so active reset dominates a simultaneous set.
 
 The concise **VERIFIED external-model observations** are:
@@ -812,11 +870,20 @@ The concise **VERIFIED external-model observations** are:
 - M6+850 ns is swallowed for both sources; +852 ns survives. FF0F write-zero similarly swallows a
   +360 ns request while +365 ns survives. These boundaries are properties of guessed external
   propagation delays, not emulator constants.
-- With Serial already sampled, Timer at `int_entry+3406 ns` reaches the transparent bank before it
-  closes and yields Timer ACK/vector `0050`, leaving Serial pending. At +3407 ns, readable Timer IF
-  rises only 55 ps before `data_phase` closes but misses latch propagation; held Serial instead
-  drives ACK/vector `0058` and Timer remains pending. Priority is therefore aperture-live, then
-  held--not live through all of `IRQ_JUMP`.
+- In nodelay M6 (`mcyc=110`) begins at `32031466000` ps. `data_phase` rises at
+  `32031954000` (+488 ns), closing the bank at the start of the latter half/T3. `write_phase` and
+  SoC `clk_t4` rise at `32032198000` (+732 ns). The selected gated bit, one-hot ACK, and vector all
+  change in that T4 delta; PCL takes `50` at the next cycle boundary, `32032442000` (+976 ns).
+- With Serial held, the nodelay Timer request at `32031953000`, 1 ns before `data_phase` rises,
+  changes active-low `irq_latch` from Serial to Timer and produces Timer ACK/vector `0050`. Moving
+  only that request to `32031955000`, 1 ns after closure, leaves the held owner Serial, produces
+  ACK/vector `0058`, and makes Timer pending only after the bank reopens. This is the decisive
+  aperture falsifier: priority is live through T1/T2, then held for T3/T4.
+- In the default-delay run, `write_phase` rises at `32032203203` ps. The chosen gated bit follows
+  0.620 ns later, Timer ACK 1.624 ns later, and the vector begins/finishes settling 5.428/5.857 ns
+  later. `write_phase` falls at `32032447236` ps; PCL finishes settling to `50` at `32032456298` ps.
+  These sub-T propagation values belong only to the reverse-engineered delay model. They are not
+  silicon measurements or emulator constants.
 - From the HALT anchor, readable Timer IF appears after 1.680 ns, the sampled bank after 4.543 ns,
   combinational pending after 12.756 ns, and the wake DFF after 972.798 ns. The absolute delays are
   external-model evidence only; the useful fact is the sequence of distinct observation nodes.
@@ -824,14 +891,16 @@ The concise **VERIFIED external-model observations** are:
 This externally distinguishes the smaller DMG topology: five local clear-dominant IF latches feed
 a phase-transparent `IE & IF` bank; held pending bits feed both priority/vector and one-hot
 acknowledge; a later DFF supplies HALT wake. It contains no source provenance, future-event query,
-or post-selection late-priority repair. The Coffee GB half-dot/T-state placement remains a fitted
-projection until this transparent cone is integrated and shadowed.
+or post-selection late-priority repair. The DMG T1/T2 transparent interval, T3 close, and T4
+ACK/vector evaluation are grounded in the pinned external model. Aligning raw M6 with Coffee GB's
+current `IRQ_PUSH_2` callback remains fitted. Every CGB phase in the Java experiment is behavioral;
+this probe supplies no CGB gate or silicon evidence.
 
 Finite limits are forced rather than natural Timer/Serial source generation, one CPU write/entry
-phase, Timer and Serial only, default-delay reverse-engineered DMG-B rather than silicon, and no
-CGB, NMI, VBlank/STAT/Joypad collision, or analog/sub-T validation. A physical trace showing a
-post-aperture higher-priority source redirecting the current vector would falsify the held-bank
-interpretation.
+phase, Timer and Serial only, reverse-engineered DMG-B default/nodelay policies rather than silicon,
+and no CGB, NMI, VBlank/STAT/Joypad collision, or analog/sub-T validation. A physical trace showing
+a post-aperture higher-priority source redirecting the current vector, separate ACK/vector source
+state, or a bank that remains transparent after `data_phase` rises would falsify this interpretation.
 
 ## Exact retained `dmg-sim` working state
 
@@ -1229,7 +1298,7 @@ artifact in either inspected checkout:
 | Active-window downstream retirement | **Bounded in external nodelay/default-delay models; silicon race unresolved** | Obtain a physical phase sweep or another independent gate model to choose whether the pre-edge shared transaction survives; extend source-tagged replay across sprite/window/SCX overlaps before migration |
 | LCDC.1 object-flight ownership across every fetch phase | **Bounded external-model trace only** | Sweep every object slot/X/row/fetch/write phase on physical DMG or another independent model; shadow source-tagged bytes and output before deleting the production +3 repair |
 | CH4 trigger aperture | **Two DMG nodelay alignments traced; wider timing unresolved** | Reproduce the SameSuite invocation, run default-delay/sub-T collision probes, sweep other CPU-write/reset phases, and treat CGB as a separate topology |
-| CH1 inactive extra-four-T production bucket | **Falsified as a channel-active-selected aperture in the DMG external model** | Locate the missing production projection boundary with CPU-write/BEXA phase sweeps and hardware captures; do not restore `wasActive` as a gate-cone input |
+| CH1 activity-selected extra-four-T bucket | **Removed in the branch; DMG external-model anchored, CGB differential only** | Sweep additional CPU-write/BEXA phases and obtain physical DMG/CGB captures; do not restore `wasActive` unless independent evidence reveals a distinct upstream topology |
 
 Mealybug images and Coffee GB ROM profiles remain integration oracles documented by the repository's
 test configuration. Their passing result is not evidence that a detached experimental cone rendered

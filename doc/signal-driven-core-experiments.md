@@ -44,11 +44,11 @@ save states, debugger boundaries, and performance.
 | DMG STAT behavior needs a large mode/line exception tree | Behavioral whole-plane partition; two bounded external gate cones | The broad model still encodes calibrated raster cases. Independently, a ripple/partial-decode reset derives LY 153/0 and transparent precharged FF41 latches derive the write glitch with neither `line == 153` nor a semantic `0x78`. |
 | The OAM bug is fundamentally a Boolean corruption formula | External gate trace for the coarse mechanism; fitted exact-data hypothesis | Sticky selection/carry-skew/retained lines have gate-trace support. The external model's symmetric SRAM directly fails the exact blocked-write mapping, so the directional feedback split remains fitted against hardware-verified `SpriteBug`, not independently observed. |
 | APU frame clocks require an eight-step controller | External-netlist-shaped clock cone plus production differential | Sampled divider and ripple latches generate the selected DMG length/sweep/envelope vector. CGB tap selection and two production adapters remain external profile rules/falsifiers. |
-| Pulse-channel quirks require semantic trigger/sweep/length branches | Behavioral whole-control decomposition; bounded CH1 external gate trace | The broad resolver encodes settled truth tables. The restart/adder trace independently falsifies `wasActive` as a causal aperture input and derives shift-zero retrigger behavior from retained BYTE state. |
+| Pulse-channel quirks require semantic trigger/sweep/length branches | Branch-accepted CH1 trigger deletion plus behavioral remainder | The broad resolver still encodes settled truth tables, but the restart/adder trace independently falsifies `wasActive` as a causal aperture input. Production now uses the common shorter nonzero-shift path and deletes that semantic input/conditional; shift-zero behavior comes from retained BYTE state in the bounded cone. DMG is externally grounded and CGB remains differential-only. |
 | Active CH3 wave RAM needs time-window and address-rewrite rules | External-netlist-shaped fitted port plus production differential | One address-owner mux, precharged data bus, and two fitted fetch-valid stages reproduce the access window and address aliasing. Retrigger feedback and electrical collisions remain separate cones. |
 | CH4 needs a zero-divisor case and a second LFSR algorithm | External-netlist-anchored steady cone; production cut rejected | Complement-loaded prescaler and zero-reset XNOR wiring remove the local semantic cases, but both faithful and lean runtime replacements fail 8 of the 13 SameSuite CH4 ROMs because the trigger/live-write projection is not yet derived. |
 | The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
-| LCDC.1 object disable must abort the fetch and catch the renderer up three dots | Bounded external DMG-B gate trace plus ownership transcription | FF40.D1 gates future X matches and final object output, not the byte latches or physical shift banks. A pre-byte fall launches nothing; after low-byte capture, high-byte capture/load/shift retire normally while output is masked. This does not yet prove the production repair deletable across all sprites/phases. |
+| LCDC.1 object disable must abort the fetch and catch the renderer up three dots | Bounded external DMG-B ownership trace; local production cut rejected | FF40.D1 gates future X matches and final object output, not the byte latches or physical shift banks. A pre-byte fall launches nothing; after low-byte capture, high-byte capture/load/shift retire normally while output is masked. Removing the production catch-up still fails the strict companion image exactly three pixels late: the remaining correction is a dual-renderer phase debt, not object-flight ownership. |
 | Mid-mode-3 writes require pending-write queues and duplicate register views | Production differential at one CPU-reachable cadence | One source register and fitted consumer delays reproduce selected LCDC/SCX/WX views; the receiver stages and half-dot capture phase are not netlist-derived. |
 | LCD disable must inspect raster/pixel state to cancel output | External-netlist reset root plus fitted output/fanout hypothesis | XONA/XEBE/XODO/XAPO reduce to one reset root, but the Java cone manually assigns that reset to candidate scanout stages and encodes write envelopes explicitly. |
 | CGB speed switching requires timer phase repair and tail-duration tables | Fitted timing hypothesis; gated-DIV routing falsified by contrary emulator evidence | STOP-entry/release counters fit verified durations, but the candidate's gated DIV disagrees with production and SameBoy; hardware capture is required before routing claims. |
@@ -240,12 +240,22 @@ They establish that the selected edge-triggered seams can share one causal bound
 identity or a peripheral deadline query.
 
 The later **external DMG gate-model trace** corrects one important boundary in this constructive
-composition. Five local clear-dominant IF latches feed `IE & IF` latches which are transparent
-during the CPU data phase. When that aperture closes, the held pending bits feed both the priority
-encoder/vector path and the one-hot acknowledge decoder. A higher-priority request can redirect the
-entry only while that bank is still transparent; a readable IF edge after closure cannot. Thus
-selection is neither frozen at Coffee GB's current `IRQ_PUSH_2` callback nor live through all of
-`IRQ_JUMP`, and `applyLateInterruptPriority` is a scheduler repair rather than a hardware feature.
+composition. Five local clear-dominant IF latches feed `IE & IF` latches which are transparent while
+the SM83's `data_phase` is low in T1/T2. `data_phase` rises for T3 and closes that aperture. In T4,
+`write_phase`—the SoC node named `clk_t4`—evaluates both the one-hot acknowledge and vector network
+from the held bank. Default delays make acknowledge settle before the vector bits within the same
+T4; nodelay makes both settle in that T4 delta, and the PC takes the vector at the following cycle
+boundary. A higher-priority request can redirect the entry only before the T3 close; a readable IF
+edge after closure cannot. Thus selection is neither frozen at Coffee GB's current `IRQ_PUSH_2`
+callback nor live through all of `IRQ_JUMP`, and `applyLateInterruptPriority` is a scheduler repair
+rather than a hardware feature. Mapping that raw M6 boundary onto Coffee GB's current callback
+remains fitted, but the DMG T1/T2 close and T4 evaluation no longer are.
+
+The detached test keeps the existing Coffee callback marker at `IRQ_PUSH_2/T4`; raw DMG
+acknowledge is four model clocks after that marker. The current peripheral lookahead uses a
+three-clock DMG countdown, so this correction exposes a one-clock callback-alignment debt rather
+than hiding it in another fitted phase constant. CGB's later eight-clock placement remains
+explicitly fitted and receives no support from this DMG trace.
 
 The same external cone makes Timer and Serial request/acknowledge collisions local. Each IF cell is
 reset-dominant, so a request asserted while its one-hot acknowledge reset is active is swallowed;
@@ -267,7 +277,7 @@ phases. No deadline or scripted Timer source is present in that bounded path.
 
 Serial remains a raw upstream pin, and the Timer projection does not yet accept CPU timer-register
 writes or reproduce the observable DIV ripple transient. The calibrated one-M-cycle-late CPU bus,
-external serial input, the complete DMG pending-bank aperture, PPU source paths, CGB
+external serial input, integration of the DMG raw-phase aperture with that bus, PPU source paths, CGB
 subedges/direct interrupts, and transparent or asynchronous delta settling remain blockers.
 Consequently these tests can name a future deletion set—both peripheral acknowledge forecasts and
 their `InterruptManager` flags—but cannot yet delete it safely.
@@ -504,8 +514,9 @@ At the same ordinary CPU write phase, inactive and active NR14.7 writes take the
 through DUPE, `CH1_START`, FYFO/FEKU, FARE, and FYTE. Channel-active state is downstream of restart
 and has no connection into that request path. For shifts one, three, and seven the complete serial
 waveform is also identical; from synchronized `CH1_START` it matches production's shorter bucket,
-`8 + 4*shift` T. Production's inactive extra four T therefore remains a compatibility projection
-outside this cone, not a gate-level consequence of `wasActive`.
+`8 + 4*shift` T. The branch now uses that common path for every nonzero-shift trigger and removes
+the channel-active input and conditional from `FrequencySweep`. This is a narrow production
+deletion, not a claim that the bounded cone models the entire sweep unit.
 
 Shift zero exposes the real retained-state behavior. The initial trigger loads KALA's terminal
 count, BYTE samples it, and LD_SUM rises before FYTE. An active retrigger has the same request and
@@ -519,11 +530,13 @@ and the same retained request path immediately calculates the second overflow ch
 scheduled second operation. One NR10 shift-seven-to-one collision also confirms that a live register
 write does not reload the in-flight serial counter.
 
-This is still not a production replacement. The external model is DMG-B, not silicon, and the
-dynamic coverage is four shifts, one frequency, one active-retrigger spacing, one natural BEXA
-phase, and one NR10 collision. Raw/asynchronous write phases, other BEXA alignments, close negate and
-carry collisions, frequency-write/retrigger overlap, intermediate analog timing, and CGB remain
-explicit falsifiers.
+The narrow trigger-scheduling cut passes the focused sweep/trigger/memento tests, all 77 SameSuite
+cases, and all 24 individual DMG/CGB Blargg sound cases. It adds no state and leaves mementos
+unchanged. The external model is DMG-B rather than silicon, and dynamic coverage is four shifts,
+one frequency, one active-retrigger spacing, one natural BEXA phase, and one NR10 collision.
+Raw/asynchronous write phases, other BEXA alignments, close negate and carry collisions,
+frequency-write/retrigger overlap, intermediate analog timing, and CGB topology remain explicit
+falsifiers; CGB is supported by differential tests only.
 
 `DmgEnvelopeWriteRipple` is an **external-netlist-shaped fitted hypothesis plus production
 differential** for the four DMG envelope counter cells as master/slave toggles whose
@@ -743,6 +756,21 @@ It proves neither the exact fetch/pop schedule nor that production's +3 catch-up
 deleted. Other slots, overlap/priority, X flip, additional write phases, physical DMG, and CGB are
 finite falsifiers. Reproduction details are in
 [signal-oracle-repro.md](signal-oracle-repro.md#dmg-object-enable-flight-probe).
+
+A separate **production-shadow falsifier** tried the obvious local deletion against the strict
+Mealybug images. Removing the three synthetic catch-up advances leaves the base
+`m3_lcdc_obj_en_change` image exact, but `m3_lcdc_obj_en_change_variant` first differs at pixel
+`(153,128)`, with the background band three pixels late. Removing object reread/refresh does not
+change that failure. A parallel shadow that retires the already-launched low/high/shift flight while
+masking object output also fails at the same pixel; delaying the fetch-control enable worsens the
+error by another three pixels. The isolated production probe was discarded after restoring and
+recompiling its worktree.
+
+This separates two mechanisms which the current repair conflates. The gate trace grounds object
+data ownership, but the catch-up loop pays the phase difference between the CPU-timeline write and
+Coffee GB's independently advanced `+4` pixel machine. Deleting it requires rephasing or removing
+the dual-machine representation (or arranging for the upstream machine to have already queued the
+three background tokens); another local object condition cannot do so.
 
 `ForwardDmgPixelReplayContractTest` makes one of those missing seams executable against the real
 `m3_lcdc_win_en_change_multiple_wx` ROM. At deterministic post-FAST_FORWARD tick 128,703, line 1

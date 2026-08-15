@@ -13,9 +13,10 @@ External-oracle manifest: [signal-oracle-repro.md](signal-oracle-repro.md)
 ## Executive conclusion
 
 The evidence supports a promising route to a substantially simpler model, but the overnight spike
-does not yet establish that replacement for the whole core. The only production cut completed so
-far is the local Serial DIV-reset path; the other subsystems are constructive, fitted, differential,
-or falsifying experiments whose exact evidence strength is recorded in the companion log.
+does not yet establish that replacement for the whole core. Two narrow production cuts were
+completed: the local Serial DIV-reset path and CH1 sweep-trigger scheduling. The other subsystem
+results are constructive, fitted, differential, or falsifying experiments whose exact evidence
+strength is recorded in the companion log.
 
 The candidate is not a shorter formula for PPU modes, interrupt delays, or APU counters.
 
@@ -712,18 +713,25 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-One narrow production slice passed the behavior and deletion gates within this research branch;
-its observed performance and external-driver licensing still need reproducible/reviewed upstream
-acceptance. Serial DIV-reset handling is now one local
-divider-stage observation, output-clock toggle, and falling-edge shift. It removes eleven net lines
-of future-event arithmetic, preserves the released save-state shape and debugger callback order,
-has an exhaustive arbitrary-phase replay test, is grounded in the pinned DMG-B gate model, and has
-no measured performance regression. CGB normal/fast behavior remains production-differential rather
-than independently grounded. The retained interoperability testbench is independently authored and
-contains no DUT implementation, but its MIT classification must still receive project-owner/legal
-review before an upstream merge because it names internal CC BY-SA model nodes. The reusable
-latch/bus/scheduler primitives remain test-only because landing a generic framework for this one
-formula would have increased production complexity.
+Two narrow production slices passed the behavior and deletion gates within this research branch:
+
+- Serial DIV-reset handling is now one local divider-stage observation, output-clock toggle, and
+  falling-edge shift. It removes eleven net lines of future-event arithmetic, preserves the
+  released save-state shape and debugger callback order, has an exhaustive arbitrary-phase replay
+  test, is grounded in the pinned DMG-B gate model, and has no measured performance regression.
+  CGB normal/fast behavior remains production-differential rather than independently grounded. The
+  retained interoperability testbench is independently authored and contains no DUT implementation,
+  but its MIT classification must still receive project-owner/legal review before an upstream merge
+  because it names internal CC BY-SA model nodes.
+- CH1 sweep trigger no longer accepts channel-active state or chooses an activity-dependent delay.
+  Every nonzero shift follows the shorter restart/adder path observed for identical-phase inactive
+  and active DMG writes. This deletes one semantic input and conditional without adding state or
+  changing mementos. Focused tests, all 77 SameSuite cases, and all 24 individual DMG/CGB Blargg
+  sound cases pass. The gate evidence is DMG-only; CGB is still production-differential.
+
+The observed performance of both cuts still needs a reproducible upstream acceptance run. Reusable
+latch/bus/scheduler primitives remain test-only because landing a generic framework for either
+local formula would have increased production complexity.
 
 The external traces strengthen the architectural diagnosis without proving the whole replacement:
 
@@ -737,13 +745,20 @@ The external traces strengthen the architectural diagnosis without proving the w
 - LCDC.5 clears the window source asynchronously. A bounded already-launched fetch/FIFO/shifter
   flight accounts for delayed pixels; the current renderer instead launches one post-reset window
   transaction.
+- LCDC.1 gates future object matches and final object output, but not an already-launched low/high
+  byte flight or the object shift bank. Deleting the renderer's three-dot catch-up nevertheless
+  fails the strict companion image exactly three pixels late: the correction repays the phase debt
+  between the CPU timeline and the duplicated +4 pixel machine. It cannot be replaced by another
+  local object-data rule; the dual-machine representation must be rephased or removed.
 - CH4's zero divisor and second LFSR form reduce to complement-loaded ripple and XNOR wiring, and a
   raw write/clock cone—not an activity flag—selects the observed trigger alignment. A faithful and
   a lean production rewrite both failed 8 of the 13 SameSuite CH4 ROMs, so the projection boundary
   remains unresolved and production was left untouched.
 - CH1 channel-active state does not feed the restart/adder request cone. Identical-phase inactive
   and active writes have identical nonzero-shift waveforms; shift-zero retrigger differs because the
-  BYTE/LD_SUM latch is already high, not because an activity branch selects another deadline.
+  BYTE/LD_SUM latch is already high, not because an activity branch selects another deadline. The
+  production trigger path now reflects that topology and deletes the former {@code wasActive}
+  timing branch.
 - OAM demonstrates the limit of the available abstraction: its external `generic_sram` erases
   directional sensing/write-back and directly fails the exact blocked-write mapping. That part
   cannot be promoted without a lower-level physical model or hardware captures.
