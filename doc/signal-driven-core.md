@@ -706,13 +706,39 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-The attempted Serial/IF cut established the next prerequisite more sharply than the original plan:
-the existing master-tick callback cannot centralize acknowledge because Timer and Serial sit on
-opposite sides of the CPU. The next production experiment must move persistent CPU T-state/bus
-intent, Timer and Serial request generation, IF/IE/IME/HALT control, live priority, and physical
+One narrow production slice did pass that rule. Serial DIV-reset handling is now one local
+divider-stage observation, output-clock toggle, and falling-edge shift. It removes eleven net lines
+of future-event arithmetic, preserves the released save-state shape and debugger callback order,
+has an exhaustive arbitrary-phase replay test, is grounded in the pinned DMG-B gate model, and has
+no measured performance regression. CGB normal/fast behavior remains production-differential rather
+than independently grounded. The reusable latch/bus/scheduler primitives remain test-only because
+landing a generic framework for this one formula would have increased production complexity.
+
+The external traces strengthen the architectural diagnosis without proving the whole replacement:
+
+- Timer overflow is a ripple plus two sampled stages and a shared load/reset cone; the apparent
+  deadline is a projection of those cells.
+- HALT's direct decode suppresses its own IDU increment, while a delayed copy drives only the sleep
+  latch; the halt bug is not a special next-fetch PC gate.
+- LY 153/0 is a ripple, partial decoder, sample, and asynchronous reset, while M1 is sampled on an
+  independent path. Precharged transparent FF41 latches create the write glitch without a semantic
+  all-enable event.
+- LCDC.5 clears the window source asynchronously. A bounded already-launched fetch/FIFO/shifter
+  flight accounts for delayed pixels; the current renderer instead launches one post-reset window
+  transaction.
+- CH4's zero divisor and second LFSR form reduce to complement-loaded ripple and XNOR wiring, and a
+  raw write/clock cone—not an activity flag—selects the observed trigger alignment.
+- OAM demonstrates the limit of the available abstraction: its external `generic_sram` erases
+  directional sensing/write-back and directly fails the exact blocked-write mapping. That part
+  cannot be promoted without a lower-level physical model or hardware captures.
+
+The attempted combined Serial/IF cut was correctly rolled back. The current master-tick loop runs
+Timer before the CPU and Serial after it, so no placement of one acknowledge callback preserves both
+peripheral windows. The next production experiment must move persistent CPU T-state/bus intent,
+Timer and Serial request generation, IF/IE/IME/HALT control, live priority, and the physical
 acknowledge into one CPU-subedge island. A detached composition shows those edge-triggered seams can
-fit; it does not yet supply timer latches, the serial input pin, transparent/asynchronous settling,
-PPU source paths, CGB wiring, or the physical acknowledge/vector phase.
+fit; it does not yet supply the complete timer/serial inputs, transparent/asynchronous settling, PPU
+source paths, CGB wiring, or the physical acknowledge/vector phase.
 
 Do not begin with a wholesale PPU rewrite or a production full-netlist evaluator. Promote a slice
 only under the evidence and deletion rule in `signal-driven-core-experiments.md`: semantic oracle
