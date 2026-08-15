@@ -283,9 +283,14 @@ first-class, not inferred from another subsystem's mode and opcode.
 
 ### CPU, HALT, and interrupt dispatch
 
-Implement HALT according to the already-derived circuit model: the sequencer continues producing
-NOP-like bus cycles while instruction-register load and PC increment are gated. Wake reopens those
-gates. The halt bug becomes the resulting failed PC gate rather than a PC decrement/replay path.
+Implement HALT according to the external DMG gate-model trace. Direct HALT decode is absent from
+the decoder's IDU-increment equation even though fetch, instruction-register load, and PC write
+remain active. HALT therefore samples the following opcode while writing the unchanged IDU value
+back to PC. A separately delayed HALT decode only sets the reset-dominant sleep latch. If a pending
+interrupt wins that latch race, the CPU never sleeps and the sampled opcode is fetched again from
+the unchanged address: the halt bug emerges without a `haltBugMode`, PC rewind, or a delayed
+next-fetch gate. During ordinary HALT, the sleep latch retains after the delayed set pulse and the
+already sampled opcode waits for wake.
 
 Keep interrupt dispatch as a real five-M-cycle microprogram. Keep the priority encoder live until
 the documented selection/vector latch. A higher-priority source arriving during dispatch then
@@ -622,8 +627,9 @@ proving the architecture.
   method.
 - **Acknowledgement level:** timer and serial acknowledge-window tests pass with no forecast of a
   future request.
-- **Gated HALT:** HALT tests and held-HDMA-opcode cases pass without PC rewind, HALT opcode replicas,
-  or CPU-to-timer semantic callbacks.
+- **HALT decode/IDU split:** HALT tests and held-HDMA-opcode cases pass with direct HALT decode
+  suppressing only HALT's own IDU increment and its delayed copy driving only the sleep latch,
+  without PC rewind, HALT opcode replicas, or CPU-to-timer semantic callbacks.
 - **Bus arbitration:** DMA/HDMA tests pass after removing CPU phase-query and copied-bus-value APIs.
 - **Clock-router emergence:** speed-switch matrices pass after deleting tail corrections. A failure
   must identify a missing gate, phase latch, or request synchronizer.
