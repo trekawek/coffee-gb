@@ -35,13 +35,10 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     private boolean pendingDmgBlobBackgroundEnable = true;
 
-    // A CGB LCDC.4 write can collide with a background tile-data read. The CPU write
-    // is processed before the PPU in Coffee GB's tick, so keep a short pulse for the
-    // fetcher rather than trying to infer the write from the settled register value.
-    // The conflict lasts for one PPU dot in either CPU speed mode.
-    private int tileSelectGlitchTicks;
-
-    private int pendingTileSelectGlitchTicks;
+    // A CGB LCDC.4 write can collide with a background tile-data read. The write strobe
+    // is sampled once into the fetcher's register-view history below; the history cells,
+    // rather than a second duration counter, retain the pulse for delayed consumers.
+    private boolean tileSelectGlitchWrite;
 
     private final boolean[] tileSelectGlitchHistory = new boolean[CONFLICT_HISTORY_LENGTH];
 
@@ -97,19 +94,14 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         pendingDmgBlobBackgroundEnable = (value & 0x01) != 0;
         mixValue = pendingMixValue;
         pendingMixValue = -1;
-        if (pendingTileSelectGlitchTicks > 0) {
-            tileSelectGlitchTicks = pendingTileSelectGlitchTicks;
-            pendingTileSelectGlitchTicks = 0;
-        } else if (tileSelectGlitchTicks > 0) {
-            tileSelectGlitchTicks--;
-        }
         historyHead = (historyHead - 1) & (CONFLICT_HISTORY_LENGTH - 1);
-        tileSelectGlitchHistory[historyHead] = tileSelectGlitchTicks > 0;
+        tileSelectGlitchHistory[historyHead] = tileSelectGlitchWrite;
+        tileSelectGlitchWrite = false;
         oamSizeHistory[historyHead] = value;
     }
 
     void triggerTileSelectGlitch() {
-        pendingTileSelectGlitchTicks = 1;
+        tileSelectGlitchWrite = true;
     }
 
     public boolean isTileSelectGlitch() {
@@ -198,8 +190,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
     }
 
     private void clearTileSelectGlitch() {
-        tileSelectGlitchTicks = 0;
-        pendingTileSelectGlitchTicks = 0;
+        tileSelectGlitchWrite = false;
         Arrays.fill(tileSelectGlitchHistory, false);
     }
 
@@ -221,7 +212,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         copyHistoriesForCapture();
         return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
-                tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
+                0, tileSelectGlitchWrite ? 1 : 0,
                 tileSelectGlitchHistoryCapture.clone(),
                 oamSizeHistoryCapture.clone());
     }
@@ -231,7 +222,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         copyHistoriesForCapture();
         return new LcdcState(value, mixValue, pendingMixValue,
                 dmgBlobBackgroundEnable, pendingDmgBlobBackgroundEnable,
-                tileSelectGlitchTicks, pendingTileSelectGlitchTicks,
+                0, tileSelectGlitchWrite ? 1 : 0,
                 capture.booleans(tileSelectGlitchHistoryCapture),
                 capture.ints(oamSizeHistoryCapture));
     }
@@ -246,8 +237,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         this.pendingMixValue = mem.pendingMixValue;
         this.dmgBlobBackgroundEnable = mem.dmgBlobBackgroundEnable;
         this.pendingDmgBlobBackgroundEnable = mem.pendingDmgBlobBackgroundEnable;
-        this.tileSelectGlitchTicks = mem.tileSelectGlitchTicks;
-        this.pendingTileSelectGlitchTicks = mem.pendingTileSelectGlitchTicks;
+        this.tileSelectGlitchWrite = mem.pendingTileSelectGlitchTicks != 0;
         if (mem.tileSelectGlitchHistory.length != tileSelectGlitchHistory.length) {
             throw new IllegalArgumentException("ComponentState tile-select history length doesn't match");
         }
@@ -275,6 +265,9 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
     private record LcdcState(
             int value, int mixValue, int pendingMixValue,
             boolean dmgBlobBackgroundEnable, boolean pendingDmgBlobBackgroundEnable,
+            // Retain the two integer slots used by released snapshots. The active pulse
+            // is already represented by tileSelectGlitchHistory; only the pending write
+            // strobe needs an authoritative live field.
             int tileSelectGlitchTicks, int pendingTileSelectGlitchTicks,
             boolean[] tileSelectGlitchHistory,
             int[] oamSizeHistory)

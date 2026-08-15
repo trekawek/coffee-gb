@@ -63,6 +63,30 @@ public class LcdcHistoryTest {
     }
 
     @Test
+    public void pendingTileSelectWriteRoundTripsBeforeThePpuCaptureEdge() {
+        Lcdc lcdc = new Lcdc();
+        lcdc.setGbc(true);
+        lcdc.triggerTileSelectGlitch();
+
+        Lcdc restored = new Lcdc();
+        restored.setGbc(true);
+        restored.restoreState(lcdc.captureState());
+
+        lcdc.tickConflicts();
+        restored.tickConflicts();
+        for (int dotsAgo = 0; dotsAgo < HISTORY_LENGTH; dotsAgo++) {
+            assertEquals(lcdc.isTileSelectGlitch(dotsAgo),
+                    restored.isTileSelectGlitch(dotsAgo));
+        }
+        lcdc.tickConflicts();
+        restored.tickConflicts();
+        for (int dotsAgo = 0; dotsAgo < HISTORY_LENGTH; dotsAgo++) {
+            assertEquals(lcdc.isTileSelectGlitch(dotsAgo),
+                    restored.isTileSelectGlitch(dotsAgo));
+        }
+    }
+
+    @Test
     public void ordinaryAndPooledCapturesExposeLogicalOrderWithoutSharingMutableArrays() {
         Lcdc lcdc = new Lcdc();
         lcdc.setGbc(true);
