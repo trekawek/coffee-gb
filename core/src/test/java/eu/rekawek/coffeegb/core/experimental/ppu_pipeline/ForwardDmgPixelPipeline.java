@@ -23,6 +23,11 @@ package eu.rekawek.coffeegb.core.experimental.ppu_pipeline;
  */
 final class ForwardDmgPixelPipeline {
 
+    enum PixelSource {
+        BACKGROUND,
+        WINDOW
+    }
+
     static final int CONTROL_TO_FIFO_DOTS = 4;
 
     static final int RAW_TO_LCD_DOTS = 3;
@@ -71,6 +76,8 @@ final class ForwardDmgPixelPipeline {
 
     private final int[] fifoObject = new int[FIFO_CAPACITY];
 
+    private final PixelSource[] fifoSource = new PixelSource[FIFO_CAPACITY];
+
     private int fifoHead;
 
     private int fifoSize;
@@ -84,7 +91,11 @@ final class ForwardDmgPixelPipeline {
 
     private final int[] scanoutLogicalX = new int[RAW_TO_LCD_DOTS];
 
+    private final PixelSource[] scanoutSource = new PixelSource[RAW_TO_LCD_DOTS];
+
     private final int[] lcdRaw = new int[LCD_CAPTURE_CAPACITY];
+
+    private final PixelSource[] lcdSource = new PixelSource[LCD_CAPTURE_CAPACITY];
 
     private int dot;
 
@@ -102,6 +113,8 @@ final class ForwardDmgPixelPipeline {
     private int lastLcdDot = -1;
 
     private int lastPoppedRaw = -1;
+
+    private PixelSource lastPoppedSource;
 
     private boolean flushDrive;
 
@@ -153,6 +166,8 @@ final class ForwardDmgPixelPipeline {
     private int tileId;
 
     private int tileLine;
+
+    private PixelSource tileSource = PixelSource.BACKGROUND;
 
     private boolean unsignedTileData = true;
 
@@ -294,13 +309,22 @@ final class ForwardDmgPixelPipeline {
 
     /** Launches an ordinary tile flight on the current control dot. */
     void launchTile(int tileId, int line) {
+        launchTile(tileId, line, PixelSource.BACKGROUND);
+    }
+
+    /** Launches a source-tagged flight for detached provenance/falsifier tests. */
+    void launchTile(int tileId, int line, PixelSource source) {
         if (tileValid) {
             throw new IllegalStateException("tile flight already valid");
+        }
+        if (source == null) {
+            throw new NullPointerException("source");
         }
         tileValid = true;
         tileLaunchDot = dot;
         this.tileId = tileId & 0xff;
         tileLine = line & 7;
+        tileSource = source;
         tileLowAddressValid = false;
         tileLowDataValid = false;
         tileHighAddressValid = false;
@@ -313,11 +337,15 @@ final class ForwardDmgPixelPipeline {
     }
 
     void seedRawFifo(int pixels, int rawBackground) {
+        seedRawFifo(pixels, rawBackground, PixelSource.BACKGROUND);
+    }
+
+    void seedRawFifo(int pixels, int rawBackground, PixelSource source) {
         if (tileValid || objectState != ObjectState.IDLE) {
             throw new IllegalStateException("cannot seed a running graph");
         }
         for (int i = 0; i < pixels; i++) {
-            enqueueRaw(rawBackground & 3, 0);
+            enqueueRaw(rawBackground & 3, 0, source);
         }
     }
 
@@ -402,7 +430,9 @@ final class ForwardDmgPixelPipeline {
             if (lcdX >= lcdRaw.length) {
                 throw new IllegalStateException("LCD capture overflow");
             }
-            lcdRaw[lcdX++] = scanoutRaw[outputStage];
+            lcdRaw[lcdX] = scanoutRaw[outputStage];
+            lcdSource[lcdX] = scanoutSource[outputStage];
+            lcdX++;
             lastLcdDot = dot;
         }
         for (int stage = outputStage; stage > 0; stage--) {
@@ -410,6 +440,7 @@ final class ForwardDmgPixelPipeline {
             scanoutValid[stage] = scanoutValid[stage - 1];
             scanoutOutputEnable[stage] = scanoutOutputEnable[stage - 1];
             scanoutLogicalX[stage] = scanoutLogicalX[stage - 1];
+            scanoutSource[stage] = scanoutSource[stage - 1];
         }
         scanoutValid[0] = false;
     }
@@ -423,7 +454,7 @@ final class ForwardDmgPixelPipeline {
         flushFifo();
         // Any background tile still in flight is downstream of the source-select edge.
         tileValid = false;
-        launchTile(windowTileId, windowTileLine);
+        launchTile(windowTileId, windowTileLine, PixelSource.WINDOW);
         fineScxRemaining = 0;
         windowActive = true;
         windowTriggerValid = false;
@@ -482,7 +513,7 @@ final class ForwardDmgPixelPipeline {
             if (!tileLowDataValid || !tileHighDataValid) {
                 throw new IllegalStateException("tile reached FIFO before its data");
             }
-            enqueueTile(tileLowData, tileHighData);
+            enqueueTile(tileLowData, tileHighData, tileSource);
             tileValid = false;
         }
     }
@@ -536,19 +567,20 @@ final class ForwardDmgPixelPipeline {
         return false;
     }
 
-    private void enqueueTile(int low, int high) {
+    private void enqueueTile(int low, int high, PixelSource source) {
         for (int bit = 7; bit >= 0; bit--) {
-            enqueueRaw(((low >>> bit) & 1) | (((high >>> bit) & 1) << 1), 0);
+            enqueueRaw(((low >>> bit) & 1) | (((high >>> bit) & 1) << 1), 0, source);
         }
     }
 
-    private void enqueueRaw(int background, int object) {
+    private void enqueueRaw(int background, int object, PixelSource source) {
         if (fifoSize == FIFO_CAPACITY) {
             throw new IllegalStateException("FIFO overflow");
         }
         int tail = (fifoHead + fifoSize) % FIFO_CAPACITY;
         fifoBackground[tail] = background;
         fifoObject[tail] = object;
+        fifoSource[tail] = source;
         fifoSize++;
     }
 
@@ -567,15 +599,18 @@ final class ForwardDmgPixelPipeline {
 
     private void popRawPixel(boolean outputEnable, int logicalX) {
         int raw = fifoBackground[fifoHead] | (fifoObject[fifoHead] << 2);
+        PixelSource source = fifoSource[fifoHead];
         fifoHead = (fifoHead + 1) % FIFO_CAPACITY;
         fifoSize--;
         scanoutRaw[0] = raw;
         scanoutValid[0] = true;
         scanoutOutputEnable[0] = outputEnable;
         scanoutLogicalX[0] = logicalX;
+        scanoutSource[0] = source;
         fifoPopX++;
         lastFifoPopDot = dot;
         lastPoppedRaw = raw;
+        lastPoppedSource = source;
     }
 
     private int objectAddress(int tileId, int line, int byteNumber) {
@@ -707,11 +742,22 @@ final class ForwardDmgPixelPipeline {
         return lastPoppedRaw;
     }
 
+    PixelSource lastPoppedSource() {
+        return lastPoppedSource;
+    }
+
     int lcdRaw(int x) {
         if (x < 0 || x >= lcdX) {
             throw new IllegalArgumentException("LCD X not emitted: " + x);
         }
         return lcdRaw[x];
+    }
+
+    PixelSource lcdSource(int x) {
+        if (x < 0 || x >= lcdX) {
+            throw new IllegalArgumentException("LCD X not emitted: " + x);
+        }
+        return lcdSource[x];
     }
 
     int tileLowAddress() {
