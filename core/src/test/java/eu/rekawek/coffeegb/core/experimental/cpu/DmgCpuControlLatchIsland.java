@@ -351,6 +351,13 @@ final class DmgCpuControlLatchIsland {
         resolutionPending = false;
     }
 
+    Observation capturedObservation() {
+        if (!resolutionPending) {
+            throw new IllegalStateException("resolve before observing captured state");
+        }
+        return resolvedObservation;
+    }
+
     Observation observation() {
         int flags = interruptFlagMask();
         int pending = runningPendingMask();

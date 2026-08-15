@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.experimental.cpu;
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Deque;
+import java.util.List;
 
 /**
  * Detached CPU bus experiment at the 8.388608 MHz half-dot lattice.
@@ -141,6 +142,12 @@ final class CpuBusCycleMachine {
                     CycleKind.STACK_WRITE, address, data, acknowledge, false, Control.NONE);
         }
 
+        /** A physical acknowledge gate; the shared interrupt fabric, not this cycle, owns source. */
+        static Cycle interruptAcknowledgeWrite(int address, int data) {
+            return new Cycle(
+                    CycleKind.STACK_WRITE, address, data, 1, false, Control.NONE);
+        }
+
         static Cycle internal() {
             return new Cycle(CycleKind.INTERNAL, null, null, 0, false, Control.NONE);
         }
@@ -173,11 +180,37 @@ final class CpuBusCycleMachine {
             long cycleNumber,
             TState tState,
             CycleKind cycleKind,
+            boolean instructionEnds,
+            Control control,
             BusSignals bus,
             int heldBusData,
             boolean ime,
             boolean eiPending,
             RunState runState) {
+    }
+
+    /** Bus-sequencer state at a half-dot commit boundary; CPU control is a separate island. */
+    record BusSnapshot(
+            Model model,
+            int[] memory,
+            List<Cycle> queuedCycles,
+            Cycle activeCycle,
+            long halfDot,
+            long cpuClock,
+            long cycleNumber,
+            int tStateIndex,
+            int halfDotInCpuClock,
+            int heldBusData) {
+
+        BusSnapshot {
+            memory = memory.clone();
+            queuedCycles = List.copyOf(queuedCycles);
+        }
+
+        @Override
+        public int[] memory() {
+            return memory.clone();
+        }
     }
 
     private final Model model;
@@ -274,6 +307,8 @@ final class CpuBusCycleMachine {
                 cycleNumber,
                 tState,
                 activeCycle.kind(),
+                activeCycle.instructionEnds(),
+                activeCycle.control(),
                 bus,
                 heldBusData,
                 ime,
@@ -282,9 +317,18 @@ final class CpuBusCycleMachine {
     }
 
     Observation stepHalfDot() {
+        return stepHalfDot(true);
+    }
+
+    /** Advances only the held bus cycle; a composed control fabric owns IME, IF, and HALT. */
+    Observation stepHalfDotBusOnly() {
+        return stepHalfDot(false);
+    }
+
+    private Observation stepHalfDot(boolean applyDetachedControlSemantics) {
         Observation observation = peek();
         if (observation.bus().sampleOrCommit()) {
-            finishCycle();
+            finishCycle(applyDetachedControlSemantics);
         }
 
         halfDot++;
@@ -326,15 +370,51 @@ final class CpuBusCycleMachine {
         return runState;
     }
 
-    private void finishCycle() {
+    BusSnapshot captureBus() {
+        return new BusSnapshot(
+                model,
+                memory,
+                List.copyOf(queuedCycles),
+                activeCycle,
+                halfDot,
+                cpuClock,
+                cycleNumber,
+                tStateIndex,
+                halfDotInCpuClock,
+                heldBusData);
+    }
+
+    void restoreBus(BusSnapshot snapshot) {
+        if (snapshot == null) {
+            throw new NullPointerException("snapshot");
+        }
+        if (snapshot.model() != model) {
+            throw new IllegalArgumentException("snapshot clock model differs");
+        }
+        int[] restoredMemory = snapshot.memory();
+        System.arraycopy(restoredMemory, 0, memory, 0, memory.length);
+        queuedCycles.clear();
+        queuedCycles.addAll(snapshot.queuedCycles());
+        activeCycle = snapshot.activeCycle();
+        halfDot = snapshot.halfDot();
+        cpuClock = snapshot.cpuClock();
+        cycleNumber = snapshot.cycleNumber();
+        tStateIndex = snapshot.tStateIndex();
+        halfDotInCpuClock = snapshot.halfDotInCpuClock();
+        heldBusData = snapshot.heldBusData();
+    }
+
+    private void finishCycle(boolean applyDetachedControlSemantics) {
         if (activeCycle.kind().reads()) {
             heldBusData = memory[activeCycle.address()];
         } else if (activeCycle.kind().writes()) {
             memory[activeCycle.address()] = activeCycle.writeData();
             heldBusData = activeCycle.writeData();
         }
-        interruptRequests &= ~activeCycle.interruptAcknowledge();
-        if (activeCycle.instructionEnds()) {
+        if (applyDetachedControlSemantics) {
+            interruptRequests &= ~activeCycle.interruptAcknowledge();
+        }
+        if (applyDetachedControlSemantics && activeCycle.instructionEnds()) {
             finishInstruction(activeCycle.control());
         }
     }
