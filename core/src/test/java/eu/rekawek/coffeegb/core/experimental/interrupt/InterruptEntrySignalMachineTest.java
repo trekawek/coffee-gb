@@ -85,10 +85,12 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void productionDifferentialRetainsEveryLegacyTimerAndSerialLead() {
+    public void rawWireAcknowledgeWindowsMatchDmgT4AndFittedCgbPlacement() {
         for (InterruptEntrySignalMachine.Model model :
                 new InterruptEntrySignalMachine.Model[]{DMG, CGB_NORMAL, CGB_DOUBLE}) {
-            int legacyWindow = model.cgb() ? 8 : 3;
+            // DMG T4 is externally grounded; the +4 distance follows from retaining the fitted
+            // Coffee callback marker. CGB +8 remains a fitted behavioral constraint.
+            int acknowledgeWindow = model.cgb() ? 8 : 4;
             for (InterruptEntrySignalMachine.Source source :
                     new InterruptEntrySignalMachine.Source[]{TIMER, SERIAL}) {
                 for (int requestDistance = 0; requestDistance <= 12; requestDistance++) {
@@ -98,7 +100,7 @@ public class InterruptEntrySignalMachineTest {
 
                     InterruptEntrySignalMachine.Observation acknowledge = null;
                     int clocksAfterClear = 0;
-                    while (clocksAfterClear <= Math.max(legacyWindow, requestDistance) + 2) {
+                    while (clocksAfterClear <= Math.max(acknowledgeWindow, requestDistance) + 2) {
                         clocksAfterClear++;
                         int request = clocksAfterClear == requestDistance ? source.mask() : 0;
                         InterruptEntrySignalMachine.Observation observation =
@@ -108,7 +110,7 @@ public class InterruptEntrySignalMachineTest {
                         }
                     }
 
-                    boolean expectedIf = requestDistance > legacyWindow;
+                    boolean expectedIf = requestDistance > acknowledgeWindow;
                     String label = model + " " + source + " request distance " + requestDistance;
                     assertEquals(label, expectedIf,
                             (machine.interruptFlags() & source.mask()) != 0);
@@ -128,7 +130,7 @@ public class InterruptEntrySignalMachineTest {
             machine.presetInterruptFlags(SERIAL.mask());
             advanceThroughProductionClear(machine);
 
-            int acknowledgeDistance = model.cgb() ? 8 : 3;
+            int acknowledgeDistance = model.cgb() ? 8 : 4;
             InterruptEntrySignalMachine.Observation collision = null;
             for (int clock = 1; clock <= acknowledgeDistance; clock++) {
                 collision = machine.stepCpuClock(clock == acknowledgeDistance ? SERIAL.mask() : 0);
@@ -141,8 +143,8 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void cpuClockPhaseExplainsNormalAndDoubleSpeedInHalfDots() {
-        assertAcknowledgeHalfDotDistance(DMG, 3, 6);
+    public void cpuClockProjectionConvertsDmgAndFittedCgbToHalfDots() {
+        assertAcknowledgeHalfDotDistance(DMG, 4, 8);
         assertAcknowledgeHalfDotDistance(CGB_NORMAL, 8, 16);
         assertAcknowledgeHalfDotDistance(CGB_DOUBLE, 8, 8);
     }
@@ -175,25 +177,37 @@ public class InterruptEntrySignalMachineTest {
 
         InterruptEntrySignalMachine.Observation t1 = beforeClose.stepCpuClock(0);
         assertEquals(T1, t1.tState());
+        assertFalse(t1.dataPhase());
+        assertFalse(t1.writePhase());
         assertTrue(t1.pendingBankTransparent());
 
         InterruptEntrySignalMachine.Observation t2 = beforeClose.stepCpuClock(TIMER.mask());
         assertEquals(T2, t2.tState());
+        assertFalse(t2.dataPhase());
+        assertFalse(t2.writePhase());
         assertTrue(t2.pendingBankTransparent());
         assertEquals(TIMER.mask() | SERIAL.mask(), t2.sampledPending());
         assertEquals(TIMER, t2.sampledPriority());
 
-        InterruptEntrySignalMachine.Observation acknowledge = beforeClose.stepCpuClock(0);
-        assertEquals(T3, acknowledge.tState());
-        assertFalse(acknowledge.pendingBankTransparent());
-        assertEquals(TIMER.mask(), acknowledge.acknowledgeWires());
-        assertEquals(TIMER.mask() | SERIAL.mask(), acknowledge.sampledPending());
-        assertFalse((acknowledge.interruptFlags() & TIMER.mask()) != 0);
-        assertTrue((acknowledge.interruptFlags() & SERIAL.mask()) != 0);
+        InterruptEntrySignalMachine.Observation closed = beforeClose.stepCpuClock(0);
+        assertEquals(T3, closed.tState());
+        assertTrue(closed.dataPhase());
+        assertFalse(closed.writePhase());
+        assertFalse(closed.pendingBankTransparent());
+        assertEquals(0, closed.acknowledgeWires());
+        assertFalse(closed.vectorResolved());
 
-        InterruptEntrySignalMachine.Observation vector = beforeClose.stepCpuClock(0);
-        assertTrue(vector.vectorCapture());
-        assertEquals(TIMER, vector.vectorSource());
+        InterruptEntrySignalMachine.Observation evaluate = beforeClose.stepCpuClock(0);
+        assertEquals(T4, evaluate.tState());
+        assertTrue(evaluate.dataPhase());
+        assertTrue(evaluate.writePhase());
+        assertFalse(evaluate.pendingBankTransparent());
+        assertEquals(TIMER.mask(), evaluate.acknowledgeWires());
+        assertEquals(TIMER.mask() | SERIAL.mask(), evaluate.sampledPending());
+        assertFalse((evaluate.interruptFlags() & TIMER.mask()) != 0);
+        assertTrue((evaluate.interruptFlags() & SERIAL.mask()) != 0);
+        assertTrue(evaluate.vectorResolved());
+        assertEquals(TIMER, evaluate.vectorSource());
 
         InterruptEntrySignalMachine afterClose = new InterruptEntrySignalMachine(DMG);
         afterClose.presetInterruptFlags(SERIAL.mask());
@@ -205,13 +219,18 @@ public class InterruptEntrySignalMachineTest {
         assertEquals(T3, late.tState());
         assertFalse(late.pendingBankTransparent());
         assertEquals(SERIAL.mask(), late.sampledPending());
-        assertEquals(SERIAL.mask(), late.acknowledgeWires());
+        assertEquals(0, late.acknowledgeWires());
         assertTrue((late.interruptFlags() & TIMER.mask()) != 0);
-        assertFalse((late.interruptFlags() & SERIAL.mask()) != 0);
+        assertTrue((late.interruptFlags() & SERIAL.mask()) != 0);
 
-        InterruptEntrySignalMachine.Observation lateVector = afterClose.stepCpuClock(0);
-        assertTrue(lateVector.vectorCapture());
-        assertEquals(SERIAL, lateVector.vectorSource());
+        InterruptEntrySignalMachine.Observation lateEvaluate = afterClose.stepCpuClock(0);
+        assertEquals(T4, lateEvaluate.tState());
+        assertTrue(lateEvaluate.writePhase());
+        assertEquals(SERIAL.mask(), lateEvaluate.acknowledgeWires());
+        assertTrue(lateEvaluate.vectorResolved());
+        assertEquals(SERIAL, lateEvaluate.vectorSource());
+        assertTrue((lateEvaluate.interruptFlags() & TIMER.mask()) != 0);
+        assertFalse((lateEvaluate.interruptFlags() & SERIAL.mask()) != 0);
     }
 
     @Test
@@ -247,13 +266,13 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void cgbSelectionLatchPreventsPostVectorRequestFromStealingDelayedAcknowledge() {
+    public void cgbFittedHeldOwnerPreventsPostVectorRequestFromStealingDelayedAcknowledge() {
         for (InterruptEntrySignalMachine.Model model :
                 new InterruptEntrySignalMachine.Model[]{CGB_NORMAL, CGB_DOUBLE}) {
             InterruptEntrySignalMachine machine = new InterruptEntrySignalMachine(model);
             machine.presetInterruptFlags(TIMER.mask());
             advanceThroughProductionClear(machine);
-            runUntilVectorCaptured(machine);
+            runUntilVectorResolved(machine);
             assertEquals(TIMER, machine.vectorSource());
 
             // The CGB IF-reset path is still in flight, but vector priority is no longer live.
@@ -268,14 +287,17 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void movingClearOnlyToTheVectorBoundaryIsFalsifiedByBothModels() {
-        // A universal end-of-IRQ_JUMP clear is four clocks after production IRQ_PUSH_2. DMG says a
-        // request four clocks away survives, while CGB says a request five clocks away is cleared.
-        assertTrue("DMG distance four must survive", legacySurvives(DMG, 4));
-        assertFalse("a +4 clear would incorrectly consume it", survivesPointStrobe(4, 4));
+    public void oneUniversalVectorBoundaryClearCannotFitDmgAndCgb() {
+        // With the retained fitted Coffee callback marker, the externally grounded DMG T4
+        // acknowledge appears at +4, so a point strobe there matches the projection. CGB's later
+        // clear remains fitted at +8: a request at +5 must still be consumed there, after the DMG
+        // point strobe has ended.
+        assertFalse("DMG distance four collides with T4", rawAcknowledgeSurvives(DMG, 4));
+        assertFalse("a +4 point strobe consumes it", survivesPointStrobe(4, 4));
 
-        assertFalse("CGB distance five must be consumed", legacySurvives(CGB_NORMAL, 5));
-        assertTrue("a +4 clear has already ended", survivesPointStrobe(4, 5));
+        assertFalse("CGB distance five remains inside its fitted window",
+                rawAcknowledgeSurvives(CGB_NORMAL, 5));
+        assertTrue("a universal +4 point strobe has already ended", survivesPointStrobe(4, 5));
     }
 
     @Test
@@ -338,12 +360,12 @@ public class InterruptEntrySignalMachineTest {
         return observation;
     }
 
-    private static InterruptEntrySignalMachine.Observation runUntilVectorCaptured(
+    private static InterruptEntrySignalMachine.Observation runUntilVectorResolved(
             InterruptEntrySignalMachine machine) {
         InterruptEntrySignalMachine.Observation observation;
         do {
             observation = machine.stepCpuClock(0);
-        } while (!observation.vectorCapture());
+        } while (!observation.vectorResolved());
         assertEquals(IRQ_JUMP, observation.machineCycle());
         assertEquals(T4, observation.tState());
         assertNotNull(observation.vectorSource());
@@ -363,21 +385,21 @@ public class InterruptEntrySignalMachineTest {
 
     private static void runUntilVectorAndAcknowledge(
             InterruptEntrySignalMachine machine) {
-        boolean vectorCaptured = false;
+        boolean vectorResolved = false;
         boolean acknowledgeObserved = false;
         int remaining = 16;
-        while ((!vectorCaptured || !acknowledgeObserved) && remaining-- > 0) {
+        while ((!vectorResolved || !acknowledgeObserved) && remaining-- > 0) {
             InterruptEntrySignalMachine.Observation observation = machine.stepCpuClock(0);
-            vectorCaptured |= observation.vectorCapture();
+            vectorResolved |= observation.vectorResolved();
             acknowledgeObserved |= observation.acknowledgeWires() != 0;
         }
-        assertTrue("vector capture did not arrive", vectorCaptured);
+        assertTrue("vector did not resolve", vectorResolved);
         assertTrue("acknowledge strobe did not arrive", acknowledgeObserved);
     }
 
-    private static boolean legacySurvives(
+    private static boolean rawAcknowledgeSurvives(
             InterruptEntrySignalMachine.Model model, int requestDistance) {
-        return requestDistance > (model.cgb() ? 8 : 3);
+        return requestDistance > (model.cgb() ? 8 : 4);
     }
 
     private static boolean survivesPointStrobe(int strobeDistance, int requestDistance) {

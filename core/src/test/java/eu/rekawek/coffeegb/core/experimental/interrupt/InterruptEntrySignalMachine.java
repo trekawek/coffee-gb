@@ -8,16 +8,17 @@ import java.util.List;
  *
  * <p>The model deliberately separates things that the production CPU currently performs in one
  * {@code IRQ_PUSH_2} callback: the end of the low-byte stack bus cycle, the phase-transparent
- * {@code IE & IF} pending bank, vector capture, and the selected source's IF-reset strobe.
+ * {@code IE & IF} pending bank, vector resolution, and the selected source's IF-reset strobe.
  * Peripheral request wires are accepted only at the half-dot on which they occur; no component can
  * inspect a future request.</p>
  *
  * <p>On DMG, the sampled-pending bank and local clear-dominant IF latches are derived from the pinned
- * external gate model. The CGB phase placements remain behavioral constraints, not a claim that CGB
- * uses the same gates. In both cases, the held pending bits are the common input to the one-hot
- * acknowledge and vector paths; no semantic "late priority" repair is needed. The exact mapping of
- * the DMG aperture, acknowledge, and vector to Java T1-T4 labels is production-aligned and fitted;
- * the default-delay trace establishes causal ordering, not those coarse phase constants.</p>
+ * external gate model. The bank is transparent while {@code data_phase} is low in T1/T2, closes
+ * when that phase rises for T3, and drives both acknowledge and vector during the T4
+ * {@code write_phase/clk_t4} evaluation. The CGB phase placements remain behavioral constraints,
+ * not a claim that CGB uses the same gates. In both cases, the held pending bits are the common
+ * input to the one-hot acknowledge and vector paths; no semantic "late priority" repair is
+ * needed.</p>
  */
 final class InterruptEntrySignalMachine {
 
@@ -109,6 +110,8 @@ final class InterruptEntrySignalMachine {
             boolean cpuClockEdge,
             MachineCycle machineCycle,
             TState tState,
+            boolean dataPhase,
+            boolean writePhase,
             BusSignals bus,
             int requestWires,
             int interruptFlags,
@@ -117,7 +120,7 @@ final class InterruptEntrySignalMachine {
             int acknowledgeWires,
             Source sampledPriority,
             Source vectorSource,
-            boolean vectorCapture,
+            boolean vectorResolved,
             boolean productionClearBoundary) {
     }
 
@@ -146,10 +149,10 @@ final class InterruptEntrySignalMachine {
 
     private long productionClearCpuClock = Long.MIN_VALUE;
 
-    /** The source captured by the vector gate. */
+    /** The source last resolved by the vector gate. */
     private Source vectorSource;
 
-    private boolean vectorCapture;
+    private boolean vectorResolved;
 
     InterruptEntrySignalMachine(Model model) {
         this.model = model;
@@ -171,7 +174,7 @@ final class InterruptEntrySignalMachine {
         halfDot++;
         requestWires = rawRequestWires & 0x1f;
         acknowledgeWires = 0;
-        vectorCapture = false;
+        vectorResolved = false;
 
         // Each physical IF bit is a local set/reset latch. A CPU FF0F write drives its set/reset
         // inputs directly; an acknowledge below remains clear-dominant over either write-data=1 or
@@ -184,6 +187,8 @@ final class InterruptEntrySignalMachine {
         boolean cpuClockEdge = halfDot % model.halfDotsPerCpuClock() == 0;
         MachineCycle cycle = machineCycle();
         TState tState = tState();
+        boolean dataPhase = tState == TState.T3 || tState == TState.T4;
+        boolean writePhase = tState == TState.T4;
         boolean pendingBankTransparent = isPendingBankTransparent(cycle, tState);
         boolean productionClearBoundary = false;
 
@@ -210,10 +215,11 @@ final class InterruptEntrySignalMachine {
                 }
             }
 
-            // Vector capture uses the same held bank as acknowledge. DMG's IF reset may already
-            // have cleared the readable flag, but it does not retroactively change the held bits.
-            if (isVectorCapturePhase(cycle, tState)) {
-                vectorCapture = true;
+            // The vector network resolves from the same held bank as acknowledge. The external
+            // DMG model has no second source-capture latch here: the PC consumes this combinational
+            // result at the following cycle boundary.
+            if (isVectorResolvePhase(cycle, tState)) {
+                vectorResolved = true;
                 vectorSource = highestPriority(sampledPending);
             }
         }
@@ -225,6 +231,8 @@ final class InterruptEntrySignalMachine {
                 cpuClockEdge,
                 cycle,
                 tState,
+                dataPhase,
+                writePhase,
                 busSignals(cycle, tState),
                 requestWires,
                 interruptFlags,
@@ -233,7 +241,7 @@ final class InterruptEntrySignalMachine {
                 acknowledgeWires,
                 highestPriority(sampledPending),
                 vectorSource,
-                vectorCapture,
+                vectorResolved,
                 productionClearBoundary);
 
         if (cpuClockEdge) {
@@ -282,24 +290,24 @@ final class InterruptEntrySignalMachine {
     }
 
     private boolean isPendingBankTransparent(MachineCycle cycle, TState tState) {
-        if (cycle.ordinal() < MachineCycle.IRQ_JUMP.ordinal()) {
-            return true;
+        if (model.cgb()) {
+            // Fitted only: the CGB legacy collision window constrains the held owner after vector
+            // resolution, but this experiment has no CGB gate-level phase oracle.
+            return cycle.ordinal() <= MachineCycle.IRQ_JUMP.ordinal();
         }
-        if (cycle != MachineCycle.IRQ_JUMP) {
-            return false;
-        }
-        // The DMG data-phase latch closes before the T3 acknowledge. CGB's held owner is only
-        // constrained by the later-ack behavior after its T4 vector capture.
-        return model.cgb() || tState == TState.T1 || tState == TState.T2;
+        // In the DMG model data_phase is low during T1/T2 and high during T3/T4. The latch opens on
+        // the low level in every entry cycle, then its final M6 value is held after T2.
+        return cycle.ordinal() <= MachineCycle.IRQ_JUMP.ordinal()
+                && (tState == TState.T1 || tState == TState.T2);
     }
 
     private boolean isAcknowledgePhase(MachineCycle cycle, TState tState) {
         return model.cgb()
                 ? cycle == MachineCycle.HANDLER_FETCH && tState == TState.T4
-                : cycle == MachineCycle.IRQ_JUMP && tState == TState.T3;
+                : cycle == MachineCycle.IRQ_JUMP && tState == TState.T4;
     }
 
-    private static boolean isVectorCapturePhase(MachineCycle cycle, TState tState) {
+    private static boolean isVectorResolvePhase(MachineCycle cycle, TState tState) {
         return cycle == MachineCycle.IRQ_JUMP && tState == TState.T4;
     }
 
