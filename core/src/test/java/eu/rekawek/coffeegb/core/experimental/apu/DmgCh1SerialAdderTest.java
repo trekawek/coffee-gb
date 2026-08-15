@@ -101,22 +101,18 @@ public class DmgCh1SerialAdderTest {
     }
 
     @Test
-    public void fixedCpuWritePhaseFalsifiesActivitySelectedRestartApertures() {
-        // From CH1_START onward the topology agrees with production's shorter delay. The longer
-        // inactive bucket remains a compatibility rule: the external netlist has no active-state
-        // input to this cone, while other CPU-write phases remain unprobed.
+    public void fixedCpuWritePhaseNeedsNoActivitySelectedRestartAperture() {
+        // From CH1_START onward the topology and production use the same schedule. The external
+        // netlist has no active-state input to this cone; other CPU-write phases remain unprobed.
         for (int shift = 1; shift <= 7; shift++) {
             int nr10 = 0x10 | shift;
             int downstreamTicks = topologyTriggerOverflowTicks(nr10, true);
-            int productionActive = productionTriggerOverflowTicks(nr10, true);
-            int productionInactive = productionTriggerOverflowTicks(nr10, false);
+            int productionTicks = productionTriggerOverflowTicks(nr10);
 
             assertEquals("CH1_START to overflow, shift=" + shift,
                     8 + 4 * shift, downstreamTicks);
-            assertEquals("active compatibility bucket, shift=" + shift,
-                    downstreamTicks, productionActive);
-            assertEquals("unexplained inactive compatibility bucket, shift=" + shift,
-                    downstreamTicks + 4, productionInactive);
+            assertEquals("production trigger schedule, shift=" + shift,
+                    downstreamTicks, productionTicks);
         }
 
         // These literal checks transcribe the retained external trace; they do not rerun it.
@@ -170,7 +166,7 @@ public class DmgCh1SerialAdderTest {
                 int nr10 = 0x10 | (negate ? 0x08 : 0) | shift;
                 for (int frequency : FREQUENCIES) {
                     FrequencySweep production = configuredProduction(nr10, frequency);
-                    production.trigger(true, false, false);
+                    production.trigger(false, false);
                     for (int tick = 0; tick < 64; tick++) {
                         production.tick();
                     }
@@ -194,7 +190,7 @@ public class DmgCh1SerialAdderTest {
                 int nr10 = 0x10 | (negate ? 0x08 : 0) | shift;
                 for (int frequency : FREQUENCIES) {
                     FrequencySweep production = configuredProduction(nr10, frequency);
-                    production.trigger(true, false, false);
+                    production.trigger(false, false);
                     for (int tick = 0; tick < 64; tick++) {
                         production.tick();
                     }
@@ -321,9 +317,9 @@ public class DmgCh1SerialAdderTest {
         return tick;
     }
 
-    private static int productionTriggerOverflowTicks(int nr10, boolean wasActive) {
+    private static int productionTriggerOverflowTicks(int nr10) {
         FrequencySweep production = configuredProduction(nr10, 0x7ff);
-        production.trigger(wasActive, false, false);
+        production.trigger(false, false);
         int ticks = 0;
         while (production.isEnabled() && ticks < 100) {
             production.tick();
