@@ -22,30 +22,25 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     private final int[] values;
 
-    // DMG palette write conflict (mealybug m3_bgp_change): during the T-cycle in which
-    // a CPU write to BGP/OBP0/OBP1 lands, the LCD output stage reads old|new; the new
-    // value settles one T-cycle later. -1 = no write this tick.
+    // Two register-write latch banks, CPU-side pending and PPU-side visible. A slot
+    // contains -1 when its write strobe is low; otherwise it carries the bus value
+    // sampled by that register's consumer. Palette old|new, SCX old-value and WX's
+    // just-written pulse therefore advance through the same two-stage path.
     private final int[] mixValues = new int[GpuRegister.values().length];
 
     private final int[] pendingMixValues = new int[GpuRegister.values().length];
 
-    // ticks remaining in which WX counts as "just written": the DMG's WX==position+6
-    // window desync is suppressed for one machine cycle after a WX write (SameBoy
-    // wx_just_changed)
-    private int wxJustChangedTicks;
+    private static final GpuRegister[] CONFLICT_REGISTERS =
+            {GpuRegister.BGP, GpuRegister.OBP0, GpuRegister.OBP1,
+                    GpuRegister.SCX, GpuRegister.WX};
 
-    private static final int WX_CHANGE_TICKS = 2;
+    private static final int[] WX_VISIBLE_BY_RELEASED_TICKS = {-1, 0, -1};
+
+    private static final int[] WX_PENDING_BY_RELEASED_TICKS = {-1, -1, 0};
 
     private boolean gbc;
 
     private SpeedMode speedMode;
-
-    // On CGB in normal speed, a tile-index fetch colliding with an SCX write reads the
-    // old value. The CPU write is processed before the PPU in our tick, so retain that
-    // old value for the PPU side of the same tick (SameBoy GB_CONFLICT_READ_OLD).
-    private int scxOldValue = -1;
-
-    private int pendingScxOldValue = -1;
 
     public void setGbc(boolean gbc) {
         this.gbc = gbc;
@@ -79,8 +74,8 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     /** Register value seen by the tile fetcher during the current PPU tick. */
     public int getForFetcher(GpuRegister reg) {
-        if (reg == GpuRegister.SCX && scxOldValue >= 0) {
-            return scxOldValue;
+        if (reg == GpuRegister.SCX && mixValues[reg.ordinal()] >= 0) {
+            return mixValues[reg.ordinal()];
         }
         return values[reg.ordinal()];
     }
@@ -91,25 +86,18 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
         return mix >= 0 ? mix : values[reg.ordinal()];
     }
 
-    /** Called once per GPU tick: a mix value lives for the single tick after the write. */
+    /** Called once per GPU tick: CPU-side writes become visible for one PPU tick. */
     void tickConflicts() {
-        scxOldValue = pendingScxOldValue;
-        pendingScxOldValue = -1;
-        for (GpuRegister reg : PALETTE_REGISTERS) {
+        for (GpuRegister reg : CONFLICT_REGISTERS) {
             mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
             pendingMixValues[reg.ordinal()] = -1;
-        }
-        if (wxJustChangedTicks > 0) {
-            wxJustChangedTicks--;
         }
     }
 
     public boolean isWxJustChanged() {
-        return wxJustChangedTicks > 0;
+        return mixValues[GpuRegister.WX.ordinal()] >= 0
+                || pendingMixValues[GpuRegister.WX.ordinal()] >= 0;
     }
-
-    private static final GpuRegister[] PALETTE_REGISTERS =
-            {GpuRegister.BGP, GpuRegister.OBP0, GpuRegister.OBP1};
 
     public void put(GpuRegister reg, int value) {
         values[reg.ordinal()] = value;
@@ -139,11 +127,11 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()] | value;
             }
             if (reg == GpuRegister.WX) {
-                wxJustChangedTicks = WX_CHANGE_TICKS;
+                pendingMixValues[reg.ordinal()] = 0;
             }
             if (gbc && reg == GpuRegister.SCX
                     && (speedMode == null || speedMode.getSpeedMode() == 1)) {
-                pendingScxOldValue = values[reg.ordinal()];
+                pendingMixValues[reg.ordinal()] = values[reg.ordinal()];
             }
             values[reg.ordinal()] = value;
         }
@@ -171,7 +159,8 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
     @Override
     public ComponentState<GpuRegisterValues> captureState() {
         return new GpuRegisterValuesState(values.clone(), mixValues.clone(), pendingMixValues.clone(),
-                wxJustChangedTicks, scxOldValue, pendingScxOldValue);
+                captureWxJustChangedTicks(),
+                mixValues[GpuRegister.SCX.ordinal()], pendingMixValues[GpuRegister.SCX.ordinal()]);
     }
 
     @Override
@@ -180,9 +169,9 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
                 capture.ints(values),
                 capture.ints(mixValues),
                 capture.ints(pendingMixValues),
-                wxJustChangedTicks,
-                scxOldValue,
-                pendingScxOldValue);
+                captureWxJustChangedTicks(),
+                mixValues[GpuRegister.SCX.ordinal()],
+                pendingMixValues[GpuRegister.SCX.ordinal()]);
     }
 
     @Override
@@ -201,9 +190,17 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
             java.util.Arrays.fill(this.mixValues, -1);
             java.util.Arrays.fill(this.pendingMixValues, -1);
         }
-        this.wxJustChangedTicks = mem.wxJustChangedTicks;
-        this.scxOldValue = mem.scxOldValue;
-        this.pendingScxOldValue = mem.pendingScxOldValue;
+        mixValues[GpuRegister.WX.ordinal()] = WX_VISIBLE_BY_RELEASED_TICKS[mem.wxJustChangedTicks];
+        pendingMixValues[GpuRegister.WX.ordinal()] =
+                WX_PENDING_BY_RELEASED_TICKS[mem.wxJustChangedTicks];
+        mixValues[GpuRegister.SCX.ordinal()] = mem.scxOldValue;
+        pendingMixValues[GpuRegister.SCX.ordinal()] = mem.pendingScxOldValue;
+    }
+
+    private int captureWxJustChangedTicks() {
+        int visible = mixValues[GpuRegister.WX.ordinal()] + 1;
+        int pending = pendingMixValues[GpuRegister.WX.ordinal()] + 1;
+        return pending * 2 + visible * (1 - pending);
     }
 
     private record GpuRegisterValuesState(int[] values, int[] mixValues, int[] pendingMixValues,
