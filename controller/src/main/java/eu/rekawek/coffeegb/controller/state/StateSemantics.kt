@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
+import eu.rekawek.coffeegb.core.gpu.GpuRegister
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterEngine
 import eu.rekawek.coffeegb.core.sgb.Commands
@@ -581,9 +582,11 @@ internal object StateSemantics {
           })
 
       put("eu.rekawek.coffeegb.core.gpu.GpuRegisterValues\$GpuRegisterValuesState",
-          constrained("GPU register arrays, nullable legacy mix arrays, and old-value sentinels are coherent.") {
+          constrained("GPU register arrays, nullable legacy mix arrays, and shared conflict-latch mirrors are coherent.") {
             val values = it.intArray("values")
             it.intValues("values", 0, 0xff)
+            it.require(values.size == GpuRegister.values().size,
+                "has ${values.size} GPU register values instead of ${GpuRegister.values().size}")
             val mix = it.value("mixValues") as IntArray?
             val pending = it.value("pendingMixValues") as IntArray?
             it.require((mix == null) == (pending == null), "has only one palette-mix array")
@@ -593,6 +596,28 @@ internal object StateSemantics {
             }
             it.range("wxJustChangedTicks", 0, 2)
             it.range("scxOldValue", -1, 0xff); it.range("pendingScxOldValue", -1, 0xff)
+            if (mix != null && pending != null) {
+              val paletteSlots = setOf(GpuRegister.BGP.ordinal, GpuRegister.OBP0.ordinal,
+                  GpuRegister.OBP1.ordinal)
+              val sharedSlots = paletteSlots + GpuRegister.SCX.ordinal + GpuRegister.WX.ordinal
+              mix.indices.filterNot { index -> index in sharedSlots }.forEach { index ->
+                it.require(mix[index] == -1 && pending[index] == -1,
+                    "has a conflict value in non-conflict register slot $index")
+              }
+
+              val scx = GpuRegister.SCX.ordinal
+              val legacyScxArrays = mix[scx] == -1 && pending[scx] == -1
+              it.require(legacyScxArrays || mix[scx] == it.int("scxOldValue")
+                  && pending[scx] == it.int("pendingScxOldValue"),
+                  "has SCX conflict latches inconsistent with its released scalar slots")
+
+              val wx = GpuRegister.WX.ordinal
+              val legacyWxArrays = mix[wx] == -1 && pending[wx] == -1
+              val wxTicks = (pending[wx] + 1) * 2 + (mix[wx] + 1) * -pending[wx]
+              it.require(legacyWxArrays || mix[wx] in -1..0 && pending[wx] in -1..0
+                  && wxTicks == it.int("wxJustChangedTicks"),
+                  "has WX conflict latches inconsistent with its released countdown slot")
+            }
           })
       put("eu.rekawek.coffeegb.core.gpu.Lcdc\$LcdcState",
           constrained("LCDC latches are bytes or the documented -1 mix sentinel; released glitch slots are binary strobes.") {
