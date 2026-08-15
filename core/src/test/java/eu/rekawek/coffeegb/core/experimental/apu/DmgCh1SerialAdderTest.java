@@ -166,7 +166,7 @@ public class DmgCh1SerialAdderTest {
                 int nr10 = 0x10 | (negate ? 0x08 : 0) | shift;
                 for (int frequency : FREQUENCIES) {
                     FrequencySweep production = configuredProduction(nr10, frequency);
-                    production.trigger(false, false);
+                    production.trigger(false, false, false);
                     for (int tick = 0; tick < 64; tick++) {
                         production.tick();
                     }
@@ -190,7 +190,7 @@ public class DmgCh1SerialAdderTest {
                 int nr10 = 0x10 | (negate ? 0x08 : 0) | shift;
                 for (int frequency : FREQUENCIES) {
                     FrequencySweep production = configuredProduction(nr10, frequency);
-                    production.trigger(false, false);
+                    production.trigger(false, false, false);
                     for (int tick = 0; tick < 64; tick++) {
                         production.tick();
                     }
@@ -319,7 +319,7 @@ public class DmgCh1SerialAdderTest {
 
     private static int productionTriggerOverflowTicks(int nr10) {
         FrequencySweep production = configuredProduction(nr10, 0x7ff);
-        production.trigger(false, false);
+        production.trigger(false, false, false);
         int ticks = 0;
         while (production.isEnabled() && ticks < 100) {
             production.tick();

@@ -81,7 +81,7 @@ public class SoundMode1 extends AbstractSoundMode {
             sampleSuppressed = true;
             lastOutput = 0;
         }
-        frequencySweep.trigger(lowFrequencyPhase, gbc);
+        frequencySweep.trigger(activeBeforeTrigger, lowFrequencyPhase, gbc);
         volumeEnvelope.trigger();
     }
 

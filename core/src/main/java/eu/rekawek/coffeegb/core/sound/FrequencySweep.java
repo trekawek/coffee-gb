@@ -45,7 +45,7 @@ public class FrequencySweep implements StatefulComponent<FrequencySweep> {
         frequencyUpdatePending = false;
     }
 
-    public void trigger(boolean lowFrequencyPhase, boolean gbc) {
+    public void trigger(boolean wasActive, boolean lowFrequencyPhase, boolean gbc) {
         this.negging = false;
         this.overflow = false;
 
