@@ -210,7 +210,7 @@ flowchart LR
     Buses --> CPU
     Buses --> PPU
     Buses --> DIV
-    PPU -->|"raw STAT/VBlank wires"| IRQ["IF latches + synchronizers"]
+    PPU -->|"raw STAT/VBlank wires"| IRQ["Local IF latches + pending bank + wake DFF"]
     DIV -->|"timer/serial wires"| IRQ
     IRQ -->|"accept / wake / vector"| CPU
     CPU -->|"acknowledge level"| IRQ
@@ -296,9 +296,11 @@ the unchanged address: the halt bug emerges without a `haltBugMode`, PC rewind, 
 next-fetch gate. During ordinary HALT, the sleep latch retains after the delayed set pulse and the
 already sampled opcode waits for wake.
 
-Keep interrupt dispatch as a real five-M-cycle microprogram. Keep the priority encoder live until
-the documented selection/vector latch. A higher-priority source arriving during dispatch then
-redirects the live encoder naturally; `applyLateInterruptPriority`-style repair is unnecessary.
+Keep interrupt dispatch as a real five-M-cycle microprogram. On DMG, let transparent `IE & IF`
+latches sample pending sources during their data-phase aperture. Their held bits then feed both the
+priority/vector logic and the one-hot acknowledge decoder. A higher-priority source redirects the
+entry only if it reaches that bank before the aperture closes; no future-opcode query or
+`applyLateInterruptPriority` repair is needed.
 
 ### Interrupt control island
 
@@ -316,7 +318,7 @@ State:
 - IME and EI-delay latch;
 - HALT gate;
 - separate running-acceptance and HALT-wake synchronizer stages; and
-- the selection/vector latch.
+- the phase-transparent pending bank and its held source bits.
 
 Outputs:
 
@@ -431,7 +433,7 @@ This changes the interpretation of current fixes:
 | Delayed register view/queue | Source transition crosses a consumer-local latch |
 | Reread high byte and patch FIFO/output | Address/data latch samples at its real stage |
 | Rewind window pixel/position | Independent fetch and LCD coordinates plus stage flush |
-| Catch up three dots on OBJ abort | Fetch enable drops at a stage; unaffected stages continue |
+| Catch up three dots on OBJ abort | Future match/output gates drop immediately; captured byte and shift-bank stages continue |
 | Predicted mode-0 timestamp | Comparator/source signal driven by pipeline state |
 
 Some observed behavior may still require a retained or transparent latch whose influence spans
@@ -710,13 +712,18 @@ merge-ready framework. Keep primitives and candidate islands in test sources unt
 slice replaces production behavior and deletes more prediction/provenance/repair state than it
 adds.
 
-One narrow production slice did pass that rule. Serial DIV-reset handling is now one local
+One narrow production slice passed the behavior and deletion gates within this research branch;
+its observed performance and external-driver licensing still need reproducible/reviewed upstream
+acceptance. Serial DIV-reset handling is now one local
 divider-stage observation, output-clock toggle, and falling-edge shift. It removes eleven net lines
 of future-event arithmetic, preserves the released save-state shape and debugger callback order,
 has an exhaustive arbitrary-phase replay test, is grounded in the pinned DMG-B gate model, and has
 no measured performance regression. CGB normal/fast behavior remains production-differential rather
-than independently grounded. The reusable latch/bus/scheduler primitives remain test-only because
-landing a generic framework for this one formula would have increased production complexity.
+than independently grounded. The retained interoperability testbench is independently authored and
+contains no DUT implementation, but its MIT classification must still receive project-owner/legal
+review before an upstream merge because it names internal CC BY-SA model nodes. The reusable
+latch/bus/scheduler primitives remain test-only because landing a generic framework for this one
+formula would have increased production complexity.
 
 The external traces strengthen the architectural diagnosis without proving the whole replacement:
 
@@ -732,7 +739,7 @@ The external traces strengthen the architectural diagnosis without proving the w
   transaction.
 - CH4's zero divisor and second LFSR form reduce to complement-loaded ripple and XNOR wiring, and a
   raw write/clock cone—not an activity flag—selects the observed trigger alignment. A faithful and
-  a lean production rewrite both failed all eight SameSuite CH4 cases, so the projection boundary
+  a lean production rewrite both failed 8 of the 13 SameSuite CH4 ROMs, so the projection boundary
   remains unresolved and production was left untouched.
 - CH1 channel-active state does not feed the restart/adder request cone. Identical-phase inactive
   and active writes have identical nonzero-shift waveforms; shift-zero retrigger differs because the
@@ -744,10 +751,11 @@ The external traces strengthen the architectural diagnosis without proving the w
 The attempted combined Serial/IF cut was correctly rolled back. The current master-tick loop runs
 Timer before the CPU and Serial after it, so no placement of one acknowledge callback preserves both
 peripheral windows. The next production experiment must move persistent CPU T-state/bus intent,
-Timer and Serial request generation, IF/IE/IME/HALT control, live priority, and the physical
-acknowledge into one CPU-subedge island. A detached composition shows those edge-triggered seams can
-fit; it does not yet supply the complete timer/serial inputs, transparent/asynchronous settling, PPU
-source paths, CGB wiring, or the physical acknowledge/vector phase.
+Timer and Serial request generation, local IF latches, the phase-transparent pending bank,
+IE/IME/HALT control, and acknowledge/vector decode into one CPU-subedge island. A detached
+composition shows the edge-triggered seams can fit; the external DMG trace supplies the missing
+selection topology, but the experiment still lacks complete timer/serial inputs, integrated
+transparent/asynchronous settling, PPU source paths, and CGB wiring.
 
 Do not begin with a wholesale PPU rewrite or a production full-netlist evaluator. Promote a slice
 only under the evidence and deletion rule in `signal-driven-core-experiments.md`: semantic oracle

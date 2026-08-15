@@ -85,7 +85,7 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void physicalSelectedSourceStrobeReproducesEveryLegacyTimerAndSerialLead() {
+    public void productionDifferentialRetainsEveryLegacyTimerAndSerialLead() {
         for (InterruptEntrySignalMachine.Model model :
                 new InterruptEntrySignalMachine.Model[]{DMG, CGB_NORMAL, CGB_DOUBLE}) {
             int legacyWindow = model.cgb() ? 8 : 3;
@@ -148,7 +148,7 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void livePrioritySelectsLateHigherSourceAndLeavesOriginalPending() {
+    public void transparentPendingBankSamplesHigherSourceBeforeItsApertureCloses() {
         for (InterruptEntrySignalMachine.Model model :
                 new InterruptEntrySignalMachine.Model[]{DMG, CGB_NORMAL, CGB_DOUBLE}) {
             InterruptEntrySignalMachine machine = new InterruptEntrySignalMachine(model);
@@ -156,13 +156,77 @@ public class InterruptEntrySignalMachineTest {
             advanceThroughProductionClear(machine);
 
             // This is the production test's insertion point: state has just become IRQ_JUMP.
-            machine.stepCpuClock(LCDC.mask());
+            InterruptEntrySignalMachine.Observation sample = machine.stepCpuClock(LCDC.mask());
+            assertTrue(model.toString(), sample.pendingBankTransparent());
+            assertEquals(model.toString(), LCDC, sample.sampledPriority());
             runUntilVectorAndAcknowledge(machine);
 
             assertEquals(model.toString(), LCDC, machine.vectorSource());
             assertFalse(model.toString(), (machine.interruptFlags() & LCDC.mask()) != 0);
             assertTrue(model.toString(), (machine.interruptFlags() & TIMER.mask()) != 0);
         }
+    }
+
+    @Test
+    public void dmgHeldPendingBankDrivesBothAcknowledgeAndVector() {
+        InterruptEntrySignalMachine beforeClose = new InterruptEntrySignalMachine(DMG);
+        beforeClose.presetInterruptFlags(SERIAL.mask());
+        advanceThroughProductionClear(beforeClose);
+
+        InterruptEntrySignalMachine.Observation t1 = beforeClose.stepCpuClock(0);
+        assertEquals(T1, t1.tState());
+        assertTrue(t1.pendingBankTransparent());
+
+        InterruptEntrySignalMachine.Observation t2 = beforeClose.stepCpuClock(TIMER.mask());
+        assertEquals(T2, t2.tState());
+        assertTrue(t2.pendingBankTransparent());
+        assertEquals(TIMER.mask() | SERIAL.mask(), t2.sampledPending());
+        assertEquals(TIMER, t2.sampledPriority());
+
+        InterruptEntrySignalMachine.Observation acknowledge = beforeClose.stepCpuClock(0);
+        assertEquals(T3, acknowledge.tState());
+        assertFalse(acknowledge.pendingBankTransparent());
+        assertEquals(TIMER.mask(), acknowledge.acknowledgeWires());
+        assertEquals(TIMER.mask() | SERIAL.mask(), acknowledge.sampledPending());
+        assertFalse((acknowledge.interruptFlags() & TIMER.mask()) != 0);
+        assertTrue((acknowledge.interruptFlags() & SERIAL.mask()) != 0);
+
+        InterruptEntrySignalMachine.Observation vector = beforeClose.stepCpuClock(0);
+        assertTrue(vector.vectorCapture());
+        assertEquals(TIMER, vector.vectorSource());
+
+        InterruptEntrySignalMachine afterClose = new InterruptEntrySignalMachine(DMG);
+        afterClose.presetInterruptFlags(SERIAL.mask());
+        advanceThroughProductionClear(afterClose);
+        afterClose.stepCpuClock(0); // IRQ_JUMP/T1
+        afterClose.stepCpuClock(0); // IRQ_JUMP/T2: final transparent sample
+
+        InterruptEntrySignalMachine.Observation late = afterClose.stepCpuClock(TIMER.mask());
+        assertEquals(T3, late.tState());
+        assertFalse(late.pendingBankTransparent());
+        assertEquals(SERIAL.mask(), late.sampledPending());
+        assertEquals(SERIAL.mask(), late.acknowledgeWires());
+        assertTrue((late.interruptFlags() & TIMER.mask()) != 0);
+        assertFalse((late.interruptFlags() & SERIAL.mask()) != 0);
+
+        InterruptEntrySignalMachine.Observation lateVector = afterClose.stepCpuClock(0);
+        assertTrue(lateVector.vectorCapture());
+        assertEquals(SERIAL, lateVector.vectorSource());
+    }
+
+    @Test
+    public void ff0fWriteClearDominatesRawRequestInsideLocalIfLatch() {
+        InterruptEntrySignalMachine machine = new InterruptEntrySignalMachine(DMG);
+
+        InterruptEntrySignalMachine.Observation collision =
+                machine.stepCpuClock(TIMER.mask(), true, 0);
+        assertEquals(TIMER.mask(), collision.requestWires());
+        assertFalse((collision.interruptFlags() & TIMER.mask()) != 0);
+        assertFalse((collision.sampledPending() & TIMER.mask()) != 0);
+
+        InterruptEntrySignalMachine.Observation afterWrite = machine.stepCpuClock(TIMER.mask());
+        assertTrue((afterWrite.interruptFlags() & TIMER.mask()) != 0);
+        assertTrue((afterWrite.sampledPending() & TIMER.mask()) != 0);
     }
 
     @Test
@@ -215,18 +279,20 @@ public class InterruptEntrySignalMachineTest {
     }
 
     @Test
-    public void latchingPriorityAtProductionClearBoundaryIsFalsified() {
-        // TIMER is selected at IRQ_PUSH_2. LCDC arrives in IRQ_JUMP and must redirect while TIMER
-        // remains pending. An early source latch could only keep TIMER or clear/re-request it.
+    public void closingPendingBankAtProductionClearBoundaryIsFalsified() {
+        // TIMER is pending at IRQ_PUSH_2. LCDC arrives while the pending bank is still transparent
+        // in IRQ_JUMP and must redirect while TIMER remains pending. Closing the bank at the legacy
+        // callback boundary could only keep TIMER or clear/re-request it.
         InterruptEntrySignalMachine machine = new InterruptEntrySignalMachine(DMG);
         machine.presetInterruptFlags(TIMER.mask());
         advanceThroughProductionClear(machine);
-        InterruptEntrySignalMachine.Source prematurelyLatched = TIMER;
+        InterruptEntrySignalMachine.Source prematurelyHeld = TIMER;
 
-        machine.stepCpuClock(LCDC.mask());
+        InterruptEntrySignalMachine.Observation transparent = machine.stepCpuClock(LCDC.mask());
+        assertTrue(transparent.pendingBankTransparent());
         runUntilVectorAndAcknowledge(machine);
 
-        assertEquals(TIMER, prematurelyLatched);
+        assertEquals(TIMER, prematurelyHeld);
         assertEquals(LCDC, machine.vectorSource());
         assertTrue((machine.interruptFlags() & TIMER.mask()) != 0);
     }

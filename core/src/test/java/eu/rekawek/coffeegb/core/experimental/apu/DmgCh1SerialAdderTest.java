@@ -103,8 +103,8 @@ public class DmgCh1SerialAdderTest {
     @Test
     public void fixedCpuWritePhaseFalsifiesActivitySelectedRestartApertures() {
         // From CH1_START onward the topology agrees with production's shorter delay. The longer
-        // inactive bucket remains a compatibility rule: the external netlist has neither an
-        // active-state input to this cone nor a second CPU-write phase that could produce it.
+        // inactive bucket remains a compatibility rule: the external netlist has no active-state
+        // input to this cone, while other CPU-write phases remain unprobed.
         for (int shift = 1; shift <= 7; shift++) {
             int nr10 = 0x10 | shift;
             int downstreamTicks = topologyTriggerOverflowTicks(nr10, true);
@@ -119,6 +119,7 @@ public class DmgCh1SerialAdderTest {
                     downstreamTicks + 4, productionInactive);
         }
 
+        // These literal checks transcribe the retained external trace; they do not rerun it.
         // Default-delay offsets are relative to the NR14 write edge, in simulator T-cycles.
         // The first member is inactive and the second is the later active retrigger. Shift zero
         // has only the initial +3.993 T edge: the active retrigger leaves BYTE/LD_SUM high.

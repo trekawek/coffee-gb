@@ -2,8 +2,9 @@
 
 Status: evidence manifest for `signal-driven-core-experiments.md`, recorded 2026-08-15.
 
-This file records how to inspect or rerun every external-netlist, gate-simulation, and SameBoy
-claim currently used by the signal-driven-core spike. It is an MIT-side manifest only: it contains
+This file records provenance and the available inspection or rerun procedure for external-netlist,
+gate-simulation, and SameBoy claims used by the signal-driven-core spike. Some entries are still
+manual or reconstructed and say so explicitly. It is an MIT-side manifest only: it contains
 repository coordinates, commands, node names, and concise expected observations. It does not copy
 external source, generated netlists, test ROM bytes, save contents, or waveforms.
 
@@ -29,6 +30,10 @@ a hardware capture.
 - The SM83 binutils fork and the Icarus/GTKWave tools retain their upstream licenses.
 - Keep all external checkouts, modified external files, generated Verilog/VVP, assembled probe
   images, FST/VCD files, and SRAM/save dumps outside the Coffee GB worktree.
+- The retained Serial interoperability testbench is independently authored and contains no DUT
+  implementation, copied netlist, or generated source. This spike treats that driver as Coffee GB
+  MIT material, but that classification is not legal advice and must be reviewed before an
+  upstream merge because it names and forces internal nodes from the CC BY-SA model.
 - Do not stage, publish, checksum in reports, or copy any probe ROM or save/dump content. Report
   only the signal relationships and terminal status listed below.
 - This manifest is not legal advice. A production translation from the CC BY-SA model needs an
@@ -40,8 +45,10 @@ Suggested ephemeral roots:
 ORACLE_DMG=/tmp/coffee-gb-dmg-sim
 ORACLE_DMG_HALT=/tmp/coffee-gb-halt-sim
 ORACLE_DMG_TIMER=/tmp/coffee-gb-dmg-sim-timer
+ORACLE_DMG_IRQ=/tmp/coffee-gb-dmg-sim-irq
 ORACLE_DMG_APU=/tmp/coffee-gb-dmg-sim-apu
 ORACLE_DMG_WINDOW=/tmp/coffee-gb-window-gate-sim
+ORACLE_DMG_OBJ=/tmp/coffee-gb-dmg-sim-obj-abort
 ORACLE_SAMEBOY=/tmp/coffee-gb-sameboy-signal
 ORACLE_IVERILOG_SRC=/tmp/coffee-gb-iverilog-src
 ORACLE_IVERILOG_PREFIX=/tmp/coffee-gb-iverilog-master
@@ -97,6 +104,7 @@ git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
 | Claim ID | Source anchor and grep expression | Concise expected finding | Limit |
 | --- | --- | --- | --- |
 | `SM83-IRQ-HALT` | `sm83/sm83.sv:4649-4795,8698-8774,8812-8886`; `sm83/cells/decoder2.sv:205-213`; expression `irq|yoii|halt|ime|idu` | Separate IE/IRQ sample bank, YOII/HALT paths, IME controls, and different decoder participation for HALT versus NOP/STOP | The dynamic probe below rejects a delayed PC gate in this external model; neither source nor simulation establishes silicon equivalence |
+| `IRQ-IF-ACK` | `dmg_cpu_b/cells/dffsr.sv`; `dmg_cpu_b/dmg_cpu_b.sv`; `sm83/sm83.sv`; expressions `nybo|ubul|cpu_irq_ack|irq_latch|irq_prio|data_phase` | Local reset-dominant IF cells feed a data-phase-transparent `IE & IF` bank; its held bits drive both vector priority and one-hot acknowledge | The dynamic probe below covers forced Timer/Serial requests and one DMG CPU phase in the default-delay external model, not silicon, CGB, or all sources/phases |
 | `SERIAL-DIV-RESET` | `dmg_cpu_b/dmg_cpu_b.sv`; instances `tape`, `ufol`, `tama`, `uvyn`, `coty`, `cave`, `dawa`, `edyl`, `elys` | FF04 reset clears the divider stage feeding the internal serial-clock toggle DFF; the shift DFF clocks only on the resulting falling SCK transition | The full-hierarchy cone below establishes DMG-B external-model ownership, not CGB or physical-silicon equivalence |
 | `TIMER-OVERFLOW` | `dmg_cpu_b/dmg_cpu_b.sv`; expression `(boga|mery|moba|nydu)_inst` | Instances at lines 7887, 24503, 24584, and 26046; inspect their pins to recover the sampled-TIMA-MSB/fall/reload cone | The dynamic probe below verifies selected CPU-write and IF/acknowledge apertures in this external model; silicon and unprobed phases remain outside it |
 | `APU-FRAME-CLOCK` | same file; expression `(ajer|bara|bufy|byfe|bylu|caru|cate|coke|horu)_inst` | Instances at lines 4934, 7035, 8425, 8891, 9012, 9560, 9602, 10255, and 20124 form the selected DMG divider/ripple cone | Does not establish CGB tap/offset, power-on suppression, or speed-switch phase |
@@ -106,6 +114,7 @@ git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
 | `STAT-SPLIT` | `dmg_cpu_b_gameboy.sv:666-674,696-704`; `dmg_cpu_b/dmg_cpu_b.sv` expression `lyc_int|lyc_int_en|ff41|ff44` | CPU-visible FF41 and LY vectors are assembled from distinct internal nodes; coincidence and internal STAT state have separate signals | Does not establish the Java line/dot table or FF41 transient mask |
 | `PPU-REG-BANKS` | `dmg_cpu_b/dmg_cpu_b.sv`; expressions `ff43_d[0-7]` and `ff4b_d[0-7]` | One eight-bit SCX storage family and one eight-bit WX storage family are present | Does not derive five Java receiver delays or their half-dot capture phase |
 | `PPU-WINDOW-SOURCE` | same file at `4180-4225,6030-6075,8890-8950,9590-9630,25651-25760,25890-25902,26955,27253-27360,34020-34031,35505-35520,35790-35793,36439-36442`; expression `(anel|byha|ff40_d5|mehe|nunu|pyco|pynu|roco|start_oam_parsing|wymo|wxy_match|xahy|xofo|in_window)` | `wxy_match` crosses two sampled stages into a retained source latch; FF40.D5 feeds its asynchronous reset without a clocked receiver, and `xahy` has a reducible parser/reset cone | Static connectivity establishes immediate source reset, not which downstream window-flight stages account for Coffee GB's observed eight-dot path retirement |
+| `PPU-OBJ-D1` | same file; expression `ff40_d1|aror|woxa|xula|sprite_x_match|latch_sp_bp_[ab]|sprite_px_[ab]` | FF40.D1 gates all future OAM-X matches through `aror` and masks the two final object planes through `woxa/xula`; it does not feed the data-byte latches or shift banks | The dynamic probe below covers one sprite and selected write apertures; it establishes bounded ownership, not complete PPU timing or silicon equivalence |
 | `LCD-MUX-RESET` | same file; expression `(kahe|kupa|nelo|nura|paty|pero|rajy|tade|xapo|xebe|xodo|xona)_inst` | Output-mux cells occur at lines 25511-30904, panel-clock muxes at 21471/22350, and reset-root cells at 35904-36541 | Establishes named external-model roots, not reset fanout through proposed Java scanout stages or the `old | data` envelope |
 | `OAM-PORT` | `dmg_cpu_b/cells/generic_sram.sv`, `dmg_cpu_b/cells/oam.sv`, and scope `dmg_cpu_b_gameboy.dmg.oam_a_inst.sram_inst` | Separate address rails, sticky word-line state, four retained bit-line groups, common line, column select, precharge controls, and `wr` are observable | Directional sample/feedback split remains fitted; dynamic evidence is below |
 
@@ -137,22 +146,26 @@ The wrapper maps `tama_n` to `reg_div16[5]` at `dmg_cpu_b_gameboy.sv:279`. The i
 path through `jago`, `kexu`, `kujo`, and `sck` corroborates `dawa` as driven SCK. The standard
 `dffr.sv` cell is positive-edge triggered with active-low reset.
 
-The testbench instantiates the complete `dmg_cpu_b` hierarchy with its actual default-timing cells
-and forces only the upstream control inputs needed to distinguish the reset cases. It and its make
-fragment remain outside both repositories:
+The independently written testbench instantiates the complete `dmg_cpu_b` hierarchy with its actual
+default-timing cells and forces only the upstream control inputs needed to distinguish the reset
+cases. Unlike the earlier one-off `/tmp` run, the MIT-side driver, make fragment, and exact-output
+checker are retained in Coffee GB:
 
 ```text
-/tmp/serial_full_cone_tb.sv
-  sha256 6d397ee0360811f167d1a6532b86a47f017db2345de93e51b420b403db180df0
-/tmp/SerialFullCone.mk
-  sha256 2d1c209e9af63ab4cde89867516f5f09aa5de7c26b4c4b2195f12e3929996e43
+scripts/signal-oracles/serial-div-reset/serial_full_cone_tb.sv
+scripts/signal-oracles/serial-div-reset/SerialFullCone.mk
+scripts/signal-oracles/serial-div-reset/verify.sh
 ```
 
-The following commands are **VERIFIED**:
+The checker rejects a wrong external revision, a different Icarus build, or changes to the external
+Makefile, `dmg_cpu_b`, `sm83`, `keeper.sv`, or `timescale.f`; it builds into a temporary directory
+and compares only the four stable `FULL_*` lines. This fresh-checkout invocation is **VERIFIED**:
 
 ```sh
-make -B -f /tmp/SerialFullCone.mk /tmp/serial_full_cone.vvp
-/tmp/coffee-gb-iverilog-master/bin/vvp -N /tmp/serial_full_cone.vvp
+ORACLE_DMG="$ORACLE_DMG" \
+ORACLE_IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
+ORACLE_VVP="$ORACLE_IVERILOG_PREFIX/bin/vvp" \
+scripts/signal-oracles/serial-div-reset/verify.sh
 ```
 
 Expected distinguishing output:
@@ -266,6 +279,77 @@ Finite falsifiers for this model are: any new `1cxx` map read after source/selec
 from pre-edge state; or solid window LD surviving after a known blank shared-latch reload or at
 least sixteen PPU rising edges. Sprite overlap, nonzero SCX, other CPU phases, analog pad behavior,
 and real-silicon race resolution remain outside this probe.
+
+## DMG object-enable flight probe
+
+Status: **VERIFIED bounded external-model trace** at revision
+`ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`, using nodelay and one selected default-delay run with
+Icarus `14.0 (devel) (1d2aa1b)`. The isolated checkout is `$ORACLE_DMG_OBJ`. This is evidence about
+flight ownership in a reverse-engineered DMG-B model, not a silicon timing capture or proof that
+Coffee GB's complete +3 repair path is deletable.
+
+The tracked monitor patch and independently authored assembly fixture are identified without
+publishing generated probe images:
+
+```text
+sha256(git diff -- dmg_cpu_b_gameboy.sv)
+  aa7f8051bb2bbff17c86e56d75b313cafc2ba90c81c32bf2bbb7e30af0206130
+numstat
+  94  3  dmg_cpu_b_gameboy.sv
+sha256(sim-tests/obj-abort.s)
+  9d55f7a543d8af7f245c40ff9e11b66e53fe532b00b2e6985f776b845147cbae
+```
+
+The exact fixture build is:
+
+```sh
+cd "$ORACLE_DMG_OBJ"
+"$ORACLE_BINUTILS_BUILD/gas/as-new" \
+  -o sim-tests/obj-abort.o sim-tests/obj-abort.s
+"$ORACLE_BINUTILS_BUILD/ld/ld-new" \
+  -o sim-tests/obj-abort.coff -T sim-tests/oam-bug.ld sim-tests/obj-abort.o
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .text \
+  sim-tests/obj-abort.coff sim-tests/obj-abort.bootrom
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .rom \
+  sim-tests/obj-abort.coff sim-tests/obj-abort.cartrom
+```
+
+Build once with `TIMING=nodelay` and once with `TIMING=default`:
+
+```sh
+make -B dmg_cpu_b_gameboy.vvp \
+  IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
+  TIMING=nodelay SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp -none \
+  +BOOTROM=./sim-tests/obj-abort.bootrom \
+  +ROM=./sim-tests/obj-abort.cartrom \
+  +SECS=0.02 +MBC_TYPE=00 +RAM_SIZE=00
+```
+
+Static inspection finds exactly three FF40.D1 consumers: `aror`, which feeds all ten OAM-slot X
+match terms, and final-plane masks `woxa`/`xula`. No D1 fanout reaches `sp_d`, byte latches, or the
+two `sprite_px_a/b` shift banks.
+
+The nodelay five-NOP aperture observes low-byte address/read, low-byte latch, then LCDC.1 falling
+coincident with the high-byte launch. X match and output disappear immediately, but the high-byte
+latch, A/B bank load (`0f/f0`), and all subsequent shifts retire with D1 low. The enabled `0x93`
+control has exactly the same read/latch/load and shift sequence; only output masking differs. The
+nodelay three-NOP aperture drops D1 before the first byte and launches no tile transaction or bank
+load. A default-delay run independently preserves only the late-disabled ordering; it adds
+propagation/load glitches but does not reverse ownership.
+
+The bounded conclusion is immediate future-match/output invalidation plus forward retirement of an
+already-committed byte/latch/shifter flight. It contains no semantic three-dot replay, position
+edit, reread, or FIFO patch. The accompanying Java cone accepts semantic capture/load/shift inputs,
+so it is an ownership transcription and executable falsifier boundary rather than independent
+external validation.
+
+Coverage is DMG, LY 1, slot 0, screen X 32, row 0/tile 1, two nodelay write apertures, one enabled
+control, one default-delay late aperture, and simplified OAM. Other slots/X/rows/tiles, X flip,
+overlap/priority, exact fetch/pop strobes, other write apertures, default-delay early cancellation,
+physical DMG, and CGB remain explicit falsifiers.
 
 ## DMG timer waveform probe
 
@@ -636,6 +720,118 @@ DMG capture. Absolute propagation delays, reset offset, CGB behavior, peripheral
 apertures, interrupt acknowledge/vector capture, and equivalence between each Java coarse step and
 one gate phase remain outside the claim. The Coffee GB repository intentionally retains only this
 manifest and independently written bounded tests.
+
+## DMG interrupt request/acknowledge probe
+
+Status: **VERIFIED external default-delay model trace with manual transition reduction**, not
+silicon evidence and not checker-verified automation. The isolated checkout is
+`/tmp/coffee-gb-dmg-sim-irq`, pinned at
+`ee559e1d963e1cc522df512e3bae1b4e5ff96fb5`. Icarus was
+`14.0 (devel) (1d2aa1b)` and the SM83 assembler was GNU Binutils
+`2.31.1-sm83-r0`.
+
+The one tracked instrumentation patch is identified without copying external source:
+
+```text
+sha256(git diff --binary)
+  2562309c3b0a4e8c8fe5521f0a14b50c08c37d9d5600baefe4a65cbe82702c04
+numstat
+  98  3  dmg_cpu_b_gameboy.sv
+```
+
+`git diff --check` is clean. The independently authored non-ROM inputs are
+`sim-tests/irq-probe.s`, `sim-tests/irq-probe.ld`, and
+`sim-tests/irq-halt-probe.s`; together with the instrumented wrapper their ordered SHA-256 manifest
+is `b9df7581f5a8b7df1f15588f7e7534afdc28b3d1235923f83f6a3b6e5451f471`.
+No standalone checker was written. Generated object, COFF, boot/cart image, VVP, waveform, and save
+hashes are intentionally omitted.
+
+The probe images were assembled locally with the pinned tools, then the hierarchy was built with:
+
+```sh
+cd "$ORACLE_DMG_IRQ"
+
+"$ORACLE_BINUTILS_BUILD/gas/as-new" \
+  -o sim-tests/irq-probe.o sim-tests/irq-probe.s
+"$ORACLE_BINUTILS_BUILD/ld/ld-new" \
+  -o sim-tests/irq-probe.coff -T sim-tests/irq-probe.ld sim-tests/irq-probe.o
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .text \
+  sim-tests/irq-probe.coff sim-tests/irq-probe.bootrom
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .rom \
+  sim-tests/irq-probe.coff sim-tests/irq-probe.cartrom
+
+"$ORACLE_BINUTILS_BUILD/gas/as-new" \
+  -o sim-tests/irq-halt-probe.o sim-tests/irq-halt-probe.s
+"$ORACLE_BINUTILS_BUILD/ld/ld-new" \
+  -o sim-tests/irq-halt-probe.coff -T sim-tests/irq-probe.ld \
+  sim-tests/irq-halt-probe.o
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .text \
+  sim-tests/irq-halt-probe.coff sim-tests/irq-halt-probe.bootrom
+"$ORACLE_BINUTILS_BUILD/binutils/objcopy" \
+  -I coff-sm83 -O binary -j .rom \
+  sim-tests/irq-halt-probe.coff sim-tests/irq-halt-probe.cartrom
+
+make -B dmg_cpu_b_gameboy.vvp \
+  IVERILOG="$ORACLE_IVERILOG_PREFIX/bin/iverilog" \
+  TIMING=default SIMPLIFIED_OAM=y SIMPLIFIED_WAVERAM=y
+```
+
+Each row below was run with this exact command shape:
+
+```sh
+"$ORACLE_IVERILOG_PREFIX/bin/vvp" -N ./dmg_cpu_b_gameboy.vvp \
+  +BOOTROM="sim-tests/${probe_name}.bootrom" \
+  +ROM="sim-tests/${probe_name}.cartrom" \
+  +SECS=0.01 +MBC_TYPE=00 +RAM_SIZE=00 \
+  +IRQ_PROBE_MODE="$probe_mode" +IRQ_OFFSET_NS="$probe_offset" \
+  +IRQ_PULSE_NS=1000
+```
+
+The decisive matrix was Timer acknowledge mode 1 at offsets 610/850/852, Serial acknowledge mode 2
+at 610/850/852, late-priority mode 3 at 3406/3407, Timer FF0F collision mode 4 at 360/365, Serial
+FF0F collision mode 5 at 360/365, and the HALT fixture mode 6 at offset 0. Modes 1/2 force a raw
+peripheral request at the interrupt-M6 anchor; mode 3 starts with Serial pending and forces Timer
+from `int_entry`; modes 4/5 force the request around FF0F write gate `rotu`; mode 6 forces Timer
+after the HALT latch rises.
+
+The monitor observes `cpu_irq[4:0]`, `cpu_irq_ack[4:0]`, `irq_latch[4:0]`, `int_pending`, `yoii`,
+`halt`, `int_entry`, `ctl_int_entry_m6`, `data_phase`, `write_phase`, `rotu`, and vector bits 3-5.
+Static cell `dffsr` updates both internal and output state as
+`(old_or_data | !set_n) & reset_n`, so active reset dominates a simultaneous set.
+
+The concise **VERIFIED external-model observations** are:
+
+- Timer ACK2 rises at raw time `32032204827` ps and clears Timer IF at `32032207035`; a raw Timer
+  request at `32032208987` while ACK remains active is swallowed and does not reassert after ACK
+  falls at `32032448530`.
+- Serial ACK3 at `32032204970`, IF clear at `32032207500`, the same raw request time, and ACK release
+  at `32032448654` reproduce the same local reset dominance. ACK clears only the selected IF bit.
+- M6+850 ns is swallowed for both sources; +852 ns survives. FF0F write-zero similarly swallows a
+  +360 ns request while +365 ns survives. These boundaries are properties of guessed external
+  propagation delays, not emulator constants.
+- With Serial already sampled, Timer at `int_entry+3406 ns` reaches the transparent bank before it
+  closes and yields Timer ACK/vector `0050`, leaving Serial pending. At +3407 ns, readable Timer IF
+  rises only 55 ps before `data_phase` closes but misses latch propagation; held Serial instead
+  drives ACK/vector `0058` and Timer remains pending. Priority is therefore aperture-live, then
+  held--not live through all of `IRQ_JUMP`.
+- From the HALT anchor, readable Timer IF appears after 1.680 ns, the sampled bank after 4.543 ns,
+  combinational pending after 12.756 ns, and the wake DFF after 972.798 ns. The absolute delays are
+  external-model evidence only; the useful fact is the sequence of distinct observation nodes.
+
+This externally distinguishes the smaller DMG topology: five local clear-dominant IF latches feed
+a phase-transparent `IE & IF` bank; held pending bits feed both priority/vector and one-hot
+acknowledge; a later DFF supplies HALT wake. It contains no source provenance, future-event query,
+or post-selection late-priority repair. The Coffee GB half-dot/T-state placement remains a fitted
+projection until this transparent cone is integrated and shadowed.
+
+Finite limits are forced rather than natural Timer/Serial source generation, one CPU write/entry
+phase, Timer and Serial only, default-delay reverse-engineered DMG-B rather than silicon, and no
+CGB, NMI, VBlank/STAT/Joypad collision, or analog/sub-T validation. A physical trace showing a
+post-aperture higher-priority source redirecting the current vector would falsify the held-bank
+interpretation.
 
 ## Exact retained `dmg-sim` working state
 
@@ -1027,9 +1223,11 @@ artifact in either inspected checkout:
 | Actual CGB TIMA behavior during the generated STOP probe | **TODO hardware capture** | Run an authorized physical CGB capture with a machine-readable result; record board revision, boot mode, probe source provenance, and sampling point |
 | Serial DIV-reset ownership on physical DMG and CGB | **DMG-B external model only; CGB differential only** | Capture SCK/shift behavior across DIV-reset phases on physical DMG and CGB revisions; recover the CGB normal/fast divider/mux topology independently |
 | DMG Timer silicon equivalence and simultaneous MOBA/acknowledge aperture | **External default-delay model only** | Capture selected divider/TIMA/IF nodes on physical DMG hardware across register-write phases; dynamically force request/acknowledge overlap instead of inferring reset dominance from static connectivity |
+| DMG interrupt pending-bank and local IF aperture | **External default-delay model only** | Capture IF, CPU pending sample, vector, and one-hot acknowledge across source/write phases on physical DMG; add an automated extractor before using exact phase widths |
 | Directional OAM feedback split | **FITTED, not external evidence** | Observe the control split in a licensed netlist/transistor trace or falsify it across physical row/data/phase sweeps |
 | Five PPU register receiver delays, output write envelope, and scanout reset fanout | **FITTED, not external evidence** | Trace each receiver/reset pin or obtain hardware phase sweeps; the static source-bank/reset-root/window-source observations are insufficient |
 | Active-window downstream retirement | **Bounded in external nodelay/default-delay models; silicon race unresolved** | Obtain a physical phase sweep or another independent gate model to choose whether the pre-edge shared transaction survives; extend source-tagged replay across sprite/window/SCX overlaps before migration |
+| LCDC.1 object-flight ownership across every fetch phase | **Bounded external-model trace only** | Sweep every object slot/X/row/fetch/write phase on physical DMG or another independent model; shadow source-tagged bytes and output before deleting the production +3 repair |
 | CH4 trigger aperture | **Two DMG nodelay alignments traced; wider timing unresolved** | Reproduce the SameSuite invocation, run default-delay/sub-T collision probes, sweep other CPU-write/reset phases, and treat CGB as a separate topology |
 | CH1 inactive extra-four-T production bucket | **Falsified as a channel-active-selected aperture in the DMG external model** | Locate the missing production projection boundary with CPU-write/BEXA phase sweeps and hardware captures; do not restore `wasActive` as a gate-cone input |
 

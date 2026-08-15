@@ -355,6 +355,7 @@ public class DmgCpuControlLatchIslandTest {
         assertEquals(List.of(
                         DmgCpuControlLatchIsland.Falsifier.SOURCE_SET_VS_FF0F_WRITE_APERTURE,
                         DmgCpuControlLatchIsland.Falsifier.PPU_SOURCE_INPUT_PHASES,
+                        DmgCpuControlLatchIsland.Falsifier.TRANSPARENT_PENDING_BANK_APERTURE,
                         DmgCpuControlLatchIsland.Falsifier.EARLY_IE_WRITE_REQUIRES_BUS_REANCHOR,
                         DmgCpuControlLatchIsland.Falsifier.VECTOR_AND_ACKNOWLEDGE_PHASES,
                         DmgCpuControlLatchIsland.Falsifier.CGB_DIRECT_INTERRUPT_PATH),
