@@ -27,9 +27,9 @@ import java.util.Set;
  * while an active retrigger before BEXA has no second LD_SUM edge because BYTE is still high.
  * That history dependence is produced by BYTE's retained state, not by channel-active status;
  * channel-active has no connection to DUPE, EZEC, FYFO, FEKU, FARE, or FYTE. The model can still
- * execute a deliberately late request, but that is now a counterfactual phase probe rather than
- * an explanation for production's {@code wasActive} timing branch. Other CPU-write phases remain
- * an explicit falsifier.
+ * execute a deliberately late request, but that is a counterfactual phase probe rather than a
+ * channel-activity-selected production schedule. Other CPU-write phases remain an explicit
+ * falsifier.
  *
  * <p>Static and dynamic provenance: {@code https://github.com/msinger/dmg-sim} revision
  * {@value #NETLIST_REVISION}, {@code dmg_cpu_b/dmg_cpu_b.sv}; Icarus Verilog 14.0-devel

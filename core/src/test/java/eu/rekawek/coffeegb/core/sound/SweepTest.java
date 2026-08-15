@@ -343,7 +343,7 @@ public class SweepTest {
             case 14:
                 sweep.setNr14(value);
                 if ((value & 0x80) != 0) {
-                    sweep.trigger(false, false, false);
+                    sweep.trigger(false, false);
                 }
                 break;
 
