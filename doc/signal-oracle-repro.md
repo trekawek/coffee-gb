@@ -896,6 +896,14 @@ ACK/vector evaluation are grounded in the pinned external model. Aligning raw M6
 current `IRQ_PUSH_2` callback remains fitted. Every CGB phase in the Java experiment is behavioral;
 this probe supplies no CGB gate or silicon evidence.
 
+The branch implements the bounded held-owner consequence without moving the existing clear:
+production samples its internal pending bank during the first half of `IRQ_PUSH_2`, retains one
+source, and uses it for both that cycle's T4 clear and the following Java vector. This deletes the
+fake external FF0F/FFFF reads, late-priority re-request/clear repair, and two live snapshot integers.
+The old importer record shape remains. Focused CPU/interrupt/memento tests (83/83), the unit suite,
+Mooneye plus acid profiles (132/132), and aggregate plus individual Blargg profiles (54/54) pass.
+That production result does not upgrade CGB or Coffee's exact callback anchor to external evidence.
+
 Finite limits are forced rather than natural Timer/Serial source generation, one CPU write/entry
 phase, Timer and Serial only, reverse-engineered DMG-B default/nodelay policies rather than silicon,
 and no CGB, NMI, VBlank/STAT/Joypad collision, or analog/sub-T validation. A physical trace showing

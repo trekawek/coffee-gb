@@ -32,8 +32,9 @@ save states, debugger boundaries, and performance.
 | Hypothesis | Result | Consequence |
 | --- | --- | --- |
 | Serial DIV-reset timing is a forecast problem | Branch-accepted DMG external-netlist-anchored production replacement/deletion; CGB production differential | The old arithmetic reduces exactly to a local divider-stage fall, SCK toggle, and falling-edge shift. CGB normal/fast use the same tested algebra but lack an external topology oracle. The independently authored hierarchy driver is now reproducible from the branch, but its license classification still needs review before merge. |
-| Timer overflow needs an explicit 4/8-tick state machine | External gate-model waveform plus production differential | A selected-input fall, sampled TIMA-MSB fall, next-BOGA request, shared load/reset cone, and live TMA reload bus reproduce the apparent timeline without an explicit deadline. Exact Java phase alignment remains fitted. |
+| Timer overflow needs an explicit 4/8-tick state machine | External gate-model waveform; local production cut rejected | A selected-input fall, sampled TIMA-MSB fall, next-BOGA request, shared load/reset cone, and live TMA reload bus reproduce the apparent timeline without an explicit deadline. A runtime replacement cannot preserve arbitrary released states because Timer does not own or serialize the independent BOGA/T4 phase; that clock must migrate above Timer first. |
 | Timer/serial acknowledgement can be centralized inside the current master-tick loop | Falsified and rolled back | Timer runs before CPU while serial runs after it; no placement of one central callback preserves both physical windows. A unified CPU-edge/half-dot island is prerequisite. |
+| Interrupt entry must reread FF0F/FFFF and repair priority at the vector callback | Branch-accepted held-owner production deletion | The CPU samples its internal pending bank during the first half of `IRQ_PUSH_2`, then uses the held owner for the existing T4 clear and later vector. Fake bus reads, late re-request/clear repair, and two snapshot integers disappear. DMG sampling/evaluation is externally grounded; callback alignment and CGB remain fitted. |
 | Java evaluation order can be made unobservable | Self-test support for two bounded contracts | A single-resolve edge-triggered scheduler and a separate fixed-point transparent/async oracle are traversal-order invariant. The allocation-heavy oracle is not a runtime implementation. |
 | The existing callback boundary is too opaque to shadow a signal scheduler | Production-differential compatibility harness | Immutable CPU/timer/serial/IF snapshots replay current races, but still carry projected timer state and a source-profile acknowledge countdown. |
 | The CPU, Timer, Serial, IF, IME, and HALT seams cannot compose without callback ordering | External gate-waveform-shaped Timer source composed with a constructive edge-triggered fabric | One half-dot fabric resolves a natural NYDU/MOBA Timer request, persistent bus intent, priority, acknowledge, and control latches symmetrically. The DMG gate trace further narrows selection to a transparent pending-bank aperture followed by held bits; the composition does not yet model that aperture. Timer writes, Serial pin generation, PPU, and CGB remain outside it. |
@@ -50,6 +51,7 @@ save states, debugger boundaries, and performance.
 | The four-dot PPU skew requires two independently running renderers | Fitted constructive datapath, source-tagged production trace, and external gate waveform | One forward graph reproduces selected observations. At a hard LCDC.5 edge, immediate source reset plus bounded retained fetch/FIFO/shifter state replaces a semantic delay; Coffee GB instead launches one post-reset window fetch. Broader overlaps remain outside it. |
 | LCDC.1 object disable must abort the fetch and catch the renderer up three dots | Bounded external DMG-B ownership trace; local production cut rejected | FF40.D1 gates future X matches and final object output, not the byte latches or physical shift banks. A pre-byte fall launches nothing; after low-byte capture, high-byte capture/load/shift retire normally while output is masked. Removing the production catch-up still fails the strict companion image exactly three pixels late: the remaining correction is a dual-renderer phase debt, not object-flight ownership. |
 | Mid-mode-3 writes require pending-write queues and duplicate register views | Production differential at one CPU-reachable cadence | One source register and fitted consumer delays reproduce selected LCDC/SCX/WX views; the receiver stages and half-dot capture phase are not netlist-derived. |
+| A CGB LCDC.4 collision needs active and pending duration counters | Branch-accepted reachable-state reduction | The pending write strobe is sampled directly into the existing consumer-history bank. Once active, that history was already authoritative, so one field and the countdown branch disappear while released integer slots remain importer-compatible. The CGB waveform itself is still not independently grounded. |
 | LCD disable must inspect raster/pixel state to cancel output | External-netlist reset root plus fitted output/fanout hypothesis | XONA/XEBE/XODO/XAPO reduce to one reset root, but the Java cone manually assigns that reset to candidate scanout stages and encodes write envelopes explicitly. |
 | CGB speed switching requires timer phase repair and tail-duration tables | Fitted timing hypothesis; gated-DIV routing falsified by contrary emulator evidence | STOP-entry/release counters fit verified durations, but the candidate's gated DIV disagrees with production and SameBoy; hardware capture is required before routing claims. |
 | Full DMG gate simulation is impractical even as a development oracle | External gate oracle demonstrated | `dmg-sim` ran its source OAM-bug program to completion and produced inspectable traces. This validates use of that external model as an offline oracle, not its silicon accuracy. |
@@ -127,7 +129,7 @@ lean-cut reruns completed with zero failures/errors:
 
 | Suite | Result |
 | --- | ---: |
-| Core unit tests, including detached experiments | 1,533 run, 8 skipped |
+| Core unit tests, including detached experiments | 1,538 run, 8 skipped |
 | Mooneye + dmg-acid2 + cgb-acid2 | 132/132 |
 | Blargg aggregate + individual | 54/54 |
 | SameSuite + Mealybug strict images | 103/103 |
@@ -257,6 +259,16 @@ three-clock DMG countdown, so this correction exposes a one-clock callback-align
 than hiding it in another fitted phase constant. CGB's later eight-clock placement remains
 explicitly fitted and receives no support from this DMG trace.
 
+The branch promotes one bounded vertical part of this result. During production `IRQ_PUSH_2`, CPU
+samples the internal pending flags during the first half of the machine cycle and retains one
+priority owner. The existing T4 clear and later Java vector both use that owner. This removes the
+external FF0F/FFFF reads from the stack-write callback, `applyLateInterruptPriority` and its
+old-source re-request/new-source clear, plus two live CPU snapshot integers. The legacy importer
+record retains its old shape. Focused CPU/interrupt/memento tests (83/83), the unit suite, Mooneye
+and acid profiles (132/132), and aggregate plus individual Blargg profiles (54/54) pass. DMG's raw
+T1/T2 and T4 topology is externally grounded; applying the same first-half projection to CGB normal
+and double speed is explicitly differential/fitted.
+
 The same external cone makes Timer and Serial request/acknowledge collisions local. Each IF cell is
 reset-dominant, so a request asserted while its one-hot acknowledge reset is active is swallowed;
 the same request after reset-cone release sets IF normally. FF0F write-zero uses the same local
@@ -279,8 +291,9 @@ Serial remains a raw upstream pin, and the Timer projection does not yet accept 
 writes or reproduce the observable DIV ripple transient. The calibrated one-M-cycle-late CPU bus,
 external serial input, integration of the DMG raw-phase aperture with that bus, PPU source paths, CGB
 subedges/direct interrupts, and transparent or asynchronous delta settling remain blockers.
-Consequently these tests can name a future deletion set—both peripheral acknowledge forecasts and
-their `InterruptManager` flags—but cannot yet delete it safely.
+Consequently these tests and the held-owner cut can name the remaining future deletion set—both
+peripheral acknowledge forecasts and their `InterruptManager` flags—but cannot yet delete that
+source-timing layer safely.
 
 ## CGB speed-switch clock topology
 
@@ -447,6 +460,18 @@ remains fitted to the current production boundary, whose CPU reads are one M-cyc
 timing constants are integration-calibrated. Production migration remains deferred until physical
 T4/BOGA and CPU write/reset phases are first-class, then passes the ROM battery; CGB and a silicon
 capture remain separate falsifiers.
+
+A **local production-cut attempt was rejected and reverted**. Replacing
+`overflow/ticksSinceOverflow/haltWakeDelay` with NYDU, MOBA, and a private BOGA phase grew Timer by
+47 net lines after compatibility and TAC-write adapters, already failing the deletion gate. More
+fundamentally, the released `TimerState` does not contain BOGA phase. Deriving it from DIV made the
+arbitrary-phase timer differential request one clock early, while forcing phase zero fixed that
+test but moved a boundary-shadow request from clock five to clock four. The same old stable state
+therefore admits two future events unless the missing clock phase is supplied from outside; a
+compatibility mode or event re-anchoring would merely restore semantic branches. Mooneye's Timer
+ROM class still passed 13/13 in both variants, illustrating why broad ROM success alone cannot
+validate a state-topology migration. The isolated candidate was fully reverted. The prerequisite
+is a shared, serialized T4/BOGA clock island above Timer—not another Timer-local counter.
 
 ## APU clock topology
 
@@ -840,6 +865,17 @@ forcing queue semantics back into the model. The external netlist contains one S
 one WX bank, supporting a single source bank; it does not establish the five Java receiver delays.
 Those capture edges remain a boundary approximation until the half-dot source phase and consumers
 are derived.
+
+One small production reduction is independent of those still-fitted receiver delays. The CGB
+LCDC.4 collision formerly kept separate active and pending dot counters alongside an eight-cell
+consumer-history bank. Reachability analysis shows that every active pulse is written into that
+history on the same capture edge; only the not-yet-sampled CPU-write strobe carries future
+information. Production now stores that boolean strobe directly into the history and removes the
+active counter, pending duration counter, and countdown branch. Released state keeps the two
+integer slots for import, projecting the active slot as zero and the pending slot as the strobe.
+Focused PPU/output tests (31/31), unit tests, Mealybug (26/26), SameSuite (77/77), Daid (9/9), and
+CGB acid2 pass. This is an exact state reduction under the existing calibrated behavior—not an
+independent gate trace of the CGB collision.
 
 `DmgLcdOutputSignalCone` is an **external-netlist-boundary plus fitted output hypothesis**. It takes
 immutable background/object tokens through three forward validity cells. BGP/OBP and LCDC.0/.1 are
