@@ -97,7 +97,8 @@ final class Proposal3TextCatalog {
     private static void pause(List<TextRegion> regions) {
         side(regions, new MenuRect(32, 405, 330, 45),
                 new MenuRect[]{new MenuRect(31, 502, 172, 40),
-                        new MenuRect(274, 502, 105, 40), new MenuRect(108, 585, 279, 39)});
+                        new MenuRect(274, 502, 105, 40), new MenuRect(108, 585, 279, 39)},
+                Proposal3GlyphAtlas.Role.NOTICE);
     }
 
     private static void saveStates(List<TextRegion> regions) {
@@ -105,7 +106,7 @@ final class Proposal3TextCatalog {
         // metadata. Empty/loading/unavailable slots simply provide no side line, leaving the
         // approved artwork untouched.
         regions.add(region(Key.SIDE_LINE, 0, new MenuRect(30, 505, 352, 44), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.SMALL));
+                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.NOTICE));
     }
 
     private static void settings(List<TextRegion> regions) {
@@ -210,11 +211,16 @@ final class Proposal3TextCatalog {
     }
 
     private static void side(List<TextRegion> regions, MenuRect heading, MenuRect[] lines) {
+        side(regions, heading, lines, Proposal3GlyphAtlas.Role.SMALL);
+    }
+
+    private static void side(List<TextRegion> regions, MenuRect heading, MenuRect[] lines,
+            Proposal3GlyphAtlas.Role lineRole) {
         regions.add(region(Key.SIDE_HEADING, 0, heading, Surface.PAPER,
                 align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM));
         for (int index = 0; index < lines.length; index++) {
             regions.add(region(Key.SIDE_LINE, index, lines[index], Surface.PAPER,
-                    align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.SMALL));
+                    align(Horizontal.CENTER), lineRole));
         }
     }
 
