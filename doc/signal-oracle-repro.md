@@ -98,7 +98,7 @@ DMG hardware truth.
 Use this command template with each table row's expression:
 
 ```sh
-git -C "$ORACLE_DMG" grep -n -E '<expression>' -- <source-path>
+git -C "$ORACLE_DMG" grep -n -E '<expression>' -- '<source-path>'
 ```
 
 | Claim ID | Source anchor and grep expression | Concise expected finding | Limit |
@@ -1138,7 +1138,8 @@ save data, waveform, nor its checksum is recorded here.
 The build used the same retained assembler/linker/objcopy and Icarus binaries described above:
 
 ```sh
-make -C /tmp/coffee-gb-dmg-sim-oam-directional -B dmg_cpu_b_gameboy.vvp \
+cd /tmp/coffee-gb-dmg-sim-oam-directional
+make -B dmg_cpu_b_gameboy.vvp \
   IVERILOG=/tmp/coffee-gb-iverilog-master/bin/iverilog \
   TIMING=default SIMPLIFIED_OAM= SIMPLIFIED_WAVERAM=y
 
@@ -1153,7 +1154,7 @@ make -C /tmp/coffee-gb-dmg-sim-oam-directional -B dmg_cpu_b_gameboy.vvp \
 /tmp/coffee-gb-fst2vcd \
   -f /tmp/oam-bug-directional-rowN.fst \
   -o /tmp/oam-bug-directional-rowN.vcd
-./oam_directional_extract.pl TRACE.vcd START END
+./oam_directional_extract.pl /tmp/oam-bug-directional-rowN.vcd START END
 ```
 
 `rowN` was instantiated for scan rows 1, 2, and 4. Each bit packed one of all eight Boolean

@@ -535,8 +535,9 @@ terms). The Java test contains no external source, ROM, or waveform artifact.
 
 ## Timer overflow topology
 
-`TimerSignalTopology` is an **external gate-model waveform plus production differential** which
-replaces the flattened overflow timeline with two 1 MHz-edge latches:
+`TimerSignalTopologyTest` exercises the `DmgTimerIsland` model as an **external gate-model waveform
+plus production differential** which replaces the flattened overflow timeline with two 1 MHz-edge
+latches:
 
 ```text
 NYDU <- sampled TIMA bit 7
