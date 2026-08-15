@@ -1485,13 +1485,9 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 // level can block a newly selected LYC source. Once that level has
                 // settled, changing FF41 must not manufacture a second rising edge.
                 m0LycOrM1 = false;
-            } else if (timing.mode0IntWindow
-                    || timeToNextLy <= (ly < 143 ? 4 + 4 * doubleSpeed
-                    : 4 + 2 * doubleSpeed)) {
-                m0LycOrM1 = lycPeriod && (newStat & 0x40) != 0;
             } else {
-                // Selecting mode 0 while the PPU is in mode 2 or 3 only arms
-                // the next HBlank event; it is not a combinational STAT source.
+                // Mode 0 only arms the next event here; the live combinational
+                // candidate is the newly selected LYC source.
                 m0LycOrM1 = lycPeriod && (newStat & 0x40) != 0;
             }
         } else if ((oldStat & 0x10) != 0
