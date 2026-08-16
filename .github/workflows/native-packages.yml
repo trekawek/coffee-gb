@@ -176,16 +176,30 @@ jobs:
           if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -ne "X64") {
             throw "windows-x86-64 requires an X64 runner"
           }
-          $WixBin = Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.11\bin"
-          $Candle = Join-Path $WixBin "candle.exe"
-          $Light = Join-Path $WixBin "light.exe"
-          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
-              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
-            choco install wixtoolset --version=3.11.2 --yes --no-progress
+          function Find-WixBin {
+            $roots = @(
+              (Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.11")
+            )
+            $roots += Get-ChildItem -Directory -Path (Join-Path ${env:ProgramFiles(x86)} "WiX Toolset v3.*") -ErrorAction SilentlyContinue |
+              Sort-Object Name -Descending |
+              ForEach-Object { $_.FullName }
+            foreach ($root in $roots | Select-Object -Unique) {
+              $bin = Join-Path $root "bin"
+              if ((Test-Path -LiteralPath (Join-Path $bin "candle.exe") -PathType Leaf) -and
+                  (Test-Path -LiteralPath (Join-Path $bin "light.exe") -PathType Leaf)) {
+                return $bin
+              }
+            }
+            return $null
           }
-          if (-not (Test-Path -LiteralPath $Candle -PathType Leaf) -or
-              -not (Test-Path -LiteralPath $Light -PathType Leaf)) {
-            throw "WiX 3.11 candle.exe and light.exe are required by JDK 21 jpackage"
+
+          $WixBin = Find-WixBin
+          if ([string]::IsNullOrWhiteSpace($WixBin)) {
+            choco install wixtoolset --version=3.11.2 --yes --no-progress
+            $WixBin = Find-WixBin
+          }
+          if ([string]::IsNullOrWhiteSpace($WixBin)) {
+            throw "A WiX 3.x candle.exe and light.exe pair is required by JDK 21 jpackage"
           }
           $WixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
