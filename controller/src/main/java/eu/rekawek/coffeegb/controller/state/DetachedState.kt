@@ -584,7 +584,7 @@ internal object DetachedStateAdapter {
     val current = StateGraph.captureRoot(gameboy.captureStateWithoutTimeSource(), GAMEBOY_ROOT)
     StateGraph.validateCompatible(state.root, current, "machine")
     try {
-      gameboy.validateRtcRuntimeState(state.rtcRuntime.toCore())
+      gameboy.validateRtcRuntimeStateForRestoreCandidate(state.rtcRuntime.toCore())
       gameboy.validateDmgFifoRuntimeState(state.dmgFifoRuntime.toCore())
     } catch (failure: IllegalArgumentException) {
       throw StateApplyException("Detached machine runtime layout is incompatible", failure)
@@ -1129,7 +1129,9 @@ internal object StateGraph {
         element: Boolean = false,
     ) {
       if (candidate === NullState || target === NullState) {
-        if (candidate !== target && !isAuditedNullable(owner, field, element)) {
+        if (candidate !== target &&
+            !isAuditedNullable(owner, field, element) &&
+            !isDynamicMbc5MulticartGameState(owner, field)) {
           throw StateApplyException("$path has incompatible state presence")
         }
         return
@@ -1144,6 +1146,12 @@ internal object StateGraph {
             return
           }
           if (candidate.typeId != target.typeId) {
+            if (isDynamicMbc5MulticartGameState(owner, field)) {
+              // This board commits a selected game by replacing its virtual child mapper. The
+              // candidate record has already passed the child-mapper policy; its type is not a
+              // target-owned invariant of the surrounding physical cartridge.
+              return
+            }
             if (isMobileAdapterEndpointStatePair(candidate, target)) {
               // One Mobile Adapter endpoint legitimately alternates between released, active-wire,
               // and external-I/O-aborted records. The candidate's own record semantics are checked
@@ -1311,6 +1319,10 @@ internal object StateGraph {
   private fun isAuditedNullable(owner: String?, field: String?, element: Boolean): Boolean =
       owner to field in if (element) AUDITED_NULLABLE_ELEMENTS else AUDITED_NULLABLE_FIELDS
 
+  /** The board's committed child mapper can be absent or one of several native MBC records. */
+  private fun isDynamicMbc5MulticartGameState(owner: String?, field: String?): Boolean =
+      owner == MBC5_MULTICART_STATE && field == "selectedGameState"
+
   private val VARIABLE_ARRAY_FIELDS =
       setOf(
           "eu.rekawek.coffeegb.core.sound.Sound\$SoundState" to "buffer",
@@ -1360,6 +1372,9 @@ internal object StateGraph {
 
   private const val FILE_BATTERY_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
+
+  private const val MBC5_MULTICART_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
 
   /**
    * Exact nullable locations in the pinned legacy graph. Nullability is a field contract, not a

@@ -50,6 +50,25 @@ class StateCoverageMatrixTest {
               Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
             },
             mapper(
+                "Mbc5Multicart",
+                listOf(
+                    0xb000 to 0x20,
+                    0xb100 to 0xe0,
+                    0xb200 to 0xa0,
+                    0x0000 to 0x0a,
+                    0x4000 to 0x08,
+                    0xa000 to 0x2a,
+                ),
+                listOf(0x0100, 0x4000, 0xa000),
+            ) {
+              Mbc5Multicart(
+                  multicartFixture(),
+                  Battery.NULL_BATTERY,
+                  VirtualTimeSource(120_000),
+                  ClockSpec.LEGACY,
+              )
+            },
+            mapper(
                 "LiCheng",
                 listOf(
                     0x0000 to 0x0a,
@@ -192,7 +211,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(29, registeredMapperRecords.size)
+    assertEquals(31, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -772,6 +791,15 @@ class StateCoverageMatrixTest {
     return Rom(bytes)
   }
 
+  private fun multicartFixture(): Rom {
+    val bytes = ByteArray(128 * 0x4000)
+    val selected = 0x40 * 0x4000
+    bytes[selected + 0x143] = 0x80.toByte()
+    bytes[selected + 0x147] = 0x10
+    bytes[selected + 0x148] = 0x05
+    return Rom(bytes)
+  }
+
   private companion object {
     const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
     const val MBC6_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State"
@@ -789,6 +817,7 @@ class StateCoverageMatrixTest {
             "Mbc2",
             "Mbc3",
             "Mbc5",
+            "Mbc5Multicart",
             "LiCheng",
             "XploderGb",
             "Vf001Zook",

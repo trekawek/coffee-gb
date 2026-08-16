@@ -76,7 +76,7 @@ internal class MachineSnapshot private constructor(
     val candidateWallClock = wallClockRuntime.toCore()
     val candidateFifo = dmgFifoRuntime?.toCore()
     try {
-      gameboy.validateRtcRuntimeState(candidateRtc)
+      gameboy.validateRtcRuntimeStateForRestoreCandidate(candidateRtc)
       gameboy.validateWallClockRuntimeState(candidateWallClock)
       gameboy.validateDmgFifoRuntimeState(candidateFifo)
     } catch (failure: IllegalArgumentException) {
@@ -719,9 +719,23 @@ private object SnapshotGraph {
 
   fun ownershipSignature(root: SnapshotRecord): List<Int> {
     val signature = ArrayList<Int>()
-    root.visitRecords { record ->
-      if (isOwnershipRecord(recordClassName(record.typeId))) signature += record.typeId
+    val seen = IdentityHashMap<SnapshotValue, Boolean>()
+    fun visit(value: SnapshotValue) {
+      if (seen.put(value, true) != null) return
+      when (value) {
+        is SnapshotRecord -> {
+          val type = recordClassName(value.typeId)
+          if (isOwnershipRecord(type)) signature += value.typeId
+          value.fields.forEach { field ->
+            if (!isDynamicMbc5MulticartGameState(type, field.name)) visit(field.value)
+          }
+        }
+        is SnapshotValues -> value.values.forEach(::visit)
+        is SnapshotIntMap -> value.entries.forEach { visit(it.value) }
+        else -> Unit
+      }
     }
+    visit(root)
     return signature
   }
 
@@ -733,9 +747,12 @@ private object SnapshotGraph {
         StateTypeRegistry.isAuditedStateType(value.javaClass) -> {
           val typeId = recordIds[value.javaClass]
               ?: throw StateApplyException("Unregistered internal record ${value.javaClass.name}")
-          if (isOwnershipRecord(value.javaClass.name)) signature += typeId
+          val type = value.javaClass.name
+          if (isOwnershipRecord(type)) signature += typeId
           StateRecordIntrospection.components(value.javaClass).forEach { component ->
-            visit(component.value(value))
+            if (!isDynamicMbc5MulticartGameState(type, component.name)) {
+              visit(component.value(value))
+            }
           }
         }
         value.javaClass.isArray && !value.javaClass.componentType.isPrimitive ->
@@ -755,6 +772,12 @@ private object SnapshotGraph {
   private fun isOwnershipRecord(name: String): Boolean =
       name.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.") ||
           name.startsWith("eu.rekawek.coffeegb.core.memory.cart.battery.")
+
+  private fun isDynamicMbc5MulticartGameState(owner: String, field: String): Boolean =
+      owner == MBC5_MULTICART_STATE && field == "selectedGameState"
+
+  private const val MBC5_MULTICART_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
 
   private class Restore {
     private var references = 0L

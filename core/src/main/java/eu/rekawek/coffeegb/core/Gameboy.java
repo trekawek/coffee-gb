@@ -1357,6 +1357,23 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
+    /**
+     * Preflights an RTC supplement before the candidate cartridge mapper state has been restored.
+     */
+    public void validateRtcRuntimeStateForRestoreCandidate(RtcRuntimeState state) {
+        if (state == null) {
+            throw new IllegalArgumentException("Cartridge RTC runtime state is missing");
+        }
+        cartridge.validateRtcRuntimeStateForRestoreCandidate(state.primary());
+        if (slotCartridge == null) {
+            if (state.slot() != null) {
+                throw new IllegalArgumentException("Slot RTC runtime state supplied without a slot cartridge");
+            }
+        } else {
+            slotCartridge.validateRtcRuntimeStateForRestoreCandidate(state.slot());
+        }
+    }
+
     public void restoreRtcRuntimeState(RtcRuntimeState state) {
         validateRtcRuntimeState(state);
         cartridge.restoreRtcRuntimeState(state.primary());

@@ -1607,6 +1607,29 @@ internal object StateSemantics {
         constrained("MBC5 exposes a nine-bit ROM bank and four-bit RAM/rumble register.") {
           it.range("selectedRamBank", 0, 0x0f); it.range("selectedRomBank", 0, 0x1ff)
         }
+    target[MBC5_MULTICART_STATE] =
+        constrained("The multi-MBC board retains byte-sized configuration registers and an explicit child mapper state.") {
+          it.requiredRecordType("menuState", MBC5_MULTICART_LOADER_STATE)
+          it.range("selectedPage", 0, 0xff); it.range("pageMask", 0, 0xff)
+          when (it.int("selectedMapperMode")) {
+            -1 -> it.require(it.value("selectedGameState") == null,
+                "has a selected game without a mapper mode")
+            MBC5_MULTICART_MBC1_MODE ->
+                it.requiredRecordType("selectedGameState", MBC1_STATE)
+            MBC5_MULTICART_MBC2_OR_MBC3_MODE ->
+                it.requiredRecordType("selectedGameState", MBC2_STATE, MBC3_STATE)
+            MBC5_MULTICART_MBC5_MODE ->
+                it.requiredRecordType("selectedGameState", MBC5_STATE)
+            else -> it.require(false, "has an invalid selected mapper mode")
+          }
+        }
+    target[MBC5_MULTICART_LOADER_STATE] =
+        constrained("The MBC5 menu loader preserves a bounded two-bank transition window.") {
+          it.requiredRecordType("mbc5State", MBC5_STATE)
+          val base = it.int("loaderBaseBank")
+          it.require(base == -1 || base in 0x14..0x212 && base and 1 == 0,
+              "has an invalid loader base bank $base")
+        }
     target["eu.rekawek.coffeegb.core.memory.cart.type.XploderGb\$XploderGbState"] =
         constrained("Xploder exposes byte ROM banking, sixteen RAM banks, and a fixed 128 KiB RAM image.") {
           it.recordType("batteryMemento", MEMORY_BATTERY_STATE, FILE_BATTERY_STATE)
@@ -1812,7 +1835,16 @@ internal object StateSemantics {
   private const val FILE_BATTERY_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
   private const val MBC1_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc1\$Mbc1State"
+  private const val MBC2_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc2\$Mbc2State"
+  private const val MBC3_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3State"
   private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
+  private const val MBC5_MULTICART_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
+  private const val MBC5_MULTICART_LOADER_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$LoaderMbc5\$LoaderMbc5State"
+  private const val MBC5_MULTICART_MBC2_OR_MBC3_MODE = 0xa0
+  private const val MBC5_MULTICART_MBC5_MODE = 0xc0
+  private const val MBC5_MULTICART_MBC1_MODE = 0xe0
   private const val MBC7_EEPROM_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc7Eeprom\$EepromState"
   private const val MOBILE_ADAPTER_ENGINE_STATE =

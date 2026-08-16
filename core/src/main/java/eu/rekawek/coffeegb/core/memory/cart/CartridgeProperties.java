@@ -41,7 +41,8 @@ public final class CartridgeProperties {
         WISDOM_TREE,
         MBC1,
         POCKET_CAMERA,
-        MBC5
+        MBC5,
+        MBC5_MULTICART
     }
 
     public enum Feature {
@@ -106,6 +107,8 @@ public final class CartridgeProperties {
                     Mapper.POCKET_CAMERA),
             mapper("Bung/EMS flash cartridge", CartridgeProperties::isBungEms,
                     Mapper.BUNG_EMS),
+            mapper("MBC5 multi-MBC multicart", CartridgeProperties::isMbc5Multicart,
+                    Mapper.MBC5_MULTICART),
             mapper("hidden MMM01 multicart", CartridgeProperties::isHiddenMmm01,
                     Mapper.HIDDEN_MMM01),
             mapper("Mani 32 KiB multicart", CartridgeProperties::isMani32kMulticart,
@@ -310,6 +313,24 @@ public final class CartridgeProperties {
                 || info.hasNullTerminatedTitle("GB16M")
                 || info.rawType() == 0xbe
                 || (info.rawType() == 0x1b && info.byteAt(0x014a) == 0xe1);
+    }
+
+    private static boolean isMbc5Multicart(RomInfo info) {
+        if (info.data.length != 0x400000
+                || !info.hasValidLogo()
+                || info.byteAt(0x0143) != 0x80
+                || info.rawType() != 0x19
+                || info.declaredRomBanks() != 64
+                || info.physicalRomBanks() != 256
+                || info.byteAt(0x0149) != 0) {
+            return false;
+        }
+        for (int bank = 0x16; bank <= 0x20; bank += 2) {
+            if (!hasLogoAt(info.data, bank * 0x4000 + 0x0104)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isHiddenMmm01(RomInfo info) {
