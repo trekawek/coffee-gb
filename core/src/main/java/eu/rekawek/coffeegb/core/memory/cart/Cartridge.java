@@ -113,6 +113,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case MBC1 -> new Mbc1(rom, battery);
             case POCKET_CAMERA -> new PocketCamera(rom, battery);
             case MBC5 -> new Mbc5(rom, battery);
+            case MBC5_MULTICART -> new Mbc5Multicart(rom, battery, rtcTimeSource, clockSpec);
             case STANDARD -> createStandardMemoryController(rom, battery, rtcTimeSource, clockSpec);
         };
     }
@@ -258,16 +259,19 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     /** Returns detached MBC3 pause bookkeeping, or null for mappers without that clock. */
     public RealTimeClock.RuntimeState captureRtcRuntimeState() {
-        return addressSpace instanceof Mbc3 mbc3 ? mbc3.captureRtcRuntimeState() : null;
+        Mbc3 mbc3 = getMbc3Controller();
+        return mbc3 == null ? null : mbc3.captureRtcRuntimeState();
     }
 
     /** Checks the MBC3 pause boundary without applying elapsed host time. */
     public boolean isRtcEmulationPaused() {
-        return addressSpace instanceof Mbc3 mbc3 && mbc3.isRtcEmulationPaused();
+        Mbc3 mbc3 = getMbc3Controller();
+        return mbc3 != null && mbc3.isRtcEmulationPaused();
     }
 
     public void validateRtcRuntimeState(RealTimeClock.RuntimeState state) {
-        if (!(addressSpace instanceof Mbc3 mbc3)) {
+        Mbc3 mbc3 = getMbc3Controller();
+        if (mbc3 == null) {
             if (state != null) {
                 throw new IllegalArgumentException("RTC runtime state supplied for a non-MBC3 cartridge");
             }
@@ -276,6 +280,24 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         if (state == null) {
             throw new IllegalArgumentException("MBC3 RTC runtime state is missing");
         }
+        validateRtcPauseBoundary(state);
+    }
+
+    /**
+     * Preflights an RTC supplement before a dynamic multicart has installed the candidate game.
+     * The regular validation remains strict once the mapper state has been restored.
+     */
+    public void validateRtcRuntimeStateForRestoreCandidate(RealTimeClock.RuntimeState state) {
+        if (addressSpace instanceof Mbc5Multicart) {
+            if (state != null) {
+                validateRtcPauseBoundary(state);
+            }
+            return;
+        }
+        validateRtcRuntimeState(state);
+    }
+
+    private static void validateRtcPauseBoundary(RealTimeClock.RuntimeState state) {
         if (!state.emulationPaused() && state.pauseStartedMillis() != 0) {
             throw new IllegalArgumentException("Running MBC3 RTC has a stale pause reference");
         }
@@ -283,9 +305,20 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
 
     public void restoreRtcRuntimeState(RealTimeClock.RuntimeState state) {
         validateRtcRuntimeState(state);
-        if (addressSpace instanceof Mbc3 mbc3) {
+        Mbc3 mbc3 = getMbc3Controller();
+        if (mbc3 != null) {
             mbc3.restoreRtcRuntimeState(state);
         }
+    }
+
+    private Mbc3 getMbc3Controller() {
+        if (addressSpace instanceof Mbc3 mbc3) {
+            return mbc3;
+        }
+        if (addressSpace instanceof Mbc5Multicart multicart) {
+            return multicart.getActiveMbc3();
+        }
+        return null;
     }
 
     /** The Sachen MMC2 needs to observe reads on the upper half of the bus (see Mmu). */

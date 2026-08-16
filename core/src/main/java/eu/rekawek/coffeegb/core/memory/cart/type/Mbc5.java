@@ -139,9 +139,9 @@ public class Mbc5 implements MemoryController {
     @Override
     public int getByte(int address) {
         if (address >= 0x0000 && address < 0x4000) {
-            return getRomByte(0, address);
+            return getRomByte(getRomBankFor0x0000(), address);
         } else if (address >= 0x4000 && address < 0x8000) {
-            return getRomByte(selectedRomBank % romBanks, address - 0x4000);
+            return getRomByte(getRomBankFor0x4000(), address - 0x4000);
         } else if (address >= 0xa000 && address < 0xc000) {
             int ramAddress = getRamAddress(address);
             if (ramAddress < ram.length) {
@@ -162,7 +162,29 @@ public class Mbc5 implements MemoryController {
         }
     }
 
-    private int getRomByte(int bank, int address) {
+    /** Hook for MBC5-derived boards that can remap the normally fixed ROM window. */
+    protected int getRomBankFor0x0000() {
+        return 0;
+    }
+
+    /** Hook for MBC5-derived boards that offset the switchable ROM window. */
+    protected int getRomBankFor0x4000() {
+        return selectedRomBank % romBanks;
+    }
+
+    protected final int getSelectedRomBank() {
+        return selectedRomBank;
+    }
+
+    protected final void setSelectedRomBank(int bank) {
+        selectedRomBank = bank;
+    }
+
+    protected final int normalizeRomBank(int bank) {
+        return Math.floorMod(bank, romBanks);
+    }
+
+    protected int getRomByte(int bank, int address) {
         int cartOffset = bank * 0x4000 + address;
         if (cartOffset < cartridge.length) {
             return cartridge[cartOffset];
