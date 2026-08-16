@@ -1611,17 +1611,29 @@ internal object StateSemantics {
         constrained("The multi-MBC board retains byte-sized configuration registers and an explicit child mapper state.") {
           it.requiredRecordType("menuState", MBC5_MULTICART_LOADER_STATE)
           it.range("selectedPage", 0, 0xff); it.range("pageMask", 0, 0xff)
-          when (it.int("selectedMapperMode")) {
+          val mapperMode = it.int("selectedMapperMode")
+          it.require(mapperMode == -1 || mapperMode in 0..0xff,
+              "has an invalid selected mapper mode $mapperMode")
+          when (mapperMode) {
             -1 -> it.require(it.value("selectedGameState") == null,
                 "has a selected game without a mapper mode")
-            MBC5_MULTICART_MBC1_MODE ->
-                it.requiredRecordType("selectedGameState", MBC1_STATE)
-            MBC5_MULTICART_MBC2_OR_MBC3_MODE ->
-                it.requiredRecordType("selectedGameState", MBC2_STATE, MBC3_STATE)
-            MBC5_MULTICART_MBC5_MODE ->
-                it.requiredRecordType("selectedGameState", MBC5_STATE)
-            else -> it.require(false, "has an invalid selected mapper mode")
+            else -> when (mapperMode and 0xe0) {
+              MBC5_MULTICART_MBC1_MODE -> it.requiredRecordType(
+                  "selectedGameState", NTNEW_STATE, MBC1_STATE, BASIC_ROM_STATE)
+              MBC5_MULTICART_MBC2_OR_MBC3_MODE ->
+                  it.requiredRecordType("selectedGameState", MBC2_STATE, MBC3_STATE)
+              MBC5_MULTICART_MBC5_MODE ->
+                  it.requiredRecordType("selectedGameState", NTNEW_STATE, MBC5_STATE)
+              else -> it.require(false, "has an invalid selected mapper mode")
+            }
           }
+        }
+    target[NTNEW_STATE] =
+        constrained("Newer N&T/Makon banking retains two byte-sized 8 KiB selectors and one RAM page.") {
+          it.recordType("batteryMemento", MEMORY_BATTERY_STATE, FILE_BATTERY_STATE)
+          it.require(it.intArray("ram").size == 0x2000, "must have one 8 KiB RAM page")
+          it.intValues("ram", 0, 0xff)
+          it.range("lowRomBank", 0, 0xff); it.range("highRomBank", 0, 0xff)
         }
     target[MBC5_MULTICART_LOADER_STATE] =
         constrained("The MBC5 menu loader preserves a bounded two-bank transition window.") {
@@ -1838,6 +1850,8 @@ internal object StateSemantics {
   private const val MBC2_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc2\$Mbc2State"
   private const val MBC3_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc3\$Mbc3State"
   private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
+  private const val BASIC_ROM_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState"
+  private const val NTNEW_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState"
   private const val MBC5_MULTICART_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
   private const val MBC5_MULTICART_LOADER_STATE =
