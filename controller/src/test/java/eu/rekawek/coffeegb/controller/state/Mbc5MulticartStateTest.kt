@@ -34,12 +34,33 @@ class Mbc5MulticartStateTest {
       assertEquals(0x43, gameboy.addressSpace.getByte(0x4000))
       assertNotNull(gameboy.captureRtcRuntimeState().primary())
 
+      menuSnapshot.restore(gameboy)
+      select(gameboy, 0x10, 0xf0, 0xe0)
+      gameboy.addressSpace.setByte(0x1400, 0x55)
+      gameboy.addressSpace.setByte(0x2000, 0x04)
+      gameboy.addressSpace.setByte(0x2400, 0x05)
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x4000))
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x6000))
+      val ntNewSnapshot = MachineSnapshot.capture(gameboy, mbc3Snapshot)
+      val ntNewState = StateCodec.encode(StateCodec.capture(configuration, gameboy))
+
+      gameboy.addressSpace.setByte(0x2000, 0x06)
+      mbc3Snapshot.restore(gameboy)
+      assertNotNull(gameboy.captureRtcRuntimeState().primary())
+      ntNewSnapshot.restore(gameboy)
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x4000))
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x6000))
+
       StateCodec.decodeAndApply(menuState, configuration, gameboy)
       assertNull(gameboy.captureRtcRuntimeState().primary())
       select(gameboy, 0x10, 0xf0, 0xe0)
       StateCodec.decodeAndApply(mbc3State, configuration, gameboy)
       assertEquals(0x43, gameboy.addressSpace.getByte(0x4000))
       assertNotNull(gameboy.captureRtcRuntimeState().primary())
+
+      StateCodec.decodeAndApply(ntNewState, configuration, gameboy)
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x4000))
+      assertEquals(0x22, gameboy.addressSpace.getByte(0x6000))
     }
   }
 
@@ -50,7 +71,10 @@ class Mbc5MulticartStateTest {
   }
 
   private fun multicartRom(): ByteArray = ByteArray(256 * 0x4000).also { data ->
-    repeat(256) { bank -> data[bank * 0x4000] = bank.toByte() }
+    repeat(256) { bank ->
+      data[bank * 0x4000] = bank.toByte()
+      data[bank * 0x4000 + 0x2000] = bank.toByte()
+    }
     putHeader(data, 0, 0x19, 0x05)
     for (bank in 0x16..0x20 step 2) {
       putHeader(data, bank, 0x19, 0x05)

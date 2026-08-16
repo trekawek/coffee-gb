@@ -19,9 +19,9 @@ import java.util.Arrays;
  * A multi-MBC board with an MBC5 menu and a configuration port in external-RAM space.
  *
  * <p>The menu runs through ordinary MBC5 banking. Before jumping to a selected game it writes a
- * 32 KiB page number, an inverted page mask and a mapper kind to {@code b000}, {@code b100} and
- * {@code b200}. The last write commits a virtual cartridge view; the game then sees its own MBC1,
- * MBC2, MBC3 or MBC5 controller from address zero.</p>
+ * 32 KiB page number, an inverted page mask and a mapper configuration byte to {@code b000},
+ * {@code b100} and {@code b200}. The last write commits a virtual cartridge view; the game then
+ * sees its own controller from address zero.</p>
  */
 public class Mbc5Multicart implements MemoryController {
 
@@ -196,9 +196,10 @@ public class Mbc5Multicart implements MemoryController {
     }
 
     private MemoryController createGame(int mapperMode) {
-        if (mapperMode != MBC1_MODE
-                && mapperMode != MBC2_OR_MBC3_MODE
-                && mapperMode != MBC5_MODE) {
+        int mapperFamily = mapperMode & 0xe0;
+        if (mapperFamily != MBC1_MODE
+                && mapperFamily != MBC2_OR_MBC3_MODE
+                && mapperFamily != MBC5_MODE) {
             return null;
         }
         int romBanks = (pageMask + 1) << 1;
@@ -209,14 +210,17 @@ public class Mbc5Multicart implements MemoryController {
         } catch (IOException e) {
             throw new IllegalStateException("Unable to create selected multicart view", e);
         }
-        return switch (mapperMode) {
-            case MBC1_MODE -> new Mbc1(gameRom, Battery.NULL_BATTERY);
-            case MBC2_OR_MBC3_MODE -> gameRom.getType().isMbc2()
-                    ? new Mbc2(gameRom, Battery.NULL_BATTERY)
-                    : new Mbc3(gameRom, Battery.NULL_BATTERY, guardedTimeSource, clockSpec);
-            case MBC5_MODE -> new Mbc5(gameRom, Battery.NULL_BATTERY);
-            default -> throw new IllegalStateException("Checked mapper mode is unsupported");
-        };
+        if (gameRom.getType().isMbc1()) {
+            return new NtNew(gameRom, Battery.NULL_BATTERY);
+        } else if (gameRom.getType().isMbc2()) {
+            return new Mbc2(gameRom, Battery.NULL_BATTERY);
+        } else if (gameRom.getType().isMbc3()) {
+            return new Mbc3(gameRom, Battery.NULL_BATTERY, guardedTimeSource, clockSpec);
+        } else if (gameRom.getType().isMbc5()) {
+            return new NtNew(gameRom, Battery.NULL_BATTERY);
+        } else {
+            return new BasicRom(gameRom, Battery.NULL_BATTERY);
+        }
     }
 
     private byte[] createGameImage(int baseRomBank, int romBanks) {

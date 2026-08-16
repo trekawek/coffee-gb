@@ -119,6 +119,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.memory.cart.type.Gowin\$GowinState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$LoaderMbc5\$LoaderMbc5State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState",
       )
 
   val legacyRecordClassNames =

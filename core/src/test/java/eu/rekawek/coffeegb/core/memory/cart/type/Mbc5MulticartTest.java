@@ -66,7 +66,7 @@ public class Mbc5MulticartTest {
         assertEquals(0x16, mapper.getByte(0x0000));
         assertEquals(0x17, mapper.getByte(0x4000));
 
-        mapper.setByte(0xb200, 0xe1);
+        mapper.setByte(0xb200, 0x80);
         assertEquals(0x16, mapper.getByte(0x0000));
 
         mapper.setByte(0xb200, 0xe0);
@@ -82,6 +82,16 @@ public class Mbc5MulticartTest {
     }
 
     @Test
+    public void acceptsLowConfigurationBitsForPlainRomGames() throws IOException {
+        MemoryController mapper = new Mbc5Multicart(new Rom(multicartRom()), Battery.NULL_BATTERY);
+
+        configure(mapper, 0x0c, 0xff, 0xe8);
+
+        assertEquals(0x18, mapper.getByte(0x0000));
+        assertEquals(0x19, mapper.getByte(0x4000));
+    }
+
+    @Test
     public void selectsMbc3AndMbc5GamesUsingTheBoardMapperMode() throws IOException {
         MemoryController mbc3 = new Mbc5Multicart(new Rom(multicartRom()), Battery.NULL_BATTERY);
         configure(mbc3, 0x20, 0xe0, 0xa0);
@@ -94,6 +104,19 @@ public class Mbc5MulticartTest {
         assertEquals(0x80, mbc5.getByte(0x0000));
         mbc5.setByte(0x2000, 3);
         assertEquals(0x83, mbc5.getByte(0x4000));
+    }
+
+    @Test
+    public void usesTheNAndT8KiBProtocolForMbc5HeaderGames() throws IOException {
+        MemoryController mapper = new Mbc5Multicart(new Rom(multicartRom()), Battery.NULL_BATTERY);
+        configure(mapper, 0x40, 0xe0, 0xc0);
+
+        mapper.setByte(0x1400, 0x55);
+        mapper.setByte(0x2000, 0x06);
+        mapper.setByte(0x2400, 0x07);
+
+        assertEquals(0x83, mapper.getByte(0x4000));
+        assertEquals(0x83, mapper.getByte(0x6000));
     }
 
     @Test
@@ -171,11 +194,13 @@ public class Mbc5MulticartTest {
         byte[] data = new byte[256 * 0x4000];
         for (int bank = 0; bank < 256; bank++) {
             data[bank * 0x4000] = (byte) bank;
+            data[bank * 0x4000 + 0x2000] = (byte) bank;
         }
         putHeader(data, 0, 0x19, 0x05);
         for (int bank = 0x16; bank <= 0x20; bank += 2) {
             putHeader(data, bank, 0x19, 0x05);
         }
+        putHeader(data, 0x18, 0x00, 0x00);
         putHeader(data, 0x20, 0x01, 0x04);
         putHeader(data, 0x40, 0x10, 0x05);
         putHeader(data, 0x80, 0x1c, 0x05);
