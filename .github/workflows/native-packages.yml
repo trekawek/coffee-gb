@@ -114,6 +114,19 @@ jobs:
             exit 1
           fi
 
+      - name: Use current native package verification harness
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          git fetch --no-tags origin $env:WORKFLOW_SHA
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to fetch the current native package verification harness"
+          }
+          git show "${env:WORKFLOW_SHA}:packaging/verify-native-package.ps1" |
+            Set-Content -LiteralPath "packaging/verify-native-package.ps1" -Encoding utf8NoBOM
+
       - name: Set up target-architecture JDK 21 and safe Maven cache
         uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
         with:

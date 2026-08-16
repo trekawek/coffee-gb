@@ -104,8 +104,8 @@ function Assert-OnlyCoffeeGbShortcuts([string] $InstallationRoot) {
         $env:ProgramData `
         "Microsoft\Windows\Start Menu\Programs\Coffee GB"
     $ExpectedShortcuts = @(
-        Join-Path $Desktop "Coffee GB.lnk",
-        Join-Path $StartMenuGroup "Coffee GB.lnk"
+        (Join-Path $Desktop "Coffee GB.lnk"),
+        (Join-Path $StartMenuGroup "Coffee GB.lnk")
     )
     $PrimaryLauncher = [System.IO.Path]::GetFullPath(
         (Join-Path $InstallationRoot "Coffee GB.exe"))
