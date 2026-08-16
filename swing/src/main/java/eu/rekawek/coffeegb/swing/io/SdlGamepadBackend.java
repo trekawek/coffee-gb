@@ -15,6 +15,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.function.BiPredicate;
 
 import static io.github.libsdl4j.api.Sdl.SDL_Init;
 import static io.github.libsdl4j.api.Sdl.SDL_QuitSubSystem;
@@ -22,6 +24,8 @@ import static io.github.libsdl4j.api.SdlSubSystemConst.SDL_INIT_GAMECONTROLLER;
 import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerAxis.*;
 import static io.github.libsdl4j.api.gamecontroller.SDL_GameControllerButton.*;
 import static io.github.libsdl4j.api.gamecontroller.SdlGamecontroller.*;
+import static io.github.libsdl4j.api.hints.SdlHints.SDL_SetHint;
+import static io.github.libsdl4j.api.hints.SdlHintsConst.SDL_HINT_JOYSTICK_THREAD;
 import static io.github.libsdl4j.api.joystick.SdlJoystick.*;
 
 /** Real SDL2 implementation kept behind the no-native test seam. */
@@ -33,6 +37,9 @@ final class SdlGamepadBackend implements GamepadBackend {
     @Override
     public void initialize() {
         locateSystemSdl();
+        configurePlatformHints(
+                System.getProperty("os.name", ""),
+                (name, value) -> SDL_SetHint(name, value));
         // SDL_JoystickGetDeviceGUID returns SDL_JoystickGUID by value.  The direct JNA mapping
         // used by libsdl4j corrupts the following native call for this struct-return ABI on
         // macOS arm64 when SDL2 is provided by Homebrew's sdl2-compat layer.  Use JNA's proxy
@@ -43,6 +50,16 @@ final class SdlGamepadBackend implements GamepadBackend {
             throw new IllegalStateException("SDL game-controller initialization failed");
         }
         initialized = true;
+    }
+
+    static void configurePlatformHints(
+            String osName, BiPredicate<String, String> hintSetter) {
+        if (nullToEmpty(osName).toLowerCase(Locale.ROOT).startsWith("windows")) {
+            // The Windows RawInput backend receives controller reports through WM_INPUT.
+            // Coffee GB does not own an SDL video event loop, so let SDL own the message-only
+            // window and dispatch those reports on its dedicated joystick thread.
+            hintSetter.test(SDL_HINT_JOYSTICK_THREAD, "1");
+        }
     }
 
     @Override
