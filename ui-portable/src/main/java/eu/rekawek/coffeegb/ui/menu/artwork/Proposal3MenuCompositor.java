@@ -24,6 +24,8 @@ import java.util.Set;
 public final class Proposal3MenuCompositor {
 
     private static final int PAPER_MATTE = MenuRaster.PAPER;
+    /** Warm save-seal center from the imagegen concept; the pale frame keeps it legible on focus. */
+    private static final int STATE_USED_SEAL = 0xffbd5d4e;
 
     private final Object lock = new Object();
     private MenuRoute cachedRoute;
@@ -87,7 +89,8 @@ public final class Proposal3MenuCompositor {
     static Proposal3GlyphAtlas.Role rowTextRole(MenuRoute route, int rowIndex) {
         return switch (route) {
             case PAUSE_CONSOLE, SAVE_STATES -> Proposal3GlyphAtlas.Role.SEMIBOLD;
-            case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.DISPLAY;
+            // Seven archive rows use the compact 36px face so their ink fits the fixed viewport.
+            case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.MEDIUM;
             case CONTROLLER_MAPPING, OPTIONAL_DEVICES, LIBRARY, SYSTEM ->
                     Proposal3GlyphAtlas.Role.SMALL;
             case ABOUT -> rowIndex == 0 ? Proposal3GlyphAtlas.Role.SEMIBOLD
@@ -303,14 +306,14 @@ public final class Proposal3MenuCompositor {
         }
         int rowIndex = indexOf(prepared.rows, id);
         if (rowIndex >= 0) {
-            int start = windowStart(prepared.rows, presentation.focusedIndex(),
+            ScrollWindow window = scrollWindow(prepared.rows, presentation.focusedIndex(),
                     layout.rows().size(), layout.scrollable());
-            int visibleIndex = rowIndex - start;
-            if (visibleIndex < 0 || visibleIndex >= layout.rows().size()) {
+            int visibleIndex = window.visualIndex(rowIndex);
+            if (visibleIndex < 0) {
                 if (rowIndex != 0 || layout.rows().isEmpty()) {
                     return;
                 }
-                visibleIndex = 0;
+                visibleIndex = window.firstContentIndex();
             }
             paintRowWidget(route, presentation, prepared, layout, prepared.rows.get(rowIndex),
                     rowIndex, layout.rows().get(visibleIndex), selected, raster);
@@ -530,9 +533,10 @@ public final class Proposal3MenuCompositor {
         List<Entry> entries = prepared.rows;
         int entryIndex = indexOf(entries, id);
         if (entryIndex >= 0) {
-            int start = windowStart(entries, focusedIndex, layout.rows().size(), layout.scrollable());
-            int visibleIndex = entryIndex - start;
-            if (visibleIndex >= 0 && visibleIndex < layout.rows().size()) {
+            ScrollWindow window = scrollWindow(entries, focusedIndex, layout.rows().size(),
+                    layout.scrollable());
+            int visibleIndex = window.visualIndex(entryIndex);
+            if (visibleIndex >= 0) {
                 return layout.rows().get(visibleIndex);
             }
             if (!target && entryIndex == 0 && !layout.rows().isEmpty()) {
@@ -555,10 +559,10 @@ public final class Proposal3MenuCompositor {
         return -1;
     }
 
-    private static int windowStart(List<Entry> entries, int focusedIndex, int capacity,
+    private static ScrollWindow scrollWindow(List<Entry> entries, int focusedIndex, int capacity,
             boolean scrollable) {
         if (!scrollable || entries.size() <= capacity) {
-            return 0;
+            return new ScrollWindow(0, Math.min(entries.size(), capacity), false, false);
         }
         int focused = -1;
         for (int index = 0; index < entries.size(); index++) {
@@ -568,10 +572,19 @@ public final class Proposal3MenuCompositor {
             }
         }
         if (focused < 0) {
-            return 0;
+            focused = 0;
         }
-        int start = focused - capacity / 2;
-        return Math.max(0, Math.min(start, entries.size() - capacity));
+        int edgeCapacity = capacity - 1;
+        if (focused < edgeCapacity) {
+            return new ScrollWindow(0, edgeCapacity, false, true);
+        }
+        if (focused >= entries.size() - edgeCapacity) {
+            return new ScrollWindow(entries.size() - edgeCapacity, edgeCapacity, true, false);
+        }
+        int contentCapacity = capacity - 2;
+        int start = Math.max(1, Math.min(focused - contentCapacity + 1,
+                entries.size() - contentCapacity - 1));
+        return new ScrollWindow(start, contentCapacity, true, true);
     }
 
     private void paintRowWidget(MenuRoute route, MenuPresentation presentation, Prepared prepared,
@@ -592,6 +605,9 @@ public final class Proposal3MenuCompositor {
                     MenuRaster.HorizontalAlignment.RIGHT, detailTextRole(route));
         }
         paintRowIcon(route, entryIndex, slot, raster);
+        if (route == MenuRoute.SAVE_STATES && isUsedState(entry)) {
+            paintStateUsedSeal(slot, raster);
+        }
         if (selected && layout.marker() != null
                 && slot.surface() == Proposal3OverlayCatalog.Surface.DARK) {
             paintMarker(presentation, prepared, layout, slot, raster);
@@ -611,6 +627,44 @@ public final class Proposal3MenuCompositor {
         int left = slot.bounds().x() + 4;
         int top = slot.bounds().y() + Math.max(0, (slot.bounds().height() - icon.height()) / 2);
         raster.paintSprite(icon, left, top);
+    }
+
+    private static boolean isUsedState(Entry entry) {
+        return "USED".equals(display(entry.detail));
+    }
+
+    /** Framed red save seal, intentionally independent from row focus coloring. */
+    private static void paintStateUsedSeal(Proposal3OverlayCatalog.Slot slot, MenuRaster raster) {
+        MenuRect bounds = slot.bounds();
+        int left = bounds.right() - 40;
+        int top = bounds.y() + Math.max(0, (bounds.height() - 30) / 2);
+        // A round-cornered 30px cartridge/save seal. The pale label and dark write-window make
+        // an occupied row recognizable even when the selected background is also warm red.
+        raster.fill(new MenuRect(left + 6, top, 18, 3), MenuRaster.PAPER_TEXT);
+        raster.fill(new MenuRect(left + 3, top + 3, 24, 24), MenuRaster.PAPER_TEXT);
+        raster.fill(new MenuRect(left + 6, top + 27, 18, 3), MenuRaster.PAPER_TEXT);
+        raster.fill(new MenuRect(left + 6, top + 3, 18, 24), STATE_USED_SEAL);
+        raster.fill(new MenuRect(left + 3, top + 6, 24, 18), STATE_USED_SEAL);
+        raster.fill(new MenuRect(left + 8, top + 6, 14, 6), MenuRaster.PAPER_TEXT);
+        raster.fill(new MenuRect(left + 9, top + 15, 12, 8), MenuRaster.INK);
+        raster.fill(new MenuRect(left + 12, top + 17, 6, 3), MenuRaster.PAPER_TEXT);
+    }
+
+    /** A compact, framed chevron row communicates that D-pad movement reveals more items. */
+    private void paintScrollWidget(MenuRoute route, Proposal3OverlayCatalog.Slot slot, boolean up,
+            MenuRaster raster) {
+        paintSurface(raster, rowSurfaceBounds(route, slot), slot.surface(), false);
+        MenuRect bounds = slot.bounds();
+        int centerX = bounds.x() + bounds.width() / 2;
+        int centerY = bounds.y() + bounds.height() / 2;
+        int top = centerY - 8;
+        for (int step = 0; step < 4; step++) {
+            int y = top + (up ? 3 - step : step) * 4;
+            raster.fill(new MenuRect(centerX - 16 + step * 4, y, 5, 4),
+                    MenuRaster.PAPER_TEXT);
+            raster.fill(new MenuRect(centerX + 11 - step * 4, y, 5, 4),
+                    MenuRaster.PAPER_TEXT);
+        }
     }
 
     private void paintActionWidget(MenuRoute route, MenuPresentation presentation,
@@ -658,12 +712,20 @@ public final class Proposal3MenuCompositor {
         if (layout.rows().isEmpty()) {
             return;
         }
-        int start = windowStart(prepared.rows, presentation.focusedIndex(), layout.rows().size(),
-                layout.scrollable());
+        ScrollWindow window = scrollWindow(prepared.rows, presentation.focusedIndex(),
+                layout.rows().size(), layout.scrollable());
         String focused = focusedId(presentation, prepared);
         for (int visible = 0; visible < layout.rows().size(); visible++) {
-            int index = start + visible;
             Proposal3OverlayCatalog.Slot slot = layout.rows().get(visible);
+            if (window.topArrow() && visible == 0) {
+                paintScrollWidget(route, slot, true, raster);
+                continue;
+            }
+            if (window.bottomArrow() && visible == layout.rows().size() - 1) {
+                paintScrollWidget(route, slot, false, raster);
+                continue;
+            }
+            int index = window.entryIndex(visible);
             if (index >= prepared.rows.size()) {
                 paintSurface(raster, rowSurfaceBounds(route, slot), slot.surface(), false);
                 continue;
@@ -678,14 +740,26 @@ public final class Proposal3MenuCompositor {
             for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
                 raster.fill(divider, PAPER_MATTE);
             }
-        } else if (route == MenuRoute.SAVE_STATES) {
-            // State rows use the same fixed-height treatment as the pause rail.  The row skins
-            // are intentionally expanded for focus repaint cleanup, so restore the dividers
-            // after every row (including an empty/focused row) to keep all four slots equal.
-            for (MenuRect divider : Proposal3OverlayCatalog.SAVE_DIVIDERS) {
+        } else if (route == MenuRoute.SAVE_STATES || route == MenuRoute.SETTINGS
+                || route == MenuRoute.CONTROLLER_MAPPING || route == MenuRoute.LIBRARY
+                || route == MenuRoute.CHOOSE_ROM) {
+            // Expanded row skins repaint focus cleanly. Restore the rail dividers afterwards so
+            // every seven-item viewport remains evenly spaced, including arrow rows.
+            for (MenuRect divider : scrollDividers(route)) {
                 raster.fill(divider, PAPER_MATTE);
             }
         }
+    }
+
+    private static List<MenuRect> scrollDividers(MenuRoute route) {
+        return switch (route) {
+            case SAVE_STATES -> Proposal3OverlayCatalog.SAVE_DIVIDERS;
+            case SETTINGS -> Proposal3OverlayCatalog.SETTINGS_DIVIDERS;
+            case CONTROLLER_MAPPING -> Proposal3OverlayCatalog.CONTROLLER_DIVIDERS;
+            case LIBRARY -> Proposal3OverlayCatalog.LIBRARY_DIVIDERS;
+            case CHOOSE_ROM -> Proposal3OverlayCatalog.CHOOSE_ROM_DIVIDERS;
+            default -> List.of();
+        };
     }
 
     private static MenuRect rowSurfaceBounds(MenuRoute route, Proposal3OverlayCatalog.Slot slot) {
@@ -1167,6 +1241,25 @@ public final class Proposal3MenuCompositor {
         private final List<Entry> rows = new ArrayList<>();
         private final List<Entry> actions = new ArrayList<>();
         private Entry volume;
+    }
+
+    /** Maps a focused full list into a seven-row viewport with non-selectable edge cues. */
+    private record ScrollWindow(int start, int contentCount, boolean topArrow,
+                                boolean bottomArrow) {
+        int firstContentIndex() {
+            return topArrow ? 1 : 0;
+        }
+
+        int visualIndex(int entryIndex) {
+            if (entryIndex < start || entryIndex >= start + contentCount) {
+                return -1;
+            }
+            return firstContentIndex() + entryIndex - start;
+        }
+
+        int entryIndex(int visualIndex) {
+            return start + visualIndex - firstContentIndex();
+        }
     }
 
     private static final class Entry {

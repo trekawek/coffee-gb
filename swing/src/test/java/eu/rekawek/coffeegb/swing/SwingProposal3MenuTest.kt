@@ -390,7 +390,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `save page has four stable rows and A or Start saves directly while B returns`() {
+  fun `save page exposes ten slots and A or Start saves directly while B returns`() {
     val bridge = FakeBridge()
     val menu = newMenu(bridge)
 
@@ -406,13 +406,38 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.START)
       assertEquals(1, bridge.savedSlot)
 
-      repeat(2) { press(menu, MenuKey.DOWN) }
-      assertEquals("slot-3", menu.focusedItemIdForTest())
+      repeat(8) { press(menu, MenuKey.DOWN) }
+      assertEquals("slot-9", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+      assertEquals(9, bridge.savedSlot)
       press(menu, MenuKey.DOWN)
       assertEquals("slot-0", menu.focusedItemIdForTest())
       press(menu, MenuKey.B)
       assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
     }
+  }
+
+  @Test
+  fun `load page reaches a persisted slot nine`() {
+    val bridge =
+        FakeBridge().also {
+          it.stateCatalog = listOf(PortableMenuStateSlot(9, true, MenuPreview.empty()))
+        }
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
+
+      repeat(9) { press(menu, MenuKey.DOWN) }
+      assertEquals("slot-9", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+    }
+
+    assertEquals(9, bridge.loadedSlot)
+    assertFalse(menu.visible())
   }
 
   @Test

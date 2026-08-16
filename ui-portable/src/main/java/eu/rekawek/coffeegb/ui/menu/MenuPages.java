@@ -143,7 +143,13 @@ final class MenuPages {
                         item("slot-0", "SLOT 0"),
                         item("slot-1", "SLOT 1"),
                         item("slot-2", "SLOT 2"),
-                        item("slot-3", "SLOT 3")),
+                        item("slot-3", "SLOT 3"),
+                        item("slot-4", "SLOT 4"),
+                        item("slot-5", "SLOT 5"),
+                        item("slot-6", "SLOT 6"),
+                        item("slot-7", "SLOT 7"),
+                        item("slot-8", "SLOT 8"),
+                        item("slot-9", "SLOT 9")),
                 1, List.of("D-PAD MOVE", "A " + (load ? "LOAD" : "SAVE"), "B BACK"),
                 "slot-0", MenuPreview.empty());
     }

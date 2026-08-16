@@ -52,8 +52,8 @@ import java.util.function.Consumer;
 /** Canvas-menu and native external-surface client for {@link EmulationService}. */
 public final class MainActivity extends Activity implements RuntimeObserver {
 
-    private static final int STATE_MENU_MIN_SLOT = 0;
-    private static final int STATE_MENU_MAX_SLOT = 3;
+    private static final int STATE_MENU_MIN_SLOT = StateRef.MIN_SLOT;
+    private static final int STATE_MENU_MAX_SLOT = StateRef.MAX_SLOT;
 
     private static final int OPEN_ROM_REQUEST = 1;
     private static final int IMPORT_BATTERY_REQUEST = 2;
@@ -1805,12 +1805,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private MenuPageSpec statePage(MenuPreview preview, String preferredFocus) {
-        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
-        for (int index = STATE_MENU_MIN_SLOT; index <= STATE_MENU_MAX_SLOT; index++) {
-            // Every stable slot remains focusable in both modes. LOAD treats an empty or
-            // unavailable slot as a no-op; SAVE overwrites directly without confirmation.
-            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index, "", true));
-        }
+        List<MenuPageSpec.Item> items = stateMenuItems(stateSlots);
         String mode = stateMenuMode == StateMenuMode.SAVE ? "SAVE" : "LOAD";
         return new MenuPageSpec(MenuRoute.SAVE_STATES, "COFFEE GB", mode + " STATES", "", "",
                 stateSavedAtLines(stateSlot(preferredFocus == null
@@ -1818,6 +1813,30 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 items, 1,
                 List.of("D-PAD MOVE", "A " + mode, "B BACK"),
                 preferredFocus == null ? "slot:" + StateRef.MIN_SLOT : preferredFocus, preview);
+    }
+
+    /** Stable state rows shared by SAVE and LOAD; persisted rows carry a visual-only seal hint. */
+    static List<MenuPageSpec.Item> stateMenuItems(List<AndroidStateSlot> catalog) {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (int index = STATE_MENU_MIN_SLOT; index <= STATE_MENU_MAX_SLOT; index++) {
+            // Every stable slot remains focusable in both modes. LOAD treats an empty or
+            // unavailable slot as a no-op; SAVE overwrites directly without confirmation.
+            boolean used = catalogContainsLoadableSlot(catalog, index);
+            // The compositor uses this semantic marker to distinguish a persisted state from an
+            // empty but still focusable slot. It is intentionally not exposed as row copy.
+            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index,
+                    used ? "USED" : "", true));
+        }
+        return List.copyOf(items);
+    }
+
+    private static boolean catalogContainsLoadableSlot(List<AndroidStateSlot> catalog, int index) {
+        for (AndroidStateSlot slot : catalog) {
+            if (slot.index() == index && slot.loadable()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static List<String> stateSavedAtLines(AndroidStateSlot slot) {

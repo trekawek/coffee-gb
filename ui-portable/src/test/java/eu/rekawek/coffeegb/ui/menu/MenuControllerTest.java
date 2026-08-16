@@ -234,7 +234,8 @@ public class MenuControllerTest {
         assertEquals("", load.headerAction());
         assertEquals(List.of("D-PAD MOVE", "A LOAD", "B BACK"), load.footerHints());
 
-        List<String> expectedSlots = List.of("slot-0", "slot-1", "slot-2", "slot-3");
+        List<String> expectedSlots = List.of("slot-0", "slot-1", "slot-2", "slot-3",
+                "slot-4", "slot-5", "slot-6", "slot-7", "slot-8", "slot-9");
         assertEquals(expectedSlots, save.items().stream().map(MenuItem::id).toList());
         assertEquals(expectedSlots, load.items().stream().map(MenuItem::id).toList());
         assertTrue(save.items().stream().allMatch(item -> item.enabled()

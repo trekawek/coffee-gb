@@ -64,9 +64,18 @@ final class Proposal3OverlayCatalog {
 
     /** Inner aperture of the left bezel; persisted 160:144 thumbnails are aspect-fitted here. */
     static final MenuRect SAVE_PREVIEW = new MenuRect(30, 140, 352, 340);
-    static final List<MenuRect> SAVE_DIVIDERS = List.of(
-            new MenuRect(420, 246, 489, 4), new MenuRect(420, 380, 489, 4),
-            new MenuRect(420, 514, 489, 4));
+    /* Every scrollable rail exposes seven visual list items. Arrow rows replace content at the
+     * leading/trailing edge when a page has more items, rather than shrinking row heights. */
+    private static final List<MenuRect> STATE_ROW_BOUNDS = equalRows(420, 118, 489, 529, 7, 3);
+    static final List<MenuRect> SAVE_DIVIDERS = dividers(STATE_ROW_BOUNDS);
+    private static final List<MenuRect> SETTINGS_ROW_BOUNDS = equalRows(423, 116, 487, 523, 7, 2);
+    static final List<MenuRect> SETTINGS_DIVIDERS = dividers(SETTINGS_ROW_BOUNDS);
+    private static final List<MenuRect> CONTROLLER_ROW_BOUNDS = equalRows(366, 115, 544, 467, 7, 2);
+    static final List<MenuRect> CONTROLLER_DIVIDERS = dividers(CONTROLLER_ROW_BOUNDS);
+    private static final List<MenuRect> LIBRARY_ROW_BOUNDS = equalRows(369, 175, 528, 389, 7, 3);
+    static final List<MenuRect> LIBRARY_DIVIDERS = dividers(LIBRARY_ROW_BOUNDS);
+    private static final List<MenuRect> CHOOSE_ROM_ROW_BOUNDS = equalRows(387, 179, 524, 333, 7, 3);
+    static final List<MenuRect> CHOOSE_ROM_DIVIDERS = dividers(CHOOSE_ROM_ROW_BOUNDS);
 
     static final MenuRect AUDIO_LEFT_META = new MenuRect(62, 405, 315, 96);
     static final MenuRect TOUCH_LEFT_META = new MenuRect(61, 154, 315, 53);
@@ -118,25 +127,17 @@ final class Proposal3OverlayCatalog {
                 false, "resume", new Marker(443, 147, 26, 20, 31), false));
 
         layouts.put(MenuRoute.SAVE_STATES, layout(MenuRoute.SAVE_STATES,
-                rows(new int[][]{{420, 118, 489, 129}, {420, 252, 489, 129},
-                        {420, 386, 489, 129}, {420, 520, 489, 129}}, Surface.DARK),
+                rows(STATE_ROW_BOUNDS, Surface.DARK),
                 List.of(),
                 masks(SAVE_PREVIEW,
-                        rowsMasks(new int[][]{{420, 118, 489, 129}, {420, 252, 489, 129},
-                                {420, 386, 489, 129}, {420, 520, 489, 129}}),
-                        SAVE_DIVIDERS.toArray(new MenuRect[0])), false, "slot-0",
+                        rowsMasks(STATE_ROW_BOUNDS),
+                        SAVE_DIVIDERS.toArray(new MenuRect[0])), true, "slot-0",
                 new Marker(443, 151, 30, 20, 31), false));
 
         layouts.put(MenuRoute.SETTINGS, layout(MenuRoute.SETTINGS,
-                rows(new int[][]{{423, 116, 487, 56}, {423, 174, 487, 57},
-                        {423, 233, 487, 57}, {423, 292, 487, 57}, {423, 351, 487, 57},
-                        {423, 410, 487, 56}, {423, 469, 487, 56}, {423, 527, 487, 57},
-                        {423, 586, 487, 56}}, Surface.DARK), List.of(),
-                masks(inner(423, 116, 487, 56), inner(423, 174, 487, 57),
-                        inner(423, 233, 487, 57), inner(423, 292, 487, 57),
-                        inner(423, 351, 487, 57), inner(423, 410, 487, 56),
-                        inner(423, 469, 487, 56), inner(423, 527, 487, 57),
-                        inner(423, 586, 487, 56)), false, "audio",
+                rows(SETTINGS_ROW_BOUNDS, Surface.DARK), List.of(),
+                masks(rowsMasks(SETTINGS_ROW_BOUNDS),
+                        SETTINGS_DIVIDERS.toArray(new MenuRect[0])), true, "audio",
                 new Marker(442, 132, 13, 20, 31), false));
 
         layouts.put(MenuRoute.AUDIO, layout(MenuRoute.AUDIO,
@@ -158,17 +159,11 @@ final class Proposal3OverlayCatalog {
                 "haptics", new Marker(443, 158, 40, 20, 31), false));
 
         layouts.put(MenuRoute.CONTROLLER_MAPPING, layout(MenuRoute.CONTROLLER_MAPPING,
-                rows(new int[][]{{366, 115, 544, 41}, {366, 161, 544, 40},
-                        {366, 203, 544, 40}, {366, 245, 544, 40}, {366, 287, 544, 40},
-                        {366, 330, 544, 40}, {366, 372, 544, 40}, {366, 414, 544, 40},
-                        {366, 457, 544, 40}, {366, 499, 544, 40}, {366, 542, 544, 40}},
-                        Surface.DARK), List.of(),
+                rows(CONTROLLER_ROW_BOUNDS, Surface.DARK), List.of(),
                 masks(CONTROLLER_LEFT_META, CONTROLLER_REMAP, CONTROLLER_CAPTURE,
-                        rowsMasks(new int[][]{{366, 115, 544, 41}, {366, 161, 544, 40},
-                                {366, 203, 544, 40}, {366, 245, 544, 40}, {366, 287, 544, 40},
-                                {366, 330, 544, 40}, {366, 372, 544, 40}, {366, 414, 544, 40},
-                                {366, 457, 544, 40}, {366, 499, 544, 40}, {366, 542, 544, 40}})),
-                false, "map-a", null, false));
+                        rowsMasks(CONTROLLER_ROW_BOUNDS),
+                        CONTROLLER_DIVIDERS.toArray(new MenuRect[0])), true, "map-a", null,
+                false));
 
         layouts.put(MenuRoute.OPTIONAL_DEVICES, layout(MenuRoute.OPTIONAL_DEVICES,
                 rows(new int[][]{{353, 117, 556, 67}, {353, 187, 556, 66},
@@ -192,23 +187,19 @@ final class Proposal3OverlayCatalog {
                                 {374, 553, 535, 86}})), false, "import-battery", null, false));
 
         layouts.put(MenuRoute.LIBRARY, layout(MenuRoute.LIBRARY,
-                rows(new int[][]{{369, 175, 528, 61}, {369, 240, 528, 62},
-                        {369, 305, 528, 62}, {369, 370, 528, 62}, {369, 435, 528, 62},
-                        {369, 500, 528, 60}}, Surface.DARK),
+                rows(LIBRARY_ROW_BOUNDS, Surface.DARK),
                 actions(new int[][]{{34, 583, 856, 52}}, Surface.PAPER),
                 masks(LIBRARY_LEFT_META, LIBRARY_PICKER_COPY,
-                        rowsMasks(new int[][]{{369, 175, 528, 61}, {369, 240, 528, 62},
-                                {369, 305, 528, 62}, {369, 370, 528, 62}, {369, 435, 528, 62},
-                                {369, 500, 528, 60}}), inner(34, 583, 856, 52)), true,
+                        rowsMasks(LIBRARY_ROW_BOUNDS), LIBRARY_DIVIDERS.toArray(new MenuRect[0]),
+                        inner(34, 583, 856, 52)), true,
                 "recent-0", null, false));
 
         layouts.put(MenuRoute.CHOOSE_ROM, layout(MenuRoute.CHOOSE_ROM,
-                rows(new int[][]{{387, 179, 524, 75}, {387, 257, 524, 75},
-                        {387, 335, 524, 75}}, Surface.DARK),
+                rows(CHOOSE_ROM_ROW_BOUNDS, Surface.DARK),
                 actions(new int[][]{{13, 515, 898, 70}, {13, 587, 898, 65}}, Surface.DARK),
                 masks(CHOOSE_LEFT_META, CHOOSE_ARCHIVE_COPY,
-                        rowsMasks(new int[][]{{387, 179, 524, 75}, {387, 257, 524, 75},
-                                {387, 335, 524, 75}}), inner(13, 515, 898, 70),
+                        rowsMasks(CHOOSE_ROM_ROW_BOUNDS),
+                        CHOOSE_ROM_DIVIDERS.toArray(new MenuRect[0]), inner(13, 515, 898, 70),
                         inner(13, 587, 898, 65)), true, "rom-1",
                 new Marker(407, 202, 23, 20, 31), false));
 
@@ -264,6 +255,14 @@ final class Proposal3OverlayCatalog {
         return List.copyOf(result);
     }
 
+    private static List<Slot> rows(List<MenuRect> values, Surface surface) {
+        ArrayList<Slot> result = new ArrayList<>(values.size());
+        for (MenuRect value : values) {
+            result.add(slot("row-" + result.size(), inner(value), surface));
+        }
+        return List.copyOf(result);
+    }
+
     private static List<Slot> actions(int[][] values, Surface surface) {
         ArrayList<Slot> result = new ArrayList<>(values.length);
         for (int[] value : values) {
@@ -279,6 +278,10 @@ final class Proposal3OverlayCatalog {
 
     private static MenuRect inner(int x, int y, int width, int height) {
         return new MenuRect(x + 3, y + 3, Math.max(1, width - 6), Math.max(1, height - 6));
+    }
+
+    private static MenuRect inner(MenuRect bounds) {
+        return inner(bounds.x(), bounds.y(), bounds.width(), bounds.height());
     }
 
     private static List<MenuRect> masks(Object... values) {
@@ -300,6 +303,42 @@ final class Proposal3OverlayCatalog {
             result[index] = inner(value[0], value[1], value[2], value[3]);
         }
         return result;
+    }
+
+    private static MenuRect[] rowsMasks(List<MenuRect> values) {
+        MenuRect[] result = new MenuRect[values.size()];
+        for (int index = 0; index < values.size(); index++) {
+            result[index] = inner(values.get(index));
+        }
+        return result;
+    }
+
+    private static List<MenuRect> equalRows(int x, int y, int width, int height, int count,
+            int divider) {
+        int contentHeight = height - (count - 1) * divider;
+        int baseHeight = contentHeight / count;
+        int extraPixels = contentHeight % count;
+        ArrayList<MenuRect> rows = new ArrayList<>(count);
+        int top = y;
+        for (int index = 0; index < count; index++) {
+            int rowHeight = baseHeight + (index < extraPixels ? 1 : 0);
+            rows.add(new MenuRect(x, top, width, rowHeight));
+            top += rowHeight + divider;
+        }
+        return List.copyOf(rows);
+    }
+
+    private static List<MenuRect> dividers(List<MenuRect> rows) {
+        ArrayList<MenuRect> dividers = new ArrayList<>(Math.max(0, rows.size() - 1));
+        for (int index = 0; index + 1 < rows.size(); index++) {
+            MenuRect row = rows.get(index);
+            MenuRect next = rows.get(index + 1);
+            int height = next.y() - row.bottom();
+            if (height > 0) {
+                dividers.add(new MenuRect(row.x(), row.bottom(), row.width(), height));
+            }
+        }
+        return List.copyOf(dividers);
     }
 
     enum Surface {
