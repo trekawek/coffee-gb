@@ -8,6 +8,7 @@ import eu.rekawek.coffeegb.controller.state.StateRef;
 import org.junit.Test;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -57,5 +58,22 @@ public class AndroidStateSlotTest {
 
         assertEquals(savedAt, slot.savedAt());
         assertTrue(MainActivity.formatStateSavedAt(savedAt).startsWith("SAVED "));
+    }
+
+    @Test
+    public void stateMenuAlwaysExposesTenSlotsAndMarksOnlyPersistedRows() {
+        List<AndroidStateSlot> catalog = List.of(
+                AndroidStateSlot.from(0, null),
+                new AndroidStateSlot(7, "Slot 7: Saved", true, MenuPreview.empty(), null));
+
+        List<eu.rekawek.coffeegb.ui.menu.MenuPageSpec.Item> items =
+                MainActivity.stateMenuItems(catalog);
+
+        assertEquals(10, items.size());
+        assertEquals("slot:0", items.get(0).id());
+        assertEquals("slot:9", items.get(9).id());
+        assertEquals("", items.get(0).detail());
+        assertEquals("USED", items.get(7).detail());
+        assertTrue(items.stream().allMatch(eu.rekawek.coffeegb.ui.menu.MenuPageSpec.Item::enabled));
     }
 }

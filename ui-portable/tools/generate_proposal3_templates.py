@@ -134,22 +134,18 @@ PAUSE_PREVIEW_MATTE = (18, 27, 20)
 ROUTE_WIDGETS = {
     # A clean rail is repainted at runtime into seven 72px rows, with exact 2px dividers.
     "00-pause-console.png": [("dark", rect(424, 121, 484, 516))],
-    "01-save-states.png": [("dark", inner(420, 118, 489, 531))],
-    "02-settings.png": [("dark", inner(*value)) for value in
-        [(423, 116, 487, 56), (423, 174, 487, 57), (423, 233, 487, 57),
-         (423, 292, 487, 57), (423, 351, 487, 57), (423, 410, 487, 56),
-         (423, 469, 487, 56), (423, 527, 487, 57), (423, 586, 487, 56)]],
+    # These rails are divided dynamically into a seven-item viewport. Scrolling replaces the
+    # leading/trailing item with a chevron row, so the text-free authority only needs one clean
+    # continuous dark surface beneath the runtime dividers.
+    "01-save-states.png": [("dark", rect(420, 118, 489, 529))],
+    "02-settings.png": [("dark", rect(423, 116, 487, 523))],
     "03-audio.png": [("dark", rect(387, 316, 519, 78)),
         ("dark", rect(387, 403, 519, 77))] + [("paper", inner(*value)) for value in
         [(417, 529, 190, 72), (684, 529, 190, 72)]],
     "04-touch-controls.png": [("dark", inner(*value)) for value in
         [(420, 118, 490, 109), (420, 231, 490, 108), (420, 343, 490, 108)]] +
         [("paper", inner(*value)) for value in [(435, 477, 457, 59), (435, 563, 457, 59)]],
-    "05-controller-mapping.png": [("dark", inner(*value)) for value in
-        [(366, 115, 544, 41), (366, 161, 544, 40), (366, 203, 544, 40),
-         (366, 245, 544, 40), (366, 287, 544, 40), (366, 330, 544, 40),
-         (366, 372, 544, 40), (366, 414, 544, 40), (366, 457, 544, 40),
-         (366, 499, 544, 40), (366, 542, 544, 40)]],
+    "05-controller-mapping.png": [("dark", rect(366, 115, 544, 467))],
     "06-optional-devices.png": [("dark", inner(*value)) for value in
         [(353, 117, 556, 67), (353, 187, 556, 66), (353, 256, 556, 66),
          (353, 324, 556, 66), (353, 393, 556, 66), (353, 461, 556, 66)]] +
@@ -157,13 +153,14 @@ ROUTE_WIDGETS = {
     "07-data-media.png": [("dark", inner(*value)) for value in
         [(374, 119, 535, 85), (374, 207, 535, 84), (374, 293, 535, 83),
          (374, 379, 535, 83), (374, 465, 535, 84), (374, 553, 535, 86)]],
-    "08-library.png": [("dark", inner(*value)) for value in
-        [(369, 175, 528, 61), (369, 240, 528, 62), (369, 305, 528, 62),
-         (369, 370, 528, 62), (369, 435, 528, 62), (369, 500, 528, 60)]] +
+    # The recent-ROM list follows the same seven-item viewport rule as the state and settings
+    # rails. Runtime dividers and chevrons are painted over this clean continuous surface.
+    "08-library.png": [("dark", rect(369, 175, 528, 389))] +
         [("paper", inner(34, 583, 856, 52))],
-    "09-choose-rom.png": [("dark", inner(*value)) for value in
-        [(387, 179, 524, 75), (387, 257, 524, 75), (387, 335, 524, 75),
-         (13, 515, 898, 70), (13, 587, 898, 65)]],
+    # ZIP candidate selection also scrolls in seven compact rows, while its two actions retain
+    # their authored lower-panel footprint.
+    "09-choose-rom.png": [("dark", rect(387, 179, 524, 333))] + [("dark", inner(*value)) for
+        value in [(13, 515, 898, 70), (13, 587, 898, 65)]],
     "10-system.png": [("dark", inner(*value)) for value in
         [(378, 124, 530, 95), (378, 223, 530, 103), (378, 329, 530, 103)]],
     "11-about.png": [("dark", inner(*value)) for value in
@@ -253,7 +250,7 @@ def main() -> None:
             # continue to the controls footer as one coherent page.
             clear_paper_text(pixels, rect(688, 25, 207, 70), paper_pixels)
             clear_paper_text(pixels, rect(8, 552, 906, 101), paper_pixels)
-            clear_surface(pixels, inner(420, 552, 489, 97), np.array(surfaces["dark"]))
+            clear_surface(pixels, rect(420, 118, 489, 529), np.array(surfaces["dark"]))
             # The legacy full-width action strip also contained the side rails of the state
             # list. Continue those authored rails down to the footer so the new fourth row
             # does not look like a detached dark widget.
@@ -264,8 +261,6 @@ def main() -> None:
             # Keep the preview well blank until a persisted thumbnail is supplied at runtime.
             left, top, right, bottom = rect(30, 140, 352, 340)
             clear_paper_text(pixels, (left, top, right, bottom), paper_pixels)
-            for divider_y in (220, 328, 436):
-                clear_paper_text(pixels, rect(420, divider_y, 489, 4), paper_pixels)
         Image.fromarray(pixels, "RGB").save(OUTPUT / source.name, optimize=True, compress_level=9)
     expected = set(ROUTE_WIDGETS)
     actual = {path.name for path in OUTPUT.glob("*.png")}

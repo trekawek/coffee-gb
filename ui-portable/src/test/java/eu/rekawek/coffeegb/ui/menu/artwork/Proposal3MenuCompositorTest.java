@@ -163,26 +163,27 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void stateRailUsesFourEqualRowsWithoutSyntheticActionsOrHeaderBack() throws Exception {
+    public void stateRailUsesSevenEqualRowsWithoutSyntheticActionsOrHeaderBack() throws Exception {
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
                 MenuRoute.SAVE_STATES);
-        assertEquals(4, layout.rows().size());
+        assertEquals(7, layout.rows().size());
+        assertTrue(layout.scrollable());
         assertTrue(layout.actions().isEmpty());
         for (int index = 0; index < layout.rows().size(); index++) {
             MenuRect row = layout.rows().get(index).bounds();
             assertEquals(423, row.x());
             assertEquals(483, row.width());
-            assertEquals(123, row.height());
-            assertEquals(121 + index * 134, row.y());
+            assertEquals(67, row.height());
+            assertEquals(121 + index * 76, row.y());
         }
-        assertEquals(3, Proposal3OverlayCatalog.SAVE_DIVIDERS.size());
+        assertEquals(6, Proposal3OverlayCatalog.SAVE_DIVIDERS.size());
         for (int index = 0; index < Proposal3OverlayCatalog.SAVE_DIVIDERS.size(); index++) {
             MenuRect divider = Proposal3OverlayCatalog.SAVE_DIVIDERS.get(index);
-            assertEquals(246 + index * 134, divider.y());
-            assertEquals(4, divider.height());
+            assertEquals(191 + index * 76, divider.y());
+            assertEquals(3, divider.height());
         }
         MenuPresentation presentation = defaultPresentation(MenuRoute.SAVE_STATES);
-        assertEquals(4, presentation.items().size());
+        assertEquals(10, presentation.items().size());
         assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("manage")));
         assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("back")));
         assertTrue(presentation.sideHeading().isEmpty());
@@ -190,15 +191,67 @@ public class Proposal3MenuCompositorTest {
         assertEquals("", presentation.headerAction());
 
         MenuRect lastRow = layout.rows().get(layout.rows().size() - 1).bounds();
-        assertEquals("state rail must reach the footer without a synthetic action row", 646,
+        assertEquals("state rail must reach the footer without a synthetic action row", 644,
                 lastRow.bottom());
         int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES).copyPixels();
         assertTrue("legacy action-strip frame survived at its left edge",
                 paperish(pixel(template, 14, 568)));
         assertTrue("legacy action-strip frame survived at its center",
                 paperish(pixel(template, 305, 568)));
-        assertTrue("legacy action-strip frame survived at its right edge",
+        assertFalse("state rail must continue through the removed action strip",
                 paperish(pixel(template, 906, 568)));
+    }
+
+    @Test
+    public void overflowingRailsUseSevenItemsAndRevealDirectionalChevronRows() throws Exception {
+        assertSevenEqualRows(MenuRoute.SETTINGS);
+        assertSevenEqualRows(MenuRoute.CONTROLLER_MAPPING);
+        assertSevenEqualRows(MenuRoute.LIBRARY);
+        assertSevenEqualRows(MenuRoute.CHOOSE_ROM);
+
+        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
+                MenuRoute.SAVE_STATES);
+        MenuPresentation top = defaultPresentation(MenuRoute.SAVE_STATES);
+        MenuPresentation lower = withFocus(top, "slot-6");
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] topPixels = compositor.compose(top).orElseThrow().copyPixels();
+        int[] lowerPixels = compositor.compose(lower).orElseThrow().copyPixels();
+        MenuRect bottomChevron = chevronBounds(layout.rows().get(6).bounds());
+        MenuRect topChevron = chevronBounds(layout.rows().get(0).bounds());
+
+        assertTrue("top of an overflowing list needs a down-chevron row",
+                lightPixels(topPixels, bottomChevron) > 20);
+        assertTrue("scrolling down needs an up-chevron row",
+                lightPixels(lowerPixels, topChevron) > 20);
+        assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES)
+                        .copyPixels(), topPixels,
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
+        assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES)
+                        .copyPixels(), lowerPixels,
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
+    }
+
+    @Test
+    public void occupiedStateUsesTheFramedSaveSealInsteadOfLegacyStatusText() {
+        MenuPresentation empty = defaultPresentation(MenuRoute.SAVE_STATES);
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (MenuPresentation.Item item : empty.items()) {
+            items.add(new MenuPageSpec.Item(item.id(), item.label(),
+                    item.id().equals("slot-0") ? "USED" : item.detail(), item.enabled(),
+                    item.secondaryId(), item.adjustable(), item.progress()));
+        }
+        MenuPresentation used = presentation(new MenuPageSpec(empty.route(), empty.title(),
+                empty.context(), empty.headerAction(), empty.sideHeading(), empty.sideLines(),
+                items, empty.columns(), empty.footerHints(), "slot-0", empty.preview()));
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] emptyPixels = compositor.compose(empty).orElseThrow().copyPixels();
+        int[] usedPixels = compositor.compose(used).orElseThrow().copyPixels();
+        MenuRect seal = new MenuRect(Proposal3OverlayCatalog.layout(MenuRoute.SAVE_STATES)
+                .rows().get(0).bounds().right() - 40, 139, 30, 30);
+
+        assertTrue("occupied slot seal did not render", differentInside(emptyPixels, usedPixels, seal));
+        assertNoDifferenceOutside(emptyPixels, usedPixels,
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
     }
 
     @Test
@@ -594,7 +647,9 @@ public class Proposal3MenuCompositorTest {
         int[] pixels = new Proposal3MenuCompositor().compose(live).orElseThrow().copyPixels();
         // The coordinated row compositor reserves x=682..693 between the ROM label and its
         // right-aligned status. No light glyph pixel may leak across that gutter.
-        for (int y = 182; y < 229; y++) {
+        MenuRect firstLibraryRow = Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY)
+                .rows().get(0).bounds();
+        for (int y = firstLibraryRow.y(); y < firstLibraryRow.bottom(); y++) {
             for (int x = 682; x < 694; x++) {
                 int value = pixels[y * 924 + x];
                 int average = ((value >>> 16 & 0xff) + (value >>> 8 & 0xff)
@@ -905,6 +960,18 @@ public class Proposal3MenuCompositorTest {
                     .orElseThrow();
             writeFrame(directory.resolve(route.name().toLowerCase() + "-focus.png"), focused);
         }
+        MenuPresentation saveStates = defaultPresentation(MenuRoute.SAVE_STATES);
+        ArrayList<MenuPresentation.Item> usedStateItems = new ArrayList<>();
+        for (MenuPresentation.Item item : saveStates.items()) {
+            usedStateItems.add(new MenuPresentation.Item(item.id(), item.label(),
+                    item.id().equals("slot-0") ? "USED" : item.detail(), item.enabled(),
+                    item.secondaryId(), item.adjustable(), item.progress()));
+        }
+        writeFrame(directory.resolve("save_states-used.png"), compositor.compose(
+                presentation(spec(saveStates, "slot-0", saveStates.preview(), usedStateItems)))
+                .orElseThrow());
+        writeFrame(directory.resolve("save_states-lower.png"), compositor.compose(
+                withFocus(saveStates, "slot-6")).orElseThrow());
         // A deliberately non-placeholder Game Boy-sized image makes the pause-menu review
         // artifact exercise the same aspect-fit and frozen-preview path as a live game frame.
         int[] gameFrame = new int[160 * 144];
@@ -1130,6 +1197,21 @@ public class Proposal3MenuCompositorTest {
 
     private static int pixel(int[] pixels, int x, int y) {
         return pixels[y * 924 + x];
+    }
+
+    private static void assertSevenEqualRows(MenuRoute route) {
+        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
+        assertTrue(route + " must scroll after seven visible items", layout.scrollable());
+        assertEquals(route + " row count", 7, layout.rows().size());
+        int height = layout.rows().get(0).bounds().height();
+        for (Proposal3OverlayCatalog.Slot row : layout.rows()) {
+            assertEquals(route + " row height", height, row.bounds().height());
+        }
+    }
+
+    private static MenuRect chevronBounds(MenuRect row) {
+        return new MenuRect(row.x() + row.width() / 2 - 16,
+                row.y() + row.height() / 2 - 8, 32, 16);
     }
 
     private static int selectedPixels(int[] pixels, MenuRect bounds) {

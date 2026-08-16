@@ -366,14 +366,22 @@ internal class SwingProposal3Menu(
       }
 
       MenuRoute.SAVE_STATES -> {
+        val catalog = commands.stateSlots()
         val slots =
-            (0..3).map { slot ->
-              item("slot-$slot", "SLOT $slot", true)
+            (0..9).map { slot ->
+              // "USED" is presentation metadata only: the shared compositor turns it into the
+              // occupied-slot seal without showing legacy status text in the state list.
+              MenuPageSpec.Item(
+                  "slot-$slot",
+                  "SLOT $slot",
+                  if (catalog.firstOrNull { it.index == slot }?.loadable == true) "USED" else "",
+                  true,
+              )
             }
         val mode = if (stateMenuMode == StateMenuMode.SAVE) "SAVE" else "LOAD"
         val focused = stateFocusedItemId ?: "slot-0"
         val focusedSlot =
-            commands.stateSlots().firstOrNull { "slot-${it.index}" == focused }
+            catalog.firstOrNull { "slot-${it.index}" == focused }
         val preview =
             focusedSlot?.preview ?: MenuPreview.empty()
         val savedAt = portableStateSavedAt(focusedSlot?.savedAt)
@@ -630,7 +638,7 @@ internal class SwingProposal3Menu(
               }
               stateFocusedItemId = id
               if (stateMenuMode == StateMenuMode.LOAD) {
-                // The detached catalog is authoritative for the on-screen four-slot page.  Do not
+                // The detached catalog is authoritative for the on-screen ten-slot page.  Do not
                 // fall back to the desktop toolbar's separately selected slot while the catalog is
                 // loading or when this focused slot is empty.
                 if (commands.stateSlots().firstOrNull { it.index == slot }?.loadable == true) {
