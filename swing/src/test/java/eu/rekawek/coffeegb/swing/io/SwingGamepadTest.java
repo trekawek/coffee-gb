@@ -343,6 +343,25 @@ public class SwingGamepadTest {
     }
 
     @Test
+    public void sdlBackendEnablesItsRawInputMessageThreadOnlyOnWindows() {
+        List<Map.Entry<String, String>> hints = new ArrayList<>();
+        SdlGamepadBackend.configurePlatformHints("Windows 11", (name, value) -> {
+            hints.add(Map.entry(name, value));
+            return true;
+        });
+        assertEquals(List.of(Map.entry("SDL_JOYSTICK_THREAD", "1")), hints);
+
+        for (String osName : List.of("Mac OS X", "Darwin", "Linux")) {
+            hints.clear();
+            SdlGamepadBackend.configurePlatformHints(osName, (name, value) -> {
+                hints.add(Map.entry(name, value));
+                return true;
+            });
+            assertTrue(osName + " must not enable the Windows joystick thread", hints.isEmpty());
+        }
+    }
+
+    @Test
     public void pollerThreadExitReleasesSourcesAndClosesBackend() throws Exception {
         Rig rig = new Rig(mapping(new ControllerProperties.GamepadAssignment(0, ID_A)));
         FakeDevice device = rig.backend.add(ID_A, "primary");
