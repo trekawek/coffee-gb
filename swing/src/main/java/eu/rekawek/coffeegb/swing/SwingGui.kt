@@ -543,7 +543,7 @@ class SwingGui private constructor(
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
         romLoading = true
         romLoadingRequestId = event.openRequestId
-        desktopUiCoordinator.opening(event.rom.name, event.openRequestId != null)
+        desktopUiCoordinator.opening(event.rom.name)
       }
     }
     eventBus.register<EmulationStartedEvent> { event ->
@@ -699,10 +699,7 @@ class SwingGui private constructor(
               RomOpenStage.AWAITING_PERSISTENCE_DECISION ->
                   "Waiting for a save-before-replace decision"
             }
-        desktopUiCoordinator.sessionTask(
-            "$stage…",
-            update.stage != RomOpenStage.AWAITING_PERSISTENCE_DECISION,
-        )
+        desktopUiCoordinator.openingProgress("$stage…")
       }
       is RomOpenUpdate.Opened -> updateRecentRoms()
       is RomOpenUpdate.Cancelled -> {
