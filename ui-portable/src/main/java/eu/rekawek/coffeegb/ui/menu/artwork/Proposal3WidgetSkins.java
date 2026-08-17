@@ -13,8 +13,9 @@ import java.util.Objects;
  * mockups. They are deliberately packaged PNGs rather than synthesized colors: repainting a
  * changing row or action therefore replaces the complete widget interior, including its paper
  * grain, without attempting to reconstruct the immutable base image pixel-by-pixel.
- * The audio slider follows the same rule with complete empty/filled track surfaces and a separate
- * exact knob sprite; its runtime compositor never receives the raw route raster.
+ * Runtime controls that change geometry (the focus cursor, slider and checkbox) are drawn from
+ * the same fixed palette primitives as their rows, so no sampled shadow or gradient can leak
+ * into a different state.
  */
 final class Proposal3WidgetSkins {
 
@@ -30,10 +31,6 @@ final class Proposal3WidgetSkins {
     private final Sprite dark;
     private final Sprite paper;
     private final Sprite selected;
-    private final Sprite focusArrow;
-    private final Sprite audioSliderEmpty;
-    private final Sprite audioSliderFilled;
-    private final Sprite audioKnob;
     private final Sprite dataArrowLeft;
     private final Sprite dataArrowRight;
     private final Sprite dataCamera;
@@ -50,8 +47,7 @@ final class Proposal3WidgetSkins {
     private final Sprite actionLibrary;
     private final Sprite actionGithub;
 
-    private Proposal3WidgetSkins(Sprite dark, Sprite paper, Sprite selected, Sprite focusArrow,
-            Sprite audioSliderEmpty, Sprite audioSliderFilled, Sprite audioKnob,
+    private Proposal3WidgetSkins(Sprite dark, Sprite paper, Sprite selected,
             Sprite dataArrowLeft, Sprite dataArrowRight, Sprite dataCamera, Sprite dataPrinter,
             Sprite aboutNetwork, Sprite aboutStorage, Sprite aboutCamera, Sprite aboutSource,
             Sprite actionSave, Sprite actionLoad, Sprite actionDelete, Sprite actionOptionalSave,
@@ -59,10 +55,6 @@ final class Proposal3WidgetSkins {
         this.dark = dark;
         this.paper = paper;
         this.selected = selected;
-        this.focusArrow = focusArrow;
-        this.audioSliderEmpty = audioSliderEmpty;
-        this.audioSliderFilled = audioSliderFilled;
-        this.audioKnob = audioKnob;
         this.dataArrowLeft = dataArrowLeft;
         this.dataArrowRight = dataArrowRight;
         this.dataCamera = dataCamera;
@@ -84,10 +76,6 @@ final class Proposal3WidgetSkins {
         Sprite dark = load("dark-widget.png");
         Sprite paper = load("paper-widget.png");
         Sprite selected = load("selected-widget.png");
-        Sprite arrow = load("focus-arrow.png");
-        Sprite audioSliderEmpty = load("audio-slider-empty.png");
-        Sprite audioSliderFilled = load("audio-slider-filled.png");
-        Sprite audioKnob = load("audio-knob.png");
         Sprite dataArrowLeft = load("data-arrow-left.png");
         Sprite dataArrowRight = load("data-arrow-right.png");
         Sprite dataCamera = load("data-camera.png");
@@ -106,10 +94,6 @@ final class Proposal3WidgetSkins {
         requireDimensions("dark-widget.png", dark, 900, 160);
         requireDimensions("paper-widget.png", paper, 900, 160);
         requireDimensions("selected-widget.png", selected, 900, 160);
-        requireDimensions("focus-arrow.png", arrow, 13, 20);
-        requireDimensions("audio-slider-empty.png", audioSliderEmpty, 438, 59);
-        requireDimensions("audio-slider-filled.png", audioSliderFilled, 438, 59);
-        requireDimensions("audio-knob.png", audioKnob, 31, 59);
         requireDimensions("data-arrow-left.png", dataArrowLeft, 45, 45);
         requireDimensions("data-arrow-right.png", dataArrowRight, 45, 45);
         requireDimensions("data-camera.png", dataCamera, 50, 50);
@@ -125,11 +109,10 @@ final class Proposal3WidgetSkins {
         requireDimensions("action-optional-cancel.png", actionOptionalCancel, 44, 42);
         requireDimensions("action-library.png", actionLibrary, 45, 39);
         requireDimensions("action-github.png", actionGithub, 53, 53);
-        return new Proposal3WidgetSkins(dark, paper, selected, arrow, audioSliderEmpty,
-                audioSliderFilled, audioKnob, dataArrowLeft, dataArrowRight, dataCamera,
-                dataPrinter, aboutNetwork, aboutStorage, aboutCamera, aboutSource, actionSave,
-                actionLoad, actionDelete, actionOptionalSave, actionOptionalCancel, actionLibrary,
-                actionGithub);
+        return new Proposal3WidgetSkins(dark, paper, selected, dataArrowLeft, dataArrowRight,
+                dataCamera, dataPrinter, aboutNetwork, aboutStorage, aboutCamera, aboutSource,
+                actionSave, actionLoad, actionDelete, actionOptionalSave, actionOptionalCancel,
+                actionLibrary, actionGithub);
     }
 
     Sprite surface(Surface surface) {
@@ -138,22 +121,6 @@ final class Proposal3WidgetSkins {
             case PAPER -> paper;
             case SELECTED -> selected;
         };
-    }
-
-    Sprite focusArrow() {
-        return focusArrow;
-    }
-
-    Sprite audioSliderEmpty() {
-        return audioSliderEmpty;
-    }
-
-    Sprite audioSliderFilled() {
-        return audioSliderFilled;
-    }
-
-    Sprite audioKnob() {
-        return audioKnob;
     }
 
     Sprite dataRowIcon(int index) {

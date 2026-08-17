@@ -29,12 +29,9 @@ final class MenuPages {
             case SAVE_STATES -> statePage(false);
             case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "",
                     List.of(),
-                    items(
-                            item("audio", "AUDIO"),
-                            // The existing touch-controls route is the compact Controls overview.
-                            // Display is intentionally omitted until a host can implement it
-                            // without requiring a host handoff.
-                            item("touch-controls", "CONTROLS")));
+                    // Keep this page intentionally small. Audio is the sole setting that is
+                    // useful and fully controllable in the on-screen UI today.
+                    items(item("audio", "AUDIO")));
             case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "",
                     List.of(),
                     items(

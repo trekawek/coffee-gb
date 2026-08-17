@@ -47,14 +47,12 @@ final class AndroidMenuModel {
         return preview != null && preview.state() == MenuPreview.State.READY;
     }
 
-    static MenuPageSpec settingsPage(boolean controllerAvailable) {
+    static MenuPageSpec settingsPage() {
         // Keep this list deliberately short.  A settings row is only useful when its
-        // value can be changed in this overlay; platform pickers, read-only runtime
-        // status and window controls do not belong here.
+        // value can be changed in this overlay; platform-only or read-only status does not
+        // belong here.
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
-                        item("audio", "AUDIO", "VOLUME / MUTE", true),
-                        item("touch-controls", "CONTROLS",
-                                controllerAvailable ? "HAPTICS / REMAP" : "HAPTICS", true)),
+                        item("audio", "AUDIO", "", true)),
                 "audio",
                 MenuPreview.empty());
     }

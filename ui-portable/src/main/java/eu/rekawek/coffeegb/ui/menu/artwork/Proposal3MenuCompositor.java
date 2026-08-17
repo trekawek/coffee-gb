@@ -559,8 +559,8 @@ public final class Proposal3MenuCompositor {
             return;
         }
         int x = target.bounds().x() + marker.sourceX() - canonical.bounds().x();
-        int y = target.bounds().y() + marker.relativeY();
-        raster.paintSprite(skins().focusArrow(), x, y, MenuRaster.PAPER_TEXT);
+        raster.drawFocusArrow(x, target.bounds().y() + target.bounds().height() / 2,
+                MenuRaster.PAPER_TEXT);
     }
 
     private static MenuRect expand(MenuRect bounds, int amount) {
@@ -643,7 +643,9 @@ public final class Proposal3MenuCompositor {
                 ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
         String label = label(route, entry, entryIndex);
         String detail = detail(route, entry, entryIndex);
-        boolean drawsDetail = supportsDetail(route, entry) && !detail.isEmpty();
+        boolean audioMuteCheckbox = route == MenuRoute.AUDIO && entry.id.equals("mute-audio");
+        boolean drawsDetail = supportsDetail(route, entry) && !detail.isEmpty()
+                && !audioMuteCheckbox;
         MenuRect labelBounds = labelBounds(route, slot.bounds(), drawsDetail, entryIndex);
         drawWidgetText(raster, label, labelBounds, color, MenuRaster.HorizontalAlignment.LEFT,
                 rowTextRole(route, entryIndex));
@@ -651,6 +653,11 @@ public final class Proposal3MenuCompositor {
             MenuRect detailBounds = detailBounds(route, slot.bounds());
             drawWidgetText(raster, detail, detailBounds, color,
                     MenuRaster.HorizontalAlignment.RIGHT, detailTextRole(route));
+        }
+        if (audioMuteCheckbox) {
+            // Preserve the model's ON/OFF state but make it a nearby, scan-friendly checkbox.
+            raster.drawCheckbox(Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX,
+                    "ON".equals(display(detail)));
         }
         paintRowIcon(route, entryIndex, slot, raster);
         if (route == MenuRoute.SAVE_STATES && isUsedState(entry)) {
@@ -910,26 +917,29 @@ public final class Proposal3MenuCompositor {
     private void drawAudioSide(MenuPresentation p, Prepared prepared, MenuRaster r) {
         Entry volume = prepared.volume;
         if (volume == null) {
-            // The route template carries the normal 75% slider. A host that cannot expose any
-            // audio control may still open this route as a B-only status page; remove that
-            // baked-in value so the page does not advertise an actionable setting.
-            r.fill(Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL, PAPER_MATTE);
+            // A host that cannot expose any audio control may still open this route as a B-only
+            // status page. Remove the whole control, including its percentage ticks.
+            r.fill(Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE, PAPER_MATTE);
         } else if (volume.adjustable || volume.progress >= 0) {
             int progress = volume.progress >= 0 ? volume.progress : parsePercent(volume.detail);
-            r.drawAudioSlider(skins().audioSliderEmpty(), skins().audioSliderFilled(),
-                    skins().audioKnob(),
-                    Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL,
-                    Proposal3OverlayCatalog.AUDIO_KNOB, progress);
+            r.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.PAPER),
+                    Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE);
+            r.drawAudioSlider(Proposal3OverlayCatalog.AUDIO_SLIDER, progress);
             if (volume.sourceIndex == p.focusedIndex()) {
                 // Volume is an adjustable control, not a normal text row. Give it the same
                 // unmistakable left-edge focus cue as the selectable mute row.
-                r.paintSprite(skins().focusArrow(),
-                        Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW.x(),
-                        Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW.y(), MenuRaster.INK);
+                r.drawFocusArrow(Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW.x(),
+                        Proposal3OverlayCatalog.AUDIO_SLIDER.y()
+                                + Proposal3OverlayCatalog.AUDIO_SLIDER.height() / 2,
+                        MenuRaster.INK);
             }
-            overlayChanged(r, "VOLUME " + progress + "%", "VOLUME 75%",
-                    new MenuRect(62, 405, 315, 45), true, MenuRaster.INK,
-                    MenuRaster.HorizontalAlignment.CENTER);
+            // The template is text-free, including at the canonical 75% value. Always paint
+            // the dynamic label in a frame-safe left-panel aperture.
+            r.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.PAPER),
+                    Proposal3OverlayCatalog.AUDIO_VOLUME_LABEL);
+            drawWidgetText(r, "VOLUME " + progress + "%",
+                    Proposal3OverlayCatalog.AUDIO_VOLUME_LABEL, MenuRaster.INK,
+                    MenuRaster.HorizontalAlignment.CENTER, Proposal3GlyphAtlas.Role.MEDIUM);
         }
     }
 

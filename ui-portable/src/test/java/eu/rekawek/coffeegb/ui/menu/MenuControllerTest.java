@@ -159,7 +159,7 @@ public class MenuControllerTest {
         controller.restore(snapshot);
 
         assertEquals(MenuRoute.SETTINGS, controller.route());
-        assertEquals("touch-controls",
+        assertEquals("audio",
                 controller.snapshot().frames().get(1).focusedItemId());
         controller.back();
         assertEquals("settings", controller.snapshot().frames().get(0).focusedItemId());

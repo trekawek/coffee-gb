@@ -233,16 +233,48 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void settingsRailUsesOnlyTheActualItemsAndStaysCompact() {
-        List<Proposal3OverlayCatalog.Slot> two =
-                Proposal3OverlayCatalog.compactSettingsRows(2);
-        assertEquals(2, two.size());
-        assertTrue(two.get(0).bounds().y() > Proposal3OverlayCatalog.SETTINGS_PANEL.y());
-        assertTrue(two.get(1).bounds().bottom() <
-                Proposal3OverlayCatalog.SETTINGS_PANEL.bottom());
-        assertEquals(1, Proposal3OverlayCatalog.compactSettingsRows(1).size());
-        assertEquals(3, Proposal3OverlayCatalog.compactSettingsRows(3).size());
-        assertEquals(1, Proposal3OverlayCatalog.compactSettingsDividers(2).size());
+    public void settingsRailUsesOneNormalHeightAudioRowAtTheTop() {
+        List<Proposal3OverlayCatalog.Slot> rows =
+                Proposal3OverlayCatalog.compactSettingsRows(1);
+        assertEquals(1, rows.size());
+        MenuRect row = rows.get(0).bounds();
+        assertEquals("Audio must use the normal top settings slot",
+                Proposal3OverlayCatalog.SETTINGS_PANEL.x() + 3, row.x());
+        assertEquals("Audio must start at the top of the settings rail",
+                Proposal3OverlayCatalog.SETTINGS_PANEL.y() + 3, row.y());
+        assertEquals(481, row.width());
+        assertEquals(67, row.height());
+        assertTrue("single-item Settings must not invent a divider",
+                Proposal3OverlayCatalog.compactSettingsDividers(1).isEmpty());
+    }
+
+    @Test
+    public void focusArrowIsWholeAndVerticallySymmetric() {
+        int[] pixels = new int[MenuRaster.WIDTH * MenuRaster.HEIGHT];
+        int left = 100;
+        int centerY = 200;
+        new MenuRaster(pixels).drawFocusArrow(left, centerY, MenuRaster.PAPER_TEXT);
+
+        for (int x = 0; x < MenuRaster.FOCUS_ARROW_WIDTH; x++) {
+            int first = -1;
+            int last = -1;
+            int count = 0;
+            for (int y = 0; y < MenuRaster.HEIGHT; y++) {
+                if (pixel(pixels, left + x, y) == MenuRaster.PAPER_TEXT) {
+                    if (first < 0) {
+                        first = y;
+                    }
+                    last = y;
+                    count++;
+                }
+            }
+            assertEquals("cursor column must be solid", last - first + 1, count);
+            assertEquals("cursor must taper symmetrically", centerY * 2 - 1, first + last);
+        }
+        assertEquals(MenuRaster.FOCUS_ARROW_HEIGHT,
+                countColorInColumn(pixels, left, MenuRaster.PAPER_TEXT));
+        assertEquals(2, countColorInColumn(pixels,
+                left + MenuRaster.FOCUS_ARROW_WIDTH - 1, MenuRaster.PAPER_TEXT));
     }
 
     @Test
@@ -714,7 +746,6 @@ public class Proposal3MenuCompositorTest {
         Map<MenuRoute, String> focusTargets = Map.ofEntries(
                 Map.entry(MenuRoute.PAUSE_CONSOLE, "save-state"),
                 Map.entry(MenuRoute.SAVE_STATES, "slot-1"),
-                Map.entry(MenuRoute.SETTINGS, "touch-controls"),
                 Map.entry(MenuRoute.AUDIO, "mute-audio"),
                 Map.entry(MenuRoute.TOUCH_CONTROLS, "controller-mapping"),
                 Map.entry(MenuRoute.CONTROLLER_MAPPING, "map-b"),
@@ -757,14 +788,20 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void audioSliderMovesTheExactKnobSpriteToBothEndpoints() throws Exception {
+    public void audioSliderMovesTheFlatKnobToBothEndpoints() throws Exception {
         int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         int[] zero = compositor.compose(audioPresentation(0)).orElseThrow().copyPixels();
         int[] hundred = compositor.compose(audioPresentation(100)).orElseThrow().copyPixels();
-        int[] raw = Proposal3RawFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        assertRectCopy(raw, Proposal3OverlayCatalog.AUDIO_KNOB, zero, 427, 201);
-        assertRectCopy(raw, Proposal3OverlayCatalog.AUDIO_KNOB, hundred, 827, 201);
+        int railY = Proposal3OverlayCatalog.AUDIO_SLIDER.y();
+        int knobY = railY - (MenuRaster.AUDIO_KNOB_HEIGHT
+                - Proposal3OverlayCatalog.AUDIO_SLIDER.height()) / 2;
+        assertEquals(MenuRaster.INK, pixel(zero, MenuRaster.audioKnobCenter(0),
+                knobY + MenuRaster.AUDIO_KNOB_HEIGHT / 2));
+        assertEquals(MenuRaster.INK, pixel(hundred, MenuRaster.audioKnobCenter(100),
+                knobY + MenuRaster.AUDIO_KNOB_HEIGHT / 2));
+        assertTrue("0% and 100% must move the knob",
+                differentInside(zero, hundred, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
         assertNoDifferenceOutside(template, zero,
                 Proposal3MenuCompositor.dynamicMasks(MenuRoute.AUDIO));
         assertNoDifferenceOutside(template, hundred,
@@ -790,7 +827,7 @@ public class Proposal3MenuCompositorTest {
         int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
         int[] pixels = new Proposal3MenuCompositor().compose(unavailable).orElseThrow().copyPixels();
 
-        MenuRect slider = Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL;
+        MenuRect slider = Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE;
         assertTrue("status-only audio page retained the template slider",
                 differentInside(template, pixels, slider));
         for (int y = slider.y(); y < slider.bottom(); y++) {
@@ -803,68 +840,72 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void sliderAssetBlitsOnlyChangeTheDeclaredTravelMask() throws Exception {
-        int[] raw = Proposal3RawFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        int[] zero = raw.clone();
-        new MenuRaster(zero).drawAudioSlider(skins.audioSliderEmpty(),
-                skins.audioSliderFilled(), skins.audioKnob(),
-                Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL,
-                Proposal3OverlayCatalog.AUDIO_KNOB, 0);
-        int[] hundred = raw.clone();
-        new MenuRaster(hundred).drawAudioSlider(skins.audioSliderEmpty(),
-                skins.audioSliderFilled(), skins.audioKnob(),
-                Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL,
-                Proposal3OverlayCatalog.AUDIO_KNOB, 100);
-        assertNoDifferenceOutside(raw, zero,
-                List.of(Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL));
-        assertNoDifferenceOutside(raw, hundred,
-                List.of(Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL));
-        assertNoDifferenceOutside(zero, hundred,
-                List.of(Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL));
-        assertTrue("progress must move the packaged knob sprite", !Arrays.equals(zero, hundred));
-    }
+    public void audioSliderUsesOneCoordinateSystemAndFlatTrackColors() {
+        int[] pixels = new int[MenuRaster.WIDTH * MenuRaster.HEIGHT];
+        MenuRaster raster = new MenuRaster(pixels);
+        MenuRect rail = Proposal3OverlayCatalog.AUDIO_SLIDER;
+        raster.drawAudioSlider(rail, 50);
 
-    @Test
-    public void sliderSurfacesMeetOnlyUnderTheExactKnob() throws Exception {
-        int[] raw = Proposal3RawFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        for (int progress : new int[]{0, 25, 50, 75, 100}) {
-            int localKnobX = progress * 4;
-            int[] composed = raw.clone();
-            new MenuRaster(composed).drawAudioSlider(skins.audioSliderEmpty(),
-                    skins.audioSliderFilled(), skins.audioKnob(),
-                    Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL,
-                    Proposal3OverlayCatalog.AUDIO_KNOB, progress);
-            for (int y = 0; y < 59; y++) {
-                for (int x = 0; x < localKnobX; x++) {
-                    assertEquals("filled surface " + progress + "% at " + x + "," + y,
-                            skins.audioSliderFilled().pixel(x, y), pixel(composed, 427 + x, 201 + y));
+        int tickY = rail.y() + rail.height() + 17;
+        for (int percent = 0; percent <= 100; percent += 10) {
+            int center = MenuRaster.audioKnobCenter(percent);
+            assertEquals("tick center for " + percent + "%", MenuRaster.INK,
+                    pixel(pixels, center, tickY + 2));
+            assertEquals("tick left edge for " + percent + "%", MenuRaster.INK,
+                    pixel(pixels, center - 2, tickY + 2));
+            assertEquals("tick right edge for " + percent + "%", MenuRaster.INK,
+                    pixel(pixels, center + 2, tickY + 2));
+        }
+
+        int knobCenter = MenuRaster.audioKnobCenter(50);
+        MenuRect interior = new MenuRect(rail.x() + 3, rail.y() + 3,
+                rail.width() - 6, rail.height() - 6);
+        for (int y = interior.y(); y < interior.bottom(); y++) {
+            for (int x = interior.x(); x < interior.right(); x++) {
+                if (x >= knobCenter - MenuRaster.AUDIO_KNOB_WIDTH / 2
+                        && x < knobCenter + MenuRaster.AUDIO_KNOB_WIDTH / 2) {
+                    continue;
                 }
-                for (int x = localKnobX + 31; x < 438; x++) {
-                    assertEquals("empty surface " + progress + "% at " + x + "," + y,
-                            skins.audioSliderEmpty().pixel(x, y), pixel(composed, 427 + x, 201 + y));
-                }
+                int expected = x < knobCenter ? MenuRaster.AUDIO_SLIDER_FILL
+                        : MenuRaster.AUDIO_SLIDER_EMPTY;
+                assertEquals("slider color changed at " + x + "," + y,
+                        expected, pixel(pixels, x, y));
             }
-            assertRectCopy(raw, Proposal3OverlayCatalog.AUDIO_KNOB,
-                    composed, 427 + localKnobX, 201);
         }
     }
 
     @Test
-    public void sliderAssetsPreserveTheCanonicalVisibleSegments() throws Exception {
-        int[] raw = Proposal3RawFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        for (int y = 0; y < 59; y++) {
-            for (int x = 331; x < 438; x++) {
-                assertEquals(raw[(201 + y) * 924 + 427 + x],
-                        skins.audioSliderEmpty().pixel(x, y));
-            }
-            for (int x = 0; x < 300; x++) {
-                assertEquals(raw[(201 + y) * 924 + 427 + x],
-                        skins.audioSliderFilled().pixel(x, y));
-            }
-        }
+    public void audioVolumeLabelAppearsAtEveryBoundaryWithoutTouchingFrame() {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] zero = compositor.compose(audioPresentation(0)).orElseThrow().copyPixels();
+        int[] seventyFive = compositor.compose(audioPresentation(75)).orElseThrow().copyPixels();
+        int[] hundred = compositor.compose(audioPresentation(100)).orElseThrow().copyPixels();
+        MenuRect label = Proposal3OverlayCatalog.AUDIO_VOLUME_LABEL;
+        assertTrue("0% volume label is missing", inkPixels(zero, label) > 10);
+        assertTrue("75% volume label is missing", inkPixels(seventyFive, label) > 10);
+        assertTrue("100% volume label is missing", inkPixels(hundred, label) > 10);
+        assertNoDifferenceOutside(zero, seventyFive,
+                List.of(label, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
+        assertNoDifferenceOutside(seventyFive, hundred,
+                List.of(label, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
+    }
+
+    @Test
+    public void audioMuteIsACompactCheckboxWithoutFarRightStatusText() throws Exception {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] off = compositor.compose(audioPresentation(75, false)).orElseThrow().copyPixels();
+        int[] on = compositor.compose(audioPresentation(75, true)).orElseThrow().copyPixels();
+        assertNoDifferenceOutside(off, on,
+                List.of(Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX));
+        assertTrue("mute checkbox did not reflect its checked state",
+                differentInside(off, on, Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX));
+
+        MenuRect farRightStatus = new MenuRect(700, Proposal3OverlayCatalog.AUDIO_MUTE.y(),
+                190, Proposal3OverlayCatalog.AUDIO_MUTE.height());
+        assertEquals("mute state must not be rendered as a distant status label", 0,
+                differenceCount(off, rowBackground(MenuRoute.AUDIO,
+                        Proposal3OverlayCatalog.layout(MenuRoute.AUDIO).rows().get(0), true,
+                        Proposal3WidgetSkins.load()), farRightStatus));
     }
 
     @Test
@@ -959,14 +1000,6 @@ public class Proposal3MenuCompositorTest {
                 "0026fd096f910ecf76860c42484e8325edd957922412deec536e9f17f3308af5");
         assertAtlas(root + "selected-widget.png", 900, 160,
                 "33c95fdf9ec596b9e5c7041348117f2c244bc021cdc14ffa7f335a4f75521723");
-        assertAtlas(root + "focus-arrow.png", 13, 20,
-                "8123a8d82f1dd4e3f22d9cf8353a1b89f6777bd5a81f2304cdf00e0a65a79342");
-        assertAtlas(root + "audio-slider-empty.png", 438, 59,
-                "47b5f4ececa249baf992e5a2cd83c00161f5543a7a2900e859829b631a96e216");
-        assertAtlas(root + "audio-slider-filled.png", 438, 59,
-                "52aaeeb688ee65f5b9b39e5ff2d659430bdbfc7b4373eceba2a5d147fa458a09");
-        assertAtlas(root + "audio-knob.png", 31, 59,
-                "dc14fb200f7f65c8730d3e3be8c5060c59fcd547a55af470a3e04887efd3e781");
         assertAtlas(root + "data-arrow-left.png", 45, 45,
                 "a6b67e6cd8bac2b4f29d7f48a8cfef3a1045a71604e6196388c22b60fcd7b562");
         assertAtlas(root + "data-arrow-right.png", 45, 45,
@@ -1000,7 +1033,7 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void audioSliderRuntimeRequiresPackagedSpritesInsteadOfAnAuthorityRaster() {
+    public void audioSliderRuntimeUsesOnlyTheFlatPalettePrimitive() {
         java.lang.reflect.Method method = null;
         for (java.lang.reflect.Method candidate : MenuRaster.class.getDeclaredMethods()) {
             if (candidate.getName().equals("drawAudioSlider")) {
@@ -1011,10 +1044,9 @@ public class Proposal3MenuCompositorTest {
         assertNotNull(method);
         assertFalse(Arrays.stream(method.getParameterTypes())
                 .anyMatch(type -> type == int[].class));
-        assertEquals(6, method.getParameterCount());
-        assertEquals(Proposal3WidgetSkins.Sprite.class, method.getParameterTypes()[0]);
-        assertEquals(Proposal3WidgetSkins.Sprite.class, method.getParameterTypes()[1]);
-        assertEquals(Proposal3WidgetSkins.Sprite.class, method.getParameterTypes()[2]);
+        assertEquals(2, method.getParameterCount());
+        assertEquals(MenuRect.class, method.getParameterTypes()[0]);
+        assertEquals(int.class, method.getParameterTypes()[1]);
     }
 
     @Test
@@ -1192,7 +1224,7 @@ public class Proposal3MenuCompositorTest {
         return switch (route) {
             case PAUSE_CONSOLE -> "save-state";
             case SAVE_STATES -> "slot-1";
-            case SETTINGS -> "touch-controls";
+            case SETTINGS -> "audio";
             case AUDIO -> "mute-audio";
             case TOUCH_CONTROLS -> "controller-mapping";
             case CONTROLLER_MAPPING -> "map-b";
@@ -1276,11 +1308,18 @@ public class Proposal3MenuCompositorTest {
     }
 
     private static MenuPresentation audioPresentation(int progress) {
+        return audioPresentation(progress, false);
+    }
+
+    private static MenuPresentation audioPresentation(int progress, boolean muted) {
         MenuPresentation source = defaultPresentation(MenuRoute.AUDIO);
         ArrayList<MenuPresentation.Item> items = new ArrayList<>(source.items());
         MenuPresentation.Item volume = items.get(0);
         items.set(0, new MenuPresentation.Item(volume.id(), volume.label(), progress + "%",
                 volume.enabled(), volume.secondaryId(), true, progress));
+        MenuPresentation.Item mute = items.get(1);
+        items.set(1, new MenuPresentation.Item(mute.id(), mute.label(), muted ? "ON" : "OFF",
+                mute.enabled(), mute.secondaryId(), mute.adjustable(), mute.progress()));
         return presentation(spec(source, "mute-audio", source.preview(), items));
     }
 
@@ -1410,15 +1449,26 @@ public class Proposal3MenuCompositorTest {
         return result;
     }
 
-    private static void assertRectCopy(int[] authority, MenuRect source, int[] actual,
-            int targetX, int targetY) {
-        for (int y = 0; y < source.height(); y++) {
-            for (int x = 0; x < source.width(); x++) {
-                assertEquals("sprite pixel " + x + "," + y,
-                        pixel(authority, source.x() + x, source.y() + y),
-                        pixel(actual, targetX + x, targetY + y));
+    private static int countColorInColumn(int[] pixels, int x, int color) {
+        int result = 0;
+        for (int y = 0; y < MenuRaster.HEIGHT; y++) {
+            if (pixel(pixels, x, y) == color) {
+                result++;
             }
         }
+        return result;
+    }
+
+    private static int differenceCount(int[] before, int[] after, MenuRect bounds) {
+        int result = 0;
+        for (int y = bounds.y(); y < bounds.bottom(); y++) {
+            for (int x = bounds.x(); x < bounds.right(); x++) {
+                if (pixel(before, x, y) != pixel(after, x, y)) {
+                    result++;
+                }
+            }
+        }
+        return result;
     }
 
     private static void assertNoDifferenceOutside(int[] before, int[] after,

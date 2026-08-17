@@ -1730,7 +1730,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         boolean controllerAvailable = activeControllerAvailable();
         menuController.setPages(List.of(
                 pausePage(), statePage(), libraryPage(), chooseRomPage(),
-                AndroidMenuModel.settingsPage(controllerAvailable),
+                AndroidMenuModel.settingsPage(),
                 AndroidMenuModel.audioPage(audio),
                 AndroidMenuModel.touchPage(touch, controllerAvailable), controllerPage(),
                 AndroidMenuModel.optionalDevicesPage(devices, optionalDevicesStatus,

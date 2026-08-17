@@ -37,8 +37,8 @@ focus state, and bounded previews above immutable text-free route artwork. It us
 masks and leaves every pixel outside them byte-identical to layer zero. The compositor returns a detached
 `MenuArgbFrame`; no Android, Swing, AWT, JavaFX, or image-decoder type crosses its public API.
 Changing rows and actions first receive a complete pinned PNG surface fragment from `widgets/`;
-text, the focus-arrow sprite, and mechanically extracted row/action icons are then composited inside
-that widget. Focus only changes the surface, text color, and marker; it never changes a label's
+text, the palette-drawn focus cursor, and mechanically extracted row/action icons are then
+composited inside that widget. Focus only changes the surface, text color, and marker; it never changes a label's
 font role, metrics, or baseline. The runtime base is prebuilt, never sampled or repaired while the
 emulator is running.
 
@@ -46,27 +46,10 @@ The widget surfaces are mechanical, text-free samples of the same approved crops
 Library list (`x=372,y=373,w=522,h=56`), selected from the Settings Audio row
 (`x=600,y=122,w=300,h=45`), and paper from the Confirm panel
 (`x=40,y=525,w=350,h=90`). Mirrored extension only enlarges those samples to the maximum widget
-interior (`900x160`); hosts never stretch them. The 13x20 focus arrow is an alpha extraction of
-the Settings row marker at `x=442,y=132`.
-
-The audio slider is also asset-only. `widgets/audio-slider-empty.png` and
-`widgets/audio-slider-filled.png` are complete opaque 438x59 slider surfaces derived mechanically
-from the Audio reference crop at `x=427,y=201`. The empty surface preserves canonical local
-`x=331..437` byte-for-byte and extends a per-row clean-paper gradient leftward. The filled surface
-preserves local `x=0..299` byte-for-byte and extends a per-row clean-dark gradient rightward. Each
-gradient reaches the preserved segment's boundary value beneath the exact knob, so it contains no
-stationary join. Neither extension samples the knob/shadow footprint at local `x=300..330`.
-Their SHA-256 digests are
-`47b5f4ececa249baf992e5a2cd83c00161f5543a7a2900e859829b631a96e216` and
-`52aaeeb688ee65f5b9b39e5ff2d659430bdbfc7b4373eceba2a5d147fa458a09`.
-`widgets/audio-knob.png` is the exact 31x59 canonical crop at `x=727,y=201`, including its
-attached two-pixel drop shadow, with digest
-`dc14fb200f7f65c8730d3e3be8c5060c59fcd547a55af470a3e04887efd3e781`.
-At runtime the compositor blits the complete empty surface, clips the filled surface through the
-knob center, then blits the exact knob sprite. The fill boundary is therefore always hidden beneath
-the opaque knob. Runtime code never samples neighboring pixels, classifies colors, transforms
-palettes, redraws the rail, or reads the template authority raster. At canonical 75%, the visible filled
-segment, knob, and empty segment remain byte-identical to layer zero.
+interior (`900x160`); hosts never stretch them. The focus cursor, audio slider, and checkbox are
+small palette primitives: their geometry is deterministic and free of sampled shadows. The
+audio thumb and all eleven 0–100% ticks use the same coordinate system, and the selected rail is a
+single flat color.
 The Android file browser remains a native boundary. Open/import actions hand off to Android's native
 document picker; this portable UI never draws a filesystem browser.
 
