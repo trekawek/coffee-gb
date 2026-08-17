@@ -174,6 +174,11 @@ internal class DesktopUiCoordinator(
 
   fun muted(muted: Boolean) = update { it.copy(commands = it.commands.copy(muted = muted)) }
 
+  fun audioVolume(volume: Int) {
+    require(volume in 0..100)
+    update { it.copy(commands = it.commands.copy(audioVolume = volume)) }
+  }
+
   fun fullscreen(fullscreen: Boolean) =
       update { it.copy(commands = it.commands.copy(fullscreen = fullscreen)) }
 

@@ -10,9 +10,11 @@ import org.junit.Test;
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -204,7 +206,6 @@ public class Proposal3MenuCompositorTest {
 
     @Test
     public void overflowingRailsUseSevenItemsAndRevealDirectionalChevronRows() throws Exception {
-        assertSevenEqualRows(MenuRoute.SETTINGS);
         assertSevenEqualRows(MenuRoute.CONTROLLER_MAPPING);
         assertSevenEqualRows(MenuRoute.LIBRARY);
         assertSevenEqualRows(MenuRoute.CHOOSE_ROM);
@@ -228,7 +229,45 @@ public class Proposal3MenuCompositorTest {
                 Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
         assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES)
                         .copyPixels(), lowerPixels,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
+                        Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
+    }
+
+    @Test
+    public void settingsRailUsesOnlyTheActualItemsAndStaysCompact() {
+        List<Proposal3OverlayCatalog.Slot> two =
+                Proposal3OverlayCatalog.compactSettingsRows(2);
+        assertEquals(2, two.size());
+        assertTrue(two.get(0).bounds().y() > Proposal3OverlayCatalog.SETTINGS_PANEL.y());
+        assertTrue(two.get(1).bounds().bottom() <
+                Proposal3OverlayCatalog.SETTINGS_PANEL.bottom());
+        assertEquals(1, Proposal3OverlayCatalog.compactSettingsRows(1).size());
+        assertEquals(3, Proposal3OverlayCatalog.compactSettingsRows(3).size());
+        assertEquals(1, Proposal3OverlayCatalog.compactSettingsDividers(2).size());
+    }
+
+    @Test
+    public void controlsRailCompactsForOneAndTwoHostItems() {
+        assertEquals(1, Proposal3OverlayCatalog.compactTouchRows(1).size());
+        assertEquals(2, Proposal3OverlayCatalog.compactTouchRows(2).size());
+        assertEquals(1, Proposal3OverlayCatalog.compactTouchDividers(2).size());
+
+        MenuPresentation one = controlsPresentation(List.of(
+                item("haptics", "HAPTIC FEEDBACK", true)), "haptics");
+        MenuPresentation two = controlsPresentation(List.of(
+                item("haptics", "HAPTIC FEEDBACK", true),
+                item("controller-mapping", "BUTTON MAPPING", true)), "haptics");
+        MenuRect oldThirdRow = new MenuRect(420, 343, 490, 108);
+        int[] onePixels = new Proposal3MenuCompositor().compose(one).orElseThrow().copyPixels();
+        int[] twoPixels = new Proposal3MenuCompositor().compose(two).orElseThrow().copyPixels();
+
+        assertTrue("one-item Controls rail did not render its focused row",
+                selectedPixels(onePixels, Proposal3OverlayCatalog.TOUCH_PANEL) > 100);
+        assertTrue("two-item Controls rail did not render its focused row",
+                selectedPixels(twoPixels, Proposal3OverlayCatalog.TOUCH_PANEL) > 100);
+        assertEquals("one-item Controls rail left a third bordered slot",
+                0, selectedPixels(onePixels, oldThirdRow));
+        assertEquals("two-item Controls rail left a third bordered slot",
+                0, selectedPixels(twoPixels, oldThirdRow));
     }
 
     @Test
@@ -407,7 +446,10 @@ public class Proposal3MenuCompositorTest {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
         for (MenuRoute route : MenuRoute.values()) {
-            List<Proposal3OverlayCatalog.Slot> rows = Proposal3OverlayCatalog.layout(route).rows();
+            List<Proposal3OverlayCatalog.Slot> rows = route == MenuRoute.SETTINGS
+                    ? Proposal3OverlayCatalog.compactSettingsRows(
+                            defaultPresentation(route).items().size())
+                    : Proposal3OverlayCatalog.layout(route).rows();
             if (rows.size() < 2) {
                 continue;
             }
@@ -602,8 +644,13 @@ public class Proposal3MenuCompositorTest {
                     : presentation.context().isEmpty() ? "/" : presentation.context();
             case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
                     || presentation.route() == MenuRoute.SAVE_STATES
-                    || presentation.route() == MenuRoute.CONFIRM_ACTION ? ""
-                    : presentation.headerAction().isEmpty() ? "BACK" : presentation.headerAction();
+                    || presentation.route() == MenuRoute.CONFIRM_ACTION
+                    || presentation.route() == MenuRoute.SETTINGS
+                    || presentation.route() == MenuRoute.AUDIO
+                    || presentation.route() == MenuRoute.TOUCH_CONTROLS
+                    || presentation.route() == MenuRoute.CONTROLLER_MAPPING
+                    || presentation.route() == MenuRoute.SYSTEM ? ""
+                    : presentation.headerAction();
             case SIDE_HEADING -> presentation.sideHeading();
             case SIDE_LINE -> region.index() < presentation.sideLines().size()
                     ? presentation.sideLines().get(region.index()) : "";
@@ -641,7 +688,7 @@ public class Proposal3MenuCompositorTest {
                 "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS", List.of(), List.of(
                         new MenuPageSpec.Item("recent-rom", "RECENT ROMS", "CHOOSE", true),
                         new MenuPageSpec.Item("choose-rom", "CHOOSE ROM", "ZIP RESULTS", true),
-                        new MenuPageSpec.Item("open-rom", "OPEN ROM", "NATIVE PICKER", true)),
+                        new MenuPageSpec.Item("open-rom", "OPEN ROM", "SELECT FILE", true)),
                 1, List.of("D-PAD MOVE", "[A] OK", "[B] BACK"), "recent-rom",
                 MenuPreview.empty()));
         int[] pixels = new Proposal3MenuCompositor().compose(live).orElseThrow().copyPixels();
@@ -668,14 +715,14 @@ public class Proposal3MenuCompositorTest {
                 Map.entry(MenuRoute.PAUSE_CONSOLE, "save-state"),
                 Map.entry(MenuRoute.SAVE_STATES, "slot-1"),
                 Map.entry(MenuRoute.SETTINGS, "touch-controls"),
-                Map.entry(MenuRoute.AUDIO, "emulated-audio"),
-                Map.entry(MenuRoute.TOUCH_CONTROLS, "button-opacity"),
+                Map.entry(MenuRoute.AUDIO, "mute-audio"),
+                Map.entry(MenuRoute.TOUCH_CONTROLS, "controller-mapping"),
                 Map.entry(MenuRoute.CONTROLLER_MAPPING, "map-b"),
                 Map.entry(MenuRoute.OPTIONAL_DEVICES, "live-camera"),
                 Map.entry(MenuRoute.DATA_MEDIA, "export-battery"),
                 Map.entry(MenuRoute.LIBRARY, "open-rom"),
                 Map.entry(MenuRoute.CHOOSE_ROM, "rom-2"),
-                Map.entry(MenuRoute.SYSTEM, "profile-status"),
+                Map.entry(MenuRoute.SYSTEM, "color-correction"),
                 Map.entry(MenuRoute.ABOUT, "network"),
                 Map.entry(MenuRoute.CONFIRM_ACTION, "confirm"),
                 Map.entry(MenuRoute.PRINTER_PAPER, "clear-paper"));
@@ -732,6 +779,27 @@ public class Proposal3MenuCompositorTest {
         assertFalse(Arrays.equals(template, canonical));
         assertNoDifferenceOutside(template, canonical,
                 Proposal3MenuCompositor.dynamicMasks(MenuRoute.AUDIO));
+    }
+
+    @Test
+    public void audioStatusWithoutVolumeClearsTheTemplateSlider() throws Exception {
+        MenuPresentation unavailable = presentation(new MenuPageSpec(MenuRoute.AUDIO,
+                "COFFEE GB", "AUDIO", "", "", List.of(),
+                List.of(item("audio-status", "NOT AVAILABLE", true)), 1,
+                List.of("", "", "B BACK"), "audio-status", MenuPreview.empty()));
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
+        int[] pixels = new Proposal3MenuCompositor().compose(unavailable).orElseThrow().copyPixels();
+
+        MenuRect slider = Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL;
+        assertTrue("status-only audio page retained the template slider",
+                differentInside(template, pixels, slider));
+        for (int y = slider.y(); y < slider.bottom(); y++) {
+            for (int x = slider.x(); x < slider.right(); x++) {
+                assertEquals("status-only audio page left an active slider pixel at "
+                                + x + "," + y,
+                        MenuRaster.PAPER, pixel(pixels, x, y));
+            }
+        }
     }
 
     @Test
@@ -814,6 +882,26 @@ public class Proposal3MenuCompositorTest {
         assertEquals(0xff0000ff, pixel(pixels, target.x() + 160, 300));
         assertEquals(0xff0000ff, pixel(pixels, target.right() - 1, 424));
         assertEquals(MenuRaster.PAPER, pixel(pixels, target.x(), 425));
+    }
+
+    @Test
+    public void emptyPrinterPreviewClearsTemplateSampleAndShowsStatus() {
+        int[] pixels = new Proposal3MenuCompositor()
+                .compose(defaultPresentation(MenuRoute.PRINTER_PAPER)).orElseThrow().copyPixels();
+        MenuRect target = Proposal3OverlayCatalog.PRINTER_PREVIEW;
+        // The status is centered by drawWidgetText; every other pixel in the preview must be the
+        // clean matte, otherwise the source artwork's decorative sample print has leaked through.
+        MenuRect status = new MenuRect(555, 320, 175, 58);
+        for (int y = target.y(); y < target.bottom(); y++) {
+            for (int x = target.x(); x < target.right(); x++) {
+                if (!status.contains(x, y)) {
+                    assertEquals("empty printer preview retained sample at " + x + "," + y,
+                            MenuRaster.PAPER, pixel(pixels, x, y));
+                }
+            }
+        }
+        assertTrue("empty printer preview did not render NO PAPER",
+                inkPixels(pixels, status) > 100);
     }
 
     @Test
@@ -930,6 +1018,45 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void firstCompositionOfAudioAndControlsRendersCompleteChrome() {
+        // These routes used to produce a partially populated non-focus PNG on the first compose
+        // in a fresh renderer, while their immediately-following focus frame was complete. Keep
+        // this deliberately first-use test separate from the route-wide cache tests below.
+        for (MenuRoute route : new MenuRoute[]{MenuRoute.AUDIO, MenuRoute.TOUCH_CONTROLS}) {
+            MenuPresentation presentation = defaultPresentation(route);
+            int[] pixels = new Proposal3MenuCompositor().compose(presentation).orElseThrow()
+                    .copyPixels();
+            assertTrue(route + " first frame lost its header glyphs",
+                    inkPixels(pixels, new MenuRect(45, 25, 620, 61)) > 1_000);
+            assertTrue(route + " first frame lost D-pad footer glyphs",
+                    inkPixels(pixels, new MenuRect(70, 669, 240, 43)) > 1_000);
+            assertTrue(route + " first frame lost A footer glyphs",
+                    inkPixels(pixels, new MenuRect(455, 669, 126, 48)) > 500);
+            assertTrue(route + " first frame lost B footer glyphs",
+                    inkPixels(pixels, new MenuRect(708, 669, 128, 48)) > 300);
+        }
+    }
+
+    @Test
+    public void positionalBlankFooterHintsProduceACleanBOnlyFooter() {
+        MenuPresentation source = defaultPresentation(MenuRoute.TOUCH_CONTROLS);
+        MenuPresentation backOnly = presentation(new MenuPageSpec(MenuRoute.TOUCH_CONTROLS,
+                source.title(), source.context(), source.headerAction(), source.sideHeading(),
+                source.sideLines(), copyItems(source.items()), source.columns(),
+                List.of("", "", "B BACK"), "haptics", source.preview()));
+        int[] pixels = new Proposal3MenuCompositor().compose(backOnly).orElseThrow().copyPixels();
+
+        assertEquals("blank D-pad hint was rendered", 0,
+                inkPixels(pixels, new MenuRect(70, 669, 240, 43)));
+        assertEquals("blank A hint was rendered", 0,
+                inkPixels(pixels, new MenuRect(455, 669, 126, 48)));
+        assertEquals("omitted A keycap remained visible", 0,
+                inkPixels(pixels, Proposal3TextCatalog.FOOTER_CHOOSE_KEYCAP_CLEAR));
+        assertTrue("B-only footer lost its B label", inkPixels(pixels,
+                new MenuRect(708, 669, 128, 48)) > 300);
+    }
+
+    @Test
     public void publicApiIsPortable() {
         for (Class<?> type : new Class<?>[]{Proposal3MenuCompositor.class,
                 MenuArgbFrame.class, MenuViewport.class, MenuArtwork.class,
@@ -1029,7 +1156,22 @@ public class Proposal3MenuCompositorTest {
         BufferedImage image = new BufferedImage(frame.width(), frame.height(),
                 BufferedImage.TYPE_INT_ARGB);
         image.setRGB(0, 0, frame.width(), frame.height(), frame.copyPixels(), 0, frame.width());
-        ImageIO.write(image, "png", path.toFile());
+        // Keep visual-review artifacts coherent for viewers that inspect the directory while the
+        // route loop is still running. Directly replacing a PNG can expose a partially written
+        // non-focus frame, making it look as though the first composition lost glyphs.
+        Path temporary = Files.createTempFile(path.getParent(),
+                path.getFileName().toString() + ".", ".tmp");
+        ImageIO.write(image, "png", temporary.toFile());
+        try {
+            try {
+                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
     }
 
     private static MenuPresentation defaultPresentation(MenuRoute route) {
@@ -1038,19 +1180,27 @@ public class Proposal3MenuCompositorTest {
         return controller.presentation();
     }
 
+    private static MenuPresentation controlsPresentation(List<MenuPageSpec.Item> items,
+            String preferredFocusId) {
+        MenuPresentation source = defaultPresentation(MenuRoute.TOUCH_CONTROLS);
+        return presentation(new MenuPageSpec(MenuRoute.TOUCH_CONTROLS, source.title(),
+                source.context(), source.headerAction(), source.sideHeading(), source.sideLines(),
+                items, 1, source.footerHints(), preferredFocusId, source.preview()));
+    }
+
     private static String focusTarget(MenuRoute route) {
         return switch (route) {
             case PAUSE_CONSOLE -> "save-state";
             case SAVE_STATES -> "slot-1";
             case SETTINGS -> "touch-controls";
-            case AUDIO -> "emulated-audio";
-            case TOUCH_CONTROLS -> "button-opacity";
+            case AUDIO -> "mute-audio";
+            case TOUCH_CONTROLS -> "controller-mapping";
             case CONTROLLER_MAPPING -> "map-b";
             case OPTIONAL_DEVICES -> "live-camera";
             case DATA_MEDIA -> "export-battery";
             case LIBRARY -> "open-rom";
             case CHOOSE_ROM -> "rom-2";
-            case SYSTEM -> "profile-status";
+            case SYSTEM -> "color-correction";
             case ABOUT -> "network";
             case CONFIRM_ACTION -> "confirm";
             case PRINTER_PAPER -> "clear-paper";
@@ -1069,7 +1219,7 @@ public class Proposal3MenuCompositorTest {
             case DATA_MEDIA -> "import-battery";
             case LIBRARY -> "recent-rom";
             case CHOOSE_ROM -> "rom-1";
-            case SYSTEM -> "video-status";
+            case SYSTEM -> "screen-fit";
             case ABOUT -> "privacy-notices";
             case CONFIRM_ACTION, PRINTER_PAPER ->
                     throw new AssertionError("route does not have visible rows: " + route);

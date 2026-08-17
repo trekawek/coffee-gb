@@ -150,7 +150,7 @@ public class MenuControllerTest {
             controller.onKeyUp(MenuKey.DOWN);
         }
         controller.push(MenuRoute.SETTINGS);
-        for (int index = 0; index < 3; index++) {
+        for (int index = 0; index < 1; index++) {
             controller.onKeyDown(MenuKey.DOWN, false);
             controller.onKeyUp(MenuKey.DOWN);
         }
@@ -159,7 +159,7 @@ public class MenuControllerTest {
         controller.restore(snapshot);
 
         assertEquals(MenuRoute.SETTINGS, controller.route());
-        assertEquals("optional-devices",
+        assertEquals("touch-controls",
                 controller.snapshot().frames().get(1).focusedItemId());
         controller.back();
         assertEquals("settings", controller.snapshot().frames().get(0).focusedItemId());
@@ -184,15 +184,15 @@ public class MenuControllerTest {
                 "PAPER", List.of("LOADING"), List.of(
                         item("clear-paper", "CLEAR", false, null),
                         item("export-share-paper", "EXPORT", false, null),
-                        item("back", "BACK", true, null)), 1, List.of("BACK")));
+                        item("loading", "LOADING", true, null)), 1, List.of("BACK")));
         controller.restore(desired);
-        assertEquals("back", controller.snapshot().frames().get(1).focusedItemId());
+        assertEquals("loading", controller.snapshot().frames().get(1).focusedItemId());
 
         controller.setPage(new MenuPageSpec(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PAPER", "",
                 "PAPER", List.of("READY"), List.of(
                         item("clear-paper", "CLEAR", true, null),
                         item("export-share-paper", "EXPORT", true, null),
-                        item("back", "BACK", true, null)), 1, List.of("BACK")));
+                        item("loading", "LOADING", false, null)), 1, List.of("BACK")));
         controller.restore(desired);
         assertEquals("export-share-paper",
                 controller.snapshot().frames().get(1).focusedItemId());

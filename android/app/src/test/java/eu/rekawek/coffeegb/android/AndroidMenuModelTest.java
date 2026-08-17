@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.android;
 
+import eu.rekawek.coffeegb.ui.menu.MenuController;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import org.junit.Test;
@@ -15,32 +17,35 @@ import static org.junit.Assert.assertTrue;
 public class AndroidMenuModelTest {
 
     @Test
-    public void settingsExposesEveryApprovedRouteId() {
-        assertEquals(List.of("audio", "touch-controls", "controller-mapping",
-                        "optional-devices", "video", "system-profile", "rewind-save",
-                        "data-media", "about"),
-                AndroidMenuModel.settingsPage().items().stream()
+    public void settingsExposesOnlyInlineEditableRoutes() {
+        assertEquals(List.of("audio", "touch-controls"),
+                AndroidMenuModel.settingsPage(false).items().stream()
                         .map(MenuPageSpec.Item::id).toList());
+        assertEquals("audio", AndroidMenuModel.settingsPage(false).preferredFocusId());
+        assertEquals("HAPTICS", AndroidMenuModel.settingsPage(false).items().get(1).detail());
+        assertEquals("HAPTICS / REMAP",
+                AndroidMenuModel.settingsPage(true).items().get(1).detail());
     }
 
     @Test
     public void sharedFooterAdvertisesTheThreeButtonMenuContract() {
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"),
-                AndroidMenuModel.settingsPage().footerHints());
-        assertFalse(AndroidMenuModel.settingsPage().footerHints().stream()
+                AndroidMenuModel.settingsPage(false).footerHints());
+        assertFalse(AndroidMenuModel.settingsPage(false).footerHints().stream()
                 .anyMatch(hint -> hint.contains("SELECT") || hint.contains("START")));
     }
 
     @Test
     public void everyPr3RouteUsesTheStableApprovedIds() {
         assertIds(AndroidMenuModel.audioPage(AndroidMenuModel.audioDraft(100, false)),
-                "volume", "mute-audio", "emulated-audio", "save-audio", "cancel-audio");
-        assertIds(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft()),
-                "haptics", "button-opacity", "reset-touch", "save-touch", "cancel-touch");
-        assertIds(AndroidMenuModel.controllerPage("PAD", Map.of(), null,
-                        false, false, false),
+                "volume", "mute-audio");
+        assertIds(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true),
+                "haptics", "controller-mapping");
+        assertIds(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), false),
+                "haptics");
+        assertIds(AndroidMenuModel.controllerPage("PAD", Map.of(), null, false),
                 "map-a", "map-b", "map-start", "map-select", "map-up", "map-down",
-                "map-left", "map-right", "invert-x", "invert-y", "reset-controller", "back");
+                "map-left", "map-right", "reset-controller");
         assertIds(AndroidMenuModel.optionalDevicesPage(
                         new AndroidMenuModel.DevicesDraft(false, false, false), "READY",
                         MenuPreview.empty()),
@@ -48,7 +53,7 @@ public class AndroidMenuModelTest {
                 "preview-printer-paper", "export-share-paper", "save-devices",
                 "cancel-devices");
         assertIds(AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "READY"),
-                "clear-paper", "export-share-paper", "back");
+                "paper-status");
         assertIds(AndroidMenuModel.systemPage("video-status"),
                 "video-status", "profile-status", "rewind-save-status", "back");
         assertIds(AndroidMenuModel.dataMediaPage(new AndroidMenuModel.TransferAvailability(
@@ -74,10 +79,39 @@ public class AndroidMenuModelTest {
         MenuPageSpec page = AndroidMenuModel.audioPage(draft);
         assertTrue(page.items().get(0).adjustable());
         assertEquals(0, page.items().get(0).progress());
-        assertTrue(page.items().stream().filter(item -> item.id().equals("mute-audio"))
+        assertFalse(page.items().stream().filter(item -> item.id().equals("mute-audio"))
                 .findFirst().orElseThrow().adjustable());
-        assertFalse(page.items().stream().filter(item -> item.id().equals("emulated-audio"))
-                .findFirst().orElseThrow().enabled());
+        assertFalse(page.items().stream().anyMatch(item -> item.id().contains("save")
+                || item.id().contains("cancel") || item.id().contains("emulated")));
+    }
+
+    @Test
+    public void unavailableDataAndPaperPagesCanBeInstalledWithoutAnInvisibleBackRow() {
+        MenuPageSpec data = AndroidMenuModel.dataMediaPage(
+                new AndroidMenuModel.TransferAvailability(false, false, "NO GAME"));
+        MenuPageSpec paper = AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "NO GAME");
+
+        assertEquals(List.of("transfer-status"), data.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals(List.of("paper-status"), paper.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals(List.of("", "", "B BACK"), data.footerHints());
+        assertEquals(List.of("", "", "B BACK"), paper.footerHints());
+
+        MenuController controller = new MenuController(new MenuController.Listener() {
+            @Override
+            public void onPresentation(eu.rekawek.coffeegb.ui.menu.MenuPresentation presentation) {
+            }
+
+            @Override
+            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
+            }
+
+            @Override
+            public void onHeaderSelected(MenuRoute route) {
+            }
+        });
+        controller.setPages(List.of(data, paper));
     }
 
     @Test
@@ -124,16 +158,24 @@ public class AndroidMenuModelTest {
 
     @Test
     public void controllerSystemAboutAndPrinterPagesStayTruthful() {
-        MenuPageSpec controller = AndroidMenuModel.controllerPage(null, Map.of(), null,
-                false, false, false);
-        assertFalse(controller.items().stream().filter(item -> item.id().equals("map-a"))
-                .findFirst().orElseThrow().enabled());
-        assertTrue(controller.items().stream().filter(item -> item.id().equals("back"))
-                .findFirst().orElseThrow().enabled());
+        MenuPageSpec controller = AndroidMenuModel.controllerPage(null, Map.of(), null, false);
+        assertEquals(List.of("controller-status"), controller.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals("NO CONTROLLER CONNECTED", controller.items().get(0).label());
+        assertEquals("", controller.items().get(0).detail());
+        assertEquals("", controller.sideHeading());
+        assertTrue(controller.sideLines().isEmpty());
+        assertFalse(controller.items().stream().anyMatch(item -> item.id().equals("back")));
 
         MenuPageSpec mapped = AndroidMenuModel.controllerPage("PAD",
-                Map.of(Button.A, "BUTTON A"), Button.A, false, false, true);
-        assertEquals("WAITING FOR TARGET INPUT", mapped.items().get(0).detail());
+                Map.of(Button.A, "BUTTON A"), Button.A, false);
+        assertEquals("WAITING FOR INPUT", mapped.items().get(0).detail());
+        assertEquals("", mapped.sideHeading());
+
+        assertEquals("", AndroidMenuModel.audioPage(
+                AndroidMenuModel.audioDraft(100, false)).sideHeading());
+        assertEquals("", AndroidMenuModel.touchPage(
+                AndroidMenuModel.resetTouchDraft(), true).sideHeading());
 
         MenuPageSpec system = AndroidMenuModel.systemPage("profile-status");
         assertEquals("profile-status", system.preferredFocusId());
@@ -146,10 +188,10 @@ public class AndroidMenuModelTest {
 
         for (MenuPreview preview : List.of(MenuPreview.loading(), MenuPreview.empty())) {
             MenuPageSpec printer = AndroidMenuModel.printerPaperPage(preview, "READY");
-            assertFalse(printer.items().get(0).enabled());
-            assertFalse(printer.items().get(1).enabled());
-            assertEquals("back", printer.preferredFocusId());
-            assertTrue(printer.items().get(2).enabled());
+            assertEquals(List.of("paper-status"), printer.items().stream()
+                    .map(MenuPageSpec.Item::id).toList());
+            assertTrue(printer.items().get(0).enabled());
+            assertEquals("paper-status", printer.preferredFocusId());
         }
     }
 

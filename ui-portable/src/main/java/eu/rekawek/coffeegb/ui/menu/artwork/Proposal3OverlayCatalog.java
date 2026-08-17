@@ -53,6 +53,8 @@ final class Proposal3OverlayCatalog {
 
     /** The inner rail remains an audit mask; the complete asset blit uses AUDIO_KNOB_TRAVEL. */
     static final MenuRect AUDIO_SLIDER = new MenuRect(429, 214, 436, 31);
+    /** Focus marker aperture immediately left of the volume slider. */
+    static final MenuRect AUDIO_VOLUME_ARROW = new MenuRect(403, 214, 24, 31);
     /** Full visible canonical knob and attached drop shadow, through source y=259 inclusive. */
     static final MenuRect AUDIO_KNOB = new MenuRect(727, 201, 31, 59);
     /** Full 438x59 slider surface, including the two-row knob-shadow cleanup area. */
@@ -61,6 +63,10 @@ final class Proposal3OverlayCatalog {
     static final MenuRect AUDIO_EMULATED_ARROW = new MenuRect(403, 429, 24, 31);
     static final MenuRect AUDIO_MUTE = new MenuRect(387, 316, 519, 78);
     static final MenuRect AUDIO_EMULATED = new MenuRect(387, 403, 519, 77);
+    /** Continuous settings rail interior; compact rows are centered inside this aperture. */
+    static final MenuRect SETTINGS_PANEL = new MenuRect(423, 116, 487, 523);
+    /** Existing Controls rail aperture; compact rows remain inside its right-side bezel. */
+    static final MenuRect TOUCH_PANEL = new MenuRect(420, 118, 490, 333);
 
     /** Inner aperture of the left bezel; persisted 160:144 thumbnails are aspect-fitted here. */
     static final MenuRect SAVE_PREVIEW = new MenuRect(30, 140, 352, 340);
@@ -109,6 +115,66 @@ final class Proposal3OverlayCatalog {
         return LAYOUTS.get(Objects.requireNonNull(route, "route"));
     }
 
+    /**
+     * Returns a compact settings rail sized to the actual host-provided item count.
+     *
+     * <p>The source mockup used a seven-row rail for the first settings proposal. That left
+     * conspicuous empty slots when a host exposed only Audio and Controls (or a single setting).
+     * Keep the panel aperture, but center one to three real rows in it.</p>
+     */
+    static List<Slot> compactSettingsRows(int itemCount) {
+        int count = Math.max(1, Math.min(3, itemCount));
+        int divider = 4;
+        int totalHeight = switch (count) {
+            case 1 -> 140;
+            case 2 -> 252;
+            default -> 330;
+        };
+        int top = SETTINGS_PANEL.y() + (SETTINGS_PANEL.height() - totalHeight) / 2;
+        return rows(equalRows(SETTINGS_PANEL.x(), top, SETTINGS_PANEL.width(), totalHeight,
+                count, divider), Surface.DARK);
+    }
+
+    static List<MenuRect> compactSettingsDividers(int itemCount) {
+        int count = Math.max(1, Math.min(3, itemCount));
+        int divider = 4;
+        int totalHeight = switch (count) {
+            case 1 -> 140;
+            case 2 -> 252;
+            default -> 330;
+        };
+        int top = SETTINGS_PANEL.y() + (SETTINGS_PANEL.height() - totalHeight) / 2;
+        return dividers(equalRows(SETTINGS_PANEL.x(), top, SETTINGS_PANEL.width(), totalHeight,
+                count, divider));
+    }
+
+    /** Returns one to three centered Controls rows without exposing empty fixed slots. */
+    static List<Slot> compactTouchRows(int itemCount) {
+        int count = Math.max(1, Math.min(3, itemCount));
+        int divider = 4;
+        int totalHeight = switch (count) {
+            case 1 -> 109;
+            case 2 -> 222;
+            default -> 333;
+        };
+        int top = TOUCH_PANEL.y() + (TOUCH_PANEL.height() - totalHeight) / 2;
+        return rows(equalRows(TOUCH_PANEL.x(), top, TOUCH_PANEL.width(), totalHeight,
+                count, divider), Surface.DARK);
+    }
+
+    static List<MenuRect> compactTouchDividers(int itemCount) {
+        int count = Math.max(1, Math.min(3, itemCount));
+        int divider = 4;
+        int totalHeight = switch (count) {
+            case 1 -> 109;
+            case 2 -> 222;
+            default -> 333;
+        };
+        int top = TOUCH_PANEL.y() + (TOUCH_PANEL.height() - totalHeight) / 2;
+        return dividers(equalRows(TOUCH_PANEL.x(), top, TOUCH_PANEL.width(), totalHeight,
+                count, divider));
+    }
+
     static Map<MenuRoute, RouteLayout> all() {
         return LAYOUTS;
     }
@@ -141,21 +207,18 @@ final class Proposal3OverlayCatalog {
                 new Marker(442, 132, 13, 20, 31), false));
 
         layouts.put(MenuRoute.AUDIO, layout(MenuRoute.AUDIO,
-                List.of(slot("mute-audio", AUDIO_MUTE, Surface.DARK),
-                        slot("emulated-audio", AUDIO_EMULATED, Surface.DARK)),
-                actions(new int[][]{{417, 529, 190, 72}, {684, 529, 190, 72}}, Surface.PAPER),
-                masks(AUDIO_LEFT_META, AUDIO_SLIDER, AUDIO_KNOB_TRAVEL, AUDIO_MUTE, AUDIO_MUTE_ARROW,
-                        AUDIO_EMULATED, AUDIO_EMULATED_ARROW, inner(417, 529, 190, 72),
-                        inner(684, 529, 190, 72)), false, "mute-audio",
+                List.of(slot("mute-audio", AUDIO_MUTE, Surface.DARK)), List.of(),
+                masks(AUDIO_LEFT_META, AUDIO_SLIDER, AUDIO_KNOB_TRAVEL, AUDIO_MUTE,
+                        AUDIO_MUTE_ARROW), false,
+                "mute-audio",
                 new Marker(405, 342, 26, 20, 31), false));
 
         layouts.put(MenuRoute.TOUCH_CONTROLS, layout(MenuRoute.TOUCH_CONTROLS,
                 rows(new int[][]{{420, 118, 490, 109}, {420, 231, 490, 108},
                         {420, 343, 490, 108}}, Surface.DARK),
-                actions(new int[][]{{435, 477, 457, 59}, {435, 563, 457, 59}}, Surface.PAPER),
-                masks(TOUCH_LEFT_META, TOUCH_LEFT_STATUS, rowsMasks(new int[][]{
-                        {420, 118, 490, 109}, {420, 231, 490, 108}, {420, 343, 490, 108}}),
-                        inner(435, 477, 457, 59), inner(435, 563, 457, 59)), false,
+                List.of(),
+                masks(rowsMasks(new int[][]{
+                        {420, 118, 490, 109}, {420, 231, 490, 108}, {420, 343, 490, 108}})), false,
                 "haptics", new Marker(443, 158, 40, 20, 31), false));
 
         layouts.put(MenuRoute.CONTROLLER_MAPPING, layout(MenuRoute.CONTROLLER_MAPPING,

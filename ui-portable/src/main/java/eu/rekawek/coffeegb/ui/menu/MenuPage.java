@@ -54,8 +54,16 @@ final class MenuPage {
     static MenuPage from(MenuPageSpec spec) {
         ArrayList<MenuItem> items = new ArrayList<>(spec.items().size());
         for (MenuPageSpec.Item item : spec.items()) {
+            // Back is a global B action, never a row. Keeping it out of the immutable page model
+            // prevents the reducer from focusing a row that the compositor intentionally hides.
+            if ("back".equals(item.id())) {
+                continue;
+            }
             items.add(new MenuItem(item.id(), item.label(), item.detail(), item.enabled(),
                     item.secondaryId(), item.adjustable(), item.progress()));
+        }
+        if (items.isEmpty()) {
+            throw new IllegalArgumentException("A menu page needs a non-back item");
         }
         return new MenuPage(spec.route(), spec.title(), spec.context(), spec.headerAction(),
                 spec.sideHeading(), spec.sideLines(), items, spec.columns(), spec.footerHints(),

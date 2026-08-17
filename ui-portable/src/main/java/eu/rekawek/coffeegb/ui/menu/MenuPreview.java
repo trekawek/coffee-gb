@@ -6,7 +6,7 @@ import java.util.Arrays;
 public final class MenuPreview {
 
     /**
-     * The largest native Game Boy image we can retain is a Super Game Boy frame including its
+     * The largest raw Game Boy image we can retain is a Super Game Boy frame including its
      * border.  Keeping this bound here makes the hand-off safe for DMG, CGB, and SGB without
      * making a menu preview a live display buffer.
      */

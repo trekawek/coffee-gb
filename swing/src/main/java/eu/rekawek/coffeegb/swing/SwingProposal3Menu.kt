@@ -60,8 +60,15 @@ internal class SwingProposal3Menu(
               handleItem(route, id, secondary)
             }
 
+            override fun onItemAdjusted(route: MenuRoute, id: String, direction: Int) {
+              handleItemAdjusted(route, id, direction)
+            }
+
             override fun onHeaderSelected(route: MenuRoute) {
-              if (route == MenuRoute.LIBRARY) {
+              // The unavailable Library fallback intentionally has no header action. Keep the
+              // host boundary inert there as well as in the row list; only a live presentation
+              // supplied with the capable OPEN ROM source may launch the desktop chooser.
+              if (route == MenuRoute.LIBRARY && commands.isEnabled(DesktopCommand.OPEN_ROM)) {
                 runNativeRomChooser()
               }
             }
@@ -258,6 +265,15 @@ internal class SwingProposal3Menu(
     return presentation.items().getOrNull(presentation.focusedIndex())?.id()
   }
 
+  internal fun visibleItemIdsForTest(): List<String> {
+    if (!controller.visible()) return emptyList()
+    return controller.presentation().items().map { it.id() }
+  }
+
+  internal fun openRouteForTest(route: MenuRoute) {
+    openRoute(route)
+  }
+
   private fun openOnEdt() {
     check(SwingUtilities.isEventDispatchThread()) { "Portable menu must open on the EDT" }
     if (opening || controller.visible()) return
@@ -312,6 +328,15 @@ internal class SwingProposal3Menu(
         progress: Int = -1,
     ) = MenuPageSpec.Item(id, label, "", isEnabled, secondaryId, adjustable, progress)
 
+    fun item(
+        id: String,
+        label: String,
+        detail: String,
+        isEnabled: Boolean,
+        adjustable: Boolean = false,
+        progress: Int = -1,
+    ) = MenuPageSpec.Item(id, label, detail, isEnabled, null, adjustable, progress)
+
     fun page(
         context: String,
         sideHeading: String,
@@ -336,8 +361,22 @@ internal class SwingProposal3Menu(
         preview,
     )
 
+    fun unavailablePage(context: String, id: String) =
+        page(
+            context,
+            "",
+            emptyList(),
+            listOf(item(id, "NOT AVAILABLE", true)),
+            preferredFocus = id,
+            footerHints = listOf("", "", "B BACK"),
+        )
+
+    fun hasEnabledNonBack(items: List<MenuPageSpec.Item>): Boolean =
+        items.any { it.id() != "back" && it.enabled() }
+
     val state = presentation.commands
     val stateAvailable = state.stateCommandsAvailable && !state.sessionBusy
+    val inlineAudioAvailable = commands.audioVolume() != null || enabled(DesktopCommand.MUTE)
     val printerHasPaper = printer?.hasPaper() == true
     return when (route) {
       MenuRoute.PAUSE_CONSOLE -> {
@@ -358,7 +397,7 @@ internal class SwingProposal3Menu(
                 item("load-state", "LOAD STATE", stateAvailable),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
                 item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
-                item("settings", "SETTINGS", enabled(DesktopCommand.PREFERENCES)),
+                item("settings", "SETTINGS", inlineAudioAvailable),
                 item("stop", "STOP GAME", enabled(DesktopCommand.CLOSE_GAME)),
             ),
             preview = snapshot.preview(),
@@ -397,75 +436,73 @@ internal class SwingProposal3Menu(
         )
       }
 
-      MenuRoute.SETTINGS ->
-          page(
-              "SETTINGS",
-              "SETTINGS HUB",
-              listOf("AUDIO + INPUT", "DEVICES + DATA", "SYSTEM PROFILE"),
-              listOf(
-                  item("audio", "AUDIO", true),
-                  item("touch-controls", "TOUCH CONTROLS", true),
-                  item("controller-mapping", "CONTROLLER MAPPING", true),
-                  item("optional-devices", "OPTIONAL DEVICES", true),
-                  item("video", "VIDEO", enabled(DesktopCommand.PREFERENCES)),
-                  item("system-profile", "SYSTEM PROFILE", true),
-                  item("rewind-save", "REWIND & SAVE", enabled(DesktopCommand.PREFERENCES)),
-                  item("data-media", "DATA & MEDIA", true),
-                  item("about", "ABOUT", true),
-                  item("back", "BACK", true),
-              ),
-          )
+      MenuRoute.SETTINGS -> {
+        // Keep a restored/directly opened legacy route valid even when the host has no inline
+        // setting capability. The status row is inert; B remains the only useful action.
+        val settingsItems =
+            if (inlineAudioAvailable) {
+              listOf(item("audio", "AUDIO", true))
+            } else {
+              listOf(item("settings-status", "NOT AVAILABLE", true))
+            }
+        if (inlineAudioAvailable) {
+          page("SETTINGS", "", emptyList(), settingsItems, preferredFocus = "audio")
+        } else {
+          unavailablePage("SETTINGS", "settings-status")
+        }
+      }
 
       MenuRoute.AUDIO ->
-          page(
-              "AUDIO",
-              "AUDIO MIX",
-              listOf("NO LIVE PREVIEW", "VOLUME  75%", "EMULATED AUDIO  ON"),
-              listOf(
-                  item("volume", "VOLUME", false),
-                  item("mute-audio", "MUTE", enabled(DesktopCommand.MUTE)),
-                  item("emulated-audio", "EMULATED AUDIO", false),
-                  item("save-audio", "SAVE", enabled(DesktopCommand.PREFERENCES)),
-                  item("cancel-audio", "CANCEL", true),
-              ),
-              preferredFocus = "mute-audio",
-          )
+          run {
+            val volume = commands.audioVolume()
+            val audioItems =
+                buildList {
+                  if (volume != null) {
+                    add(item("volume", "VOLUME", "$volume%", true, adjustable = true, progress = volume))
+                  }
+                  add(
+                      item(
+                          "mute-audio",
+                          "MUTE",
+                          if (state.muted) "ON" else "OFF",
+                          enabled(DesktopCommand.MUTE),
+                      ))
+                }
+            if (audioItems.any { it.enabled() }) {
+              page(
+                  "AUDIO",
+                  "",
+                  emptyList(),
+                  audioItems,
+                  preferredFocus = if (volume != null) "volume" else "mute-audio",
+              )
+            } else {
+              unavailablePage("AUDIO", "audio-status")
+            }
+          }
 
       MenuRoute.TOUCH_CONTROLS ->
           page(
-              "TOUCH CONTROLS",
-              "INPUT DECK",
-              listOf("SKIN  CLASSIC", "HAPTICS  ON", "LAYOUT  SAVED"),
-              listOf(
-                  item("haptics", "HAPTIC FEEDBACK", false),
-                  item("button-opacity", "BUTTON OPACITY", false),
-                  item("reset-touch", "RESET DEFAULTS", false),
-                  item("save-touch", "SAVE", enabled(DesktopCommand.PREFERENCES)),
-                  item("cancel-touch", "CANCEL", true),
-              ),
-              preferredFocus = "save-touch",
+              "CONTROLS",
+              "",
+              emptyList(),
+              // Swing has no touch layout editor. Keep a restored legacy route safe and honest
+              // instead of turning it into a shortcut to the desktop Preferences window.
+              listOf(item("unavailable", "NOT AVAILABLE", true)),
+              preferredFocus = "unavailable",
+              footerHints = listOf("", "", "B BACK"),
           )
 
       MenuRoute.CONTROLLER_MAPPING ->
           page(
               "CONTROLLER MAPPING",
-              "INPUT MAP",
-              listOf("DEVICE  BLUETOOTH", "PROFILE  DEFAULT", "A + B TO CANCEL"),
-              listOf(
-                  item("map-a", "A", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-b", "B", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-start", "START", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-select", "SELECT", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-up", "UP", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-down", "DOWN", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-left", "LEFT", enabled(DesktopCommand.PREFERENCES)),
-                  item("map-right", "RIGHT", enabled(DesktopCommand.PREFERENCES)),
-                  item("invert-x", "HORIZONTAL AXIS", enabled(DesktopCommand.PREFERENCES)),
-                  item("invert-y", "VERTICAL AXIS", enabled(DesktopCommand.PREFERENCES)),
-                  item("reset-controller", "RESET MAPPINGS", enabled(DesktopCommand.PREFERENCES)),
-                  item("back", "BACK", true),
-              ),
-              preferredFocus = "map-a",
+              "",
+              emptyList(),
+              // Mapping is omitted until it can be completed inside the overlay. A stale route
+              // must never expose placeholder axes or hand control to another UI surface.
+              listOf(item("unavailable", "NOT AVAILABLE", true)),
+              preferredFocus = "unavailable",
+              footerHints = listOf("", "", "B BACK"),
           )
 
       MenuRoute.OPTIONAL_DEVICES ->
@@ -495,81 +532,123 @@ internal class SwingProposal3Menu(
               MenuPreview.empty()
             }
         val paperAvailable = currentPreview.state() == MenuPreview.State.READY
+        val paperItems =
+            if (paperAvailable) {
+              listOf(
+                  item("clear-paper", "CLEAR PAPER", true),
+                  item("export-share-paper", "EXPORT & SHARE", true),
+              )
+            } else {
+              // Back rows are removed by the shared menu model. Keep the refreshed page valid
+              // when the paper disappears, while leaving navigation to the global B action.
+              listOf(item("no-paper", "NO PAPER", true))
+            }
         page(
             "PRINTER PAPER",
             "PRINTER ROLL",
-            listOf("LAST PRINT  READY", "PAPER  248 PX", "EXPORT IS NATIVE"),
-            listOf(
-                item("clear-paper", "CLEAR PAPER", paperAvailable),
-                item("export-share-paper", "EXPORT & SHARE", paperAvailable),
-                item("back", "BACK", true),
-            ),
-            preferredFocus = if (paperAvailable) "export-share-paper" else "back",
+            if (paperAvailable) {
+              listOf("LAST PRINT  READY", "PAPER  248 PX", "EXPORT IS NATIVE")
+            } else {
+              emptyList()
+            },
+            paperItems,
+            preferredFocus = if (paperAvailable) "export-share-paper" else "no-paper",
             preview = currentPreview,
+            footerHints =
+                if (paperAvailable) listOf("D-PAD MOVE", "A CHOOSE", "B BACK")
+                else listOf("", "", "B BACK"),
         )
       }
 
-      MenuRoute.DATA_MEDIA ->
+      MenuRoute.DATA_MEDIA -> {
+        val dataItems =
+            listOf(
+                item("import-battery", "IMPORT BATTERY SAVE", false),
+                item("export-battery", "EXPORT BATTERY SAVE", false),
+                item("import-state-0", "IMPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
+                item("export-state-0", "EXPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
+                item("export-screenshot", "EXPORT NATIVE SCREENSHOT", enabled(DesktopCommand.SCREENSHOT)),
+                item("preview-printer-paper", "PRINTER PAPER", printerHasPaper),
+                item("back", "BACK", true),
+            )
+        if (hasEnabledNonBack(dataItems)) {
           page(
               "DATA & MEDIA",
               "DATA DECK",
               listOf("BATTERY SAVE  READY", "STATE SLOT 0  READY", "SCREENSHOT  PNG"),
-              listOf(
-                  item("import-battery", "IMPORT BATTERY SAVE", false),
-                  item("export-battery", "EXPORT BATTERY SAVE", false),
-                  item("import-state-0", "IMPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
-                  item("export-state-0", "EXPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
-                  item("export-screenshot", "EXPORT NATIVE SCREENSHOT", enabled(DesktopCommand.SCREENSHOT)),
-                  item("preview-printer-paper", "PRINTER PAPER", printerHasPaper),
-                  item("back", "BACK", true),
-              ),
+              dataItems,
               preferredFocus = "export-screenshot",
           )
+        } else {
+          unavailablePage("DATA & MEDIA", "data-status")
+        }
+      }
 
-      MenuRoute.LIBRARY ->
+      MenuRoute.LIBRARY -> {
+        val libraryItems =
+            listOf(
+                item("recent-rom", "RECENT ROM", false),
+                item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
+                item("choose-rom", "CHOOSE ROM", enabled(DesktopCommand.OPEN_ROM)),
+                item("clear-recent", "CLEAR RECENTS", false),
+                item("back", "BACK", true),
+            )
+        if (hasEnabledNonBack(libraryItems)) {
           page(
               "LIBRARY",
               "RECENT ROMS",
               listOf("LAST OPENED  TODAY", "DOCUMENT PICKER  NATIVE", "ZIP  MULTI-SELECT"),
-              listOf(
-                  item("recent-rom", "RECENT ROM", false),
-                  item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
-                  item("choose-rom", "CHOOSE ROM", enabled(DesktopCommand.OPEN_ROM)),
-                  item("clear-recent", "CLEAR RECENTS", false),
-                  item("back", "BACK", true),
-              ),
+              libraryItems,
               preferredFocus = "open-rom",
               headerAction = if (enabled(DesktopCommand.OPEN_ROM)) "OPEN ROM" else "",
           )
+        } else {
+          unavailablePage("LIBRARY", "library-status")
+        }
+      }
 
-      MenuRoute.SYSTEM ->
+      MenuRoute.SYSTEM -> {
+        val systemItems =
+            listOf(
+                item("video-status", "VIDEO", enabled(DesktopCommand.PREFERENCES)),
+                item("profile-status", "SYSTEM PROFILE", false),
+                item("rewind-save-status", "REWIND & SAVE", enabled(DesktopCommand.PREFERENCES)),
+                item("back", "BACK", true),
+            )
+        if (hasEnabledNonBack(systemItems)) {
           page(
               "SYSTEM",
               "SYSTEM PROFILE",
               listOf("VIDEO  RASTER SKIN", "PROFILE  AUTO", "REWIND  DISABLED"),
-              listOf(
-                  item("video-status", "VIDEO", enabled(DesktopCommand.PREFERENCES)),
-                  item("profile-status", "SYSTEM PROFILE", false),
-                  item("rewind-save-status", "REWIND & SAVE", enabled(DesktopCommand.PREFERENCES)),
-                  item("back", "BACK", true),
-              ),
+              systemItems,
               preferredFocus = "video-status",
           )
+        } else {
+          unavailablePage("SYSTEM", "system-status")
+        }
+      }
 
-      MenuRoute.ABOUT ->
+      MenuRoute.ABOUT -> {
+        val aboutItems =
+            listOf(
+                item("privacy-notices", "PRIVACY & NOTICES", commands.canOpenAbout()),
+                item("network", "NO NETWORK ACCESS", false),
+                item("storage", "NO BROAD STORAGE ACCESS", false),
+                item("live-camera", "CAMERA ONLY WHEN ENABLED", false),
+                item("source-notices", "SOURCE & THIRD-PARTY NOTICES", false),
+            )
+        if (hasEnabledNonBack(aboutItems)) {
           page(
               "ABOUT",
               "COFFEE GB",
               listOf("GAME BOY EMULATOR", "MIT LICENSE", "NO NETWORK"),
-              listOf(
-                  item("privacy-notices", "PRIVACY & NOTICES", commands.canOpenAbout()),
-                  item("network", "NO NETWORK ACCESS", false),
-                  item("storage", "NO BROAD STORAGE ACCESS", false),
-                  item("live-camera", "CAMERA ONLY WHEN ENABLED", false),
-                  item("source-notices", "SOURCE & THIRD-PARTY NOTICES", false),
-              ),
+              aboutItems,
               preferredFocus = "privacy-notices",
           )
+        } else {
+          unavailablePage("ABOUT", "about-status")
+        }
+      }
 
       MenuRoute.CHOOSE_ROM -> {
         val archive =
@@ -653,33 +732,16 @@ internal class SwingProposal3Menu(
       MenuRoute.SETTINGS ->
           when (id) {
             "audio" -> openRoute(MenuRoute.AUDIO)
-            "touch-controls" -> openRoute(MenuRoute.TOUCH_CONTROLS)
-            "controller-mapping" -> openRoute(MenuRoute.CONTROLLER_MAPPING)
-            "optional-devices" -> openRoute(MenuRoute.OPTIONAL_DEVICES)
-            "video" -> runPreferencesAndHide(PreferencesCategory.DISPLAY)
-            "system-profile" -> openRoute(MenuRoute.SYSTEM)
-            "rewind-save" -> runPreferencesAndHide(PreferencesCategory.SAVES_AND_REWIND)
-            "data-media" -> openRoute(MenuRoute.DATA_MEDIA)
-            "about" -> openRoute(MenuRoute.ABOUT)
-            "back" -> back()
           }
       MenuRoute.AUDIO ->
           when (id) {
-            "mute-audio" -> runCommandAndHide(DesktopCommand.MUTE)
-            "save-audio" -> runPreferencesAndHide(PreferencesCategory.AUDIO)
-            "cancel-audio" -> back()
+            // Mute is a session action, so apply it in place and keep the settings overlay open.
+            // This also lets the row immediately reflect the new state.
+            "mute-audio" -> runCommandInPlace(DesktopCommand.MUTE, MenuRoute.AUDIO)
           }
-      MenuRoute.TOUCH_CONTROLS ->
-          when (id) {
-            "save-touch" -> runPreferencesAndHide(PreferencesCategory.CONTROLS)
-            "cancel-touch" -> back()
-          }
-      MenuRoute.CONTROLLER_MAPPING ->
-          when {
-            id.startsWith("map-") || id == "invert-x" || id == "invert-y" ||
-                id == "reset-controller" -> runPreferencesAndHide(PreferencesCategory.CONTROLS)
-            id == "back" -> back()
-          }
+      // Legacy/restored control routes deliberately have no activation. B navigation is handled
+      // centrally by MenuController; A must not escape to desktop Preferences.
+      MenuRoute.TOUCH_CONTROLS, MenuRoute.CONTROLLER_MAPPING -> Unit
       MenuRoute.OPTIONAL_DEVICES ->
           when (id) {
             "live-camera", "calibrate-tilt", "save-devices" ->
@@ -731,6 +793,16 @@ internal class SwingProposal3Menu(
     }
   }
 
+  private fun handleItemAdjusted(route: MenuRoute, id: String, direction: Int) {
+    if (route != MenuRoute.AUDIO || id != "volume" || direction !in -1..1) return
+    runOnEdt {
+      if (!controller.visible() || controller.route() != MenuRoute.AUDIO) return@runOnEdt
+      val current = commands.audioVolume() ?: return@runOnEdt
+      commands.setAudioVolume((current + direction * 5).coerceIn(0, 100))
+      controller.setPage(pageFor(MenuRoute.AUDIO, commands.menuState()))
+    }
+  }
+
   private fun openSelectedArchiveCandidate() {
     runOnEdt {
       val pending = pendingArchiveSelection ?: return@runOnEdt
@@ -775,6 +847,22 @@ internal class SwingProposal3Menu(
     runOnEdt {
       hideAndResume()
       commands.invoke(command)
+    }
+  }
+
+  /** Applies a session setting without handing control to a native desktop surface. */
+  private fun runCommandInPlace(command: DesktopCommand, route: MenuRoute) {
+    runOnEdt {
+      if (!controller.visible() || controller.route() != route || !commands.isEnabled(command)) {
+        return@runOnEdt
+      }
+      commands.invoke(command)
+      // Command handlers publish their new presentation synchronously on the EDT in production.
+      // Rebuilding the page here keeps the value shown in the row in sync even when a host bridge
+      // does not emit a separate menu repaint event.
+      if (controller.visible() && controller.route() == route) {
+        controller.setPage(pageFor(route, commands.menuState()))
+      }
     }
   }
 
@@ -981,6 +1069,11 @@ internal interface PortableMenuCommandBridge {
   fun setPaused(paused: Boolean)
 
   fun openPreferences(category: PreferencesCategory)
+
+  /** Optional live audio controls; null means the host cannot edit audio in this overlay. */
+  fun audioVolume(): Int? = null
+
+  fun setAudioVolume(volume: Int) = Unit
 
   fun canSaveState(slot: Int): Boolean
 

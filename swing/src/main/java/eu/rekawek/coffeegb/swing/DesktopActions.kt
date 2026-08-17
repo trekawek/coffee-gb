@@ -43,6 +43,7 @@ internal data class DesktopCommandPresentation(
     val stateSlot: Int = 0,
     val loadableStateSlots: Set<Int> = emptySet(),
     val muted: Boolean = false,
+    val audioVolume: Int = 100,
     val fullscreen: Boolean = false,
     val commandBarVisible: Boolean = true,
     val exactWindowScaleOne: Boolean = false,
@@ -50,6 +51,7 @@ internal data class DesktopCommandPresentation(
   init {
     require(stateSlot in 0..9)
     require(loadableStateSlots.all { it in 0..9 })
+    require(audioVolume in 0..100)
   }
 }
 
@@ -73,6 +75,8 @@ internal data class DesktopCommandHandlers(
     val preferencesForCategory: ((PreferencesCategory) -> Unit)? = null,
     val openMenu: () -> Unit = {},
     val openAbout: (() -> Unit)? = null,
+    /** Null when this host does not support changing volume from the portable overlay. */
+    val setAudioVolume: ((Int) -> Unit)? = null,
 )
 
 /** Detached quick-state data consumed by the portable menu renderer. */
@@ -198,6 +202,16 @@ internal class DesktopActionRegistry(
     if (presentation.paused != paused && isEnabled(DesktopCommand.PAUSE)) {
       handlers.setPaused(paused)
     }
+  }
+
+  override fun audioVolume(): Int? =
+      if (handlers.setAudioVolume != null) presentation.audioVolume else null
+
+  override fun setAudioVolume(volume: Int) {
+    require(volume in 0..100)
+    // Inline availability is defined by this handler itself. Do not couple an overlay control to
+    // the enablement of the separate Preferences window command.
+    handlers.setAudioVolume?.invoke(volume)
   }
 
   override fun openPreferences(category: PreferencesCategory) {

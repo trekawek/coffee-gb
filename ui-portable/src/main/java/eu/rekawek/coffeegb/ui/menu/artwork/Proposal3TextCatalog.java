@@ -23,7 +23,8 @@ final class Proposal3TextCatalog {
     static final MenuRect FOOTER = new MenuRect(18, 659, 888, 61);
 
     private static final MenuRect FOOTER_DPAD_CLEAR = new MenuRect(70, 669, 240, 43);
-    /* The A and B keycaps belong to the approved artwork and intentionally remain untouched. */
+    /* The approved A/B keycaps remain untouched unless a host explicitly omits that control. */
+    static final MenuRect FOOTER_CHOOSE_KEYCAP_CLEAR = new MenuRect(404, 665, 48, 54);
     private static final MenuRect FOOTER_CHOOSE_CLEAR = new MenuRect(455, 669, 126, 48);
     private static final MenuRect FOOTER_BACK_CLEAR = new MenuRect(708, 669, 128, 48);
 
@@ -110,31 +111,24 @@ final class Proposal3TextCatalog {
     }
 
     private static void settings(List<TextRegion> regions) {
-        side(regions, new MenuRect(55, 151, 324, 44),
-                new MenuRect[]{new MenuRect(42, 496, 324, 37),
-                        new MenuRect(42, 538, 324, 37), new MenuRect(42, 580, 324, 37)});
+        // Settings is intentionally a small route index. Its header and three rows carry all
+        // required context; the old configuration/status copy only duplicated that information.
     }
 
     private static void audio(List<TextRegion> regions) {
-        side(regions, new MenuRect(60, 151, 290, 44),
-                new MenuRect[]{new MenuRect(57, 402, 320, 41),
-                        new MenuRect(57, 493, 320, 41), new MenuRect(57, 535, 320, 41)});
-        literal(regions, "VOLUME", new MenuRect(426, 151, 160, 43), Surface.PAPER,
-                align(Horizontal.LEFT), Proposal3GlyphAtlas.Role.MEDIUM);
+        // The slider carries its own live value. Do not repeat VOLUME/ACTIVE in the side panel.
     }
 
     private static void touchControls(List<TextRegion> regions) {
-        side(regions, new MenuRect(63, 155, 326, 43),
-                new MenuRect[]{new MenuRect(50, 513, 326, 40),
-                        new MenuRect(50, 555, 326, 38), new MenuRect(50, 595, 326, 32)});
+        // Controls rows and the B footer are sufficient; fixed skin/status copy is omitted.
     }
 
     private static void controllerMapping(List<TextRegion> regions) {
         side(regions, new MenuRect(53, 150, 286, 44),
                 new MenuRect[]{new MenuRect(41, 247, 302, 40),
                         new MenuRect(41, 493, 302, 38), new MenuRect(41, 535, 302, 38)});
-        literal(regions, "WAITING FOR INPUT", new MenuRect(219, 605, 472, 38),
-                Surface.PAPER, align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
+        // Capture status is supplied by the host while a mapping is being captured. It must not
+        // be baked into every idle controller page.
     }
 
     private static void optionalDevices(List<TextRegion> regions) {
@@ -174,13 +168,8 @@ final class Proposal3TextCatalog {
     }
 
     private static void system(List<TextRegion> regions) {
-        side(regions, new MenuRect(47, 155, 306, 44),
-                new MenuRect[]{new MenuRect(43, 438, 322, 40),
-                        new MenuRect(43, 520, 322, 40), new MenuRect(43, 560, 322, 35)});
-        literal(regions, "PROFILE AND REWIND SETTINGS", new MenuRect(397, 480, 480, 42),
-                Surface.PAPER, align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
-        literal(regions, "ARE FIXED FOR THIS SESSION.", new MenuRect(397, 522, 480, 42),
-                Surface.PAPER, align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
+        // Display options are self-describing rows. The old system/profile/rewind explanation
+        // referred to unavailable host settings and did not belong in this in-screen route.
     }
 
     private static void about(List<TextRegion> regions) {

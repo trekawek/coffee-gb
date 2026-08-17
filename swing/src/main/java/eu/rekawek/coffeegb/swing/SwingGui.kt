@@ -416,6 +416,16 @@ class SwingGui private constructor(
                       (!muted).toString(),
                   )
                 },
+                setAudioVolume = { volume ->
+                  val current = properties.applicationSettings
+                  if (current.audio.volume != volume) {
+                    properties.updateApplicationSettings { settings ->
+                      settings.copy(audio = settings.audio.copy(volume = volume))
+                    }
+                    emulator.applyDeviceSettings(properties.applicationSettings)
+                  }
+                  desktopUiCoordinator.audioVolume(volume)
+                },
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
                 setCommandBarVisible = ::setCommandBarVisible,
@@ -479,6 +489,7 @@ class SwingGui private constructor(
                 commands =
                     DesktopCommandPresentation(
                         muted = !properties.applicationSettings.audio.enabled,
+                        audioVolume = properties.applicationSettings.audio.volume,
                         commandBarVisible =
                             properties.applicationSettings.desktop.commandBarVisible,
                         exactWindowScaleOne =
@@ -1067,6 +1078,10 @@ class SwingGui private constructor(
           DesktopShortcutRegistry(DesktopKeyboardKeyAdapter.keyCodes(applied.input.keyboard.values)))
     }
     applyEffect("audio and game controllers") { emulator.applyDeviceSettings(applied) }
+    // Preferences can change the volume outside the portable overlay. Republish the applied
+    // value so the overlay's cached command presentation (and its next +/- adjustment) starts
+    // from the setting the user just applied.
+    desktopUiCoordinator.audioVolume(applied.audio.volume)
     applyEffect("camera") { menu.applyCameraSettings(applied.peripherals) }
     applyEffect("display") {
       displayController.apply(

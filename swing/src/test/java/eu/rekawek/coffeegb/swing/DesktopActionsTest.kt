@@ -121,6 +121,45 @@ class DesktopActionsTest {
   }
 
   @Test
+  fun `inline volume capability does not depend on preferences command enablement`() {
+    val calls = mutableListOf<String>()
+    val registry =
+        DesktopActionRegistry(
+            handlers(calls).copy(setAudioVolume = { calls += "volume=$it" }),
+        )
+    registry.update(
+        DesktopCommandPresentation(
+            sessionBusy = true,
+            audioVolume = 37,
+        ))
+
+    assertFalse(registry[DesktopCommand.PREFERENCES].isEnabled)
+    assertEquals(37, registry.audioVolume())
+
+    registry.setAudioVolume(38)
+
+    assertEquals(listOf("volume=38"), calls)
+  }
+
+  @Test
+  fun `externally applied volume refreshes cached overlay value before the next adjustment`() {
+    val calls = mutableListOf<String>()
+    val registry =
+        DesktopActionRegistry(
+            handlers(calls).copy(setAudioVolume = { calls += "volume=$it" }),
+        )
+
+    registry.update(DesktopCommandPresentation(audioVolume = 37))
+    // Mirrors a volume changed through the desktop Preferences dialog rather than the overlay.
+    registry.update(DesktopCommandPresentation(audioVolume = 82))
+
+    assertEquals(82, registry.audioVolume())
+    registry.setAudioVolume(registry.audioVolume()!! - 5)
+
+    assertEquals(listOf("volume=77"), calls)
+  }
+
+  @Test
   fun `gameplay bindings withdraw only matching unmodified application shortcuts`() {
     val shortcuts =
         DesktopShortcutRegistry(

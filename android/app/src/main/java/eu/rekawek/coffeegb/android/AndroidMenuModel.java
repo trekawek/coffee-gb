@@ -13,6 +13,7 @@ import java.util.Map;
 final class AndroidMenuModel {
 
     private static final List<String> HINTS = List.of("D-PAD MOVE", "A CHOOSE", "B BACK");
+    private static final List<String> BACK_ONLY_HINTS = List.of("", "", "B BACK");
 
     private AndroidMenuModel() {
     }
@@ -46,42 +47,34 @@ final class AndroidMenuModel {
         return preview != null && preview.state() == MenuPreview.State.READY;
     }
 
-    static MenuPageSpec settingsPage() {
-        return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "CONFIGURATION",
-                List.of("AUDIO + INPUT", "DEVICES + DATA", "SYSTEM + ABOUT"), List.of(
+    static MenuPageSpec settingsPage(boolean controllerAvailable) {
+        // Keep this list deliberately short.  A settings row is only useful when its
+        // value can be changed in this overlay; platform pickers, read-only runtime
+        // status and window controls do not belong here.
+        return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
                         item("audio", "AUDIO", "VOLUME / MUTE", true),
-                        item("touch-controls", "TOUCH CONTROLS", "HAPTICS", true),
-                        item("controller-mapping", "CONTROLLER MAPPING", "BUTTONS / AXES", true),
-                        item("optional-devices", "OPTIONAL DEVICES", "RUMBLE / CAMERA / PRINTER", true),
-                        item("video", "VIDEO", "SYSTEM STATUS", true),
-                        item("system-profile", "SYSTEM PROFILE", "SYSTEM STATUS", true),
-                        item("rewind-save", "REWIND & SAVE", "SYSTEM STATUS", true),
-                        item("data-media", "DATA & MEDIA", "NATIVE PICKERS", true),
-                        item("about", "ABOUT", "PRIVACY / NOTICES", true)), null,
+                        item("touch-controls", "CONTROLS",
+                                controllerAvailable ? "HAPTICS / REMAP" : "HAPTICS", true)),
+                "audio",
                 MenuPreview.empty());
     }
 
     static MenuPageSpec audioPage(AudioDraft draft) {
-        return page(MenuRoute.AUDIO, "COFFEE GB", "AUDIO", "", "AUDIO MIX",
-                List.of("NO LIVE PREVIEW", "CHANGES APPLY ON SAVE", "EMULATED AUDIO  ON"),
-                List.of(
-                        adjustable("volume", "VOLUME", draft.volume() + "%", true,
+        return page(MenuRoute.AUDIO, "COFFEE GB", "AUDIO", "", "", List.of(), List.of(
+                adjustable("volume", "VOLUME", draft.volume() + "%", true,
                                 draft.volume()),
-                        adjustable("mute-audio", "MUTE", onOff(draft.muted()), true, -1),
-                        item("emulated-audio", "EMULATED AUDIO", "ON", false),
-                        item("save-audio", "SAVE", "COMMIT", true),
-                        item("cancel-audio", "CANCEL", "DISCARD", true)),
-                "mute-audio", MenuPreview.empty());
+                        item("mute-audio", "MUTE", onOff(draft.muted()), true)),
+                "volume", MenuPreview.empty());
     }
 
-    static MenuPageSpec touchPage(TouchDraft draft) {
-        return page(MenuRoute.TOUCH_CONTROLS, "COFFEE GB", "TOUCH CONTROLS", "", "INPUT DECK",
-                List.of("POSITIONS FIXED", "BAKED INTO SKIN", "SAVE COMMITS HAPTICS"), List.of(
-                        item("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true),
-                        item("button-opacity", "BUTTON OPACITY", "70%", false),
-                        item("reset-touch", "RESET DEFAULTS", "HAPTICS ON", true),
-                        item("save-touch", "SAVE", "COMMIT", true),
-                        item("cancel-touch", "CANCEL", "DISCARD", true)),
+    static MenuPageSpec touchPage(TouchDraft draft, boolean controllerAvailable) {
+        ArrayList<MenuPageSpec.Item> rows = new ArrayList<>();
+        rows.add(item("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true));
+        if (controllerAvailable) {
+            rows.add(item("controller-mapping", "REMAP CONTROLS", "", true));
+        }
+        return page(MenuRoute.TOUCH_CONTROLS, "COFFEE GB", "CONTROLS", "", "",
+                List.of(), rows,
                 "haptics", MenuPreview.empty());
     }
 
@@ -109,37 +102,37 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec controllerPage(String controllerName, Map<Button, String> labels,
-            Button captureTarget, boolean waitingForRelease, boolean invertX, boolean invertY) {
+            Button captureTarget, boolean waitingForRelease) {
         boolean connected = controllerName != null;
         ArrayList<MenuPageSpec.Item> rows = new ArrayList<>();
-        addMapping(rows, "map-a", "A", Button.A, connected, labels, captureTarget,
+        if (!connected) {
+            // Normal navigation omits the remap affordance when disconnected.  Keep one
+            // concise recovery row for a restored stack whose controller disappeared.
+            rows.add(item("controller-status", "NO CONTROLLER CONNECTED", "", true));
+            return page(MenuRoute.CONTROLLER_MAPPING, "COFFEE GB", "REMAP CONTROLS", "",
+                    "", List.of(), rows,
+                    "controller-status", MenuPreview.empty(), BACK_ONLY_HINTS);
+        }
+        addMapping(rows, "map-a", "A", Button.A, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-b", "B", Button.B, connected, labels, captureTarget,
+        addMapping(rows, "map-b", "B", Button.B, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-start", "START", Button.START, connected, labels, captureTarget,
+        addMapping(rows, "map-start", "START", Button.START, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-select", "SELECT", Button.SELECT, connected, labels, captureTarget,
+        addMapping(rows, "map-select", "SELECT", Button.SELECT, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-up", "UP", Button.UP, connected, labels, captureTarget,
+        addMapping(rows, "map-up", "UP", Button.UP, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-down", "DOWN", Button.DOWN, connected, labels, captureTarget,
+        addMapping(rows, "map-down", "DOWN", Button.DOWN, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-left", "LEFT", Button.LEFT, connected, labels, captureTarget,
+        addMapping(rows, "map-left", "LEFT", Button.LEFT, labels, captureTarget,
                 waitingForRelease);
-        addMapping(rows, "map-right", "RIGHT", Button.RIGHT, connected, labels, captureTarget,
+        addMapping(rows, "map-right", "RIGHT", Button.RIGHT, labels, captureTarget,
                 waitingForRelease);
-        rows.add(item("invert-x", "INVERT X", connected ? onOff(invertX) : "NO CONTROLLER",
-                connected));
-        rows.add(item("invert-y", "INVERT Y", connected ? onOff(invertY) : "NO CONTROLLER",
-                connected));
-        rows.add(item("reset-controller", "RESET CONTROLLER", connected ? "IMMEDIATE"
-                : "NO CONTROLLER", connected));
-        rows.add(item("back", "BACK", "RETURN", true));
+        rows.add(item("reset-controller", "RESET CONTROLLER", "", true));
         String preferred = captureTarget == null ? "map-a" : mappingId(captureTarget);
-        return page(MenuRoute.CONTROLLER_MAPPING, "COFFEE GB", "CONTROLLER MAPPING", "",
-                "INPUT MAP", List.of(connected ? controllerName : "NO CONTROLLER",
-                        captureTarget == null ? "A MAPS BUTTON" : "WAITING FOR TARGET INPUT",
-                        "ESCAPE / BACK CANCELS CAPTURE"), rows, preferred, MenuPreview.empty());
+        return page(MenuRoute.CONTROLLER_MAPPING, "COFFEE GB", "REMAP CONTROLS", "",
+                "", List.of(controllerName), rows, preferred, MenuPreview.empty());
     }
 
     static MenuPageSpec systemPage(String preferredFocusId) {
@@ -154,6 +147,13 @@ final class AndroidMenuModel {
 
     static MenuPageSpec dataMediaPage(TransferAvailability availability) {
         String detail = availability.detail();
+        if (!availability.enabled() && !availability.runtimePresent()) {
+            // Back is a global B action and is removed from the immutable page model. Keep
+            // unavailable direct/restored routes valid with one concise, inert status row.
+            return page(MenuRoute.DATA_MEDIA, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
+                    List.of(detail), List.of(item("transfer-status", detail, "", true)),
+                    "transfer-status", MenuPreview.empty(), BACK_ONLY_HINTS);
+        }
         String transferDetail = availability.enabled() ? "NATIVE PICKER" : detail;
         boolean enabled = availability.enabled();
         return page(MenuRoute.DATA_MEDIA, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
@@ -201,27 +201,33 @@ final class AndroidMenuModel {
             case READY -> "READY";
         };
         boolean ready = printerPreviewReady(preview);
+        if (!ready) {
+            String label = preview.state() == MenuPreview.State.LOADING
+                    ? "PAPER LOADING" : "NO PAPER";
+            return page(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PRINTER PAPER", "",
+                    "GAME BOY PRINTER", List.of(status),
+                    List.of(item("paper-status", label, "", true)), "paper-status", preview,
+                    BACK_ONLY_HINTS);
+        }
         return page(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PRINTER PAPER", "",
                 "GAME BOY PRINTER", List.of("PAPER " + state, status, "EXPORT FULL RESOLUTION"),
                 List.of(
-                        item("clear-paper", "CLEAR PAPER", ready ? "CONFIRM" : "EMPTY", ready),
-                        item("export-share-paper", "EXPORT & SHARE", ready ? "NATIVE PNG" : "EMPTY", ready),
+                        item("clear-paper", "CLEAR PAPER", "CONFIRM", true),
+                        item("export-share-paper", "EXPORT & SHARE", "NATIVE PNG", true),
                         item("back", "BACK", "RETURN", true)),
-                ready ? "export-share-paper" : "back", preview);
+                "export-share-paper", preview);
     }
 
     private static void addMapping(List<MenuPageSpec.Item> rows, String id, String label,
-            Button button, boolean connected, Map<Button, String> labels, Button captureTarget,
+            Button button, Map<Button, String> labels, Button captureTarget,
             boolean waitingForRelease) {
         String detail;
-        if (!connected) {
-            detail = "NO CONTROLLER";
-        } else if (button == captureTarget) {
-            detail = waitingForRelease ? "RELEASE TARGET INPUT" : "WAITING FOR TARGET INPUT";
+        if (button == captureTarget) {
+            detail = waitingForRelease ? "RELEASE INPUT" : "WAITING FOR INPUT";
         } else {
             detail = labels.getOrDefault(button, "UNMAPPED");
         }
-        rows.add(item(id, label, detail, connected));
+        rows.add(item(id, label, detail, true));
     }
 
     private static String mappingId(Button button) {
@@ -231,8 +237,16 @@ final class AndroidMenuModel {
     private static MenuPageSpec page(MenuRoute route, String title, String context,
             String headerAction, String sideHeading, List<String> sideLines,
             List<MenuPageSpec.Item> items, String preferredFocusId, MenuPreview preview) {
+        return page(route, title, context, headerAction, sideHeading, sideLines, items,
+                preferredFocusId, preview, HINTS);
+    }
+
+    private static MenuPageSpec page(MenuRoute route, String title, String context,
+            String headerAction, String sideHeading, List<String> sideLines,
+            List<MenuPageSpec.Item> items, String preferredFocusId, MenuPreview preview,
+            List<String> footerHints) {
         return new MenuPageSpec(route, title, context, headerAction, sideHeading, sideLines,
-                items, 1, HINTS, preferredFocusId, preview);
+                items, 1, footerHints, preferredFocusId, preview);
     }
 
     private static MenuPageSpec.Item item(String id, String label, String detail,

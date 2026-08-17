@@ -310,53 +310,109 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `settings reaches about with privacy notices as the visible enabled selection`() {
+  fun `settings exposes only live audio controls and keeps changes in overlay`() {
     val bridge = FakeBridge()
-    val menu =
-        SwingProposal3Menu(
-            frameSink = {},
-            commands = bridge,
-            releaseGameplay = {},
-        )
-
-    javax.swing.SwingUtilities.invokeAndWait {
-      menu.openFromDesktop()
-    }
-    javax.swing.SwingUtilities.invokeAndWait {
-      repeat(5) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
-      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
-
-      repeat(8) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
-      assertEquals(MenuRoute.ABOUT, menu.routeForTest())
-      assertEquals("privacy-notices", menu.focusedItemIdForTest())
-      assertTrue(menu.onKeyDown(MenuKey.A, false))
-      menu.onKeyUp(MenuKey.A)
-    }
-
-    assertTrue(bridge.aboutOpened)
-    assertFalse(menu.visible())
-  }
-
-  @Test
-  fun `about back navigation returns through settings without a hidden back row`() {
-    val bridge = FakeBridge()
-    val menu =
-        SwingProposal3Menu(
-            frameSink = {},
-            commands = bridge,
-            releaseGameplay = {},
-        )
+    val menu = SwingProposal3Menu(frameSink = {}, commands = bridge, releaseGameplay = {})
 
     javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
     javax.swing.SwingUtilities.invokeAndWait {
       repeat(5) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
-      repeat(8) { press(menu, MenuKey.DOWN) }
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+      assertEquals("audio", menu.focusedItemIdForTest())
+      assertEquals(listOf("audio"), menu.visibleItemIdsForTest())
+
       press(menu, MenuKey.A)
-      assertEquals(MenuRoute.ABOUT, menu.routeForTest())
-      assertEquals("privacy-notices", menu.focusedItemIdForTest())
+      assertEquals(MenuRoute.AUDIO, menu.routeForTest())
+      assertEquals("volume", menu.focusedItemIdForTest())
+      assertEquals(listOf("volume", "mute-audio"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.LEFT)
+      assertEquals(95, bridge.volume)
+      assertEquals(MenuRoute.AUDIO, menu.routeForTest())
+      press(menu, MenuKey.DOWN)
+      assertEquals("mute-audio", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+      assertTrue(bridge.muted)
+      assertEquals(MenuRoute.AUDIO, menu.routeForTest())
+      assertTrue(menu.visible())
+    }
+
+    assertEquals(listOf(DesktopCommand.MUTE), bridge.invoked)
+    assertEquals(0, bridge.preferencesOpened)
+  }
+
+  @Test
+  fun `restored legacy control routes are inert and cannot open preferences`() {
+    val bridge = FakeBridge()
+    val menu = SwingProposal3Menu(frameSink = {}, commands = bridge, releaseGameplay = {})
+
+    javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.TOUCH_CONTROLS)
+      assertEquals(MenuRoute.TOUCH_CONTROLS, menu.routeForTest())
+      assertEquals(listOf("unavailable"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.TOUCH_CONTROLS, menu.routeForTest())
+      assertTrue(menu.visible())
+      press(menu, MenuKey.B)
+
+      menu.openRouteForTest(MenuRoute.CONTROLLER_MAPPING)
+      assertEquals(MenuRoute.CONTROLLER_MAPPING, menu.routeForTest())
+      assertEquals(listOf("unavailable"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.CONTROLLER_MAPPING, menu.routeForTest())
+      assertTrue(menu.visible())
+    }
+
+    assertEquals(0, bridge.preferencesOpened)
+  }
+
+  @Test
+  fun `unavailable legacy routes remain valid B-only status pages`() {
+    val routes =
+        listOf(
+            MenuRoute.SETTINGS to "settings-status",
+            MenuRoute.AUDIO to "audio-status",
+            MenuRoute.DATA_MEDIA to "data-status",
+            MenuRoute.LIBRARY to "library-status",
+            MenuRoute.SYSTEM to "system-status",
+            MenuRoute.ABOUT to "about-status",
+        )
+
+    for ((route, statusId) in routes) {
+      val bridge =
+          FakeBridge(
+              setOf(DesktopCommand.PAUSE, DesktopCommand.CLOSE_GAME),
+              audioAvailable = false,
+              aboutAvailable = false,
+          )
+      val menu = newMenu(bridge)
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openRouteForTest(route)
+        assertEquals(route, menu.routeForTest())
+        assertEquals(listOf(statusId), menu.visibleItemIdsForTest())
+        assertEquals(statusId, menu.focusedItemIdForTest())
+
+        // The status row is deliberately inert; B is the only available action.
+        press(menu, MenuKey.A)
+        assertEquals(route, menu.routeForTest())
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+      }
+    }
+  }
+
+  @Test
+  fun `audio back navigation returns through settings without a back row`() {
+    val bridge = FakeBridge()
+    val menu = SwingProposal3Menu(frameSink = {}, commands = bridge, releaseGameplay = {})
+
+    javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
+    javax.swing.SwingUtilities.invokeAndWait {
+      repeat(5) { press(menu, MenuKey.DOWN) }
+      press(menu, MenuKey.A)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.AUDIO, menu.routeForTest())
 
       press(menu, MenuKey.B)
       assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
@@ -562,15 +618,6 @@ class SwingProposal3MenuTest {
     }
   }
 
-  private fun savedDatePixels(frame: MenuArgbFrame): IntArray {
-    val pixels = frame.copyPixels()
-    return IntArray(352 * 44) { offset ->
-      val x = 30 + offset % 352
-      val y = 505 + offset / 352
-      pixels[y * frame.width() + x]
-    }
-  }
-
   @Test
   fun `printer route renders the bridge paper preview and keeps export native`() {
     val bridge = FakeBridge()
@@ -586,10 +633,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      repeat(5) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
-      repeat(3) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
       repeat(3) { press(menu, MenuKey.DOWN) }
       assertEquals("preview-printer-paper", menu.focusedItemIdForTest())
       press(menu, MenuKey.A)
@@ -609,28 +653,62 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `printer route refreshes to visible back after paper disappears`() {
+  fun `printer route refreshes safely after paper disappears`() {
     val bridge = FakeBridge()
     val printer = FakePrinter(MenuPreview.ready(1, 1, intArrayOf(0xffd02020.toInt())))
-    val menu = newMenu(bridge, printer)
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+            printer = printer,
+        )
 
     javax.swing.SwingUtilities.invokeAndWait {
-      repeat(5) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
-      repeat(3) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
+      menu.openFromDesktop()
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
       repeat(3) { press(menu, MenuKey.DOWN) }
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.PRINTER_PAPER, menu.routeForTest())
 
       printer.preview = MenuPreview.empty()
       press(menu, MenuKey.A)
+      assertEquals(MenuRoute.PRINTER_PAPER, menu.routeForTest())
+      assertEquals(listOf("no-paper"), menu.visibleItemIdsForTest())
+      val emptyFrame = frames.filterNotNull().last()
+      assertEquals(0, inkPixels(emptyFrame, 45, 487, 306, 123))
+      press(menu, MenuKey.B)
 
       assertEquals(MenuRoute.OPTIONAL_DEVICES, menu.routeForTest())
     }
 
     assertEquals(0, printer.exportCount)
     assertEquals(0, printer.clearCount)
+  }
+
+  private fun inkPixels(frame: MenuArgbFrame, x: Int, y: Int, width: Int, height: Int): Int {
+    var count = 0
+    val pixels = frame.copyPixels()
+    for (row in y until y + height) {
+      for (column in x until x + width) {
+        val pixel = pixels[row * frame.width() + column]
+        val red = pixel ushr 16 and 0xff
+        val green = pixel ushr 8 and 0xff
+        val blue = pixel and 0xff
+        if ((red + green + blue) / 3 < 45) count++
+      }
+    }
+    return count
+  }
+
+  private fun savedDatePixels(frame: MenuArgbFrame): IntArray {
+    val pixels = frame.copyPixels()
+    return IntArray(352 * 44) { offset ->
+      val x = 30 + offset % 352
+      val y = 505 + offset / 352
+      pixels[y * frame.width() + x]
+    }
   }
 
   private fun newMenu(
@@ -669,27 +747,33 @@ class SwingProposal3MenuTest {
   ): RomSourceSnapshot.ArchiveCandidate =
       RomSourceSnapshot.ArchiveCandidate(token, entryName, 0, 32 * 1024, title)
 
-  private class FakeBridge : PortableMenuCommandBridge {
+  private class FakeBridge(
+      private val enabledCommands: Set<DesktopCommand> =
+          setOf(
+              DesktopCommand.OPEN_ROM,
+              DesktopCommand.PAUSE,
+              DesktopCommand.RESET,
+              DesktopCommand.SAVE_STATE,
+              DesktopCommand.LOAD_STATE,
+              DesktopCommand.PREFERENCES,
+              DesktopCommand.CLOSE_GAME,
+              DesktopCommand.MUTE,
+          ),
+      private val audioAvailable: Boolean = true,
+      private val aboutAvailable: Boolean = true,
+  ) : PortableMenuCommandBridge {
     val invoked = mutableListOf<DesktopCommand>()
     val pauseTransitions = mutableListOf<Boolean>()
+    var muted = false
+    var volume = 100
     var aboutOpened = false
+    var preferencesOpened = 0
     var loadedSlot: Int? = null
     var savedSlot: Int? = null
     var stateCatalog: List<PortableMenuStateSlot> = emptyList()
     var catalogRefreshOnEdt: Boolean? = null
     var saveOnEdt: Boolean? = null
     var loadOnEdt: Boolean? = null
-    private val enabled =
-        setOf(
-            DesktopCommand.OPEN_ROM,
-            DesktopCommand.PAUSE,
-            DesktopCommand.RESET,
-            DesktopCommand.SAVE_STATE,
-            DesktopCommand.LOAD_STATE,
-            DesktopCommand.PREFERENCES,
-            DesktopCommand.CLOSE_GAME,
-        )
-
     override fun menuState(): DesktopPresentation =
         DesktopPresentation(
             gameTitle = "TEST GAME",
@@ -699,16 +783,25 @@ class SwingProposal3MenuTest {
                     pauseSupported = true,
                     stateCommandsAvailable = true,
                     stateBrowserAvailable = true,
+                    muted = muted,
+                    audioVolume = volume,
                 ),
         )
 
-    override fun isEnabled(command: DesktopCommand): Boolean = command in enabled
+    override fun isEnabled(command: DesktopCommand): Boolean = command in enabledCommands
 
     override fun invoke(command: DesktopCommand) {
       invoked += command
+      if (command == DesktopCommand.MUTE) muted = !muted
     }
 
-    override fun canOpenAbout(): Boolean = true
+    override fun audioVolume(): Int? = volume.takeIf { audioAvailable }
+
+    override fun setAudioVolume(volume: Int) {
+      this.volume = volume
+    }
+
+    override fun canOpenAbout(): Boolean = aboutAvailable
 
     override fun openAbout() {
       aboutOpened = true
@@ -718,7 +811,9 @@ class SwingProposal3MenuTest {
       pauseTransitions += paused
     }
 
-    override fun openPreferences(category: PreferencesCategory) = Unit
+    override fun openPreferences(category: PreferencesCategory) {
+      preferencesOpened++
+    }
 
     override fun canSaveState(slot: Int): Boolean = true
 
@@ -767,4 +862,5 @@ class SwingProposal3MenuTest {
       exportCount++
     }
   }
+
 }
