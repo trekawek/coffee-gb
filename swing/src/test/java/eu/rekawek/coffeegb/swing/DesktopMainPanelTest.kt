@@ -91,30 +91,28 @@ class DesktopMainPanelTest {
   }
 
   @Test
-  fun `first open shows its cancellable task outside the home and game cards`() {
+  fun `opening status uses the footer without a second cancel row`() {
     onEdt {
-      var cancellations = 0
       val actions = actions()
-      val panel = panel(actions, onCancel = { cancellations++ })
+      val panel = panel(actions)
 
       panel.render(
           DesktopPresentation(
-              task = DesktopSessionTask("Opening Tetris.gb…", cancellable = true),
               commands = DesktopCommandPresentation(sessionBusy = true),
               persistentStatus = "Opening Tetris.gb",
           ))
 
       val components = descendants(panel)
-      assertTrue(
-          components.filterIsInstance<JLabel>().any {
-            it.text == "Opening Tetris.gb…" && it.isVisible
-          })
-      val cancel =
-          components.filterIsInstance<AbstractButton>().single {
-            it.text == "Cancel" && it.isVisible
+      val status =
+          components.filterIsInstance<JLabel>().single {
+            it.accessibleContext.accessibleName == "Emulator status"
           }
-      cancel.doClick()
-      assertEquals(1, cancellations)
+      assertTrue(status.isVisible)
+      assertEquals("Opening Tetris.gb", status.text)
+      assertFalse(
+          components.filterIsInstance<AbstractButton>().any {
+            it.text == "Cancel" && it.isVisible
+          })
       assertEquals("Opening Tetris.gb", panel.accessibleContext.accessibleDescription)
     }
   }

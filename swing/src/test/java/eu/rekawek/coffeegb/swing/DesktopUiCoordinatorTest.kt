@@ -31,13 +31,17 @@ class DesktopUiCoordinatorTest {
         DesktopUiCoordinator(DesktopPresentation(), rendered::add, edtCheck = { true })
 
     coordinator.opened("Tetris")
-    coordinator.opening("Pokemon.gbc", cancellable = true)
+    coordinator.opening("Pokemon.gbc")
+    assertNull(coordinator.current().task)
+    assertEquals("Opening Pokemon.gbc", coordinator.current().persistentStatus)
+    coordinator.openingProgress("Preparing Pokemon.gbc…")
 
     val replacing = rendered.last()
     assertEquals("Tetris", replacing.gameTitle)
     assertTrue(replacing.commands.gameLoaded)
     assertTrue(replacing.commands.sessionBusy)
-    assertTrue(replacing.task!!.cancellable)
+    assertNull(replacing.task)
+    assertEquals("Preparing Pokemon.gbc", replacing.persistentStatus)
 
     coordinator.openingFinished("The new game could not be opened")
     assertEquals("Tetris", coordinator.current().gameTitle)

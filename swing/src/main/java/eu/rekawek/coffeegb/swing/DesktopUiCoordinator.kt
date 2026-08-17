@@ -29,9 +29,25 @@ internal class DesktopUiCoordinator(
     render(next)
   }
 
-  fun opening(target: String, cancellable: Boolean) {
+  fun opening(target: String) {
     require(target.isNotBlank())
-    sessionTask("Opening $target…", cancellable)
+    openingProgress("Opening $target…")
+  }
+
+  /**
+   * Keeps routine ROM-opening progress in the persistent footer. A second task banner would
+   * repeat the same message and add an unnecessary Cancel row.
+   */
+  fun openingProgress(message: String) {
+    require(message.isNotBlank())
+    update {
+      it.copy(
+          task = null,
+          commands = it.commands.copy(sessionBusy = true),
+          persistentStatus = message.removeSuffix("…"),
+          statusRecoveryCommand = null,
+      )
+    }
   }
 
   fun sessionTask(message: String, cancellable: Boolean) {
