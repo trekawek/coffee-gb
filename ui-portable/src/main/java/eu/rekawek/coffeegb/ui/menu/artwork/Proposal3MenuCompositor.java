@@ -52,6 +52,12 @@ public final class Proposal3MenuCompositor {
             }
 
             MenuRoute route = Objects.requireNonNull(presentation.route(), "route");
+            // Resolve all packaged raster dependencies before beginning the first frame. This
+            // keeps the initial non-focus composition deterministic when a host requests a
+            // screenshot immediately after constructing the compositor; subsequent frames use
+            // the same immutable caches.
+            atlas();
+            skins();
             Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
             int[] authority = authorityPixels(route);
             int[] working = authority.clone();
@@ -75,6 +81,20 @@ public final class Proposal3MenuCompositor {
     static List<MenuRect> dynamicMasks(MenuRoute route) {
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
         ArrayList<MenuRect> masks = new ArrayList<>(layout.dynamicMasks());
+        if (route == MenuRoute.SETTINGS) {
+            // Settings rows are centered according to the host's actual item count. The panel
+            // itself is a deliberate repaint boundary so no obsolete seven-row rail can leak
+            // through when a platform supplies one or two settings.
+            masks.add(Proposal3OverlayCatalog.SETTINGS_PANEL);
+        }
+        if (route == MenuRoute.TOUCH_CONTROLS) {
+            // Android may expose only Haptics, or Haptics plus Remap. Treat the Controls rail as
+            // a compact presentation instead of leaving fixed empty bordered slots behind.
+            masks.add(Proposal3OverlayCatalog.TOUCH_PANEL);
+        }
+        if (route == MenuRoute.AUDIO) {
+            masks.add(Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW);
+        }
         masks.addAll(Proposal3TextCatalog.masks(route));
         for (Proposal3OverlayCatalog.Slot slot : layout.rows()) {
             masks.add(expand(slot.bounds(), 3));
@@ -184,7 +204,10 @@ public final class Proposal3MenuCompositor {
 
             String visualId = visualId(route, id, prepared.rows.size());
             if (isAction(route, id)) {
-                if (actionIds.add(visualId)) {
+                // Disabled action rows have no distinct portable disabled skin. Omitting them
+                // keeps a capability that is unavailable from looking like a live button, while
+                // the host can still keep an enabled status row to make the route navigable.
+                if (item.enabled() && actionIds.add(visualId)) {
                     prepared.actions.add(entry(item, index, visualId, -1));
                 }
             } else if (rowIds.add(visualId)) {
@@ -195,17 +218,18 @@ public final class Proposal3MenuCompositor {
 
         if (route == MenuRoute.LIBRARY) {
             addSyntheticAction(prepared, actionIds, "open-rom", "OPEN ROM",
-                    findSource(items, "open-rom"));
+                    findEnabledSource(items, "open-rom"));
         }
         if (route == MenuRoute.CHOOSE_ROM) {
             addSyntheticAction(prepared, actionIds, "open-selected", "OPEN SELECTED",
-                    findSource(items, "open-selected"));
-            addSyntheticAction(prepared, actionIds, "cancel", "CANCEL", findSource(items, "cancel"));
+                    findEnabledSource(items, "open-selected"));
+            addSyntheticAction(prepared, actionIds, "cancel", "CANCEL",
+                    findEnabledSource(items, "cancel"));
         }
         if (route == MenuRoute.ABOUT) {
             addSyntheticAction(prepared, actionIds, "source",
                     "GITHUB.COM/TREKAWEK/COFFEE-GB",
-                    findSource(items, "source-notices"));
+                    findEnabledSource(items, "source-notices"));
         }
         orderActions(route, prepared.actions);
         return prepared;
@@ -214,8 +238,7 @@ public final class Proposal3MenuCompositor {
     private static void orderActions(MenuRoute route, List<Entry> actions) {
         List<String> order = switch (route) {
             case SAVE_STATES -> List.of();
-            case AUDIO -> List.of("save-audio", "cancel-audio");
-            case TOUCH_CONTROLS -> List.of("save-touch", "cancel-touch");
+            case AUDIO, TOUCH_CONTROLS -> List.of();
             case OPTIONAL_DEVICES -> List.of("save-devices", "cancel-devices");
             case LIBRARY -> List.of("open-rom");
             case CHOOSE_ROM -> List.of("open-selected", "cancel");
@@ -264,8 +287,7 @@ public final class Proposal3MenuCompositor {
     private static boolean isAction(MenuRoute route, String id) {
         return switch (route) {
             case SAVE_STATES -> false;
-            case AUDIO -> id.equals("save-audio") || id.equals("cancel-audio");
-            case TOUCH_CONTROLS -> id.equals("save-touch") || id.equals("cancel-touch");
+            case AUDIO, TOUCH_CONTROLS -> false;
             case OPTIONAL_DEVICES -> id.equals("save-devices") || id.equals("cancel-devices");
             case LIBRARY -> id.equals("open-rom");
             case CHOOSE_ROM -> id.equals("open-selected") || id.equals("cancel");
@@ -276,9 +298,10 @@ public final class Proposal3MenuCompositor {
         };
     }
 
-    private static int findSource(List<MenuPresentation.Item> items, String id) {
+    private static int findEnabledSource(List<MenuPresentation.Item> items, String id) {
         for (int index = 0; index < items.size(); index++) {
-            if (id.equals(items.get(index).id())) {
+            MenuPresentation.Item item = items.get(index);
+            if (id.equals(item.id()) && item.enabled()) {
                 return index;
             }
         }
@@ -287,7 +310,11 @@ public final class Proposal3MenuCompositor {
 
     private static void addSyntheticAction(Prepared prepared, Set<String> ids, String id,
             String label, int sourceIndex) {
-        if (ids.add(id)) {
+        // A host may keep a route alive with a single enabled status row while its platform
+        // capability is unavailable. Do not invent an actionable-looking footer button in that
+        // case; only synthesize the artwork action when its capable source item is present and
+        // enabled in the same immutable presentation.
+        if (sourceIndex >= 0 && ids.add(id)) {
             prepared.actions.add(new Entry(id, label, "", true, sourceIndex, false, -1, -1));
         }
     }
@@ -345,7 +372,23 @@ public final class Proposal3MenuCompositor {
             paintSurface(raster, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR,
                     Proposal3OverlayCatalog.Surface.PAPER, false);
         }
+        if (route == MenuRoute.SETTINGS || route == MenuRoute.AUDIO
+                || route == MenuRoute.TOUCH_CONTROLS || route == MenuRoute.CONTROLLER_MAPPING
+                || route == MenuRoute.SYSTEM) {
+            // The source artwork's top-right Back outline is decorative in the portable overlay;
+            // B is the single global back action. Clear the entire footprint, including its
+            // border, rather than only replacing the old word.
+            paintSurface(raster, Proposal3OverlayCatalog.BACK_HEADER,
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
+        }
         String[] footer = footerValues(route, presentation.footerHints());
+        if (footer[1].isEmpty()) {
+            // A positional blank is an explicit host contract, not a request to restore the
+            // default footer. Remove the approved A keycap as well as its label so a B-only host
+            // does not advertise a control that cannot be used on that page.
+            paintSurface(raster, Proposal3TextCatalog.FOOTER_CHOOSE_KEYCAP_CLEAR,
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
+        }
         for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
             String value = textValue(region, presentation, prepared, footer);
             Proposal3OverlayCatalog.Surface surface = region.surface()
@@ -392,19 +435,19 @@ public final class Proposal3MenuCompositor {
 
     private static String[] footerValues(MenuRoute route, List<String> hints) {
         // The pause screen establishes the console-wide physical-control contract. Other routes
-        // retain their page-specific text (for example SAVE/CANCEL), while keycap artwork stays
-        // untouched so no glyph is drawn over the approved A/B shapes.
+        // retain their page-specific text (for example SAVE/CANCEL). For every other route a
+        // supplied list is positional: an empty entry intentionally suppresses that slot.
         if (route == MenuRoute.PAUSE_CONSOLE) {
             return new String[]{"D-PAD MOVE", "A CHOOSE", "B BACK"};
         }
-        String[] fallback = {"D-PAD MOVE", "A CHOOSE", "B BACK"};
-        for (int index = 0; index < fallback.length && index < hints.size(); index++) {
-            String hint = hints.get(index);
-            if (hint != null && !hint.isBlank()) {
-                fallback[index] = hint;
-            }
+        if (hints == null || hints.isEmpty()) {
+            return new String[]{"D-PAD MOVE", "A CHOOSE", "B BACK"};
         }
-        return fallback;
+        String[] values = {"", "", ""};
+        for (int index = 0; index < values.length && index < hints.size(); index++) {
+            values[index] = display(hints.get(index));
+        }
+        return values;
     }
 
     private static String textValue(Proposal3TextCatalog.TextRegion region,
@@ -420,8 +463,12 @@ public final class Proposal3MenuCompositor {
             case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
                     || presentation.route() == MenuRoute.SAVE_STATES
                     || presentation.route() == MenuRoute.CONFIRM_ACTION
-                    ? "" : presentation.headerAction().isEmpty()
-                    ? "BACK" : display(presentation.headerAction());
+                    || presentation.route() == MenuRoute.SETTINGS
+                    || presentation.route() == MenuRoute.AUDIO
+                    || presentation.route() == MenuRoute.TOUCH_CONTROLS
+                    || presentation.route() == MenuRoute.CONTROLLER_MAPPING
+                    || presentation.route() == MenuRoute.SYSTEM
+                    ? "" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
             case FOOTER_BUTTON -> footerButton(footer[region.index()]);
             case FOOTER_LABEL -> footerLabel(footer[region.index()]);
@@ -533,14 +580,15 @@ public final class Proposal3MenuCompositor {
         List<Entry> entries = prepared.rows;
         int entryIndex = indexOf(entries, id);
         if (entryIndex >= 0) {
-            ScrollWindow window = scrollWindow(entries, focusedIndex, layout.rows().size(),
+            List<Proposal3OverlayCatalog.Slot> slots = rowSlots(layout, entries.size());
+            ScrollWindow window = scrollWindow(entries, focusedIndex, slots.size(),
                     layout.scrollable());
             int visibleIndex = window.visualIndex(entryIndex);
             if (visibleIndex >= 0) {
-                return layout.rows().get(visibleIndex);
+                return slots.get(visibleIndex);
             }
             if (!target && entryIndex == 0 && !layout.rows().isEmpty()) {
-                return layout.rows().get(0);
+                return slots.get(0);
             }
         }
         int actionIndex = indexOf(prepared.actions, id);
@@ -709,19 +757,20 @@ public final class Proposal3MenuCompositor {
 
     private void drawRows(MenuRoute route, MenuPresentation presentation, Prepared prepared,
             Proposal3OverlayCatalog.RouteLayout layout, MenuRaster raster) {
-        if (layout.rows().isEmpty()) {
+        List<Proposal3OverlayCatalog.Slot> slots = rowSlots(layout, prepared.rows.size());
+        if (slots.isEmpty()) {
             return;
         }
         ScrollWindow window = scrollWindow(prepared.rows, presentation.focusedIndex(),
-                layout.rows().size(), layout.scrollable());
+                slots.size(), layout.scrollable());
         String focused = focusedId(presentation, prepared);
-        for (int visible = 0; visible < layout.rows().size(); visible++) {
-            Proposal3OverlayCatalog.Slot slot = layout.rows().get(visible);
+        for (int visible = 0; visible < slots.size(); visible++) {
+            Proposal3OverlayCatalog.Slot slot = slots.get(visible);
             if (window.topArrow() && visible == 0) {
                 paintScrollWidget(route, slot, true, raster);
                 continue;
             }
-            if (window.bottomArrow() && visible == layout.rows().size() - 1) {
+            if (window.bottomArrow() && visible == slots.size() - 1) {
                 paintScrollWidget(route, slot, false, raster);
                 continue;
             }
@@ -741,25 +790,36 @@ public final class Proposal3MenuCompositor {
                 raster.fill(divider, PAPER_MATTE);
             }
         } else if (route == MenuRoute.SAVE_STATES || route == MenuRoute.SETTINGS
+                || route == MenuRoute.TOUCH_CONTROLS
                 || route == MenuRoute.CONTROLLER_MAPPING || route == MenuRoute.LIBRARY
                 || route == MenuRoute.CHOOSE_ROM) {
             // Expanded row skins repaint focus cleanly. Restore the rail dividers afterwards so
             // every seven-item viewport remains evenly spaced, including arrow rows.
-            for (MenuRect divider : scrollDividers(route)) {
+            for (MenuRect divider : scrollDividers(route, slots.size())) {
                 raster.fill(divider, PAPER_MATTE);
             }
         }
     }
 
-    private static List<MenuRect> scrollDividers(MenuRoute route) {
+    private static List<MenuRect> scrollDividers(MenuRoute route, int slotCount) {
         return switch (route) {
             case SAVE_STATES -> Proposal3OverlayCatalog.SAVE_DIVIDERS;
-            case SETTINGS -> Proposal3OverlayCatalog.SETTINGS_DIVIDERS;
+            case SETTINGS -> Proposal3OverlayCatalog.compactSettingsDividers(slotCount);
+            case TOUCH_CONTROLS -> Proposal3OverlayCatalog.compactTouchDividers(slotCount);
             case CONTROLLER_MAPPING -> Proposal3OverlayCatalog.CONTROLLER_DIVIDERS;
             case LIBRARY -> Proposal3OverlayCatalog.LIBRARY_DIVIDERS;
             case CHOOSE_ROM -> Proposal3OverlayCatalog.CHOOSE_ROM_DIVIDERS;
             default -> List.of();
         };
+    }
+
+    private static List<Proposal3OverlayCatalog.Slot> rowSlots(
+            Proposal3OverlayCatalog.RouteLayout layout, int itemCount) {
+        return layout.route() == MenuRoute.SETTINGS
+                ? Proposal3OverlayCatalog.compactSettingsRows(itemCount)
+                : layout.route() == MenuRoute.TOUCH_CONTROLS
+                ? Proposal3OverlayCatalog.compactTouchRows(itemCount)
+                : layout.rows();
     }
 
     private static MenuRect rowSurfaceBounds(MenuRoute route, Proposal3OverlayCatalog.Slot slot) {
@@ -849,12 +909,24 @@ public final class Proposal3MenuCompositor {
 
     private void drawAudioSide(MenuPresentation p, Prepared prepared, MenuRaster r) {
         Entry volume = prepared.volume;
-        if (volume != null && (volume.adjustable || volume.progress >= 0)) {
+        if (volume == null) {
+            // The route template carries the normal 75% slider. A host that cannot expose any
+            // audio control may still open this route as a B-only status page; remove that
+            // baked-in value so the page does not advertise an actionable setting.
+            r.fill(Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL, PAPER_MATTE);
+        } else if (volume.adjustable || volume.progress >= 0) {
             int progress = volume.progress >= 0 ? volume.progress : parsePercent(volume.detail);
             r.drawAudioSlider(skins().audioSliderEmpty(), skins().audioSliderFilled(),
                     skins().audioKnob(),
                     Proposal3OverlayCatalog.AUDIO_KNOB_TRAVEL,
                     Proposal3OverlayCatalog.AUDIO_KNOB, progress);
+            if (volume.sourceIndex == p.focusedIndex()) {
+                // Volume is an adjustable control, not a normal text row. Give it the same
+                // unmistakable left-edge focus cue as the selectable mute row.
+                r.paintSprite(skins().focusArrow(),
+                        Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW.x(),
+                        Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW.y(), MenuRaster.INK);
+            }
             overlayChanged(r, "VOLUME " + progress + "%", "VOLUME 75%",
                     new MenuRect(62, 405, 315, 45), true, MenuRaster.INK,
                     MenuRaster.HorizontalAlignment.CENTER);
@@ -867,6 +939,14 @@ public final class Proposal3MenuCompositor {
         } else if (p.preview().state() == MenuPreview.State.LOADING) {
             r.fill(Proposal3OverlayCatalog.PRINTER_PREVIEW, PAPER_MATTE);
             drawWidgetText(r, "LOADING", Proposal3OverlayCatalog.PRINTER_PREVIEW,
+                    MenuRaster.INK,
+                    MenuRaster.HorizontalAlignment.CENTER, Proposal3GlyphAtlas.Role.MEDIUM);
+        } else {
+            // The route template contains a decorative sample print. An empty runtime roll must
+            // replace that sample with an explicit status so an unavailable printer never looks
+            // as though it has retained paper.
+            r.fill(Proposal3OverlayCatalog.PRINTER_PREVIEW, PAPER_MATTE);
+            drawWidgetText(r, "NO PAPER", Proposal3OverlayCatalog.PRINTER_PREVIEW,
                     MenuRaster.INK,
                     MenuRaster.HorizontalAlignment.CENTER, Proposal3GlyphAtlas.Role.MEDIUM);
         }
@@ -1007,7 +1087,7 @@ public final class Proposal3MenuCompositor {
     }
 
     private static String detail(MenuRoute route, Entry entry, int index) {
-        String candidate = display(nativeCopy(entry.detail));
+        String candidate = display(entry.detail);
         String canonical = canonicalDetail(route, entry, index);
         if (candidate.isEmpty() || isGenericDetail(candidate)) {
             return canonical;
@@ -1050,7 +1130,7 @@ public final class Proposal3MenuCompositor {
             case SAVE_STATES -> "SLOT " + Math.max(0, e.slotNumber);
             case SETTINGS -> switch (e.id) {
                 case "audio" -> "AUDIO";
-                case "touch-controls" -> "TOUCH CONTROLS";
+                case "touch-controls" -> "CONTROLS";
                 case "controller-mapping" -> "CONTROLLER MAPPING";
                 case "optional-devices" -> "OPTIONAL DEVICES";
                 case "video" -> "VIDEO";
@@ -1058,17 +1138,18 @@ public final class Proposal3MenuCompositor {
                 case "rewind-save" -> "REWIND & SAVE";
                 case "data-media" -> "DATA & MEDIA";
                 case "about" -> "ABOUT";
+                case "system" -> "DISPLAY";
                 default -> display(e.label);
             };
             case AUDIO -> switch (e.id) {
-                case "mute-audio" -> "MUTE AUDIO";
-                case "emulated-audio" -> "EMULATED AUDIO";
+                case "mute-audio" -> "MUTE";
                 default -> display(e.label);
             };
             case TOUCH_CONTROLS -> switch (e.id) {
                 case "haptics" -> "HAPTIC FEEDBACK";
                 case "button-opacity" -> "BUTTON OPACITY";
                 case "reset-touch" -> "RESET DEFAULTS";
+                case "controller-mapping" -> "BUTTON MAPPING";
                 default -> display(e.label);
             };
             case CONTROLLER_MAPPING -> switch (e.id) {
@@ -1098,7 +1179,7 @@ public final class Proposal3MenuCompositor {
                 case "export-battery" -> "EXPORT BATTERY SAVE";
                 case "import-state-0" -> "IMPORT STATE SLOT 0";
                 case "export-state-0" -> "EXPORT STATE SLOT 0";
-                case "export-screenshot" -> "EXPORT NATIVE SCREENSHOT";
+                case "export-screenshot" -> "EXPORT SCREENSHOT";
                 case "preview-printer-paper" -> "PRINTER PAPER";
                 default -> display(e.label);
             };
@@ -1108,6 +1189,9 @@ public final class Proposal3MenuCompositor {
                 case "video-status" -> "VIDEO";
                 case "profile-status" -> "SYSTEM PROFILE";
                 case "rewind-save-status" -> "REWIND & SAVE";
+                case "screen-fit" -> "SCREEN FIT";
+                case "color-correction" -> "COLOR CORRECTION";
+                case "frame-blending" -> "FRAME BLENDING";
                 default -> display(e.label);
             };
             case ABOUT -> switch (e.id) {
@@ -1125,8 +1209,7 @@ public final class Proposal3MenuCompositor {
     private static String canonicalDetail(MenuRoute route, Entry e, int index) {
         return switch (route) {
             case SAVE_STATES -> "";
-            case AUDIO -> e.id.equals("mute-audio") ? "OFF"
-                    : e.id.equals("emulated-audio") ? "ON" : "";
+            case AUDIO -> e.id.equals("mute-audio") ? "OFF" : "";
             case TOUCH_CONTROLS -> e.id.equals("haptics") ? "ON"
                     : e.id.equals("button-opacity") ? "70%" : "";
             case CONTROLLER_MAPPING -> switch (e.id) {
@@ -1204,20 +1287,6 @@ public final class Proposal3MenuCompositor {
     private static String valueAt(List<String> values, int index, String fallback) {
         return values != null && index >= 0 && index < values.size() && !values.get(index).isEmpty()
                 ? values.get(index) : fallback;
-    }
-
-    private static String nativeCopy(String value) {
-        String normalized = display(value);
-        return switch (normalized) {
-            case "ANDROID PICKER" -> "NATIVE PICKER";
-            case "ANDROID FILE PICKER" -> "NATIVE FILE PICKER";
-            case "ANDROID FILE BROWSER" -> "NATIVE FILE BROWSER";
-            case "ANDROID'S NATIVE FILE BROWSER" -> "NATIVE FILE BROWSER";
-            case "SAF / NO BROAD STORAGE" -> "NATIVE STORAGE / NO BROAD STORAGE";
-            case "SAF / NO BROAD ACCESS" -> "NATIVE STORAGE / NO BROAD ACCESS";
-            case "COFFEE GB ANDROID" -> "COFFEE GB";
-            default -> normalized;
-        };
     }
 
     private static String display(String value) {

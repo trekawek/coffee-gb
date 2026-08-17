@@ -38,12 +38,12 @@ public class NineRouteRendererAndroidTest {
         java.util.Arrays.fill(previewPixels, Color.BLACK);
         MenuPreview readyPaper = MenuPreview.ready(16, 96, previewPixels);
         List<MenuPageSpec> pages = List.of(
-                AndroidMenuModel.settingsPage(),
+                AndroidMenuModel.settingsPage(true),
                 AndroidMenuModel.audioPage(AndroidMenuModel.audioDraft(100, true)),
-                AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft()),
+                AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true),
                 AndroidMenuModel.controllerPage("PHYSICAL BLUETOOTH GAME CONTROLLER",
                         Map.of(Button.A, "BUTTON A", Button.B, "BUTTON B"),
-                        null, false, false, false),
+                        null, false),
                 AndroidMenuModel.optionalDevicesPage(
                         new AndroidMenuModel.DevicesDraft(true, false, true),
                         "CAMERA DENIED / DISABLED", readyPaper),

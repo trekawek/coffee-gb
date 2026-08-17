@@ -27,35 +27,26 @@ final class MenuPages {
                             item("settings", "SETTINGS"),
                             item("stop", "STOP GAME")));
             case SAVE_STATES -> statePage(false);
-            case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "CONFIGURATION",
-                    List.of("SESSION READY", "", ""),
+            case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "",
+                    List.of(),
                     items(
                             item("audio", "AUDIO"),
-                            item("touch-controls", "TOUCH CONTROLS"),
-                            item("controller-mapping", "CONTROLLER MAPPING"),
-                            item("optional-devices", "OPTIONAL DEVICES"),
-                            item("video", "VIDEO"),
-                            item("system-profile", "SYSTEM PROFILE"),
-                            item("rewind-save", "REWIND & SAVE"),
-                            item("data-media", "DATA & MEDIA"),
-                            item("about", "ABOUT")));
-            case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "AUDIO OUTPUT",
-                    List.of("VOLUME 75%", "ACTIVE", ""),
+                            // The existing touch-controls route is the compact Controls overview.
+                            // Display is intentionally omitted until a host can implement it
+                            // without requiring a host handoff.
+                            item("touch-controls", "CONTROLS")));
+            case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "",
+                    List.of(),
                     items(
-                            item("volume", "VOLUME", "75%"),
-                            item("mute-audio", "MUTE AUDIO", "OFF"),
-                            item("emulated-audio", "EMULATED AUDIO", "ON"),
-                            item("save-audio", "SAVE"),
-                            item("cancel-audio", "CANCEL")), 1, DEFAULT_HINTS,
-                    "mute-audio", MenuPreview.empty());
-            case TOUCH_CONTROLS -> page(route, "COFFEE GB", "TOUCH CONTROLS", "", "COFFEE GB SKIN",
-                    List.of("POSITIONS FIXED", "", ""),
+                            adjustable("volume", "VOLUME", "75%", 75),
+                            item("mute-audio", "MUTE", "OFF")), 1, DEFAULT_HINTS,
+                    "volume", MenuPreview.empty());
+            case TOUCH_CONTROLS -> page(route, "COFFEE GB", "CONTROLS", "", "",
+                    List.of(),
                     items(
                             item("haptics", "HAPTIC FEEDBACK", "ON"),
-                            item("button-opacity", "BUTTON OPACITY", "70%"),
-                            item("reset-touch", "RESET DEFAULTS"),
-                            item("save-touch", "SAVE"),
-                            item("cancel-touch", "CANCEL")));
+                            item("controller-mapping", "BUTTON MAPPING"),
+                            item("reset-touch", "RESET DEFAULTS")));
             case CONTROLLER_MAPPING -> page(route, "COFFEE GB", "CONTROLLER MAPPING", "", "GAMEPAD",
                     List.of("CONNECTED", "PRESS A TO REMAP", ""),
                     items(
@@ -67,8 +58,6 @@ final class MenuPages {
                             item("map-down", "DOWN"),
                             item("map-left", "LEFT"),
                             item("map-right", "RIGHT"),
-                            item("invert-x", "HORIZONTAL AXIS", "NORMAL"),
-                            item("invert-y", "VERTICAL AXIS", "NORMAL"),
                             item("reset-controller", "RESET MAPPINGS")));
             case OPTIONAL_DEVICES -> page(route, "COFFEE GB", "OPTIONAL DEVICES", "", "PERIPHERALS",
                     List.of("CARTRIDGE DEPENDENT", "", ""),
@@ -84,20 +73,19 @@ final class MenuPages {
             case PRINTER_PAPER -> new MenuPage(route, "COFFEE GB", "PRINTER PAPER", "",
                     "GAME BOY PRINTER", List.of("PAPER READY", "1 PAGE", ""), items(
                             item("clear-paper", "CLEAR PAPER"),
-                            item("export-share-paper", "EXPORT & SHARE"),
-                            item("back", "BACK")), 1, DEFAULT_HINTS,
+                            item("export-share-paper", "EXPORT & SHARE")), 1, DEFAULT_HINTS,
                     "export-share-paper", MenuPreview.empty());
             case DATA_MEDIA -> page(route, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
-                    List.of("PRIVATE SAVE DATA", "ANDROID PICKER", ""),
+                    List.of("PRIVATE SAVE DATA", "SELECT FILE", ""),
                     items(
                             item("import-battery", "IMPORT BATTERY SAVE"),
                             item("export-battery", "EXPORT BATTERY SAVE"),
                             item("import-state-0", "IMPORT STATE SLOT 0"),
                             item("export-state-0", "EXPORT STATE SLOT 0"),
-                            item("export-screenshot", "EXPORT NATIVE SCREENSHOT"),
+                            item("export-screenshot", "EXPORT SCREENSHOT"),
                             item("preview-printer-paper", "PRINTER PAPER")));
             case LIBRARY -> page(route, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
-                    List.of("ANDROID", "FILE PICKER", ""),
+                    List.of("RECENT GAMES", "SELECT ROM", ""),
                     items(
                             item("recent-rom", "ADVENTURE BOY.GB", "TODAY"),
                             item("open-rom", "OPEN ROM"),
@@ -109,13 +97,12 @@ final class MenuPages {
                             item("rom-1", "ADVENTURE BOY.GB"),
                             item("rom-2", "POCKET CAMERA.GBC"),
                             item("rom-3", "COFFEE DEMO.GB")));
-            case SYSTEM -> page(route, "COFFEE GB", "SYSTEM", "", "RUNTIME",
-                    List.of("COFFEE GB ANDROID", "SESSION READY", ""),
+            case SYSTEM -> page(route, "COFFEE GB", "DISPLAY", "", "",
+                    List.of(),
                     items(
-                            item("video-status", "VIDEO", "NEAREST NEIGHBOR / ASPECT FIT"),
-                            item("profile-status", "SYSTEM PROFILE", "SELECTED ON OPEN"),
-                            item("rewind-save-status", "REWIND & SAVE", "PORTABLE DEFAULTS"),
-                            item("back", "BACK")));
+                            item("screen-fit", "SCREEN FIT", "ASPECT"),
+                            item("color-correction", "COLOR CORRECTION", "OFF"),
+                            item("frame-blending", "FRAME BLENDING", "OFF")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                     List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(
@@ -177,5 +164,9 @@ final class MenuPages {
 
     private static MenuItem item(String id, String label, String detail) {
         return new MenuItem(id, label, detail);
+    }
+
+    private static MenuItem adjustable(String id, String label, String detail, int progress) {
+        return new MenuItem(id, label, detail, true, null, true, progress);
     }
 }

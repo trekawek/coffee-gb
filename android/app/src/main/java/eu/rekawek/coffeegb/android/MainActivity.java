@@ -748,10 +748,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void handleMenuAdjustment(MenuRoute route, String id, int direction) {
         if (route == MenuRoute.AUDIO && "volume".equals(id) && audioDraft != null) {
             audioDraft = AndroidMenuModel.adjustVolume(audioDraft, direction);
-            refreshMenuPages();
-        } else if (route == MenuRoute.AUDIO && "mute-audio".equals(id)
-                && audioDraft != null) {
-            audioDraft = audioDraft.toggleMuted();
+            persistAudioDraft();
             refreshMenuPages();
         }
     }
@@ -874,18 +871,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 refreshMenuPages();
                 menuController.push(MenuRoute.TOUCH_CONTROLS);
             }
-            case "controller-mapping" -> menuController.push(MenuRoute.CONTROLLER_MAPPING);
-            case "optional-devices" -> {
-                devicesDraft = loadDevicesDraft();
-                loadPrinterPreview();
-                refreshMenuPages();
-                menuController.push(MenuRoute.OPTIONAL_DEVICES);
-            }
-            case "video" -> openSystem("video-status");
-            case "system-profile" -> openSystem("profile-status");
-            case "rewind-save" -> openSystem("rewind-save-status");
-            case "data-media" -> menuController.push(MenuRoute.DATA_MEDIA);
-            case "about" -> menuController.push(MenuRoute.ABOUT);
             default -> { }
         }
     }
@@ -895,22 +880,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             audioDraft = loadAudioDraft();
         }
         switch (id) {
-            case "volume" -> audioDraft = AndroidMenuModel.adjustVolume(audioDraft, 1);
-            case "mute-audio" -> audioDraft = audioDraft.toggleMuted();
-            case "save-audio" -> {
-                getPreferences(MODE_PRIVATE).edit()
-                        .putInt("audio.volume", audioDraft.volume())
-                        .putBoolean("audio.muted", audioDraft.muted()).apply();
-                if (runtime != null) {
-                    runtime.setAudioVolume(audioDraft.volume());
-                    runtime.setAudioMuted(audioDraft.muted());
-                }
-                audioDraft = null;
-                menuController.back();
-            }
-            case "cancel-audio" -> {
-                audioDraft = null;
-                menuController.back();
+            // Volume is adjusted only with left/right while focused; A is intentionally inert.
+            case "volume" -> { }
+            case "mute-audio" -> {
+                audioDraft = audioDraft.toggleMuted();
+                persistAudioDraft();
             }
             default -> { }
         }
@@ -922,20 +896,35 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
         }
         switch (id) {
-            case "haptics" -> touchDraft = touchDraft.toggleHaptics();
-            case "reset-touch" -> touchDraft = AndroidMenuModel.resetTouchDraft();
-            case "save-touch" -> {
+            case "haptics" -> {
+                // Haptics is a small, self-contained setting: apply it to the running
+                // surface and persist it as soon as the row changes.
+                touchDraft = touchDraft.toggleHaptics();
                 video.updateTouchLayout(touchDraft.layout());
-                touchDraft = null;
-                menuController.back();
             }
-            case "cancel-touch" -> {
-                touchDraft = null;
-                menuController.back();
+            case "controller-mapping" -> {
+                // A controller may disconnect between page rendering and activation.
+                if (activeControllerAvailable()) {
+                    menuController.push(MenuRoute.CONTROLLER_MAPPING);
+                }
             }
             default -> { }
         }
         refreshMenuPages();
+    }
+
+    /** Persists the currently visible audio values so leaving the page never discards a change. */
+    private void persistAudioDraft() {
+        if (audioDraft == null) {
+            return;
+        }
+        getPreferences(MODE_PRIVATE).edit()
+                .putInt("audio.volume", audioDraft.volume())
+                .putBoolean("audio.muted", audioDraft.muted()).apply();
+        if (runtime != null) {
+            runtime.setAudioVolume(audioDraft.volume());
+            runtime.setAudioMuted(audioDraft.muted());
+        }
     }
 
     private void handleOptionalDevicesItem(AndroidEmulationRuntime active, String id) {
@@ -1003,10 +992,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleControllerItem(AndroidEmulationRuntime active, String id) {
-        if ("back".equals(id)) {
-            menuController.back();
-            return;
-        }
         if (active == null) {
             return;
         }
@@ -1016,10 +1001,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             if (input.beginCapture(target)) {
                 menuController.setBackIntercepted(true);
             }
-        } else if ("invert-x".equals(id)) {
-            input.toggleHorizontalInversion();
-        } else if ("invert-y".equals(id)) {
-            input.toggleVerticalInversion();
         } else if ("reset-controller".equals(id)) {
             input.resetActiveController();
         }
@@ -1746,10 +1727,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 ? AndroidMenuModel.touchDraft(video.touchLayout()) : touchDraft;
         AndroidMenuModel.DevicesDraft devices = devicesDraft == null
                 ? loadDevicesDraft() : devicesDraft;
+        boolean controllerAvailable = activeControllerAvailable();
         menuController.setPages(List.of(
                 pausePage(), statePage(), libraryPage(), chooseRomPage(),
-                AndroidMenuModel.settingsPage(), AndroidMenuModel.audioPage(audio),
-                AndroidMenuModel.touchPage(touch), controllerPage(),
+                AndroidMenuModel.settingsPage(controllerAvailable),
+                AndroidMenuModel.audioPage(audio),
+                AndroidMenuModel.touchPage(touch, controllerAvailable), controllerPage(),
                 AndroidMenuModel.optionalDevicesPage(devices, optionalDevicesStatus,
                         printerPreview),
                 AndroidMenuModel.printerPaperPage(printerPreview, printerStatus),
@@ -1897,9 +1880,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 ? Map.of() : input.effectiveKeyLabels();
         return AndroidMenuModel.controllerPage(name, labels,
                 input == null ? null : input.captureTarget(),
-                input != null && input.captureWaitingForRelease(),
-                input != null && input.horizontalInverted(),
-                input != null && input.verticalInverted());
+                input != null && input.captureWaitingForRelease());
+    }
+
+    private boolean activeControllerAvailable() {
+        AndroidInputRouter input = runtime == null ? null : runtime.input();
+        return input != null && input.activeControllerName() != null;
     }
 
     private MenuPageSpec confirmationPage() {

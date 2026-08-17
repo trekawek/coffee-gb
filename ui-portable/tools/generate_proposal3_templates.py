@@ -72,7 +72,7 @@ ROUTE_PAPER_TEXT = {
         rect(57, 540, 320, 30), rect(405, 145, 180, 48),
     ],
     "04-touch-controls.png": [
-        rect(38, 146, 350, 54), rect(40, 504, 342, 46), rect(40, 548, 342, 42),
+        rect(38, 146, 338, 54), rect(40, 504, 336, 46), rect(40, 548, 342, 42),
         rect(40, 588, 342, 40),
     ],
     "05-controller-mapping.png": [
@@ -116,11 +116,31 @@ ROUTE_PAPER_TEXT = {
 
 ROUTE_PAPER_RESTORE = {
     "00-pause-console.png": [rect(20, 471, 370, 12), rect(20, 557, 370, 12)],
-    "05-controller-mapping.png": [rect(38, 476, 310, 13), rect(210, 596, 494, 13)],
+    "05-controller-mapping.png": [rect(38, 476, 310, 13)],
     "10-system.png": [rect(34, 486, 330, 18)],
     "11-about.png": [rect(36, 455, 320, 15)],
     "12-confirm-action.png": [rect(40, 202, 340, 15), rect(444, 255, 440, 15),
                               rect(444, 387, 440, 15), rect(444, 497, 440, 15)],
+    # Text bands must never eat the authored bezel rails. Keep the narrow rails from the raw
+    # illustration after clearing copy; runtime widgets repaint only the panel interiors.
+    "02-settings.png": [rect(394, 112, 18, 534)],
+    "03-audio.png": [rect(345, 112, 4, 534), rect(367, 112, 11, 534)],
+    "04-touch-controls.png": [rect(386, 112, 5, 534), rect(408, 112, 9, 534)],
+    "05-controller-mapping.png": [rect(349, 112, 9, 494), rect(365, 112, 8, 470)],
+    "10-system.png": [rect(354, 112, 12, 501), rect(378, 112, 8, 501)],
+}
+
+# These authored controls are no longer part of the immediate settings flow. Clear the complete
+# old widget, including its outline, rather than leaving an unlabeled button shell behind.
+ROUTE_FLAT_PAPER = {
+    # The header Back outline is a source-art decoration, not a second navigation control. Remove
+    # the complete footprint on every settings-related route; runtime B remains the sole back
+    # action.
+    "02-settings.png": [rect(744, 25, 151, 61)],
+    "03-audio.png": [rect(744, 25, 151, 61)],
+    "04-touch-controls.png": [rect(744, 25, 151, 61)],
+    "05-controller-mapping.png": [rect(744, 25, 151, 61)],
+    "10-system.png": [rect(744, 25, 151, 61)],
 }
 
 # Exact half-open inner pause-screen aperture.  It deliberately reaches under the stepped bezel
@@ -139,13 +159,16 @@ ROUTE_WIDGETS = {
     # continuous dark surface beneath the runtime dividers.
     "01-save-states.png": [("dark", rect(420, 118, 489, 529))],
     "02-settings.png": [("dark", rect(423, 116, 487, 523))],
+    # Keep only the slider's authored paper well and the live Mute row. The entire lower panel is
+    # a quiet dark surface; the old Emulated Audio and Save/Cancel shells are gone.
     "03-audio.png": [("dark", rect(387, 316, 519, 78)),
-        ("dark", rect(387, 403, 519, 77))] + [("paper", inner(*value)) for value in
-        [(417, 529, 190, 72), (684, 529, 190, 72)]],
-    "04-touch-controls.png": [("dark", inner(*value)) for value in
-        [(420, 118, 490, 109), (420, 231, 490, 108), (420, 343, 490, 108)]] +
-        [("paper", inner(*value)) for value in [(435, 477, 457, 59), (435, 563, 457, 59)]],
-    "05-controller-mapping.png": [("dark", rect(366, 115, 544, 467))],
+        ("dark", rect(383, 397, 527, 244))],
+    # Keep the Controls rail as one clean dark aperture; the compositor supplies one to three
+    # centered rows from the host presentation, so no unused fixed dividers survive.
+    "04-touch-controls.png": [("dark", rect(420, 118, 490, 333)),
+        ("dark", rect(417, 469, 489, 162))],
+    "05-controller-mapping.png": [("dark", rect(366, 115, 544, 467)),
+        ("dark", rect(366, 583, 544, 61))],
     "06-optional-devices.png": [("dark", inner(*value)) for value in
         [(353, 117, 556, 67), (353, 187, 556, 66), (353, 256, 556, 66),
          (353, 324, 556, 66), (353, 393, 556, 66), (353, 461, 556, 66)]] +
@@ -237,6 +260,8 @@ def main() -> None:
             pixels[top:bottom, left:right] = reference[top:bottom, left:right]
         for left, top, right, bottom in ROUTE_PAPER_RESTORE.get(source.name, []):
             pixels[top:bottom, left:right] = reference[top:bottom, left:right]
+        for bounds in ROUTE_FLAT_PAPER.get(source.name, []):
+            clear_paper_text(pixels, bounds, paper_pixels)
         if source.name == "00-pause-console.png":
             left, top, right, bottom = PAUSE_PREVIEW_APERTURE
             pixels[top:bottom, left:right] = PAUSE_PREVIEW_MATTE
