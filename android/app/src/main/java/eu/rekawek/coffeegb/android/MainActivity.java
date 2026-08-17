@@ -977,13 +977,21 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime.setCameraEnabled(plan.cameraEnabled());
         }
         devicesDraft = null;
-        menuController.back();
         if (!plan.requestCameraPermission()) {
+            menuController.back();
             return;
+        }
+        // A normal Devices stack returns to its parent after Save. A direct/restored Devices
+        // route has no parent: backing out would resume the game before the permission surface
+        // can take over its pause ownership. Keep that route as the restore target instead.
+        MenuStackSnapshot restoreStack = menuController.snapshot();
+        if (restoreStack.frames().size() > 1) {
+            menuController.back();
+            restoreStack = menuController.snapshot();
         }
         externalSurface = MenuExternalSurfaceState.launched(
                 MenuExternalSurfaceState.Action.CAMERA_PERMISSION, CAMERA_PERMISSION_REQUEST,
-                menuController.snapshot(), menuPauseOwned,
+                restoreStack, menuPauseOwned,
                 MenuExternalSurfaceState.RestorePolicy.ALWAYS);
         clearLegacyCameraPermissionFallback();
         menuPauseOwned = false;
