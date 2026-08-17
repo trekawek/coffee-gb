@@ -38,7 +38,7 @@ public class NineRouteRendererAndroidTest {
         java.util.Arrays.fill(previewPixels, Color.BLACK);
         MenuPreview readyPaper = MenuPreview.ready(16, 96, previewPixels);
         List<MenuPageSpec> pages = List.of(
-                AndroidMenuModel.settingsPage(true),
+                AndroidMenuModel.settingsPage(),
                 AndroidMenuModel.audioPage(AndroidMenuModel.audioDraft(100, true)),
                 AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true),
                 AndroidMenuModel.controllerPage("PHYSICAL BLUETOOTH GAME CONTROLLER",

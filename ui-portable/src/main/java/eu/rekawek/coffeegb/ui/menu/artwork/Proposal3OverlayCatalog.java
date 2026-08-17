@@ -51,17 +51,17 @@ final class Proposal3OverlayCatalog {
     static final MenuRect PAUSE_HEADER_CONTEXT = new MenuRect(340, 25, 325, 61);
     static final MenuRect PAUSE_HEADER_ACTION = new MenuRect(688, 25, 207, 61);
 
-    /** The inner rail remains an audit mask; the complete asset blit uses AUDIO_KNOB_TRAVEL. */
-    static final MenuRect AUDIO_SLIDER = new MenuRect(429, 214, 436, 31);
+    /** Complete audio-control repaint aperture, including the former baked dot strip. */
+    static final MenuRect AUDIO_SLIDER_ZONE = new MenuRect(403, 170, 475, 104);
+    /** Flat, compact slider rail; its thumb and tick positions share the same 0..100% scale. */
+    static final MenuRect AUDIO_SLIDER = new MenuRect(427, 198, 430, 22);
     /** Focus marker aperture immediately left of the volume slider. */
-    static final MenuRect AUDIO_VOLUME_ARROW = new MenuRect(403, 214, 24, 31);
-    /** Full visible canonical knob and attached drop shadow, through source y=259 inclusive. */
-    static final MenuRect AUDIO_KNOB = new MenuRect(727, 201, 31, 59);
-    /** Full 438x59 slider surface, including the two-row knob-shadow cleanup area. */
-    static final MenuRect AUDIO_KNOB_TRAVEL = new MenuRect(427, 201, 438, 59);
+    static final MenuRect AUDIO_VOLUME_ARROW = new MenuRect(403, 198, 18, 20);
     static final MenuRect AUDIO_MUTE_ARROW = new MenuRect(403, 342, 24, 31);
     static final MenuRect AUDIO_EMULATED_ARROW = new MenuRect(403, 429, 24, 31);
     static final MenuRect AUDIO_MUTE = new MenuRect(387, 316, 519, 78);
+    /** Checkbox sits beside Mute rather than putting a textual state at the distant right edge. */
+    static final MenuRect AUDIO_MUTE_CHECKBOX = new MenuRect(556, 337, 36, 36);
     static final MenuRect AUDIO_EMULATED = new MenuRect(387, 403, 519, 77);
     /** Continuous settings rail interior; compact rows are centered inside this aperture. */
     static final MenuRect SETTINGS_PANEL = new MenuRect(423, 116, 487, 523);
@@ -83,7 +83,8 @@ final class Proposal3OverlayCatalog {
     private static final List<MenuRect> CHOOSE_ROM_ROW_BOUNDS = equalRows(387, 179, 524, 333, 7, 3);
     static final List<MenuRect> CHOOSE_ROM_DIVIDERS = dividers(CHOOSE_ROM_ROW_BOUNDS);
 
-    static final MenuRect AUDIO_LEFT_META = new MenuRect(62, 405, 315, 96);
+    /** Kept entirely inside the left inset so changing a percentage cannot erase its frame. */
+    static final MenuRect AUDIO_VOLUME_LABEL = new MenuRect(62, 405, 275, 45);
     static final MenuRect TOUCH_LEFT_META = new MenuRect(61, 154, 315, 53);
     static final MenuRect TOUCH_LEFT_STATUS = new MenuRect(53, 535, 327, 54);
     static final MenuRect CONTROLLER_LEFT_META = new MenuRect(42, 155, 300, 142);
@@ -119,14 +120,17 @@ final class Proposal3OverlayCatalog {
      * Returns a compact settings rail sized to the actual host-provided item count.
      *
      * <p>The source mockup used a seven-row rail for the first settings proposal. That left
-     * conspicuous empty slots when a host exposed only Audio and Controls (or a single setting).
-     * Keep the panel aperture, but center one to three real rows in it.</p>
+     * conspicuous empty slots when a host exposed Audio and Controls. The simplified settings
+     * page now exposes only Audio: it deliberately uses the normal first seven-row slot, not a
+     * tall centered card, so it aligns with every other menu rail.</p>
      */
     static List<Slot> compactSettingsRows(int itemCount) {
         int count = Math.max(1, Math.min(3, itemCount));
+        if (count == 1) {
+            return rows(List.of(SETTINGS_ROW_BOUNDS.get(0)), Surface.DARK);
+        }
         int divider = 4;
         int totalHeight = switch (count) {
-            case 1 -> 140;
             case 2 -> 252;
             default -> 330;
         };
@@ -137,9 +141,11 @@ final class Proposal3OverlayCatalog {
 
     static List<MenuRect> compactSettingsDividers(int itemCount) {
         int count = Math.max(1, Math.min(3, itemCount));
+        if (count == 1) {
+            return List.of();
+        }
         int divider = 4;
         int totalHeight = switch (count) {
-            case 1 -> 140;
             case 2 -> 252;
             default -> 330;
         };
@@ -190,7 +196,7 @@ final class Proposal3OverlayCatalog {
                         slot("settings", PAUSE_SETTINGS, Surface.DARK),
                         slot("stop", PAUSE_STOP, Surface.DARK)), List.of(),
                 masks(PAUSE_PREVIEW, PAUSE_MENU, PAUSE_HEADER_CONTEXT, PAUSE_HEADER_ACTION),
-                false, "resume", new Marker(443, 147, 26, 20, 31), false));
+                false, "resume", new Marker(443), false));
 
         layouts.put(MenuRoute.SAVE_STATES, layout(MenuRoute.SAVE_STATES,
                 rows(STATE_ROW_BOUNDS, Surface.DARK),
@@ -198,20 +204,20 @@ final class Proposal3OverlayCatalog {
                 masks(SAVE_PREVIEW,
                         rowsMasks(STATE_ROW_BOUNDS),
                         SAVE_DIVIDERS.toArray(new MenuRect[0])), true, "slot-0",
-                new Marker(443, 151, 30, 20, 31), false));
+                new Marker(443), false));
 
         layouts.put(MenuRoute.SETTINGS, layout(MenuRoute.SETTINGS,
                 rows(SETTINGS_ROW_BOUNDS, Surface.DARK), List.of(),
                 masks(rowsMasks(SETTINGS_ROW_BOUNDS),
                         SETTINGS_DIVIDERS.toArray(new MenuRect[0])), true, "audio",
-                new Marker(442, 132, 13, 20, 31), false));
+                new Marker(442), false));
 
         layouts.put(MenuRoute.AUDIO, layout(MenuRoute.AUDIO,
                 List.of(slot("mute-audio", AUDIO_MUTE, Surface.DARK)), List.of(),
-                masks(AUDIO_LEFT_META, AUDIO_SLIDER, AUDIO_KNOB_TRAVEL, AUDIO_MUTE,
+                masks(AUDIO_VOLUME_LABEL, AUDIO_SLIDER_ZONE, AUDIO_MUTE,
                         AUDIO_MUTE_ARROW), false,
                 "mute-audio",
-                new Marker(405, 342, 26, 20, 31), false));
+                new Marker(405), false));
 
         layouts.put(MenuRoute.TOUCH_CONTROLS, layout(MenuRoute.TOUCH_CONTROLS,
                 rows(new int[][]{{420, 118, 490, 109}, {420, 231, 490, 108},
@@ -219,7 +225,7 @@ final class Proposal3OverlayCatalog {
                 List.of(),
                 masks(rowsMasks(new int[][]{
                         {420, 118, 490, 109}, {420, 231, 490, 108}, {420, 343, 490, 108}})), false,
-                "haptics", new Marker(443, 158, 40, 20, 31), false));
+                "haptics", new Marker(443), false));
 
         layouts.put(MenuRoute.CONTROLLER_MAPPING, layout(MenuRoute.CONTROLLER_MAPPING,
                 rows(CONTROLLER_ROW_BOUNDS, Surface.DARK), List.of(),
@@ -238,7 +244,7 @@ final class Proposal3OverlayCatalog {
                                 {353, 256, 556, 66}, {353, 324, 556, 66}, {353, 393, 556, 66},
                                 {353, 461, 556, 66}}), inner(370, 561, 239, 59),
                         inner(643, 561, 241, 59)), false, "rumble",
-                new Marker(375, 136, 19, 20, 31), false));
+                new Marker(375), false));
 
         layouts.put(MenuRoute.DATA_MEDIA, layout(MenuRoute.DATA_MEDIA,
                 rows(new int[][]{{374, 119, 535, 85}, {374, 207, 535, 84},
@@ -264,7 +270,7 @@ final class Proposal3OverlayCatalog {
                         rowsMasks(CHOOSE_ROM_ROW_BOUNDS),
                         CHOOSE_ROM_DIVIDERS.toArray(new MenuRect[0]), inner(13, 515, 898, 70),
                         inner(13, 587, 898, 65)), true, "rom-1",
-                new Marker(407, 202, 23, 20, 31), false));
+                new Marker(407), false));
 
         layouts.put(MenuRoute.SYSTEM, layout(MenuRoute.SYSTEM,
                 rows(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
@@ -294,7 +300,7 @@ final class Proposal3OverlayCatalog {
                 actions(new int[][]{{386, 574, 241, 53}, {637, 574, 259, 53}}, Surface.PAPER),
                 masks(PRINTER_PREVIEW, inner(386, 574, 241, 53),
                         inner(637, 574, 259, 53)), false, "export-share-paper",
-                new Marker(647, 587, 10, 22, 29), true));
+                new Marker(647), true));
 
         if (layouts.size() != MenuRoute.values().length) {
             throw new IllegalStateException("Proposal 3 overlay catalog does not cover every route");
@@ -455,38 +461,15 @@ final class Proposal3OverlayCatalog {
 
     static final class Marker {
         private final int sourceX;
-        private final int sourceY;
-        private final int relativeY;
-        private final int width;
-        private final int height;
 
-        private Marker(int sourceX, int sourceY, int relativeY, int width, int height) {
+        private Marker(int sourceX) {
             this.sourceX = sourceX;
-            this.sourceY = sourceY;
-            this.relativeY = relativeY;
-            this.width = width;
-            this.height = height;
         }
 
         int sourceX() {
             return sourceX;
         }
 
-        int sourceY() {
-            return sourceY;
-        }
-
-        int relativeY() {
-            return relativeY;
-        }
-
-        int width() {
-            return width;
-        }
-
-        int height() {
-            return height;
-        }
     }
 
     static final class RouteLayout {

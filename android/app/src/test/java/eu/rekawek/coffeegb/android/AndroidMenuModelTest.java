@@ -18,20 +18,18 @@ public class AndroidMenuModelTest {
 
     @Test
     public void settingsExposesOnlyInlineEditableRoutes() {
-        assertEquals(List.of("audio", "touch-controls"),
-                AndroidMenuModel.settingsPage(false).items().stream()
+        assertEquals(List.of("audio"),
+                AndroidMenuModel.settingsPage().items().stream()
                         .map(MenuPageSpec.Item::id).toList());
-        assertEquals("audio", AndroidMenuModel.settingsPage(false).preferredFocusId());
-        assertEquals("HAPTICS", AndroidMenuModel.settingsPage(false).items().get(1).detail());
-        assertEquals("HAPTICS / REMAP",
-                AndroidMenuModel.settingsPage(true).items().get(1).detail());
+        assertEquals("audio", AndroidMenuModel.settingsPage().preferredFocusId());
+        assertEquals("", AndroidMenuModel.settingsPage().items().get(0).detail());
     }
 
     @Test
     public void sharedFooterAdvertisesTheThreeButtonMenuContract() {
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"),
-                AndroidMenuModel.settingsPage(false).footerHints());
-        assertFalse(AndroidMenuModel.settingsPage(false).footerHints().stream()
+                AndroidMenuModel.settingsPage().footerHints());
+        assertFalse(AndroidMenuModel.settingsPage().footerHints().stream()
                 .anyMatch(hint -> hint.contains("SELECT") || hint.contains("START")));
     }
 

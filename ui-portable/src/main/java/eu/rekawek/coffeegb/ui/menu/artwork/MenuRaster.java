@@ -20,9 +20,16 @@ final class MenuRaster {
     static final int PAPER_TEXT = 0xffe4dfb5;
     static final int PAPER = 0xffd4d2ad;
 
-    /** The canonical 75% knob begins at x=727; the endpoint centers travel 400 pixels. */
-    private static final int AUDIO_KNOB_MIN_X = 427;
-    private static final int AUDIO_KNOB_MAX_X = 827;
+    /** Slider endpoints share one coordinate system with the 0, 10, ..., 100% tick marks. */
+    static final int AUDIO_KNOB_MIN_X = 427;
+    static final int AUDIO_KNOB_MAX_X = 827;
+    static final int AUDIO_KNOB_WIDTH = 30;
+    static final int AUDIO_KNOB_HEIGHT = 36;
+    static final int AUDIO_SLIDER_EMPTY = PAPER;
+    static final int AUDIO_SLIDER_FILL = 0xff667657;
+    private static final int AUDIO_SLIDER_INSET = 3;
+    static final int FOCUS_ARROW_WIDTH = 18;
+    static final int FOCUS_ARROW_HEIGHT = 20;
 
     private final int[] pixels;
 
@@ -37,42 +44,95 @@ final class MenuRaster {
         return pixels;
     }
 
-    /** Paints complete audited rail surfaces, then the immutable exact knob sprite. */
-    void drawAudioSlider(Proposal3WidgetSkins.Sprite emptyTrack,
-            Proposal3WidgetSkins.Sprite filledTrack,
-            Proposal3WidgetSkins.Sprite exactKnob,
-            MenuRect widget, MenuRect canonicalKnob, int progress) {
-        Objects.requireNonNull(emptyTrack, "emptyTrack");
-        Objects.requireNonNull(filledTrack, "filledTrack");
-        Objects.requireNonNull(exactKnob, "exactKnob");
-        Objects.requireNonNull(widget, "widget");
-        Objects.requireNonNull(canonicalKnob, "canonicalKnob");
+    /**
+     * Draws the complete audio control from palette primitives.
+     *
+     * <p>The former source samples contained the 75% knob's baked lighting and drop shadow.
+     * Slicing those samples caused a light or dark seam at every other value, so the live
+     * control deliberately uses flat fills and one shared percentage coordinate system.</p>
+     */
+    void drawAudioSlider(MenuRect rail, int progress) {
+        Objects.requireNonNull(rail, "rail");
+        if (rail.width() != AUDIO_KNOB_MAX_X - AUDIO_KNOB_MIN_X + AUDIO_KNOB_WIDTH
+                || rail.height() < AUDIO_SLIDER_INSET * 2 + 1) {
+            throw new IllegalArgumentException("Unexpected audio slider geometry");
+        }
         int bounded = Math.max(0, Math.min(100, progress));
-        if (emptyTrack.width() != widget.width() || emptyTrack.height() > widget.height()
-                || filledTrack.width() != widget.width()
-                || filledTrack.height() != emptyTrack.height()
-                || exactKnob.width() != canonicalKnob.width()
-                || exactKnob.height() != canonicalKnob.height()) {
-            throw new IllegalArgumentException("The packaged audio slider geometry has changed");
+        fill(rail, INK);
+        MenuRect interior = new MenuRect(rail.x() + AUDIO_SLIDER_INSET,
+                rail.y() + AUDIO_SLIDER_INSET,
+                rail.width() - AUDIO_SLIDER_INSET * 2,
+                rail.height() - AUDIO_SLIDER_INSET * 2);
+        fill(interior, AUDIO_SLIDER_EMPTY);
+
+        int knobCenter = audioKnobCenter(bounded);
+        int fillRight = Math.max(interior.x(), Math.min(interior.right(), knobCenter));
+        if (fillRight > interior.x()) {
+            fill(new MenuRect(interior.x(), interior.y(), fillRight - interior.x(),
+                    interior.height()), AUDIO_SLIDER_FILL);
         }
 
-        MenuRect rail = new MenuRect(widget.x(), widget.y(), widget.width(), emptyTrack.height());
-        paintWidget(emptyTrack, rail);
-        int destinationX = AUDIO_KNOB_MIN_X
-                + (int) ((long) (AUDIO_KNOB_MAX_X - AUDIO_KNOB_MIN_X) * bounded / 100L);
-        int localKnobX = destinationX - widget.x();
-        paintWidgetSlice(filledTrack, rail, localKnobX + exactKnob.width() / 2 + 1);
-        paintWidget(exactKnob, new MenuRect(destinationX, widget.y(), exactKnob.width(),
-                exactKnob.height()));
+        int knobLeft = audioKnobLeft(bounded);
+        int knobTop = rail.y() - (AUDIO_KNOB_HEIGHT - rail.height()) / 2;
+        drawAudioKnob(new MenuRect(knobLeft, knobTop, AUDIO_KNOB_WIDTH, AUDIO_KNOB_HEIGHT));
+        drawAudioTicks(rail.y() + rail.height() + 17);
     }
 
-    /** Blits a left-hand slice of a complete packaged surface. */
-    private void paintWidgetSlice(Proposal3WidgetSkins.Sprite texture, MenuRect bounds, int width) {
-        int clippedWidth = Math.max(0, Math.min(bounds.width(), width));
-        for (int y = 0; y < bounds.height(); y++) {
-            for (int x = 0; x < clippedWidth; x++) {
-                pixels[(bounds.y() + y) * WIDTH + bounds.x() + x] = texture.pixel(x, y);
-            }
+    static int audioKnobLeft(int progress) {
+        int bounded = Math.max(0, Math.min(100, progress));
+        return AUDIO_KNOB_MIN_X + (int) ((long) (AUDIO_KNOB_MAX_X - AUDIO_KNOB_MIN_X)
+                * bounded / 100L);
+    }
+
+    static int audioKnobCenter(int progress) {
+        return audioKnobLeft(progress) + AUDIO_KNOB_WIDTH / 2;
+    }
+
+    /** A small framed, pixel-native thumb with no sampled highlights or shadows. */
+    private void drawAudioKnob(MenuRect knob) {
+        fill(knob, INK);
+        fill(new MenuRect(knob.x() + 2, knob.y() + 2, knob.width() - 4, knob.height() - 4),
+                PAPER_TEXT);
+        fill(new MenuRect(knob.x() + 5, knob.y() + 5, knob.width() - 10, knob.height() - 10),
+                PAPER);
+        fill(new MenuRect(knob.x() + knob.width() / 2 - 2, knob.y() + 8, 4,
+                knob.height() - 16), INK);
+    }
+
+    private void drawAudioTicks(int top) {
+        for (int percent = 0; percent <= 100; percent += 10) {
+            int center = audioKnobCenter(percent);
+            fill(new MenuRect(center - 2, top, 5, 5), INK);
+        }
+    }
+
+    /** Draws a vertically symmetric cursor instead of relying on the truncated source crop. */
+    void drawFocusArrow(int left, int centerY, int color) {
+        for (int x = 0; x < FOCUS_ARROW_WIDTH; x++) {
+            int height = Math.max(2, FOCUS_ARROW_HEIGHT - 2 * ((x + 1) / 2));
+            fill(new MenuRect(left + x, centerY - height / 2, 1, height), color);
+        }
+    }
+
+    /** A compact double-framed checkbox derived from the approved pixel-art direction. */
+    void drawCheckbox(MenuRect bounds, boolean checked) {
+        Objects.requireNonNull(bounds, "bounds");
+        if (bounds.width() < 32 || bounds.height() < 32) {
+            throw new IllegalArgumentException("Checkbox needs a 32px square minimum");
+        }
+        fill(bounds, PAPER_TEXT);
+        fill(new MenuRect(bounds.x() + 3, bounds.y() + 3, bounds.width() - 6,
+                bounds.height() - 6), INK);
+        fill(new MenuRect(bounds.x() + 7, bounds.y() + 7, bounds.width() - 14,
+                bounds.height() - 14), PAPER);
+        if (!checked) {
+            return;
+        }
+        fill(new MenuRect(bounds.x() + 9, bounds.y() + 18, 5, 5), INK);
+        fill(new MenuRect(bounds.x() + 12, bounds.y() + 21, 5, 5), INK);
+        for (int step = 0; step < 4; step++) {
+            fill(new MenuRect(bounds.x() + 15 + step * 3, bounds.y() + 18 - step * 3,
+                    5, 5), INK);
         }
     }
 
