@@ -224,7 +224,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final ClockSpec clockSpec;
 
+    /** Session metadata; deliberately excluded from the emulated machine state. */
+    private final ExecutionMode executionMode;
+
     public Gameboy(GameboyConfiguration configuration) {
+        this.executionMode = Objects.requireNonNull(configuration.executionMode, "executionMode");
         this.hardwareProfile = HardwareProfileRegistry.requireRegistered(configuration.hardwareProfile);
         if (configuration.bootstrapMode != BootstrapMode.SKIP
                 && !Bios.hasBundledBootRom(hardwareProfile)) {
@@ -1457,6 +1461,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return clockSpec;
     }
 
+    /**
+     * Returns the execution strategy selected when this session was created.
+     *
+     * <p>This value is session metadata and is unchanged by save-state capture or restore.</p>
+     */
+    public ExecutionMode getExecutionMode() {
+        return executionMode;
+    }
+
     /** @deprecated Use {@link #getHardwareProfile()}. */
     @Deprecated
     public GameboyType getGameboyType() {
@@ -1896,6 +1909,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         private HardwareProfile hardwareProfile;
 
+        private ExecutionMode executionMode = ExecutionMode.ACCURACY;
+
         private BootstrapMode bootstrapMode = BootstrapMode.SKIP;
 
         private Rom slotRom;
@@ -2001,6 +2016,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
         public ClockSpec getClockSpec() {
             return hardwareProfile.clockSpec();
+        }
+
+        /**
+         * Selects the execution strategy for the session created by this configuration.
+         * Accuracy is the default. The selected mode is not part of save-state data.
+         */
+        public GameboyConfiguration setExecutionMode(ExecutionMode executionMode) {
+            this.executionMode = Objects.requireNonNull(executionMode, "executionMode");
+            return this;
+        }
+
+        public ExecutionMode getExecutionMode() {
+            return executionMode;
         }
 
         /** Selects the DMG-blob timing expected by the Mealybug Shootout references. */
@@ -2190,6 +2218,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         private GameboyConfiguration copy() {
             GameboyConfiguration copy = new GameboyConfiguration(rom);
             copy.hardwareProfile = hardwareProfile;
+            copy.executionMode = executionMode;
             copy.bootstrapMode = bootstrapMode;
             copy.slotRom = slotRom;
             copy.batteryData = batteryData;
