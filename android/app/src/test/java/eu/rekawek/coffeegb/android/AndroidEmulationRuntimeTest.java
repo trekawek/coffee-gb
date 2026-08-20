@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import org.junit.Test;
@@ -105,6 +106,33 @@ public class AndroidEmulationRuntimeTest {
                     properties.getOverrides().getHardwareProfile());
             assertEquals(Boolean.TRUE, properties.getOverrides().getRuntimeWarmupEnabled());
             assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
+        }
+    }
+
+    @Test
+    public void everyExplicitHardwareSelectionBecomesTheMatchingTransientOverride() {
+        for (DiagnosticsOptions.Hardware hardware : DiagnosticsOptions.Hardware.values()) {
+            DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                    true, hardware.externalValue(), true, "sink", false, true, false);
+            try (EmulatorProperties properties =
+                         new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides(options))) {
+                assertEquals(hardware.profileOverride(),
+                        properties.getOverrides().getHardwareProfile());
+                assertEquals(BootstrapMode.SKIP,
+                        properties.getOverrides().getBootstrapMode());
+                assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
+            }
+        }
+    }
+
+    @Test
+    public void disabledDiagnosticsDoNotOverrideBootstrapOrHardwareProfile() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                false, "cgb", true, "sink", true, true, false);
+        try (EmulatorProperties properties =
+                     new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides(options))) {
+            assertNull(properties.getOverrides().getHardwareProfile());
+            assertNull(properties.getOverrides().getBootstrapMode());
         }
     }
 

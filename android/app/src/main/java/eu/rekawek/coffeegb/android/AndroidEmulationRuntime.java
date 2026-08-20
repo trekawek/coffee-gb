@@ -26,11 +26,11 @@ import eu.rekawek.coffeegb.controller.state.StateImage;
 import eu.rekawek.coffeegb.controller.state.StatePngCodec;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
-import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.RomImage;
@@ -177,9 +177,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     static ApplicationSettingsOverrides androidSettingsOverrides(DiagnosticsOptions options) {
         DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
-        HardwareProfile profile = checked.enabled && checked.hardware == DiagnosticsOptions.Hardware.DMG
-                ? HardwareProfileRegistry.DMG : null;
-        return new ApplicationSettingsOverrides(profile, null, null, false,
+        HardwareProfile profile = checked.enabled ? checked.hardware.profileOverride() : null;
+        // Benchmark sessions must not inherit NORMAL boot from user settings: the profile event
+        // is emitted at session materialization and needs the actual post-boot KEY0/GPU mode.
+        // Release/non-diagnostic callers retain the ordinary settings path unchanged.
+        BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
+        return new ApplicationSettingsOverrides(profile, bootstrapMode, null, false,
                 checked.enabled && checked.runtimeWarmup);
     }
 
@@ -1007,7 +1010,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         // NativeFrameStore must know whether a DMG event is transfer input for SGB before it
         // receives the first physical frame.
         eventBus.register(
-                event -> frames.setHardwareProfile(event.getProfile()),
+                event -> {
+                    frames.setHardwareProfile(event.getProfile());
+                    diagnostics.hardwareProfile(event);
+                },
                 Controller.HardwareProfileEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.

@@ -123,9 +123,6 @@ final class NativeFrameStore implements AutoCloseable {
     void setHardwareProfile(HardwareProfile profile) {
         sgbOutput = Objects.requireNonNull(profile, "profile")
                 .capabilities().superGameboyCommands();
-        if (diagnostics != null) {
-            diagnostics.hardwareProfile(profile);
-        }
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {
