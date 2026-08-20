@@ -28,12 +28,12 @@ public class MenuReducerTest {
         state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.UP));
         assertEquals("resume", state.focusedItemId());
         state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.UP));
-        assertEquals("stop", state.focusedItemId());
+        assertEquals("recent-games", state.focusedItemId());
 
         MenuPresentation presentation = state.presentation();
         assertTrue(presentation.visible());
         assertEquals(MenuRoute.PAUSE_CONSOLE, presentation.route());
-        assertEquals("stop", presentation.items().get(presentation.focusedIndex()).id());
+        assertEquals("recent-games", presentation.items().get(presentation.focusedIndex()).id());
         assertUnmodifiable(presentation.items());
         assertNotSame(presentation, state.presentation());
     }
@@ -75,7 +75,7 @@ public class MenuReducerTest {
         state = MenuReducer.push(state, MenuRoute.SETTINGS);
         assertEquals(2, state.depth());
         assertEquals(MenuRoute.SETTINGS, state.route());
-        assertEquals("audio", state.focusedItemId());
+        assertEquals("system", state.focusedItemId());
 
         state = MenuReducer.back(state);
         assertEquals(1, state.depth());
@@ -91,9 +91,9 @@ public class MenuReducerTest {
     @Test
     public void leftAndRightAreNoOpsForTheProposalVerticalLists() {
         MenuState state = MenuReducer.show(MenuReducer.initial(), MenuRoute.SETTINGS);
-        assertEquals("audio", state.focusedItemId());
-        assertEquals("audio", MenuReducer.move(state, MenuCommand.Direction.LEFT).focusedItemId());
-        assertEquals("audio", MenuReducer.move(state, MenuCommand.Direction.RIGHT).focusedItemId());
+        assertEquals("system", state.focusedItemId());
+        assertEquals("system", MenuReducer.move(state, MenuCommand.Direction.LEFT).focusedItemId());
+        assertEquals("system", MenuReducer.move(state, MenuCommand.Direction.RIGHT).focusedItemId());
     }
 
     private static void assertUnmodifiable(List<?> values) {

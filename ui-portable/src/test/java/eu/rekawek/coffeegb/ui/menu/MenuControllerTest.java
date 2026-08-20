@@ -12,6 +12,34 @@ import static org.junit.Assert.assertTrue;
 public class MenuControllerTest {
 
     @Test
+    public void recentGamesPagePublishesFocusedPreviewAndLastPlayedMetadata() {
+        int[] pixels = {0xff0f0f0f, 0xffb7dd79, 0xff396e55, 0xff172c34};
+        MenuPreview preview = MenuPreview.ready(2, 2, pixels);
+        MenuPageSpec spec = MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("game-a", "ADVENTURE BOY.GB", "TODAY", true,
+                        MenuPreview.empty()),
+                new MenuPageSpec.RecentGame("game-b", "POCKET CAMERA.GBC", "YESTERDAY", true,
+                        preview)), "game-b");
+        assertEquals(MenuRoute.RECENT_GAMES, spec.route());
+        assertEquals("game-b", spec.preferredFocusId());
+        assertEquals("POCKET CAMERA.GBC", spec.items().get(1).label());
+        assertEquals(List.of("LAST PLAYED: YESTERDAY"), spec.sideLines());
+        assertEquals(preview, spec.preview());
+        assertEquals(List.of("D-PAD MOVE", "A OPEN", "B BACK"), spec.footerHints());
+
+        MenuPageSpec empty = MenuPageSpec.recentGames(List.of(), null);
+        assertEquals("recent-games-status", empty.items().get(0).id());
+        assertEquals("NO RECENT GAMES", empty.items().get(0).label());
+        assertEquals(List.of("", "", "B BACK"), empty.footerHints());
+
+        MenuPageSpec unavailable = MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("missing", "MISSING.GB", "LAST WEEK", false,
+                        MenuPreview.empty())), null);
+        assertEquals("recent-games-status", unavailable.preferredFocusId());
+        assertEquals("NO READABLE RECENT GAMES", unavailable.items().get(1).label());
+    }
+
+    @Test
     public void repeatedConfirmAndKeyUpAreConsumedOnce() {
         Events events = new Events();
         MenuController controller = new MenuController(events);
@@ -159,7 +187,7 @@ public class MenuControllerTest {
         controller.restore(snapshot);
 
         assertEquals(MenuRoute.SETTINGS, controller.route());
-        assertEquals("audio",
+        assertEquals("display",
                 controller.snapshot().frames().get(1).focusedItemId());
         controller.back();
         assertEquals("settings", controller.snapshot().frames().get(0).focusedItemId());

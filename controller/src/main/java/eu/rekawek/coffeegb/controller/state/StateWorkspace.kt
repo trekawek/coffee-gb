@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.state
 import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import java.io.IOException
 import java.nio.file.Path
+import java.time.Instant
 
 /**
  * Active state repository plus a bounded set of previous-directory read fallbacks.
@@ -136,6 +137,23 @@ class StateWorkspace(
       } catch (_: IOException) {
         null
       }
+    }
+    return null
+  }
+
+  /**
+   * Returns the authoritative autosave timestamp without requiring a live machine identity.
+   * Legacy recent entries may use this as a fallback when no successful-open timestamp exists.
+   */
+  fun autosaveSavedAt(): Instant? {
+    repositories.forEach { repository ->
+      val autosave =
+          try {
+            repository.readIfPresent(StateRef.Autosave)
+          } catch (_: IOException) {
+            return null
+          } ?: return@forEach
+      return autosave.metadata?.savedAt
     }
     return null
   }

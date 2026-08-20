@@ -25,19 +25,24 @@ final class MenuPages {
                             item("open-rom", "OPEN ROM"),
                             item("reset", "RESET GAME"),
                             item("settings", "SETTINGS"),
-                            item("stop", "STOP GAME")));
+                            item("recent-games", "RECENT GAMES")));
             case SAVE_STATES -> statePage(false);
+            case RECENT_GAMES -> MenuPage.from(MenuPageSpec.recentGames(List.of(), null));
             case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "",
                     List.of(),
-                    // Keep this page intentionally small. Audio is the sole setting that is
-                    // useful and fully controllable in the on-screen UI today.
-                    items(item("audio", "AUDIO")));
+                    items(item("system", "SYSTEM"),
+                            item("display", "DISPLAY"),
+                            item("audio", "AUDIO"),
+                            item("peripherals", "PERIPHERALS")));
             case AUDIO -> new MenuPage(route, "COFFEE GB", "AUDIO", "", "",
                     List.of(),
                     items(
                             adjustable("volume", "VOLUME", "75%", 75),
                             item("mute-audio", "MUTE", "OFF")), 1, DEFAULT_HINTS,
                     "volume", MenuPreview.empty());
+            case DISPLAY -> page(route, "COFFEE GB", "DISPLAY", "", "", List.of(),
+                    items(item("sgb-border", "SGB BORDER", "OFF"),
+                            item("dmg-colors", "DMG COLORS", "GREEN")));
             case TOUCH_CONTROLS -> page(route, "COFFEE GB", "CONTROLS", "", "",
                     List.of(),
                     items(
@@ -56,17 +61,13 @@ final class MenuPages {
                             item("map-left", "LEFT"),
                             item("map-right", "RIGHT"),
                             item("reset-controller", "RESET MAPPINGS")));
-            case OPTIONAL_DEVICES -> page(route, "COFFEE GB", "OPTIONAL DEVICES", "", "PERIPHERALS",
-                    List.of("CARTRIDGE DEPENDENT", "", ""),
+            case OPTIONAL_DEVICES -> page(route, "COFFEE GB", "PERIPHERALS", "", "", List.of(),
                     items(
-                            item("rumble", "RUMBLE", "OFF"),
-                            item("live-camera", "LIVE CAMERA", "OFF"),
-                            item("game-boy-printer", "GAME BOY PRINTER", "OFF"),
-                            item("calibrate-tilt", "CALIBRATE TILT"),
-                            item("preview-printer-paper", "PREVIEW PRINTER PAPER"),
-                            item("export-share-paper", "EXPORT & SHARE PAPER"),
-                            item("save-devices", "SAVE"),
-                            item("cancel-devices", "CANCEL")));
+                            item("camera", "CAMERA", "OFF"),
+                            item("gamepad", "GAMEPAD", "AUTO"),
+                            item("gps", "GPS", "OFF")));
+            case OPTION_PICKER -> page(route, "COFFEE GB", "OPTION PICKER", "", "", List.of(),
+                    items(item("choice:default", "DEFAULT", "SELECTED")));
             case PRINTER_PAPER -> new MenuPage(route, "COFFEE GB", "PRINTER PAPER", "",
                     "GAME BOY PRINTER", List.of("PAPER READY", "1 PAGE", ""), items(
                             item("clear-paper", "CLEAR PAPER"),
@@ -94,12 +95,10 @@ final class MenuPages {
                             item("rom-1", "ADVENTURE BOY.GB"),
                             item("rom-2", "POCKET CAMERA.GBC"),
                             item("rom-3", "COFFEE DEMO.GB")));
-            case SYSTEM -> page(route, "COFFEE GB", "DISPLAY", "", "",
-                    List.of(),
-                    items(
-                            item("screen-fit", "SCREEN FIT", "ASPECT"),
-                            item("color-correction", "COLOR CORRECTION", "OFF"),
-                            item("frame-blending", "FRAME BLENDING", "OFF")));
+            case SYSTEM -> page(route, "COFFEE GB", "SYSTEM", "", "", List.of(),
+                    items(item("dmg-games", "DMG GAMES", "AUTO"),
+                            item("cgb-games", "CGB GAMES", "AUTO"),
+                            item("bootstrap", "BOOTSTRAP", "SKIP")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                     List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(

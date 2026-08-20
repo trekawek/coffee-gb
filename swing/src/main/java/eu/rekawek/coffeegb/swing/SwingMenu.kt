@@ -53,6 +53,15 @@ internal fun addProposal3MenuItem(menu: JMenu, openMenuAction: Action, enabled: 
   menu.addSeparator()
 }
 
+/** Routes native Recent ROM items through the exact-origin opener when the host provides it. */
+internal fun openRecentRomPath(
+    path: Path,
+    exactOpen: ((Path) -> Unit)?,
+    legacyOpen: (Path, RomOpenSource) -> Unit,
+) {
+  exactOpen?.invoke(path) ?: legacyOpen(path, RomOpenSource.RECENT)
+}
+
 internal fun mobileAdapterConfigurationMenuItem(onShow: () -> Unit): JMenuItem =
     JMenuItem("Configure Mobile Adapter…").apply {
       accessibleContext.accessibleDescription =
@@ -143,8 +152,13 @@ internal class SwingMenu(
     private val proposal3MenuEnabled: Boolean,
     currentThemeTokens: () -> DesktopThemeTokens,
     private val onDesktopStatus: (String) -> Unit = {},
+    /** Exact recent-game route; null preserves legacy hosts that only expose path opening. */
+    private val onOpenRecentRom: ((Path) -> Unit)? = null,
 ) {
   private var cameraDeviceIndex = properties.applicationSettings.peripherals.cameraDeviceIndex
+
+  /** The compact in-screen peripherals page needs the live OFF/ON state as well as the index. */
+  @Volatile private var cameraEnabled = false
 
   private lateinit var cameraController: CameraPeripheralController<WebcamCameraSource>
 
@@ -299,6 +313,18 @@ internal class SwingMenu(
     }
   }
 
+  internal fun isCameraEnabled(): Boolean = cameraEnabled
+
+  internal fun setCameraEnabled(enabled: Boolean) {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Camera settings must be applied from the Event Dispatch Thread"
+    }
+    cameraEnabled = enabled
+    if (::cameraController.isInitialized) {
+      cameraController.requestEnabled(enabled)
+    }
+  }
+
   private fun createFileMenu(): JMenu {
     val fileMenu = JMenu("File")
 
@@ -447,6 +473,9 @@ internal class SwingMenu(
                     "Enable Game Boy Camera"
                   }
               camera.state =
+                  state == CameraPeripheralUiState.Opening ||
+                      state == CameraPeripheralUiState.Enabled
+              cameraEnabled =
                   state == CameraPeripheralUiState.Opening ||
                       state == CameraPeripheralUiState.Enabled
               if (state == CameraPeripheralUiState.OpenFailed && window.isDisplayable) {
@@ -657,7 +686,9 @@ internal class SwingMenu(
       item.toolTipText = "<html>${escapeMenuHtml(romPath.toString())}</html>"
       item.accessibleContext.accessibleName = "Open recent ROM ${rom.name}"
       item.accessibleContext.accessibleDescription = romPath.toString()
-      item.addActionListener { launchRom(rom, RomOpenSource.RECENT) }
+      item.addActionListener {
+        openRecentRomPath(romPath, onOpenRecentRom, onOpenRom)
+      }
       recentRomsMenu.add(item)
     }
     recentRomsMenu.isEnabled = recentRomsMenu.itemCount > 0

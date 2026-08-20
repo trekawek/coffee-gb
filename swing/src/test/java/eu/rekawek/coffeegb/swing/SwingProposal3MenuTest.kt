@@ -2,11 +2,14 @@ package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.ui.menu.MenuKey
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import java.time.Instant
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.EnumSet
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JRootPane
@@ -247,25 +250,6 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `stop confirmation B returns to pause without invoking`() {
-    val bridge = FakeBridge()
-    val menu = newMenu(bridge)
-
-    javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 6)
-      press(menu, MenuKey.A)
-
-      assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      assertEquals("cancel", menu.focusedItemIdForTest())
-      press(menu, MenuKey.B)
-      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
-    }
-
-    assertTrue(bridge.invoked.isEmpty())
-    assertEquals(listOf(true), bridge.pauseTransitions)
-  }
-
-  @Test
   fun `confirming reset invokes reset and hides while resuming`() {
     val bridge = FakeBridge()
     val menu = newMenu(bridge)
@@ -285,26 +269,6 @@ class SwingProposal3MenuTest {
     }
 
     assertEquals(listOf(DesktopCommand.RESET), bridge.invoked)
-    assertEquals(listOf(true, false), bridge.pauseTransitions)
-    assertFalse(menu.visible())
-  }
-
-  @Test
-  fun `confirming stop invokes close game and hides while resuming`() {
-    val bridge = FakeBridge()
-    val menu = newMenu(bridge)
-
-    javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 6)
-      press(menu, MenuKey.A)
-      assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      press(menu, MenuKey.RIGHT)
-      assertEquals("confirm", menu.focusedItemIdForTest())
-      assertTrue(menu.onKeyDown(MenuKey.A, false))
-      menu.onKeyUp(MenuKey.A)
-    }
-
-    assertEquals(listOf(DesktopCommand.CLOSE_GAME), bridge.invoked)
     assertEquals(listOf(true, false), bridge.pauseTransitions)
     assertFalse(menu.visible())
   }
@@ -339,6 +303,103 @@ class SwingProposal3MenuTest {
 
     assertEquals(listOf(DesktopCommand.MUTE), bridge.invoked)
     assertEquals(0, bridge.preferencesOpened)
+  }
+
+  @Test
+  fun `settings root exposes the four desktop sections and system values use committed details`() {
+    val bridge = FakeBridge(settingsAccess = FakeSettingsAccess())
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      repeat(5) { press(menu, MenuKey.DOWN) }
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+      assertEquals(listOf("system", "display", "audio", "peripherals"), menu.visibleItemIdsForTest())
+
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SYSTEM, menu.routeForTest())
+      assertEquals(listOf("dmg-games", "cgb-games", "bootstrap"), menu.visibleItemIdsForTest())
+    }
+  }
+
+  @Test
+  fun `generic choice picker applies every settings family and returns to its origin`() {
+    val choiceCases =
+        listOf(
+            MenuRoute.SYSTEM to "dmg-games",
+            MenuRoute.SYSTEM to "cgb-games",
+            MenuRoute.SYSTEM to "bootstrap",
+            MenuRoute.DISPLAY to "dmg-colors",
+            MenuRoute.OPTIONAL_DEVICES to "camera",
+            MenuRoute.OPTIONAL_DEVICES to "gamepad",
+        )
+
+    choiceCases.forEach { (origin, settingId) ->
+      val settings = FakeSettingsAccess()
+      val bridge = FakeBridge(settingsAccess = settings)
+      val menu = newMenu(bridge)
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openRouteForTest(origin)
+        while (menu.focusedItemIdForTest() != settingId) press(menu, MenuKey.DOWN)
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.OPTION_PICKER, menu.routeForTest())
+        assertTrue(menu.visibleItemIdsForTest().all { it.startsWith("choice:") })
+        // Move away from the committed option so this verifies A applies the selected option,
+        // rather than merely returning with no change.
+        press(menu, MenuKey.DOWN)
+        press(menu, MenuKey.A)
+        assertEquals(origin, menu.routeForTest())
+      }
+      assertEquals(settingId, settings.applied.single().first)
+      assertTrue(settings.applied.single().second != settings.initialValue(settingId))
+    }
+  }
+
+  @Test
+  fun `display checkbox toggles in place and picker B cancels without persistence`() {
+    val settings = FakeSettingsAccess()
+    val bridge = FakeBridge(settingsAccess = settings)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.DISPLAY)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.DISPLAY, menu.routeForTest())
+      assertEquals(listOf("sgb-border"), settings.toggled)
+
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.OPTION_PICKER, menu.routeForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.DISPLAY, menu.routeForTest())
+    }
+
+    assertTrue(settings.applied.isEmpty())
+  }
+
+  @Test
+  fun `choice picker preserves unavailable current gamepad and cancellation across lifecycle`() {
+    val settings = FakeSettingsAccess()
+    val bridge = FakeBridge(settingsAccess = settings)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertTrue(menu.visibleItemIdsForTest().contains("choice:missing-device"))
+      assertEquals("choice:off", menu.focusedItemIdForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.OPTIONAL_DEVICES, menu.routeForTest())
+      menu.closeForLifecycle()
+      menu.openFromDesktop()
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      press(menu, MenuKey.B)
+    }
+
+    assertTrue(settings.applied.isEmpty())
   }
 
   @Test
@@ -585,6 +646,141 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `recent games page follows focus preview and opens selected path`() {
+    val firstPath = Paths.get("/games/first.gb")
+    val secondPath = Paths.get("/games/second.gbc")
+    val red = 0xffc02020.toInt()
+    val blue = 0xff2060c0.toInt()
+    val bridge =
+        FakeBridge().also {
+          it.recentCatalog =
+              listOf(
+                  PortableMenuRecentGame(
+                      firstPath,
+                      "FIRST.GB",
+                      MenuPreview.ready(1, 1, intArrayOf(red)),
+                      "2026-08-17 20:15",
+                  ),
+                  PortableMenuRecentGame(
+                      secondPath,
+                      "SECOND.GBC",
+                      MenuPreview.ready(1, 1, intArrayOf(blue)),
+                      "2026-08-16 09:30",
+                      RomOrigin.directFile(secondPath),
+                  ),
+              )
+        }
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      moveToPauseItem(menu, 6)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
+      assertEquals(listOf("recent:0", "recent:1"), menu.visibleItemIdsForTest())
+      assertEquals(listOf("LAST PLAYED: 2026-08-17 20:15"), menu.presentationForTest().sideLines())
+      val firstFrame = frames.filterNotNull().last()
+      assertTrue(firstFrame.copyPixels().contains(red))
+
+      press(menu, MenuKey.DOWN)
+      assertEquals("recent:1", menu.focusedItemIdForTest())
+      assertEquals(listOf("LAST PLAYED: 2026-08-16 09:30"), menu.presentationForTest().sideLines())
+      val secondFrame = frames.filterNotNull().last()
+      assertTrue(secondFrame.copyPixels().contains(blue))
+      press(menu, MenuKey.A)
+    }
+
+    assertEquals(secondPath, bridge.openedRecentPath)
+    assertEquals(RomOrigin.directFile(secondPath), bridge.openedRecentOrigin)
+    assertEquals(listOf(true, false), bridge.pauseTransitions)
+    assertFalse(menu.visible())
+  }
+
+  @Test
+  fun `empty recent games page is inert and returns with B`() {
+    val bridge = FakeBridge()
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      moveToPauseItem(menu, 6)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
+      assertEquals(listOf("recent-games-status"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.A)
+      assertEquals(null, bridge.openedRecentPath)
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+    }
+  }
+
+  @Test
+  fun `active recent game uses the captured pause frame and current play time`() {
+    val stored = 0xff8a4a24.toInt()
+    val live = 0xff2a77cc.toInt()
+    val bridge =
+        FakeBridge(playTimeNanos = 83_000_000_000L).also {
+          it.recentCatalog =
+              listOf(
+                  PortableMenuRecentGame(
+                      Paths.get("/games/active.gb"),
+                      "ACTIVE",
+                      MenuPreview.ready(1, 1, intArrayOf(stored)),
+                      "2026-08-17 08:00",
+                      active = true,
+                  ))
+        }
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+            capturePausePreview = { MenuPreview.ready(1, 1, intArrayOf(live)) },
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      moveToPauseItem(menu, 6)
+      press(menu, MenuKey.A)
+
+      assertEquals("CURRENT / ACTIVE", menu.presentationForTest().items().first().label())
+      assertEquals(listOf("LAST PLAYED: JUST NOW / 01:23"), menu.presentationForTest().sideLines())
+      val frame = frames.filterNotNull().last()
+      assertTrue(frame.copyPixels().contains(live))
+      assertFalse(frame.copyPixels().contains(stored))
+    }
+  }
+
+  @Test
+  fun `legacy host without recent-open capability cannot enter or hide through recent games`() {
+    val bridge =
+        FakeBridge(recentAvailable = false).also {
+          it.recentCatalog =
+              listOf(PortableMenuRecentGame(Paths.get("/games/unavailable.gb"), "UNAVAILABLE"))
+        }
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      assertFalse(
+          menu.presentationForTest().items().single { it.id() == "recent-games" }.enabled())
+      menu.openRouteForTest(MenuRoute.RECENT_GAMES)
+      assertFalse(
+          menu.presentationForTest().items().single { it.id() == "recent:0" }.enabled())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
+      assertTrue(menu.visible())
+      assertEquals(null, bridge.openedRecentPath)
+    }
+  }
+
+  @Test
   fun `state date follows focus even when slots share the empty preview`() {
     val bridge =
         FakeBridge().also {
@@ -619,6 +815,40 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `peripherals route contains only camera and player one gamepad`() {
+    val settings = FakeSettingsAccess()
+    val bridge = FakeBridge(settingsAccess = settings)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
+      assertEquals(listOf("camera", "gamepad"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.OPTION_PICKER, menu.routeForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.OPTIONAL_DEVICES, menu.routeForTest())
+      assertEquals(0, bridge.preferencesOpened)
+    }
+  }
+
+  @Test
+  fun `legacy optional devices route is inert when the typed settings bridge is absent`() {
+    val bridge = FakeBridge()
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
+      assertEquals(listOf("peripherals-status"), menu.visibleItemIdsForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.OPTIONAL_DEVICES, menu.routeForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+    }
+
+    assertEquals(0, bridge.preferencesOpened)
+  }
+
+  @Test
   fun `printer route renders the bridge paper preview and keeps export native`() {
     val bridge = FakeBridge()
     val printer = FakePrinter(MenuPreview.ready(1, 1, intArrayOf(0xffd02020.toInt())))
@@ -633,11 +863,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
-      repeat(3) { press(menu, MenuKey.DOWN) }
-      assertEquals("preview-printer-paper", menu.focusedItemIdForTest())
-      press(menu, MenuKey.A)
-
+      menu.openRouteForTest(MenuRoute.PRINTER_PAPER)
       assertEquals(MenuRoute.PRINTER_PAPER, menu.routeForTest())
       assertEquals("export-share-paper", menu.focusedItemIdForTest())
     }
@@ -645,9 +871,7 @@ class SwingProposal3MenuTest {
     val frame = frames.filterNotNull().last()
     assertEquals(0xffd02020.toInt(), frame.copyPixels()[345 * frame.width() + 642])
 
-    javax.swing.SwingUtilities.invokeAndWait {
-      assertTrue(menu.onKeyDown(MenuKey.A, false))
-    }
+    javax.swing.SwingUtilities.invokeAndWait { assertTrue(menu.onKeyDown(MenuKey.A, false)) }
     assertEquals(1, printer.exportCount)
     assertFalse(menu.visible())
   }
@@ -667,9 +891,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      menu.openRouteForTest(MenuRoute.OPTIONAL_DEVICES)
-      repeat(3) { press(menu, MenuKey.DOWN) }
-      press(menu, MenuKey.A)
+      menu.openRouteForTest(MenuRoute.PRINTER_PAPER)
       assertEquals(MenuRoute.PRINTER_PAPER, menu.routeForTest())
 
       printer.preview = MenuPreview.empty()
@@ -680,7 +902,7 @@ class SwingProposal3MenuTest {
       assertEquals(0, inkPixels(emptyFrame, 45, 487, 306, 123))
       press(menu, MenuKey.B)
 
-      assertEquals(MenuRoute.OPTIONAL_DEVICES, menu.routeForTest())
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
     }
 
     assertEquals(0, printer.exportCount)
@@ -758,9 +980,12 @@ class SwingProposal3MenuTest {
               DesktopCommand.PREFERENCES,
               DesktopCommand.CLOSE_GAME,
               DesktopCommand.MUTE,
-          ),
+      ),
       private val audioAvailable: Boolean = true,
       private val aboutAvailable: Boolean = true,
+      private val settingsAccess: PortableMenuSettingsAccess? = null,
+      private val recentAvailable: Boolean = true,
+      private val playTimeNanos: Long = 0,
   ) : PortableMenuCommandBridge {
     val invoked = mutableListOf<DesktopCommand>()
     val pauseTransitions = mutableListOf<Boolean>()
@@ -770,6 +995,9 @@ class SwingProposal3MenuTest {
     var preferencesOpened = 0
     var loadedSlot: Int? = null
     var savedSlot: Int? = null
+    var recentCatalog: List<PortableMenuRecentGame> = emptyList()
+    var openedRecentPath: Path? = null
+    var openedRecentOrigin: RomOrigin? = null
     var stateCatalog: List<PortableMenuStateSlot> = emptyList()
     var catalogRefreshOnEdt: Boolean? = null
     var saveOnEdt: Boolean? = null
@@ -777,6 +1005,7 @@ class SwingProposal3MenuTest {
     override fun menuState(): DesktopPresentation =
         DesktopPresentation(
             gameTitle = "TEST GAME",
+            playTimeNanos = playTimeNanos,
             commands =
                 DesktopCommandPresentation(
                     gameLoaded = true,
@@ -799,6 +1028,16 @@ class SwingProposal3MenuTest {
 
     override fun setAudioVolume(volume: Int) {
       this.volume = volume
+    }
+
+    override fun settingsSnapshot(): PortableMenuSettingsSnapshot? = settingsAccess?.snapshot()
+
+    override fun applySettingsChoice(id: String, token: String) {
+      settingsAccess?.applyChoice(id, token)
+    }
+
+    override fun toggleSettings(id: String) {
+      settingsAccess?.toggle(id)
     }
 
     override fun canOpenAbout(): Boolean = aboutAvailable
@@ -836,9 +1075,94 @@ class SwingProposal3MenuTest {
       return stateCatalog
     }
 
+    override fun recentGames(): List<PortableMenuRecentGame> {
+      check(javax.swing.SwingUtilities.isEventDispatchThread()) {
+        "Recent-game snapshots must be read on the EDT"
+      }
+      return recentCatalog
+    }
+
+    override fun canOpenRecentGame(): Boolean = recentAvailable
+
+    override fun openRecentGame(game: PortableMenuRecentGame) {
+      check(javax.swing.SwingUtilities.isEventDispatchThread()) {
+        "Recent-game activation must run on the EDT"
+      }
+      openedRecentPath = game.path
+      openedRecentOrigin = game.origin
+    }
+
     override fun refreshStateCatalog() {
       catalogRefreshOnEdt = javax.swing.SwingUtilities.isEventDispatchThread()
       check(catalogRefreshOnEdt == true) { "State catalog refresh must run on the EDT" }
+    }
+  }
+
+  private class FakeSettingsAccess : PortableMenuSettingsAccess {
+    val applied = mutableListOf<Pair<String, String>>()
+    val toggled = mutableListOf<String>()
+    private var current = initialSnapshot()
+
+    override fun snapshot(): PortableMenuSettingsSnapshot = current
+
+    override fun applyChoice(id: String, token: String) {
+      require(current.choicesFor(id).any { it.token == token && it.enabled })
+      applied += id to token
+      current =
+          current.copy(
+              values = current.values + (id to token),
+              displayValues = current.displayValues + (id to token.uppercase()),
+          )
+    }
+
+    override fun toggle(id: String) {
+      require(id in current.toggleIds)
+      toggled += id
+      val value = if (current.value(id) == "on") "off" else "on"
+      current = current.copy(values = current.values + (id to value))
+    }
+
+    fun initialValue(id: String): String = initialSnapshot().value(id)!!
+
+    private companion object {
+      fun initialSnapshot() =
+          PortableMenuSettingsSnapshot(
+              values =
+                  mapOf(
+                      "dmg-games" to "auto",
+                      "cgb-games" to "auto",
+                      "bootstrap" to "skip",
+                      "sgb-border" to "off",
+                      "dmg-colors" to "green",
+                      "camera" to "off",
+                      "gamepad" to "missing-device",
+                  ),
+              choices =
+                  mapOf(
+                      "dmg-games" to choices("auto", "dmg", "cgb", "sgb"),
+                      "cgb-games" to choices("auto", "cgb"),
+                      "bootstrap" to choices("skip", "fast-forward", "full"),
+                      "dmg-colors" to choices("green", "grey"),
+                      "camera" to choices("off", "camera-0"),
+                      "gamepad" to
+                          choices("off", "auto", "device-a") +
+                              PortableMenuSettingChoice("missing-device", "MISSING DEVICE", false),
+                  ),
+              toggleIds = setOf("sgb-border"),
+              displayValues =
+                  mapOf(
+                      "dmg-games" to "AUTO",
+                      "cgb-games" to "AUTO",
+                      "bootstrap" to "SKIP",
+                      "sgb-border" to "OFF",
+                      "dmg-colors" to "GREEN",
+                      "camera" to "OFF",
+                      "gamepad" to "UNAVAILABLE MISSING",
+                  ),
+          )
+
+      fun choices(vararg tokens: String): List<PortableMenuSettingChoice> =
+          tokens.map { PortableMenuSettingChoice(it, it.uppercase()) }
     }
   }
 

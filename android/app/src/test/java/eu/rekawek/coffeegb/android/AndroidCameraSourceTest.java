@@ -55,11 +55,24 @@ public class AndroidCameraSourceTest {
         assertNull(AndroidCameraSource.decodeRgba(ByteBuffer.wrap(new byte[3]), 1, 1, 4, 4));
     }
 
+    @Test
+    public void persistsAndForwardsFrontAndRearLensSelection() {
+        FakeInput input = new FakeInput();
+        AndroidCameraSource source = new AndroidCameraSource(input);
+        source.setLens("front");
+        assertEquals(AndroidCameraSource.Lens.FRONT, source.lens());
+        assertEquals(AndroidCameraSource.Lens.FRONT, input.lens);
+        source.setLens("rear");
+        assertEquals(AndroidCameraSource.Lens.REAR, source.lens());
+        assertEquals(AndroidCameraSource.Lens.REAR, input.lens);
+    }
+
     private static final class FakeInput implements AndroidCameraSource.Input {
         private Consumer<CameraFrame> listener;
         private int starts;
         private int stops;
         private int closes;
+        private AndroidCameraSource.Lens lens = AndroidCameraSource.Lens.REAR;
 
         @Override
         public void start(Consumer<CameraFrame> listener) {
@@ -71,6 +84,11 @@ public class AndroidCameraSourceTest {
         public void stop() {
             stops++;
             listener = null;
+        }
+
+        @Override
+        public void setLens(AndroidCameraSource.Lens lens) {
+            this.lens = lens;
         }
 
         @Override

@@ -109,11 +109,19 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private AndroidPrinterStore printer;
     private boolean printerEnabled;
     private boolean cameraEnabled;
+    private volatile String cameraLens = "rear";
+    private volatile boolean gpsEnabled;
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
     private List<Uri> pendingRecents = List.of();
+    private List<RecentSafDocuments.Entry> pendingRecentGames = List.of();
     private Uri currentSource;
+    private long activeCandidateToken = RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN;
+    private String activeArchiveEntryName = "";
+    private int activeArchiveEntryOccurrence = -1;
+    /** SHA-256 of the normalized cartridge bytes selected for the active session. */
+    private String activeRomHash = "";
     private StateStorageLayout activeLayout;
     private StateRepository activeStates;
     private long nextOpenRequestId;
@@ -246,6 +254,111 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 activeCamera.setEnabled(enabled);
             }
         });
+    }
+
+    /** Selects the physical CameraX lens used by a Pocket Camera cartridge. */
+    void setCameraLens(String lens) {
+        String selected = "front".equalsIgnoreCase(lens) ? "front" : "rear";
+        submit(() -> {
+            cameraLens = selected;
+            AndroidCameraSource activeCamera = camera;
+            if (activeCamera != null) {
+                activeCamera.setLens(selected);
+            }
+        });
+    }
+
+    /** Applies the persisted Android gamepad selector to both live input and future ROM opens. */
+    void setGamepadSelection(String selection) {
+        String normalized = "none".equalsIgnoreCase(selection)
+                || "off".equalsIgnoreCase(selection) ? "none"
+                : (selection == null || selection.isBlank() || "auto".equalsIgnoreCase(selection)
+                        ? "auto" : selection);
+        input.setGamepadSelection(normalized);
+    }
+
+    /** Persists and applies the Android-only emulated GPS accessory switch. */
+    void setGpsEnabled(boolean enabled) {
+        gpsEnabled = enabled;
+        submit(() -> {
+            if (eventBus != null && controller != null && activeLayout != null) {
+                eventBus.post(new Controller.SetGpsReceiverEvent(enabled));
+            }
+        });
+    }
+
+    /** Persists the selected DMG palette in the controller settings and frame renderer. */
+    void setDisplayGrayscale(boolean grayscale) {
+        frames.setGrayscale(grayscale);
+        submit(() -> {
+            String value = Boolean.toString(grayscale);
+            if (!Objects.equals(properties.getProperty(EmulatorProperties.Key.DisplayGrayscale,
+                    null), value)) {
+                properties.setProperty(EmulatorProperties.Key.DisplayGrayscale, value);
+            }
+        });
+    }
+
+    /** Applies the SGB border choice immediately and carries it into future ROM profiles. */
+    void setSgbBorder(boolean enabled) {
+        submit(() -> {
+            String value = Boolean.toString(enabled);
+            if (Objects.equals(properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, null),
+                    value)) {
+                return;
+            }
+            properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, value);
+            if (eventBus != null) {
+                eventBus.post(new SgbDisplay.SetSgbBorder(enabled));
+            }
+        });
+    }
+
+    /** Applies a system selector with the controller's documented reload semantics. */
+    void setSystemSelection(String id, String value) {
+        submit(() -> {
+            boolean changed;
+            switch (id) {
+                case "dmg-games" -> changed = setProfileProperty(
+                        EmulatorProperties.Key.DmgGamesType, value);
+                case "cgb-games" -> changed = setProfileProperty(
+                        EmulatorProperties.Key.CgbGamesType, value);
+                case "bootstrap" -> {
+                    String mode = "full".equalsIgnoreCase(value) ? "NORMAL"
+                            : ("fast-forward".equalsIgnoreCase(value)
+                                    || "fast_forward".equalsIgnoreCase(value)
+                                    ? "FAST_FORWARD" : value.toUpperCase(java.util.Locale.ROOT));
+                    String before = properties.getProperty(
+                            EmulatorProperties.Key.BootstrapMode, null);
+                    if (Objects.equals(before, mode)) {
+                        changed = false;
+                    } else {
+                        properties.setProperty(EmulatorProperties.Key.BootstrapMode, mode);
+                        changed = !Objects.equals(before, properties.getProperty(
+                                EmulatorProperties.Key.BootstrapMode, null));
+                    }
+                }
+                default -> { return; }
+            }
+            if (changed && eventBus != null && controller != null && activeLayout != null) {
+                eventBus.post(new Controller.UpdatedSystemMappingEvent());
+            }
+        });
+    }
+
+    private boolean setProfileProperty(EmulatorProperties.Key key, String value) {
+        String before = properties.getProperty(key, null);
+        String normalized = value == null || value.isBlank() || "auto".equalsIgnoreCase(value)
+                ? null : value.toLowerCase(java.util.Locale.ROOT);
+        if (Objects.equals(before, normalized)) {
+            return false;
+        }
+        if (normalized == null) {
+            properties.clearProperty(key);
+        } else {
+            properties.setProperty(key, normalized);
+        }
+        return !Objects.equals(before, properties.getProperty(key, null));
     }
 
     /** Connects or disconnects the portable Game Boy Printer at the controller-safe boundary. */
@@ -461,6 +574,34 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         });
     }
 
+    /** Reads recent games for the in-screen page without changing the runtime phase. */
+    void requestRecentGames(Consumer<List<RecentGame>> callback) {
+        Consumer<List<RecentGame>> checked = Objects.requireNonNull(callback, "callback");
+        submit(() -> {
+            NativeFrameStore.Snapshot currentFrame = frames.snapshot();
+            persistActiveRecentGame(currentFrame);
+            deliverRecentGames(checked);
+            if (currentSource != null && currentFrame == null) {
+                scheduleRecentGamesRefresh(checked, currentSource, activeOpenRequestId, 0);
+            }
+        });
+    }
+
+    /** Opens one opaque Recent Games token published by {@link #requestRecentGames(Consumer)}. */
+    void selectRecentGame(long token) {
+        submit(() -> {
+            if (token < 0 || token >= pendingRecentGames.size()) {
+                publish(RuntimeState.Phase.FAILED,
+                        "That recent game is no longer available.", List.of(),
+                        activeLayout != null, state.paused(), false);
+                return;
+            }
+            RecentSafDocuments.Entry entry = pendingRecentGames.get((int) token);
+            pendingRecentGames = List.of();
+            openRecentGame(entry);
+        });
+    }
+
     /** Opens a redacted recent-document token published by {@link #requestRecentDocuments()}. */
     public void selectRecentDocument(long token) {
         submit(() -> {
@@ -512,6 +653,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeCamera.pause();
         }
         submit(() -> {
+            persistActiveRecentGame(frames.snapshot());
             if (controller == null) {
                 return;
             }
@@ -561,6 +703,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void stop() {
         input.releaseAll();
         submit(() -> {
+            persistActiveRecentGame(frames.snapshot());
             clearPendingSource();
             if (!closeController()) {
                 publish(RuntimeState.Phase.FAILED,
@@ -571,6 +714,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeLayout = null;
             activeStates = null;
             currentSource = null;
+            clearActiveCandidate();
             activeRomTitle = "";
             activeBatterySave = false;
             activeSessionGeneration = 0L;
@@ -724,11 +868,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         deadlines.shutdownNow();
         try {
             owner.execute(() -> {
+                persistActiveRecentGame(frames.snapshot());
                 clearPendingSource();
                 closeController();
                 activeLayout = null;
                 activeStates = null;
                 currentSource = null;
+                clearActiveCandidate();
                 input.close();
                 frames.close();
             });
@@ -788,6 +934,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         rumble = new AndroidRumbleSink(context, eventBus, false);
         tilt = new AndroidTiltSink(context, eventBus);
         camera = new AndroidCameraSource(context);
+        camera.setLens(cameraLens);
         camera.setEnabled(cameraEnabled);
         PocketCamera.setCameraSource(camera);
         printer = new AndroidPrinterStore();
@@ -833,11 +980,18 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                                     == activeOpenRequestId && cameraRequiredForOpenRequest);
                         }
                         if (currentSource != null) {
-                            new RecentSafDocuments(context).recordIfPersisted(currentSource);
+                            NativeFrameStore.Snapshot recentFrame = frames.snapshot();
+                            persistActiveRecentGame(recentFrame);
+                            if (recentFrame == null) {
+                                scheduleRecentPreview(currentSource, activeOpenRequestId, 0);
+                            }
                         }
                         lifecycle.activated(lifecycleCommands());
                         if (printerEnabled) {
                             eventBus.post(new Controller.SetPrinterEvent(true));
+                        }
+                        if (gpsEnabled) {
+                            eventBus.post(new Controller.SetGpsReceiverEvent(true));
                         }
                         publish(RuntimeState.Phase.RUNNING,
                                 "Loaded " + event.getRomName() + ". App-private saves are ready.",
@@ -867,6 +1021,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 (Controller.EmulationStoppedEvent event) -> submit(() -> {
                     if (!closed.get()) {
+                        persistActiveRecentGame(frames.snapshot());
                         publish(RuntimeState.Phase.STOPPED,
                                 "Game stopped. Choose a ROM or ZIP document.",
                                 List.of(), false, false, false);
@@ -877,7 +1032,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.LoadRomFailedEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
-                        forgetRevokedPermission(currentSource);
+                        new RecentSafDocuments(context).removeGame(currentSource,
+                                activeCandidateToken, activeArchiveEntryName,
+                                activeArchiveEntryOccurrence);
                         publish(RuntimeState.Phase.FAILED,
                                 "Coffee GB could not load the selected ROM.",
                                 List.of(), false, true, false);
@@ -932,6 +1089,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void openRom(Uri uri) {
+        persistActiveRecentGame(frames.snapshot());
         clearPendingSource();
         frames.clear();
         publish(RuntimeState.Phase.OPENING, "Opening selected ROM…", List.of(), false, true, false);
@@ -961,21 +1119,109 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
-    private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source) {
+    /** Reopens the exact game-level archive entry retained by the recent catalog. */
+    private void openRecentGame(RecentSafDocuments.Entry recent) {
+        persistActiveRecentGame(frames.snapshot());
+        clearPendingSource();
+        publish(RuntimeState.Phase.OPENING, "Opening recent game…", List.of(),
+                false, true, false);
+        RomSourceSnapshot snapshot = null;
         try {
-            activeRomTitle = "";
-            activeBatterySave = false;
-            activeSessionGeneration = 0L;
-            clearPauseMenuSnapshotInternal();
+            snapshot = RomSourceSnapshot.open(
+                    new AndroidRomInput(context.getContentResolver(), recent.uri()));
+            long token;
+            if (recent.candidateToken() == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN) {
+                if (snapshot.isArchive()) {
+                    // The former document-level catalog could not retain which member of a ZIP
+                    // had run. Keep that hashless migration usable without guessing: an
+                    // unambiguous archive can open directly, while a multi-game archive asks the
+                    // player to choose and will be upgraded to a game-level row on start.
+                    if (!recent.romHash().isBlank()) {
+                        recentGameUnavailable(recent,
+                                "That recent game is no longer a direct ROM.");
+                        closeQuietly(snapshot);
+                        return;
+                    }
+                    if (snapshot.candidates().isEmpty()) {
+                        recentGameUnavailable(recent,
+                                "That archive no longer contains a readable game.");
+                        closeQuietly(snapshot);
+                        return;
+                    } else if (snapshot.candidates().size() == 1) {
+                        token = snapshot.candidates().get(0).token();
+                    } else {
+                        pendingSnapshot = snapshot;
+                        pendingSource = recent.uri();
+                        List<RuntimeState.Selection> choices = snapshot.candidates().stream()
+                                .map(candidate -> new RuntimeState.Selection(candidate.token(),
+                                        candidate.displayName()))
+                                .collect(Collectors.toList());
+                        publish(RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION,
+                                "Choose the game previously opened from this archive.", choices,
+                                false, true, false);
+                        return;
+                    }
+                } else {
+                    token = RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN;
+                }
+            } else {
+                Long resolved = resolveRecentCandidateToken(snapshot.candidates(),
+                        recent.candidateToken(), recent.archiveEntryName(),
+                        recent.archiveEntryOccurrence());
+                if (!snapshot.isArchive() || resolved == null) {
+                    recentGameUnavailable(recent,
+                            "That game is no longer available in the archive.");
+                    closeQuietly(snapshot);
+                    return;
+                }
+                token = resolved;
+            }
+            activateSnapshot(snapshot, token, recent.uri(), recent);
+        } catch (Exception failure) {
+            closeQuietly(snapshot);
+            recentGameUnavailable(recent,
+                    "That recent game could not be reopened.");
+        }
+    }
+
+    private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source) {
+        activateSnapshot(snapshot, token, source, null);
+    }
+
+    private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source,
+            RecentSafDocuments.Entry recent) {
+        try {
+            RomSourceSnapshot.ArchiveCandidate candidate = token
+                    == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN ? null
+                    : snapshot.candidates().stream()
+                            .filter(item -> item.token() == token)
+                            .findFirst().orElseThrow();
             RomImage image = token == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
                     ? snapshot.loadSingle()
                     : snapshot.load(token);
             Rom rom = new Rom(image);
             String hash = StateIdentity.INSTANCE.hash(rom).hex();
+            if (recent != null && !recentHashMatches(recent.romHash(), hash)) {
+                recentGameUnavailable(recent,
+                        "That recent game has changed since it was last played.");
+                return;
+            }
             StateStorageLayout layout = persistenceStore.layout(hash);
+            // Preserve the currently paused session until the candidate has been positively
+            // identified. This keeps a stale recent row from blanking the menu preview or
+            // replacing any runtime identity before the controller accepts a load request.
+            frames.clear();
+            activeRomTitle = "";
+            activeBatterySave = false;
+            activeSessionGeneration = 0L;
+            clearPauseMenuSnapshotInternal();
             activeLayout = layout;
             activeStates = new StateRepository(layout, AtomicFileWriter.system());
             currentSource = source;
+            activeCandidateToken = token;
+            activeArchiveEntryName = candidate == null ? "" : candidate.entryName();
+            activeArchiveEntryOccurrence = candidate == null ? -1 : candidate.entryOccurrence();
+            activeRomHash = hash;
             activeOpenRequestId = ++nextOpenRequestId;
             tiltOpenRequestId = activeOpenRequestId;
             tiltRequiredForOpenRequest = rom.getType().isMbc7();
@@ -987,10 +1233,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             controllerEventBus().post(new Controller.LoadRomEvent(
                     image, null, persistenceStore, activeOpenRequestId, true));
         } catch (Exception failure) {
-            forgetRevokedPermission(source);
+            if (recent == null) {
+                forgetRevokedPermission(source);
+            } else {
+                new RecentSafDocuments(context).removeGame(recent);
+            }
             activeLayout = null;
             activeStates = null;
             currentSource = null;
+            clearActiveCandidate();
             publish(RuntimeState.Phase.FAILED,
                     "Coffee GB could not load the selected ROM.", List.of(), false, true, false);
         } finally {
@@ -1295,7 +1546,126 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         pendingSnapshot = null;
         pendingSource = null;
         pendingRecents = List.of();
+        pendingRecentGames = List.of();
         closeQuietly(snapshot);
+    }
+
+    private void scheduleRecentPreview(Uri source, long openRequestId, int attempt) {
+        deadlines.schedule(() -> submit(() -> {
+            if (currentSource == null || !currentSource.equals(source)
+                    || activeOpenRequestId != openRequestId) {
+                return;
+            }
+            NativeFrameStore.Snapshot snapshot = frames.snapshot();
+            if (snapshot != null) {
+                persistActiveRecentGame(snapshot);
+            } else if (attempt + 1 < 4) {
+                scheduleRecentPreview(source, openRequestId, attempt + 1);
+            }
+        }), recentPreviewDelay(attempt), TimeUnit.MILLISECONDS);
+    }
+
+    private void scheduleRecentGamesRefresh(Consumer<List<RecentGame>> callback, Uri source,
+            long openRequestId, int attempt) {
+        deadlines.schedule(() -> submit(() -> {
+            if (currentSource == null || !currentSource.equals(source)
+                    || activeOpenRequestId != openRequestId) {
+                return;
+            }
+            NativeFrameStore.Snapshot snapshot = frames.snapshot();
+            if (snapshot != null) {
+                persistActiveRecentGame(snapshot);
+                deliverRecentGames(callback);
+            } else if (attempt + 1 < 4) {
+                scheduleRecentGamesRefresh(callback, source, openRequestId, attempt + 1);
+            }
+        }), recentPreviewDelay(attempt), TimeUnit.MILLISECONDS);
+    }
+
+    private static long recentPreviewDelay(int attempt) {
+        return switch (Math.max(0, attempt)) {
+            case 0 -> 100L;
+            case 1 -> 250L;
+            case 2 -> 500L;
+            default -> 1_000L;
+        };
+    }
+
+    private void deliverRecentGames(Consumer<List<RecentGame>> callback) {
+        List<RecentSafDocuments.Entry> entries =
+                new RecentSafDocuments(context).readableEntries();
+        pendingRecentGames = List.copyOf(entries);
+        ArrayList<RecentGame> games = new ArrayList<>(entries.size());
+        for (int index = 0; index < entries.size(); index++) {
+            RecentSafDocuments.Entry entry = entries.get(index);
+            games.add(new RecentGame(index, entry.romName(),
+                    entry.lastPlayedMillis(), entry.preview()));
+        }
+        mainHandler.post(() -> callback.accept(List.copyOf(games)));
+    }
+
+    private void persistActiveRecentGame(NativeFrameStore.Snapshot snapshot) {
+        if (currentSource == null || activeRomTitle == null || activeRomTitle.isBlank()
+                || activeLayout == null) {
+            return;
+        }
+        new RecentSafDocuments(context).recordIfPersisted(currentSource, activeRomTitle,
+                activeCandidateToken, activeArchiveEntryName, activeArchiveEntryOccurrence,
+                activeRomHash, snapshot);
+    }
+
+    private void recentGameUnavailable(RecentSafDocuments.Entry recent, String message) {
+        new RecentSafDocuments(context).removeGame(recent);
+        boolean active = activeLayout != null;
+        boolean paused = active && state.paused();
+        publish(active ? (paused ? RuntimeState.Phase.PAUSED : RuntimeState.Phase.RUNNING)
+                        : RuntimeState.Phase.FAILED,
+                message, List.of(), active, paused, false);
+    }
+
+    static Long resolveRecentCandidateToken(
+            List<RomSourceSnapshot.ArchiveCandidate> candidates, long savedToken,
+            String entryName, int entryOccurrence) {
+        if (entryName == null || entryName.isEmpty() || entryOccurrence < 0) {
+            return null;
+        }
+        for (RomSourceSnapshot.ArchiveCandidate candidate : candidates) {
+            if (candidate.token() == savedToken && candidate.entryName().equals(entryName)
+                    && candidate.entryOccurrence() == entryOccurrence) {
+                return candidate.token();
+            }
+        }
+        for (RomSourceSnapshot.ArchiveCandidate candidate : candidates) {
+            if (candidate.entryName().equals(entryName)
+                    && candidate.entryOccurrence() == entryOccurrence) {
+                return candidate.token();
+            }
+        }
+        return null;
+    }
+
+    static boolean recentHashMatches(String savedHash, String loadedHash) {
+        // Entries written by earlier builds have no hash. Their exact archive coordinates (or
+        // direct-document shape) remain the safest available legacy identity and are upgraded
+        // with the computed hash as soon as emulation starts successfully.
+        return savedHash == null || savedHash.isBlank()
+                || loadedHash != null && savedHash.equalsIgnoreCase(loadedHash);
+    }
+
+    private void clearActiveCandidate() {
+        activeCandidateToken = RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN;
+        activeArchiveEntryName = "";
+        activeArchiveEntryOccurrence = -1;
+        activeRomHash = "";
+    }
+
+    record RecentGame(long token, String name, long lastPlayedMillis, MenuPreview preview) {
+        RecentGame {
+            if (name == null || name.isBlank()) {
+                name = "RECENT GAME";
+            }
+            preview = preview == null ? MenuPreview.empty() : preview;
+        }
     }
 
     private void cancelFlushDeadline() {

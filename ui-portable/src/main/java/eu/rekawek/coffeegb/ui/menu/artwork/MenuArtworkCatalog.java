@@ -53,11 +53,14 @@ public final class MenuArtworkCatalog {
         EnumMap<MenuRoute, MenuArtwork> catalog = new EnumMap<>(MenuRoute.class);
         add(catalog, MenuRoute.PAUSE_CONSOLE, "00-pause-console.png");
         add(catalog, MenuRoute.SAVE_STATES, "01-save-states.png");
+        add(catalog, MenuRoute.RECENT_GAMES, "16-recent-games.png");
         add(catalog, MenuRoute.SETTINGS, "02-settings.png");
         add(catalog, MenuRoute.AUDIO, "03-audio.png");
+        add(catalog, MenuRoute.DISPLAY, "14-display.png");
         add(catalog, MenuRoute.TOUCH_CONTROLS, "04-touch-controls.png");
         add(catalog, MenuRoute.CONTROLLER_MAPPING, "05-controller-mapping.png");
         add(catalog, MenuRoute.OPTIONAL_DEVICES, "06-optional-devices.png");
+        add(catalog, MenuRoute.OPTION_PICKER, "15-option-picker.png");
         add(catalog, MenuRoute.DATA_MEDIA, "07-data-media.png");
         add(catalog, MenuRoute.LIBRARY, "08-library.png");
         add(catalog, MenuRoute.CHOOSE_ROM, "09-choose-rom.png");

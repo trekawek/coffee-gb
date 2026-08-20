@@ -41,6 +41,7 @@ final class NativeFrameStore implements AutoCloseable {
 
     private long nextSequence;
     private long droppedFrames;
+    private volatile boolean grayscale;
     private boolean closed;
 
     NativeFrameStore() {
@@ -65,7 +66,7 @@ final class NativeFrameStore implements AutoCloseable {
         if (slot == null) {
             return;
         }
-        event.toRgb(slot.pixels, false);
+        event.toRgb(slot.pixels, grayscale);
         makeOpaque(slot.pixels, Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT);
         publish(slot);
     }
@@ -78,6 +79,15 @@ final class NativeFrameStore implements AutoCloseable {
         event.toRgb(slot.pixels, false);
         makeOpaque(slot.pixels, Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT);
         publish(slot);
+    }
+
+    /** Applies the Android DMG palette choice to future native frames. */
+    void setGrayscale(boolean grayscale) {
+        this.grayscale = grayscale;
+    }
+
+    boolean grayscale() {
+        return grayscale;
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {

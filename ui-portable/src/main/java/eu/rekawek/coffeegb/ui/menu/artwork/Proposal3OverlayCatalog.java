@@ -63,8 +63,10 @@ final class Proposal3OverlayCatalog {
     /** Checkbox sits beside Mute rather than putting a textual state at the distant right edge. */
     static final MenuRect AUDIO_MUTE_CHECKBOX = new MenuRect(556, 337, 36, 36);
     static final MenuRect AUDIO_EMULATED = new MenuRect(387, 403, 519, 77);
-    /** Continuous settings rail interior; compact rows are centered inside this aperture. */
+    /** Continuous settings rail interior; settings rows begin at its first slot. */
     static final MenuRect SETTINGS_PANEL = new MenuRect(423, 116, 487, 523);
+    /** Left panel repainted when a generic picker retains its originating settings artwork. */
+    static final MenuRect OPTION_PICKER_ILLUSTRATION = new MenuRect(22, 129, 371, 500);
     /** Existing Controls rail aperture; compact rows remain inside its right-side bezel. */
     static final MenuRect TOUCH_PANEL = new MenuRect(420, 118, 490, 333);
 
@@ -116,42 +118,15 @@ final class Proposal3OverlayCatalog {
         return LAYOUTS.get(Objects.requireNonNull(route, "route"));
     }
 
-    /**
-     * Returns a compact settings rail sized to the actual host-provided item count.
-     *
-     * <p>The source mockup used a seven-row rail for the first settings proposal. That left
-     * conspicuous empty slots when a host exposed Audio and Controls. The simplified settings
-     * page now exposes only Audio: it deliberately uses the normal first seven-row slot, not a
-     * tall centered card, so it aligns with every other menu rail.</p>
-     */
+    /** Returns the first normal-height settings slots, without centering or tall cards. */
     static List<Slot> compactSettingsRows(int itemCount) {
-        int count = Math.max(1, Math.min(3, itemCount));
-        if (count == 1) {
-            return rows(List.of(SETTINGS_ROW_BOUNDS.get(0)), Surface.DARK);
-        }
-        int divider = 4;
-        int totalHeight = switch (count) {
-            case 2 -> 252;
-            default -> 330;
-        };
-        int top = SETTINGS_PANEL.y() + (SETTINGS_PANEL.height() - totalHeight) / 2;
-        return rows(equalRows(SETTINGS_PANEL.x(), top, SETTINGS_PANEL.width(), totalHeight,
-                count, divider), Surface.DARK);
+        int count = Math.max(1, Math.min(SETTINGS_ROW_BOUNDS.size(), itemCount));
+        return rows(SETTINGS_ROW_BOUNDS.subList(0, count), Surface.DARK);
     }
 
     static List<MenuRect> compactSettingsDividers(int itemCount) {
-        int count = Math.max(1, Math.min(3, itemCount));
-        if (count == 1) {
-            return List.of();
-        }
-        int divider = 4;
-        int totalHeight = switch (count) {
-            case 2 -> 252;
-            default -> 330;
-        };
-        int top = SETTINGS_PANEL.y() + (SETTINGS_PANEL.height() - totalHeight) / 2;
-        return dividers(equalRows(SETTINGS_PANEL.x(), top, SETTINGS_PANEL.width(), totalHeight,
-                count, divider));
+        int count = Math.max(1, Math.min(SETTINGS_ROW_BOUNDS.size(), itemCount));
+        return dividers(SETTINGS_ROW_BOUNDS.subList(0, count));
     }
 
     /** Returns one to three centered Controls rows without exposing empty fixed slots. */
@@ -194,7 +169,7 @@ final class Proposal3OverlayCatalog {
                         slot("open-rom", PAUSE_OPEN_ROM, Surface.DARK),
                         slot("reset", PAUSE_RESET, Surface.DARK),
                         slot("settings", PAUSE_SETTINGS, Surface.DARK),
-                        slot("stop", PAUSE_STOP, Surface.DARK)), List.of(),
+                        slot("recent-games", PAUSE_STOP, Surface.DARK)), List.of(),
                 masks(PAUSE_PREVIEW, PAUSE_MENU, PAUSE_HEADER_CONTEXT, PAUSE_HEADER_ACTION),
                 false, "resume", new Marker(443), false));
 
@@ -206,10 +181,18 @@ final class Proposal3OverlayCatalog {
                         SAVE_DIVIDERS.toArray(new MenuRect[0])), true, "slot-0",
                 new Marker(443), false));
 
+        layouts.put(MenuRoute.RECENT_GAMES, layout(MenuRoute.RECENT_GAMES,
+                rows(STATE_ROW_BOUNDS, Surface.DARK),
+                List.of(),
+                masks(SAVE_PREVIEW,
+                        rowsMasks(STATE_ROW_BOUNDS),
+                        SAVE_DIVIDERS.toArray(new MenuRect[0])), true, "recent-0",
+                new Marker(443), false));
+
         layouts.put(MenuRoute.SETTINGS, layout(MenuRoute.SETTINGS,
                 rows(SETTINGS_ROW_BOUNDS, Surface.DARK), List.of(),
                 masks(rowsMasks(SETTINGS_ROW_BOUNDS),
-                        SETTINGS_DIVIDERS.toArray(new MenuRect[0])), true, "audio",
+                        SETTINGS_DIVIDERS.toArray(new MenuRect[0])), false, "system",
                 new Marker(442), false));
 
         layouts.put(MenuRoute.AUDIO, layout(MenuRoute.AUDIO,
@@ -218,6 +201,12 @@ final class Proposal3OverlayCatalog {
                         AUDIO_MUTE_ARROW), false,
                 "mute-audio",
                 new Marker(405), false));
+
+        layouts.put(MenuRoute.DISPLAY, layout(MenuRoute.DISPLAY,
+                rows(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
+                        {378, 329, 530, 103}}, Surface.DARK), List.of(),
+                masks(rowsMasks(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
+                        {378, 329, 530, 103}})), false, "sgb-border", null, false));
 
         layouts.put(MenuRoute.TOUCH_CONTROLS, layout(MenuRoute.TOUCH_CONTROLS,
                 rows(new int[][]{{420, 118, 490, 109}, {420, 231, 490, 108},
@@ -238,13 +227,18 @@ final class Proposal3OverlayCatalog {
                 rows(new int[][]{{353, 117, 556, 67}, {353, 187, 556, 66},
                         {353, 256, 556, 66}, {353, 324, 556, 66}, {353, 393, 556, 66},
                         {353, 461, 556, 66}}, Surface.DARK),
-                actions(new int[][]{{370, 561, 239, 59}, {643, 561, 241, 59}}, Surface.PAPER),
+                List.of(),
                 masks(OPTIONAL_LEFT_META, OPTIONAL_LEFT_STATUS,
                         rowsMasks(new int[][]{{353, 117, 556, 67}, {353, 187, 556, 66},
-                                {353, 256, 556, 66}, {353, 324, 556, 66}, {353, 393, 556, 66},
-                                {353, 461, 556, 66}}), inner(370, 561, 239, 59),
-                        inner(643, 561, 241, 59)), false, "rumble",
+                        {353, 256, 556, 66}, {353, 324, 556, 66}, {353, 393, 556, 66},
+                                {353, 461, 556, 66}})), false, "camera",
                 new Marker(375), false));
+
+        layouts.put(MenuRoute.OPTION_PICKER, layout(MenuRoute.OPTION_PICKER,
+                rows(SETTINGS_ROW_BOUNDS, Surface.DARK), List.of(),
+                masks(rowsMasks(SETTINGS_ROW_BOUNDS),
+                        SETTINGS_DIVIDERS.toArray(new MenuRect[0])), true, "choice:default",
+                new Marker(442), false));
 
         layouts.put(MenuRoute.DATA_MEDIA, layout(MenuRoute.DATA_MEDIA,
                 rows(new int[][]{{374, 119, 535, 85}, {374, 207, 535, 84},
@@ -277,7 +271,7 @@ final class Proposal3OverlayCatalog {
                         {378, 329, 530, 103}}, Surface.DARK), List.of(),
                 masks(SYSTEM_LEFT_META, SYSTEM_LEFT_STATUS, SYSTEM_RIGHT_COPY,
                         rowsMasks(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
-                                {378, 329, 530, 103}})), false, "video-status", null, false));
+                                {378, 329, 530, 103}})), false, "dmg-games", null, false));
 
         layouts.put(MenuRoute.ABOUT, layout(MenuRoute.ABOUT,
                 rows(new int[][]{{352, 115, 558, 89}, {352, 207, 558, 83},

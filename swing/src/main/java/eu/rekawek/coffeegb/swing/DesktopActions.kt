@@ -1,11 +1,13 @@
 package eu.rekawek.coffeegb.swing
 
-import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
+import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker
 import java.awt.Toolkit
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.nio.file.Path
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -72,12 +74,89 @@ internal data class DesktopCommandHandlers(
     val screenshot: () -> Unit,
     val setCommandBarVisible: (Boolean) -> Unit,
     val selectStateSlot: (Int) -> Unit,
+    /** Opens one entry selected from the portable Recent Games page. */
+    val openRecentGame: ((PortableMenuRecentGame) -> Unit)? = null,
     val preferencesForCategory: ((PreferencesCategory) -> Unit)? = null,
     val openMenu: () -> Unit = {},
     val openAbout: (() -> Unit)? = null,
     /** Null when this host does not support changing volume from the portable overlay. */
     val setAudioVolume: ((Int) -> Unit)? = null,
+    /** Typed in-screen settings port. Null keeps older/test hosts Audio-only compatible. */
+    val portableSettings: PortableMenuSettingsAccess? = null,
 )
+
+/** Stable in-screen settings identifiers shared by Swing's production bridge and route host. */
+internal object PortableMenuSettingId {
+  const val DMG_GAMES = "dmg-games"
+  const val CGB_GAMES = "cgb-games"
+  const val BOOTSTRAP = "bootstrap"
+  const val SGB_BORDER = "sgb-border"
+  const val DMG_COLORS = "dmg-colors"
+  const val CAMERA = "camera"
+  const val GAMEPAD = "gamepad"
+}
+
+internal data class PortableMenuSettingChoice(
+    val token: String,
+    val label: String,
+    val enabled: Boolean = true,
+)
+
+/** Detached values/options for the portable settings pages; no Preferences object leaks through. */
+internal data class PortableMenuSettingsSnapshot(
+    val values: Map<String, String>,
+    val choices: Map<String, List<PortableMenuSettingChoice>>,
+    val toggleIds: Set<String> = emptySet(),
+    val displayValues: Map<String, String> = emptyMap(),
+) {
+  init {
+    require(values.keys.all { it in SETTING_IDS }) { "Unknown portable setting: ${values.keys}" }
+    require(choices.keys.all { it in SETTING_IDS }) { "Unknown portable setting: ${choices.keys}" }
+    require(toggleIds.all { it in SETTING_IDS }) { "Unknown portable toggle: $toggleIds" }
+    require(displayValues.keys.all { it in SETTING_IDS }) {
+      "Unknown portable display value: ${displayValues.keys}"
+    }
+    values.forEach { (id, value) -> require(value.isNotBlank()) { "$id must have a value" } }
+    choices.forEach { (id, options) ->
+      require(options.isNotEmpty()) { "$id must have at least one choice" }
+      require(options.map { it.token }.distinct().size == options.size) {
+        "$id choices must have unique stable tokens"
+      }
+      options.forEach { option ->
+        require(option.token.isNotBlank()) { "$id choice tokens must not be blank" }
+        require(option.label.isNotBlank()) { "$id choice labels must not be blank" }
+      }
+    }
+  }
+
+  fun value(id: String): String? = values[id]
+
+  fun displayValue(id: String): String? = displayValues[id] ?: values[id]
+
+  fun choicesFor(id: String): List<PortableMenuSettingChoice> = choices[id].orEmpty()
+
+  companion object {
+    val SETTING_IDS =
+        setOf(
+            PortableMenuSettingId.DMG_GAMES,
+            PortableMenuSettingId.CGB_GAMES,
+            PortableMenuSettingId.BOOTSTRAP,
+            PortableMenuSettingId.SGB_BORDER,
+            PortableMenuSettingId.DMG_COLORS,
+            PortableMenuSettingId.CAMERA,
+            PortableMenuSettingId.GAMEPAD,
+        )
+  }
+}
+
+/** Narrow production/test seam for settings that are safe to apply without a native dialog. */
+internal interface PortableMenuSettingsAccess {
+  fun snapshot(): PortableMenuSettingsSnapshot
+
+  fun applyChoice(id: String, token: String)
+
+  fun toggle(id: String)
+}
 
 /** Detached quick-state data consumed by the portable menu renderer. */
 internal data class PortableMenuStateSlot(
@@ -88,7 +167,25 @@ internal data class PortableMenuStateSlot(
   val savedAt: Instant? = null,
 )
 
+/** Detached recent-game data consumed by the portable Recent Games page. */
+internal data class PortableMenuRecentGame(
+  val path: Path,
+  val label: String,
+  val preview: MenuPreview = MenuPreview.empty(),
+  val lastPlayed: String = "RECENTLY",
+  val origin: RomOrigin? = null,
+  val active: Boolean = false,
+) {
+  init {
+    require(label.isNotBlank())
+    require(lastPlayed.isNotBlank())
+  }
+}
+
 private val PORTABLE_STATE_TIME_FORMAT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
+
+private val PORTABLE_RECENT_TIME_FORMAT: DateTimeFormatter =
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
 
 /** Formats only the persisted instant supplied by the state catalog. */
@@ -101,6 +198,18 @@ internal fun portableStateSavedAt(instant: Instant?): String? {
     null
   }
 }
+
+/** Formats the persisted successful-selection time shown below a Recent Games screenshot. */
+internal fun portableRecentLastPlayed(instant: Instant?): String =
+    if (instant == null) {
+      "RECENTLY"
+    } else {
+      try {
+        PORTABLE_RECENT_TIME_FORMAT.format(instant)
+      } catch (_: RuntimeException) {
+        "RECENTLY"
+      }
+    }
 
 /**
  * Creates every general desktop action exactly once and applies one immutable command snapshot.
@@ -115,6 +224,8 @@ internal class DesktopActionRegistry(
   private var portableStateSlots: List<PortableMenuStateSlot> = emptyList()
   private var portableStateSlotsPublished = false
   private val stateCatalogListeners = mutableListOf<() -> Unit>()
+  private var portableRecentGames: List<PortableMenuRecentGame> = emptyList()
+  private val recentGameListeners = mutableListOf<() -> Unit>()
   private var presentation = DesktopCommandPresentation()
   private var menuPresentation = DesktopPresentation()
   private val playTime = PlayTimeTracker()
@@ -214,6 +325,17 @@ internal class DesktopActionRegistry(
     handlers.setAudioVolume?.invoke(volume)
   }
 
+  override fun settingsSnapshot(): PortableMenuSettingsSnapshot? =
+      handlers.portableSettings?.snapshot()
+
+  override fun applySettingsChoice(id: String, token: String) {
+    handlers.portableSettings?.applyChoice(id, token)
+  }
+
+  override fun toggleSettings(id: String) {
+    handlers.portableSettings?.toggle(id)
+  }
+
   override fun openPreferences(category: PreferencesCategory) {
     if (!isEnabled(DesktopCommand.PREFERENCES)) return
     handlers.preferencesForCategory?.invoke(category) ?: handlers.preferences()
@@ -244,10 +366,28 @@ internal class DesktopActionRegistry(
     stateCatalogListeners += listener
   }
 
+  override fun recentGames(): List<PortableMenuRecentGame> = portableRecentGames
+
+  override fun canOpenRecentGame(): Boolean =
+      handlers.openRecentGame != null && !presentation.sessionBusy
+
+  override fun openRecentGame(game: PortableMenuRecentGame) {
+    if (canOpenRecentGame()) handlers.openRecentGame?.invoke(game)
+  }
+
+  override fun addRecentGamesListener(listener: () -> Unit) {
+    recentGameListeners += listener
+  }
+
   fun updatePortableStateSlots(slots: List<PortableMenuStateSlot>) {
     portableStateSlots = slots.toList()
     portableStateSlotsPublished = true
     stateCatalogListeners.toList().forEach { it() }
+  }
+
+  fun updatePortableRecentGames(games: List<PortableMenuRecentGame>) {
+    portableRecentGames = games.toList()
+    recentGameListeners.toList().forEach { it() }
   }
 
   fun commandPresentation(): DesktopCommandPresentation = presentation

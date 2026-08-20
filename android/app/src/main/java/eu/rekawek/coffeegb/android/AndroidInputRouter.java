@@ -7,11 +7,16 @@ import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 
 import java.util.Collection;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 /**
  * Android source adapter over the portable {@link PlayerInputHub}.
@@ -43,11 +48,14 @@ final class AndroidInputRouter implements AutoCloseable {
     private final Map<Integer, PlayerInputHub.SourceHandle> touchPointers = new HashMap<>();
     private final Map<String, DeviceSource> devices = new HashMap<>();
     private final Map<Integer, String> deviceIds = new HashMap<>();
+    private final Map<String, InputDevice> connectedDevices = new HashMap<>();
     private final PlayerInputHub.SourceHandle keyboard;
     private final EnumSet<Button> keyboardButtons = EnumSet.noneOf(Button.class);
     private final ControllerKeyCapture capture;
 
     private InputDevice activeController;
+    /** Persisted selector: none, auto, or an sdl- stable device token. */
+    private String gamepadSelection = "auto";
     private boolean closed;
 
     AndroidInputRouter(PlayerInputHub hub) {
@@ -93,6 +101,9 @@ final class AndroidInputRouter implements AutoCloseable {
         }
         if (isGameController(event.getSource())) {
             InputDevice controller = event.getDevice();
+            if (!isAllowed(controller)) {
+                return true;
+            }
             if (isConfigurableController(controller)) {
                 activeController = controller;
             }
@@ -143,6 +154,9 @@ final class AndroidInputRouter implements AutoCloseable {
             return false;
         }
         InputDevice controller = event.getDevice();
+        if (!isAllowed(controller)) {
+            return true;
+        }
         if (isConfigurableController(controller)) {
             activeController = controller;
         }
@@ -175,6 +189,7 @@ final class AndroidInputRouter implements AutoCloseable {
     synchronized void disconnect(int deviceId) {
         String key = deviceIds.remove(deviceId);
         if (key != null) {
+            connectedDevices.remove(key);
             DeviceSource source = devices.remove(key);
             if (source != null) {
                 source.close();
@@ -196,9 +211,67 @@ final class AndroidInputRouter implements AutoCloseable {
         return true;
     }
 
+    /** Selects which physical gamepad is allowed to feed player one. */
+    synchronized void setGamepadSelection(String selection) {
+        String normalized = normalizeSelection(selection);
+        if (gamepadSelection.equals(normalized)) {
+            return;
+        }
+        gamepadSelection = normalized;
+        if (!isAllowed(activeController)) {
+            activeController = null;
+            cancelCapture();
+        }
+        ArrayList<String> remove = new ArrayList<>();
+        for (Map.Entry<String, DeviceSource> entry : devices.entrySet()) {
+            InputDevice device = connectedDevices.get(entry.getKey());
+            if (!isAllowed(device)) {
+                entry.getValue().close();
+                remove.add(entry.getKey());
+            }
+        }
+        for (String key : remove) {
+            devices.remove(key);
+        }
+    }
+
+    synchronized String gamepadSelection() {
+        return gamepadSelection;
+    }
+
+    synchronized boolean acceptsController(InputDevice device) {
+        return isAllowed(device);
+    }
+
+    /** Menu navigation remains available from a physical controller even when gameplay is OFF. */
+    synchronized boolean acceptsMenuController(InputDevice device) {
+        return device != null && acceptsMenuControllerSources(device.getSources(), device.isVirtual());
+    }
+
+    static boolean acceptsMenuControllerSources(int sources, boolean virtual) {
+        return isConfigurableControllerSources(sources, virtual);
+    }
+
+    /** Returns currently connected, non-virtual physical gamepads with stable selector tokens. */
+    synchronized List<ControllerChoice> controllerChoices() {
+        ArrayList<ControllerChoice> choices = new ArrayList<>();
+        for (int id : InputDevice.getDeviceIds()) {
+            InputDevice device = InputDevice.getDevice(id);
+            if (isConfigurableController(device)) {
+                choices.add(new ControllerChoice(stableToken(device),
+                        device.getName() == null || device.getName().isBlank()
+                                ? "CONTROLLER" : device.getName()));
+            }
+        }
+        choices.sort(java.util.Comparator.comparing(ControllerChoice::label)
+                .thenComparing(ControllerChoice::token));
+        return List.copyOf(choices);
+    }
+
     synchronized CaptureResult captureKeyEvent(KeyEvent event) {
         if (closed || !capture.active() || event == null
-                || !isConfigurableController(event.getDevice())) {
+                || !isConfigurableController(event.getDevice())
+                || !isAllowed(event.getDevice())) {
             return CaptureResult.NONE;
         }
         InputDevice controller = event.getDevice();
@@ -309,6 +382,7 @@ final class AndroidInputRouter implements AutoCloseable {
         devices.values().forEach(DeviceSource::close);
         devices.clear();
         deviceIds.clear();
+        connectedDevices.clear();
         activeController = null;
         cancelCapture();
         closed = true;
@@ -318,23 +392,97 @@ final class AndroidInputRouter implements AutoCloseable {
         String key = device == null ? "unknown" : deviceKey(device);
         if (device != null) {
             deviceIds.put(device.getId(), key);
+            connectedDevices.put(key, device);
         }
         return devices.computeIfAbsent(key, ignored -> new DeviceSource(hub.openSource(0)));
     }
 
     private InputDevice configurationDevice() {
-        if (isConfigurableController(activeController)) {
-            return activeController;
+        if ("none".equals(gamepadSelection)) {
+            activeController = null;
+            return null;
         }
-        activeController = null;
+        if (isConfigurableController(activeController)) {
+            if (isAllowed(activeController)) {
+                return activeController;
+            }
+            activeController = null;
+        }
+        InputDevice first = null;
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
-            if (isConfigurableController(device)) {
-                activeController = device;
-                return device;
+            if (isConfigurableController(device) && isAllowed(device)) {
+                if (first == null) {
+                    first = device;
+                }
+                if (!"auto".equals(gamepadSelection)) {
+                    break;
+                }
             }
         }
-        return null;
+        activeController = first;
+        return first;
+    }
+
+    private boolean isAllowed(InputDevice device) {
+        if (!isConfigurableController(device) || "none".equals(gamepadSelection)) {
+            return false;
+        }
+        return "auto".equals(gamepadSelection)
+                || stableToken(device).equals(gamepadSelection);
+    }
+
+    static boolean allowsSelection(String selection, String token) {
+        String normalized = normalizeSelection(selection);
+        return !"none".equals(normalized)
+                && ("auto".equals(normalized) || normalized.equals(token));
+    }
+
+    private static String normalizeSelection(String selection) {
+        if (selection == null || selection.isBlank() || "AUTO".equalsIgnoreCase(selection)) {
+            return "auto";
+        }
+        if ("OFF".equalsIgnoreCase(selection) || "none".equalsIgnoreCase(selection)) {
+            return "none";
+        }
+        return selection;
+    }
+
+    static String stableToken(InputDevice device) {
+        if (device == null) {
+            return "";
+        }
+        String descriptor = device.getDescriptor();
+        String raw = (descriptor == null ? "" : descriptor) + "|"
+                + device.getVendorId() + "|" + device.getProductId();
+        return "sdl-" + sha256(raw);
+    }
+
+    private static String sha256(String raw) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(raw.getBytes(StandardCharsets.UTF_8));
+            StringBuilder encoded = new StringBuilder(digest.length * 2);
+            for (byte value : digest) {
+                encoded.append(Character.forDigit((value >>> 4) & 0xf, 16));
+                encoded.append(Character.forDigit(value & 0xf, 16));
+            }
+            return encoded.toString();
+        } catch (NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
+    }
+
+    private static String deviceKey(InputDevice device) {
+        String descriptor = device.getDescriptor();
+        if (descriptor != null && !descriptor.isBlank()) {
+            return descriptor;
+        }
+        return device.getVendorId() + ":" + device.getProductId() + ":" + device.getId();
+    }
+
+    /** A picker-safe immutable physical-controller identity. */
+    record ControllerChoice(String token, String label) {
     }
 
     private static boolean isGameController(int source) {
@@ -376,13 +524,6 @@ final class AndroidInputRouter implements AutoCloseable {
         return label.replace("BUTTON_", "BUTTON ");
     }
 
-    private static String deviceKey(InputDevice device) {
-        String descriptor = device.getDescriptor();
-        if (descriptor != null && !descriptor.isBlank()) {
-            return descriptor;
-        }
-        return device.getVendorId() + ":" + device.getProductId() + ":" + device.getId();
-    }
 
     private static void applyAxis(EnumSet<Button> buttons, float value, Button negative, Button positive) {
         buttons.remove(negative);

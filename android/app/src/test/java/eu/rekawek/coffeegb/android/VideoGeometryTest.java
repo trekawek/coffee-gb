@@ -37,6 +37,16 @@ public class VideoGeometryTest {
     }
 
     @Test
+    public void superGameboyBorderKeepsItsNativeAspectInsideTheFixedSkinWindow() {
+        VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(256, 224, 800, 720);
+
+        assertEquals(16, viewport.left());
+        assertEquals(24, viewport.top());
+        assertEquals(768, viewport.width());
+        assertEquals(672, viewport.height());
+    }
+
+    @Test
     public void invalidDimensionsProduceNoDrawableViewport() {
         VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(160, 144, 0, 1080);
 

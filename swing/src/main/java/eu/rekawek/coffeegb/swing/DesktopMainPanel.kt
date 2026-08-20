@@ -82,7 +82,7 @@ internal data class DesktopNotice(
 internal class DesktopMainPanel(
     gameSurface: JComponent,
     private val actions: DesktopActionRegistry,
-    onOpenRecent: (Path) -> Unit,
+    onOpenRecent: (DesktopRecentGame) -> Unit,
     onCancelTask: () -> Unit,
     initialTokens: DesktopThemeTokens,
 ) : JPanel(BorderLayout()), DesktopThemeRefreshHook {
@@ -257,7 +257,7 @@ internal class DesktopStatusBar(
 
 internal class DesktopHomePanel(
     openAction: Action,
-    private val onOpenRecent: (Path) -> Unit,
+    private val onOpenRecent: (DesktopRecentGame) -> Unit,
 ) : JPanel(BorderLayout()) {
   private val content = JPanel()
   private val recentList = JPanel()
@@ -312,7 +312,7 @@ internal class DesktopHomePanel(
 
   private fun createRecentThumbnail(game: DesktopRecentGame): JComponent {
     val path = game.path
-    val name = path.fileName?.toString() ?: path.toString()
+    val name = game.title
     return JButton(game.thumbnail?.let(::thumbnailIcon)).apply {
       preferredSize = RECENT_PREVIEW_SIZE
       minimumSize = RECENT_PREVIEW_SIZE
@@ -325,7 +325,7 @@ internal class DesktopHomePanel(
         text = "No preview"
         foreground = tokens.secondaryText
       }
-      addActionListener { onOpenRecent(path) }
+      addActionListener { onOpenRecent(game) }
     }
   }
 

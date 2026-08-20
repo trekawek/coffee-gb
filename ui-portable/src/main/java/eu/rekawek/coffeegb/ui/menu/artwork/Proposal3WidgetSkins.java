@@ -46,12 +46,18 @@ final class Proposal3WidgetSkins {
     private final Sprite actionOptionalCancel;
     private final Sprite actionLibrary;
     private final Sprite actionGithub;
+    private final Sprite choiceField;
+    private final Sprite settingsSystem;
+    private final Sprite settingsDisplay;
+    private final Sprite settingsPeripherals;
 
     private Proposal3WidgetSkins(Sprite dark, Sprite paper, Sprite selected,
             Sprite dataArrowLeft, Sprite dataArrowRight, Sprite dataCamera, Sprite dataPrinter,
             Sprite aboutNetwork, Sprite aboutStorage, Sprite aboutCamera, Sprite aboutSource,
             Sprite actionSave, Sprite actionLoad, Sprite actionDelete, Sprite actionOptionalSave,
-            Sprite actionOptionalCancel, Sprite actionLibrary, Sprite actionGithub) {
+            Sprite actionOptionalCancel, Sprite actionLibrary, Sprite actionGithub,
+            Sprite choiceField, Sprite settingsSystem, Sprite settingsDisplay,
+            Sprite settingsPeripherals) {
         this.dark = dark;
         this.paper = paper;
         this.selected = selected;
@@ -70,6 +76,10 @@ final class Proposal3WidgetSkins {
         this.actionOptionalCancel = actionOptionalCancel;
         this.actionLibrary = actionLibrary;
         this.actionGithub = actionGithub;
+        this.choiceField = choiceField;
+        this.settingsSystem = settingsSystem;
+        this.settingsDisplay = settingsDisplay;
+        this.settingsPeripherals = settingsPeripherals;
     }
 
     static Proposal3WidgetSkins load() throws IOException {
@@ -91,6 +101,10 @@ final class Proposal3WidgetSkins {
         Sprite actionOptionalCancel = load("action-optional-cancel.png");
         Sprite actionLibrary = load("action-library.png");
         Sprite actionGithub = load("action-github.png");
+        Sprite choiceField = load("choice-field.png");
+        Sprite settingsSystem = load("settings-system.png");
+        Sprite settingsDisplay = load("settings-display.png");
+        Sprite settingsPeripherals = load("settings-peripherals.png");
         requireDimensions("dark-widget.png", dark, 900, 160);
         requireDimensions("paper-widget.png", paper, 900, 160);
         requireDimensions("selected-widget.png", selected, 900, 160);
@@ -109,10 +123,15 @@ final class Proposal3WidgetSkins {
         requireDimensions("action-optional-cancel.png", actionOptionalCancel, 44, 42);
         requireDimensions("action-library.png", actionLibrary, 45, 39);
         requireDimensions("action-github.png", actionGithub, 53, 53);
+        requireDimensions("choice-field.png", choiceField, 250, 55);
+        requireDimensions("settings-system.png", settingsSystem, 300, 350);
+        requireDimensions("settings-display.png", settingsDisplay, 280, 400);
+        requireDimensions("settings-peripherals.png", settingsPeripherals, 300, 300);
         return new Proposal3WidgetSkins(dark, paper, selected, dataArrowLeft, dataArrowRight,
                 dataCamera, dataPrinter, aboutNetwork, aboutStorage, aboutCamera, aboutSource,
                 actionSave, actionLoad, actionDelete, actionOptionalSave, actionOptionalCancel,
-                actionLibrary, actionGithub);
+                actionLibrary, actionGithub, choiceField, settingsSystem, settingsDisplay,
+                settingsPeripherals);
     }
 
     Sprite surface(Surface surface) {
@@ -129,6 +148,19 @@ final class Proposal3WidgetSkins {
             case 1, 3 -> dataArrowRight;
             case 4 -> dataCamera;
             case 5 -> dataPrinter;
+            default -> null;
+        };
+    }
+
+    Sprite choiceField() {
+        return choiceField;
+    }
+
+    Sprite settingsIllustration(MenuRoute route) {
+        return switch (route) {
+            case SYSTEM -> settingsSystem;
+            case DISPLAY -> settingsDisplay;
+            case OPTIONAL_DEVICES -> settingsPeripherals;
             default -> null;
         };
     }

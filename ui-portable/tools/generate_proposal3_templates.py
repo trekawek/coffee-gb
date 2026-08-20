@@ -63,6 +63,12 @@ ROUTE_PAPER_TEXT = {
         rect(30, 140, 352, 340), rect(30, 486, 352, 66),
         rect(688, 25, 207, 70),
     ],
+    "16-recent-games.png": [
+        # Recent Games reuses the Load State geometry: the selected game's screenshot and
+        # timestamp occupy the left well while the right rail lists recent titles.
+        rect(30, 140, 352, 340), rect(30, 486, 352, 66),
+        rect(688, 25, 207, 70),
+    ],
     "02-settings.png": [
         rect(38, 146, 342, 50), rect(36, 486, 342, 46), rect(36, 532, 342, 42),
         rect(36, 574, 342, 44),
@@ -158,6 +164,7 @@ ROUTE_WIDGETS = {
     # leading/trailing item with a chevron row, so the text-free authority only needs one clean
     # continuous dark surface beneath the runtime dividers.
     "01-save-states.png": [("dark", rect(420, 118, 489, 529))],
+    "16-recent-games.png": [("dark", rect(420, 118, 489, 529))],
     "02-settings.png": [("dark", rect(423, 116, 487, 523))],
     # Keep only the slider's authored paper well and the live Mute row. The entire lower panel is
     # a quiet dark surface; the old Emulated Audio and Save/Cancel shells are gone.
@@ -265,7 +272,7 @@ def main() -> None:
         if source.name == "00-pause-console.png":
             left, top, right, bottom = PAUSE_PREVIEW_APERTURE
             pixels[top:bottom, left:right] = PAUSE_PREVIEW_MATTE
-        if source.name == "01-save-states.png":
+        if source.name in ("01-save-states.png", "16-recent-games.png"):
             # Remove all legacy left-side copy while preserving the stepped bezel around the
             # thumbnail aperture.  The runtime fills this aperture with a detached thumbnail.
             clear_paper_text(pixels, rect(30, 140, 352, 340), paper_pixels)

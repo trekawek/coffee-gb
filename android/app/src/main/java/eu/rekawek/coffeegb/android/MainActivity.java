@@ -11,6 +11,8 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraManager;
 import android.graphics.PointF;
 import android.hardware.input.InputManager;
 import android.net.Uri;
@@ -93,6 +95,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String STATE_OPTIONAL_STATUS = "status.optional-devices";
     private static final String STATE_PRINTER_STATUS = "status.printer";
     private static final String STATE_ABOUT_STATUS = "status.about";
+    private static final String STATE_OPTION_ACTIVE = "choice.active";
+    private static final String STATE_OPTION_ROUTE = "choice.route";
+    private static final String STATE_OPTION_ID = "choice.id";
+    private static final String STATE_OPTION_TITLE = "choice.title";
+    private static final String STATE_OPTION_SELECTED = "choice.selected";
+    private static final String STATE_OPTION_TOKENS = "choice.tokens";
+    private static final String STATE_OPTION_LABELS = "choice.labels";
+    private static final String STATE_OPTION_ENABLED = "choice.enabled";
     private static final String PRINTER_CONTINUATION_PREFS = "printer-share-continuation";
     private static final String PRINTER_CONTINUATION_TOKEN = "token";
     private static final String PRINTER_CONTINUATION_URI = "uri";
@@ -120,12 +130,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuController menuController;
     private RuntimeState observedState = RuntimeState.stopped();
     private List<AndroidStateSlot> stateSlots = List.of();
+    private List<AndroidEmulationRuntime.RecentGame> recentGames = List.of();
     private StateMenuMode stateMenuMode = StateMenuMode.SAVE;
     private ConfirmVariant confirmVariant;
     private int confirmSlot = -1;
     private boolean stateSlotsLoading;
+    private boolean recentGamesLoading;
     /** Monotonic guard for owner-thread catalog reads crossing Activity/ROM transitions. */
     private long stateCatalogGeneration;
+    private long recentGamesCatalogGeneration;
     private boolean menuVisible;
     private boolean menuPauseOwned;
     private boolean selectionActionInFlight;
@@ -139,10 +152,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private AndroidMenuModel.AudioDraft audioDraft;
     private AndroidMenuModel.TouchDraft touchDraft;
     private AndroidMenuModel.DevicesDraft devicesDraft;
+    private ChoiceSession optionSession;
     private String optionalDevicesStatus = "READY";
     private String aboutStatus = "OPEN IN BROWSER";
     private String printerStatus = "READY";
-    private String systemPreferredFocus = "video-status";
+    private String systemPreferredFocus = "dmg-games";
     private MenuPreview printerPreview = MenuPreview.empty();
     private int printerPreviewGeneration;
     private boolean printerPaperEntryPending;
@@ -153,6 +167,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuExternalSurfaceState legacyCameraPermissionFallbackSurface;
     private boolean legacyCameraPermissionFallbackPosted;
     private long lifecycleGeneration;
+
+    private static final String PREF_SYSTEM_DMG = "system.dmgGames";
+    private static final String PREF_SYSTEM_CGB = "system.cgbGames";
+    private static final String PREF_SYSTEM_BOOTSTRAP = "system.bootstrap";
+    private static final String PREF_DISPLAY_BORDER = "display.sgbBorder";
+    private static final String PREF_DISPLAY_COLORS = "display.dmgColors";
+    private static final String PREF_CAMERA_SELECTION = "devices.camera.selection";
+    private static final String PREF_GAMEPAD_SELECTION = "devices.gamepad.selection";
+    private static final String PREF_GPS_ENABLED = "devices.gps.enabled";
 
     private final InputManager.InputDeviceListener inputDevices =
             new InputManager.InputDeviceListener() {
@@ -198,11 +221,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     .getBoolean("devices.rumble", false));
             runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE)
                     .getBoolean("devices.printer", false));
-            if (getPreferences(MODE_PRIVATE).getBoolean("devices.camera", false)
+            SharedPreferences settings = getPreferences(MODE_PRIVATE);
+            runtime.setCameraLens(cameraSelection(settings));
+            runtime.setCameraEnabled(!"off".equals(cameraSelection(settings))
                     && checkSelfPermission(Manifest.permission.CAMERA)
-                    == PackageManager.PERMISSION_GRANTED) {
-                runtime.setCameraEnabled(true);
-            }
+                    == PackageManager.PERMISSION_GRANTED);
+            runtime.setGamepadSelection(gamepadSelection(settings));
+            runtime.setGpsEnabled(settings.getBoolean(PREF_GPS_ENABLED, false));
+            runtime.setDisplayGrayscale("grey".equals(displayColors(settings)));
+            runtime.setSgbBorder(settings.getBoolean(PREF_DISPLAY_BORDER, false));
+            applySystemSettings(runtime, settings);
             applyState(runtime.state());
             dispatchPendingDocumentResult();
             restoreExternalSurfaceIfRequested();
@@ -232,6 +260,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             stateCatalogGeneration++;
             stateSlotsLoading = false;
             stateSlots = List.of();
+            recentGamesCatalogGeneration++;
+            recentGamesLoading = false;
+            recentGames = List.of();
             cancelPendingPrinterPaperEntry();
             printerPreview = MenuPreview.empty();
             refreshMenuPages();
@@ -322,6 +353,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             writeSnapshot(outState, "external", externalSurface.menuStack());
         }
         saveDrafts(outState);
+        saveOptionSession(outState);
         if (confirmVariant != null) {
             outState.putString(STATE_CONFIRM_VARIANT, confirmVariant.name());
             outState.putInt(STATE_CONFIRM_SLOT, confirmSlot);
@@ -443,8 +475,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 return true;
             }
         }
+        boolean selectedController = active == null || !isGameController(event.getSource())
+                || (menuController != null && menuController.visible()
+                        ? active.input().acceptsMenuController(event.getDevice())
+                        : active.input().acceptsController(event.getDevice()));
         MenuKey menuKey = menuKey(event);
-        if (menuKey != null) {
+        if (menuKey != null && selectedController) {
             if (event.getAction() == KeyEvent.ACTION_MULTIPLE
                     && menuController != null && menuController.visible()) {
                 return true;
@@ -471,6 +507,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (menuController != null && menuController.visible()
                 && isGameController(event.getSource())
                 && event.getAction() == MotionEvent.ACTION_MOVE) {
+            if (active == null || !active.input().acceptsMenuController(event.getDevice())) {
+                return true;
+            }
             if (active != null && menuController.route() == MenuRoute.CONTROLLER_MAPPING
                     && active.input().captureActive()) {
                 return true;
@@ -629,6 +668,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 && refreshStatePreviewForFocus(presentation)) {
             return;
         }
+        if (presentation.visible() && presentation.route() == MenuRoute.RECENT_GAMES
+                && refreshRecentGamePreviewForFocus(presentation)) {
+            return;
+        }
         boolean wasVisible = menuVisible;
         MenuRoute previous = presentedRoute;
         menuVisible = presentation.visible();
@@ -677,6 +720,33 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         return true;
     }
 
+    /** Rebinds the detached recent-game preview and timestamp as focus moves between rows. */
+    private boolean refreshRecentGamePreviewForFocus(MenuPresentation presentation) {
+        if (menuController == null || recentGamesLoading || recentGames.isEmpty()) {
+            return false;
+        }
+        MenuPresentation.Item focused = presentation.items().get(presentation.focusedIndex());
+        AndroidEmulationRuntime.RecentGame selected = null;
+        for (AndroidEmulationRuntime.RecentGame game : recentGames) {
+            if (("recent:" + game.token()).equals(focused.id())) {
+                selected = game;
+                break;
+            }
+        }
+        if (selected == null) {
+            return false;
+        }
+        MenuPreview preview = selected.preview();
+        List<String> sideLines = formatRecentPlayed(selected.lastPlayedMillis()).isBlank()
+                ? List.of() : List.of("LAST PLAYED: "
+                + formatRecentPlayed(selected.lastPlayedMillis()));
+        if (presentation.preview() == preview && presentation.sideLines().equals(sideLines)) {
+            return false;
+        }
+        menuController.setPage(recentGamesPage());
+        return true;
+    }
+
     private void onRouteExited(MenuRoute route) {
         if (route == printerPaperEntryParent) {
             cancelPendingPrinterPaperEntry();
@@ -687,6 +757,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         switch (route) {
             case AUDIO -> audioDraft = null;
+            case RECENT_GAMES -> {
+                recentGamesCatalogGeneration++;
+                recentGamesLoading = false;
+                recentGames = List.of();
+            }
+            case OPTION_PICKER -> optionSession = null;
             case TOUCH_CONTROLS -> touchDraft = null;
             case OPTIONAL_DEVICES -> devicesDraft = null;
             case CONTROLLER_MAPPING -> cancelControllerCapture();
@@ -761,15 +837,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         switch (route) {
             case PAUSE_CONSOLE -> handlePauseItem(active, id);
             case SAVE_STATES -> handleStateItem(active, id, secondary);
+            case RECENT_GAMES -> handleRecentGamesItem(active, id);
             case LIBRARY -> handleLibraryItem(active, id);
             case CHOOSE_ROM -> handleChooseRomItem(active, id);
             case SETTINGS -> handleSettingsItem(id);
             case AUDIO -> handleAudioItem(id);
+            case DISPLAY -> handleDisplayItem(id);
             case TOUCH_CONTROLS -> handleTouchItem(id);
             case OPTIONAL_DEVICES -> handleOptionalDevicesItem(active, id);
+            case OPTION_PICKER -> handleOptionPickerItem(id);
             case CONTROLLER_MAPPING -> handleControllerItem(active, id);
             case PRINTER_PAPER -> handlePrinterPaperItem(id);
-            case SYSTEM -> menuController.back();
+            case SYSTEM -> handleSystemItem(id);
             case DATA_MEDIA -> handleDataMediaItem(id);
             case ABOUT -> handleAboutItem(id);
             case CONFIRM_ACTION -> handleConfirmationItem(id);
@@ -786,7 +865,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case "load-state" -> showStateMenu(StateMenuMode.LOAD);
             case "reset" -> showConfirmation(ConfirmVariant.RESET, -1);
             case "settings" -> menuController.push(MenuRoute.SETTINGS);
-            case "stop" -> showConfirmation(ConfirmVariant.STOP, -1);
+            case "recent-games" -> showRecentGames();
             case "open-rom" -> openRomFromMenu();
             default -> { }
         }
@@ -825,6 +904,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
+    private void handleRecentGamesItem(AndroidEmulationRuntime active, String id) {
+        if (active == null || id == null || !id.startsWith("recent:")) {
+            return;
+        }
+        long token = parseToken(id.substring("recent:".length()));
+        if (token < 0 || recentGamesLoading) {
+            return;
+        }
+        selectionActionInFlight = true;
+        menuPauseOwned = false;
+        menuController.hide();
+        active.selectRecentGame(token);
+    }
+
     private void handleLibraryItem(AndroidEmulationRuntime active, String id) {
         if ("open-rom".equals(id)) {
             openRomFromMenu();
@@ -861,10 +954,23 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void handleSettingsItem(String id) {
         switch (id) {
+            case "system" -> {
+                systemPreferredFocus = "dmg-games";
+                refreshMenuPages();
+                menuController.push(MenuRoute.SYSTEM);
+            }
+            case "display" -> {
+                refreshMenuPages();
+                menuController.push(MenuRoute.DISPLAY);
+            }
             case "audio" -> {
                 audioDraft = loadAudioDraft();
                 refreshMenuPages();
                 menuController.push(MenuRoute.AUDIO);
+            }
+            case "peripherals" -> {
+                refreshMenuPages();
+                menuController.push(MenuRoute.OPTIONAL_DEVICES);
             }
             case "touch-controls" -> {
                 touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
@@ -889,6 +995,143 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             default -> { }
         }
         refreshMenuPages();
+    }
+
+    private void handleSystemItem(String id) {
+        SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+        switch (id) {
+            case "dmg-games" -> openOptionPicker(MenuRoute.SYSTEM, id, "DMG GAMES",
+                    List.of(new AndroidMenuModel.ChoiceValue("auto", "AUTO"),
+                            new AndroidMenuModel.ChoiceValue("dmg", "DMG"),
+                            new AndroidMenuModel.ChoiceValue("cgb", "CGB"),
+                            new AndroidMenuModel.ChoiceValue("sgb", "SGB")),
+                    systemDmg(preferences));
+            case "cgb-games" -> openOptionPicker(MenuRoute.SYSTEM, id, "CGB GAMES",
+                    List.of(new AndroidMenuModel.ChoiceValue("auto", "AUTO"),
+                            new AndroidMenuModel.ChoiceValue("cgb", "CGB")),
+                    systemCgb(preferences));
+            case "bootstrap" -> openOptionPicker(MenuRoute.SYSTEM, id, "BOOTSTRAP",
+                    List.of(new AndroidMenuModel.ChoiceValue("skip", "SKIP"),
+                            new AndroidMenuModel.ChoiceValue("fast-forward", "FAST-FORWARD"),
+                            new AndroidMenuModel.ChoiceValue("full", "FULL")),
+                    systemBootstrap(preferences));
+            default -> { }
+        }
+    }
+
+    private void handleDisplayItem(String id) {
+        SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+        switch (id) {
+            case "sgb-border" -> {
+                boolean enabled = !preferences.getBoolean(PREF_DISPLAY_BORDER, false);
+                preferences.edit().putBoolean(PREF_DISPLAY_BORDER, enabled).apply();
+                if (runtime != null) {
+                    runtime.setSgbBorder(enabled);
+                }
+            }
+            case "dmg-colors" -> openOptionPicker(MenuRoute.DISPLAY, id, "DMG COLORS",
+                    List.of(new AndroidMenuModel.ChoiceValue("green", "GREEN"),
+                            new AndroidMenuModel.ChoiceValue("grey", "GREY")),
+                    displayColors(preferences));
+            default -> { }
+        }
+        refreshMenuPages();
+    }
+
+    private void openOptionPicker(MenuRoute origin, String originId, String title,
+            List<AndroidMenuModel.ChoiceValue> choices, String selectedToken) {
+        optionSession = new ChoiceSession(origin, originId, title, choices, selectedToken);
+        refreshMenuPages();
+        menuController.push(MenuRoute.OPTION_PICKER);
+    }
+
+    private void handleOptionPickerItem(String id) {
+        ChoiceSession session = optionSession;
+        if (session == null || id == null || !id.startsWith("choice:")) {
+            return;
+        }
+        String token = id.substring("choice:".length());
+        AndroidMenuModel.ChoiceValue choice = session.choices().stream()
+                .filter(candidate -> candidate.token().equals(token))
+                .findFirst().orElse(null);
+        if (choice == null || !choice.enabled() || "unavailable".equals(token)) {
+            return;
+        }
+        optionSession = null;
+        menuController.back();
+        applyChoice(session, token);
+        refreshMenuPages();
+    }
+
+    private void applyChoice(ChoiceSession session, String token) {
+        SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit();
+        AndroidEmulationRuntime active = runtime;
+        switch (session.originId()) {
+            case "dmg-games" -> {
+                edit.putString(PREF_SYSTEM_DMG, token).apply();
+                if (active != null) active.setSystemSelection("dmg-games", token);
+            }
+            case "cgb-games" -> {
+                edit.putString(PREF_SYSTEM_CGB, token).apply();
+                if (active != null) active.setSystemSelection("cgb-games", token);
+            }
+            case "bootstrap" -> {
+                edit.putString(PREF_SYSTEM_BOOTSTRAP, token).apply();
+                if (active != null) active.setSystemSelection("bootstrap", token);
+            }
+            case "dmg-colors" -> {
+                edit.putString(PREF_DISPLAY_COLORS, token).apply();
+                if (active != null) active.setDisplayGrayscale("grey".equals(token));
+            }
+            case "camera" -> applyCameraChoice(token);
+            case "gamepad" -> applyGamepadChoice(token);
+            default -> { }
+        }
+    }
+
+    private void applyGamepadChoice(String token) {
+        getPreferences(MODE_PRIVATE).edit().putString(PREF_GAMEPAD_SELECTION, token).apply();
+        if (runtime != null) {
+            runtime.setGamepadSelection(token);
+        }
+    }
+
+    private void applyCameraChoice(String token) {
+        String selected = switch (token) {
+            case "front", "rear" -> token;
+            default -> "off";
+        };
+        getPreferences(MODE_PRIVATE).edit().putString(PREF_CAMERA_SELECTION, selected)
+                .putBoolean("devices.camera", !"off".equals(selected)).apply();
+        if (runtime != null) {
+            runtime.setCameraLens(selected);
+        }
+        if ("off".equals(selected)) {
+            if (runtime != null) runtime.setCameraEnabled(false);
+            return;
+        }
+        boolean granted = checkSelfPermission(Manifest.permission.CAMERA)
+                == PackageManager.PERMISSION_GRANTED;
+        if (granted) {
+            if (runtime != null) runtime.setCameraEnabled(true);
+            optionalDevicesStatus = "CAMERA ENABLED";
+            return;
+        }
+        // The picker has already returned to its origin. Capture that exact stack before
+        // replacing it with the native permission surface, so denial restores the same page.
+        requestCameraPermissionForCurrentMenu();
+    }
+
+    private void requestCameraPermissionForCurrentMenu() {
+        MenuStackSnapshot restoreStack = menuController.snapshot();
+        externalSurface = MenuExternalSurfaceState.launched(
+                MenuExternalSurfaceState.Action.CAMERA_PERMISSION, CAMERA_PERMISSION_REQUEST,
+                restoreStack, menuPauseOwned,
+                MenuExternalSurfaceState.RestorePolicy.ALWAYS);
+        clearLegacyCameraPermissionFallback();
+        menuPauseOwned = false;
+        menuController.hide();
+        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
     }
 
     private void handleTouchItem(String id) {
@@ -928,6 +1171,44 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleOptionalDevicesItem(AndroidEmulationRuntime active, String id) {
+        if ("camera".equals(id)) {
+            String selected = cameraSelection(getPreferences(MODE_PRIVATE));
+            ArrayList<AndroidMenuModel.ChoiceValue> choices = new ArrayList<>(cameraChoices());
+            if (choices.stream().noneMatch(choice -> choice.token().equals(selected))) {
+                choices.add(new AndroidMenuModel.ChoiceValue(selected, "UNAVAILABLE", false));
+            }
+            openOptionPicker(MenuRoute.OPTIONAL_DEVICES, id, "CAMERA", choices, selected);
+            return;
+        }
+        if ("gamepad".equals(id)) {
+            SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+            String selected = gamepadSelection(preferences);
+            ArrayList<AndroidMenuModel.ChoiceValue> choices = new ArrayList<>();
+            choices.add(new AndroidMenuModel.ChoiceValue("none", "OFF"));
+            choices.add(new AndroidMenuModel.ChoiceValue("auto", "AUTO"));
+            AndroidInputRouter input = runtime == null ? null : runtime.input();
+            if (input != null) {
+                for (AndroidInputRouter.ControllerChoice choice : input.controllerChoices()) {
+                    choices.add(new AndroidMenuModel.ChoiceValue(choice.token(), choice.label()));
+                }
+            }
+            boolean listed = choices.stream().anyMatch(choice -> choice.token().equals(selected));
+            if (!listed && !"none".equals(selected) && !"auto".equals(selected)) {
+                choices.add(new AndroidMenuModel.ChoiceValue(selected, "UNAVAILABLE", false));
+            }
+            openOptionPicker(MenuRoute.OPTIONAL_DEVICES, id, "GAMEPAD", choices, selected);
+            return;
+        }
+        if ("gps".equals(id)) {
+            SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+            boolean enabled = !preferences.getBoolean(PREF_GPS_ENABLED, false);
+            preferences.edit().putBoolean(PREF_GPS_ENABLED, enabled).apply();
+            if (runtime != null) {
+                runtime.setGpsEnabled(enabled);
+            }
+            refreshMenuPages();
+            return;
+        }
         if (devicesDraft == null) {
             devicesDraft = loadDevicesDraft();
         }
@@ -1141,6 +1422,34 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         refreshMenuPages();
         menuController.push(MenuRoute.SAVE_STATES);
         loadStateSlots();
+    }
+
+    private void showRecentGames() {
+        recentGamesLoading = true;
+        recentGames = List.of();
+        recentGamesCatalogGeneration++;
+        refreshMenuPages();
+        menuController.push(MenuRoute.RECENT_GAMES);
+        AndroidEmulationRuntime active = runtime;
+        if (active == null) {
+            recentGamesLoading = false;
+            refreshMenuPages();
+            return;
+        }
+        long generation = recentGamesCatalogGeneration;
+        long ownerGeneration = lifecycleGeneration;
+        active.requestRecentGames(games -> {
+            if (generation != recentGamesCatalogGeneration
+                    || ownerGeneration != lifecycleGeneration
+                    || runtime != active
+                    || menuController == null || !menuController.visible()
+                    || menuController.route() != MenuRoute.RECENT_GAMES) {
+                return;
+            }
+            recentGames = List.copyOf(games);
+            recentGamesLoading = false;
+            refreshMenuPages();
+        });
     }
 
     private void loadStateSlots() {
@@ -1423,9 +1732,16 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         clearLegacyCameraPermissionFallback();
-        getPreferences(MODE_PRIVATE).edit().putBoolean("devices.camera", granted).apply();
+        SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+        String selected = cameraSelection(preferences);
+        if (!granted) {
+            selected = "off";
+        }
+        preferences.edit().putBoolean("devices.camera", granted)
+                .putString(PREF_CAMERA_SELECTION, selected).apply();
         if (runtime != null) {
-            runtime.setCameraEnabled(granted);
+            runtime.setCameraLens(selected);
+            runtime.setCameraEnabled(granted && !"off".equals(selected));
         }
         optionalDevicesStatus = granted ? "CAMERA ENABLED" : "CAMERA DENIED / DISABLED";
         externalSurface = pending.afterResult(granted);
@@ -1622,8 +1938,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (stackContains(snapshot, MenuRoute.SAVE_STATES)) {
             loadStateSlots();
         }
-        if (stackContains(snapshot, MenuRoute.PRINTER_PAPER)
-                || stackContains(snapshot, MenuRoute.OPTIONAL_DEVICES)) {
+        if (stackContains(snapshot, MenuRoute.RECENT_GAMES)) {
+            recentGamesLoading = true;
+            recentGamesCatalogGeneration++;
+            mainHandler.post(this::reloadRecentGames);
+        }
+        if (stackContains(snapshot, MenuRoute.PRINTER_PAPER)) {
             deferredMenuFocusRestore = snapshot;
             mainHandler.post(this::loadPrinterPreview);
         }
@@ -1631,9 +1951,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void restoreDeferredPaperFocusIfReady() {
         MenuStackSnapshot deferred = deferredMenuFocusRestore;
-        if (!deferred.visible()
-                || (!stackContains(deferred, MenuRoute.PRINTER_PAPER)
-                && !stackContains(deferred, MenuRoute.OPTIONAL_DEVICES))) {
+        if (!deferred.visible() || !stackContains(deferred, MenuRoute.PRINTER_PAPER)) {
             return;
         }
         if (printerPreview.state() != MenuPreview.State.READY) {
@@ -1733,23 +2051,62 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         AndroidMenuModel.AudioDraft audio = audioDraft == null ? loadAudioDraft() : audioDraft;
         AndroidMenuModel.TouchDraft touch = touchDraft == null
                 ? AndroidMenuModel.touchDraft(video.touchLayout()) : touchDraft;
-        AndroidMenuModel.DevicesDraft devices = devicesDraft == null
-                ? loadDevicesDraft() : devicesDraft;
         boolean controllerAvailable = activeControllerAvailable();
+        SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+        String selectedCamera = cameraSelection(preferences);
+        String camera = cameraChoices().stream().anyMatch(
+                choice -> choice.token().equals(selectedCamera)) ? selectedCamera : "unavailable";
+        String gamepad = gamepadSelection(preferences);
+        ArrayList<AndroidMenuModel.ChoiceValue> gamepadChoices = new ArrayList<>();
+        if (runtime != null) {
+            for (AndroidInputRouter.ControllerChoice choice : runtime.input().controllerChoices()) {
+                gamepadChoices.add(new AndroidMenuModel.ChoiceValue(choice.token(), choice.label()));
+            }
+        }
         menuController.setPages(List.of(
-                pausePage(), statePage(), libraryPage(), chooseRomPage(),
+                pausePage(), statePage(), recentGamesPage(), libraryPage(), chooseRomPage(),
                 AndroidMenuModel.settingsPage(),
                 AndroidMenuModel.audioPage(audio),
+                AndroidMenuModel.displayPage(
+                        preferences.getBoolean(PREF_DISPLAY_BORDER, false),
+                        "grey".equals(displayColors(preferences))),
                 AndroidMenuModel.touchPage(touch, controllerAvailable), controllerPage(),
-                AndroidMenuModel.optionalDevicesPage(devices, optionalDevicesStatus,
-                        printerPreview),
+                AndroidMenuModel.optionalDevicesPage(camera, gamepad,
+                        preferences.getBoolean(PREF_GPS_ENABLED, false), gamepadChoices),
+                AndroidMenuModel.optionPickerPage(
+                        optionSession == null ? "SELECT OPTION" : optionSession.title(),
+                        optionSession == null ? List.of() : optionSession.choices(),
+                        optionSession == null ? null : optionSession.selectedToken()),
                 AndroidMenuModel.printerPaperPage(printerPreview, printerStatus),
-                AndroidMenuModel.systemPage(systemPreferredFocus),
+                AndroidMenuModel.systemPage(systemDmg(preferences), systemCgb(preferences),
+                        systemBootstrap(preferences), systemPreferredFocus),
                 AndroidMenuModel.dataMediaPage(AndroidMenuModel.transferAvailability(
                         runtime != null, observedState)),
                 AndroidMenuModel.aboutPage(BuildConfig.VERSION_NAME, aboutStatus),
                 confirmationPage()));
         attemptDeferredFocusRestore();
+    }
+
+    private void reloadRecentGames() {
+        AndroidEmulationRuntime active = runtime;
+        if (active == null || menuController == null || !menuController.visible()
+                || menuController.route() != MenuRoute.RECENT_GAMES) {
+            return;
+        }
+        long generation = recentGamesCatalogGeneration;
+        long ownerGeneration = lifecycleGeneration;
+        active.requestRecentGames(games -> {
+            if (generation != recentGamesCatalogGeneration
+                    || ownerGeneration != lifecycleGeneration
+                    || runtime != active
+                    || menuController == null || !menuController.visible()
+                    || menuController.route() != MenuRoute.RECENT_GAMES) {
+                return;
+            }
+            recentGames = List.copyOf(games);
+            recentGamesLoading = false;
+            refreshMenuPages();
+        });
     }
 
     private MenuPageSpec pausePage() {
@@ -1772,7 +2129,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         item("open-rom", "OPEN ROM", "", runtime != null),
                         item("reset", "RESET GAME", "CONFIRM", runtime != null),
                         item("settings", "SETTINGS", "OPEN", true),
-                        item("stop", "STOP GAME", "CONFIRM", runtime != null)),
+                        item("recent-games", "RECENT GAMES", "OPEN", runtime != null)),
                 1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), null, preview);
     }
 
@@ -1804,6 +2161,37 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 items, 1,
                 List.of("D-PAD MOVE", "A " + mode, "B BACK"),
                 preferredFocus == null ? "slot:" + StateRef.MIN_SLOT : preferredFocus, preview);
+    }
+
+    private MenuPageSpec recentGamesPage() {
+        String preferred = null;
+        if (menuController != null && menuController.visible()
+                && menuController.route() == MenuRoute.RECENT_GAMES) {
+            MenuPresentation current = menuController.presentation();
+            if (current.focusedIndex() >= 0 && current.focusedIndex() < current.items().size()) {
+                preferred = current.items().get(current.focusedIndex()).id();
+            }
+        }
+        ArrayList<MenuPageSpec.RecentGame> items = new ArrayList<>(recentGames.size());
+        for (AndroidEmulationRuntime.RecentGame game : recentGames) {
+            items.add(new MenuPageSpec.RecentGame("recent:" + game.token(), game.name(),
+                    formatRecentPlayed(game.lastPlayedMillis()), true, game.preview()));
+        }
+        // A transient empty result is intentionally represented as the same safe status row as
+        // an empty catalog. The callback replaces it atomically once the private catalog read is
+        // complete, so there is never a URI or provider detail painted on-screen.
+        return AndroidMenuModel.recentGamesPage(items, preferred, recentGamesLoading);
+    }
+
+    private static String formatRecentPlayed(long millis) {
+        if (millis <= 0L) {
+            return "";
+        }
+        try {
+            return STATE_TIME_FORMAT.format(Instant.ofEpochMilli(millis));
+        } catch (DateTimeException | ArithmeticException ignored) {
+            return "";
+        }
     }
 
     /** Stable state rows shared by SAVE and LOAD; persisted rows carry a visual-only seal hint. */
@@ -1927,6 +2315,93 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         return AndroidMenuModel.audioDraft(
                 getPreferences(MODE_PRIVATE).getInt("audio.volume", 100),
                 getPreferences(MODE_PRIVATE).getBoolean("audio.muted", false));
+    }
+
+    private List<AndroidMenuModel.ChoiceValue> cameraChoices() {
+        ArrayList<AndroidMenuModel.ChoiceValue> choices = new ArrayList<>();
+        choices.add(new AndroidMenuModel.ChoiceValue("off", "OFF"));
+        boolean rear = true;
+        boolean front = true;
+        try {
+            CameraManager manager = (CameraManager) getSystemService(CAMERA_SERVICE);
+            if (manager != null) {
+                rear = false;
+                front = false;
+                for (String id : manager.getCameraIdList()) {
+                    CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
+                    Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                    rear |= facing != null && facing == CameraCharacteristics.LENS_FACING_BACK;
+                    front |= facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT;
+                }
+            }
+        } catch (Exception ignored) {
+            // CameraX remains the authority if the platform does not expose lens metadata.
+            rear = true;
+            front = true;
+        }
+        if (rear) choices.add(new AndroidMenuModel.ChoiceValue("rear", "REAR"));
+        if (front) choices.add(new AndroidMenuModel.ChoiceValue("front", "FRONT"));
+        return List.copyOf(choices);
+    }
+
+    private static String cameraSelection(SharedPreferences preferences) {
+        String selected = preferences.getString(PREF_CAMERA_SELECTION, null);
+        if (selected == null) {
+            return preferences.getBoolean("devices.camera", false) ? "rear" : "off";
+        }
+        return "front".equalsIgnoreCase(selected) || "rear".equalsIgnoreCase(selected)
+                ? selected.toLowerCase(java.util.Locale.US) : "off";
+    }
+
+    private static String gamepadSelection(SharedPreferences preferences) {
+        String selected = preferences.getString(PREF_GAMEPAD_SELECTION, "auto");
+        if (selected == null || selected.isBlank() || "AUTO".equalsIgnoreCase(selected)) {
+            return "auto";
+        }
+        if ("OFF".equalsIgnoreCase(selected) || "none".equalsIgnoreCase(selected)) {
+            return "none";
+        }
+        return selected;
+    }
+
+    private static String displayColors(SharedPreferences preferences) {
+        return "grey".equalsIgnoreCase(preferences.getString(PREF_DISPLAY_COLORS, "green"))
+                ? "grey" : "green";
+    }
+
+    private static String systemDmg(SharedPreferences preferences) {
+        String value = preferences.getString(PREF_SYSTEM_DMG, "auto");
+        if (value == null) {
+            return "auto";
+        }
+        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
+            case "dmg", "cgb", "sgb" -> value.toLowerCase(java.util.Locale.ROOT);
+            default -> "auto";
+        };
+    }
+
+    private static String systemCgb(SharedPreferences preferences) {
+        return "cgb".equalsIgnoreCase(preferences.getString(PREF_SYSTEM_CGB, "auto"))
+                ? "cgb" : "auto";
+    }
+
+    private static String systemBootstrap(SharedPreferences preferences) {
+        String value = preferences.getString(PREF_SYSTEM_BOOTSTRAP, "skip");
+        if (value == null) {
+            return "skip";
+        }
+        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
+            case "fast_forward", "fast-forward" -> "fast-forward";
+            case "full" -> "full";
+            default -> "skip";
+        };
+    }
+
+    private static void applySystemSettings(AndroidEmulationRuntime runtime,
+            SharedPreferences preferences) {
+        runtime.setSystemSelection("dmg-games", systemDmg(preferences));
+        runtime.setSystemSelection("cgb-games", systemCgb(preferences));
+        runtime.setSystemSelection("bootstrap", systemBootstrap(preferences));
     }
 
     private AndroidMenuModel.DevicesDraft loadDevicesDraft() {
@@ -2057,6 +2532,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         armLegacyCameraPermissionFallback(externalSurface);
         restoreDrafts(state);
+        restoreOptionSession(state);
         String confirm = state.getString(STATE_CONFIRM_VARIANT);
         if (confirm != null) {
             try {
@@ -2136,6 +2612,56 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
+    private void saveOptionSession(Bundle state) {
+        if (optionSession == null) {
+            return;
+        }
+        state.putBoolean(STATE_OPTION_ACTIVE, true);
+        state.putString(STATE_OPTION_ROUTE, optionSession.origin().name());
+        state.putString(STATE_OPTION_ID, optionSession.originId());
+        state.putString(STATE_OPTION_TITLE, optionSession.title());
+        state.putString(STATE_OPTION_SELECTED, optionSession.selectedToken());
+        ArrayList<String> tokens = new ArrayList<>();
+        ArrayList<String> labels = new ArrayList<>();
+        ArrayList<Boolean> enabled = new ArrayList<>();
+        for (AndroidMenuModel.ChoiceValue choice : optionSession.choices()) {
+            tokens.add(choice.token());
+            labels.add(choice.label());
+            enabled.add(choice.enabled());
+        }
+        state.putStringArrayList(STATE_OPTION_TOKENS, tokens);
+        state.putStringArrayList(STATE_OPTION_LABELS, labels);
+        state.putSerializable(STATE_OPTION_ENABLED, enabled);
+    }
+
+    private void restoreOptionSession(Bundle state) {
+        if (!state.getBoolean(STATE_OPTION_ACTIVE, false)) {
+            return;
+        }
+        try {
+            MenuRoute origin = MenuRoute.valueOf(state.getString(STATE_OPTION_ROUTE));
+            ArrayList<String> tokens = state.getStringArrayList(STATE_OPTION_TOKENS);
+            ArrayList<String> labels = state.getStringArrayList(STATE_OPTION_LABELS);
+            @SuppressWarnings("unchecked")
+            ArrayList<Boolean> enabled = (ArrayList<Boolean>) state.getSerializable(
+                    STATE_OPTION_ENABLED);
+            if (tokens == null || labels == null || tokens.size() != labels.size()
+                    || tokens.isEmpty()) {
+                return;
+            }
+            ArrayList<AndroidMenuModel.ChoiceValue> choices = new ArrayList<>();
+            for (int index = 0; index < tokens.size(); index++) {
+                choices.add(new AndroidMenuModel.ChoiceValue(tokens.get(index), labels.get(index),
+                        enabled == null || index >= enabled.size() || enabled.get(index)));
+            }
+            optionSession = new ChoiceSession(origin, state.getString(STATE_OPTION_ID),
+                    state.getString(STATE_OPTION_TITLE), choices,
+                    state.getString(STATE_OPTION_SELECTED));
+        } catch (RuntimeException ignored) {
+            optionSession = null;
+        }
+    }
+
     private static void writeSnapshot(Bundle state, String prefix, MenuStackSnapshot snapshot) {
         state.putInt(prefix + ".count", snapshot.frames().size());
         for (int index = 0; index < snapshot.frames().size(); index++) {
@@ -2174,6 +2700,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
         }
         return frames.isEmpty() ? MenuStackSnapshot.hidden() : new MenuStackSnapshot(frames);
+    }
+
+    private record ChoiceSession(MenuRoute origin, String originId, String title,
+                                 List<AndroidMenuModel.ChoiceValue> choices,
+                                 String selectedToken) {
+        private ChoiceSession {
+            choices = List.copyOf(choices);
+        }
     }
 
     @TargetApi(Build.VERSION_CODES.TIRAMISU)

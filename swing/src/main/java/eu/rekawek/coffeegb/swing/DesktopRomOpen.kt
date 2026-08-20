@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.RomChangeConfirmationPolicy
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.core.events.EventBus
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import java.awt.BorderLayout
 import java.awt.Color
@@ -74,6 +75,8 @@ internal class DesktopRomOpen(
     private val onRecentChanged: () -> Unit,
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
     private val onUpdate: (RomOpenUpdate) -> Unit = {},
+    private val recentMetadataStore: DesktopRecentGameMetadataStore =
+        DesktopRecentGameMetadataStore(),
 ) : AutoCloseable {
 
   private val progress =
@@ -84,7 +87,12 @@ internal class DesktopRomOpen(
       )
 
   private val service =
-      RomOpenService(eventBus, properties.recentRoms) { update -> handleUpdate(update) }
+      RomOpenService(
+          eventBus,
+          PreferencesRomRecentStore(properties.recentRoms),
+          { update -> handleUpdate(update) },
+          recentMetadataStore = recentMetadataStore,
+      )
 
   private var archiveSelectionHost: DesktopArchiveSelectionHost? = null
 
@@ -98,6 +106,19 @@ internal class DesktopRomOpen(
 
   fun open(path: Path, source: RomOpenSource) {
     open(listOf(RomOpenInput.LocalPath(path)), source)
+  }
+
+  /** Reopens a recent archive candidate by exact entry identity when the sidecar still matches. */
+  fun openRecent(path: Path, origin: RomOrigin?) {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater { openRecent(path, origin) }
+      return
+    }
+    beginOpen(
+        listOf(RomOpenInput.LocalPath(path)),
+        RomOpenSource.RECENT,
+        preferredOrigin = origin,
+    )
   }
 
   fun open(inputs: List<RomOpenInput>, source: RomOpenSource) {
@@ -324,10 +345,11 @@ internal class DesktopRomOpen(
       inputs: List<RomOpenInput>,
       source: RomOpenSource,
       recentPathToReplace: Path? = null,
+      preferredOrigin: RomOrigin? = null,
   ): Long? {
     val singlePath = (inputs.singleOrNull() as? RomOpenInput.LocalPath)?.path
     if (singlePath != null && !confirm(singlePath)) return null
-    return service.open(RomOpenRequest(inputs, source, recentPathToReplace))
+    return service.open(RomOpenRequest(inputs, source, recentPathToReplace, preferredOrigin))
   }
 
   private fun progressMessage(update: RomOpenUpdate.Progress): String {

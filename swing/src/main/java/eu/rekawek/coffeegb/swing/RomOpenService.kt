@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.core.memory.cart.RomSourceException
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import java.io.Closeable
 import java.nio.file.Path
+import java.time.Clock
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -45,13 +46,35 @@ data class RomOpenRequest(
     val source: RomOpenSource,
     /** Missing recent entry replaced atomically only after this request commits successfully. */
     val recentPathToReplace: Path? = null,
+    /** Exact path-backed ROM previously selected from this file or archive, when known. */
+    val preferredOrigin: RomOrigin? = null,
 ) {
   constructor(
       path: Path,
       source: RomOpenSource,
       recentPathToReplace: Path? = null,
-  ) : this(listOf(RomOpenInput.LocalPath(path)), source, recentPathToReplace)
+      preferredOrigin: RomOrigin? = null,
+  ) : this(listOf(RomOpenInput.LocalPath(path)), source, recentPathToReplace, preferredOrigin)
 }
+
+/** Resolves a persisted archive identity against the newly snapshotted, bounded inventory. */
+internal fun exactRecentArchiveCandidate(
+    snapshot: RomSourceSnapshot,
+    path: Path,
+    preferredOrigin: RomOrigin?,
+): RomSourceSnapshot.ArchiveCandidate? {
+  if (!snapshot.isArchive || !isRecentArchiveOriginForPath(path, preferredOrigin)) return null
+  val exactOrigin = preferredOrigin ?: return null
+  val entry = exactOrigin.archiveEntry().orElse(null) ?: return null
+  return snapshot.candidates().firstOrNull { candidate ->
+    candidate.entryName() == entry &&
+        candidate.entryOccurrence() == exactOrigin.archiveEntryOccurrence()
+  }
+}
+
+private fun isRecentArchiveOriginForPath(path: Path, origin: RomOrigin?): Boolean =
+    origin?.kind() == RomOrigin.Kind.ARCHIVE_ENTRY &&
+        origin.containerPath().orElse(null) == normalizedRecentPath(path)
 
 enum class RomOpenStage {
   QUEUED,
@@ -137,13 +160,20 @@ internal constructor(
     executor: ExecutorService? = null,
     private val uiExecutor: Executor =
         Executor { task -> SwingUtilities.invokeLater(task) },
+    private val recentMetadataStore: DesktopRecentGameMetadataStore? = null,
+    private val clock: Clock = Clock.systemUTC(),
 ) : Closeable {
 
   constructor(
       eventBus: EventBus,
       recentRoms: RecentRoms,
       listener: (RomOpenUpdate) -> Unit,
-  ) : this(eventBus, PreferencesRomRecentStore(recentRoms), listener)
+  ) : this(
+      eventBus,
+      PreferencesRomRecentStore(recentRoms),
+      listener,
+      recentMetadataStore = DesktopRecentGameMetadataStore(),
+  )
 
   private val executor =
       executor
@@ -205,6 +235,7 @@ internal constructor(
         val operation = claimSuccessfulTerminal(id) ?: return@register
         val path = operation.path
         val origin = event.origin ?: operation.origin
+        val playedAt = clock.instant()
         submitLifecycle {
           // The controller event and this disk/preferences work are intentionally separated.
           if (path == null || origin == null) {
@@ -216,6 +247,30 @@ internal constructor(
             recentStore.recordSuccessfulOpen(path, operation.request.recentPathToReplace)
           } catch (failure: RuntimeException) {
             LOG.warn("ROM opened but its recent-file entry could not be updated", failure)
+          }
+          recentMetadataStore?.let { metadataStore ->
+            val metadata =
+                runCatching {
+                      DesktopRecentGameMetadata.fromSuccessfulOpen(
+                          path,
+                          event.romName,
+                          playedAt,
+                          origin,
+                      )
+                    }
+                    .getOrElse { failure ->
+                      LOG.warn("ROM opened but its exact recent-game metadata was invalid", failure)
+                      null
+                    }
+            if (metadata == null ||
+                !metadataStore.record(metadata, operation.request.recentPathToReplace)) {
+              // A stale origin for the same archive would be worse than no origin: without this
+              // sidecar the next open safely returns to the bounded archive chooser.
+              metadataStore.remove(path)
+              LOG.warn(
+                  "ROM opened but its exact recent-game metadata could not be persisted; " +
+                      "the stale entry was discarded")
+            }
           }
           completeTerminal(
               operation,
@@ -285,6 +340,7 @@ internal constructor(
             request.inputs.asSequence().take(MAX_EXTERNAL_INPUTS).toList(),
             request.source,
             request.recentPathToReplace,
+            request.preferredOrigin,
         )
     val operation = Operation(nextRequestId.getAndIncrement(), boundedRequest)
     var unavailable = false
@@ -403,6 +459,9 @@ internal constructor(
 
   fun removeRecent(path: Path) {
     recentStore.remove(path)
+    if (recentMetadataStore?.remove(path) == false) {
+      LOG.warn("Recent ROM was removed but its exact metadata could not be removed")
+    }
   }
 
   fun recentPaths(): List<Path> = recentStore.getPaths()
@@ -677,9 +736,22 @@ internal constructor(
               path,
               RomOpenStage.INSPECTING,
           ))
+      val preferredArchiveCandidate =
+          exactRecentArchiveCandidate(snapshot, path, operation.request.preferredOrigin)
+      val exactArchivePreference =
+          isRecentArchiveOriginForPath(path, operation.request.preferredOrigin)
       if (!snapshot.isArchive) {
         dispatch(operation, snapshot.loadSingle())
-      } else if (snapshot.candidates().size == 1) {
+      } else if (preferredArchiveCandidate != null) {
+        dispatch(
+            operation,
+            snapshot.load(preferredArchiveCandidate.token()) {
+              operation.cancelled.get() || !isCurrent(operation)
+            },
+        )
+      } else if (operation.request.source != RomOpenSource.RECENT &&
+          !exactArchivePreference &&
+          snapshot.candidates().size == 1) {
         dispatch(operation, snapshot.loadSingle())
       } else {
         publish(
@@ -1132,7 +1204,7 @@ internal interface RomRecentStore {
   fun remove(path: Path)
 }
 
-private class PreferencesRomRecentStore(
+internal class PreferencesRomRecentStore(
     private val recentRoms: RecentRoms,
 ) : RomRecentStore {
   override fun getPaths(): List<Path> = recentRoms.getPaths()
