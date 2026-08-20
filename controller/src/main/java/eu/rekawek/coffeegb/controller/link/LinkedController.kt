@@ -1135,8 +1135,8 @@ class LinkedController(
     }
     repeat(clockSpec.controllerTicksPerFrame()) {
       sessions.forEach { it?.gameboy?.tick() }
-      timingTicker.run(clockSpec)
     }
+    timingTicker.runFrame(clockSpec)
 
     frame++
     workProgressFrame++

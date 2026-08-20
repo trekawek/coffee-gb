@@ -1,12 +1,14 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 
 public class NativeFrameStoreTest {
@@ -94,6 +96,63 @@ public class NativeFrameStoreTest {
             int green = requireSnapshot(store).pixels()[0];
             assertEquals(0xffaaaaaa, grayscale);
             assertEquals(0xff99c886, green);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void dmgProfileAcceptsRawDmgFrames() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.DMG);
+            int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            pixels[0] = 1;
+            store.publish(new Display.DmgFrameReadyEvent(pixels));
+
+            assertNotNull(store.snapshot());
+            assertEquals(0xff99c886, requireSnapshot(store).pixels()[0]);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void sgbProfileRejectsRawDmgButAcceptsDerivedSgbFrames() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            dmg[0] = 1;
+            store.publish(new Display.DmgFrameReadyEvent(dmg));
+            assertNull(store.snapshot());
+
+            int[] sgb = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            sgb[0] = 0x00f80000;
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(sgb, false));
+            NativeFrameStore.Snapshot frame = requireSnapshot(store);
+            assertEquals(Display.DISPLAY_WIDTH, frame.width());
+            assertEquals(Display.DISPLAY_HEIGHT, frame.height());
+            assertEquals(0xfff80000, frame.pixels()[0]);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void profileTransitionFromSgbToDmgSurvivesClear() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            store.clear();
+            int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            store.publish(new Display.DmgFrameReadyEvent(dmg));
+            assertNull(store.snapshot());
+
+            store.setHardwareProfile(HardwareProfileRegistry.DMG);
+            store.clear();
+            store.publish(new Display.DmgFrameReadyEvent(dmg));
+            assertNotNull(store.snapshot());
         } finally {
             store.close();
         }

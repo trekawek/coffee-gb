@@ -44,6 +44,33 @@ internal constructor(
       hasPacingDebt = false
       return
     }
+    selectClock(clockSpec)
+    if (++ticks < clockSpec.controllerTicksPerFrame()) {
+      return
+    }
+    ticks = 0
+    paceCompletedFrame()
+  }
+
+  /**
+   * Accounts for one already-completed controller frame.
+   *
+   * Ordinary controller loops advance the machine in one tight frame-sized batch, so they do not
+   * need to invoke the tick-granular entry point for every master tick. Debug continuations still
+   * use [run], because they can stop at any master-tick boundary. Calling this method establishes
+   * a frame boundary and discards any incomplete tick cadence left by a previous clock domain.
+   */
+  fun runFrame(clockSpec: ClockSpec) {
+    if (disabled) {
+      hasPacingDebt = false
+      return
+    }
+    selectClock(clockSpec)
+    ticks = 0
+    paceCompletedFrame()
+  }
+
+  private fun selectClock(clockSpec: ClockSpec) {
     if (activeClock != clockSpec) {
       activeClock = clockSpec
       frameNanos = clockSpec.newFrameNanosecondAccumulator()
@@ -51,10 +78,9 @@ internal constructor(
       deadline = nanoTime.asLong
       hasPacingDebt = false
     }
-    if (++ticks < clockSpec.controllerTicksPerFrame()) {
-      return
-    }
-    ticks = 0
+  }
+
+  private fun paceCompletedFrame() {
     val frameDurationNanos = frameNanos.advance(1)
     completedFrames++
     deadline =
@@ -71,24 +97,28 @@ internal constructor(
       // this avoids a prolonged burst of unpaced execution after a breakpoint or suspended host.
       deadline = now - MAX_CATCH_UP_NANOS
     }
-    // Sleep the bulk of the wait and yield only the last stretch: parkNanos wakes with
-    // millisecond-ish slack depending on the OS timer, and yielding keeps fine-grained pacing
-    // without relying on Java 9's unavailable spin-wait hint or pegging a core for the whole frame.
+    // Sleep the bulk of the wait and park the final stretch as well. Android API 26 does not
+    // expose Java 9's onSpinWait; replacing it with Thread.yield caused a scheduler-yield storm
+    // on slower devices. LockSupport.parkNanos remains available on API 26, does not allocate,
+    // and the absolute deadline below preserves the existing cadence/debt semantics. Keep the
+    // final wait bounded: a full-duration park oversleeps on some Android/desktop schedulers,
+    // while a final park of at most 1.5 ms retains frame cadence without Thread.yield polling.
+    // A normal frame therefore needs two park calls, not a repeated 1.5 ms scheduler storm.
     while (true) {
       val remaining = deadline - nanoTime.asLong
       if (remaining <= 0) {
         break
       }
-      if (remaining > SPIN_THRESHOLD_NANOS) {
-        parkNanos.accept(remaining - SPIN_THRESHOLD_NANOS)
+      if (remaining > FINAL_PARK_THRESHOLD_NANOS) {
+        parkNanos.accept(remaining - FINAL_PARK_THRESHOLD_NANOS)
       } else {
-        Thread.yield()
+        parkNanos.accept(remaining)
       }
     }
   }
 
   private companion object {
-    const val SPIN_THRESHOLD_NANOS = 1_500_000L
+    const val FINAL_PARK_THRESHOLD_NANOS = 1_500_000L
     const val MAX_CATCH_UP_NANOS = 50_000_000L
   }
 }

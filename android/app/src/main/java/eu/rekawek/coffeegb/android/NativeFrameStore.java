@@ -1,12 +1,14 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
@@ -42,6 +44,8 @@ final class NativeFrameStore implements AutoCloseable {
     private long nextSequence;
     private long droppedFrames;
     private volatile boolean grayscale;
+    /** True while the active session has a Super Game Boy presentation path. */
+    private volatile boolean sgbOutput;
     private boolean closed;
 
     NativeFrameStore() {
@@ -62,6 +66,13 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     void publish(Display.DmgFrameReadyEvent event) {
+        // SGB consumes the DMG event as its transfer input and synchronously publishes the final
+        // SGB presentation afterward. Publishing both lets a renderer scheduled between those
+        // callbacks briefly display the raw DMG palette. The active profile is latched by the
+        // controller before emulation starts, so only the final SGB event reaches this store.
+        if (sgbOutput) {
+            return;
+        }
         Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
         if (slot == null) {
             return;
@@ -88,6 +99,12 @@ final class NativeFrameStore implements AutoCloseable {
 
     boolean grayscale() {
         return grayscale;
+    }
+
+    /** Selects the presentation family for the active controller session. */
+    void setHardwareProfile(HardwareProfile profile) {
+        sgbOutput = Objects.requireNonNull(profile, "profile")
+                .capabilities().superGameboyCommands();
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {
@@ -155,6 +172,10 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     synchronized void clear() {
+        // Keep the last authoritative profile while a replacement is being parsed or selected.
+        // openRom() clears the presentation before it knows whether the old session will actually
+        // be replaced; a failed/rejected load must not let that still-active SGB session publish
+        // its raw DMG transfer input. The next HardwareProfileEvent overwrites this gate.
         nextSequence++;
         for (Slot slot : slots) {
             if (slot.state == SlotState.PUBLISHED) {

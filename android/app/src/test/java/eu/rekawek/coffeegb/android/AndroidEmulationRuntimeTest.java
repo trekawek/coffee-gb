@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.android;
 
+import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import org.junit.Test;
 
@@ -19,6 +20,15 @@ public class AndroidEmulationRuntimeTest {
         // active layout and its monotonic generation, rather than a RUNNING/PAUSED state, retain
         // the identity needed to accept that replacement session.
         assertTrue(AndroidEmulationRuntime.isResetReload(null, true, 12L, 11L));
+    }
+
+    @Test
+    public void androidControllerPropertiesDisableRewindThroughTransientOverride() {
+        try (EmulatorProperties properties =
+                     new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides())) {
+            assertFalse(properties.getSaves().getRewindEnabled());
+            assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
+        }
     }
 
     @Test

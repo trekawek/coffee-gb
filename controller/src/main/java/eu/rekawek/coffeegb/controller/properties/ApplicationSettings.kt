@@ -614,6 +614,7 @@ data class ApplicationSettingsOverrides(
     val hardwareProfile: HardwareProfile? = null,
     val bootstrapMode: BootstrapMode? = null,
     val batterySavesEnabled: Boolean? = null,
+    val rewindEnabled: Boolean? = null,
 ) {
   init {
     hardwareProfile?.let(HardwareProfileRegistry::requireRegistered)
