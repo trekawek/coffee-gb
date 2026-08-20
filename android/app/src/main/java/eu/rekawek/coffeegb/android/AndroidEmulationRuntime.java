@@ -159,7 +159,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Android has no rewind control yet; disable its snapshot work without changing saved settings. */
     static ApplicationSettingsOverrides androidSettingsOverrides() {
-        return new ApplicationSettingsOverrides(null, null, null, false);
+        return new ApplicationSettingsOverrides(null, null, null, false, false);
     }
 
     public RuntimeState state() {

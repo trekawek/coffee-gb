@@ -61,7 +61,12 @@ internal class RomSessionPreparer(
       return PreparedSession.FromDetachedState(config, it, romHashes, stateStore)
     }
 
-    warmRuntime(config)
+    // Runtime warmup is a desktop/JIT optimization. Host frontends may explicitly opt out when
+    // the disposable 120-frame run would delay first presentation; null retains the desktop
+    // default and avoids making this policy persistent.
+    if (properties.overrides.runtimeWarmupEnabled != false) {
+      warmRuntime(config)
+    }
 
     bootStateCache.getOrCreate(config)?.let {
       return PreparedSession.FromBootState(config, it, romHashes, stateStore)
