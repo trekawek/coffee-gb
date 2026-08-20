@@ -63,7 +63,10 @@ class ApplicationSettingsDisplayTest {
               )
 
           val encoded = ApplicationSettingsCodec.encode(document)
-          assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+          assertEquals(
+              ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+              encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+          )
           assertEquals(
               scalingMode.name,
               encoded[ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY],
@@ -114,7 +117,10 @@ class ApplicationSettingsDisplayTest {
       assertEquals(futureValues, migrated.unknownProperties)
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+      )
       assertEquals("EXPLICIT", canonical[ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY])
       assertEquals("4", canonical["display.scale"])
       assertEquals("000000", canonical[ApplicationSettingsCodec.DISPLAY_LETTERBOX_COLOR_KEY])

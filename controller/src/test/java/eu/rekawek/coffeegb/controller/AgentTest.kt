@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller
 
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugAnchoredMemoryRequest
 import eu.rekawek.coffeegb.core.debug.DebugErrorCode
@@ -40,6 +41,16 @@ import org.junit.rules.TemporaryFolder
 class AgentTest {
 
   @get:Rule val temporaryFolder = TemporaryFolder()
+
+  @Test
+  fun `headless agent defaults to accuracy and accepts an explicit execution mode`() {
+    Agent(testRom(0x00)).use { agent ->
+      assertEquals(ExecutionMode.ACCURACY, agent.executionMode)
+    }
+    Agent(testRom(0x00), ExecutionMode.PERFORMANCE).use { agent ->
+      assertEquals(ExecutionMode.PERFORMANCE, agent.executionMode)
+    }
+  }
 
   @Test
   fun headlessInspectionBindsPcStackAndMemoryToOneSnapshot() {

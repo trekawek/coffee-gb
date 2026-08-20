@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.agent
 
 import eu.rekawek.coffeegb.controller.debug.DebugResultDispatcher
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugBreakpointHit
@@ -59,7 +60,10 @@ import kotlin.concurrent.withLock
  * debug futures are completed asynchronously so a synchronous client continuation can never run on
  * the emulation owner.
  */
-internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
+internal class HeadlessAgentSession(
+    romFile: File,
+    private val executionMode: ExecutionMode = ExecutionMode.ACCURACY,
+) : AutoCloseable {
 
   private val commands = ArrayBlockingQueue<OwnerCommand>(COMMAND_CAPACITY)
 
@@ -137,7 +141,10 @@ internal class HeadlessAgentSession(romFile: File) : AutoCloseable {
     try {
       val eventBus = EventBusImpl(null, "headless-agent", false)
       registerMediaSubscribers(eventBus)
-      val configuration = Gameboy.GameboyConfiguration(Rom(romFile)).setSupportBatterySave(false)
+      val configuration =
+          Gameboy.GameboyConfiguration(Rom(romFile))
+              .setSupportBatterySave(false)
+              .setExecutionMode(executionMode)
       val machine = configuration.build()
       machine.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null)
       machine.enableDebugRetirementTracking()

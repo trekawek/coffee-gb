@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
@@ -29,6 +30,35 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class ApplicationSettingsStoreTest {
+
+  @Test
+  fun `execution mode defaults, round trips, and invalid values fail safe to accuracy`() {
+    assertEquals(
+        ExecutionMode.ACCURACY,
+        ApplicationSettingsCodec.decode(emptyMap()).settings.advanced.executionMode,
+    )
+
+    val performance =
+        ApplicationSettingsDocument(
+            ApplicationSettings(
+                advanced =
+                    ApplicationSettings.Advanced(executionMode = ExecutionMode.PERFORMANCE)))
+    val encoded = ApplicationSettingsCodec.encode(performance)
+    assertEquals("PERFORMANCE", encoded[ApplicationSettingsCodec.EXECUTION_MODE_KEY])
+    assertEquals(
+        ExecutionMode.PERFORMANCE,
+        ApplicationSettingsCodec.decode(encoded).settings.advanced.executionMode,
+    )
+
+    assertEquals(
+        ExecutionMode.ACCURACY,
+        ApplicationSettingsCodec.decode(
+                encoded + (ApplicationSettingsCodec.EXECUTION_MODE_KEY to "future-mode"))
+            .settings
+            .advanced
+            .executionMode,
+    )
+  }
 
   @Test
   fun `all legacy keys migrate to a canonical idempotent schema while unknowns survive`() {
@@ -425,14 +455,20 @@ class ApplicationSettingsStoreTest {
 
           Files.readAllBytes(path).also { bytes ->
             val canonical = ApplicationSettingsStore.decodeProperties(bytes)
-            assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+            assertEquals(
+                ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+                canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+            )
             assertEquals(store.current(), ApplicationSettingsCodec.decode(canonical))
             assertEquals(canonical, ApplicationSettingsCodec.encode(store.current()))
           }
         }
 
     ApplicationSettingsStore(path, debounceMillis = 60_000).use { store ->
-      assertEquals("8", store.current().settings.schemaVersion.toString())
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          store.current().settings.schemaVersion.toString(),
+      )
     }
     assertTrue(canonicalBytes.contentEquals(Files.readAllBytes(path)))
   }
@@ -836,7 +872,8 @@ class ApplicationSettingsStoreTest {
               "saves.rewindMemoryMiB" to "64",
               "saves.rewindSeconds" to "30",
               "peripherals.cameraDeviceIndex" to "0",
-              "settings.schemaVersion" to "8",
+              "settings.schemaVersion" to ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+              "system.executionMode" to "ACCURACY",
               "sound.enabled" to "false",
               "system.bootstrapMode" to "FAST_FORWARD",
               "system.cgbGames" to "cgb0",

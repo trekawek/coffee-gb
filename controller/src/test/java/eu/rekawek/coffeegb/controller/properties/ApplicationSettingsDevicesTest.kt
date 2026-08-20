@@ -103,7 +103,10 @@ class ApplicationSettingsDevicesTest {
     mutableTunings.clear()
 
     val encoded = ApplicationSettingsCodec.encode(document)
-    assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
     assertEquals(audioId('c'), encoded[ApplicationSettingsCodec.AUDIO_OUTPUT_KEY])
     assertEquals("37", encoded[ApplicationSettingsCodec.AUDIO_VOLUME_KEY])
     assertEquals("LOW", encoded[ApplicationSettingsCodec.AUDIO_LATENCY_KEY])
@@ -163,7 +166,10 @@ class ApplicationSettingsDevicesTest {
       assertEquals(futureValues, migrated.unknownProperties)
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+      )
       assertEquals("default", canonical[ApplicationSettingsCodec.AUDIO_OUTPUT_KEY])
       assertEquals("100", canonical[ApplicationSettingsCodec.AUDIO_VOLUME_KEY])
       assertEquals("BALANCED", canonical[ApplicationSettingsCodec.AUDIO_LATENCY_KEY])
@@ -293,7 +299,10 @@ class ApplicationSettingsDevicesTest {
 
     val encoded = ApplicationSettingsCodec.encode(document)
 
-    assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
     assertEquals(
         ApplicationSettings.MAX_CAMERA_DEVICE_INDEX.toString(),
         encoded[ApplicationSettingsCodec.CAMERA_DEVICE_INDEX_KEY],

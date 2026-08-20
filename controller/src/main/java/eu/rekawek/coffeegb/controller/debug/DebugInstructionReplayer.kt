@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.replay.ReplayInputSource
 import eu.rekawek.coffeegb.controller.replay.ReplayRuntime
 import eu.rekawek.coffeegb.controller.state.SessionSnapshot
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.debug.history.DebugHistoryPosition
 import eu.rekawek.coffeegb.core.joypad.InputTimelineObserver
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
@@ -130,11 +131,13 @@ internal class DebugInstructionReplayer : AutoCloseable {
     close()
     val input = ReplayInputSource()
     val configuration =
-        liveSession.config.forDebugHistoryReplay(
-            liveSession.gameboy,
-            VirtualTimeSource(),
-            input,
-        )
+        liveSession.config
+            .forDebugHistoryReplay(
+                liveSession.gameboy,
+                VirtualTimeSource(),
+                input,
+            )
+            .setExecutionMode(ExecutionMode.ACCURACY)
     val serialEndpoint =
         when (liveSession.serialEndpoint) {
           SerialEndpoint.NULL_ENDPOINT -> SerialEndpoint.NULL_ENDPOINT

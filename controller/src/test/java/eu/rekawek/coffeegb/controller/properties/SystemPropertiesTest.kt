@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
@@ -28,6 +29,35 @@ class SystemPropertiesTest {
       properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = mode.name
       assertEquals(mode, properties.system.bootstrapMode)
     }
+  }
+
+  @Test
+  fun `execution mode defaults, persists, and transiently overrides session configuration`() {
+    val properties = testEmulatorProperties()
+    assertEquals(ExecutionMode.ACCURACY, properties.system.executionMode)
+
+    properties.updateApplicationSettings { settings ->
+      settings.copy(
+          advanced = settings.advanced.copy(executionMode = ExecutionMode.PERFORMANCE))
+    }
+    assertEquals(ExecutionMode.PERFORMANCE, properties.system.executionMode)
+
+    val rom = Rom(Paths.get("src/test/resources/roms", "cpu_instrs.gb").toFile())
+    assertEquals(
+        ExecutionMode.PERFORMANCE,
+        Controller.createGameboyConfig(properties, rom).executionMode,
+    )
+
+    val overridden = testEmulatorProperties(executionMode = ExecutionMode.ACCURACY)
+    overridden.updateApplicationSettings { settings ->
+      settings.copy(
+          advanced = settings.advanced.copy(executionMode = ExecutionMode.PERFORMANCE))
+    }
+    assertEquals(ExecutionMode.ACCURACY, overridden.system.executionMode)
+    assertEquals(
+        ExecutionMode.ACCURACY,
+        Controller.createGameboyConfig(overridden, rom).executionMode,
+    )
   }
 
   @Test

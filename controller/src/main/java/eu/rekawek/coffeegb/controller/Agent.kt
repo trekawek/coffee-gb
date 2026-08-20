@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.agent.AgentDisassembler
 import eu.rekawek.coffeegb.controller.agent.HeadlessAgentSession
 import eu.rekawek.coffeegb.controller.state.StateImage
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
 import eu.rekawek.coffeegb.core.debug.DebugButton
 import eu.rekawek.coffeegb.core.debug.DebugCpuState
@@ -24,9 +25,12 @@ import java.util.concurrent.ExecutionException
  * Each instance owns one named emulation thread. Call [close] when finished; Kotlin callers can use
  * `Agent(file).use { ... }`. Frame output is an immutable, toolkit-neutral pixel value.
  */
-class Agent(romFile: File) : AutoCloseable {
+class Agent @JvmOverloads constructor(
+    romFile: File,
+    val executionMode: ExecutionMode = ExecutionMode.ACCURACY,
+) : AutoCloseable {
 
-  private val session = HeadlessAgentSession(romFile)
+  private val session = HeadlessAgentSession(romFile, executionMode)
 
   val debugPort: DebugPort
     get() = session.debugPort

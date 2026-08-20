@@ -13,6 +13,7 @@ import eu.rekawek.coffeegb.controller.state.StateDecodeException
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
@@ -117,6 +118,12 @@ object ReplayCompatibility {
   /** Rejects live services and sensor cartridges outside deterministic replay-v1's scope. */
   fun validateRecording(session: Session, initialMode: ReplayInitialMode) {
     validateCartridges(session.config)
+    if (session.gameboy.executionMode != ExecutionMode.ACCURACY) {
+      incompatible(
+          ReplayCompatibilityReason.BEHAVIOR_MISMATCH,
+          "Replay recording requires Accuracy execution mode until replay identity carries mode",
+      )
+    }
     if (session.serialEndpoint !== SerialEndpoint.NULL_ENDPOINT) {
       incompatible(
           ReplayCompatibilityReason.UNSUPPORTED_SERIAL_PERIPHERAL,

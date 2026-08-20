@@ -22,6 +22,7 @@ import eu.rekawek.coffeegb.controller.state.StateRootKind
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
@@ -1563,6 +1564,9 @@ class Connection(
           .setMealybugDmgBlob(mealybugDmgBlob)
           .setCodeBreakerRumble(codeBreakerRumble)
           .setDisplaySgbBorder(displaySgbBorder)
+          // Protocol payloads do not carry execution-mode identity yet; linked sessions use the
+          // reference executor until that handshake is versioned.
+          .setExecutionMode(ExecutionMode.ACCURACY)
           .setSlotRom(slotRom?.let(::Rom))
           .setSupportBatterySave(false)
       // A portable checkpoint already owns the mapper RAM and RTC data, but its detached graph

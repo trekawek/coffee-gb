@@ -683,6 +683,7 @@ interface Controller : AutoCloseable {
       }
       config.setHardwareProfile(hardwareProfile)
       config.setBootstrapMode(bootstrapMode)
+      config.setExecutionMode(properties.system.executionMode)
       config.setSupportBatterySave(properties.saves.batterySavesEnabled)
       config.setPlayerInputSource(properties.playerInputSource)
       if (!config.hardwareProfile.capabilities().superGameboyBorder() ||

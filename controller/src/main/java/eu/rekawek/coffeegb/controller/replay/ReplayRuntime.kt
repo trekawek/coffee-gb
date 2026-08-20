@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller.replay
 
 import eu.rekawek.coffeegb.controller.Session
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource
@@ -13,6 +14,7 @@ internal object ReplayRuntime {
       source: Gameboy.GameboyConfiguration,
       rtcTimeSource: TimeSource,
       playerInputSource: PlayerInputSource,
+      executionMode: ExecutionMode = source.executionMode,
   ): Gameboy.GameboyConfiguration =
       Gameboy.GameboyConfiguration(source.rom)
           .setHardwareProfile(source.hardwareProfile)
@@ -21,6 +23,7 @@ internal object ReplayRuntime {
           .setMealybugDmgBlob(source.isMealybugDmgBlob)
           .setCodeBreakerRumble(source.isCodeBreakerRumble)
           .setDisplaySgbBorder(source.isDisplaySgbBorder)
+          .setExecutionMode(executionMode)
           .setSupportBatterySave(false)
           .setBatteryStorage(null, null)
           .setRtcTimeSource(rtcTimeSource)

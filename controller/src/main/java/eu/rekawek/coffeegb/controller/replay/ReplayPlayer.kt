@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.replay
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.headless.HeadlessMachineSession
 import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
@@ -241,6 +242,7 @@ class ReplayPlayer private constructor(
               configuration,
               VirtualTimeSource(replay.initialConditions.rtcEpochMillis),
               inputSource,
+              executionMode = ExecutionMode.ACCURACY,
           )
       val session =
           ReplayRuntime.session(

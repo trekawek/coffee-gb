@@ -681,7 +681,10 @@ class BasicController private constructor(
       session?.config?.let { config ->
         val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
-        if (newProfile != config.hardwareProfile || newBootstrapMode != config.bootstrapMode) {
+        val newExecutionMode = properties.system.executionMode
+        if (newProfile != config.hardwareProfile ||
+            newBootstrapMode != config.bootstrapMode ||
+            newExecutionMode != config.executionMode) {
           eventBus.post(Controller.LoadRomEvent(config.rom.image))
         }
       }
