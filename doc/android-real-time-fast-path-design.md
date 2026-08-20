@@ -22,9 +22,9 @@ rows stay separate:
 | CGB0 | CGB revision 0 with a color cartridge | 59.7275 FPS |
 | CGB DMG-compatibility | CGB hardware, non-color cartridge, effective DMG compatibility | 59.7275 FPS |
 | SGB | SGB | 61.168 FPS |
-| SGB2 | SGB2 | 61.168 FPS |
+| SGB2 | SGB2 | 59.7275 FPS |
 
-The cadence is derived from the core clock (4,194,304 / 70,224 for legacy/CGB and
+The cadence is derived from the core clock (4,194,304 / 70,224 for legacy/CGB/SGB2 and
 47,250,000 / 772,464 for SGB), not from an Android timer or an overclocked emulation loop.
 Native CGB, CGB0, and CGB DMG-compatibility are different rows even when they use the same
 cartridge in a diagnostic run. A requested profile is not evidence of the effective profile:
