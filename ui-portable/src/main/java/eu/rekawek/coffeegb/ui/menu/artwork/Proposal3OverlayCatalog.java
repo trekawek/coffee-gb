@@ -18,7 +18,8 @@ import java.util.Objects;
  */
 final class Proposal3OverlayCatalog {
 
-    static final MenuRect OPEN_ROM_HEADER = new MenuRect(691, 27, 202, 57);
+    /** Full source-artwork footprint of the obsolete Library Open ROM header button. */
+    static final MenuRect OPEN_ROM_HEADER = new MenuRect(688, 25, 207, 70);
     static final MenuRect BACK_HEADER = new MenuRect(744, 25, 151, 61);
     /** Full source-artwork footprint of the obsolete confirmation-page Back button. */
     static final MenuRect CONFIRM_HEADER_CLEAR = new MenuRect(735, 25, 165, 61);
@@ -80,7 +81,8 @@ final class Proposal3OverlayCatalog {
     static final List<MenuRect> SETTINGS_DIVIDERS = dividers(SETTINGS_ROW_BOUNDS);
     private static final List<MenuRect> CONTROLLER_ROW_BOUNDS = equalRows(366, 115, 544, 467, 7, 2);
     static final List<MenuRect> CONTROLLER_DIVIDERS = dividers(CONTROLLER_ROW_BOUNDS);
-    private static final List<MenuRect> LIBRARY_ROW_BOUNDS = equalRows(369, 175, 528, 389, 7, 3);
+    /** Library keeps the same seven-row rail height as the other full-page menus. */
+    private static final List<MenuRect> LIBRARY_ROW_BOUNDS = equalRows(369, 117, 528, 529, 7, 3);
     static final List<MenuRect> LIBRARY_DIVIDERS = dividers(LIBRARY_ROW_BOUNDS);
     private static final List<MenuRect> CHOOSE_ROM_ROW_BOUNDS = equalRows(387, 179, 524, 333, 7, 3);
     static final List<MenuRect> CHOOSE_ROM_DIVIDERS = dividers(CHOOSE_ROM_ROW_BOUNDS);
@@ -251,10 +253,9 @@ final class Proposal3OverlayCatalog {
 
         layouts.put(MenuRoute.LIBRARY, layout(MenuRoute.LIBRARY,
                 rows(LIBRARY_ROW_BOUNDS, Surface.DARK),
-                actions(new int[][]{{34, 583, 856, 52}}, Surface.PAPER),
-                masks(LIBRARY_LEFT_META, LIBRARY_PICKER_COPY,
-                        rowsMasks(LIBRARY_ROW_BOUNDS), LIBRARY_DIVIDERS.toArray(new MenuRect[0]),
-                        inner(34, 583, 856, 52)), true,
+                List.of(),
+                masks(OPEN_ROM_HEADER, rowsMasks(LIBRARY_ROW_BOUNDS),
+                        LIBRARY_DIVIDERS.toArray(new MenuRect[0])), true,
                 "recent-0", null, false));
 
         layouts.put(MenuRoute.CHOOSE_ROM, layout(MenuRoute.CHOOSE_ROM,

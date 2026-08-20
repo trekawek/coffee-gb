@@ -816,9 +816,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleMenuHeader(MenuRoute route) {
-        if (route == MenuRoute.LIBRARY) {
-            openRomFromMenu();
-        }
+        // Library has no header action. Open ROM is an ordinary row, matching the pause menu.
     }
 
     private void handleMenuAdjustment(MenuRoute route, String id, int direction) {
@@ -838,7 +836,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case PAUSE_CONSOLE -> handlePauseItem(active, id);
             case SAVE_STATES -> handleStateItem(active, id, secondary);
             case RECENT_GAMES -> handleRecentGamesItem(active, id);
-            case LIBRARY -> handleLibraryItem(active, id);
+            case LIBRARY -> handleLibraryItem(id);
             case CHOOSE_ROM -> handleChooseRomItem(active, id);
             case SETTINGS -> handleSettingsItem(id);
             case AUDIO -> handleAudioItem(id);
@@ -918,21 +916,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         active.selectRecentGame(token);
     }
 
-    private void handleLibraryItem(AndroidEmulationRuntime active, String id) {
-        if ("open-rom".equals(id)) {
+    private void handleLibraryItem(String id) {
+        if ("recent-games".equals(id)) {
+            showRecentGames();
+        } else if ("open-rom".equals(id)) {
             openRomFromMenu();
-        } else if ("recent-rom".equals(id) && active != null) {
-            active.requestRecentDocuments();
-        } else if (id.startsWith("recent:") && active != null) {
-            long token = parseToken(id.substring("recent:".length()));
-            if (token >= 0) {
-                selectionActionInFlight = true;
-                menuPauseOwned = false;
-                menuController.hide();
-                active.selectRecentDocument(token);
-            }
-        } else if ("choose-rom".equals(id)) {
-            menuController.push(MenuRoute.CHOOSE_ROM);
+        } else if ("settings".equals(id)) {
+            menuController.push(MenuRoute.SETTINGS);
         }
     }
 
@@ -2236,23 +2226,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private MenuPageSpec libraryPage() {
-        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
-        if (observedState.phase() == RuntimeState.Phase.AWAITING_RECENT_SELECTION) {
-            for (RuntimeState.Selection selection : observedState.selections()) {
-                items.add(item("recent:" + selection.token(), selection.label(), "A OPEN", true));
-            }
-        } else {
-            items.add(item("recent-rom", "RECENT ROMS", "CHOOSE", runtime != null));
-            items.add(item("choose-rom", "CHOOSE ROM", "ZIP RESULTS",
-                    observedState.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION));
-        }
-        items.add(item("open-rom", "OPEN ROM", "NATIVE PICKER", runtime != null));
-        if (runtime == null) {
-            items.add(item("wait", "RUNTIME STARTING", "WAIT", true));
-        }
-        return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
-                List.of("DOCUMENT PICKER NATIVE", "RECENT METADATA PRIVATE", "ZIP MULTI-ROM"),
-                items, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
+        return AndroidMenuModel.libraryPage(runtime != null);
     }
 
     private MenuPageSpec chooseRomPage() {

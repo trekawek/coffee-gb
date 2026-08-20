@@ -25,6 +25,23 @@ public class AndroidMenuModelTest {
     }
 
     @Test
+    public void libraryUsesThreePauseEquivalentRowsWithoutLegacyPickerCopy() {
+        MenuPageSpec page = AndroidMenuModel.libraryPage(true);
+
+        assertIds(page, "recent-games", "open-rom", "settings");
+        assertEquals("", page.headerAction());
+        assertEquals("", page.sideHeading());
+        assertTrue(page.sideLines().isEmpty());
+        assertEquals("recent-games", page.preferredFocusId());
+
+        MenuPageSpec unavailable = AndroidMenuModel.libraryPage(false);
+        assertFalse(unavailable.items().get(0).enabled());
+        assertFalse(unavailable.items().get(1).enabled());
+        assertTrue(unavailable.items().get(2).enabled());
+        assertEquals("settings", unavailable.preferredFocusId());
+    }
+
+    @Test
     public void sharedFooterAdvertisesTheThreeButtonMenuContract() {
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"),
                 AndroidMenuModel.settingsPage().footerHints());

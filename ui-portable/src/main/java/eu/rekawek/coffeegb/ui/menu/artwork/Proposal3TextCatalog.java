@@ -161,11 +161,8 @@ final class Proposal3TextCatalog {
     }
 
     private static void library(List<TextRegion> regions) {
-        literal(regions, "OPEN ROM", new MenuRect(69, 167, 280, 44), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.SEMIBOLD);
-        side(regions, new MenuRect(494, 123, 320, 44),
-                new MenuRect[]{new MenuRect(42, 425, 320, 36),
-                        new MenuRect(42, 466, 320, 36), new MenuRect(42, 507, 320, 37)});
+        // The Library left panel is intentionally icon-only. The folder/cartridge opener is part
+        // of the approved route artwork; all actions live in the seven-row rail on the right.
     }
 
     private static void chooseRom(List<TextRegion> regions) {

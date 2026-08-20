@@ -209,6 +209,10 @@ public class Proposal3MenuCompositorTest {
         assertSevenEqualRows(MenuRoute.CONTROLLER_MAPPING);
         assertSevenEqualRows(MenuRoute.LIBRARY);
         assertSevenEqualRows(MenuRoute.CHOOSE_ROM);
+        assertEquals("Library uses the full seven-row rail", 7,
+                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).rows().size());
+        assertTrue("Library no longer has a synthetic bottom action",
+                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).actions().isEmpty());
 
         Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
                 MenuRoute.SAVE_STATES);
@@ -651,7 +655,6 @@ public class Proposal3MenuCompositorTest {
                         || route == MenuRoute.TOUCH_CONTROLS
                         || route == MenuRoute.CONTROLLER_MAPPING
                         || route == MenuRoute.OPTIONAL_DEVICES
-                        || route == MenuRoute.LIBRARY
                         || route == MenuRoute.SYSTEM;
                 MenuRect label = Proposal3MenuCompositor.rowLabelBoundsForAudit(route,
                         layout.rows().get(index).bounds(), detail, index);
@@ -803,30 +806,26 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
-    public void dynamicLibraryLabelAndDetailUseDisjointWidgetColumns() throws Exception {
+    public void libraryUsesThreePlainRowsInsideTheFullSevenRowRail() throws Exception {
         MenuPresentation live = presentation(new MenuPageSpec(MenuRoute.LIBRARY,
-                "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS", List.of(), List.of(
-                        new MenuPageSpec.Item("recent-rom", "RECENT ROMS", "CHOOSE", true),
-                        new MenuPageSpec.Item("choose-rom", "CHOOSE ROM", "ZIP RESULTS", true),
-                        new MenuPageSpec.Item("open-rom", "OPEN ROM", "SELECT FILE", true)),
-                1, List.of("D-PAD MOVE", "[A] OK", "[B] BACK"), "recent-rom",
+                "COFFEE GB", "LIBRARY", "", "", List.of(), List.of(
+                        new MenuPageSpec.Item("recent-games", "RECENT GAMES", "", true),
+                        new MenuPageSpec.Item("open-rom", "OPEN ROM", "", true),
+                        new MenuPageSpec.Item("settings", "SETTINGS", "", true)),
+                1, List.of("D-PAD MOVE", "[A] OK", "[B] BACK"), "recent-games",
                 MenuPreview.empty()));
+        assertEquals(List.of("recent-games", "open-rom", "settings"), live.items().stream()
+                .map(MenuPresentation.Item::id).toList());
+        assertEquals("", live.headerAction());
+        assertEquals("", live.sideHeading());
+        assertTrue(live.sideLines().isEmpty());
+
+        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY).copyPixels();
         int[] pixels = new Proposal3MenuCompositor().compose(live).orElseThrow().copyPixels();
-        // The coordinated row compositor reserves x=682..693 between the ROM label and its
-        // right-aligned status. No light glyph pixel may leak across that gutter.
-        MenuRect firstLibraryRow = Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY)
-                .rows().get(0).bounds();
-        for (int y = firstLibraryRow.y(); y < firstLibraryRow.bottom(); y++) {
-            for (int x = 682; x < 694; x++) {
-                int value = pixels[y * 924 + x];
-                int average = ((value >>> 16 & 0xff) + (value >>> 8 & 0xff)
-                        + (value & 0xff)) / 3;
-                assertTrue("library label/detail overlap at " + x + "," + y,
-                        average < 125);
-            }
-        }
-        assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY).copyPixels(),
-                pixels, Proposal3MenuCompositor.dynamicMasks(MenuRoute.LIBRARY));
+        assertFalse("Library rows were not rendered", Arrays.equals(template, pixels));
+        // The icon-only left panel lies outside every dynamic mask and must remain byte-identical.
+        assertNoDifferenceOutside(template, pixels,
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.LIBRARY));
     }
 
     @Test
@@ -1368,7 +1367,7 @@ public class Proposal3MenuCompositorTest {
             case OPTIONAL_DEVICES -> "camera";
             case OPTION_PICKER -> "choice:default";
             case DATA_MEDIA -> "import-battery";
-            case LIBRARY -> "recent-rom";
+            case LIBRARY -> "recent-games";
             case CHOOSE_ROM -> "rom-1";
             case SYSTEM -> "dmg-games";
             case ABOUT -> "privacy-notices";
@@ -1390,7 +1389,7 @@ public class Proposal3MenuCompositorTest {
     private static boolean supportsRowDetails(MenuRoute route) {
         return switch (route) {
             case SAVE_STATES, AUDIO, TOUCH_CONTROLS, CONTROLLER_MAPPING,
-                    OPTIONAL_DEVICES, LIBRARY, SYSTEM -> true;
+                    OPTIONAL_DEVICES, SYSTEM -> true;
             default -> false;
         };
     }

@@ -95,7 +95,9 @@ ROUTE_PAPER_TEXT = {
         rect(34, 492, 330, 132),
     ],
     "08-library.png": [
-        rect(48, 158, 300, 52), rect(470, 116, 350, 52), rect(34, 412, 330, 50),
+        # Library is icon-only on the left; clear the old opener title and picker copy while
+        # preserving the folder/cartridge illustration between those bands.
+        rect(48, 158, 300, 52), rect(34, 412, 330, 50),
         rect(34, 454, 330, 50), rect(34, 496, 330, 50),
     ],
     "09-choose-rom.png": [
@@ -147,6 +149,10 @@ ROUTE_FLAT_PAPER = {
     "04-touch-controls.png": [rect(744, 25, 151, 61)],
     "05-controller-mapping.png": [rect(744, 25, 151, 61)],
     "10-system.png": [rect(744, 25, 151, 61)],
+    # Library no longer offers duplicate Open ROM buttons in the header or below the rail. The
+    # full header footprint includes its outline; the lower clear stops at the right-side rail so
+    # the folder/cartridge illustration remains untouched above it.
+    "08-library.png": [rect(688, 25, 207, 70), rect(8, 570, 361, 76)],
 }
 
 # Exact half-open inner pause-screen aperture.  It deliberately reaches under the stepped bezel
@@ -185,8 +191,7 @@ ROUTE_WIDGETS = {
          (374, 379, 535, 83), (374, 465, 535, 84), (374, 553, 535, 86)]],
     # The recent-ROM list follows the same seven-item viewport rule as the state and settings
     # rails. Runtime dividers and chevrons are painted over this clean continuous surface.
-    "08-library.png": [("dark", rect(369, 175, 528, 389))] +
-        [("paper", inner(34, 583, 856, 52))],
+    "08-library.png": [("dark", rect(369, 117, 528, 529))],
     # ZIP candidate selection also scrolls in seven compact rows, while its two actions retain
     # their authored lower-panel footprint.
     "09-choose-rom.png": [("dark", rect(387, 179, 524, 333))] + [("dark", inner(*value)) for
