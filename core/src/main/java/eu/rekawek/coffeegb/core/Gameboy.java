@@ -645,12 +645,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (!bootCompatibilityResolved) {
             applyBootCompatibilityIfReady();
         }
-        if (newMode != null) {
+        if (gbc && newMode != null) {
             hdma.onGpuUpdate(newMode);
         }
-        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
-                gpu.isStatModeLatchRephasedBySpeedSwitch());
-        cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        if (gbc) {
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+            cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        }
 
         boolean stopFrameBlanked = cpu.consumeStopFrameBlankRequest();
         if (stopFrameBlanked) {
@@ -661,7 +663,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (!gpu.isLcdEnabled()) {
             if (!lcdDisabled) {
                 lcdDisabled = true;
-                hdma.onLcdSwitch(false);
+                if (gbc) {
+                    hdma.onLcdSwitch(false);
+                }
                 lcdOffTicks = 0;
             }
             // A very short LCD-off (a common way to squeeze in a VRAM rewrite, e.g. the
@@ -682,7 +686,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             if (lcdDisabled) {
                 lcdDisabled = false;
-                hdma.onLcdSwitch(true);
+                if (gbc) {
+                    hdma.onLcdSwitch(true);
+                }
             }
             if (!stopFrameBlanked && newMode == Mode.VBlank) {
                 requestedScreenRefresh = true;
@@ -732,7 +738,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (speedSwitchTail) {
             speedSwitchTailTicks--;
             if (speedSwitchTailTicks == 0) {
-                hdma.onSpeedSwitchComplete();
+                if (gbc) {
+                    hdma.onSpeedSwitchComplete();
+                }
                 gpu.onSpeedSwitchComplete();
             }
         } else if (speedSwitching) {
@@ -740,7 +748,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // timer and PPU clocks continue running. A granted HBlank burst also
             // advances unless an active OAM transfer owns the shared DMA clock.
             cpu.tick();
-            if (hdma.pausesOamDmaForSpeedSwitchBurst()
+            if (gbc && hdma.pausesOamDmaForSpeedSwitchBurst()
                     && !dma.isTransferInProgress()) {
                 hdma.tick();
             }
@@ -753,16 +761,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         && !speedSwitchClockPhaseShifted
                         && gpu.isLcdEnabled()
                         && (gpu.getTicksInLine() & 3) == 0;
-                int completedHblankBurstAdvance = hdma.completedHblankSpeedSwitchBurst()
+                int completedHblankBurstAdvance = gbc && hdma.completedHblankSpeedSwitchBurst()
                         ? COMPLETED_HBLANK_SPEED_SWITCH_ADVANCE_TICKS : 0;
                 int pendingHblankAlignment = 0;
-                if (hdma.alignsPendingHblankSpeedSwitchTail()) {
+                if (gbc && hdma.alignsPendingHblankSpeedSwitchTail()) {
                     pendingHblankAlignment = dma.isTransferInProgress()
                             ? OAM_DMA_HBLANK_SPEED_SWITCH_DELAY_TICKS
                             : -PENDING_HBLANK_SPEED_SWITCH_ADVANCE_TICKS;
                 }
                 speedSwitchTailTicks = baseSpeedSwitchTailTicks(longClockMuxPhase,
-                        hdma.holdsHblankSpeedSwitchTail())
+                        gbc && hdma.holdsHblankSpeedSwitchTail())
                         - completedHblankBurstAdvance
                         + (speedMode.getSpeedMode() == 2 && speedSwitchClockPhaseShifted ? 1 : 0)
                         + pendingHblankAlignment;
@@ -770,11 +778,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     speedSwitchClockPhaseShifted = true;
                 }
                 if (speedSwitchTailTicks <= 0) {
-                    hdma.onSpeedSwitchComplete();
+                    if (gbc) {
+                        hdma.onSpeedSwitchComplete();
+                    }
                     gpu.onSpeedSwitchComplete();
                 }
             }
-        } else if (hdma.isTransferInProgress()) {
+        } else if (gbc && hdma.isTransferInProgress()) {
             Cpu.State dmaCpuState = cpu.getState();
             if (dmaCpuState == Cpu.State.HALTED
                     || dmaCpuState == Cpu.State.STOPPED) {
@@ -839,7 +849,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             // A retiring instruction can issue its final VRAM read on the CPU half
             // of the edge immediately before an HBlank request reaches arbitration.
-            boolean retiringIntoHdmaRequest = hdma.isHblankRequestArrivingAfterCpuTick()
+            boolean retiringIntoHdmaRequest = gbc && hdma.isHblankRequestArrivingAfterCpuTick()
                     && cpu.isInstructionRetiringForHdma();
             if (retiringIntoHdmaRequest) {
                 gpu.setCpuRetiringInstructionForHdma(true);
@@ -856,12 +866,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             sound.onSpeedSwitch();
             gpu.onSpeedSwitch();
             dma.onSpeedSwitch();
-            if (hdma.onSpeedSwitch()) {
+            if (gbc && hdma.onSpeedSwitch()) {
                 cpu.replaySpeedSwitchPaddingByte();
             }
         }
         Cpu.State finalCpuState = cpu.getState();
-        hdma.onCpuHaltState(finalCpuState == Cpu.State.HALTED);
+        if (gbc) {
+            hdma.onCpuHaltState(finalCpuState == Cpu.State.HALTED);
+        }
         if (deferFrameSequencerClock) {
             sound.commitFrameSequencerClock();
         }
@@ -874,26 +886,30 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // OAM DMA is driven by the CPU clock domain. HALT pauses it after the
         // entry latency; STOP and a CGB speed switch pause it immediately.
         boolean halted = finalCpuState == Cpu.State.HALTED;
-        dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
+        if (gbc) {
+            dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
+        }
         boolean dmaCpuClockPaused = halted || finalCpuState == Cpu.State.STOPPED
                         || finalCpuState == Cpu.State.SPEED_SWITCH || speedSwitchTail
-                        || hdma.pausesOamDmaForSpeedSwitchBurst();
+                        || gbc && hdma.pausesOamDmaForSpeedSwitchBurst();
         if (dma.requiresClockTick(dmaCpuClockPaused)) {
             dma.tick(dmaCpuClockPaused, halted);
         }
         sound.tick(divReset);
         serialPort.tick();
-        infraredPort.tick();
+        if (gbc) {
+            infraredPort.tick();
+        }
         joypad.tick();
         // The HBlank request crosses from the PPU to the CPU arbiter while the CPU is
         // still allowed to finish the current machine cycle.
-        if (hdma.requiresCpuHdmaPhaseFlags()) {
+        if (gbc && hdma.requiresCpuHdmaPhaseFlags()) {
             int hdmaPhaseFlags = cpu.getHdmaPhaseFlags();
             hdma.advanceHblankRequest(
                     (hdmaPhaseFlags & Cpu.HDMA_PHASE_IN_FLIGHT_WRITE_CYCLE) != 0,
                     (hdmaPhaseFlags & Cpu.HDMA_PHASE_CPU_REQUEST_SLOT_IN_PROGRESS) != 0,
                     (hdmaPhaseFlags & Cpu.HDMA_PHASE_INTERRUPT_CLAIMED) != 0);
-        } else {
+        } else if (gbc) {
             hdma.advanceHblankRequest();
         }
         Mode mode = gpu.tick();
