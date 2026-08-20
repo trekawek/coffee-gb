@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.awt.Component
@@ -39,6 +40,13 @@ internal class SystemPreferencesEditor private constructor(
     override fun toString(): String = label
   }
 
+  internal data class ExecutionModeOption(
+      val mode: ExecutionMode,
+      val label: String,
+  ) {
+    override fun toString(): String = label
+  }
+
   private val datelSlotRom = initial.datelSlotRom
   private val fullChangerCharacter = initial.fullChangerCharacter
 
@@ -66,6 +74,15 @@ internal class SystemPreferencesEditor private constructor(
             "Choose whether boot ROM startup is skipped, fast-forwarded, or shown in full."
       }
 
+  internal val executionMode =
+      JComboBox(EXECUTION_MODE_OPTIONS.toTypedArray()).apply {
+        selectedItem = executionModeOption(initial.executionMode)
+        getAccessibleContext().accessibleName = "Execution mode"
+        getAccessibleContext().accessibleDescription =
+            "Choose Accuracy for the cycle- and dot-accurate reference, or Performance for guarded " +
+                "batching that falls back to Accuracy when needed. Changes reload the active session."
+      }
+
   init {
     getAccessibleContext().accessibleName = "System preferences"
     getAccessibleContext().accessibleDescription =
@@ -80,6 +97,7 @@ internal class SystemPreferencesEditor private constructor(
         dmgGamesProfile = (dmgGamesProfile.selectedItem as ProfileOption).selection,
         cgbGamesProfile = (cgbGamesProfile.selectedItem as ProfileOption).selection,
         bootstrapMode = (bootstrapMode.selectedItem as BootstrapOption).mode,
+        executionMode = (executionMode.selectedItem as ExecutionModeOption).mode,
         datelSlotRom = datelSlotRom,
         fullChangerCharacter = fullChangerCharacter,
     )
@@ -90,6 +108,7 @@ internal class SystemPreferencesEditor private constructor(
     dmgGamesProfile.selectedItem = profileOption(defaults.dmgGamesProfile)
     cgbGamesProfile.selectedItem = profileOption(defaults.cgbGamesProfile)
     bootstrapMode.selectedItem = bootstrapOption(defaults.bootstrapMode)
+    executionMode.selectedItem = executionModeOption(defaults.executionMode)
   }
 
   private fun createRows() {
@@ -115,8 +134,13 @@ internal class SystemPreferencesEditor private constructor(
     bootstrapLabel.labelFor = bootstrapMode
     addRow(constraints, 2, bootstrapLabel, bootstrapMode)
 
+    val executionModeLabel = JLabel("Execution mode:")
+    executionModeLabel.displayedMnemonic = KeyEvent.VK_E
+    executionModeLabel.labelFor = executionMode
+    addRow(constraints, 3, executionModeLabel, executionMode)
+
     constraints.gridx = 0
-    constraints.gridy = 3
+    constraints.gridy = 4
     constraints.gridwidth = 2
     constraints.weightx = 1.0
     constraints.weighty = 1.0
@@ -164,11 +188,26 @@ internal class SystemPreferencesEditor private constructor(
             BootstrapOption(BootstrapMode.NORMAL, "Full"),
         )
 
+    val EXECUTION_MODE_OPTIONS =
+        listOf(
+            ExecutionModeOption(
+                ExecutionMode.ACCURACY,
+                "Accuracy (cycle/dot-accurate reference)",
+            ),
+            ExecutionModeOption(
+                ExecutionMode.PERFORMANCE,
+                "Performance (guarded batching)",
+            ),
+        )
+
     fun profileOption(selection: ApplicationSettings.ProfileSelection): ProfileOption =
         PROFILE_OPTIONS.single { it.selection == selection }
 
     fun bootstrapOption(mode: BootstrapMode): BootstrapOption =
         BOOTSTRAP_OPTIONS.single { it.mode == mode }
+
+    fun executionModeOption(mode: ExecutionMode): ExecutionModeOption =
+        EXECUTION_MODE_OPTIONS.single { it.mode == mode }
 
     fun requireEdt() {
       check(SwingUtilities.isEventDispatchThread()) {
