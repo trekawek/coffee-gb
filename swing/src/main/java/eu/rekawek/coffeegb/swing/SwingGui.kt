@@ -510,6 +510,7 @@ class SwingGui private constructor(
             onOpenRecent = { game -> romOpen.openRecent(game.path, game.origin) },
             onCancelTask = { romLoadingRequestId?.let(romOpen::cancel) },
             initialTokens = initialTheme.tokens,
+            showHomeRecentGames = !proposal3MenuEnabled,
         )
     mainWindow.contentPane = desktopMainPanel
     desktopUiCoordinator =
@@ -630,9 +631,10 @@ class SwingGui private constructor(
           if (!romLoading) {
             mainWindow.title = activeWindowTitle
             desktopUiCoordinator.stopped()
-            // The unload autosave just committed its preview; refresh Home now rather than
-            // waiting for another ROM-open or preference change.
+            // The unload autosave just committed its preview; refresh the recent-game catalog
+            // now rather than waiting for another ROM-open or preference change.
             updateRecentRoms()
+            portableMenu?.openFromDesktop()
           }
         }
       }
@@ -684,6 +686,10 @@ class SwingGui private constructor(
     }
     if (initialRom != null) {
       romOpen.open(initialRom.toPath(), RomOpenSource.INITIAL_ARGUMENT)
+    } else {
+      // With Proposal 3 enabled, idle desktop startup is the same controller-friendly Library
+      // entry point as Android. The default desktop home remains untouched when the flag is off.
+      portableMenu?.openFromDesktop()
     }
     requestDesktopStartupSmokeIfConfigured()
   }

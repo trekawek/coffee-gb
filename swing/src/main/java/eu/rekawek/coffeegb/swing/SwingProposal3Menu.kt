@@ -299,7 +299,16 @@ internal class SwingProposal3Menu(
     check(SwingUtilities.isEventDispatchThread()) { "Portable menu must open on the EDT" }
     if (opening || controller.visible()) return
     val current = commands.menuState()
-    if (!current.commands.gameLoaded || current.commands.sessionBusy) return
+    if (current.commands.sessionBusy) return
+
+    if (!current.commands.gameLoaded) {
+      // The desktop's idle surface follows Android: the portable Library, rather than a paused
+      // console, is the entry point when no ROM is active. There is nothing to capture or pause.
+      pauseSnapshot = null
+      controller.setPage(pageFor(MenuRoute.LIBRARY, current))
+      controller.show(MenuRoute.LIBRARY)
+      return
+    }
 
     val title = checkNotNull(current.gameTitle) { "Loaded session has no ROM title" }
     // Freeze the actual display before requesting pause; a child route must reuse this snapshot.
@@ -659,19 +668,17 @@ internal class SwingProposal3Menu(
       MenuRoute.LIBRARY -> {
         val libraryItems =
             listOf(
-                item("recent-rom", "RECENT ROM", false),
+                item("recent-rom", "RECENT ROMS", commands.canOpenRecentGame()),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
-                item("choose-rom", "CHOOSE ROM", enabled(DesktopCommand.OPEN_ROM)),
-                item("clear-recent", "CLEAR RECENTS", false),
-                item("back", "BACK", true),
             )
         if (hasEnabledNonBack(libraryItems)) {
           page(
               "LIBRARY",
               "RECENT ROMS",
-              listOf("LAST OPENED  TODAY", "DOCUMENT PICKER  NATIVE", "ZIP  MULTI-SELECT"),
+              listOf("DOCUMENT PICKER  NATIVE", "RECENT METADATA  PRIVATE", "ZIP  MULTI-ROM"),
               libraryItems,
-              preferredFocus = "open-rom",
+              preferredFocus =
+                  if (commands.canOpenRecentGame()) "recent-rom" else "open-rom",
               headerAction = if (enabled(DesktopCommand.OPEN_ROM)) "OPEN ROM" else "",
           )
         } else {
@@ -951,8 +958,8 @@ internal class SwingProposal3Menu(
           }
       MenuRoute.LIBRARY ->
           when (id) {
-            "open-rom", "choose-rom" -> runNativeRomChooser()
-            "back" -> back()
+            "recent-rom" -> if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
+            "open-rom" -> runNativeRomChooser()
           }
       MenuRoute.ABOUT ->
           if (id == "privacy-notices") runAboutAndHide()

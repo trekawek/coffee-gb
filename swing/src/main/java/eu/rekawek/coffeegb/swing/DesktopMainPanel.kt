@@ -85,9 +85,15 @@ internal class DesktopMainPanel(
     onOpenRecent: (DesktopRecentGame) -> Unit,
     onCancelTask: () -> Unit,
     initialTokens: DesktopThemeTokens,
+    showHomeRecentGames: Boolean = true,
 ) : JPanel(BorderLayout()), DesktopThemeRefreshHook {
   private val cards = CardLayout()
-  private val home = DesktopHomePanel(actions[DesktopCommand.OPEN_ROM], onOpenRecent)
+  private val home =
+      DesktopHomePanel(
+          actions[DesktopCommand.OPEN_ROM],
+          onOpenRecent,
+          showHomeRecentGames,
+      )
   private val commandBar = DesktopCommandBar(actions)
   private val taskBanner = DesktopTaskBanner(onCancelTask)
   private val statusBar = DesktopStatusBar(actions)
@@ -258,6 +264,7 @@ internal class DesktopStatusBar(
 internal class DesktopHomePanel(
     openAction: Action,
     private val onOpenRecent: (DesktopRecentGame) -> Unit,
+    private val showRecentGames: Boolean = true,
 ) : JPanel(BorderLayout()) {
   private val content = JPanel()
   private val recentList = JPanel()
@@ -296,8 +303,10 @@ internal class DesktopHomePanel(
   fun updateRecentGames(games: List<DesktopRecentGame>) {
     recentGames = games.toList()
     recentList.removeAll()
-    recentGames.forEach { game -> recentList.add(createRecentThumbnail(game)) }
-    recentList.isVisible = recentGames.isNotEmpty()
+    if (showRecentGames) {
+      recentGames.forEach { game -> recentList.add(createRecentThumbnail(game)) }
+    }
+    recentList.isVisible = showRecentGames && recentGames.isNotEmpty()
     revalidate()
     repaint()
   }

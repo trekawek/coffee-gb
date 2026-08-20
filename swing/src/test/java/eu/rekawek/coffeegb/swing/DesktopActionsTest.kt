@@ -107,14 +107,14 @@ class DesktopActionsTest {
   }
 
   @Test
-  fun `Proposal 3 command is unavailable unless the desktop feature is enabled`() {
+  fun `Proposal 3 command opens the idle Library only when the desktop feature is enabled`() {
     val handlers = handlers(mutableListOf())
     val hidden = DesktopActionRegistry(handlers, proposal3MenuAvailable = false)
     val enabled = DesktopActionRegistry(handlers, proposal3MenuAvailable = true)
-    val playing = DesktopCommandPresentation(gameLoaded = true)
+    val idle = DesktopCommandPresentation()
 
-    hidden.update(playing)
-    enabled.update(playing)
+    hidden.update(idle)
+    enabled.update(idle)
 
     assertFalse(hidden[DesktopCommand.OPEN_MENU].isEnabled)
     assertTrue(enabled[DesktopCommand.OPEN_MENU].isEnabled)

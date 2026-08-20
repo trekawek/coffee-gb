@@ -162,6 +162,20 @@ class DesktopMainPanelTest {
   }
 
   @Test
+  fun `portable Library startup suppresses the legacy home recent thumbnails`() {
+    onEdt {
+      val panel = panel(actions(), showHomeRecentGames = false)
+      panel.updateRecentRoms((0..2).map { Path.of("/games/game-$it.gb") })
+
+      val home = descendants(panel).filterIsInstance<DesktopHomePanel>().single()
+      assertFalse(
+          descendants(home).filterIsInstance<AbstractButton>().any {
+            it.accessibleContext.accessibleName?.startsWith("Open recent ROM") == true
+          })
+    }
+  }
+
+  @Test
   fun `command bar is visible only for windowed play`() {
     onEdt {
       val panel = panel(actions())
@@ -314,6 +328,7 @@ class DesktopMainPanelTest {
       actions: DesktopActionRegistry,
       onOpenRecent: (DesktopRecentGame) -> Unit = {},
       onCancel: () -> Unit = {},
+      showHomeRecentGames: Boolean = true,
   ) =
       DesktopMainPanel(
           gameSurface = JPanel(),
@@ -321,6 +336,7 @@ class DesktopMainPanelTest {
           onOpenRecent = onOpenRecent,
           onCancelTask = onCancel,
           initialTokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM),
+          showHomeRecentGames = showHomeRecentGames,
       )
 
   private fun actions(

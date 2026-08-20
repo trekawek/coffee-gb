@@ -452,7 +452,7 @@ internal class DesktopActionRegistry(
         DesktopCommand.MUTE,
         DesktopCommand.SHOW_COMMAND_BAR -> !state.sessionBusy
         DesktopCommand.OPEN_MENU ->
-            proposal3MenuAvailable && state.gameLoaded && !state.sessionBusy
+            proposal3MenuAvailable && !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
       DesktopCommand.PAUSE ->

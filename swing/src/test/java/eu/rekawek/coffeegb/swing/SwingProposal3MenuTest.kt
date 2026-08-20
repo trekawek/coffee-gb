@@ -63,6 +63,34 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `idle desktop opens the Library without pausing or capturing a game frame`() {
+    val bridge = FakeBridge(gameLoaded = false)
+    var captures = 0
+    val menu =
+        SwingProposal3Menu(
+            frameSink = {},
+            commands = bridge,
+            releaseGameplay = {},
+            capturePausePreview = {
+              captures++
+              MenuPreview.empty()
+            },
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      assertEquals(listOf("recent-rom", "open-rom"), menu.visibleItemIdsForTest())
+      assertEquals("recent-rom", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
+    }
+
+    assertTrue(bridge.pauseTransitions.isEmpty())
+    assertEquals(0, captures)
+  }
+
+  @Test
   fun `open rom row delegates to desktop native chooser command boundary`() {
     val bridge = FakeBridge()
     val frames = mutableListOf<MenuArgbFrame?>()
@@ -446,6 +474,7 @@ class SwingProposal3MenuTest {
               setOf(DesktopCommand.PAUSE, DesktopCommand.CLOSE_GAME),
               audioAvailable = false,
               aboutAvailable = false,
+              recentAvailable = false,
           )
       val menu = newMenu(bridge)
       javax.swing.SwingUtilities.invokeAndWait {
@@ -986,6 +1015,7 @@ class SwingProposal3MenuTest {
       private val settingsAccess: PortableMenuSettingsAccess? = null,
       private val recentAvailable: Boolean = true,
       private val playTimeNanos: Long = 0,
+      private val gameLoaded: Boolean = true,
   ) : PortableMenuCommandBridge {
     val invoked = mutableListOf<DesktopCommand>()
     val pauseTransitions = mutableListOf<Boolean>()
@@ -1004,14 +1034,14 @@ class SwingProposal3MenuTest {
     var loadOnEdt: Boolean? = null
     override fun menuState(): DesktopPresentation =
         DesktopPresentation(
-            gameTitle = "TEST GAME",
+            gameTitle = "TEST GAME".takeIf { gameLoaded },
             playTimeNanos = playTimeNanos,
             commands =
                 DesktopCommandPresentation(
-                    gameLoaded = true,
-                    pauseSupported = true,
-                    stateCommandsAvailable = true,
-                    stateBrowserAvailable = true,
+                    gameLoaded = gameLoaded,
+                    pauseSupported = gameLoaded,
+                    stateCommandsAvailable = gameLoaded,
+                    stateBrowserAvailable = gameLoaded,
                     muted = muted,
                     audioVolume = volume,
                 ),
