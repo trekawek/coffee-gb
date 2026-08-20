@@ -360,6 +360,32 @@ class DetachedStateTest {
   }
 
   @Test
+  fun scalarTimingAndDmgFifoSupplementMustAgreeBeforeLiveMutation() {
+    session(configuration().setGameboyType(GameboyType.DMG)).use { session ->
+      repeat(400) { session.gameboy.tick() }
+      val before = session.captureDetachedState()
+      val gpu = before.machine.record(GPU_MEMENTO)
+      val timing = gpu.field("pixelTransferPhaseMemento") as RecordState
+      val timingFifo = timing.field("fifoMemento") as RecordState
+      val runtime = requireNotNull(before.machine.dmgFifoRuntime)
+      val mismatchedScalar = timingFifo.replaceField(
+          "linePixels", Int32State((runtime.timing.linePixels + 1) % 161))
+      val candidate = before.withMachineRoot(
+          before.machine.root.replaceRecordField(
+              GPU_MEMENTO,
+              "pixelTransferPhaseMemento",
+              timing.replaceField("fifoMemento", mismatchedScalar),
+          ))
+
+      // Both records are individually well-formed.  The cross-plane preflight must reject the
+      // contradiction before restoreStateSilently or the later runtime supplement can mutate the
+      // live machine.
+      assertRejectedBeforeMutation(
+          session, before, candidate, "scalar timing/runtime supplement disagreement")
+    }
+  }
+
+  @Test
   fun dmgFifoRuntimePresenceMatchesHardwareBeforeAnyLiveMutation() {
     listOf(GameboyType.DMG, GameboyType.SGB).forEach { hardware ->
       session(configuration().setGameboyType(hardware)).use { session ->
