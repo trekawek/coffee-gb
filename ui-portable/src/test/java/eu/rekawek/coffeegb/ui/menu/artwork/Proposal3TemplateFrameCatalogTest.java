@@ -41,7 +41,7 @@ public class Proposal3TemplateFrameCatalogTest {
             Map.entry(MenuRoute.DATA_MEDIA,
                     "d4f1e25cff448338014405f2cc0358211bed7fb1b274b25b06f473da5bb54ab0"),
             Map.entry(MenuRoute.LIBRARY,
-                    "74a4b62b4bc4729fdf985197ec2cd5ee4ca1205c588289efa995ecd48e350262"),
+                    "7e1bc6e11f3014ff4476da4a8d7a4b4c66bad46456c325f9630a776c1663d924"),
             Map.entry(MenuRoute.CHOOSE_ROM,
                     "c1299934061703afe90e093d2059cc71fdacde87356a2518eb0f82154263f728"),
             Map.entry(MenuRoute.SYSTEM,

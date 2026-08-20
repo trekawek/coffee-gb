@@ -131,7 +131,7 @@ public final class Proposal3MenuCompositor {
             case PAUSE_CONSOLE, SAVE_STATES -> Proposal3GlyphAtlas.Role.SEMIBOLD;
             // Seven archive rows use the compact 36px face so their ink fits the fixed viewport.
             case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.MEDIUM;
-            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, LIBRARY, SYSTEM, DISPLAY, OPTION_PICKER ->
+            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, SYSTEM, DISPLAY, OPTION_PICKER ->
                     Proposal3GlyphAtlas.Role.SMALL;
             case ABOUT -> rowIndex == 0 ? Proposal3GlyphAtlas.Role.SEMIBOLD
                     : Proposal3GlyphAtlas.Role.NOTICE;
@@ -391,10 +391,6 @@ public final class Proposal3MenuCompositor {
             // including the source artwork's button outline.
             paintSurface(raster, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR,
                     Proposal3OverlayCatalog.Surface.PAPER, false);
-        } else if (route == MenuRoute.LIBRARY) {
-            // The custom opener illustration remains on the left, while the row below is now
-            // the sole Open ROM affordance. Clear the source artwork's outlined header button.
-            paintPaperAperture(raster, Proposal3OverlayCatalog.OPEN_ROM_HEADER);
         }
         if (route == MenuRoute.SETTINGS || route == MenuRoute.AUDIO
                 || route == MenuRoute.DISPLAY
@@ -1218,7 +1214,6 @@ public final class Proposal3MenuCompositor {
             // normal-width ByteBounce metrics. Their labels have no detail column to reserve.
             case ABOUT -> row.x() + (rowIndex == 0 ? 22 : 98);
             case CONTROLLER_MAPPING -> row.x() + 12;
-            case LIBRARY -> row.x() + 20;
             case SYSTEM, DISPLAY -> row.x() + 16;
             default -> row.x() + 52;
         };

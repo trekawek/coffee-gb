@@ -81,9 +81,9 @@ final class Proposal3OverlayCatalog {
     static final List<MenuRect> SETTINGS_DIVIDERS = dividers(SETTINGS_ROW_BOUNDS);
     private static final List<MenuRect> CONTROLLER_ROW_BOUNDS = equalRows(366, 115, 544, 467, 7, 2);
     static final List<MenuRect> CONTROLLER_DIVIDERS = dividers(CONTROLLER_ROW_BOUNDS);
-    /** Library keeps the same seven-row rail height as the other full-page menus. */
-    private static final List<MenuRect> LIBRARY_ROW_BOUNDS = equalRows(369, 117, 528, 529, 7, 3);
-    static final List<MenuRect> LIBRARY_DIVIDERS = dividers(LIBRARY_ROW_BOUNDS);
+    /** Library is the Recent Games frame with fewer populated rows and a custom left icon. */
+    private static final List<MenuRect> LIBRARY_ROW_BOUNDS = STATE_ROW_BOUNDS;
+    static final List<MenuRect> LIBRARY_DIVIDERS = SAVE_DIVIDERS;
     private static final List<MenuRect> CHOOSE_ROM_ROW_BOUNDS = equalRows(387, 179, 524, 333, 7, 3);
     static final List<MenuRect> CHOOSE_ROM_DIVIDERS = dividers(CHOOSE_ROM_ROW_BOUNDS);
 
@@ -254,9 +254,9 @@ final class Proposal3OverlayCatalog {
         layouts.put(MenuRoute.LIBRARY, layout(MenuRoute.LIBRARY,
                 rows(LIBRARY_ROW_BOUNDS, Surface.DARK),
                 List.of(),
-                masks(OPEN_ROM_HEADER, rowsMasks(LIBRARY_ROW_BOUNDS),
+                masks(rowsMasks(LIBRARY_ROW_BOUNDS),
                         LIBRARY_DIVIDERS.toArray(new MenuRect[0])), true,
-                "recent-0", null, false));
+                "recent-0", new Marker(443), false));
 
         layouts.put(MenuRoute.CHOOSE_ROM, layout(MenuRoute.CHOOSE_ROM,
                 rows(CHOOSE_ROM_ROW_BOUNDS, Surface.DARK),
