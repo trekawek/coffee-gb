@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.android;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -8,11 +9,13 @@ import android.graphics.Paint;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
@@ -38,6 +41,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         implements SurfaceHolder.Callback, NativeFrameStore.Listener {
 
     private static final int CANVAS_MATTE = 0xFFFAFAFA;
+    private static final float SURFACE_FRAME_RATE_HZ = 60.0f;
 
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -66,6 +70,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private AndroidInputRouter input;
     private RenderThread renderThread;
     private volatile boolean surfaceReady;
+    /** Guards the one frame-rate hint allowed for each newly-created Surface. */
+    private boolean surfaceFrameRateHintApplied;
 
     public CoffeeGbSurfaceView(Context context) {
         super(context);
@@ -304,6 +310,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
+        applySurfaceFrameRateHint(holder);
         if (frames != null) {
             frames.addListener(this);
             startRenderer();
@@ -318,6 +325,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
+        surfaceFrameRateHintApplied = false;
         NativeFrameStore active = frames;
         if (active != null) {
             active.removeListener(this);
@@ -398,6 +406,18 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         return height >= width ? portraitSkin : landscapeSkin;
     }
 
+    /** Applies Android's non-disruptive game frame-rate hint once for this Surface lifecycle. */
+    private void applySurfaceFrameRateHint(SurfaceHolder holder) {
+        if (surfaceFrameRateHintApplied) {
+            return;
+        }
+        // Mark the lifecycle attempt before calling into the framework. A Surface callback can
+        // race with teardown, and a failed/unsupported hint must not turn into a per-frame call.
+        surfaceFrameRateHintApplied = true;
+        SurfaceRatePolicy.apply(holder.getSurface(), Build.VERSION.SDK_INT,
+                SURFACE_FRAME_RATE_HZ);
+    }
+
     PointF menuControlCenter(int width, int height) {
         RasterSkin skin = skinFor(width, height);
         SkinTransform transform = skin.transform(width, height);
@@ -408,6 +428,9 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private final SurfaceHolder holder;
         private boolean running = true;
         private boolean frameAvailable;
+        /** Hardware Canvas is preferred, but one failed lock permanently selects the safe fallback
+         * for this short-lived renderer. A new Surface gets a fresh RenderThread. */
+        private boolean hardwareCanvasAvailable = true;
 
         private RenderThread(SurfaceHolder holder) {
             super("coffee-gb-android-video");
@@ -450,15 +473,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
 
         private void draw(NativeFrameStore.Frame frame) {
-            Canvas canvas;
-            try {
-                canvas = holder.lockCanvas();
-            } catch (IllegalArgumentException failure) {
-                if (surfaceLost()) {
-                    return;
-                }
-                throw failure;
-            }
+            Canvas canvas = lockCanvas();
             if (canvas == null) {
                 return;
             }
@@ -489,6 +504,32 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 skin.draw(canvas, skinPaint, transform);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
+            }
+        }
+
+        /**
+         * Uses the accelerated Surface canvas on API 26+ and falls back to the software canvas
+         * when a device/framework cannot provide it. Both paths return a Canvas that must be
+         * paired with the same {@link SurfaceHolder#unlockCanvasAndPost(Canvas)} call.
+         */
+        private Canvas lockCanvas() {
+            if (hardwareCanvasAvailable) {
+                try {
+                    return holder.lockHardwareCanvas();
+                } catch (RuntimeException hardwareFailure) {
+                    hardwareCanvasAvailable = false;
+                    if (surfaceLost()) {
+                        return null;
+                    }
+                }
+            }
+            try {
+                return holder.lockCanvas();
+            } catch (RuntimeException softwareFailure) {
+                if (surfaceLost()) {
+                    return null;
+                }
+                throw softwareFailure;
             }
         }
 
@@ -536,6 +577,52 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private static final long DURATION_MILLIS = 1_500L;
 
         private TransientMessage() {
+        }
+    }
+
+    /** Small policy seam keeping API-level and frame-rate choices unit-testable without a Surface. */
+    static final class SurfaceRatePolicy {
+
+        enum Request {
+            UNSUPPORTED,
+            DEFAULT_COMPATIBILITY,
+            DEFAULT_COMPATIBILITY_SEAMLESS_ONLY
+        }
+
+        private SurfaceRatePolicy() {
+        }
+
+        static Request requestAt(int sdkInt) {
+            if (sdkInt < Build.VERSION_CODES.R) {
+                return Request.UNSUPPORTED;
+            }
+            return sdkInt < Build.VERSION_CODES.S
+                    ? Request.DEFAULT_COMPATIBILITY
+                    : Request.DEFAULT_COMPATIBILITY_SEAMLESS_ONLY;
+        }
+
+        @TargetApi(Build.VERSION_CODES.S)
+        static void apply(Surface surface, int sdkInt, float frameRateHz) {
+            Request request = requestAt(sdkInt);
+            if (request == Request.UNSUPPORTED || surface == null || !surface.isValid()) {
+                return;
+            }
+            try {
+                if (request == Request.DEFAULT_COMPATIBILITY_SEAMLESS_ONLY) {
+                    // The strategy overload is API 31+. It is deliberately restricted to
+                    // seamless switches so a game's hint cannot trigger a disruptive mode change.
+                    surface.setFrameRate(frameRateHz,
+                            Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                            Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+                } else {
+                    // Android 11 has only the default two-argument game hint. Do not use
+                    // FIXED_SOURCE: that compatibility mode is intended for video content.
+                    surface.setFrameRate(frameRateHz, Surface.FRAME_RATE_COMPATIBILITY_DEFAULT);
+                }
+            } catch (RuntimeException ignored) {
+                // A device can reject a hint during a concurrent Surface teardown. Rendering
+                // remains correct, and the next Surface lifecycle gets a fresh one-shot attempt.
+            }
         }
     }
 }
