@@ -245,6 +245,67 @@ interface Controller : AutoCloseable {
       val effectiveSpeedMode: Int? = null,
   ) : Event
 
+  /**
+   * Benchmark-only physical display-boundary evidence sampled on the controller owner thread. The
+   * event is emitted only when [ApplicationSettingsOverrides.benchmarkPolicyEnabled] is true, so
+   * ordinary sessions retain their zero-allocation frame loop. A frame-600 sample is taken from
+   * the synchronous Display hand-off, rather than relabeling the controller/audio cadence.
+   */
+  data class BenchmarkFrameBoundaryEvent(
+      val frame: Long,
+      val effectiveGbc: Boolean,
+      val effectiveDmgCompat: Boolean,
+      val speedMode: Int,
+  ) : Event {
+    init {
+      require(frame > 0) { "Benchmark frame must be positive" }
+      require(speedMode == 1 || speedMode == 2) { "Benchmark speed mode must be 1 or 2" }
+    }
+  }
+
+  /**
+   * Explicit benchmark arm token.  The Android harness posts this only after the host has
+   * observed the materialized/paused session and captured its compositor baseline.  It is not
+   * emitted or consumed by ordinary sessions.
+   */
+  data class BenchmarkArmEvent(
+      val generation: Long,
+      val token: String,
+  ) : Event {
+    init {
+      require(generation > 0L) { "Benchmark generation must be positive" }
+      require(token.matches(Regex("[a-z0-9][a-z0-9._-]{15,63}"))) {
+        "Benchmark arm token must be opaque and parser-safe"
+      }
+    }
+  }
+
+  /**
+   * Controller-thread acknowledgement emitted after the benchmark arm reset has taken effect.
+   * Android uses this boundary to sample controller CPU/priority/environment state and to start
+   * the measured frame epoch before posting Resume.
+   */
+  data class BenchmarkArmAcknowledgedEvent(val generation: Long, val token: String) : Event {
+    init {
+      require(generation > 0L) { "Benchmark generation must be positive" }
+      require(token.matches(Regex("[a-z0-9][a-z0-9._-]{15,63}"))) {
+        "Benchmark arm token must be opaque and parser-safe"
+      }
+    }
+  }
+
+  /**
+   * Synchronous physical Display publication boundary from the Android frame hand-off.  This is
+   * distinct from the controller/audio cadence: the 600th event is the exact display frame that
+   * must freeze the core before another physical frame can be produced.
+   */
+  data class BenchmarkPhysicalFrameBoundaryEvent(val frame: Long, val generation: Long) : Event {
+    init {
+      require(frame > 0L) { "Benchmark physical frame must be positive" }
+      require(generation > 0L) { "Benchmark generation must be positive" }
+    }
+  }
+
   /** Posted while the rewind key is held; the emulation plays backwards while active. */
   data class RewindEvent(val active: Boolean) : Event
 

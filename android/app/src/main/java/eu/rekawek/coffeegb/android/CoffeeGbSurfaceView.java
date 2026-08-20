@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 /**
  * Dedicated nearest-neighbour native-frame surface.
@@ -41,7 +42,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         implements SurfaceHolder.Callback, NativeFrameStore.Listener {
 
     private static final int CANVAS_MATTE = 0xFFFAFAFA;
-    private static final float SURFACE_FRAME_RATE_HZ = 60.0f;
+    private static final float DEFAULT_SURFACE_FRAME_RATE_HZ = 60.0f;
+    private static final int BENCHMARK_ANCHOR_POSTS = 4;
+    // Keep the final warm-up interval in the 200 ms SurfaceFlinger bucket.  These posts are
+    // outside the measured epoch and give TimeStats a real, known pending boundary record.
+    private static final long BENCHMARK_ANCHOR_INTERVAL_MILLIS = 180L;
+    /** Lets the 600th BufferQueue fence cross a few display periods before the drain is queued. */
+    private static final long BENCHMARK_DRAIN_DELAY_MILLIS = 100L;
 
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -67,11 +74,16 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private volatile TouchControlsLayout touchLayout;
     private volatile String transientMessage;
     private volatile long transientExpiresAt;
+    /** One-time benchmark-only blank post used to establish a real Surface layer anchor. */
+    private volatile boolean benchmarkAnchorRequested;
+    private volatile int benchmarkAnchorPosts;
+    private volatile Consumer<Boolean> benchmarkAnchorCallback;
     private AndroidInputRouter input;
     private RenderThread renderThread;
     private volatile boolean surfaceReady;
     /** Guards the one frame-rate hint allowed for each newly-created Surface. */
     private boolean surfaceFrameRateHintApplied;
+    private float surfaceFrameRateHz = DEFAULT_SURFACE_FRAME_RATE_HZ;
 
     public CoffeeGbSurfaceView(Context context) {
         super(context);
@@ -124,6 +136,47 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     public void clearMenuPresentation() {
         menuPresentation = null;
         onFrameAvailable();
+    }
+
+    /**
+     * Selects the benchmark-only display vote before the Surface is created.  The compositor
+     * gate still verifies the active display mode; this hint never changes emulated cadence.
+     */
+    void setBenchmarkFrameRate(int rateHz) {
+        setBenchmarkContentRateMillihz(rateHz > 0 ? rateHz * 1000 : -1);
+    }
+
+    /** Advertises the exact emulated producer cadence, not the host display mode target. */
+    void setBenchmarkContentRateMillihz(int rateMillihz) {
+        if (rateMillihz > 0 && rateMillihz <= 240_000) {
+            surfaceFrameRateHz = rateMillihz / 1000.0f;
+        } else {
+            surfaceFrameRateHz = DEFAULT_SURFACE_FRAME_RATE_HZ;
+        }
+        surfaceFrameRateHintApplied = false;
+    }
+
+    /**
+     * Requests one out-of-epoch opaque post on this exact SurfaceView.  It is intentionally not
+     * a game frame and never touches NativeFrameStore counters; the callback runs on the renderer
+     * thread only after unlockCanvasAndPost has returned.
+     */
+    void requestBenchmarkAnchor(Consumer<Boolean> callback) {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED || callback == null) {
+            return;
+        }
+        synchronized (renderLock) {
+            if (benchmarkAnchorRequested || benchmarkAnchorCallback != null) {
+                return;
+            }
+            benchmarkAnchorRequested = true;
+            benchmarkAnchorPosts = BENCHMARK_ANCHOR_POSTS;
+            benchmarkAnchorCallback = callback;
+            if (renderThread != null) {
+                renderThread.frameAvailable = true;
+                renderLock.notifyAll();
+            }
+        }
     }
 
     /** Displays host feedback over gameplay or the opaque menu for the standard short duration. */
@@ -415,7 +468,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         // race with teardown, and a failed/unsupported hint must not turn into a per-frame call.
         surfaceFrameRateHintApplied = true;
         SurfaceRatePolicy.apply(holder.getSurface(), Build.VERSION.SDK_INT,
-                SURFACE_FRAME_RATE_HZ);
+                surfaceFrameRateHz);
     }
 
     PointF menuControlCenter(int width, int height) {
@@ -445,12 +498,96 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 if (active == null || !surfaceReady) {
                     continue;
                 }
-                NativeFrameStore.Frame frame = active.takeLatest();
+                boolean anchor;
+                int anchorPosts = 0;
+                Consumer<Boolean> anchorCallback = null;
+                synchronized (renderLock) {
+                    anchor = benchmarkAnchorRequested;
+                    if (anchor) {
+                        benchmarkAnchorRequested = false;
+                        anchorPosts = benchmarkAnchorPosts;
+                        benchmarkAnchorPosts = 0;
+                        anchorCallback = benchmarkAnchorCallback;
+                        benchmarkAnchorCallback = null;
+                    }
+                }
+                NativeFrameStore.Frame frame = anchor ? null : active.takeLatest();
                 try {
-                    draw(frame);
+                    boolean submitted = true;
+                    if (anchor) {
+                        // A single Canvas post can be coalesced before TimeStats records a
+                        // present-to-present sample.  Keep the renderer quiescent and post a
+                        // bounded, paced neutral sequence on the same SurfaceView layer.
+                        for (int post = 0; post < anchorPosts; post++) {
+                            submitted &= draw(null);
+                            if (!submitted) {
+                                break;
+                            }
+                            if (post + 1 < anchorPosts) {
+                                SystemClock.sleep(BENCHMARK_ANCHOR_INTERVAL_MILLIS);
+                            }
+                        }
+                    } else {
+                        submitted = draw(frame);
+                    }
+                    if (anchor) {
+                        if (anchorCallback != null) {
+                            anchorCallback.accept(submitted);
+                        }
+                    } else if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        if (submitted) {
+                            active.frameSubmitted(frame);
+                            if (active.submissionLimitReached()) {
+                                // The measured window ends at the 600th successful submission.
+                                // Post exactly one neutral drain after that boundary so the last
+                                // measured buffer's present fence can enter SurfaceFlinger
+                                // TimeStats.  It is not a NativeFrameStore frame and cannot become
+                                // measured frame 601; the diagnostics final record is emitted only
+                                // after this post returns.
+                                SystemClock.sleep(BENCHMARK_DRAIN_DELAY_MILLIS);
+                                boolean drainPosted = postBenchmarkDrain();
+                                active.benchmarkDrainPosted(drainPosted);
+                                synchronized (renderLock) {
+                                    running = false;
+                                    renderLock.notifyAll();
+                                }
+                            }
+                        } else {
+                            active.framePresentationLate(frame);
+                        }
+                    }
+                } catch (RuntimeException presentationFailure) {
+                    if (anchor) {
+                        if (anchorCallback != null) {
+                            anchorCallback.accept(false);
+                        }
+                    } else if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        // Keep a diagnostic owner thread alive for a later Surface frame, but
+                        // make the result reject this run as corrupted presentation output.
+                        active.framePresentationCorrupt(frame);
+                    } else {
+                        // Preserve the pre-M2 production behavior when diagnostics are disabled:
+                        // a real presentation failure remains an uncaught renderer failure.
+                        throw presentationFailure;
+                    }
                 } finally {
                     active.finishDrawing(frame);
                 }
+            }
+        }
+
+        /** One diagnostic-only out-of-epoch neutral post; release builds never call this path. */
+        private boolean postBenchmarkDrain() {
+            if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+                return false;
+            }
+            try {
+                return draw(null);
+            } catch (RuntimeException failure) {
+                // The diagnostic final record is still emitted with drain_success=false so the
+                // host gate rejects the run.  Ordinary production presentation failures are
+                // handled by the surrounding non-diagnostic branch and remain uncaught.
+                return false;
             }
         }
 
@@ -472,10 +609,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             }
         }
 
-        private void draw(NativeFrameStore.Frame frame) {
+        private boolean draw(NativeFrameStore.Frame frame) {
             Canvas canvas = lockCanvas();
             if (canvas == null) {
-                return;
+                return false;
             }
             try {
                 canvas.drawColor(CANVAS_MATTE);
@@ -505,6 +642,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             } finally {
                 holder.unlockCanvasAndPost(canvas);
             }
+            return true;
         }
 
         /**

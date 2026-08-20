@@ -33,6 +33,20 @@ final class AndroidAudioSink implements AutoCloseable {
             return new AudioStats(sampleRate(), 0, 0, 0);
         }
 
+        /** Playback head in stereo PCM sample frames, or -1 when unavailable. */
+        default long playbackPositionFrames() {
+            return -1L;
+        }
+
+        /** Cumulative AudioTrack underruns, or -1 when the output does not expose the metric. */
+        default long outputUnderrunCount() {
+            return -1L;
+        }
+
+        default boolean isPlaying() {
+            return true;
+        }
+
         void play();
 
         void pause();
@@ -45,9 +59,31 @@ final class AndroidAudioSink implements AutoCloseable {
         void release();
     }
 
-    record Stats(int sampleRate, long overruns, long underruns, long restarts, boolean paused,
+    record Stats(int sampleRate, long overruns, long underruns, long outputUnderruns,
+                 long restarts, boolean paused,
                  boolean active, int minimumBufferBytes, int configuredBufferBytes,
-                 int actualBufferBytes) {
+                 int actualBufferBytes, long pcmInputEvents, long pcmInputFrames,
+                 long pcmEnqueuedBytes, long pcmEnqueuedFrames, long pcmWrittenBytes,
+                 long pcmWrittenFrames, long writeFailures, long pcmDiscardedBytes,
+                 long pcmPendingBytes, long pcmQueuedBytes, int queuedFrames,
+                 boolean outputOpen, boolean outputPlaying, boolean muted, int volume,
+                 long routeFailures, long playbackPositionFrames, int systemVolume,
+                 int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
+                 int maximumFrameBytes) {
+    }
+
+    /** Absolute audio counters captured at the host ARM boundary; no queue mutation occurs. */
+    record AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
+                         long writtenBytes, long writtenFrames, long writeFailures,
+                         long discardedBytes, long pendingBytes, long queuedBytes,
+                         long playbackPositionFrames, long overruns, long underruns,
+                         long outputUnderruns, long restarts,
+                         long routeFailures, boolean outputOpen, boolean outputPlaying,
+                         int sampleRate, int queueCapacityFrames, int maximumFrameBytes) {
+        static AudioBaseline unavailable() {
+            return new AudioBaseline(-1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L,
+                    -1L, -1L, -1L, -1L, -1L, -1L, -1L, false, false, -1, -1, -1);
+        }
     }
 
     private static final long POLL_MILLIS = 20L;
@@ -61,6 +97,9 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AtomicBoolean reopenRequested = new AtomicBoolean();
     private final AtomicLong underruns = new AtomicLong();
     private final AtomicLong restarts = new AtomicLong();
+    /** Benchmark-only ledger.  Release R8 removes its implementation and all guarded call sites. */
+    private final PcmAccounting pcmAccounting = BuildConfig.DIAGNOSTICS_ENABLED
+            ? new DiagnosticPcmAccounting() : NoOpPcmAccounting.INSTANCE;
     private final Object wakeLock = new Object();
     private final AudioDeviceCallback deviceCallback = new AudioDeviceCallback() {
         @Override
@@ -83,6 +122,14 @@ final class AndroidAudioSink implements AutoCloseable {
     private volatile int minimumBufferBytes;
     private volatile int configuredBufferBytes;
     private volatile int actualBufferBytes;
+    private volatile boolean outputOpen;
+    private volatile boolean outputPlaying;
+    private volatile Output activeOutput;
+    private volatile long playbackPositionFrames = -1L;
+    private volatile long outputUnderruns = -1L;
+    private volatile int systemVolume = -1;
+    private volatile int systemVolumeMax = -1;
+    private volatile boolean systemMusicMuted = true;
     private volatile Thread worker;
 
     AndroidAudioSink(Context context, EventBus eventBus) {
@@ -146,6 +193,26 @@ final class AndroidAudioSink implements AutoCloseable {
         wakeConsumer();
     }
 
+    /** Captures absolute benchmark audio counters at ARM without flushing or reopening output. */
+    AudioBaseline benchmarkBaseline() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return AudioBaseline.unavailable();
+        }
+        synchronized (pcmAccounting) {
+            updatePlaybackEvidence(activeOutput);
+            BoundedPcmQueue active = queue;
+            PcmSnapshot snapshot = pcmAccounting.snapshot();
+            return new AudioBaseline(snapshot.inputEvents(), snapshot.inputFrames(),
+                    snapshot.enqueuedBytes(), snapshot.enqueuedFrames(), snapshot.writtenBytes(),
+                    snapshot.writtenFrames(), snapshot.writeFailures(), snapshot.discardedBytes(),
+                    snapshot.pendingBytes(), active == null ? 0L : active.queuedBytes(),
+                    playbackPositionFrames, active == null ? 0L : active.overruns(),
+                    underruns.get(), outputUnderruns, restarts.get(), snapshot.routeFailures(), outputOpen,
+                    outputPlaying, sampleRate, active == null ? 0 : active.capacityFrames(),
+                    active == null ? 0 : active.maximumFrameBytes());
+        }
+    }
+
     void setMuted(boolean nextMuted) {
         muted = nextMuted;
         clearQueuedPcm();
@@ -163,9 +230,32 @@ final class AndroidAudioSink implements AutoCloseable {
 
     Stats stats() {
         BoundedPcmQueue active = queue;
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                return diagnosticStats(active);
+            }
+        }
         return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
-                restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
-                actualBufferBytes);
+                -1L, restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
+                actualBufferBytes, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                active == null ? 0 : active.queuedFrames(), false, false, muted, volume, 0L,
+                -1L, -1, -1, true, active == null ? 0 : active.capacityFrames(),
+                active == null ? 0 : active.maximumFrameBytes());
+    }
+
+    private Stats diagnosticStats(BoundedPcmQueue active) {
+        updatePlaybackEvidence(activeOutput);
+        PcmSnapshot snapshot = pcmAccounting.snapshot();
+        return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
+                outputUnderruns, restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
+                actualBufferBytes, snapshot.inputEvents(), snapshot.inputFrames(),
+                snapshot.enqueuedBytes(), snapshot.enqueuedFrames(), snapshot.writtenBytes(),
+                snapshot.writtenFrames(), snapshot.writeFailures(), snapshot.discardedBytes(),
+                snapshot.pendingBytes(), active == null ? 0L : active.queuedBytes(),
+                active == null ? 0 : active.queuedFrames(), outputOpen, outputPlaying, muted,
+                volume, snapshot.routeFailures(), playbackPositionFrames, systemVolume,
+                systemVolumeMax, systemMusicMuted, active == null ? 0 : active.capacityFrames(),
+                active == null ? 0 : active.maximumFrameBytes());
     }
 
     AudioStats audioStats() {
@@ -208,7 +298,18 @@ final class AndroidAudioSink implements AutoCloseable {
         if (!running.get() || active == null || paused) {
             return;
         }
-        active.offer(event, volume, muted);
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                pcmAccounting.input(event.buffer().length / 2L);
+                int bytes = active.offer(event, volume, muted);
+                accountQueueDiscards(active);
+                if (bytes > 0) {
+                    pcmAccounting.enqueued(bytes, bytes / 4L);
+                }
+            }
+        } else {
+            active.offer(event, volume, muted);
+        }
         hasProducedPcm = true;
         wakeConsumer();
     }
@@ -221,12 +322,25 @@ final class AndroidAudioSink implements AutoCloseable {
         try {
             while (running.get()) {
                 if (output == null || reopenRequested.getAndSet(false)) {
+                    if (BuildConfig.DIAGNOSTICS_ENABLED && output != null) {
+                        outputOpen = false;
+                        outputPlaying = false;
+                    }
                     release(output);
                     output = openOutput();
+                    activeOutput = output;
                     outputPaused = false;
                     if (output == null) {
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            outputOpen = false;
+                            outputPlaying = false;
+                        }
                         awaitWake(POLL_MILLIS);
                         continue;
+                    }
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        outputOpen = true;
+                        outputPlaying = false;
                     }
                     if (outputOpenedOnce) {
                         restarts.incrementAndGet();
@@ -234,10 +348,19 @@ final class AndroidAudioSink implements AutoCloseable {
                         outputOpenedOnce = true;
                     }
                     if (activeQueue == null || sampleRate != output.sampleRate()) {
+                        if (BuildConfig.DIAGNOSTICS_ENABLED && activeQueue != null) {
+                            clearAndAccount(activeQueue);
+                        } else if (activeQueue != null) {
+                            activeQueue.clear();
+                        }
                         activeQueue = new BoundedPcmQueue(output.sampleRate());
                         queue = activeQueue;
                     } else {
-                        activeQueue.clear();
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            clearAndAccount(activeQueue);
+                        } else {
+                            activeQueue.clear();
+                        }
                     }
                     sampleRate = output.sampleRate();
                     AudioStats outputStats = output.audioStats();
@@ -250,6 +373,9 @@ final class AndroidAudioSink implements AutoCloseable {
                     hasProducedPcm = false;
                     if (!paused) {
                         output.play();
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            outputPlaying = true;
+                        }
                     }
                     continue;
                 }
@@ -259,6 +385,9 @@ final class AndroidAudioSink implements AutoCloseable {
                         output.pause();
                         output.flush();
                         outputPaused = true;
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            outputPlaying = false;
+                        }
                     }
                     awaitWake(POLL_MILLIS);
                     continue;
@@ -266,6 +395,9 @@ final class AndroidAudioSink implements AutoCloseable {
                 if (outputPaused) {
                     output.play();
                     outputPaused = false;
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        outputPlaying = true;
+                    }
                 }
 
                 BoundedPcmQueue.Frame frame = activeQueue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
@@ -276,8 +408,26 @@ final class AndroidAudioSink implements AutoCloseable {
                     continue;
                 }
                 try {
-                    if (!writeFully(output, frame)) {
-                        reopenRequested.set(true);
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        WriteResult result = writeFullyWithAccounting(output, frame);
+                        synchronized (pcmAccounting) {
+                            if (result.bytesWritten() > 0) {
+                                pcmAccounting.written(result.bytesWritten(),
+                                        result.complete() ? frame.length() / 4L : 0L);
+                            }
+                            if (!result.complete()) {
+                                int discarded = frame.length() - result.bytesWritten();
+                                if (discarded > 0) {
+                                    pcmAccounting.discarded(discarded);
+                                }
+                                pcmAccounting.writeFailure();
+                                reopenRequested.set(true);
+                            }
+                        }
+                    } else {
+                        if (!writeFully(output, frame)) {
+                            reopenRequested.set(true);
+                        }
                     }
                 } finally {
                     activeQueue.release(frame);
@@ -286,12 +436,62 @@ final class AndroidAudioSink implements AutoCloseable {
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         } finally {
+            if (BuildConfig.DIAGNOSTICS_ENABLED && activeQueue != null) {
+                clearAndAccount(activeQueue);
+            } else if (activeQueue != null) {
+                activeQueue.clear();
+            }
             queue = null;
+            activeOutput = null;
             sampleRate = 0;
             minimumBufferBytes = 0;
             configuredBufferBytes = 0;
             actualBufferBytes = 0;
+            outputUnderruns = -1L;
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                outputOpen = false;
+                outputPlaying = false;
+            }
             release(output);
+        }
+    }
+
+    private void updatePlaybackEvidence(Output output) {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        if (output == null) {
+            playbackPositionFrames = -1L;
+            outputUnderruns = -1L;
+            outputPlaying = false;
+        } else {
+            playbackPositionFrames = output.playbackPositionFrames();
+            try {
+                outputUnderruns = output.outputUnderrunCount();
+            } catch (RuntimeException unavailable) {
+                outputUnderruns = -1L;
+            }
+            try {
+                outputPlaying = output.isPlaying();
+            } catch (RuntimeException unavailable) {
+                outputPlaying = false;
+            }
+        }
+        if (audioManager == null) {
+            systemVolume = -1;
+            systemVolumeMax = -1;
+            systemMusicMuted = true;
+            return;
+        }
+        try {
+            systemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+            systemVolumeMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            systemMusicMuted = android.os.Build.VERSION.SDK_INT >= 23
+                    && audioManager.isStreamMute(AudioManager.STREAM_MUSIC);
+        } catch (RuntimeException unavailable) {
+            systemVolume = -1;
+            systemVolumeMax = -1;
+            systemMusicMuted = true;
         }
     }
 
@@ -299,6 +499,11 @@ final class AndroidAudioSink implements AutoCloseable {
         try {
             return outputFactory.open();
         } catch (RuntimeException unavailable) {
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                synchronized (pcmAccounting) {
+                    pcmAccounting.routeFailure();
+                }
+            }
             return null;
         }
     }
@@ -315,12 +520,42 @@ final class AndroidAudioSink implements AutoCloseable {
         return offset == frame.length();
     }
 
+    private WriteResult writeFullyWithAccounting(Output output, BoundedPcmQueue.Frame frame) {
+        int offset = 0;
+        while (offset < frame.length() && running.get() && !paused) {
+            int written = output.write(frame.bytes(), offset, frame.length() - offset);
+            if (written <= 0) {
+                return new WriteResult(false, offset);
+            }
+            offset += written;
+        }
+        return new WriteResult(offset == frame.length(), offset);
+    }
+
     private void clearQueuedPcm() {
         BoundedPcmQueue active = queue;
         if (active != null) {
-            active.clear();
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                clearAndAccount(active);
+            } else {
+                active.clear();
+            }
         }
         hasProducedPcm = false;
+    }
+
+    private void clearAndAccount(BoundedPcmQueue active) {
+        synchronized (pcmAccounting) {
+            active.clear();
+            accountQueueDiscards(active);
+        }
+    }
+
+    private void accountQueueDiscards(BoundedPcmQueue active) {
+        long discarded = active.drainDiscardedBytes();
+        if (discarded > 0L) {
+            pcmAccounting.discarded(discarded);
+        }
     }
 
     private void awaitWake(long timeoutMillis) {
@@ -358,5 +593,122 @@ final class AndroidAudioSink implements AutoCloseable {
         } catch (RuntimeException ignored) {
             // Release must not retain the service because a route vanished during teardown.
         }
+    }
+
+    private interface PcmAccounting {
+        void input(long frames);
+
+        void enqueued(long bytes, long frames);
+
+        void written(long bytes, long frames);
+
+        void discarded(long bytes);
+
+        void writeFailure();
+
+        void routeFailure();
+
+        PcmSnapshot snapshot();
+    }
+
+    /** No-op implementation keeps the ordinary audio path free of benchmark state. */
+    private static final class NoOpPcmAccounting implements PcmAccounting {
+        private static final NoOpPcmAccounting INSTANCE = new NoOpPcmAccounting();
+
+        @Override
+        public void input(long frames) {
+        }
+
+        @Override
+        public void enqueued(long bytes, long frames) {
+        }
+
+        @Override
+        public void written(long bytes, long frames) {
+        }
+
+        @Override
+        public void discarded(long bytes) {
+        }
+
+        @Override
+        public void writeFailure() {
+        }
+
+        @Override
+        public void routeFailure() {
+        }
+
+        @Override
+        public PcmSnapshot snapshot() {
+            return PcmSnapshot.EMPTY;
+        }
+    }
+
+    /** Plain counters are safe because callers serialize the benchmark ledger on this object. */
+    private static final class DiagnosticPcmAccounting implements PcmAccounting {
+        private long inputEvents;
+        private long inputFrames;
+        private long enqueuedBytes;
+        private long enqueuedFrames;
+        private long writtenBytes;
+        private long writtenFrames;
+        private long writeFailures;
+        private long discardedBytes;
+        private long pendingBytes;
+        private long routeFailures;
+
+        @Override
+        public void input(long frames) {
+            inputEvents++;
+            inputFrames += frames;
+        }
+
+        @Override
+        public void enqueued(long bytes, long frames) {
+            enqueuedBytes += bytes;
+            enqueuedFrames += frames;
+            pendingBytes += bytes;
+        }
+
+        @Override
+        public void written(long bytes, long frames) {
+            writtenBytes += bytes;
+            writtenFrames += frames;
+            pendingBytes -= bytes;
+        }
+
+        @Override
+        public void discarded(long bytes) {
+            discardedBytes += bytes;
+            pendingBytes -= bytes;
+        }
+
+        @Override
+        public void writeFailure() {
+            writeFailures++;
+        }
+
+        @Override
+        public void routeFailure() {
+            routeFailures++;
+        }
+
+        @Override
+        public PcmSnapshot snapshot() {
+            return new PcmSnapshot(inputEvents, inputFrames, enqueuedBytes, enqueuedFrames,
+                    writtenBytes, writtenFrames, writeFailures, discardedBytes, pendingBytes,
+                    routeFailures);
+        }
+    }
+
+    private record PcmSnapshot(long inputEvents, long inputFrames, long enqueuedBytes,
+            long enqueuedFrames, long writtenBytes, long writtenFrames, long writeFailures,
+            long discardedBytes, long pendingBytes, long routeFailures) {
+        private static final PcmSnapshot EMPTY = new PcmSnapshot(0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L);
+    }
+
+    private record WriteResult(boolean complete, int bytesWritten) {
     }
 }

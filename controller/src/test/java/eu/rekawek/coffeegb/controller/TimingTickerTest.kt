@@ -88,6 +88,29 @@ class TimingTickerTest {
   }
 
   @Test
+  fun `benchmark reset clears warmup debt and starts a fresh cadence`() {
+    val now = AtomicLong(0)
+    val ticker = TimingTicker(
+        LongSupplier { now.addAndGet(1_000_000_000L) },
+        LongConsumer {},
+    )
+    val clock = ClockSpec(1_000, 10, 1)
+
+    ticker.runFrame(clock)
+    assertEquals(1, ticker.completedFrames)
+    assertTrue(ticker.hasPacingDebt)
+
+    ticker.resetForBenchmark()
+
+    assertEquals(0, ticker.completedFrames)
+    kotlin.test.assertFalse(ticker.hasPacingDebt)
+    repeat(clock.controllerTicksPerFrame() - 1) { ticker.run(clock) }
+    assertEquals(0, ticker.completedFrames)
+    ticker.run(clock)
+    assertEquals(1, ticker.completedFrames)
+  }
+
+  @Test
   fun `twenty millisecond pacing debt is repaid before pacing resumes`() {
     val now = AtomicLong(0)
     val parked = mutableListOf<Long>()

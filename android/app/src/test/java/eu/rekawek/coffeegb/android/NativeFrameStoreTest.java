@@ -6,6 +6,8 @@ import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sgb.SuperGameboy;
 import org.junit.Test;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -68,6 +70,7 @@ public class NativeFrameStoreTest {
                 store.publish(new Display.DmgFrameReadyEvent(source));
                 NativeFrameStore.Frame rendered = store.takeLatest();
                 assertNotNull(rendered);
+                store.framePresented(rendered);
                 store.finishDrawing(rendered);
             }
 
@@ -78,6 +81,25 @@ public class NativeFrameStoreTest {
             assertEquals(0, store.droppedFrames());
             assertEquals(0xff051f2a, requireSnapshot(store).pixels()[0]);
         } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void beginningBenchmarkEpochDoesNotWakeRendererWithoutARealFrame() {
+        NativeFrameStore store = new NativeFrameStore();
+        AtomicInteger notifications = new AtomicInteger();
+        NativeFrameStore.Listener listener = notifications::incrementAndGet;
+        try {
+            store.addListener(listener);
+            store.beginBenchmarkEpoch(7L);
+            assertEquals(0, notifications.get());
+
+            int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            store.publish(new Display.DmgFrameReadyEvent(pixels));
+            assertEquals(1, notifications.get());
+        } finally {
+            store.removeListener(listener);
             store.close();
         }
     }
@@ -176,6 +198,27 @@ public class NativeFrameStoreTest {
             assertEquals(0xff051f2a, frame.pixels()[0]);
             store.finishDrawing(frame);
             assertEquals(0xff051f2a, requireSnapshot(store).pixels()[0]);
+            assertEquals(1, store.droppedFrames());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void reusingPublishedSlotsAndTakingNewestCountEachDiscardOnce() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            for (int frame = 0; frame < 4; frame++) {
+                pixels[0] = frame;
+                store.publish(new Display.DmgFrameReadyEvent(pixels));
+            }
+            assertEquals(1, store.droppedFrames());
+
+            NativeFrameStore.Frame newest = store.takeLatest();
+            assertNotNull(newest);
+            assertEquals(3, store.droppedFrames());
+            store.finishDrawing(newest);
         } finally {
             store.close();
         }

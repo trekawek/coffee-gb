@@ -45,6 +45,30 @@ public class DiagnosticsOptionsInstrumentationTest {
         assertEquals("dmg", parsed.hardware.profileOverride().id());
     }
 
+    @Test
+    public void matrixMetadataRoundTripsThroughTheServiceIntent() {
+        CapturingContext context = new CapturingContext(
+                InstrumentationRegistry.getInstrumentation().getTargetContext());
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                "candidate-build", "pair-0001", "block-0001", 4,
+                "candidate", "parent", "redmi-build", "thermal-a", true, "workload-0001");
+
+        EmulationService.start(context, options);
+
+        DiagnosticsOptions parsed = DiagnosticsOptions.parse(true, context.startedIntent);
+        assertEquals(options.buildId, parsed.buildId);
+        assertEquals(options.pairId, parsed.pairId);
+        assertEquals(options.matrixBlock, parsed.matrixBlock);
+        assertEquals(options.rowOrder, parsed.rowOrder);
+        assertEquals(options.runSide, parsed.runSide);
+        assertEquals(options.firstSide, parsed.firstSide);
+        assertEquals(options.deviceBuild, parsed.deviceBuild);
+        assertEquals(options.thermalWindow, parsed.thermalWindow);
+        assertEquals(options.thermalValid, parsed.thermalValid);
+        assertEquals(options.workloadNonce, parsed.workloadNonce);
+    }
+
     private static final class CapturingContext extends ContextWrapper {
         private Intent startedIntent;
 

@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 /**
  * Process-local launch options for the minified benchmark APK.
@@ -23,6 +24,28 @@ final class DiagnosticsOptions {
     static final String EXTRA_RENDER = "coffee_gb_render";
     static final String EXTRA_WARMUP = "coffee_gb_warmup";
     static final String EXTRA_RECENT = "coffee_gb_recent";
+    static final String EXTRA_FRAME_SINK = "coffee_gb_frame_sink";
+    /** Host-assigned build identity; accepted only as a bounded parser-safe token. */
+    static final String EXTRA_BUILD_ID = "coffee_gb_build_id";
+    static final String EXTRA_PAIR_ID = "coffee_gb_pair_id";
+    static final String EXTRA_MATRIX_BLOCK = "coffee_gb_matrix_block";
+    static final String EXTRA_ROW_ORDER = "coffee_gb_row_order";
+    static final String EXTRA_RUN_SIDE = "coffee_gb_run_side";
+    static final String EXTRA_FIRST_SIDE = "coffee_gb_first_side";
+    static final String EXTRA_DEVICE_BUILD = "coffee_gb_device_build";
+    static final String EXTRA_THERMAL_WINDOW = "coffee_gb_thermal_window";
+    static final String EXTRA_THERMAL_VALID = "coffee_gb_thermal_valid";
+    /** Opaque scheduler nonce; never derived from a ROM, save, URI, or title. */
+    static final String EXTRA_WORKLOAD_NONCE = "coffee_gb_workload_nonce";
+    /** Requested Surface frame-rate vote; only the benchmark variant consumes this value. */
+    static final String EXTRA_SURFACE_RATE_HZ = "coffee_gb_surface_rate_hz";
+    /** Opaque app-owned recent-catalog slot; no URI/title is accepted on the benchmark wire. */
+    static final String EXTRA_RECENT_SLOT = "coffee_gb_recent_slot";
+    /** One-shot host arm token delivered through a singleTop Activity intent. */
+    static final String EXTRA_BENCHMARK_ARM_TOKEN = "coffee_gb_benchmark_arm_token";
+
+    private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
+    private static final String UNKNOWN_TOKEN = "unknown";
 
     enum Hardware {
         AUTO("auto", null),
@@ -118,8 +141,39 @@ final class DiagnosticsOptions {
         FRAME_SINK
     }
 
+    enum RunSide {
+        UNKNOWN("unknown"),
+        PARENT("parent"),
+        CANDIDATE("candidate");
+
+        private final String externalValue;
+
+        RunSide(String externalValue) {
+            this.externalValue = externalValue;
+        }
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        static RunSide fromExternalValue(String value) {
+            if (value == null || value.isBlank()) {
+                return UNKNOWN;
+            }
+            String normalized = value.trim().toLowerCase(Locale.ROOT);
+            for (RunSide side : values()) {
+                if (side.externalValue.equals(normalized)) {
+                    return side;
+                }
+            }
+            return UNKNOWN;
+        }
+    }
+
     private static final DiagnosticsOptions DISABLED = new DiagnosticsOptions(
-            false, Hardware.AUTO, true, Render.PRESENTATION, false, false);
+            false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
+            "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
+            UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1);
 
     final boolean enabled;
     final Hardware hardware;
@@ -127,19 +181,75 @@ final class DiagnosticsOptions {
     final Render render;
     final boolean runtimeWarmup;
     final boolean launchRecent;
+    /** Build/matrix fields are bounded metadata only; they never identify a ROM or save. */
+    final String buildId;
+    final String pairId;
+    final String matrixBlock;
+    final int rowOrder;
+    final RunSide runSide;
+    final RunSide firstSide;
+    final String deviceBuild;
+    final String thermalWindow;
+    final boolean thermalValid;
+    final String workloadNonce;
+    /** Host display-mode target; this is not the emulated producer/content cadence. */
+    final int displayTargetHz;
+    /** Exact profile producer cadence advertised to Surface.setFrameRate, in millihertz. */
+    final int surfaceContentRateMillihz;
+    final int recentSlot;
 
     private DiagnosticsOptions(boolean enabled, Hardware hardware, boolean audioOutput,
-            Render render, boolean runtimeWarmup, boolean launchRecent) {
+            Render render, boolean runtimeWarmup, boolean launchRecent, String buildId,
+            String pairId, String matrixBlock, int rowOrder, RunSide runSide,
+            RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
+            String workloadNonce, int displayTargetHz, int recentSlot) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
         this.render = render;
         this.runtimeWarmup = runtimeWarmup;
         this.launchRecent = launchRecent;
+        this.buildId = buildId;
+        this.pairId = pairId;
+        this.matrixBlock = matrixBlock;
+        this.rowOrder = rowOrder;
+        this.runSide = runSide;
+        this.firstSide = firstSide;
+        this.deviceBuild = deviceBuild;
+        this.thermalWindow = thermalWindow;
+        this.thermalValid = thermalValid;
+        this.workloadNonce = workloadNonce;
+        this.displayTargetHz = displayTargetHz;
+        this.surfaceContentRateMillihz = contentRateMillihz(hardware);
+        this.recentSlot = recentSlot >= 0 && recentSlot < 10 ? recentSlot : -1;
     }
 
     static DiagnosticsOptions disabled() {
         return DISABLED;
+    }
+
+    private static int contentRateMillihz(Hardware hardware) {
+        if (hardware == Hardware.SGB) {
+            return (int) Math.round((47_250_000.0 / 772_464.0) * 1_000.0);
+        }
+        if (hardware == Hardware.DMG || hardware == Hardware.MGB
+                || hardware == Hardware.CGB || hardware == Hardware.CGB0
+                || hardware == Hardware.SGB2) {
+            return (int) Math.round((4_194_304.0 / 70_224.0) * 1_000.0);
+        }
+        return -1;
+    }
+
+    static String benchmarkArmToken(Intent intent) {
+        if (intent == null || !intent.hasExtra(EXTRA_BENCHMARK_ARM_TOKEN)) {
+            return null;
+        }
+        Object value = extraValue(intent, EXTRA_BENCHMARK_ARM_TOKEN);
+        if (value == null) {
+            return null;
+        }
+        String token = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+        return token.matches("[a-z0-9][a-z0-9._-]{15,63}") ? token : null;
     }
 
     static DiagnosticsOptions fromIntent(Intent intent) {
@@ -161,12 +271,60 @@ final class DiagnosticsOptions {
                 extraValue(intent, EXTRA_AUDIO), stringExtra(intent, EXTRA_RENDER),
                 booleanExtra(intent, EXTRA_WARMUP, false),
                 booleanExtra(intent, EXTRA_RECENT, true),
-                booleanExtra(intent, "coffee_gb_frame_sink", false));
+                booleanExtra(intent, EXTRA_FRAME_SINK, false),
+                stringExtra(intent, EXTRA_BUILD_ID), stringExtra(intent, EXTRA_PAIR_ID),
+                stringExtra(intent, EXTRA_MATRIX_BLOCK), intExtra(intent, EXTRA_ROW_ORDER, -1),
+                stringExtra(intent, EXTRA_RUN_SIDE), stringExtra(intent, EXTRA_FIRST_SIDE),
+                stringExtra(intent, EXTRA_DEVICE_BUILD), stringExtra(intent, EXTRA_THERMAL_WINDOW),
+                booleanExtra(intent, EXTRA_THERMAL_VALID, false),
+                stringExtra(intent, EXTRA_WORKLOAD_NONCE),
+                intExtra(intent, EXTRA_SURFACE_RATE_HZ, -1),
+                intExtra(intent, EXTRA_RECENT_SLOT, -1));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
             Object audioValue, String renderValue, boolean warmup, boolean recent,
             boolean frameSink) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, null, null, null, -1, null, null, null, null, false, null,
+                -1, -1);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, null, -1);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, -1, -1);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz, -1);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot) {
         if (!diagnosticsEnabled) {
             return DISABLED;
         }
@@ -176,7 +334,14 @@ final class DiagnosticsOptions {
         if (frameSink) {
             render = Render.FRAME_SINK;
         }
-        return new DiagnosticsOptions(true, hardware, audio, render, warmup, recent);
+        int rate = displayTargetHz == 60 || displayTargetHz == 90 || displayTargetHz == 120
+                ? displayTargetHz : -1;
+        return new DiagnosticsOptions(true, hardware, audio, render, warmup, recent,
+                safeToken(buildId, defaultBuildId()), safeToken(pairId, UNKNOWN_TOKEN),
+                safeToken(matrixBlock, UNKNOWN_TOKEN), boundedRowOrder(rowOrder),
+                RunSide.fromExternalValue(runSide), RunSide.fromExternalValue(firstSide),
+                safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
+                thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot);
     }
 
     private static Hardware parseHardware(String value) {
@@ -202,6 +367,21 @@ final class DiagnosticsOptions {
 
     private static Object extraValue(Intent intent, String key) {
         return intent == null || intent.getExtras() == null ? null : intent.getExtras().get(key);
+    }
+
+    private static int intExtra(Intent intent, String key, int defaultValue) {
+        if (intent == null || !intent.hasExtra(key)) {
+            return defaultValue;
+        }
+        Object value = extraValue(intent, key);
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value).trim());
+        } catch (RuntimeException malformed) {
+            return defaultValue;
+        }
     }
 
     private static boolean booleanExtra(Intent intent, String key, boolean defaultValue) {
@@ -231,5 +411,31 @@ final class DiagnosticsOptions {
             }
         }
         return defaultValue;
+    }
+
+    private static int boundedRowOrder(int value) {
+        return value >= 0 && value < 7 ? value : -1;
+    }
+
+    private static String safeToken(String value, String fallback) {
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return SAFE_TOKEN.matcher(normalized).matches() ? normalized : "invalid";
+    }
+
+    private static String defaultBuildId() {
+        String raw = (BuildConfig.APPLICATION_ID + "-" + BuildConfig.BUILD_TYPE + "-"
+                + BuildConfig.VERSION_NAME).toLowerCase(Locale.ROOT);
+        StringBuilder normalized = new StringBuilder(Math.min(64, raw.length()));
+        for (int index = 0; index < raw.length() && normalized.length() < 64; index++) {
+            char character = raw.charAt(index);
+            normalized.append((character >= 'a' && character <= 'z')
+                    || (character >= '0' && character <= '9') || character == '.'
+                    || character == '_' || character == '-' ? character : '_');
+        }
+        String value = normalized.toString();
+        return SAFE_TOKEN.matcher(value).matches() ? value : "coffee-gb-build";
     }
 }

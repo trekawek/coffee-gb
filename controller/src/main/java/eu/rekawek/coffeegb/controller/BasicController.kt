@@ -378,6 +378,11 @@ class BasicController private constructor(
   /** Emulated ticks since the last controller frame lattice boundary. */
   private var debugFramePosition = 0
 
+  /** Benchmark-only epoch state; ordinary sessions never consult these fields in the hot loop. */
+  private var benchmarkArmed = false
+  private var benchmarkCoreFrozen = false
+  private var benchmarkGeneration = 0L
+
   private var debugTrackingEnabled = false
 
   private var pendingDebugAction: PendingDebugAction? = null
@@ -545,7 +550,48 @@ class BasicController private constructor(
       }
       setPaused(true)
     }
+    eventQueue.register<Controller.BenchmarkArmEvent> {
+      val currentSession = session
+      if (properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed && currentSession != null) {
+        benchmarkGeneration = it.generation
+        benchmarkArmed = true
+        benchmarkCoreFrozen = false
+        debugFrame = 0L
+        debugMasterTick = 0L
+        debugFramePosition = 0
+        timingTicker.resetForBenchmark()
+        postSessionEventSafely(
+            currentSession,
+            Controller.BenchmarkArmAcknowledgedEvent(it.generation, it.token),
+        )
+      }
+    }
+    eventQueue.register<Controller.BenchmarkPhysicalFrameBoundaryEvent> {
+      if (properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
+          && !benchmarkCoreFrozen && it.frame == 600L
+          && it.generation == benchmarkGeneration) {
+        val currentSession = session ?: return@register
+        val speedMode = currentSession.gameboy.getSpeedMode()
+        val gpu = currentSession.gameboy.getGpu()
+        postSessionEventSafely(
+            currentSession,
+            Controller.BenchmarkFrameBoundaryEvent(
+                it.frame,
+                gpu.isGbc(),
+                gpu.isDmgCompatMode(),
+                speedMode.getSpeedMode(),
+            ),
+        )
+        benchmarkCoreFrozen = true
+        setPaused(true)
+      }
+    }
     eventQueue.register<Controller.ResumeEmulationEvent> {
+      if (properties.overrides.benchmarkPolicyEnabled && benchmarkCoreFrozen) {
+        // The 600th measured core boundary owns the terminal freeze.  A lifecycle/audio resume
+        // cannot accidentally create an unmeasured 601st frame before the host collects SF data.
+        return@register
+      }
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = false
       } else if (pauseStateBeforeResume != null) {
@@ -720,6 +766,7 @@ class BasicController private constructor(
             debugPort == null &&
             debugInstrumentation == null &&
             !debugCheckpointHistory.enabled &&
+            !properties.overrides.benchmarkPolicyEnabled &&
             !timingTicker.disabled &&
             timingTicker.hasPacingDebt,
     )
@@ -4037,7 +4084,12 @@ class BasicController private constructor(
   ) {
     val session = session ?: return
 
-    isPaused = false
+    // Benchmark sessions materialize into an explicit anchor-ready pause.  The host arms one
+    // generation after capturing its compositor baseline; normal sessions retain auto-resume.
+    isPaused = properties.overrides.benchmarkPolicyEnabled
+    benchmarkArmed = false
+    benchmarkCoreFrozen = false
+    benchmarkGeneration = 0L
     debugPaused = false
     playbackSessionGeneration = SessionPresentationGeneration.next()
     pauseStateBeforeResume = null
@@ -4502,7 +4554,7 @@ class BasicController private constructor(
     flushMobileAdapterGuestConfiguration(closeDeadlineNanos)
 
     try {
-      if (closeState == null) {
+      if (!properties.overrides.benchmarkPolicyEnabled && closeState == null) {
         closeState =
             session?.let {
               Controller.ControllerState(DetachedStateAdapter.capture(it.gameboy), it.config.rom)
@@ -4512,7 +4564,7 @@ class BasicController private constructor(
         closeAutosavePlayDurationNanos = currentPlayDurationNanos()
         closeAutosavePlayDurationCaptured = true
       }
-      if (closeAutosaveCapture == null &&
+      if (!properties.overrides.benchmarkPolicyEnabled && closeAutosaveCapture == null &&
           stateContext != null &&
           shouldPersistCloseAutosave()) {
         try {
@@ -4535,7 +4587,7 @@ class BasicController private constructor(
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.SHUTDOWN)
       }
     }
-    if (closeCapture == null) {
+    if (!properties.overrides.benchmarkPolicyEnabled && closeCapture == null) {
       closeCapture = session?.gameboy?.prepareCartridgeFlush() ?: BatteryFlush.none()
     }
 
@@ -4554,26 +4606,34 @@ class BasicController private constructor(
       )
     }
 
-    val capture = checkNotNull(closeCapture)
-    val persistence = persistCloseCapture(capture, closeDeadlineNanos)
-    if (persistence is BatteryPersistenceResult.Failure) {
-      val requestId = closeRequestId ?: nextPersistenceRequestId++
-      closeRequestId = requestId
-      throw Controller.PersistenceBarrierException(
-          requestId,
-          Controller.PersistenceBarrierOperation.CLOSE,
-          persistence.fileName(),
-          persistence.message(),
-          persistence.cause(),
-      )
+    val capture = closeCapture ?: BatteryFlush.none()
+    if (properties.overrides.benchmarkPolicyEnabled) {
+      // A benchmark process is a disposable observation.  Do not flush battery/RTC bytes or
+      // write an autosave when the runner force-stops/recreates it between paired runs.
+      capture.complete(BatteryPersistenceResult.Success(0))
+    } else {
+      val persistence = persistCloseCapture(capture, closeDeadlineNanos)
+      if (persistence is BatteryPersistenceResult.Failure) {
+        val requestId = closeRequestId ?: nextPersistenceRequestId++
+        closeRequestId = requestId
+        throw Controller.PersistenceBarrierException(
+            requestId,
+            Controller.PersistenceBarrierOperation.CLOSE,
+            persistence.fileName(),
+            persistence.message(),
+            persistence.cause(),
+        )
+      }
+      capture.complete(persistence)
     }
-    capture.complete(persistence)
 
     // The battery flush owns the persistence executor first. A close-autosave must not sit ahead
     // of an already-admitted replacement/stop writer, or a cancelled writer can starve the final
     // battery capture indefinitely. The portable state was captured before either write, after
     // ordinary state work was drained, so writing it after the battery flush remains coherent.
-    persistCloseAutosave(closeDeadlineNanos)
+    if (!properties.overrides.benchmarkPolicyEnabled) {
+      persistCloseAutosave(closeDeadlineNanos)
+    }
     val state = closeState
 
     try {

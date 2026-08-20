@@ -52,19 +52,27 @@ final class AndroidInputRouter implements AutoCloseable {
     private final PlayerInputHub.SourceHandle keyboard;
     private final EnumSet<Button> keyboardButtons = EnumSet.noneOf(Button.class);
     private final ControllerKeyCapture capture;
+    private final Runnable benchmarkMutationRecorder;
 
     private InputDevice activeController;
     /** Persisted selector: none, auto, or an sdl- stable device token. */
     private String gamepadSelection = "auto";
     private boolean closed;
+    private boolean benchmarkLocked;
 
     AndroidInputRouter(PlayerInputHub hub) {
         this(hub, null);
     }
 
     AndroidInputRouter(PlayerInputHub hub, AndroidControllerMappings mappings) {
+        this(hub, mappings, null);
+    }
+
+    AndroidInputRouter(PlayerInputHub hub, AndroidControllerMappings mappings,
+            Runnable benchmarkMutationRecorder) {
         this.hub = Objects.requireNonNull(hub, "hub");
         this.mappings = mappings;
+        this.benchmarkMutationRecorder = benchmarkMutationRecorder;
         capture = new ControllerKeyCapture((deviceId, keyCode, target) -> {
             InputDevice controller = InputDevice.getDevice(deviceId);
             if (this.mappings != null && isConfigurableController(controller)) {
@@ -76,6 +84,10 @@ final class AndroidInputRouter implements AutoCloseable {
 
     synchronized void updateTouchPointer(int pointerId, Collection<Button> buttons) {
         if (closed) {
+            return;
+        }
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
             return;
         }
         PlayerInputHub.SourceHandle source = touchPointers.computeIfAbsent(
@@ -98,6 +110,10 @@ final class AndroidInputRouter implements AutoCloseable {
     synchronized boolean onKeyEvent(KeyEvent event) {
         if (closed || event.getAction() == KeyEvent.ACTION_MULTIPLE) {
             return false;
+        }
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
+            return true;
         }
         if (isGameController(event.getSource())) {
             InputDevice controller = event.getDevice();
@@ -153,6 +169,10 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || !isGameController(event.getSource()) || event.getAction() != MotionEvent.ACTION_MOVE) {
             return false;
         }
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
+            return true;
+        }
         InputDevice controller = event.getDevice();
         if (!isAllowed(controller)) {
             return true;
@@ -187,6 +207,10 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     synchronized void disconnect(int deviceId) {
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
+            return;
+        }
         String key = deviceIds.remove(deviceId);
         if (key != null) {
             connectedDevices.remove(key);
@@ -207,12 +231,20 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || configurationDevice() == null) {
             return false;
         }
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
+            return false;
+        }
         capture.begin(Objects.requireNonNull(target, "target"));
         return true;
     }
 
     /** Selects which physical gamepad is allowed to feed player one. */
     synchronized void setGamepadSelection(String selection) {
+        if (benchmarkLocked) {
+            recordBenchmarkMutation();
+            return;
+        }
         String normalized = normalizeSelection(selection);
         if (gamepadSelection.equals(normalized)) {
             return;
@@ -269,7 +301,7 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     synchronized CaptureResult captureKeyEvent(KeyEvent event) {
-        if (closed || !capture.active() || event == null
+        if (closed || benchmarkLocked || !capture.active() || event == null
                 || !isConfigurableController(event.getDevice())
                 || !isAllowed(event.getDevice())) {
             return CaptureResult.NONE;
@@ -370,6 +402,21 @@ final class AndroidInputRouter implements AutoCloseable {
         keyboard.update(keyboardButtons);
         devices.values().forEach(DeviceSource::clear);
         cancelCapture();
+    }
+
+    /** Freezes all live controller/touch sources for the measured benchmark window. */
+    synchronized void lockBenchmarkWindow() {
+        if (closed || benchmarkLocked) {
+            return;
+        }
+        releaseAll();
+        benchmarkLocked = true;
+    }
+
+    private void recordBenchmarkMutation() {
+        if (benchmarkMutationRecorder != null) {
+            benchmarkMutationRecorder.run();
+        }
     }
 
     @Override

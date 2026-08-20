@@ -130,6 +130,7 @@ debug_keystore="$user_home/.android/debug.keystore"
 android_maven_repo="$repo_root/build/android-m2"
 apk_dir="$repo_root/android/app/build/outputs/apk/$build_variant"
 unsigned_apk="$apk_dir/app-$build_variant-unsigned.apk"
+gradle_signed_apk="$apk_dir/app-$build_variant.apk"
 if [[ "$build_variant" == "release" ]]; then
   aligned_apk="$apk_dir/app-release-qa-r8-aligned.apk"
   signed_apk="$apk_dir/coffee-gb-qa-r8.apk"
@@ -153,21 +154,28 @@ ANDROID_SDK_ROOT="$sdk_root" ANDROID_HOME="$sdk_root" \
   "$repo_root/android/gradlew" -p "$repo_root/android" \
   "-PcoffeeGbMavenRepository=$android_maven_repo" ":app:$gradle_task"
 
-[[ -f "$unsigned_apk" ]] || die "$build_variant build did not produce the unsigned APK: $unsigned_apk"
+if [[ "$build_variant" == "benchmark" && -f "$gradle_signed_apk" ]]; then
+  # The benchmark build type uses the local Android debug key directly. Keep the historical
+  # QA filename for callers while preserving the Gradle-produced certificate and alignment.
+  echo "Using the Gradle-signed benchmark APK"
+  cp -- "$gradle_signed_apk" "$signed_apk"
+  "$apksigner_bin" verify --verbose "$signed_apk"
+else
+  [[ -f "$unsigned_apk" ]] || die "$build_variant build did not produce the unsigned APK: $unsigned_apk"
+  echo "Using Android build-tools $build_tools_version"
+  echo "Aligning the $build_variant APK"
+  "$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
 
-echo "Using Android build-tools $build_tools_version"
-echo "Aligning the $build_variant APK"
-"$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
-
-echo "Signing the QA APK with the debug keystore"
-"$apksigner_bin" sign \
-  --ks "$debug_keystore" \
-  --ks-key-alias androiddebugkey \
-  --ks-pass pass:android \
-  --key-pass pass:android \
-  --out "$signed_apk" \
-  "$aligned_apk"
-"$apksigner_bin" verify --verbose "$signed_apk"
+  echo "Signing the QA APK with the debug keystore"
+  "$apksigner_bin" sign \
+    --ks "$debug_keystore" \
+    --ks-key-alias androiddebugkey \
+    --ks-pass pass:android \
+    --key-pass pass:android \
+    --out "$signed_apk" \
+    "$aligned_apk"
+  "$apksigner_bin" verify --verbose "$signed_apk"
+fi
 
 echo "Installing the $build_variant QA APK with adb -r (app data preserved)"
 "$adb_bin" install -r "$signed_apk"

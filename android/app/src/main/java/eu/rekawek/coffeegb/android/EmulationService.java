@@ -39,7 +39,19 @@ public final class EmulationService extends Service implements AudioManager.OnAu
                 .putExtra(DiagnosticsOptions.EXTRA_RENDER,
                         checked.render == DiagnosticsOptions.Render.FRAME_SINK ? "sink" : "presentation")
                 .putExtra(DiagnosticsOptions.EXTRA_WARMUP, checked.runtimeWarmup)
-                .putExtra(DiagnosticsOptions.EXTRA_RECENT, checked.launchRecent);
+                .putExtra(DiagnosticsOptions.EXTRA_RECENT, checked.launchRecent)
+                .putExtra(DiagnosticsOptions.EXTRA_BUILD_ID, checked.buildId)
+                .putExtra(DiagnosticsOptions.EXTRA_PAIR_ID, checked.pairId)
+                .putExtra(DiagnosticsOptions.EXTRA_MATRIX_BLOCK, checked.matrixBlock)
+                .putExtra(DiagnosticsOptions.EXTRA_ROW_ORDER, checked.rowOrder)
+                .putExtra(DiagnosticsOptions.EXTRA_RUN_SIDE, checked.runSide.externalValue())
+                .putExtra(DiagnosticsOptions.EXTRA_FIRST_SIDE, checked.firstSide.externalValue())
+                .putExtra(DiagnosticsOptions.EXTRA_DEVICE_BUILD, checked.deviceBuild)
+                .putExtra(DiagnosticsOptions.EXTRA_THERMAL_WINDOW, checked.thermalWindow)
+                .putExtra(DiagnosticsOptions.EXTRA_THERMAL_VALID, checked.thermalValid)
+                .putExtra(DiagnosticsOptions.EXTRA_WORKLOAD_NONCE, checked.workloadNonce)
+                .putExtra(DiagnosticsOptions.EXTRA_SURFACE_RATE_HZ, checked.displayTargetHz)
+                .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot);
         context.startService(intent);
     }
 
@@ -55,6 +67,10 @@ public final class EmulationService extends Service implements AudioManager.OnAu
         // The system must not recreate a stopped process and imply that its in-memory game lived.
         pendingOptions = BuildConfig.DIAGNOSTICS_ENABLED
                 ? DiagnosticsOptions.fromIntent(intent) : DiagnosticsOptions.disabled();
+        // Matrix scheduling must force-stop/relaunch the benchmark process between runs.  An
+        // in-process runtime replacement would leave an already-bound Activity/Surface attached
+        // to the closed generation and could silently turn a visible run into a headless run.
+        // Keep one runtime per service generation; the host workflow owns isolation.
         ensureRuntime();
         return START_NOT_STICKY;
     }
@@ -108,9 +124,9 @@ public final class EmulationService extends Service implements AudioManager.OnAu
 
     @Override
     public void onAudioFocusChange(int focusChange) {
-        if (focusChange == AudioManager.AUDIOFOCUS_LOSS
+        if (runtime != null && (focusChange == AudioManager.AUDIOFOCUS_LOSS
                 || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
+                || focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)) {
             runtime.onAudioFocusLost();
         }
         // On gain, runtime deliberately remains paused until the user resumes. Phase 6 installs
@@ -119,7 +135,13 @@ public final class EmulationService extends Service implements AudioManager.OnAu
 
     private void requestAudioFocus() {
         if (audioManager != null) {
-            audioManager.requestAudioFocus(this, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
+            int result = audioManager.requestAudioFocus(this, AudioManager.STREAM_MUSIC,
+                    AudioManager.AUDIOFOCUS_GAIN);
+            if (runtime != null) {
+                runtime.onAudioFocusResult(result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED);
+            }
+        } else if (runtime != null) {
+            runtime.onAudioFocusResult(false);
         }
     }
 

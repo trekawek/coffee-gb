@@ -150,6 +150,11 @@ android {
     create("benchmark") {
       initWith(getByName("release"))
       matchingFallbacks += listOf("release")
+      // Benchmark artifacts are installed and alternated by the matrix runner. Use the
+      // machine-local Android debug key so every locally built parent/candidate benchmark
+      // artifact has a stable, non-secret certificate. Release remains intentionally unsigned
+      // here; the release packaging workflow owns its signing policy.
+      signingConfig = signingConfigs.getByName("debug")
       buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "true")
     }
   }
@@ -338,6 +343,16 @@ tasks.named("check") {
 }
 
 androidComponents {
+  // AGP does not create unit-test artifacts for a non-debuggable release-like variant by
+  // default. Keep benchmark non-debuggable/minified, but enable its isolated JVM test component
+  // so BuildConfig.DIAGNOSTICS_ENABLED=true is exercised instead of silently returning from the
+  // benchmark-only accounting/run-control tests.
+  beforeVariants(selector().withBuildType("benchmark")) { variantBuilder ->
+    // AGP 9.3 also exposes deprecated duplicate accessors on VariantBuilder itself. The
+    // non-deprecated component capability is HasUnitTestBuilder; use it explicitly so Kotlin DSL
+    // resolution does not select the ambiguous VariantBuilder property.
+    (variantBuilder as com.android.build.api.variant.HasUnitTestBuilder).enableUnitTest = true
+  }
   onVariants(selector().withBuildType("debug")) { variant ->
     val mergedManifest = variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
     val verifyPermissions = tasks.register("verifyDebugPermissions") {

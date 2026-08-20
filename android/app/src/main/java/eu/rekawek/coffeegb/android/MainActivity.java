@@ -165,6 +165,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private boolean activityResumed;
     private DiagnosticsOptions diagnosticsOptions = DiagnosticsOptions.disabled();
     private boolean benchmarkRecentLaunchRequested;
+    private boolean benchmarkAnchorRequested;
+    private String pendingBenchmarkArmToken;
     // Android 6-8 can return from a cancelled permission Activity without delivering its result.
     private MenuExternalSurfaceState legacyCameraPermissionFallbackSurface;
     private boolean legacyCameraPermissionFallbackPosted;
@@ -210,26 +212,36 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             if (observedRuntime != connected) {
                 observedRuntime = connected;
                 observedGeneration = -1L;
+                benchmarkAnchorRequested = false;
             }
             runtime = connected;
             bound = true;
             runtime.addObserver(MainActivity.this);
             video.attach(runtime.frames(), runtime.input());
-            runtime.setAudioMuted(getPreferences(MODE_PRIVATE)
+            runtime.setAudioMuted(diagnosticsOptions.enabled ? false : getPreferences(MODE_PRIVATE)
                     .getBoolean("audio.muted", false));
-            runtime.setAudioVolume(getPreferences(MODE_PRIVATE)
+            runtime.setAudioVolume(diagnosticsOptions.enabled ? 100 : getPreferences(MODE_PRIVATE)
                     .getInt("audio.volume", 100));
-            runtime.setRumbleEnabled(getPreferences(MODE_PRIVATE)
-                    .getBoolean("devices.rumble", false));
-            runtime.setPrinterEnabled(getPreferences(MODE_PRIVATE)
-                    .getBoolean("devices.printer", false));
             SharedPreferences settings = getPreferences(MODE_PRIVATE);
-            runtime.setCameraLens(cameraSelection(settings));
-            runtime.setCameraEnabled(!"off".equals(cameraSelection(settings))
-                    && checkSelfPermission(Manifest.permission.CAMERA)
-                    == PackageManager.PERMISSION_GRANTED);
-            runtime.setGamepadSelection(gamepadSelection(settings));
-            runtime.setGpsEnabled(settings.getBoolean(PREF_GPS_ENABLED, false));
+            if (diagnosticsOptions.enabled) {
+                // A benchmark session is deliberately isolated from persisted optional-device
+                // selectors.  These are transient overrides: do not write them back to prefs.
+                runtime.setRumbleEnabled(false);
+                runtime.setPrinterEnabled(false);
+                runtime.setCameraLens("off");
+                runtime.setCameraEnabled(false);
+                runtime.setGamepadSelection("none");
+                runtime.setGpsEnabled(false);
+            } else {
+                runtime.setRumbleEnabled(settings.getBoolean("devices.rumble", false));
+                runtime.setPrinterEnabled(settings.getBoolean("devices.printer", false));
+                runtime.setCameraLens(cameraSelection(settings));
+                runtime.setCameraEnabled(!"off".equals(cameraSelection(settings))
+                        && checkSelfPermission(Manifest.permission.CAMERA)
+                        == PackageManager.PERMISSION_GRANTED);
+                runtime.setGamepadSelection(gamepadSelection(settings));
+                runtime.setGpsEnabled(settings.getBoolean(PREF_GPS_ENABLED, false));
+            }
             if (!diagnosticsOptions.enabled) {
                 runtime.setDisplayGrayscale("grey".equals(displayColors(settings)));
                 runtime.setSgbBorder(settings.getBoolean(PREF_DISPLAY_BORDER, false));
@@ -268,6 +280,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             runtime = null;
             observedRuntime = null;
             observedGeneration = -1L;
+            benchmarkAnchorRequested = false;
             bound = false;
             observedState = RuntimeState.stopped();
             stateCatalogGeneration++;
@@ -281,6 +294,26 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             refreshMenuPages();
         }
     };
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        String token = DiagnosticsOptions.benchmarkArmToken(intent);
+        if (token == null) {
+            return;
+        }
+        AndroidEmulationRuntime active = runtime;
+        if (active == null || !bound) {
+            pendingBenchmarkArmToken = token;
+        } else {
+            pendingBenchmarkArmToken = token;
+            armPendingBenchmarkIfReady(active);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -302,6 +335,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
         FrameLayout root = new FrameLayout(this);
         video = new CoffeeGbSurfaceView(this);
+        if (diagnosticsOptions.enabled) {
+            // The host separately pins the display mode (60/120 Hz).  Surface.setFrameRate must
+            // describe the exact emulated producer cadence, e.g. 59.7275 rather than the SGB
+            // display target 120 Hz.
+            video.setBenchmarkContentRateMillihz(diagnosticsOptions.surfaceContentRateMillihz);
+        }
         menuController = new MenuController(new MenuController.Listener() {
             @Override
             public void onPresentation(MenuPresentation presentation) {
@@ -2495,6 +2534,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             deferredMenuFocusRestore = menuController.snapshot();
         }
         observedState = state;
+        if (diagnosticsOptions.enabled && state.phase() == RuntimeState.Phase.PAUSED
+                && !benchmarkAnchorRequested && runtime != null && video != null) {
+            benchmarkAnchorRequested = true;
+            AndroidEmulationRuntime active = runtime;
+            video.requestBenchmarkAnchor(success -> {
+                active.benchmarkAnchorPosted(success);
+                if (success) {
+                    armPendingBenchmarkIfReady(active);
+                }
+            });
+        }
         refreshMenuPages();
         if (runtime == null || menuController == null || externalSurface.active()) {
             return;
@@ -2508,6 +2558,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             menuPauseOwned = false;
             menuController.show(MenuRoute.LIBRARY);
         }
+    }
+
+    /** Defers a singleTop arm token until the real anchor has completed on the renderer. */
+    private void armPendingBenchmarkIfReady(AndroidEmulationRuntime active) {
+        if (!diagnosticsOptions.enabled || active == null || pendingBenchmarkArmToken == null
+                || !active.benchmarkAnchorReady()) {
+            return;
+        }
+        String token = pendingBenchmarkArmToken;
+        pendingBenchmarkArmToken = null;
+        active.armBenchmark(token);
     }
 
 

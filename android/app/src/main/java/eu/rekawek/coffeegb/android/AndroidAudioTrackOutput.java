@@ -114,6 +114,21 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
     }
 
     @Override
+    public long playbackPositionFrames() {
+        return track.getPlaybackHeadPosition() & 0xffffffffL;
+    }
+
+    @Override
+    public long outputUnderrunCount() {
+        return track.getUnderrunCount();
+    }
+
+    @Override
+    public boolean isPlaying() {
+        return track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING;
+    }
+
+    @Override
     public void play() {
         track.play();
     }

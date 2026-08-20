@@ -10,6 +10,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.function.LongConsumer;
 
 /**
  * Bounded native-frame hand-off between the controller event thread and an Android renderer.
@@ -41,23 +42,34 @@ final class NativeFrameStore implements AutoCloseable {
     private final Slot[] slots = new Slot[SLOT_COUNT];
     private final CopyOnWriteArraySet<Listener> listeners = new CopyOnWriteArraySet<>();
     private final AndroidBenchmarkDiagnostics diagnostics;
+    private final LongConsumer benchmarkBoundary;
 
     private long nextSequence;
     private long droppedFrames;
+    private long benchmarkEpoch;
     private volatile boolean grayscale;
     /** True while the active session has a Super Game Boy presentation path. */
     private volatile boolean sgbOutput;
     private boolean closed;
 
     NativeFrameStore() {
-        this(null);
+        this(null, null);
     }
 
     NativeFrameStore(AndroidBenchmarkDiagnostics diagnostics) {
+        this(diagnostics, null);
+    }
+
+    NativeFrameStore(AndroidBenchmarkDiagnostics diagnostics, LongConsumer benchmarkBoundary) {
         this.diagnostics = diagnostics;
+        this.benchmarkBoundary = benchmarkBoundary;
         for (int index = 0; index < slots.length; index++) {
             slots[index] = new Slot();
         }
+    }
+
+    boolean diagnosticsEnabled() {
+        return diagnostics != null && diagnostics.enabled();
     }
 
     void addListener(Listener listener) {
@@ -79,11 +91,11 @@ final class NativeFrameStore implements AutoCloseable {
         if (sgbOutput) {
             return;
         }
-        if (diagnostics != null) {
-            diagnostics.physicalFrame();
-            if (diagnostics.frameSink()) {
-                return;
-            }
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            recordFrameReady();
+        }
+        if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
+            return;
         }
         Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
         if (slot == null) {
@@ -95,11 +107,11 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     void publish(Display.GbcFrameReadyEvent event) {
-        if (diagnostics != null) {
-            diagnostics.physicalFrame();
-            if (diagnostics.frameSink()) {
-                return;
-            }
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            recordFrameReady();
+        }
+        if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
+            return;
         }
         Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
         if (slot == null) {
@@ -126,11 +138,11 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {
-        if (diagnostics != null) {
-            diagnostics.physicalFrame();
-            if (diagnostics.frameSink()) {
-                return;
-            }
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            recordFrameReady();
+        }
+        if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
+            return;
         }
         int width = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_WIDTH : Display.DISPLAY_WIDTH;
         int height = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_HEIGHT : Display.DISPLAY_HEIGHT;
@@ -161,6 +173,10 @@ final class NativeFrameStore implements AutoCloseable {
         for (Slot slot : slots) {
             if (slot != newest && slot.state == SlotState.PUBLISHED) {
                 slot.state = SlotState.FREE;
+                if (!slot.presentationConsumed) {
+                    recordDroppedFrame();
+                }
+                slot.presentationConsumed = false;
             }
         }
         newest.state = SlotState.DRAWING;
@@ -204,6 +220,10 @@ final class NativeFrameStore implements AutoCloseable {
         for (Slot slot : slots) {
             if (slot.state == SlotState.PUBLISHED) {
                 slot.state = SlotState.FREE;
+                if (!slot.presentationConsumed) {
+                    recordDroppedFrame();
+                }
+                slot.presentationConsumed = false;
             }
         }
         notifyListeners();
@@ -211,6 +231,71 @@ final class NativeFrameStore implements AutoCloseable {
 
     synchronized long droppedFrames() {
         return droppedFrames;
+    }
+
+    /** Starts a new benchmark epoch while the anchor-paused renderer is quiescent. */
+    synchronized void beginBenchmarkEpoch(long generation) {
+        if (generation <= 0L) {
+            throw new IllegalArgumentException("Benchmark generation must be positive");
+        }
+        benchmarkEpoch = generation;
+        nextSequence = 0L;
+        for (Slot slot : slots) {
+            slot.state = SlotState.FREE;
+            slot.presentationConsumed = false;
+            slot.epoch = generation;
+        }
+        // The anchor renderer is quiescent at this boundary. Do not wake it with a synthetic
+        // null draw: the first real measured publication must schedule the renderer callback,
+        // otherwise a post-baseline neutral buffer could become frame 601.
+    }
+
+    /** Records a Surface BufferQueue submission after the canvas post has completed. */
+    synchronized void frameSubmitted(Frame frame) {
+        if (frame != null) {
+            frame.slot.presentationConsumed = true;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
+                    && diagnostics.acceptsFrameEpoch(frame.epoch())) {
+                diagnostics.frameSubmitted(frame.sequence());
+            }
+        }
+    }
+
+    boolean submissionLimitReached() {
+        return BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
+                && diagnostics.submissionLimitReached();
+    }
+
+    /** Completes the benchmark-only out-of-epoch drain without exposing diagnostics to release. */
+    void benchmarkDrainPosted(boolean success) {
+        if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null) {
+            diagnostics.benchmarkDrainPosted(success);
+        }
+    }
+
+    /** Compatibility seam for existing package tests; new renderer code uses frameSubmitted. */
+    synchronized void framePresented(Frame frame) {
+        frameSubmitted(frame);
+    }
+
+    synchronized void framePresentationLate(Frame frame) {
+        if (frame != null) {
+            frame.slot.presentationConsumed = true;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
+                    && diagnostics.acceptsFrameEpoch(frame.epoch())) {
+                diagnostics.frameLate();
+            }
+        }
+    }
+
+    synchronized void framePresentationCorrupt(Frame frame) {
+        if (frame != null) {
+            frame.slot.presentationConsumed = true;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null
+                    && diagnostics.acceptsFrameEpoch(frame.epoch())) {
+                diagnostics.frameCorrupt();
+            }
+        }
     }
 
     synchronized int bufferCount() {
@@ -241,7 +326,7 @@ final class NativeFrameStore implements AutoCloseable {
 
     private synchronized Slot reserve(int width, int height) {
         if (closed || width < 1 || height < 1 || width > MAX_WIDTH || height > MAX_HEIGHT) {
-            droppedFrames++;
+            recordDroppedFrame();
             return null;
         }
         Slot chosen = null;
@@ -262,21 +347,32 @@ final class NativeFrameStore implements AutoCloseable {
         if (chosen == null) {
             // Rendering owns every fixed buffer. Dropping one arriving frame is preferable to
             // blocking the controller thread or allocating a fourth frame.
-            droppedFrames++;
+            recordDroppedFrame();
             return null;
+        }
+        if (chosen.state == SlotState.PUBLISHED) {
+            // Reusing a published slot discards that frame before presentation. Count it here;
+            // takeLatest() cannot count it again because the slot becomes WRITING below.
+            if (!chosen.presentationConsumed) {
+                recordDroppedFrame();
+            }
+            chosen.presentationConsumed = false;
         }
         chosen.state = SlotState.WRITING;
         chosen.width = width;
         chosen.height = height;
+        chosen.epoch = benchmarkEpoch;
         return chosen;
     }
 
     private void publish(Slot slot) {
         synchronized (this) {
             if (closed || slot.state != SlotState.WRITING) {
+                recordDroppedFrame();
                 return;
             }
             slot.sequence = ++nextSequence;
+            slot.presentationConsumed = false;
             slot.state = SlotState.PUBLISHED;
         }
         notifyListeners();
@@ -285,6 +381,23 @@ final class NativeFrameStore implements AutoCloseable {
     private void notifyListeners() {
         for (Listener listener : listeners) {
             listener.onFrameAvailable();
+        }
+    }
+
+    private void recordDroppedFrame() {
+        droppedFrames++;
+        if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null) {
+            diagnostics.frameDropped();
+        }
+    }
+
+    private void recordFrameReady() {
+        if (diagnostics == null) {
+            return;
+        }
+        boolean boundary = diagnostics.frameReady();
+        if (boundary && benchmarkBoundary != null) {
+            benchmarkBoundary.accept(diagnostics.benchmarkGeneration());
         }
     }
 
@@ -299,6 +412,14 @@ final class NativeFrameStore implements AutoCloseable {
 
         private Frame(Slot slot) {
             this.slot = slot;
+        }
+
+        long sequence() {
+            return slot.sequence;
+        }
+
+        long epoch() {
+            return slot.epoch;
         }
 
         int[] pixels() {
@@ -349,5 +470,8 @@ final class NativeFrameStore implements AutoCloseable {
         private int width;
         private int height;
         private long sequence;
+        private long epoch;
+        /** True once the renderer has consumed this published frame; prevents double drop counts. */
+        private boolean presentationConsumed;
     }
 }

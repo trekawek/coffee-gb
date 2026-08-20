@@ -20,6 +20,7 @@ import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -39,6 +40,7 @@ final class RecentSafDocuments {
     private static final String KEY_DOCUMENT_ENTRIES = "recent-rom-entries-v2";
     private static final String KEY_GAME_ENTRIES = "recent-game-entries-v3";
     private static final int CAPACITY = 10;
+    private static final SecureRandom BENCHMARK_NONCE_RANDOM = new SecureRandom();
 
     private final ContentResolver resolver;
     private final SharedPreferences preferences;
@@ -120,12 +122,21 @@ final class RecentSafDocuments {
      * cleanup are all writes and therefore do not belong on the benchmark launch path.
      */
     Entry mostRecentReadableEntry() {
+        return benchmarkEntryAtSlot(0);
+    }
+
+    /** Read-only opaque slot lookup used by the benchmark scheduler for row-specific selections. */
+    Entry benchmarkEntryAtSlot(int slot) {
+        if (slot < 0 || slot >= CAPACITY) {
+            return null;
+        }
         String encoded = preferences.getString(KEY_GAME_ENTRIES, null);
         if (encoded == null || encoded.isBlank()) {
             return null;
         }
         try {
             JSONArray array = new JSONArray(encoded);
+            int readableIndex = 0;
             for (int index = 0; index < array.length(); index++) {
                 JSONObject object = array.optJSONObject(index);
                 if (object == null) {
@@ -144,6 +155,9 @@ final class RecentSafDocuments {
                         object.optString("romHash", ""),
                         object.optLong("lastPlayed", 0L));
                 if (hasValidRomHash(entry.romHash()) && hasPersistedReadPermission(entry.uri())) {
+                    if (readableIndex++ != slot) {
+                        continue;
+                    }
                     return new Entry(entry.uri(), entry.romName(), entry.candidateToken(),
                             entry.archiveEntryName(), entry.archiveEntryOccurrence(),
                             entry.romHash(), entry.lastPlayedMillis(), MenuPreview.empty());
@@ -153,6 +167,66 @@ final class RecentSafDocuments {
             // A malformed private catalog is not repaired by a benchmark launch.
         }
         return null;
+    }
+
+    /**
+     * Returns the app-owned opaque workload nonce for a selected recent game, creating it once.
+     * The nonce is generated independently of URI, title, archive name, ROM bytes, and save data;
+     * it is persisted only beside the private recent-game metadata.
+     */
+    String ensureBenchmarkNonce(Entry target) {
+        if (target == null || !hasPersistedReadPermission(target.uri())) {
+            return "unknown";
+        }
+        String encoded = preferences.getString(KEY_GAME_ENTRIES, null);
+        if (encoded == null || encoded.isBlank()) {
+            return "unknown";
+        }
+        try {
+            JSONArray array = new JSONArray(encoded);
+            for (int index = 0; index < array.length(); index++) {
+                JSONObject object = array.optJSONObject(index);
+                if (object == null) {
+                    continue;
+                }
+                StoredEntry candidate = stored(Uri.parse(object.optString("uri", "")),
+                        object.optString("romName", ""),
+                        object.optLong("candidateToken",
+                                RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN),
+                        object.optString("entryName", ""), object.optInt("entryOccurrence", -1),
+                        object.optString("romHash", ""), object.optLong("lastPlayed", 0L));
+                if (!sameGame(candidate, stored(target.uri(), target.romName(),
+                        target.candidateToken(), target.archiveEntryName(),
+                        target.archiveEntryOccurrence(), target.romHash(),
+                        target.lastPlayedMillis()))) {
+                    continue;
+                }
+                String existing = object.optString("benchmarkNonce", "").trim().toLowerCase(
+                        java.util.Locale.ROOT);
+                if (existing.matches("[a-z0-9][a-z0-9._-]{15,63}")) {
+                    return existing;
+                }
+                String nonce = randomBenchmarkNonce();
+                object.put("benchmarkNonce", nonce);
+                if (preferences.edit().putString(KEY_GAME_ENTRIES, array.toString()).commit()) {
+                    return nonce;
+                }
+                return "unknown";
+            }
+        } catch (Exception ignored) {
+            // A malformed private catalog cannot be made benchmark-eligible.
+        }
+        return "unknown";
+    }
+
+    private static String randomBenchmarkNonce() {
+        byte[] bytes = new byte[24];
+        BENCHMARK_NONCE_RANDOM.nextBytes(bytes);
+        StringBuilder result = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            result.append(String.format(java.util.Locale.ROOT, "%02x", value));
+        }
+        return result.toString();
     }
 
     static boolean hasValidRomHash(String value) {

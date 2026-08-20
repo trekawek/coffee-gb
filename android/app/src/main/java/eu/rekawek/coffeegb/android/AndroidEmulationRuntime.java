@@ -108,6 +108,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private EventBus eventBus;
     private BasicController controller;
     private volatile AndroidAudioSink audio;
+    /** Published before the controller-thread arm acknowledgement; never retained after ACK. */
+    private volatile AndroidAudioSink.AudioBaseline pendingBenchmarkAudioBaseline;
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
     private volatile AndroidCameraSource camera;
@@ -161,12 +163,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     AndroidEmulationRuntime(Context context, DiagnosticsOptions options) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
         diagnosticsOptions = options == null ? DiagnosticsOptions.disabled() : options;
-        diagnostics = new AndroidBenchmarkDiagnostics(diagnosticsOptions);
-        frames = new NativeFrameStore(diagnostics);
+        diagnostics = new AndroidBenchmarkDiagnostics(this.context, diagnosticsOptions);
+        // Release/non-diagnostic sessions use a null sink so the native frame hot path does not
+        // enter synchronized benchmark methods on every frame.
+        frames = new NativeFrameStore(diagnostics.enabled() ? diagnostics : null,
+                this::postBenchmarkPhysicalBoundary);
         properties = new EmulatorProperties(androidSettingsOverrides(diagnosticsOptions));
         diagnostics.sessionLaunch();
         input = new AndroidInputRouter(properties.getPlayerInputSource(),
-                new AndroidControllerMappings(this.context));
+                new AndroidControllerMappings(this.context), diagnostics::inputMutation);
         submit(this::initialize);
     }
 
@@ -182,12 +187,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         // is emitted at session materialization and needs the actual post-boot KEY0/GPU mode.
         // Release/non-diagnostic callers retain the ordinary settings path unchanged.
         BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
-        return new ApplicationSettingsOverrides(profile, bootstrapMode, null, false,
-                checked.enabled && checked.runtimeWarmup);
+        return new ApplicationSettingsOverrides(profile, bootstrapMode,
+                checked.enabled ? false : null, false,
+                checked.enabled && checked.runtimeWarmup, checked.enabled);
     }
 
     public RuntimeState state() {
         return state;
+    }
+
+    /** Called synchronously by NativeFrameStore on the controller thread at physical ready #600. */
+    private void postBenchmarkPhysicalBoundary(long generation) {
+        if (!diagnostics.enabled() || eventBus == null || generation <= 0L) {
+            return;
+        }
+        eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
     }
 
     /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
@@ -246,6 +260,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Applies host-only audio controls without changing emulation timing or save state. */
     void setAudioMuted(boolean muted) {
+        if (diagnostics.enabled()) {
+            if (rejectBenchmarkMutation() || muted) {
+                return;
+            }
+        }
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
             activeAudio.setMuted(muted);
@@ -253,14 +272,30 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     void setAudioVolume(int volume) {
+        if (diagnostics.enabled()) {
+            if (rejectBenchmarkMutation() || volume != 100) {
+                return;
+            }
+        }
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
             activeAudio.setVolume(volume);
         }
     }
 
+    private boolean rejectBenchmarkMutation() {
+        if (!diagnostics.enabled() || !diagnostics.benchmarkWindowLocked()) {
+            return false;
+        }
+        diagnostics.inputMutation();
+        return true;
+    }
+
     /** Applies the user’s host-only rumble preference without changing the portable cartridge. */
     void setRumbleEnabled(boolean enabled) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         AndroidRumbleSink activeRumble = rumble;
         if (activeRumble != null) {
             activeRumble.setEnabled(enabled);
@@ -269,6 +304,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Calibrates an active MBC7 cartridge to the device's current resting position. */
     void calibrateTilt() {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         AndroidTiltSink activeTilt = tilt;
         if (activeTilt != null) {
             activeTilt.calibrate();
@@ -277,6 +315,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Enables live Pocket Camera capture after the user grants the optional camera permission. */
     void setCameraEnabled(boolean enabled) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         submit(() -> {
             cameraEnabled = enabled;
             AndroidCameraSource activeCamera = camera;
@@ -288,6 +329,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Selects the physical CameraX lens used by a Pocket Camera cartridge. */
     void setCameraLens(String lens) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         String selected = "front".equalsIgnoreCase(lens) ? "front" : "rear";
         submit(() -> {
             cameraLens = selected;
@@ -300,6 +344,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Applies the persisted Android gamepad selector to both live input and future ROM opens. */
     void setGamepadSelection(String selection) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         String normalized = "none".equalsIgnoreCase(selection)
                 || "off".equalsIgnoreCase(selection) ? "none"
                 : (selection == null || selection.isBlank() || "auto".equalsIgnoreCase(selection)
@@ -309,6 +356,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Persists and applies the Android-only emulated GPS accessory switch. */
     void setGpsEnabled(boolean enabled) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         gpsEnabled = enabled;
         submit(() -> {
             if (eventBus != null && controller != null && activeLayout != null) {
@@ -319,6 +369,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Persists the selected DMG palette in the controller settings and frame renderer. */
     void setDisplayGrayscale(boolean grayscale) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         frames.setGrayscale(grayscale);
         submit(() -> {
             String value = Boolean.toString(grayscale);
@@ -331,6 +384,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Applies the SGB border choice immediately and carries it into future ROM profiles. */
     void setSgbBorder(boolean enabled) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         submit(() -> {
             String value = Boolean.toString(enabled);
             if (Objects.equals(properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, null),
@@ -346,6 +402,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Applies a system selector with the controller's documented reload semantics. */
     void setSystemSelection(String id, String value) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         submit(() -> {
             boolean changed;
             switch (id) {
@@ -393,6 +452,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Connects or disconnects the portable Game Boy Printer at the controller-safe boundary. */
     void setPrinterEnabled(boolean enabled) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         submit(() -> {
             printerEnabled = enabled;
             if (controller != null && activeLayout != null) {
@@ -422,6 +484,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Pauses one active session at its controller-owned safe point without ending it. */
     public void pause() {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         input.releaseAll();
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
@@ -448,6 +513,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Resets only the active emulator session through its portable controller event. */
     public void reset() {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         submit(() -> {
             if (controller != null && activeLayout != null) {
                 eventBus.post(new Controller.ResetEmulationEvent());
@@ -457,17 +525,26 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Requests a portable quick-state save at the controller's safe point. */
     public void saveSnapshot(int slot) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         saveSnapshot(slot, null);
     }
 
     /** Requests a quick-state save and invokes the detached completion callback on the main thread. */
     void saveSnapshot(int slot, Runnable onCompleted) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         checkStateSlot(slot);
         submit(() -> requestStateSave(slot, onCompleted));
     }
 
     /** Requests a portable quick-state restore; controller errors remain typed/redacted. */
     public void restoreSnapshot(int slot) {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         checkStateSlot(slot);
         submit(() -> requestStateLoad(slot));
     }
@@ -651,8 +728,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         submit(() -> {
-            RecentSafDocuments.Entry recent = new RecentSafDocuments(context)
-                    .mostRecentReadableEntry();
+            RecentSafDocuments recentStore = new RecentSafDocuments(context);
+            RecentSafDocuments.Entry recent = diagnosticsOptions.recentSlot >= 0
+                    ? recentStore.benchmarkEntryAtSlot(diagnosticsOptions.recentSlot)
+                    : recentStore.mostRecentReadableEntry();
             if (recent == null) {
                 diagnostics.noRecentEntry();
                 publish(RuntimeState.Phase.FAILED,
@@ -661,6 +740,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 return;
             }
             diagnostics.openStart();
+            diagnostics.setWorkloadNonce(new RecentSafDocuments(context)
+                    .ensureBenchmarkNonce(recent));
+            // Freeze gameplay input before materialization. The benchmark session is paused until
+            // the host arms it, but a touch/key/controller event could otherwise mutate the
+            // initial Joypad state during ROM preparation and before the controller ACKs ARM.
+            // The ACK handler repeats this idempotently as an epoch guard.
+            input.lockBenchmarkWindow();
             openRecentGame(recent);
         });
     }
@@ -698,6 +784,18 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Pauses at the controller safe point and asks for a bounded asynchronous battery flush. */
     public void onHostNotVisible() {
+        if (diagnostics.enabled()) {
+            // Benchmark visibility is a scheduler precondition.  Do not flush/reopen audio or
+            // enter the ordinary battery/autosave lifecycle barrier; a hidden run is discarded.
+            diagnostics.inputMutation();
+            AndroidAudioSink activeAudio = audio;
+            if (activeAudio != null) {
+                // Stop output immediately, but keep the measured counters/baseline intact so the
+                // eventual record is rejected rather than presenting a false continuous stream.
+                activeAudio.pause();
+            }
+            return;
+        }
         input.releaseAll();
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
@@ -726,16 +824,29 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Records visibility for a future load without automatically resuming an already paused game. */
     public void onHostVisible() {
+        if (diagnostics.enabled()) {
+            diagnostics.inputMutation();
+            return;
+        }
         submit(lifecycle::foregrounded);
     }
 
     /** Audio loss follows the same conservative policy: pause, flush, and require user resume. */
     public void onAudioFocusLost() {
+        diagnostics.audioFocusLost();
         onHostNotVisible();
+    }
+
+    /** Records the service's intrinsic focus request result before a benchmark ARM. */
+    public void onAudioFocusResult(boolean granted) {
+        diagnostics.audioFocusResult(granted);
     }
 
     /** Audio focus gain intentionally does not resume emulation without an explicit user command. */
     public void resume() {
+        if (rejectBenchmarkMutation()) {
+            return;
+        }
         clearPauseMenuSnapshot();
         submit(() -> {
             if (controller == null || activeLayout == null) {
@@ -760,6 +871,44 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             lifecycle.resumedByUser();
             eventBus.post(new Controller.ResumeEmulationEvent());
         });
+    }
+
+    /**
+     * Arms one benchmark generation after the host has captured the warm-up compositor baseline.
+     * This path is benchmark-only; ordinary resume remains a separate user operation.
+     */
+    void armBenchmark(String token) {
+        if (!diagnostics.enabled()) {
+            return;
+        }
+        submit(() -> {
+            long generation = System.nanoTime();
+            if (generation <= 0L || token == null
+                    || !token.matches("[a-z0-9][a-z0-9._-]{15,63}")
+                    || !diagnostics.benchmarkAnchorReady()) {
+                return;
+            }
+            AndroidAudioSink activeAudio = audio;
+            AndroidAudioSink.AudioBaseline audioBaseline = activeAudio == null
+                    ? AndroidAudioSink.AudioBaseline.unavailable() : activeAudio.benchmarkBaseline();
+            pendingBenchmarkAudioBaseline = audioBaseline;
+            // BasicController performs the ticker/deadline reset and synchronously emits the
+            // acknowledgement on its owner thread. CPU/priority/environment baselines and the
+            // matrix_run record are taken only from that acknowledgement callback.
+            eventBus.post(new Controller.BenchmarkArmEvent(generation, token));
+        });
+    }
+
+    boolean benchmarkAnchorReady() {
+        return diagnostics.enabled() && diagnostics.benchmarkAnchorReady();
+    }
+
+    /** Receives the renderer-thread result of the one-time pre-measurement Surface anchor post. */
+    void benchmarkAnchorPosted(boolean success) {
+        if (!diagnostics.enabled()) {
+            return;
+        }
+        submit(() -> diagnostics.benchmarkAnchorPosted(success));
     }
 
     /** Stops one session and recreates its controller shell for a later load without leaks. */
@@ -992,9 +1141,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     submit(this::drainPendingStateRequests);
                 },
                 StateUxSessionEvent.class);
+        AndroidBenchmarkDiagnostics activeDiagnostics = diagnostics.enabled() ? diagnostics : null;
         audio = diagnostics.enabled() && !diagnosticsOptions.audioOutput
                 ? AndroidAudioSink.disabled(eventBus)
-                : new AndroidAudioSink(context, eventBus, diagnostics);
+                : new AndroidAudioSink(context, eventBus, activeDiagnostics);
+        diagnostics.setAudioSink(audio);
         if (diagnostics.enabled() && !diagnosticsOptions.audioOutput) {
             diagnostics.audioStats(new AndroidAudioSink.AudioStats(0, 0, 0, 0));
         }
@@ -1015,6 +1166,24 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     diagnostics.hardwareProfile(event);
                 },
                 Controller.HardwareProfileEvent.class);
+        eventBus.register(
+                event -> diagnostics.benchmarkFrameBoundary(event),
+                Controller.BenchmarkFrameBoundaryEvent.class);
+        eventBus.register(
+                event -> {
+                    if (!diagnostics.enabled()) {
+                        return;
+                    }
+                    AndroidAudioSink.AudioBaseline baseline = pendingBenchmarkAudioBaseline;
+                    pendingBenchmarkAudioBaseline = null;
+                    if (!diagnostics.armBenchmark(event.getGeneration(), event.getToken(), baseline)) {
+                        return;
+                    }
+                    frames.beginBenchmarkEpoch(event.getGeneration());
+                    input.lockBenchmarkWindow();
+                    eventBus.post(new Controller.ResumeEmulationEvent());
+                },
+                Controller.BenchmarkArmAcknowledgedEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
@@ -1034,7 +1203,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.EmulationStartedEvent event) -> {
                     // This callback runs synchronously on the controller thread. Keep the CPU
                     // sample on that thread instead of the runtime owner executor.
-                    diagnostics.emulationStarted();
+                    if (diagnostics.enabled()) {
+                        // BasicController materializes benchmark sessions paused.  Diagnostics
+                        // now reports ANCHOR_READY; the host must arm a generation explicitly.
+                        diagnostics.emulationStarted();
+                    } else {
+                        diagnostics.emulationStarted();
+                    }
                     submit(() -> {
                     boolean requestedOpen = event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId;
@@ -1074,9 +1249,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         if (gpsEnabled) {
                             eventBus.post(new Controller.SetGpsReceiverEvent(true));
                         }
-                        publish(RuntimeState.Phase.RUNNING,
+                        publish(diagnostics.enabled() ? RuntimeState.Phase.PAUSED
+                                        : RuntimeState.Phase.RUNNING,
                                 "Loaded " + event.getRomName() + ". App-private saves are ready.",
-                                List.of(), true, false, false);
+                                List.of(), true, diagnostics.enabled(), false);
                     }
                     });
                 },
@@ -1325,14 +1501,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeRomHash = hash;
             activeOpenRequestId = ++nextOpenRequestId;
             tiltOpenRequestId = activeOpenRequestId;
-            tiltRequiredForOpenRequest = rom.getType().isMbc7();
+            tiltRequiredForOpenRequest = !diagnostics.enabled() && rom.getType().isMbc7();
             cameraOpenRequestId = activeOpenRequestId;
-            cameraRequiredForOpenRequest = rom.getType().isPocketCamera()
-                    || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA;
+            cameraRequiredForOpenRequest = !diagnostics.enabled() && (rom.getType().isPocketCamera()
+                    || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA);
             publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
                     false, true, false);
             controllerEventBus().post(new Controller.LoadRomEvent(
-                    image, null, persistenceStore, activeOpenRequestId, true));
+                    image, null, persistenceStore, activeOpenRequestId, !diagnostics.enabled()));
         } catch (Exception failure) {
             if (recent == null) {
                 if (!diagnostics.enabled()) {
