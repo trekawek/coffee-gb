@@ -189,7 +189,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
         return new ApplicationSettingsOverrides(profile, bootstrapMode,
                 checked.enabled ? false : null, false,
-                checked.enabled && checked.runtimeWarmup, checked.enabled);
+                checked.enabled && checked.runtimeWarmup, checked.enabled,
+                checked.enabled ? checked.executionMode : null);
     }
 
     public RuntimeState state() {
@@ -412,6 +413,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         EmulatorProperties.Key.DmgGamesType, value);
                 case "cgb-games" -> changed = setProfileProperty(
                         EmulatorProperties.Key.CgbGamesType, value);
+                case "execution-mode" -> changed = setExecutionModeProperty(value);
                 case "bootstrap" -> {
                     String mode = "full".equalsIgnoreCase(value) ? "NORMAL"
                             : ("fast-forward".equalsIgnoreCase(value)
@@ -448,6 +450,19 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             properties.setProperty(key, normalized);
         }
         return !Objects.equals(before, properties.getProperty(key, null));
+    }
+
+    /** Applies the core strategy through the controller settings model before a safe reload. */
+    private boolean setExecutionModeProperty(String value) {
+        String normalized = DiagnosticsOptions.executionModeValue(
+                DiagnosticsOptions.parseExecutionMode(value)).toUpperCase(java.util.Locale.ROOT);
+        String before = properties.getProperty(EmulatorProperties.Key.ExecutionMode, null);
+        if (Objects.equals(before, normalized)) {
+            return false;
+        }
+        properties.setProperty(EmulatorProperties.Key.ExecutionMode, normalized);
+        return !Objects.equals(before,
+                properties.getProperty(EmulatorProperties.Key.ExecutionMode, null));
     }
 
     /** Connects or disconnects the portable Game Boy Printer at the controller-safe boundary. */

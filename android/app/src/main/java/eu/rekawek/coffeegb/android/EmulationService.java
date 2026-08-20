@@ -7,6 +7,8 @@ import android.media.AudioManager;
 import android.os.Binder;
 import android.os.IBinder;
 
+import eu.rekawek.coffeegb.core.ExecutionMode;
+
 /**
  * Same-process, non-foreground owner for the Android emulation runtime.
  *
@@ -24,8 +26,18 @@ public final class EmulationService extends Service implements AudioManager.OnAu
     private DiagnosticsOptions pendingOptions = DiagnosticsOptions.disabled();
 
     public static void start(Context context) {
-        nextStartOptions = DiagnosticsOptions.disabled();
-        context.startService(new Intent(context, EmulationService.class));
+        start(context, DiagnosticsOptions.executionModeValue(
+                ExecutionMode.ACCURACY));
+    }
+
+    /** Starts an ordinary session with the persisted frontend-selected core strategy. */
+    static void start(Context context, String executionMode) {
+        DiagnosticsOptions selected = DiagnosticsOptions.disabled(
+                DiagnosticsOptions.parseExecutionMode(executionMode));
+        nextStartOptions = selected;
+        context.startService(new Intent(context, EmulationService.class)
+                .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
+                        DiagnosticsOptions.executionModeValue(selected.executionMode)));
     }
 
     static void start(Context context, DiagnosticsOptions options) {
@@ -51,7 +63,9 @@ public final class EmulationService extends Service implements AudioManager.OnAu
                 .putExtra(DiagnosticsOptions.EXTRA_THERMAL_VALID, checked.thermalValid)
                 .putExtra(DiagnosticsOptions.EXTRA_WORKLOAD_NONCE, checked.workloadNonce)
                 .putExtra(DiagnosticsOptions.EXTRA_SURFACE_RATE_HZ, checked.displayTargetHz)
-                .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot);
+                .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot)
+                .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
+                        DiagnosticsOptions.executionModeValue(checked.executionMode));
         context.startService(intent);
     }
 
@@ -65,8 +79,7 @@ public final class EmulationService extends Service implements AudioManager.OnAu
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // The system must not recreate a stopped process and imply that its in-memory game lived.
-        pendingOptions = BuildConfig.DIAGNOSTICS_ENABLED
-                ? DiagnosticsOptions.fromIntent(intent) : DiagnosticsOptions.disabled();
+        pendingOptions = intent == null ? nextStartOptions : DiagnosticsOptions.fromIntent(intent);
         // Matrix scheduling must force-stop/relaunch the benchmark process between runs.  An
         // in-process runtime replacement would leave an already-bound Activity/Surface attached
         // to the closed generation and could silently turn a visible run into a headless run.

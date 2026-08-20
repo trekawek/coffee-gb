@@ -159,7 +159,7 @@ if [ "$sub" = am ]; then
     exit 0
   fi
   [ "$action" = start ] || exit 1
-  profile=; pair=; block=; order=; side=; first=; slot=; launch_rate=; artifact=; arm=
+  profile=; pair=; block=; order=; side=; first=; slot=; launch_rate=; artifact=; execution=accuracy; arm=
   shift 2
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -175,6 +175,7 @@ if [ "$sub" = am ]; then
           coffee_gb_first_side) first=$value ;;
           coffee_gb_recent_slot) slot=$value ;;
           coffee_gb_surface_rate_hz) launch_rate=$value ;;
+          coffee_gb_execution_mode) execution=$value ;;
           coffee_gb_benchmark_arm_token) arm=$value ;;
         esac
         shift 3
@@ -194,6 +195,7 @@ if [ "$sub" = am ]; then
       slot=$(awk -F= '$1 == "slot" { print $2 }' "$context")
       launch_rate=$(awk -F= '$1 == "rate" { print $2 }' "$context")
       artifact=$(awk -F= '$1 == "artifact" { print $2 }' "$context")
+      execution=$(awk -F= '$1 == "execution" { print $2 }' "$context")
     fi
     generation=$(($(cat "$gen_file") + 1))
     printf '%s\n' "$generation" >"$gen_file"
@@ -213,9 +215,9 @@ if [ "$sub" = am ]; then
       content_rate=59728
       ready_fps=59.7275
       [ "$effective" = sgb ] && { content_rate=61168; ready_fps=61.1679; }
-      matrix_record="I/CoffeeGbBench: event=matrix_run build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side first_side=$first benchmark_generation=$generation workload_nonce=app-owned-test-nonce-0001 warmup=true input_contract=none thermal_window=m2 audio=on render=presentation availability=available requested_hardware=$profile surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective device_id=3333333333333333333333333333333333333333333333333333333333333333"
+      matrix_record="I/CoffeeGbBench: event=matrix_run build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side first_side=$first benchmark_generation=$generation workload_nonce=app-owned-test-nonce-0001 warmup=true input_contract=none execution_mode=$execution thermal_window=m2 audio=on render=presentation availability=available requested_hardware=$profile surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective device_id=3333333333333333333333333333333333333333333333333333333333333333"
       printf '%s\n' "$matrix_record" >>"$log"
-      final_record="I/CoffeeGbBench: event=final_result build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side benchmark_generation=$generation frame=600 ready_count=600 ready_interval_fps=$ready_fps submission_interval_fps=$ready_fps submitted_count=600 dropped_count=0 duplicate_count=0 late_count=0 corrupt_count=0 requested_profile=$profile profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate warmup=true input_contract=none drain_success=true audio_active=true audio_muted=false audio_system_music_muted=false audio_track_underruns=0 audio_start_track_underruns=0 audio_focus_granted=true audio_focus_start_loss_count=0 audio_focus_loss_count=0 live_input_mutations=0 thermal_worst=0 display_bad_count=0 interactive_bad_count=0 plugged_bad_count=0 power_save_bad_count=0 stay_awake_bad_count=0 workload_nonce=app-owned-test-nonce-0001 device_id=3333333333333333333333333333333333333333333333333333333333333333"
+      final_record="I/CoffeeGbBench: event=final_result build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side benchmark_generation=$generation frame=600 ready_count=600 ready_interval_fps=$ready_fps submission_interval_fps=$ready_fps submitted_count=600 dropped_count=0 duplicate_count=0 late_count=0 corrupt_count=0 requested_profile=$profile profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective execution_mode=$execution surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate warmup=true input_contract=none drain_success=true audio_active=true audio_muted=false audio_system_music_muted=false audio_track_underruns=0 audio_start_track_underruns=0 audio_focus_granted=true audio_focus_start_loss_count=0 audio_focus_loss_count=0 live_input_mutations=0 thermal_worst=0 display_bad_count=0 interactive_bad_count=0 plugged_bad_count=0 power_save_bad_count=0 stay_awake_bad_count=0 workload_nonce=app-owned-test-nonce-0001 device_id=3333333333333333333333333333333333333333333333333333333333333333"
       printf '%s\n' "$final_record" >>"$log"
     fi
   elif [ "$mode" != timeout ]; then
@@ -223,10 +225,10 @@ if [ "$sub" = am ]; then
     printf 'I/CoffeeGbBench: event=benchmark_anchor success=true phase=anchor_ready\n' >>"$log"
   fi
   if [ -z "$arm" ]; then
-    printf 'profile=%s\npair=%s\nblock=%s\norder=%s\nside=%s\nfirst=%s\nslot=%s\nrate=%s\nartifact=%s\n' \
-      "$profile" "$pair" "$block" "$order" "$side" "$first" "$slot" "$launch_rate" "$artifact" >"$context"
-    printf 'launch profile=%s slot=%s rate=%s pair=%s order=%s side=%s first=%s\n' \
-      "$profile" "$slot" "$launch_rate" "$pair" "$order" "$side" "$first" >>"$records"
+    printf 'profile=%s\npair=%s\nblock=%s\norder=%s\nside=%s\nfirst=%s\nslot=%s\nrate=%s\nartifact=%s\nexecution=%s\n' \
+      "$profile" "$pair" "$block" "$order" "$side" "$first" "$slot" "$launch_rate" "$artifact" "$execution" >"$context"
+    printf 'launch profile=%s slot=%s rate=%s mode=%s pair=%s order=%s side=%s first=%s\n' \
+      "$profile" "$slot" "$launch_rate" "$execution" "$pair" "$order" "$side" "$first" >>"$records"
   fi
   printf 'Status: ok\n'
   exit 0
@@ -311,7 +313,8 @@ run_case() {
     COFFEE_GB_M2_GATE_SCRIPT="$tmp/gate" COFFEE_GB_M2_FAST=1 COFFEE_GB_M2_SEED=7 \
     COFFEE_GB_M2_ANCHOR_POLLS=2 COFFEE_GB_M2_FINAL_POLLS=2 \
     "$root/benchmark-device-matrix.sh" --parent-apk "$parent" --candidate-apk "$candidate" \
-      --color-slot 2 --non-color-slot 3 --output-dir "$tmp/out-$mode" \
+      --color-slot 2 --non-color-slot 3 --execution-mode performance \
+      --output-dir "$tmp/out-$mode" \
       >"$tmp/$mode.stdout" 2>"$tmp/$mode.stderr"
 }
 
@@ -358,6 +361,7 @@ awk '
     side=$0; sub(/^.*side=/, "", side); sub(/[[:space:]].*$/, "", side)
     first=$0; sub(/^.*first=/, "", first); sub(/[[:space:]].*$/, "", first)
     rate=$0; sub(/^.*rate=/, "", rate); sub(/[[:space:]].*$/, "", rate)
+    mode=$0; sub(/^.*mode=/, "", mode); sub(/[[:space:]].*$/, "", mode)
     profile=$0; sub(/^.*profile=/, "", profile); sub(/[[:space:]].*$/, "", profile)
     slot=$0; sub(/^.*slot=/, "", slot); sub(/[[:space:]].*$/, "", slot)
     if ((launch_no - 1) % 14 == 0) { block_no++; expected_first=(block_no % 2 == 1 ? "parent" : "candidate") }
@@ -365,6 +369,7 @@ awk '
     if ((launch_no % 2) == 1) { prior_pair=pair; prior_side=side } else if (pair != prior_pair || side == prior_side) exit 3
     row=pair; sub(/^p[0-9]+-/, "", row)
     if ((row == "sgb" && rate != 120) || (row != "sgb" && rate != 60)) exit 4
+    if (mode != "performance") exit 12
     if (((row == "cgb-native" || row == "cgb0-native") && slot != 2) || \
         ((row != "cgb-native" && row != "cgb0-native") && slot != 3)) exit 5
     if ((row == "cgb-native" || row == "cgb-dmg-compat") && profile != "cgb") exit 6

@@ -175,6 +175,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String PREF_SYSTEM_DMG = "system.dmgGames";
     private static final String PREF_SYSTEM_CGB = "system.cgbGames";
     private static final String PREF_SYSTEM_BOOTSTRAP = "system.bootstrap";
+    private static final String PREF_EXECUTION_MODE = "execution.mode";
     private static final String PREF_DISPLAY_BORDER = "display.sgbBorder";
     private static final String PREF_DISPLAY_COLORS = "display.dmgColors";
     private static final String PREF_CAMERA_SELECTION = "devices.camera.selection";
@@ -445,7 +446,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (diagnosticsOptions.enabled) {
             EmulationService.start(this, diagnosticsOptions);
         } else {
-            EmulationService.start(this);
+            EmulationService.start(this, executionMode(getPreferences(MODE_PRIVATE)));
         }
         if (!bound) {
             bindService(new Intent(this, EmulationService.class), connection, BIND_AUTO_CREATE);
@@ -1029,6 +1030,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 refreshMenuPages();
                 menuController.push(MenuRoute.OPTIONAL_DEVICES);
             }
+            case "execution-mode" -> openOptionPicker(MenuRoute.SETTINGS, id,
+                    "EXECUTION MODE",
+                    List.of(new AndroidMenuModel.ChoiceValue("accuracy", "ACCURACY"),
+                            new AndroidMenuModel.ChoiceValue("performance", "PERFORMANCE")),
+                    executionMode(getPreferences(MODE_PRIVATE)));
             case "touch-controls" -> {
                 touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
                 refreshMenuPages();
@@ -1140,6 +1146,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 edit.putString(PREF_DISPLAY_COLORS, token).apply();
                 if (active != null) active.setDisplayGrayscale("grey".equals(token));
             }
+            case "execution-mode" -> {
+                String selected = DiagnosticsOptions.executionModeValue(
+                        DiagnosticsOptions.parseExecutionMode(token));
+                edit.putString(PREF_EXECUTION_MODE, selected).apply();
+                if (active != null) {
+                    active.setSystemSelection("execution-mode", selected);
+                }
+            }
+
             case "camera" -> applyCameraChoice(token);
             case "gamepad" -> applyGamepadChoice(token);
             default -> { }
@@ -2122,7 +2137,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         menuController.setPages(List.of(
                 pausePage(), statePage(), recentGamesPage(), libraryPage(), chooseRomPage(),
-                AndroidMenuModel.settingsPage(),
+                AndroidMenuModel.settingsPage(executionMode(preferences)),
                 AndroidMenuModel.audioPage(audio),
                 AndroidMenuModel.displayPage(
                         preferences.getBoolean(PREF_DISPLAY_BORDER, false),
@@ -2438,11 +2453,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         };
     }
 
+    /** Reads the persisted core strategy; malformed/legacy values safely select Accuracy. */
+    private static String executionMode(SharedPreferences preferences) {
+        return DiagnosticsOptions.executionModeValue(DiagnosticsOptions.parseExecutionMode(
+                preferences.getString(PREF_EXECUTION_MODE, "accuracy")));
+    }
+
     private static void applySystemSettings(AndroidEmulationRuntime runtime,
             SharedPreferences preferences) {
         runtime.setSystemSelection("dmg-games", systemDmg(preferences));
         runtime.setSystemSelection("cgb-games", systemCgb(preferences));
         runtime.setSystemSelection("bootstrap", systemBootstrap(preferences));
+        runtime.setSystemSelection("execution-mode", executionMode(preferences));
     }
 
     private AndroidMenuModel.DevicesDraft loadDevicesDraft() {

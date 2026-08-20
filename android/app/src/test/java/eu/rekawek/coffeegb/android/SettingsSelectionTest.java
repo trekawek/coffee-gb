@@ -14,10 +14,13 @@ import static org.junit.Assert.assertTrue;
 public class SettingsSelectionTest {
 
     @Test
-    public void settingsGraphHasOnlyTheFourApprovedSections() {
-        assertEquals(List.of("system", "display", "audio", "peripherals"),
-                AndroidMenuModel.settingsPage().items().stream()
+    public void settingsGraphIncludesTheCoreExecutionModeSelector() {
+        assertEquals(List.of("system", "display", "audio", "peripherals", "execution-mode"),
+                AndroidMenuModel.settingsPage("performance").items().stream()
                         .map(MenuPageSpec.Item::id).toList());
+        assertEquals("PERFORMANCE", AndroidMenuModel.settingsPage("performance").items().get(4)
+                .detail());
+        assertEquals("ACCURACY", AndroidMenuModel.settingsPage().items().get(4).detail());
         assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
                 AndroidMenuModel.systemPage("AUTO", "AUTO", "SKIP", "dmg-games")
                         .items().stream().map(MenuPageSpec.Item::id).toList());

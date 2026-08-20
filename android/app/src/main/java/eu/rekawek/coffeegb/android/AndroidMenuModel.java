@@ -48,11 +48,17 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec settingsPage() {
+        return settingsPage("accuracy");
+    }
+
+    static MenuPageSpec settingsPage(String executionMode) {
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
                         item("system", "SYSTEM", "", true),
                         item("display", "DISPLAY", "", true),
                         item("audio", "AUDIO", "", true),
-                        item("peripherals", "PERIPHERALS", "", true)),
+                        item("peripherals", "PERIPHERALS", "", true),
+                        item("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode),
+                                true)),
                 "system",
                 MenuPreview.empty());
     }
@@ -175,6 +181,10 @@ final class AndroidMenuModel {
             case "full" -> "FULL";
             default -> token;
         };
+    }
+
+    private static String executionModeLabel(String token) {
+        return "performance".equalsIgnoreCase(token) ? "PERFORMANCE" : "ACCURACY";
     }
 
     static MenuPageSpec audioPage(AudioDraft draft) {

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import android.content.Intent;
 
+import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 
@@ -13,8 +14,9 @@ import java.util.regex.Pattern;
  *
  * <p>The parser deliberately accepts only a small, typed allow-list.  The release APK compiles
  * this entire path with {@link BuildConfig#DIAGNOSTICS_ENABLED} set to {@code false}, so ordinary
- * launches cannot enable the benchmark behavior.  Options are kept in memory and are never
- * copied into emulator settings or preferences.</p>
+ * launches cannot enable the benchmark behavior.  Benchmark options remain process-local and
+ * are never copied into user preferences; the ordinary UI applies its persisted execution mode
+ * through the controller settings model.</p>
  */
 final class DiagnosticsOptions {
 
@@ -43,6 +45,8 @@ final class DiagnosticsOptions {
     static final String EXTRA_RECENT_SLOT = "coffee_gb_recent_slot";
     /** One-shot host arm token delivered through a singleTop Activity intent. */
     static final String EXTRA_BENCHMARK_ARM_TOKEN = "coffee_gb_benchmark_arm_token";
+    /** Session execution strategy; Accuracy is the compatibility-safe default. */
+    static final String EXTRA_EXECUTION_MODE = "coffee_gb_execution_mode";
 
     private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final String UNKNOWN_TOKEN = "unknown";
@@ -173,7 +177,8 @@ final class DiagnosticsOptions {
     private static final DiagnosticsOptions DISABLED = new DiagnosticsOptions(
             false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
             "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
-            UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1);
+            UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
+            ExecutionMode.ACCURACY);
 
     final boolean enabled;
     final Hardware hardware;
@@ -197,12 +202,14 @@ final class DiagnosticsOptions {
     /** Exact profile producer cadence advertised to Surface.setFrameRate, in millihertz. */
     final int surfaceContentRateMillihz;
     final int recentSlot;
+    /** Core-owned session strategy. This is not persisted in a save state. */
+    final ExecutionMode executionMode;
 
     private DiagnosticsOptions(boolean enabled, Hardware hardware, boolean audioOutput,
             Render render, boolean runtimeWarmup, boolean launchRecent, String buildId,
             String pairId, String matrixBlock, int rowOrder, RunSide runSide,
             RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
-            String workloadNonce, int displayTargetHz, int recentSlot) {
+            String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
@@ -222,10 +229,31 @@ final class DiagnosticsOptions {
         this.displayTargetHz = displayTargetHz;
         this.surfaceContentRateMillihz = contentRateMillihz(hardware);
         this.recentSlot = recentSlot >= 0 && recentSlot < 10 ? recentSlot : -1;
+        this.executionMode = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
     }
 
     static DiagnosticsOptions disabled() {
         return DISABLED;
+    }
+
+    static DiagnosticsOptions disabled(ExecutionMode executionMode) {
+        ExecutionMode selected = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
+        if (selected == ExecutionMode.ACCURACY) {
+            return DISABLED;
+        }
+        return new DiagnosticsOptions(false, Hardware.AUTO, true, Render.PRESENTATION, false,
+                false, "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN,
+                RunSide.UNKNOWN, UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
+                selected);
+    }
+
+    static ExecutionMode parseExecutionMode(String value) {
+        return "performance".equalsIgnoreCase(value == null ? "" : value.trim())
+                ? ExecutionMode.PERFORMANCE : ExecutionMode.ACCURACY;
+    }
+
+    static String executionModeValue(ExecutionMode mode) {
+        return mode == ExecutionMode.PERFORMANCE ? "performance" : "accuracy";
     }
 
     private static int contentRateMillihz(Hardware hardware) {
@@ -258,14 +286,14 @@ final class DiagnosticsOptions {
 
     static DiagnosticsOptions parse(boolean diagnosticsEnabled, Intent intent) {
         if (!diagnosticsEnabled) {
-            return DISABLED;
+            return disabled(parseExecutionMode(stringExtra(intent, EXTRA_EXECUTION_MODE)));
         }
 
         // The benchmark variant is diagnostic by default so a bare `am start` is repeatable.
         // --ez coffee_gb_benchmark false remains a useful escape hatch for UI smoke checks.
         boolean enabled = booleanExtra(intent, EXTRA_BENCHMARK, true);
         if (!enabled) {
-            return DISABLED;
+            return disabled(parseExecutionMode(stringExtra(intent, EXTRA_EXECUTION_MODE)));
         }
         return parseValues(true, stringExtra(intent, EXTRA_HARDWARE),
                 extraValue(intent, EXTRA_AUDIO), stringExtra(intent, EXTRA_RENDER),
@@ -279,7 +307,8 @@ final class DiagnosticsOptions {
                 booleanExtra(intent, EXTRA_THERMAL_VALID, false),
                 stringExtra(intent, EXTRA_WORKLOAD_NONCE),
                 intExtra(intent, EXTRA_SURFACE_RATE_HZ, -1),
-                intExtra(intent, EXTRA_RECENT_SLOT, -1));
+                intExtra(intent, EXTRA_RECENT_SLOT, -1),
+                stringExtra(intent, EXTRA_EXECUTION_MODE));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
@@ -325,8 +354,20 @@ final class DiagnosticsOptions {
             boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
             String runSide, String firstSide, String deviceBuild, String thermalWindow,
             boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue) {
         if (!diagnosticsEnabled) {
-            return DISABLED;
+            return disabled(parseExecutionMode(executionModeValue));
         }
         Hardware hardware = parseHardware(hardwareValue);
         boolean audio = booleanValue(audioValue, true);
@@ -341,7 +382,8 @@ final class DiagnosticsOptions {
                 safeToken(matrixBlock, UNKNOWN_TOKEN), boundedRowOrder(rowOrder),
                 RunSide.fromExternalValue(runSide), RunSide.fromExternalValue(firstSide),
                 safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
-                thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot);
+                thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot,
+                parseExecutionMode(executionModeValue));
     }
 
     private static Hardware parseHardware(String value) {
