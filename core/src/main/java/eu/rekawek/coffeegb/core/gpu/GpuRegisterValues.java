@@ -30,6 +30,14 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     private final int[] pendingMixValues = new int[GpuRegister.values().length];
 
+    /**
+     * Whether the one-tick write-conflict latches need to advance.  The common case has no
+     * CPU write in flight, so avoid walking all five conflict registers on every PPU tick.
+     * This is derived from {@link #mixValues} and {@link #pendingMixValues} and is restored
+     * from those arrays rather than being part of the portable state schema.
+     */
+    private transient boolean conflictTickNeeded;
+
     private static final GpuRegister[] CONFLICT_REGISTERS =
             {GpuRegister.BGP, GpuRegister.OBP0, GpuRegister.OBP1,
                     GpuRegister.SCX, GpuRegister.WX};
@@ -89,10 +97,18 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     /** Called once per GPU tick: CPU-side writes become visible for one PPU tick. */
     void tickConflicts() {
-        for (GpuRegister reg : CONFLICT_REGISTERS) {
-            mixValues[reg.ordinal()] = pendingMixValues[reg.ordinal()];
-            pendingMixValues[reg.ordinal()] = -1;
+        if (!conflictTickNeeded) {
+            return;
         }
+        boolean conflictVisibleNextTick = false;
+        for (GpuRegister reg : CONFLICT_REGISTERS) {
+            int ordinal = reg.ordinal();
+            int pending = pendingMixValues[ordinal];
+            mixValues[ordinal] = pending;
+            pendingMixValues[reg.ordinal()] = -1;
+            conflictVisibleNextTick |= pending >= 0;
+        }
+        conflictTickNeeded = conflictVisibleNextTick;
     }
 
     public boolean isWxJustChanged() {
@@ -126,13 +142,16 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
             // the DMG palette-write conflict mix does not exist on the CGB
             if (!gbc && (reg == GpuRegister.BGP || reg == GpuRegister.OBP0 || reg == GpuRegister.OBP1)) {
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()] | value;
+                conflictTickNeeded = true;
             }
             if (reg == GpuRegister.WX) {
                 pendingMixValues[reg.ordinal()] = 0;
+                conflictTickNeeded = true;
             }
             if (gbc && reg == GpuRegister.SCX
                     && (speedMode == null || speedMode.getSpeedMode() == 1)) {
                 pendingMixValues[reg.ordinal()] = values[reg.ordinal()];
+                conflictTickNeeded = true;
             }
             values[reg.ordinal()] = value;
         }
@@ -196,6 +215,17 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
                 WX_PENDING_BY_RELEASED_TICKS[mem.wxJustChangedTicks];
         mixValues[GpuRegister.SCX.ordinal()] = mem.scxOldValue;
         pendingMixValues[GpuRegister.SCX.ordinal()] = mem.pendingScxOldValue;
+        conflictTickNeeded = hasConflictLatch();
+    }
+
+    private boolean hasConflictLatch() {
+        for (GpuRegister reg : CONFLICT_REGISTERS) {
+            int ordinal = reg.ordinal();
+            if (mixValues[ordinal] >= 0 || pendingMixValues[ordinal] >= 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private int captureWxJustChangedTicks() {
