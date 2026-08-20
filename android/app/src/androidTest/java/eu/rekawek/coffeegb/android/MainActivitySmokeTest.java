@@ -386,14 +386,12 @@ public class MainActivitySmokeTest {
             scenario.onActivity(activity -> menuController(activity).show(
                     eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTIONAL_DEVICES));
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTIONAL_DEVICES);
-            moveFocusTo(scenario, instrumentation, "live-camera");
+            moveFocusTo(scenario, instrumentation, "camera");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
-            moveFocusTo(scenario, instrumentation, "save-devices");
+            awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTION_PICKER);
+            moveFocusTo(scenario, instrumentation, "choice:rear");
+            press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             scenario.onActivity(activity -> {
-                eu.rekawek.coffeegb.ui.menu.MenuController controller =
-                        menuController(activity);
-                controller.onKeyDown(eu.rekawek.coffeegb.ui.menu.MenuKey.A, false);
-                controller.onKeyUp(eu.rekawek.coffeegb.ui.menu.MenuKey.A);
                 assertFalse(menuController(activity).visible());
                 assertFalse(booleanField(activity, "menuPauseOwned"));
                 eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState surface =
@@ -405,7 +403,7 @@ public class MainActivitySmokeTest {
             awaitStableCameraPermissionSurface(instrumentation, permissionReadiness);
             cancelCameraPermissionSurface(instrumentation);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTIONAL_DEVICES);
-            awaitFocused(scenario, "save-devices");
+            awaitFocused(scenario, "camera");
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
             scenario.onActivity(activity -> {
                 assertFalse(externalSurface(activity).active());
