@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.BatteryStore
@@ -158,6 +159,25 @@ class RomSessionPreparerTest {
         call.ticks,
     )
     assertEquals(BootstrapMode.SKIP, call.config.bootstrapMode)
+  }
+
+  @Test
+  fun explicitRuntimeWarmupOverrideSkipsDisposableRun() {
+    val executor = RecordingWarmupExecutor()
+    val cache = RuntimeWarmupCache(2, executor)
+    val properties = EmulatorProperties(ApplicationSettingsOverrides(runtimeWarmupEnabled = false))
+
+    try {
+      val prepared =
+          RomSessionPreparer(BootStateCache(2), runtimeWarmupCache = cache)
+              .prepare(properties, LoadRomEvent(ROM))
+
+      assertIs<PreparedSession.Deferred>(prepared)
+      assertTrue(executor.calls.isEmpty())
+      assertEquals(0, cache.size)
+    } finally {
+      properties.close()
+    }
   }
 
   @Test

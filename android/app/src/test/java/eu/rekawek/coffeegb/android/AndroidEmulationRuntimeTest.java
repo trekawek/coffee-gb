@@ -28,6 +28,7 @@ public class AndroidEmulationRuntimeTest {
                      new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides())) {
             assertFalse(properties.getSaves().getRewindEnabled());
             assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
+            assertEquals(Boolean.FALSE, properties.getOverrides().getRuntimeWarmupEnabled());
         }
     }
 
