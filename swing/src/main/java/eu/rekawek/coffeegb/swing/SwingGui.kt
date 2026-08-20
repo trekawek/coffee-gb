@@ -471,6 +471,9 @@ class SwingGui private constructor(
     val portableMenu =
         installDesktopProposal3Menu(proposal3MenuEnabled) {
           emulator.installPortableMenu(desktopActions) { visible ->
+            if (::desktopMainPanel.isInitialized) {
+              dispatchSwingMutation { desktopMainPanel.setPortableMenuVisible(visible) }
+            }
             if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
           }
         }
