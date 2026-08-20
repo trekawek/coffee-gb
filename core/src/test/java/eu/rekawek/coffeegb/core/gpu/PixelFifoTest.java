@@ -42,6 +42,19 @@ public class PixelFifoTest {
     }
 
     @Test
+    public void emptyOutputTickAdvancesTimestampWithoutChangingRuntimeState() {
+        DmgPixelFifo.RuntimeState initial = fifo.captureRuntimeState();
+
+        fifo.outputTick();
+        fifo.outputTick();
+
+        assertEquals(initial, fifo.captureRuntimeState());
+        assertEquals(2, longField(fifo, "outputTicks"));
+        assertEquals(0, intField(fifo, "delayHead"));
+        assertEquals(0, intField(fifo, "delaySize"));
+    }
+
+    @Test
     public void firstPixelLatchClearsBeforeAnotherOutputIsRequired() {
         DmgPixelFifo.RuntimeState initial = fifo.captureRuntimeState();
         assertEquals(0, initial.linePixels());
@@ -80,6 +93,27 @@ public class PixelFifoTest {
     }
 
     @Test
+    public void suppressedOutputStillClearsPendingFirstPixelLatch() {
+        fifo.setRenderOutput(false);
+        fifo.enqueue8Pixels(zip(0b11001001, 0b11110000, false), TileAttributes.EMPTY);
+        fifo.setOverlay(
+                new int[]{3, 0, 0, 0, 0, 0, 0, 0},
+                0,
+                TileAttributes.valueOf(0x90),
+                0);
+        fifo.putPixelToScreen();
+
+        fifo.outputTick();
+        fifo.outputTick();
+        fifo.outputTick();
+        assertEquals(0x3f, fifo.captureRuntimeState().firstEntry());
+
+        fifo.outputTick();
+
+        assertEquals(-1, fifo.captureRuntimeState().firstEntry());
+    }
+
+    @Test
     public void testZip() {
         assertArrayEquals(new int[]{3, 3, 2, 2, 1, 0, 0, 1}, zip(0b11001001, 0b11110000, false));
         assertArrayEquals(new int[]{1, 0, 0, 1, 2, 2, 3, 3}, zip(0b11001001, 0b11110000, true));
@@ -87,6 +121,26 @@ public class PixelFifoTest {
 
     private int[] zip(int data1, int data2, boolean reverse) {
         return Fetcher.zip(data1, data2, reverse, new int[8]);
+    }
+
+    private static int intField(Object object, String name) {
+        try {
+            var field = object.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return (int) field.get(object);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static long longField(Object object, String name) {
+        try {
+            var field = object.getClass().getDeclaredField(name);
+            field.setAccessible(true);
+            return (long) field.get(object);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static List<Integer> arrayQueueAsList(IntQueue queue) {

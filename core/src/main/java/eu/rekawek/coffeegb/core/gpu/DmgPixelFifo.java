@@ -108,6 +108,9 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
     @Override
     public void outputTick() {
         outputTicks++;
+        if (delaySize == 0 && firstEntry < 0) {
+            return;
+        }
         if (!renderOutput) {
             // Preserve the first-pixel split latch and output cadence, but skip the
             // palette/register/VRAM-transfer work that only the visible machine needs.
