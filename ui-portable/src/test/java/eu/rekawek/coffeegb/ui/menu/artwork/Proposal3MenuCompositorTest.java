@@ -820,7 +820,24 @@ public class Proposal3MenuCompositorTest {
         assertEquals("", live.sideHeading());
         assertTrue(live.sideLines().isEmpty());
 
+        Proposal3OverlayCatalog.RouteLayout library =
+                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY);
+        Proposal3OverlayCatalog.RouteLayout recent =
+                Proposal3OverlayCatalog.layout(MenuRoute.RECENT_GAMES);
+        assertEquals(recent.rows().size(), library.rows().size());
+        for (int index = 0; index < recent.rows().size(); index++) {
+            assertEquals("Library row geometry diverged at " + index,
+                    recent.rows().get(index).bounds(), library.rows().get(index).bounds());
+        }
+        assertEquals(recent.marker().sourceX(), library.marker().sourceX());
+        assertEquals(Proposal3MenuCompositor.rowTextRole(MenuRoute.RECENT_GAMES, 0),
+                Proposal3MenuCompositor.rowTextRole(MenuRoute.LIBRARY, 0));
+
         int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY).copyPixels();
+        int[] recentTemplate = Proposal3TemplateFrameCatalog.decode(MenuRoute.RECENT_GAMES)
+                .copyPixels();
+        assertNoDifferenceOutside(recentTemplate, template,
+                List.of(new MenuRect(106, 225, 200, 170)));
         int[] pixels = new Proposal3MenuCompositor().compose(live).orElseThrow().copyPixels();
         assertFalse("Library rows were not rendered", Arrays.equals(template, pixels));
         // The icon-only left panel lies outside every dynamic mask and must remain byte-identical.

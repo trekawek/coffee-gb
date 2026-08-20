@@ -32,6 +32,12 @@ def inner(x: int, y: int, width: int, height: int) -> tuple[int, int, int, int]:
     return rect(x + 3, y + 3, width - 6, height - 6)
 
 
+# Library is deliberately based on the Recent Games authority frame. Only this icon is retained
+# from the original, narrower Library mockup.
+LIBRARY_ICON_SOURCE = rect(85, 235, 200, 170)
+LIBRARY_ICON_DESTINATION = (106, 225)
+
+
 # Tight paper-only bands.  Borders, divider rules, icons, and previews sit outside these bounds.
 COMMON_PAPER_TEXT = [
     rect(32, 31, 303, 49),       # COFFEE GB
@@ -95,10 +101,9 @@ ROUTE_PAPER_TEXT = {
         rect(34, 492, 330, 132),
     ],
     "08-library.png": [
-        # Library is icon-only on the left; clear the old opener title and picker copy while
-        # preserving the folder/cartridge illustration between those bands.
-        rect(48, 158, 300, 52), rect(34, 412, 330, 50),
-        rect(34, 454, 330, 50), rect(34, 496, 330, 50),
+        # Library uses the Recent Games authority frame; these are its preview and caption bands.
+        rect(30, 140, 352, 340), rect(30, 486, 352, 66),
+        rect(688, 25, 207, 70),
     ],
     "09-choose-rom.png": [
         rect(45, 114, 330, 56), rect(430, 114, 420, 56), rect(34, 382, 330, 52),
@@ -149,10 +154,6 @@ ROUTE_FLAT_PAPER = {
     "04-touch-controls.png": [rect(744, 25, 151, 61)],
     "05-controller-mapping.png": [rect(744, 25, 151, 61)],
     "10-system.png": [rect(744, 25, 151, 61)],
-    # Library no longer offers duplicate Open ROM buttons in the header or below the rail. The
-    # full header footprint includes its outline; the lower clear stops at the right-side rail so
-    # the folder/cartridge illustration remains untouched above it.
-    "08-library.png": [rect(688, 25, 207, 70), rect(8, 570, 361, 76)],
 }
 
 # Exact half-open inner pause-screen aperture.  It deliberately reaches under the stepped bezel
@@ -189,9 +190,8 @@ ROUTE_WIDGETS = {
     "07-data-media.png": [("dark", inner(*value)) for value in
         [(374, 119, 535, 85), (374, 207, 535, 84), (374, 293, 535, 83),
          (374, 379, 535, 83), (374, 465, 535, 84), (374, 553, 535, 86)]],
-    # The recent-ROM list follows the same seven-item viewport rule as the state and settings
-    # rails. Runtime dividers and chevrons are painted over this clean continuous surface.
-    "08-library.png": [("dark", rect(369, 117, 528, 529))],
+    # Library is the Recent Games viewport with only three populated rows.
+    "08-library.png": [("dark", rect(420, 118, 489, 529))],
     # ZIP candidate selection also scrolls in seven compact rows, while its two actions retain
     # their authored lower-panel footprint.
     "09-choose-rom.png": [("dark", rect(387, 179, 524, 333))] + [("dark", inner(*value)) for
@@ -249,6 +249,79 @@ def paste_surface(image: Image.Image, surface: Image.Image,
             image.paste(surface.crop((0, 0, width, height)), (x, y))
 
 
+def largest_component(mask: np.ndarray) -> np.ndarray:
+    """Keep the connected opener illustration while discarding isolated paper-grain pixels."""
+    height, width = mask.shape
+    visited = np.zeros_like(mask, dtype=bool)
+    largest: list[tuple[int, int]] = []
+    for y in range(height):
+        for x in range(width):
+            if not mask[y, x] or visited[y, x]:
+                continue
+            component: list[tuple[int, int]] = []
+            pending = [(x, y)]
+            visited[y, x] = True
+            while pending:
+                current_x, current_y = pending.pop()
+                component.append((current_x, current_y))
+                for adjacent_y in range(max(0, current_y - 1), min(height, current_y + 2)):
+                    for adjacent_x in range(max(0, current_x - 1),
+                                            min(width, current_x + 2)):
+                        if (mask[adjacent_y, adjacent_x]
+                                and not visited[adjacent_y, adjacent_x]):
+                            visited[adjacent_y, adjacent_x] = True
+                            pending.append((adjacent_x, adjacent_y))
+            if len(component) > len(largest):
+                largest = component
+    result = np.zeros_like(mask, dtype=bool)
+    for x, y in largest:
+        result[y, x] = True
+    return result
+
+
+def fill_mask_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill light paper-colored areas enclosed by the opener's dark pixel-art outline."""
+    height, width = mask.shape
+    outside = np.zeros_like(mask, dtype=bool)
+    pending: list[tuple[int, int]] = []
+    for x in range(width):
+        pending.extend(((x, 0), (x, height - 1)))
+    for y in range(height):
+        pending.extend(((0, y), (width - 1, y)))
+    while pending:
+        x, y = pending.pop()
+        if mask[y, x] or outside[y, x]:
+            continue
+        outside[y, x] = True
+        if x > 0:
+            pending.append((x - 1, y))
+        if x + 1 < width:
+            pending.append((x + 1, y))
+        if y > 0:
+            pending.append((x, y - 1))
+        if y + 1 < height:
+            pending.append((x, y + 1))
+    return mask | ~outside
+
+
+def extract_library_opener(source: Image.Image) -> Image.Image:
+    """Turn the baked Library opener into a transparent sprite without redrawing it."""
+    crop = np.array(source.crop(LIBRARY_ICON_SOURCE).convert("RGB"))
+    border = np.concatenate((crop[:8].reshape(-1, 3), crop[-8:].reshape(-1, 3),
+                             crop[:, :8].reshape(-1, 3), crop[:, -8:].reshape(-1, 3)))
+    paper = np.median(border, axis=0)
+    distance = np.sqrt(np.square(crop.astype(float) - paper).sum(axis=2))
+    mask = fill_mask_holes(largest_component(distance > 35))
+    padded = np.pad(mask, 1)
+    dilated = np.zeros_like(mask, dtype=bool)
+    for offset_y in range(3):
+        for offset_x in range(3):
+            dilated |= padded[offset_y:offset_y + mask.shape[0],
+                              offset_x:offset_x + mask.shape[1]]
+    rgba = np.dstack((crop, np.where(dilated, 255, 0).astype(np.uint8)))
+    return Image.fromarray(rgba, "RGBA")
+
+
 def main() -> None:
     if not RAW.is_dir():
         raise SystemExit(f"Proposal 3 raw reference directory is missing: {RAW}")
@@ -258,16 +331,22 @@ def main() -> None:
         "paper": Image.open(WIDGETS / "paper-widget.png").convert("RGB"),
     }
     paper_pixels = np.array(surfaces["paper"])
+    library_opener = extract_library_opener(
+        Image.open(RAW / "08-library.png").convert("RGB"))
     for source in sorted(RAW.glob("*.png")):
         if source.name not in ROUTE_WIDGETS or source.name not in ROUTE_PAPER_TEXT:
             raise SystemExit(f"No audited template recipe for {source.name}")
-        template = Image.open(source).convert("RGB")
+        # The old Library reference has unique, narrower panel geometry. Start from the Recent
+        # Games reference so every rail, border and footer seam is shared pixel-for-pixel.
+        reference_source = RAW / ("16-recent-games.png"
+                                  if source.name == "08-library.png" else source.name)
+        template = Image.open(reference_source).convert("RGB")
         for surface, bounds in ROUTE_WIDGETS[source.name]:
             paste_surface(template, surfaces[surface], bounds)
         pixels = np.array(template)
         for bounds in COMMON_PAPER_TEXT + ROUTE_PAPER_TEXT[source.name]:
             clear_paper_text(pixels, bounds, paper_pixels)
-        reference = np.array(Image.open(source).convert("RGB"))
+        reference = np.array(Image.open(reference_source).convert("RGB"))
         for left, top, right, bottom in COMMON_PAPER_RESTORE:
             pixels[top:bottom, left:right] = reference[top:bottom, left:right]
         for left, top, right, bottom in ROUTE_PAPER_RESTORE.get(source.name, []):
@@ -277,7 +356,7 @@ def main() -> None:
         if source.name == "00-pause-console.png":
             left, top, right, bottom = PAUSE_PREVIEW_APERTURE
             pixels[top:bottom, left:right] = PAUSE_PREVIEW_MATTE
-        if source.name in ("01-save-states.png", "16-recent-games.png"):
+        if source.name in ("01-save-states.png", "08-library.png", "16-recent-games.png"):
             # Remove all legacy left-side copy while preserving the stepped bezel around the
             # thumbnail aperture.  The runtime fills this aperture with a detached thumbnail.
             clear_paper_text(pixels, rect(30, 140, 352, 340), paper_pixels)
@@ -298,7 +377,10 @@ def main() -> None:
             # Keep the preview well blank until a persisted thumbnail is supplied at runtime.
             left, top, right, bottom = rect(30, 140, 352, 340)
             clear_paper_text(pixels, (left, top, right, bottom), paper_pixels)
-        Image.fromarray(pixels, "RGB").save(OUTPUT / source.name, optimize=True, compress_level=9)
+        rendered = Image.fromarray(pixels, "RGB")
+        if source.name == "08-library.png":
+            rendered.paste(library_opener, LIBRARY_ICON_DESTINATION, library_opener)
+        rendered.save(OUTPUT / source.name, optimize=True, compress_level=9)
     expected = set(ROUTE_WIDGETS)
     actual = {path.name for path in OUTPUT.glob("*.png")}
     if actual != expected:
