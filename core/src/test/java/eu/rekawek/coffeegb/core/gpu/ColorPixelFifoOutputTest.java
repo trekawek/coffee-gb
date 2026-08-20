@@ -12,6 +12,19 @@ import static org.junit.Assert.assertEquals;
 public class ColorPixelFifoOutputTest {
 
     @Test
+    public void emptyTickAdvancesTimestampWithoutMutatingEmptyDelayRing() {
+        Fixture fixture = new Fixture();
+
+        fixture.fifo.outputTick();
+        fixture.fifo.outputTick();
+
+        assertEquals(2, longField(fixture.fifo, "outputTicks"));
+        assertEquals(0, intField(fixture.fifo, "delayHead"));
+        assertEquals(0, intField(fixture.fifo, "delaySize"));
+        assertEquals(0, displayPixelCount(fixture.display));
+    }
+
+    @Test
     public void suppressedTickDrainsPendingOutputWithoutPublishingIt() {
         Fixture fixture = new Fixture();
         fixture.fifo.outputTick();
