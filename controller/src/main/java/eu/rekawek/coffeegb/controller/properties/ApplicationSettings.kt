@@ -616,6 +616,8 @@ data class ApplicationSettingsOverrides(
     val batterySavesEnabled: Boolean? = null,
     val rewindEnabled: Boolean? = null,
     val runtimeWarmupEnabled: Boolean? = null,
+    /** Transient benchmark policy; never persisted into user settings or save state. */
+    val benchmarkPolicyEnabled: Boolean = false,
 ) {
   init {
     hardwareProfile?.let(HardwareProfileRegistry::requireRegistered)

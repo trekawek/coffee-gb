@@ -65,7 +65,12 @@ internal class RomSessionPreparer(
     // the disposable 120-frame run would delay first presentation; null retains the desktop
     // default and avoids making this policy persistent.
     if (properties.overrides.runtimeWarmupEnabled != false) {
-      warmRuntime(config)
+      val warmed = warmRuntime(config, properties.overrides.benchmarkPolicyEnabled)
+      if (properties.overrides.benchmarkPolicyEnabled && !warmed) {
+        throw IllegalStateException("Benchmark runtime warmup was unavailable")
+      }
+    } else if (properties.overrides.benchmarkPolicyEnabled) {
+      throw IllegalStateException("Benchmark runtime warmup is disabled")
     }
 
     bootStateCache.getOrCreate(config)?.let {
@@ -89,9 +94,9 @@ internal class RomSessionPreparer(
    * This is intentionally best-effort: a failed disposable machine must never reject a playable
    * ROM. Cancellation remains observable because a superseded load must not continue preparing.
    */
-  private fun warmRuntime(config: GameboyConfiguration) {
+  private fun warmRuntime(config: GameboyConfiguration, benchmarkPolicy: Boolean): Boolean {
     try {
-      runtimeWarmupCache.warm(config, ::ensureActive)
+      return runtimeWarmupCache.warm(config, ::ensureActive)
     } catch (error: CancellationException) {
       throw error
     } catch (error: VirtualMachineError) {
@@ -100,10 +105,17 @@ internal class RomSessionPreparer(
       throw error
     } catch (error: Throwable) {
       ensureActive()
+      if (benchmarkPolicy) {
+        // A benchmark run must prove that its requested warmup completed.  Ordinary launches
+        // retain the best-effort JIT warmup behavior, but silently continuing here would let the
+        // diagnostics stream claim ANCHOR_READY for a session that never warmed successfully.
+        throw IllegalStateException("Benchmark runtime warmup failed", error)
+      }
       LOG.warn(
           "Disposable runtime warmup failed ({}); continuing with the requested ROM load",
           error.javaClass.simpleName,
       )
+      return false
     }
   }
 
@@ -150,14 +162,14 @@ internal class RuntimeWarmupCache(
    * Performs at most one successful warmup per shape. Waiters observe a completed owner run or
    * take ownership after its cancellation/failure; only successful, still-active runs are cached.
    */
-  fun warm(config: GameboyConfiguration, ensureActive: () -> Unit) {
-    val key = RuntimeWarmupKey.from(config) ?: return
+  fun warm(config: GameboyConfiguration, ensureActive: () -> Unit): Boolean {
+    val key = RuntimeWarmupKey.from(config) ?: return false
     ensureActive()
     synchronized(monitor) {
       while (true) {
         if (completed[key] != null) {
           hitCount++
-          return
+          return true
         }
         if (inProgress.add(key)) {
           break
@@ -175,11 +187,13 @@ internal class RuntimeWarmupCache(
     try {
       val warmupConfig = config.forRuntimeWarmup().setPlayerInputSource(PlayerInputHub())
       val ticks = Math.multiplyExact(WARMUP_FRAMES, warmupConfig.clockSpec.controllerTicksPerFrame())
+      require(ticks > 0) { "Runtime warmup must contain positive controller ticks" }
       executor.warm(warmupConfig, ticks, ensureActive)
       ensureActive()
       synchronized(monitor) {
         completed[key] = Unit
       }
+      return true
     } finally {
       synchronized(monitor) {
         inProgress.remove(key)

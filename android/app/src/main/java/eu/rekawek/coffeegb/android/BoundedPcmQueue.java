@@ -21,7 +21,12 @@ final class BoundedPcmQueue {
     private final StereoPcmConverter converter;
     private final ArrayBlockingQueue<Frame> available;
     private final ArrayBlockingQueue<Frame> queued;
+    private final int capacity;
+    private final int frameBytes;
     private final AtomicLong overruns = new AtomicLong();
+    /** Benchmark-only discard ledger; release keeps the pre-existing overrun counter only. */
+    private final DiscardAccounting discardAccounting = BuildConfig.DIAGNOSTICS_ENABLED
+            ? new DiagnosticDiscardAccounting() : NoOpDiscardAccounting.INSTANCE;
 
     BoundedPcmQueue(int sampleRate) {
         this(sampleRate, DEFAULT_CAPACITY, maximumFrameBytes(sampleRate));
@@ -35,6 +40,8 @@ final class BoundedPcmQueue {
             throw new IllegalArgumentException("PCM frames must have positive capacity");
         }
         converter = new StereoPcmConverter(sampleRate);
+        this.capacity = capacity;
+        this.frameBytes = frameBytes;
         available = new ArrayBlockingQueue<>(capacity);
         queued = new ArrayBlockingQueue<>(capacity);
         for (int index = 0; index < capacity; index++) {
@@ -43,16 +50,19 @@ final class BoundedPcmQueue {
     }
 
     /** Called synchronously by the emulation event bus; it never waits for host audio. */
-    void offer(Sound.SoundSampleEvent event, int volume, boolean muted) {
+    int offer(Sound.SoundSampleEvent event, int volume, boolean muted) {
         Frame frame = available.poll();
         if (frame == null) {
             frame = queued.poll();
             if (frame == null) {
                 // One consumer can own at most one frame, so this is a defensive last resort.
                 overruns.incrementAndGet();
-                return;
+                return 0;
             }
             overruns.incrementAndGet();
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                discardAccounting.add(frame.length);
+            }
         }
         try {
             frame.length = converter.render(event.buffer(), event.clockSpec(), volume, muted,
@@ -60,6 +70,7 @@ final class BoundedPcmQueue {
             if (!queued.offer(frame)) {
                 throw new IllegalStateException("PCM queue lost its reserved frame slot");
             }
+            return frame.length;
         } catch (RuntimeException failure) {
             frame.length = 0;
             available.offer(frame);
@@ -84,6 +95,9 @@ final class BoundedPcmQueue {
     void clear() {
         Frame frame;
         while ((frame = queued.poll()) != null) {
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                discardAccounting.add(frame.length);
+            }
             release(frame);
         }
     }
@@ -94,6 +108,26 @@ final class BoundedPcmQueue {
 
     int queuedFrames() {
         return queued.size();
+    }
+
+    int capacityFrames() {
+        return capacity;
+    }
+
+    int maximumFrameBytes() {
+        return frameBytes;
+    }
+
+    long queuedBytes() {
+        long bytes = 0L;
+        for (Frame frame : queued) {
+            bytes += frame.length;
+        }
+        return bytes;
+    }
+
+    long drainDiscardedBytes() {
+        return discardAccounting.drain();
     }
 
     long samplePhase() {
@@ -123,6 +157,41 @@ final class BoundedPcmQueue {
 
         int length() {
             return length;
+        }
+    }
+
+    private interface DiscardAccounting {
+        void add(long bytes);
+
+        long drain();
+    }
+
+    private static final class NoOpDiscardAccounting implements DiscardAccounting {
+        private static final NoOpDiscardAccounting INSTANCE = new NoOpDiscardAccounting();
+
+        @Override
+        public void add(long bytes) {
+        }
+
+        @Override
+        public long drain() {
+            return 0L;
+        }
+    }
+
+    private static final class DiagnosticDiscardAccounting implements DiscardAccounting {
+        private long bytes;
+
+        @Override
+        public void add(long value) {
+            bytes += value;
+        }
+
+        @Override
+        public long drain() {
+            long value = bytes;
+            bytes = 0L;
+            return value;
         }
     }
 }

@@ -98,6 +98,53 @@ public class DiagnosticsOptionsTest {
                         HardwareProfileRegistry.DMG, true, false));
     }
 
+    @Test
+    public void matrixMetadataIsBoundedAndRoundTripsTypedValues() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                "Candidate-Build_1", "p-0001", "block-02", 5, "candidate", "parent",
+                "redmi-build", "thermal-window-a", true, "workload-0001");
+
+        assertEquals("candidate-build_1", options.buildId);
+        assertEquals("p-0001", options.pairId);
+        assertEquals("block-02", options.matrixBlock);
+        assertEquals(5, options.rowOrder);
+        assertEquals(DiagnosticsOptions.RunSide.CANDIDATE, options.runSide);
+        assertEquals(DiagnosticsOptions.RunSide.PARENT, options.firstSide);
+        assertEquals("redmi-build", options.deviceBuild);
+        assertEquals("thermal-window-a", options.thermalWindow);
+        assertTrue(options.thermalValid);
+        assertEquals("workload-0001", options.workloadNonce);
+
+        DiagnosticsOptions malformed = DiagnosticsOptions.parseValues(
+                true, "dmg", true, null, false, true, false,
+                "/rom/path", "save/payload", "block with spaces", 9,
+                "other", "other", "/device", "window with spaces", false);
+        assertEquals("invalid", malformed.buildId);
+        assertEquals("invalid", malformed.pairId);
+        assertEquals("invalid", malformed.matrixBlock);
+        assertEquals(-1, malformed.rowOrder);
+        assertEquals(DiagnosticsOptions.RunSide.UNKNOWN, malformed.runSide);
+        assertEquals(DiagnosticsOptions.RunSide.UNKNOWN, malformed.firstSide);
+        assertEquals("invalid", malformed.deviceBuild);
+        assertEquals("invalid", malformed.thermalWindow);
+    }
+
+    @Test
+    public void contentCadenceIsExactAndIndependentFromDisplayTarget() {
+        DiagnosticsOptions legacy = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, 60);
+        DiagnosticsOptions sgb = DiagnosticsOptions.parseValues(
+                true, "sgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, 120);
+
+        assertEquals(60, legacy.displayTargetHz);
+        assertEquals(59_728, legacy.surfaceContentRateMillihz);
+        assertEquals(120, sgb.displayTargetHz);
+        assertEquals(61_168, sgb.surfaceContentRateMillihz);
+    }
+
     private static Object expectedProfile(DiagnosticsOptions.Hardware hardware) {
         switch (hardware) {
             case AUTO:

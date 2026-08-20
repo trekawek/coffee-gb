@@ -78,6 +78,27 @@ public class BoundedPcmQueueTest {
         queue.release(reusedSecond);
     }
 
+    @Test
+    public void benchmarkDiscardLedgerCountsReplacementAndClearExactlyOnce() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        BoundedPcmQueue queue = new BoundedPcmQueue(44_100, 2, 4_096);
+        Sound.SoundSampleEvent event = new Sound.SoundSampleEvent(samples(2_000), ClockSpec.LEGACY);
+
+        int frameBytes = queue.offer(event, 100, false);
+        queue.offer(event, 100, false);
+        queue.offer(event, 100, false);
+        assertEquals(frameBytes, queue.drainDiscardedBytes());
+        assertEquals(0L, queue.drainDiscardedBytes());
+
+        queue.clear();
+        long clearedBytes = queue.drainDiscardedBytes();
+        assertTrue(clearedBytes > 0L);
+        queue.clear();
+        assertEquals(0L, queue.drainDiscardedBytes());
+    }
+
     private static int[] samples(int ticks) {
         int[] result = new int[ticks * 2];
         for (int tick = 0; tick < ticks; tick++) {

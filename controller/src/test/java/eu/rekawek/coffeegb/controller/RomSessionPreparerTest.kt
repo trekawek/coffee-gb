@@ -181,6 +181,38 @@ class RomSessionPreparerTest {
   }
 
   @Test
+  fun unsupportedWarmupShapeDoesNotClaimACompletedWarmup() {
+    val executor = RecordingWarmupExecutor()
+    val cache = RuntimeWarmupCache(2, executor)
+
+    assertFalse(
+        cache.warm(
+            skipConfig().setBootstrapMode(BootstrapMode.FAST_FORWARD),
+            {},
+        ))
+    assertTrue(executor.calls.isEmpty())
+    assertEquals(0, cache.size)
+  }
+
+  @Test
+  fun benchmarkPolicyFailsClosedWhenRuntimeWarmupIsDisabled() {
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                runtimeWarmupEnabled = false,
+                benchmarkPolicyEnabled = true,
+            ))
+    try {
+      assertFailsWith<IllegalStateException> {
+        RomSessionPreparer(BootStateCache(2), runtimeWarmupCache = noopWarmupCache())
+            .prepare(properties, LoadRomEvent(ROM))
+      }
+    } finally {
+      properties.close()
+    }
+  }
+
+  @Test
   fun runtimeWarmupOnlyAcceptsFreshOrdinarySkipCartridges() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(8, executor)

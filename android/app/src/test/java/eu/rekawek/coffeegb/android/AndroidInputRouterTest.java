@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import org.junit.Test;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -41,6 +42,26 @@ public class AndroidInputRouterTest {
             router.releaseAll();
 
             assertTrue(hub.sample().buttons(0).isEmpty());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void benchmarkLockRejectsInputBeforeArmAndIsIdempotent() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AtomicInteger mutations = new AtomicInteger();
+        AndroidInputRouter router = new AndroidInputRouter(hub, null, mutations::incrementAndGet);
+        try {
+            router.updateTouchPointer(1, List.of(Button.A));
+            assertEquals(java.util.Set.of(Button.A), hub.sample().buttons(0));
+
+            router.lockBenchmarkWindow();
+            router.lockBenchmarkWindow();
+            router.updateTouchPointer(1, List.of(Button.B));
+
+            assertTrue(hub.sample().buttons(0).isEmpty());
+            assertEquals(1, mutations.get());
         } finally {
             router.close();
         }

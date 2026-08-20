@@ -70,6 +70,19 @@ internal constructor(
     paceCompletedFrame()
   }
 
+  /**
+   * Re-anchors pacing for the benchmark's explicit measurement epoch.  The warm-up interval may
+   * have spent arbitrary wall time paused or loading; carrying its deadline/debt into the paired
+   * run would make the first measured frame a scheduler catch-up rather than hardware cadence.
+   */
+  internal fun resetForBenchmark() {
+    deadline = nanoTime.asLong
+    ticks = 0
+    completedFrames = 0
+    hasPacingDebt = false
+    frameNanos = activeClock.newFrameNanosecondAccumulator()
+  }
+
   private fun selectClock(clockSpec: ClockSpec) {
     if (activeClock != clockSpec) {
       activeClock = clockSpec
