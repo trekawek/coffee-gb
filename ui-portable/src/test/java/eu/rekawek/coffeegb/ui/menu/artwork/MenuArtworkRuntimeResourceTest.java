@@ -37,7 +37,10 @@ public class MenuArtworkRuntimeResourceTest {
             "10-system.png",
             "11-about.png",
             "12-confirm-action.png",
-            "13-printer-paper.png");
+            "13-printer-paper.png",
+            "14-display.png",
+            "15-option-picker.png",
+            "16-recent-games.png");
 
     @Test
     public void allProposal3ResourcesStayWithinBudget() throws Exception {

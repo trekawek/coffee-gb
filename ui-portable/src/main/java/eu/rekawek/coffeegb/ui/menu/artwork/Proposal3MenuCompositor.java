@@ -95,6 +95,26 @@ public final class Proposal3MenuCompositor {
         if (route == MenuRoute.AUDIO) {
             masks.add(Proposal3OverlayCatalog.AUDIO_VOLUME_ARROW);
         }
+        if (route == MenuRoute.SYSTEM || route == MenuRoute.DISPLAY) {
+            masks.add(new MenuRect(22, 129, 334, 467));
+        }
+        if (route == MenuRoute.DISPLAY) {
+            masks.add(new MenuRect(374, 326, 538, 114));
+        }
+        if (route == MenuRoute.OPTIONAL_DEVICES) {
+            masks.add(new MenuRect(17, 118, 318, 524));
+            masks.add(new MenuRect(350, 320, 560, 215));
+            masks.add(new MenuRect(350, 540, 560, 98));
+        }
+        if (route == MenuRoute.OPTION_PICKER) {
+            masks.add(Proposal3OverlayCatalog.OPTION_PICKER_ILLUSTRATION);
+        }
+        if (route == MenuRoute.SETTINGS || route == MenuRoute.AUDIO
+                || route == MenuRoute.DISPLAY || route == MenuRoute.TOUCH_CONTROLS
+                || route == MenuRoute.CONTROLLER_MAPPING || route == MenuRoute.SYSTEM
+                || route == MenuRoute.OPTIONAL_DEVICES || route == MenuRoute.OPTION_PICKER) {
+            masks.add(Proposal3OverlayCatalog.BACK_HEADER);
+        }
         masks.addAll(Proposal3TextCatalog.masks(route));
         for (Proposal3OverlayCatalog.Slot slot : layout.rows()) {
             masks.add(expand(slot.bounds(), 3));
@@ -111,7 +131,7 @@ public final class Proposal3MenuCompositor {
             case PAUSE_CONSOLE, SAVE_STATES -> Proposal3GlyphAtlas.Role.SEMIBOLD;
             // Seven archive rows use the compact 36px face so their ink fits the fixed viewport.
             case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.MEDIUM;
-            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, LIBRARY, SYSTEM ->
+            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, LIBRARY, SYSTEM, DISPLAY, OPTION_PICKER ->
                     Proposal3GlyphAtlas.Role.SMALL;
             case ABOUT -> rowIndex == 0 ? Proposal3GlyphAtlas.Role.SEMIBOLD
                     : Proposal3GlyphAtlas.Role.NOTICE;
@@ -122,7 +142,7 @@ public final class Proposal3MenuCompositor {
     /** Fixed action role; selection never participates in this decision. */
     static Proposal3GlyphAtlas.Role actionTextRole(MenuRoute route) {
         return switch (route) {
-            case SAVE_STATES, CHOOSE_ROM -> Proposal3GlyphAtlas.Role.SEMIBOLD;
+            case SAVE_STATES, RECENT_GAMES, CHOOSE_ROM -> Proposal3GlyphAtlas.Role.SEMIBOLD;
             default -> Proposal3GlyphAtlas.Role.MEDIUM;
         };
     }
@@ -237,7 +257,7 @@ public final class Proposal3MenuCompositor {
 
     private static void orderActions(MenuRoute route, List<Entry> actions) {
         List<String> order = switch (route) {
-            case SAVE_STATES -> List.of();
+            case SAVE_STATES, RECENT_GAMES -> List.of();
             case AUDIO, TOUCH_CONTROLS -> List.of();
             case OPTIONAL_DEVICES -> List.of("save-devices", "cancel-devices");
             case LIBRARY -> List.of("open-rom");
@@ -263,6 +283,12 @@ public final class Proposal3MenuCompositor {
                 return "slot-" + slot;
             }
         }
+        if (route == MenuRoute.RECENT_GAMES) {
+            // Recent identifiers are host-owned stable tokens (for example recent:7), while the
+            // artwork marker is anchored to a canonical visual row. Normalize every supplied
+            // entry by presentation order so the selected row always resolves that anchor.
+            return "recent-" + rowCount;
+        }
         if (route == MenuRoute.LIBRARY
                 && ("recent-rom".equals(id) || id.startsWith("recent:"))) {
             return "recent-" + rowCount;
@@ -286,8 +312,8 @@ public final class Proposal3MenuCompositor {
 
     private static boolean isAction(MenuRoute route, String id) {
         return switch (route) {
-            case SAVE_STATES -> false;
-            case AUDIO, TOUCH_CONTROLS -> false;
+            case SAVE_STATES, RECENT_GAMES -> false;
+            case AUDIO, DISPLAY, TOUCH_CONTROLS, OPTION_PICKER -> false;
             case OPTIONAL_DEVICES -> id.equals("save-devices") || id.equals("cancel-devices");
             case LIBRARY -> id.equals("open-rom");
             case CHOOSE_ROM -> id.equals("open-selected") || id.equals("cancel");
@@ -373,8 +399,10 @@ public final class Proposal3MenuCompositor {
                     Proposal3OverlayCatalog.Surface.PAPER, false);
         }
         if (route == MenuRoute.SETTINGS || route == MenuRoute.AUDIO
+                || route == MenuRoute.DISPLAY
                 || route == MenuRoute.TOUCH_CONTROLS || route == MenuRoute.CONTROLLER_MAPPING
-                || route == MenuRoute.SYSTEM) {
+                || route == MenuRoute.SYSTEM || route == MenuRoute.OPTIONAL_DEVICES
+                || route == MenuRoute.OPTION_PICKER) {
             // The source artwork's top-right Back outline is decorative in the portable overlay;
             // B is the single global back action. Clear the entire footprint, including its
             // border, rather than only replacing the old word.
@@ -465,15 +493,21 @@ public final class Proposal3MenuCompositor {
                     || presentation.route() == MenuRoute.CONFIRM_ACTION
                     || presentation.route() == MenuRoute.SETTINGS
                     || presentation.route() == MenuRoute.AUDIO
+                    || presentation.route() == MenuRoute.DISPLAY
                     || presentation.route() == MenuRoute.TOUCH_CONTROLS
                     || presentation.route() == MenuRoute.CONTROLLER_MAPPING
                     || presentation.route() == MenuRoute.SYSTEM
+                    || presentation.route() == MenuRoute.OPTIONAL_DEVICES
+                    || presentation.route() == MenuRoute.OPTION_PICKER
+                    || presentation.route() == MenuRoute.RECENT_GAMES
                     ? "" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
             case FOOTER_BUTTON -> footerButton(footer[region.index()]);
             case FOOTER_LABEL -> footerLabel(footer[region.index()]);
             case SIDE_HEADING -> display(presentation.sideHeading());
-            case SIDE_LINE -> display(valueAt(presentation.sideLines(), region.index(), ""));
+            case SIDE_LINE -> presentation.route() == MenuRoute.RECENT_GAMES
+                    ? recentLastPlayedText(valueAt(presentation.sideLines(), region.index(), ""))
+                    : display(valueAt(presentation.sideLines(), region.index(), ""));
             case CONFIRM_TITLE -> confirmationTitle(presentation, prepared);
             case CONFIRM_COPY_ONE, CONFIRM_COPY_TWO, CONFIRM_COPY_THREE ->
                     confirmationCopy(region.key(), presentation);
@@ -499,6 +533,17 @@ public final class Proposal3MenuCompositor {
         }
         int space = value.indexOf(' ');
         return space < 0 ? value : value.substring(space + 1).trim();
+    }
+
+    static String recentLastPlayedText(String value) {
+        String normalized = display(value);
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        String prefix = "LAST PLAYED:";
+        String timestamp = normalized.startsWith(prefix)
+                ? normalized.substring(prefix.length()).trim() : normalized;
+        return timestamp.isEmpty() ? prefix : prefix + "\n" + timestamp;
     }
 
     private static String confirmationTitle(MenuPresentation presentation, Prepared prepared) {
@@ -643,21 +688,26 @@ public final class Proposal3MenuCompositor {
                 ? MenuRaster.PAPER_TEXT : MenuRaster.INK;
         String label = label(route, entry, entryIndex);
         String detail = detail(route, entry, entryIndex);
-        boolean audioMuteCheckbox = route == MenuRoute.AUDIO && entry.id.equals("mute-audio");
+        boolean checkbox = isCheckboxRow(route, entry);
+        boolean optionSelected = route == MenuRoute.OPTION_PICKER
+                && "SELECTED".equals(display(detail));
+        boolean choice = isChoiceRow(route, entry);
         boolean drawsDetail = supportsDetail(route, entry) && !detail.isEmpty()
-                && !audioMuteCheckbox;
-        MenuRect labelBounds = labelBounds(route, slot.bounds(), drawsDetail, entryIndex);
+                && !checkbox && !optionSelected && !choice;
+        MenuRect labelBounds = labelBounds(route, slot.bounds(), drawsDetail || choice, entryIndex);
         drawWidgetText(raster, label, labelBounds, color, MenuRaster.HorizontalAlignment.LEFT,
                 rowTextRole(route, entryIndex));
-        if (drawsDetail) {
+        if (choice) {
+            paintChoiceField(route, slot.bounds(), detail, selected, raster);
+        } else if (drawsDetail) {
             MenuRect detailBounds = detailBounds(route, slot.bounds());
             drawWidgetText(raster, detail, detailBounds, color,
                     MenuRaster.HorizontalAlignment.RIGHT, detailTextRole(route));
         }
-        if (audioMuteCheckbox) {
-            // Preserve the model's ON/OFF state but make it a nearby, scan-friendly checkbox.
-            raster.drawCheckbox(Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX,
-                    "ON".equals(display(detail)));
+        if (checkbox || optionSelected) {
+            // Preserve the model's ON/OFF/SELECTED state but keep the control near its label.
+            raster.drawCheckbox(checkboxBounds(route, slot.bounds()),
+                    checkbox ? "ON".equals(display(detail)) : optionSelected);
         }
         paintRowIcon(route, entryIndex, slot, raster);
         if (route == MenuRoute.SAVE_STATES && isUsedState(entry)) {
@@ -667,6 +717,46 @@ public final class Proposal3MenuCompositor {
                 && slot.surface() == Proposal3OverlayCatalog.Surface.DARK) {
             paintMarker(presentation, prepared, layout, slot, raster);
         }
+    }
+
+    private static boolean isChoiceRow(MenuRoute route, Entry entry) {
+        return switch (route) {
+            case SYSTEM -> entry.id.equals("dmg-games") || entry.id.equals("cgb-games")
+                    || entry.id.equals("bootstrap");
+            case DISPLAY -> entry.id.equals("dmg-colors");
+            case OPTIONAL_DEVICES -> entry.id.equals("camera") || entry.id.equals("gamepad");
+            default -> false;
+        };
+    }
+
+    private static boolean isCheckboxRow(MenuRoute route, Entry entry) {
+        return route == MenuRoute.AUDIO && entry.id.equals("mute-audio")
+                || route == MenuRoute.DISPLAY && entry.id.equals("sgb-border")
+                || route == MenuRoute.OPTIONAL_DEVICES && entry.id.equals("gps");
+    }
+
+    private static MenuRect checkboxBounds(MenuRoute route, MenuRect row) {
+        if (route == MenuRoute.AUDIO) {
+            return Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX;
+        }
+        if (route == MenuRoute.OPTION_PICKER) {
+            return new MenuRect(row.x() + 8,
+                    row.y() + Math.max(0, (row.height() - 36) / 2), 36, 36);
+        }
+        return new MenuRect(row.x() + 172, row.y() + Math.max(0, (row.height() - 36) / 2),
+                36, 36);
+    }
+
+    private void paintChoiceField(MenuRoute route, MenuRect row, String value, boolean selected,
+            MenuRaster raster) {
+        Proposal3WidgetSkins.Sprite choiceField = skins().choiceField();
+        int left = row.right() - choiceField.width() - 4;
+        int top = row.y() + Math.max(0, (row.height() - choiceField.height()) / 2);
+        raster.paintSprite(choiceField, left, top);
+        MenuRect valueBounds = new MenuRect(left + 12, top + 7, choiceField.width() - 48, 40);
+        drawWidgetText(raster, value, valueBounds,
+                selected ? MenuRaster.PAPER_TEXT : MenuRaster.PAPER_TEXT,
+                MenuRaster.HorizontalAlignment.RIGHT, Proposal3GlyphAtlas.Role.SMALL);
     }
 
     private void paintRowIcon(MenuRoute route, int entryIndex,
@@ -768,6 +858,19 @@ public final class Proposal3MenuCompositor {
         if (slots.isEmpty()) {
             return;
         }
+        if (!layout.scrollable() && prepared.rows.size() < layout.rows().size()) {
+            // Capability-filtered submenu pages must not leave the template's unused outlined
+            // slots visible. Clear each complete widget footprint before painting live rows.
+            for (int index = prepared.rows.size(); index < layout.rows().size(); index++) {
+                paintSurface(raster, expand(layout.rows().get(index).bounds(), 3),
+                        layout.rows().get(index).surface(), false);
+            }
+            if (route == MenuRoute.DISPLAY && prepared.rows.size() < 3) {
+                paintDarkAperture(raster, new MenuRect(374, 326, 538, 114));
+            } else if (route == MenuRoute.OPTIONAL_DEVICES && prepared.rows.size() < 6) {
+                paintDarkAperture(raster, new MenuRect(350, 320, 560, 215));
+            }
+        }
         ScrollWindow window = scrollWindow(prepared.rows, presentation.focusedIndex(),
                 slots.size(), layout.scrollable());
         String focused = focusedId(presentation, prepared);
@@ -796,7 +899,9 @@ public final class Proposal3MenuCompositor {
             for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
                 raster.fill(divider, PAPER_MATTE);
             }
-        } else if (route == MenuRoute.SAVE_STATES || route == MenuRoute.SETTINGS
+        } else if (route == MenuRoute.SAVE_STATES || route == MenuRoute.RECENT_GAMES
+                || route == MenuRoute.SETTINGS
+                || route == MenuRoute.OPTION_PICKER
                 || route == MenuRoute.TOUCH_CONTROLS
                 || route == MenuRoute.CONTROLLER_MAPPING || route == MenuRoute.LIBRARY
                 || route == MenuRoute.CHOOSE_ROM) {
@@ -810,8 +915,9 @@ public final class Proposal3MenuCompositor {
 
     private static List<MenuRect> scrollDividers(MenuRoute route, int slotCount) {
         return switch (route) {
-            case SAVE_STATES -> Proposal3OverlayCatalog.SAVE_DIVIDERS;
+            case SAVE_STATES, RECENT_GAMES -> Proposal3OverlayCatalog.SAVE_DIVIDERS;
             case SETTINGS -> Proposal3OverlayCatalog.compactSettingsDividers(slotCount);
+            case OPTION_PICKER -> Proposal3OverlayCatalog.SETTINGS_DIVIDERS;
             case TOUCH_CONTROLS -> Proposal3OverlayCatalog.compactTouchDividers(slotCount);
             case CONTROLLER_MAPPING -> Proposal3OverlayCatalog.CONTROLLER_DIVIDERS;
             case LIBRARY -> Proposal3OverlayCatalog.LIBRARY_DIVIDERS;
@@ -822,11 +928,17 @@ public final class Proposal3MenuCompositor {
 
     private static List<Proposal3OverlayCatalog.Slot> rowSlots(
             Proposal3OverlayCatalog.RouteLayout layout, int itemCount) {
-        return layout.route() == MenuRoute.SETTINGS
-                ? Proposal3OverlayCatalog.compactSettingsRows(itemCount)
-                : layout.route() == MenuRoute.TOUCH_CONTROLS
-                ? Proposal3OverlayCatalog.compactTouchRows(itemCount)
-                : layout.rows();
+        if (layout.route() == MenuRoute.SETTINGS) {
+            return Proposal3OverlayCatalog.compactSettingsRows(itemCount);
+        }
+        if (layout.route() == MenuRoute.TOUCH_CONTROLS) {
+            return Proposal3OverlayCatalog.compactTouchRows(itemCount);
+        }
+        if (layout.route() == MenuRoute.DISPLAY || layout.route() == MenuRoute.OPTIONAL_DEVICES) {
+            int count = Math.max(1, Math.min(layout.rows().size(), itemCount));
+            return layout.rows().subList(0, count);
+        }
+        return layout.rows();
     }
 
     private static MenuRect rowSurfaceBounds(MenuRoute route, Proposal3OverlayCatalog.Slot slot) {
@@ -874,8 +986,8 @@ public final class Proposal3MenuCompositor {
 
     private static boolean supportsDetail(MenuRoute route, Entry entry) {
         return switch (route) {
-            case AUDIO, TOUCH_CONTROLS, CONTROLLER_MAPPING,
-                    OPTIONAL_DEVICES, LIBRARY, SYSTEM -> true;
+            case AUDIO, DISPLAY, TOUCH_CONTROLS, CONTROLLER_MAPPING,
+                    OPTIONAL_DEVICES, LIBRARY, SYSTEM, OPTION_PICKER -> true;
             default -> false;
         };
     }
@@ -884,11 +996,13 @@ public final class Proposal3MenuCompositor {
             Proposal3OverlayCatalog.RouteLayout layout, MenuRaster raster) {
         switch (route) {
             case PAUSE_CONSOLE -> drawPause(presentation, raster);
-            case SAVE_STATES -> drawSaveSide(presentation, raster);
+            case SAVE_STATES, RECENT_GAMES -> drawSaveSide(presentation, raster);
             case AUDIO -> drawAudioSide(presentation, prepared, raster);
+            case SYSTEM, DISPLAY, OPTIONAL_DEVICES -> drawSettingsIllustration(route, raster);
+            case OPTION_PICKER -> drawOptionPickerIllustration(presentation, raster);
             case PRINTER_PAPER -> drawPrinter(presentation, raster);
             case SETTINGS, TOUCH_CONTROLS, CONTROLLER_MAPPING,
-                    OPTIONAL_DEVICES, DATA_MEDIA, LIBRARY, CHOOSE_ROM, SYSTEM, ABOUT -> {
+                    DATA_MEDIA, LIBRARY, CHOOSE_ROM, ABOUT -> {
                 // Their previews and route copy are handled by the text catalog above.
             }
         }
@@ -911,6 +1025,88 @@ public final class Proposal3MenuCompositor {
         r.fill(Proposal3OverlayCatalog.SAVE_PREVIEW, PAPER_MATTE);
         if (p.preview().state() == MenuPreview.State.READY) {
             r.copyPreview(p.preview(), Proposal3OverlayCatalog.SAVE_PREVIEW, PAPER_MATTE);
+        }
+    }
+
+    private void drawSettingsIllustration(MenuRoute route, MenuRaster raster) {
+        Proposal3WidgetSkins.Sprite illustration = skins().settingsIllustration(route);
+        if (illustration == null) {
+            return;
+        }
+        // Repaint the old illustration/text-free aperture first. This removes the legacy chip,
+        // divider, and peripheral labels without touching the surrounding approved bezel.
+        MenuRect clear = route == MenuRoute.OPTIONAL_DEVICES
+                ? new MenuRect(17, 118, 318, 524)
+                : new MenuRect(22, 129, 334, 467);
+        paintPaperAperture(raster, clear);
+        if (route == MenuRoute.OPTIONAL_DEVICES) {
+            // The peripherals page has no footer actions; clear the legacy optional-device
+            // button strip while retaining the approved paper panel beneath the rail.
+            paintPaperAperture(raster, new MenuRect(350, 540, 560, 98));
+        }
+        int left;
+        int top;
+        if (route == MenuRoute.SYSTEM) {
+            left = 35;
+            top = 173;
+        } else if (route == MenuRoute.DISPLAY) {
+            left = 49;
+            top = 145;
+        } else {
+            left = 26;
+            top = 181;
+        }
+        raster.paintSprite(illustration, left, top);
+    }
+
+    private void drawOptionPickerIllustration(MenuPresentation presentation, MenuRaster raster) {
+        MenuRoute origin = optionPickerIllustrationRoute(presentation.context());
+        if (origin == null) {
+            return;
+        }
+        Proposal3WidgetSkins.Sprite illustration = skins().settingsIllustration(origin);
+        MenuRect clear = Proposal3OverlayCatalog.OPTION_PICKER_ILLUSTRATION;
+        paintPaperAperture(raster, clear);
+        int left = clear.x() + (clear.width() - illustration.width()) / 2;
+        int top = switch (origin) {
+            case SYSTEM -> 170;
+            case DISPLAY -> 145;
+            case OPTIONAL_DEVICES -> 180;
+            default -> throw new IllegalStateException("Unsupported picker illustration: " + origin);
+        };
+        raster.paintSprite(illustration, left, top);
+    }
+
+    static MenuRoute optionPickerIllustrationRoute(String context) {
+        return switch (display(context)) {
+            case "DMG GAMES", "CGB GAMES", "BOOTSTRAP" -> MenuRoute.SYSTEM;
+            case "DMG COLORS" -> MenuRoute.DISPLAY;
+            case "CAMERA", "GAMEPAD" -> MenuRoute.OPTIONAL_DEVICES;
+            default -> null;
+        };
+    }
+
+    private void paintPaperAperture(MenuRaster raster, MenuRect bounds) {
+        int top = bounds.y();
+        int remaining = bounds.height();
+        while (remaining > 0) {
+            int height = Math.min(160, remaining);
+            paintSurface(raster, new MenuRect(bounds.x(), top, bounds.width(), height),
+                    Proposal3OverlayCatalog.Surface.PAPER, false);
+            top += height;
+            remaining -= height;
+        }
+    }
+
+    private void paintDarkAperture(MenuRaster raster, MenuRect bounds) {
+        int top = bounds.y();
+        int remaining = bounds.height();
+        while (remaining > 0) {
+            int height = Math.min(160, remaining);
+            paintSurface(raster, new MenuRect(bounds.x(), top, bounds.width(), height),
+                    Proposal3OverlayCatalog.Surface.DARK, false);
+            top += height;
+            remaining -= height;
         }
     }
 
@@ -1027,7 +1223,7 @@ public final class Proposal3MenuCompositor {
             case ABOUT -> row.x() + (rowIndex == 0 ? 22 : 98);
             case CONTROLLER_MAPPING -> row.x() + 12;
             case LIBRARY -> row.x() + 20;
-            case SYSTEM -> row.x() + 16;
+            case SYSTEM, DISPLAY -> row.x() + 16;
             default -> row.x() + 52;
         };
         int detail = drawsDetail ? detailWidth(route) : 0;
@@ -1059,7 +1255,8 @@ public final class Proposal3MenuCompositor {
             case CONTROLLER_MAPPING -> 180;
             case OPTIONAL_DEVICES -> 175;
             case LIBRARY -> 190;
-            case SYSTEM -> 310;
+            case SYSTEM -> 250;
+            case DISPLAY -> 250;
             default -> 0;
         };
     }
@@ -1134,12 +1331,16 @@ public final class Proposal3MenuCompositor {
                 case "load-state" -> "LOAD STATE";
                 case "reset" -> "RESET GAME";
                 case "settings" -> "SETTINGS";
-                case "stop" -> "STOP GAME";
+                case "recent-games" -> "RECENT GAMES";
                 default -> display(e.label);
             };
             case SAVE_STATES -> "SLOT " + Math.max(0, e.slotNumber);
+            case RECENT_GAMES -> display(e.label);
             case SETTINGS -> switch (e.id) {
+                case "system" -> "SYSTEM";
+                case "display" -> "DISPLAY";
                 case "audio" -> "AUDIO";
+                case "peripherals" -> "PERIPHERALS";
                 case "touch-controls" -> "CONTROLS";
                 case "controller-mapping" -> "CONTROLLER MAPPING";
                 case "optional-devices" -> "OPTIONAL DEVICES";
@@ -1148,7 +1349,6 @@ public final class Proposal3MenuCompositor {
                 case "rewind-save" -> "REWIND & SAVE";
                 case "data-media" -> "DATA & MEDIA";
                 case "about" -> "ABOUT";
-                case "system" -> "DISPLAY";
                 default -> display(e.label);
             };
             case AUDIO -> switch (e.id) {
@@ -1177,6 +1377,9 @@ public final class Proposal3MenuCompositor {
                 default -> display(e.label);
             };
             case OPTIONAL_DEVICES -> switch (e.id) {
+                case "camera" -> "CAMERA";
+                case "gamepad" -> "GAMEPAD";
+                case "gps" -> "GPS";
                 case "live-camera" -> "LIVE CAMERA";
                 case "game-boy-printer" -> "GAME BOY PRINTER";
                 case "calibrate-tilt" -> "CALIBRATE TILT";
@@ -1195,13 +1398,22 @@ public final class Proposal3MenuCompositor {
             };
             case LIBRARY -> libraryLabel(e, index);
             case CHOOSE_ROM -> chooseLabel(e, index);
+            case OPTION_PICKER -> display(e.label);
             case SYSTEM -> switch (e.id) {
+                case "dmg-games" -> "DMG GAMES";
+                case "cgb-games" -> "CGB GAMES";
+                case "bootstrap" -> "BOOTSTRAP";
                 case "video-status" -> "VIDEO";
                 case "profile-status" -> "SYSTEM PROFILE";
                 case "rewind-save-status" -> "REWIND & SAVE";
                 case "screen-fit" -> "SCREEN FIT";
                 case "color-correction" -> "COLOR CORRECTION";
                 case "frame-blending" -> "FRAME BLENDING";
+                default -> display(e.label);
+            };
+            case DISPLAY -> switch (e.id) {
+                case "sgb-border" -> "SGB BORDER";
+                case "dmg-colors" -> "DMG COLORS";
                 default -> display(e.label);
             };
             case ABOUT -> switch (e.id) {
@@ -1218,7 +1430,7 @@ public final class Proposal3MenuCompositor {
 
     private static String canonicalDetail(MenuRoute route, Entry e, int index) {
         return switch (route) {
-            case SAVE_STATES -> "";
+            case SAVE_STATES, RECENT_GAMES -> "";
             case AUDIO -> e.id.equals("mute-audio") ? "OFF" : "";
             case TOUCH_CONTROLS -> e.id.equals("haptics") ? "ON"
                     : e.id.equals("button-opacity") ? "70%" : "";
@@ -1235,15 +1447,23 @@ public final class Proposal3MenuCompositor {
                 default -> "";
             };
             case OPTIONAL_DEVICES -> switch (e.id) {
+                case "camera", "gamepad" -> "AUTO";
+                case "gps" -> "OFF";
                 case "rumble", "live-camera", "game-boy-printer" -> "OFF";
                 default -> "";
             };
             case LIBRARY -> index == 0 ? "TODAY" : index == 1 ? "YESTERDAY"
                     : index == 2 ? "3 DAYS AGO" : "";
             case SYSTEM -> switch (e.id) {
+                case "dmg-games", "cgb-games" -> "AUTO";
+                case "bootstrap" -> "SKIP";
                 case "video-status" -> "NEAREST NEIGHBOR / ASPECT FIT";
                 case "profile-status" -> "SELECTED ON OPEN";
                 case "rewind-save-status" -> "PORTABLE DEFAULTS";
+                default -> "";
+            };
+            case DISPLAY -> switch (e.id) {
+                case "dmg-colors" -> "GREEN";
                 default -> "";
             };
             default -> "";

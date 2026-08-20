@@ -278,6 +278,26 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void hostRecentIdsStillResolveTheSelectedRowsFocusArrow() {
+        MenuPresentation presentation = presentation(MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", "TODAY", true,
+                        MenuPreview.empty()),
+                new MenuPageSpec.RecentGame("recent:7", "POCKET CAMERA.GBC", "YESTERDAY", true,
+                        MenuPreview.empty())), "recent:7"));
+        int[] pixels = new Proposal3MenuCompositor().compose(presentation)
+                .orElseThrow().copyPixels();
+        Proposal3OverlayCatalog.RouteLayout layout =
+                Proposal3OverlayCatalog.layout(MenuRoute.RECENT_GAMES);
+        MenuRect canonical = layout.rows().get(0).bounds();
+        MenuRect selected = layout.rows().get(1).bounds();
+        int left = selected.x() + layout.marker().sourceX() - canonical.x();
+
+        assertEquals("selected recent row lost its focus arrow",
+                MenuRaster.FOCUS_ARROW_HEIGHT,
+                countColorInColumn(pixels, left, MenuRaster.PAPER_TEXT));
+    }
+
+    @Test
     public void controlsRailCompactsForOneAndTwoHostItems() {
         assertEquals(1, Proposal3OverlayCatalog.compactTouchRows(1).size());
         assertEquals(2, Proposal3OverlayCatalog.compactTouchRows(2).size());
@@ -478,6 +498,9 @@ public class Proposal3MenuCompositorTest {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
         for (MenuRoute route : MenuRoute.values()) {
+            if (route == MenuRoute.OPTIONAL_DEVICES || route == MenuRoute.OPTION_PICKER) {
+                continue;
+            }
             List<Proposal3OverlayCatalog.Slot> rows = route == MenuRoute.SETTINGS
                     ? Proposal3OverlayCatalog.compactSettingsRows(
                             defaultPresentation(route).items().size())
@@ -552,6 +575,67 @@ public class Proposal3MenuCompositorTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(Proposal3GlyphAtlas.Role.NOTICE, savedAt.role());
+    }
+
+    @Test
+    public void recentTimestampSplitsIntoTwoReadableLinesThatFit() throws Exception {
+        Proposal3TextCatalog.TextRegion lastPlayed =
+                Proposal3TextCatalog.regions(MenuRoute.RECENT_GAMES).stream()
+                        .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
+                        .findFirst()
+                        .orElseThrow();
+        assertEquals(Proposal3GlyphAtlas.Role.NOTICE, lastPlayed.role());
+        String caption = Proposal3MenuCompositor.recentLastPlayedText(
+                "LAST PLAYED: 2026-08-17 20:13");
+        assertEquals("LAST PLAYED:\n2026-08-17 20:13", caption);
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+        for (String line : caption.split("\\n")) {
+            assertTrue("recent caption line would ellipsize: " + line,
+                    atlas.measure(lastPlayed.role(), line) <= lastPlayed.bounds().width());
+        }
+        assertTrue("two-line recent caption does not have enough vertical room",
+                lastPlayed.bounds().height() >= 2 * 40);
+    }
+
+    @Test
+    public void recentGamesPaintTheSelectedPreviewAndLastPlayedLabelInTheLoadStateAperture() {
+        int[] pixels = new int[160 * 144];
+        java.util.Arrays.fill(pixels, 0xff396e55);
+        MenuPresentation presentation = presentation(MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB",
+                        "2026-08-17 20:13", true,
+                        MenuPreview.ready(160, 144, pixels))), "recent:0"));
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] empty = compositor.compose(defaultPresentation(MenuRoute.RECENT_GAMES))
+                .orElseThrow().copyPixels();
+        int[] composed = compositor.compose(presentation).orElseThrow().copyPixels();
+
+        assertTrue("recent game preview was not painted",
+                differentInside(empty, composed, Proposal3OverlayCatalog.SAVE_PREVIEW));
+        assertTrue("last played label was not painted",
+                inkPixels(composed, new MenuRect(30, 490, 352, 88)) > 20);
+    }
+
+    @Test
+    public void recentCaptionPaintsTodayAndFullTimestampOnSeparateLines() {
+        MenuPresentation blank = presentation(MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", "", true,
+                        MenuPreview.empty())), "recent:0"));
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] baseline = compositor.compose(blank).orElseThrow().copyPixels();
+        MenuRect labelLine = new MenuRect(30, 490, 352, 44);
+        MenuRect valueLine = new MenuRect(30, 534, 352, 44);
+
+        for (String value : List.of("TODAY", "2026-08-17 20:13")) {
+            MenuPresentation captioned = presentation(MenuPageSpec.recentGames(List.of(
+                    new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", value, true,
+                            MenuPreview.empty())), "recent:0"));
+            int[] rendered = compositor.compose(captioned).orElseThrow().copyPixels();
+            assertTrue(value + " lost the LAST PLAYED label line",
+                    differentInside(baseline, rendered, labelLine));
+            assertTrue(value + " lost the timestamp value line",
+                    differentInside(baseline, rendered, valueLine));
+        }
     }
 
     @Test
@@ -684,8 +768,12 @@ public class Proposal3MenuCompositorTest {
                     || presentation.route() == MenuRoute.SYSTEM ? ""
                     : presentation.headerAction();
             case SIDE_HEADING -> presentation.sideHeading();
-            case SIDE_LINE -> region.index() < presentation.sideLines().size()
-                    ? presentation.sideLines().get(region.index()) : "";
+            case SIDE_LINE -> {
+                String value = region.index() < presentation.sideLines().size()
+                        ? presentation.sideLines().get(region.index()) : "";
+                yield presentation.route() == MenuRoute.RECENT_GAMES
+                        ? Proposal3MenuCompositor.recentLastPlayedText(value) : value;
+            }
             case FOOTER_DPAD, FOOTER_BUTTON, FOOTER_LABEL, CONFIRM_TITLE,
                     CONFIRM_COPY_ONE, CONFIRM_COPY_TWO -> "RUNTIME";
             case CONFIRM_COPY_THREE -> presentation.sideLines().size() < 2 ? "" : "RUNTIME";
@@ -747,13 +835,14 @@ public class Proposal3MenuCompositorTest {
                 Map.entry(MenuRoute.PAUSE_CONSOLE, "save-state"),
                 Map.entry(MenuRoute.SAVE_STATES, "slot-1"),
                 Map.entry(MenuRoute.AUDIO, "mute-audio"),
+                Map.entry(MenuRoute.DISPLAY, "dmg-colors"),
                 Map.entry(MenuRoute.TOUCH_CONTROLS, "controller-mapping"),
                 Map.entry(MenuRoute.CONTROLLER_MAPPING, "map-b"),
-                Map.entry(MenuRoute.OPTIONAL_DEVICES, "live-camera"),
+                Map.entry(MenuRoute.OPTIONAL_DEVICES, "gamepad"),
                 Map.entry(MenuRoute.DATA_MEDIA, "export-battery"),
                 Map.entry(MenuRoute.LIBRARY, "open-rom"),
                 Map.entry(MenuRoute.CHOOSE_ROM, "rom-2"),
-                Map.entry(MenuRoute.SYSTEM, "color-correction"),
+                Map.entry(MenuRoute.SYSTEM, "cgb-games"),
                 Map.entry(MenuRoute.ABOUT, "network"),
                 Map.entry(MenuRoute.CONFIRM_ACTION, "confirm"),
                 Map.entry(MenuRoute.PRINTER_PAPER, "clear-paper"));
@@ -1115,10 +1204,18 @@ public class Proposal3MenuCompositorTest {
             MenuPresentation canonical = defaultPresentation(route);
             MenuArgbFrame frame = compositor.compose(canonical).orElseThrow();
             writeFrame(directory.resolve(route.name().toLowerCase() + ".png"), frame);
-            MenuArgbFrame focused = compositor.compose(withFocus(canonical, focusTarget(route)))
+            MenuPresentation focusedPresentation = route == MenuRoute.RECENT_GAMES
+                    ? recentGamesPresentation("recent:7")
+                    : withFocus(canonical, focusTarget(route));
+            MenuArgbFrame focused = compositor.compose(focusedPresentation)
                     .orElseThrow();
             writeFrame(directory.resolve(route.name().toLowerCase() + "-focus.png"), focused);
         }
+        writeFrame(directory.resolve("recent_games-today.png"), compositor.compose(
+                recentGamesPresentation("recent:0", "TODAY", "YESTERDAY"))
+                .orElseThrow());
+        writeFrame(directory.resolve("recent_games-full-timestamp.png"), compositor.compose(
+                recentGamesPresentation("recent:0")).orElseThrow());
         MenuPresentation saveStates = defaultPresentation(MenuRoute.SAVE_STATES);
         ArrayList<MenuPresentation.Item> usedStateItems = new ArrayList<>();
         for (MenuPresentation.Item item : saveStates.items()) {
@@ -1207,9 +1304,25 @@ public class Proposal3MenuCompositorTest {
     }
 
     private static MenuPresentation defaultPresentation(MenuRoute route) {
+        if (route == MenuRoute.RECENT_GAMES) {
+            return recentGamesPresentation("recent:0");
+        }
         MenuController controller = new MenuController(listener());
         controller.show(route);
         return controller.presentation();
+    }
+
+    private static MenuPresentation recentGamesPresentation(String focusedId) {
+        return recentGamesPresentation(focusedId, "2026-08-17 20:13", "2026-08-16 09:42");
+    }
+
+    private static MenuPresentation recentGamesPresentation(String focusedId,
+            String firstLastPlayed, String secondLastPlayed) {
+        return presentation(MenuPageSpec.recentGames(List.of(
+                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB",
+                        firstLastPlayed, true, MenuPreview.empty()),
+                new MenuPageSpec.RecentGame("recent:7", "POCKET CAMERA.GBC",
+                        secondLastPlayed, true, MenuPreview.empty())), focusedId));
     }
 
     private static MenuPresentation controlsPresentation(List<MenuPageSpec.Item> items,
@@ -1224,15 +1337,18 @@ public class Proposal3MenuCompositorTest {
         return switch (route) {
             case PAUSE_CONSOLE -> "save-state";
             case SAVE_STATES -> "slot-1";
+            case RECENT_GAMES -> "recent:7";
             case SETTINGS -> "audio";
             case AUDIO -> "mute-audio";
+            case DISPLAY -> "dmg-colors";
             case TOUCH_CONTROLS -> "controller-mapping";
             case CONTROLLER_MAPPING -> "map-b";
-            case OPTIONAL_DEVICES -> "live-camera";
+            case OPTIONAL_DEVICES -> "gamepad";
+            case OPTION_PICKER -> "choice:default";
             case DATA_MEDIA -> "export-battery";
             case LIBRARY -> "open-rom";
             case CHOOSE_ROM -> "rom-2";
-            case SYSTEM -> "color-correction";
+            case SYSTEM -> "cgb-games";
             case ABOUT -> "network";
             case CONFIRM_ACTION -> "confirm";
             case PRINTER_PAPER -> "clear-paper";
@@ -1243,15 +1359,18 @@ public class Proposal3MenuCompositorTest {
         return switch (route) {
             case PAUSE_CONSOLE -> "resume";
             case SAVE_STATES -> "slot-0";
-            case SETTINGS -> "audio";
+            case RECENT_GAMES -> "recent:0";
+            case SETTINGS -> "system";
             case AUDIO -> "mute-audio";
+            case DISPLAY -> "sgb-border";
             case TOUCH_CONTROLS -> "haptics";
             case CONTROLLER_MAPPING -> "map-a";
-            case OPTIONAL_DEVICES -> "rumble";
+            case OPTIONAL_DEVICES -> "camera";
+            case OPTION_PICKER -> "choice:default";
             case DATA_MEDIA -> "import-battery";
             case LIBRARY -> "recent-rom";
             case CHOOSE_ROM -> "rom-1";
-            case SYSTEM -> "screen-fit";
+            case SYSTEM -> "dmg-games";
             case ABOUT -> "privacy-notices";
             case CONFIRM_ACTION, PRINTER_PAPER ->
                     throw new AssertionError("route does not have visible rows: " + route);

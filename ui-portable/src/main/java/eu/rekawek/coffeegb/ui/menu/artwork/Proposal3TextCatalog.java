@@ -62,11 +62,14 @@ final class Proposal3TextCatalog {
             switch (route) {
                 case PAUSE_CONSOLE -> pause(regions);
                 case SAVE_STATES -> saveStates(regions);
+                case RECENT_GAMES -> recentGames(regions);
                 case SETTINGS -> settings(regions);
                 case AUDIO -> audio(regions);
+                case DISPLAY -> display(regions);
                 case TOUCH_CONTROLS -> touchControls(regions);
                 case CONTROLLER_MAPPING -> controllerMapping(regions);
                 case OPTIONAL_DEVICES -> optionalDevices(regions);
+                case OPTION_PICKER -> optionPicker(regions);
                 case DATA_MEDIA -> dataMedia(regions);
                 case LIBRARY -> library(regions);
                 case CHOOSE_ROM -> chooseRom(regions);
@@ -110,13 +113,25 @@ final class Proposal3TextCatalog {
                 align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.NOTICE));
     }
 
+    private static void recentGames(List<TextRegion> regions) {
+        // The selected recent game's detached screenshot occupies the left well. Its timestamp
+        // is rendered immediately below it. The compositor splits the host's single side line
+        // into two readable rows without changing the page-model contract.
+        regions.add(region(Key.SIDE_LINE, 0, new MenuRect(30, 490, 352, 88), Surface.PAPER,
+                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.NOTICE));
+    }
+
     private static void settings(List<TextRegion> regions) {
-        // Settings is intentionally a small route index. Its header and three rows carry all
+        // Settings is intentionally a small route index. Its header and four rows carry all
         // required context; the old configuration/status copy only duplicated that information.
     }
 
     private static void audio(List<TextRegion> regions) {
         // The slider carries its own live value. Do not repeat VOLUME/ACTIVE in the side panel.
+    }
+
+    private static void display(List<TextRegion> regions) {
+        // Display rows and their live values are self-describing.
     }
 
     private static void touchControls(List<TextRegion> regions) {
@@ -132,17 +147,11 @@ final class Proposal3TextCatalog {
     }
 
     private static void optionalDevices(List<TextRegion> regions) {
-        side(regions, new MenuRect(43, 147, 294, 44),
-                new MenuRect[]{new MenuRect(43, 546, 294, 34),
-                        new MenuRect(43, 583, 294, 31), new MenuRect(43, 616, 294, 22)});
-        literal(regions, "RUMBLE", new MenuRect(45, 291, 124, 34), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
-        literal(regions, "CAMERA", new MenuRect(186, 291, 126, 34), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
-        literal(regions, "TILT", new MenuRect(63, 457, 102, 34), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.MEDIUM);
-        literal(regions, "PRINTER", new MenuRect(184, 457, 130, 34), Surface.PAPER,
-                align(Horizontal.CENTER), Proposal3GlyphAtlas.Role.SMALL);
+        // The prepared peripherals illustration is the complete left-panel explanation.
+    }
+
+    private static void optionPicker(List<TextRegion> regions) {
+        // A compact gamepad-first list needs no fixed copy or native-looking affordances.
     }
 
     private static void dataMedia(List<TextRegion> regions) {
@@ -168,7 +177,7 @@ final class Proposal3TextCatalog {
     }
 
     private static void system(List<TextRegion> regions) {
-        // Display options are self-describing rows. The old system/profile/rewind explanation
+        // System options are self-describing rows. The old system/profile/rewind explanation
         // referred to unavailable host settings and did not belong in this in-screen route.
     }
 

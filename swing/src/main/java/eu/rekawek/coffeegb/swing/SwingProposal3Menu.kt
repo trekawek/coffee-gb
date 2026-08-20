@@ -76,6 +76,8 @@ internal class SwingProposal3Menu(
             override fun onBackIntercepted(route: MenuRoute) {
               if (route == MenuRoute.CHOOSE_ROM) {
                 cancelArchiveSelection()
+              } else if (route == MenuRoute.OPTION_PICKER) {
+                cancelChoiceSelection()
               }
             }
           })
@@ -95,10 +97,19 @@ internal class SwingProposal3Menu(
 
   private var pendingArchiveSelection: PendingArchiveSelection? = null
 
+  /** The choice page is transient; never let a stale selection survive lifecycle teardown. */
+  private data class PendingChoice(
+      val settingId: String,
+      val originRoute: MenuRoute,
+  )
+
+  private var pendingChoice: PendingChoice? = null
+
   private var selectedArchiveItemId: String? = null
 
   private var stateMenuMode = StateMenuMode.SAVE
   private var stateFocusedItemId: String? = null
+  private var recentFocusedItemId: String? = null
 
   private var renderedVisible = false
 
@@ -109,6 +120,13 @@ internal class SwingProposal3Menu(
       runOnEdt {
         if (controller.visible() && controller.route() == MenuRoute.SAVE_STATES) {
           controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
+        }
+      }
+    }
+    commands.addRecentGamesListener {
+      runOnEdt {
+        if (controller.visible() && controller.route() == MenuRoute.RECENT_GAMES) {
+          controller.setPage(pageFor(MenuRoute.RECENT_GAMES, commands.menuState()))
         }
       }
     }
@@ -128,6 +146,7 @@ internal class SwingProposal3Menu(
       pauseSnapshot = null
       pendingConfirmation = null
       pendingArchiveSelection = null
+      pendingChoice = null
       selectedArchiveItemId = null
       controller.setBackIntercepted(false)
       opening = false
@@ -270,6 +289,8 @@ internal class SwingProposal3Menu(
     return controller.presentation().items().map { it.id() }
   }
 
+  internal fun presentationForTest(): MenuPresentation = controller.presentation()
+
   internal fun openRouteForTest(route: MenuRoute) {
     openRoute(route)
   }
@@ -374,9 +395,30 @@ internal class SwingProposal3Menu(
     fun hasEnabledNonBack(items: List<MenuPageSpec.Item>): Boolean =
         items.any { it.id() != "back" && it.enabled() }
 
+    fun peripheralsItems(snapshot: PortableMenuSettingsSnapshot?): List<MenuPageSpec.Item> =
+        if (snapshot == null) {
+          listOf(item("peripherals-status", "NOT AVAILABLE", true))
+        } else {
+          listOf(
+              item(
+                  PortableMenuSettingId.CAMERA,
+                  "CAMERA",
+                  snapshot.displayValue(PortableMenuSettingId.CAMERA)?.uppercase().orEmpty(),
+                  true,
+              ),
+              item(
+                  PortableMenuSettingId.GAMEPAD,
+                  "GAMEPAD",
+                  snapshot.displayValue(PortableMenuSettingId.GAMEPAD)?.uppercase().orEmpty(),
+                  true,
+              ),
+          )
+        }
+
     val state = presentation.commands
     val stateAvailable = state.stateCommandsAvailable && !state.sessionBusy
     val inlineAudioAvailable = commands.audioVolume() != null || enabled(DesktopCommand.MUTE)
+    val settings = commands.settingsSnapshot()
     val printerHasPaper = printer?.hasPaper() == true
     return when (route) {
       MenuRoute.PAUSE_CONSOLE -> {
@@ -396,9 +438,9 @@ internal class SwingProposal3Menu(
                 item("save-state", "SAVE STATE", stateAvailable),
                 item("load-state", "LOAD STATE", stateAvailable),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
-                item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
-                item("settings", "SETTINGS", inlineAudioAvailable),
-                item("stop", "STOP GAME", enabled(DesktopCommand.CLOSE_GAME)),
+              item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
+              item("settings", "SETTINGS", settings != null || inlineAudioAvailable),
+                item("recent-games", "RECENT GAMES", commands.canOpenRecentGame()),
             ),
             preview = snapshot.preview(),
         )
@@ -436,19 +478,46 @@ internal class SwingProposal3Menu(
         )
       }
 
-      MenuRoute.SETTINGS -> {
-        // Keep a restored/directly opened legacy route valid even when the host has no inline
-        // setting capability. The status row is inert; B remains the only useful action.
-        val settingsItems =
-            if (inlineAudioAvailable) {
-              listOf(item("audio", "AUDIO", true))
-            } else {
-              listOf(item("settings-status", "NOT AVAILABLE", true))
+      MenuRoute.RECENT_GAMES -> {
+        val games = commands.recentGames()
+        val recentGames =
+            games.mapIndexed { index, game ->
+              MenuPageSpec.RecentGame(
+                  "recent:$index",
+                  (if (game.active) "CURRENT / ${game.label}" else game.label).uppercase(),
+                  recentLastPlayed(game),
+                  commands.canOpenRecentGame(),
+                  recentPreview(game),
+              )
             }
-        if (inlineAudioAvailable) {
-          page("SETTINGS", "", emptyList(), settingsItems, preferredFocus = "audio")
+        return MenuPageSpec.recentGames(recentGames, recentFocusedItemId)
+      }
+
+      MenuRoute.SETTINGS -> {
+        // Older host bridges only know about Audio. Production Swing advertises the complete
+        // typed settings capability and therefore has exactly these four rows.
+        if (settings == null) {
+          val settingsItems =
+              if (inlineAudioAvailable) listOf(item("audio", "AUDIO", true))
+              else listOf(item("settings-status", "NOT AVAILABLE", true))
+          if (inlineAudioAvailable) {
+            page("SETTINGS", "", emptyList(), settingsItems, preferredFocus = "audio")
+          } else {
+            unavailablePage("SETTINGS", "settings-status")
+          }
         } else {
-          unavailablePage("SETTINGS", "settings-status")
+          page(
+              "SETTINGS",
+              "",
+              emptyList(),
+              listOf(
+                  item("system", "SYSTEM", true),
+                  item("display", "DISPLAY", true),
+                  item("audio", "AUDIO", inlineAudioAvailable),
+                  item("peripherals", "PERIPHERALS", true),
+              ),
+              preferredFocus = "system",
+          )
         }
       }
 
@@ -486,8 +555,7 @@ internal class SwingProposal3Menu(
               "CONTROLS",
               "",
               emptyList(),
-              // Swing has no touch layout editor. Keep a restored legacy route safe and honest
-              // instead of turning it into a shortcut to the desktop Preferences window.
+              // Swing has no touch layout editor. Keep a restored legacy route safe and honest.
               listOf(item("unavailable", "NOT AVAILABLE", true)),
               preferredFocus = "unavailable",
               footerHints = listOf("", "", "B BACK"),
@@ -506,22 +574,26 @@ internal class SwingProposal3Menu(
           )
 
       MenuRoute.OPTIONAL_DEVICES ->
-          page(
-              "OPTIONAL DEVICES",
-              "ACCESSORIES",
-              listOf("RUMBLE  READY", "CAMERA  PERMISSION", "PRINTER  READY"),
-              listOf(
-                  item("rumble", "RUMBLE", false),
-                  item("live-camera", "LIVE CAMERA", enabled(DesktopCommand.PREFERENCES)),
-                  item("game-boy-printer", "GAME BOY PRINTER", printer != null),
-                  item("calibrate-tilt", "CALIBRATE TILT", enabled(DesktopCommand.PREFERENCES)),
-                  item("preview-printer-paper", "PREVIEW PRINTER PAPER", printerHasPaper),
-                  item("export-share-paper", "EXPORT & SHARE PAPER", printerHasPaper),
-                  item("save-devices", "SAVE", enabled(DesktopCommand.PREFERENCES)),
-                  item("cancel-devices", "CANCEL", true),
-              ),
-              preferredFocus = "live-camera",
-          )
+          if (settings == null) {
+            // Compatibility for old host bridges that predate the typed settings port. The
+            // restored route is intentionally inert.
+            page(
+                "OPTIONAL DEVICES",
+                "",
+                emptyList(),
+                listOf(item("peripherals-status", "NOT AVAILABLE", true)),
+                preferredFocus = "peripherals-status",
+                footerHints = listOf("", "", "B BACK"),
+            )
+          } else {
+            page(
+                "PERIPHERALS",
+                "",
+                emptyList(),
+                peripheralsItems(settings),
+                preferredFocus = peripheralsItems(settings).firstOrNull()?.id(),
+            )
+          }
 
       MenuRoute.PRINTER_PAPER -> {
         val currentPrinter = printer
@@ -610,21 +682,87 @@ internal class SwingProposal3Menu(
       MenuRoute.SYSTEM -> {
         val systemItems =
             listOf(
-                item("video-status", "VIDEO", enabled(DesktopCommand.PREFERENCES)),
-                item("profile-status", "SYSTEM PROFILE", false),
-                item("rewind-save-status", "REWIND & SAVE", enabled(DesktopCommand.PREFERENCES)),
-                item("back", "BACK", true),
+                item(
+                    PortableMenuSettingId.DMG_GAMES,
+                    "DMG GAMES",
+                    settings?.displayValue(PortableMenuSettingId.DMG_GAMES)?.uppercase().orEmpty(),
+                    settings != null,
+                ),
+                item(
+                    PortableMenuSettingId.CGB_GAMES,
+                    "CGB GAMES",
+                    settings?.displayValue(PortableMenuSettingId.CGB_GAMES)?.uppercase().orEmpty(),
+                    settings != null,
+                ),
+                item(
+                    PortableMenuSettingId.BOOTSTRAP,
+                    "BOOTSTRAP",
+                    settings?.displayValue(PortableMenuSettingId.BOOTSTRAP)?.uppercase().orEmpty(),
+                    settings != null,
+                ),
             )
-        if (hasEnabledNonBack(systemItems)) {
+        if (settings != null) {
           page(
               "SYSTEM",
-              "SYSTEM PROFILE",
-              listOf("VIDEO  RASTER SKIN", "PROFILE  AUTO", "REWIND  DISABLED"),
+              "",
+              emptyList(),
               systemItems,
-              preferredFocus = "video-status",
+              preferredFocus = "dmg-games",
           )
         } else {
           unavailablePage("SYSTEM", "system-status")
+        }
+      }
+
+      // DISPLAY and OPTION_PICKER are supplied by the portable route model. Keep all dynamic
+      // values host-owned so this Swing renderer never needs a native settings surface.
+      MenuRoute.DISPLAY -> {
+        val displayItems =
+            listOf(
+                item(
+                    PortableMenuSettingId.SGB_BORDER,
+                    "SGB BORDER",
+                    settings?.displayValue(PortableMenuSettingId.SGB_BORDER)?.uppercase().orEmpty(),
+                    settings != null && PortableMenuSettingId.SGB_BORDER in settings.toggleIds,
+                ),
+                item(
+                    PortableMenuSettingId.DMG_COLORS,
+                    "DMG COLORS",
+                    settings?.displayValue(PortableMenuSettingId.DMG_COLORS)?.uppercase().orEmpty(),
+                    settings != null,
+                ),
+        )
+        if (settings != null) {
+          page("DISPLAY", "", emptyList(), displayItems, preferredFocus = "sgb-border")
+        } else {
+          unavailablePage("DISPLAY", "display-status")
+        }
+      }
+
+      MenuRoute.OPTION_PICKER -> {
+        val pending = pendingChoice
+        val pickerSettings = settings
+        if (pending == null || pickerSettings == null) {
+          unavailablePage("CHOOSE", "choice-status")
+        } else {
+          val committed = pickerSettings.value(pending.settingId)
+          val options = pickerSettings.choicesFor(pending.settingId)
+          val choices =
+              options.map { choice ->
+                item(
+                    "choice:${choice.token}",
+                    choice.label.uppercase(),
+                    if (choice.token == committed) "SELECTED" else "",
+                    choice.enabled,
+                )
+              }
+          page(
+              choiceContextLabel(pending.settingId),
+              "",
+              emptyList(),
+              choices,
+              preferredFocus = choices.firstOrNull { it.id() == "choice:$committed" }?.id(),
+          )
         }
       }
 
@@ -706,7 +844,8 @@ internal class SwingProposal3Menu(
             "open-rom" -> runNativeRomChooser()
             "reset" -> openConfirmation(DesktopCommand.RESET)
             "settings" -> openRoute(MenuRoute.SETTINGS)
-            "stop" -> openConfirmation(DesktopCommand.CLOSE_GAME)
+            "recent-games" ->
+                if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
           }
       MenuRoute.SAVE_STATES ->
           if (id.startsWith("slot-")) {
@@ -729,9 +868,62 @@ internal class SwingProposal3Menu(
               }
             }
           }
+      MenuRoute.RECENT_GAMES ->
+          if (id.startsWith("recent:")) {
+            runOnEdt {
+              if (!controller.visible() || controller.route() != MenuRoute.RECENT_GAMES) {
+                return@runOnEdt
+              }
+              val index = id.removePrefix("recent:").toIntOrNull() ?: return@runOnEdt
+              val game = commands.recentGames().getOrNull(index) ?: return@runOnEdt
+              if (!commands.canOpenRecentGame()) return@runOnEdt
+              recentFocusedItemId = id
+              hideAndResume()
+              commands.openRecentGame(game)
+            }
+          }
       MenuRoute.SETTINGS ->
           when (id) {
+            "system" -> openRoute(MenuRoute.SYSTEM)
+            "display" -> openRoute(MenuRoute.DISPLAY)
             "audio" -> openRoute(MenuRoute.AUDIO)
+            "peripherals" -> openRoute(MenuRoute.OPTIONAL_DEVICES)
+          }
+      MenuRoute.SYSTEM ->
+          if (id in
+              setOf(
+                  PortableMenuSettingId.DMG_GAMES,
+                  PortableMenuSettingId.CGB_GAMES,
+                  PortableMenuSettingId.BOOTSTRAP,
+              )) {
+            openChoice(id, MenuRoute.SYSTEM)
+          }
+      MenuRoute.DISPLAY ->
+          when (id) {
+            PortableMenuSettingId.SGB_BORDER ->
+                runSettingsToggleInPlace(PortableMenuSettingId.SGB_BORDER, MenuRoute.DISPLAY)
+            PortableMenuSettingId.DMG_COLORS -> openChoice(id, MenuRoute.DISPLAY)
+          }
+      MenuRoute.OPTIONAL_DEVICES ->
+          when (id) {
+            PortableMenuSettingId.CAMERA -> openChoice(id, MenuRoute.OPTIONAL_DEVICES)
+            PortableMenuSettingId.GAMEPAD -> openChoice(id, MenuRoute.OPTIONAL_DEVICES)
+          }
+      MenuRoute.OPTION_PICKER ->
+          if (id.startsWith("choice:")) {
+            runOnEdt {
+              val pending = pendingChoice ?: return@runOnEdt
+              val token = id.removePrefix("choice:")
+              if (commands.settingsSnapshot()?.choicesFor(pending.settingId)?.any {
+                    it.token == token && it.enabled
+                  } == true) {
+                commands.applySettingsChoice(pending.settingId, token)
+                pendingChoice = null
+                controller.setBackIntercepted(false)
+                controller.setPage(pageFor(pending.originRoute, commands.menuState()))
+                controller.back()
+              }
+            }
           }
       MenuRoute.AUDIO ->
           when (id) {
@@ -740,17 +932,8 @@ internal class SwingProposal3Menu(
             "mute-audio" -> runCommandInPlace(DesktopCommand.MUTE, MenuRoute.AUDIO)
           }
       // Legacy/restored control routes deliberately have no activation. B navigation is handled
-      // centrally by MenuController; A must not escape to desktop Preferences.
+      // centrally by MenuController.
       MenuRoute.TOUCH_CONTROLS, MenuRoute.CONTROLLER_MAPPING -> Unit
-      MenuRoute.OPTIONAL_DEVICES ->
-          when (id) {
-            "live-camera", "calibrate-tilt", "save-devices" ->
-                runPreferencesAndHide(PreferencesCategory.PERIPHERALS)
-            "game-boy-printer" -> runPrinterAndHide { it.open() }
-            "preview-printer-paper" -> openRoute(MenuRoute.PRINTER_PAPER)
-            "export-share-paper" -> openRoute(MenuRoute.PRINTER_PAPER)
-            "cancel-devices" -> back()
-          }
       MenuRoute.PRINTER_PAPER ->
           when (id) {
             "clear-paper" ->
@@ -769,12 +952,6 @@ internal class SwingProposal3Menu(
       MenuRoute.LIBRARY ->
           when (id) {
             "open-rom", "choose-rom" -> runNativeRomChooser()
-            "back" -> back()
-          }
-      MenuRoute.SYSTEM ->
-          when (id) {
-            "video-status" -> runPreferencesAndHide(PreferencesCategory.DISPLAY)
-            "rewind-save-status" -> runPreferencesAndHide(PreferencesCategory.SAVES_AND_REWIND)
             "back" -> back()
           }
       MenuRoute.ABOUT ->
@@ -827,6 +1004,26 @@ internal class SwingProposal3Menu(
     }
   }
 
+  private fun cancelChoiceSelection() {
+    runOnEdt {
+      if (pendingChoice == null) return@runOnEdt
+      pendingChoice = null
+      controller.setBackIntercepted(false)
+      controller.back()
+    }
+  }
+
+  private fun choiceContextLabel(settingId: String): String =
+      when (settingId) {
+        PortableMenuSettingId.DMG_GAMES -> "DMG GAMES"
+        PortableMenuSettingId.CGB_GAMES -> "CGB GAMES"
+        PortableMenuSettingId.BOOTSTRAP -> "BOOTSTRAP"
+        PortableMenuSettingId.DMG_COLORS -> "DMG COLORS"
+        PortableMenuSettingId.CAMERA -> "CAMERA"
+        PortableMenuSettingId.GAMEPAD -> "GAMEPAD"
+        else -> "CHOOSE"
+      }
+
   private fun openConfirmation(command: DesktopCommand) {
     runOnEdt {
       if (!controller.visible() || !commands.isEnabled(command)) return@runOnEdt
@@ -866,10 +1063,28 @@ internal class SwingProposal3Menu(
     }
   }
 
-  private fun runPreferencesAndHide(category: PreferencesCategory) {
+  private fun openChoice(settingId: String, originRoute: MenuRoute) {
     runOnEdt {
-      hideAndResume()
-      commands.openPreferences(category)
+      if (!controller.visible()) return@runOnEdt
+      val settings = commands.settingsSnapshot() ?: return@runOnEdt
+      if (settings.choicesFor(settingId).isEmpty()) return@runOnEdt
+      pendingChoice = PendingChoice(settingId, originRoute)
+      val current = commands.menuState()
+      controller.setPage(pageFor(MenuRoute.OPTION_PICKER, current))
+      controller.setBackIntercepted(true)
+      controller.push(MenuRoute.OPTION_PICKER)
+    }
+  }
+
+  private fun runSettingsToggleInPlace(settingId: String, route: MenuRoute) {
+    runOnEdt {
+      if (!controller.visible() || controller.route() != route) return@runOnEdt
+      val settings = commands.settingsSnapshot() ?: return@runOnEdt
+      if (settingId !in settings.toggleIds) return@runOnEdt
+      commands.toggleSettings(settingId)
+      if (controller.visible() && controller.route() == route) {
+        controller.setPage(pageFor(route, commands.menuState()))
+      }
     }
   }
 
@@ -914,6 +1129,10 @@ internal class SwingProposal3Menu(
   private fun back() {
     runOnEdt {
       val route = controller.route()
+      if (route == MenuRoute.OPTION_PICKER) {
+        pendingChoice = null
+        controller.setBackIntercepted(false)
+      }
       controller.back()
       if (route == MenuRoute.CONFIRM_ACTION) pendingConfirmation = null
     }
@@ -941,13 +1160,16 @@ internal class SwingProposal3Menu(
 
   private fun render(presentation: MenuPresentation) {
     if (presentation.visible() &&
-        presentation.route() == MenuRoute.SAVE_STATES &&
+        (presentation.route() == MenuRoute.SAVE_STATES ||
+            presentation.route() == MenuRoute.RECENT_GAMES) &&
         !SwingUtilities.isEventDispatchThread()) {
       // MenuController is thread-safe, but the detached catalog and mode/focus fields are Swing
-      // presentation state. Physical gamepad edges originate on the poller, so coalesce their
-      // state-page repaint onto the EDT before reading that state.
+      // presentation state. Physical gamepad edges originate on the poller, so coalesce these
+      // catalog-backed page repaints onto the EDT before reading that state.
       runOnEdt {
-        if (controller.visible() && controller.route() == MenuRoute.SAVE_STATES) {
+        if (controller.visible() &&
+            (controller.route() == MenuRoute.SAVE_STATES ||
+                controller.route() == MenuRoute.RECENT_GAMES)) {
           render(controller.presentation())
         }
       }
@@ -966,6 +1188,20 @@ internal class SwingProposal3Menu(
           ?: emptyList()
       if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines) {
         controller.setPage(pageFor(MenuRoute.SAVE_STATES, commands.menuState()))
+        return
+      }
+    }
+    if (presentation.visible() && presentation.route() == MenuRoute.RECENT_GAMES) {
+      val focusedId = presentation.items().getOrNull(presentation.focusedIndex())?.id()
+      if (focusedId?.startsWith("recent:") == true) recentFocusedItemId = focusedId
+      val selected =
+          focusedId?.removePrefix("recent:")?.toIntOrNull()?.let { commands.recentGames().getOrNull(it) }
+      val desiredPreview = selected?.let(::recentPreview) ?: MenuPreview.empty()
+      val desiredSideLines =
+          if (selected == null) emptyList()
+          else listOf("LAST PLAYED: ${recentLastPlayed(selected)}")
+      if (presentation.preview() !== desiredPreview || presentation.sideLines() != desiredSideLines) {
+        controller.setPage(pageFor(MenuRoute.RECENT_GAMES, commands.menuState()))
         return
       }
     }
@@ -1005,6 +1241,18 @@ internal class SwingProposal3Menu(
         }
       }
     }
+  }
+
+  private fun recentPreview(game: PortableMenuRecentGame): MenuPreview {
+    if (!game.active) return game.preview
+    val captured = pauseSnapshot?.preview() ?: return game.preview
+    return if (captured.state() == MenuPreview.State.READY) captured else game.preview
+  }
+
+  private fun recentLastPlayed(game: PortableMenuRecentGame): String {
+    if (!game.active) return game.lastPlayed
+    val playTime = pauseSnapshot?.formattedPlayTime()
+    return if (playTime == null) "JUST NOW" else "JUST NOW / $playTime"
   }
 
   private fun releaseGameplaySoon() {
@@ -1070,6 +1318,13 @@ internal interface PortableMenuCommandBridge {
 
   fun openPreferences(category: PreferencesCategory)
 
+  /** Typed in-screen settings access; null is retained for older/test Audio-only bridges. */
+  fun settingsSnapshot(): PortableMenuSettingsSnapshot? = null
+
+  fun applySettingsChoice(id: String, token: String) = Unit
+
+  fun toggleSettings(id: String) = Unit
+
   /** Optional live audio controls; null means the host cannot edit audio in this overlay. */
   fun audioVolume(): Int? = null
 
@@ -1089,6 +1344,15 @@ internal interface PortableMenuCommandBridge {
 
   /** Called on the EDT when a detached catalog/thumbnail snapshot is replaced. */
   fun addStateCatalogListener(listener: () -> Unit) = Unit
+
+  fun recentGames(): List<PortableMenuRecentGame> = emptyList()
+
+  fun canOpenRecentGame(): Boolean = false
+
+  fun openRecentGame(game: PortableMenuRecentGame) = Unit
+
+  /** Called on the EDT when the detached recent-game thumbnail catalog is replaced. */
+  fun addRecentGamesListener(listener: () -> Unit) = Unit
 }
 
 /** The printer keeps its existing modeless Swing window and native export chooser. */

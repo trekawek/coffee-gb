@@ -8,6 +8,77 @@ import java.util.Objects;
 /** Immutable page data supplied by the host coordinator, including dynamic runtime rows. */
 public final class MenuPageSpec {
 
+    /** Host-owned recent-game metadata used by the portable Recent Games page. */
+    public record RecentGame(String id, String name, String lastPlayed, boolean enabled,
+            MenuPreview preview) {
+        public RecentGame {
+            if (id == null || id.isBlank()) {
+                throw new IllegalArgumentException("recent game id cannot be blank");
+            }
+            if (name == null || name.isBlank()) {
+                throw new IllegalArgumentException("recent game name cannot be blank");
+            }
+            if (lastPlayed == null) {
+                throw new IllegalArgumentException("lastPlayed cannot be null");
+            }
+            preview = Objects.requireNonNull(preview, "preview");
+        }
+    }
+
+    /**
+     * Builds the host-fed Recent Games page. The selected entry's detached preview and
+     * last-played text are placed in the left panel; callers can rebuild the immutable page after
+     * focus moves, just as they do for the Load State page.
+     */
+    public static MenuPageSpec recentGames(List<RecentGame> games, String focusedId) {
+        Objects.requireNonNull(games, "games");
+        ArrayList<RecentGame> copied = new ArrayList<>(games.size());
+        for (RecentGame game : games) {
+            copied.add(Objects.requireNonNull(game, "games cannot contain null"));
+        }
+        ArrayList<Item> items = new ArrayList<>(copied.size());
+        for (RecentGame game : copied) {
+            items.add(new Item(game.id(), game.name(), "", game.enabled()));
+        }
+        String selectedId = focusedId;
+        RecentGame selected = null;
+        if (selectedId != null) {
+            for (RecentGame game : copied) {
+                if (selectedId.equals(game.id())) {
+                    selected = game;
+                    break;
+                }
+            }
+        }
+        if (items.isEmpty()) {
+            items.add(new Item("recent-games-status", "NO RECENT GAMES", "", true));
+            selectedId = "recent-games-status";
+        } else if (selected == null) {
+            for (RecentGame game : copied) {
+                if (game.enabled()) {
+                    selected = game;
+                    selectedId = game.id();
+                    break;
+                }
+            }
+            if (selected == null) {
+                // Keep unavailable entries visible for honest history, but provide one inert
+                // enabled status row so the reducer always has a safe focus target.
+                items.add(new Item("recent-games-status", "NO READABLE RECENT GAMES", "", true));
+                selectedId = "recent-games-status";
+            }
+        }
+        List<String> sideLines = selected == null || selected.lastPlayed().isBlank()
+                ? List.of()
+                : List.of("LAST PLAYED: " + selected.lastPlayed());
+        MenuPreview preview = selected == null ? MenuPreview.empty() : selected.preview();
+        List<String> footer = "recent-games-status".equals(selectedId)
+                ? List.of("", "", "B BACK")
+                : List.of("D-PAD MOVE", "A OPEN", "B BACK");
+        return new MenuPageSpec(MenuRoute.RECENT_GAMES, "COFFEE GB", "RECENT GAMES", "", "",
+                sideLines, items, 1, footer, selectedId, preview);
+    }
+
     private final MenuRoute route;
     private final String title;
     private final String context;

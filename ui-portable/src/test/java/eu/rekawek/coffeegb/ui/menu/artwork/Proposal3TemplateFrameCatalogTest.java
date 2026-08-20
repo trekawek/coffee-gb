@@ -22,16 +22,22 @@ public class Proposal3TemplateFrameCatalogTest {
                     "bd1721e79d2f7e701a79643a39f572c654195aff15503159cf854d75b722b044"),
             Map.entry(MenuRoute.SAVE_STATES,
                     "f7c22fa13f2ecc2d6f57f64c87de2d1af72e6185c8ff6c60d6fb97870cdce943"),
+            Map.entry(MenuRoute.RECENT_GAMES,
+                    "f7c22fa13f2ecc2d6f57f64c87de2d1af72e6185c8ff6c60d6fb97870cdce943"),
             Map.entry(MenuRoute.SETTINGS,
                     "c1ade7eddda645020a81997df8bf582fae40bbd6ee98cc27a437820c6a509558"),
             Map.entry(MenuRoute.AUDIO,
                     "40555bc2278fa7d64b201337359877a1b55d01c7cede40d02494d03124ccd290"),
+            Map.entry(MenuRoute.DISPLAY,
+                    "542bb9fbc993ff30f9e6d11ae5e0e72b4f78af63bef304bb75a0ac1864c7b5cb"),
             Map.entry(MenuRoute.TOUCH_CONTROLS,
                     "aec6aec6750fd17cffebbd7804516253179734d0919abc5bbdda4081de1126c0"),
             Map.entry(MenuRoute.CONTROLLER_MAPPING,
                     "215597451cfa97c9bb2f9815db0be771925eb155617a47c37b0a72cbe52ab1c7"),
             Map.entry(MenuRoute.OPTIONAL_DEVICES,
                     "9d6905ea93562ae63894f843bea0e7a140de8f959d0dabd4cb816f24bb45cdd8"),
+            Map.entry(MenuRoute.OPTION_PICKER,
+                    "c1ade7eddda645020a81997df8bf582fae40bbd6ee98cc27a437820c6a509558"),
             Map.entry(MenuRoute.DATA_MEDIA,
                     "d4f1e25cff448338014405f2cc0358211bed7fb1b274b25b06f473da5bb54ab0"),
             Map.entry(MenuRoute.LIBRARY,
@@ -50,7 +56,7 @@ public class Proposal3TemplateFrameCatalogTest {
     @Test
     public void everyRouteMapsToItsRawFilenameAndDecodesToThePackagedSize() throws Exception {
         Set<String> templatePaths = new HashSet<>();
-        assertEquals(14, MenuRoute.values().length);
+        assertEquals(17, MenuRoute.values().length);
         assertEquals(MenuRoute.values().length, EXPECTED_TEMPLATE_PNG_SHA256.size());
 
         for (MenuRoute route : MenuRoute.values()) {

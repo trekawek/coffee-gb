@@ -142,7 +142,7 @@ class DesktopMainPanelTest {
   fun `clicking a recent-game thumbnail opens that game`() {
     onEdt {
       val opened = mutableListOf<Path>()
-      val panel = panel(actions(), onOpenRecent = opened::add)
+      val panel = panel(actions(), onOpenRecent = { opened.add(it.path) })
       val path = Path.of("/games/tetris.gb")
       panel.updateRecentGames(
           listOf(
@@ -312,7 +312,7 @@ class DesktopMainPanelTest {
 
   private fun panel(
       actions: DesktopActionRegistry,
-      onOpenRecent: (Path) -> Unit = {},
+      onOpenRecent: (DesktopRecentGame) -> Unit = {},
       onCancel: () -> Unit = {},
   ) =
       DesktopMainPanel(

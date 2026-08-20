@@ -472,8 +472,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
                             frame.width(), frame.height());
                     source.set(0, 0, frame.width(), frame.height());
-                    destination.set(Math.round(display.left), Math.round(display.top),
-                            Math.round(display.right), Math.round(display.bottom));
+                    VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(
+                            frame.width(), frame.height(), Math.round(display.width()),
+                            Math.round(display.height()));
+                    destination.set(Math.round(display.left) + viewport.left(),
+                            Math.round(display.top) + viewport.top(),
+                            Math.round(display.left) + viewport.left() + viewport.width(),
+                            Math.round(display.top) + viewport.top() + viewport.height());
                     canvas.drawBitmap(bitmap, source, destination, videoPaint);
                 }
                 MenuPresentation menu = menuPresentation;

@@ -11,6 +11,9 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneOffset
 import java.util.concurrent.AbstractExecutorService
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
@@ -552,6 +555,141 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `recent archive request dispatches its exact saved entry without asking again`() {
+    val fixture = fixture()
+    val archive = temporaryFolder.newFile("recent-exact.zip")
+    writeZip(
+        archive,
+        "one/game.gb" to syntheticRom("FIRST", 0x51),
+        "two/game.gb" to syntheticRom("SECOND", 0x52),
+    )
+    val path = archive.toPath().toAbsolutePath().normalize()
+    val preferred = RomOrigin.archiveEntry(path, "two/game.gb", 0, false)
+
+    fixture.service.open(
+        RomOpenRequest(path, RomOpenSource.RECENT, preferredOrigin = preferred))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    val image = fixture.loads.single().image!!
+    assertEquals(preferred, image.origin())
+    assertEquals(0x52.toByte(), image.bytes()[0x200])
+    assertTrue(
+        fixture.updates.none {
+          it is RomOpenUpdate.Progress && it.stage == RomOpenStage.AWAITING_ARCHIVE_SELECTION
+        })
+    fixture.close()
+  }
+
+  @Test
+  fun `changed recent archive falls back to the bounded normal chooser`() {
+    val fixture = fixture()
+    val archive = temporaryFolder.newFile("recent-changed.zip")
+    writeZip(
+        archive,
+        "one.gb" to syntheticRom("ONE", 0x61),
+    )
+    val path = archive.toPath().toAbsolutePath().normalize()
+    val removed = RomOrigin.archiveEntry(path, "removed.gb", 0, false)
+
+    fixture.service.open(
+        RomOpenRequest(path, RomOpenSource.RECENT, preferredOrigin = removed))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertTrue(fixture.loads.isEmpty())
+    val chooser =
+        fixture.updates.filterIsInstance<RomOpenUpdate.Progress>().last()
+    assertEquals(RomOpenStage.AWAITING_ARCHIVE_SELECTION, chooser.stage)
+    assertEquals(listOf("one.gb"), chooser.candidates.map { it.entryName() })
+    fixture.close()
+  }
+
+  @Test
+  fun `recent archive without exact metadata asks before opening its sole candidate`() {
+    val fixture = fixture()
+    val archive = temporaryFolder.newFile("legacy-recent.zip")
+    writeZip(archive, "only.gb" to syntheticRom("ONLY", 0x63))
+
+    fixture.service.open(RomOpenRequest(archive.toPath(), RomOpenSource.RECENT))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    assertTrue(fixture.loads.isEmpty())
+    val chooser =
+        fixture.updates.filterIsInstance<RomOpenUpdate.Progress>().last()
+    assertEquals(RomOpenStage.AWAITING_ARCHIVE_SELECTION, chooser.stage)
+    assertEquals("only.gb", chooser.candidates.single().entryName())
+    fixture.close()
+  }
+
+  @Test
+  fun `switching recent entries in one archive honors each exact candidate`() {
+    val fixture = fixture()
+    val archive = temporaryFolder.newFile("recent-switch.zip")
+    writeZip(
+        archive,
+        "first.gb" to syntheticRom("FIRST", 0x66),
+        "second.gb" to syntheticRom("SECOND", 0x67),
+    )
+    val path = archive.toPath().toAbsolutePath().normalize()
+    val firstOrigin = RomOrigin.archiveEntry(path, "first.gb", 0, false)
+    val secondOrigin = RomOrigin.archiveEntry(path, "second.gb", 0, false)
+
+    val firstId =
+        fixture.service.open(
+            RomOpenRequest(path, RomOpenSource.RECENT, preferredOrigin = firstOrigin))
+    fixture.worker.runAll()
+    fixture.eventBus.post(
+        Controller.EmulationStartedEvent("FIRST", fixture.loads.last().image!!.origin(), firstId))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    fixture.service.open(
+        RomOpenRequest(path, RomOpenSource.RECENT, preferredOrigin = secondOrigin))
+    fixture.worker.runAll()
+
+    assertEquals(listOf(firstOrigin, secondOrigin), fixture.loads.map { it.image!!.origin() })
+    assertEquals(0x67.toByte(), fixture.loads.last().image!!.bytes()[0x200])
+    fixture.close()
+  }
+
+  @Test
+  fun `successful start persists exact title played time and archive occurrence`() {
+    val node = FakeRecentMetadataNode()
+    val metadataStore = DesktopRecentGameMetadataStore(node)
+    val playedAt = Instant.parse("2026-08-18T13:14:15Z")
+    val fixture = fixture(metadataStore, Clock.fixed(playedAt, ZoneOffset.UTC))
+    val archive = temporaryFolder.newFile("metadata.zip")
+    val first = syntheticRom("FIRST", 0x71)
+    val second = syntheticRom("SECOND", 0x72)
+    writeZipAllowingDuplicates(
+        archive,
+        "game.gb" to first,
+        "game.gb" to second,
+    )
+    val path = archive.toPath().toAbsolutePath().normalize()
+    val preferred = RomOrigin.archiveEntry(path, "game.gb", 1, false)
+
+    val requestId =
+        fixture.service.open(
+            RomOpenRequest(path, RomOpenSource.RECENT, preferredOrigin = preferred))
+    fixture.worker.runAll()
+    val load = fixture.loads.single()
+    fixture.eventBus.post(
+        Controller.EmulationStartedEvent("SECOND ACTUAL", load.image!!.origin(), requestId))
+    fixture.worker.runAll()
+    fixture.ui.runAll()
+
+    val persisted = metadataStore.read(path)
+    assertEquals("SECOND ACTUAL", persisted?.title)
+    assertEquals(playedAt, persisted?.playedAt)
+    assertEquals("game.gb", persisted?.origin?.archiveEntry()?.orElseThrow())
+    assertEquals(1, persisted?.origin?.archiveEntryOccurrence())
+    fixture.close()
+  }
+
+  @Test
   fun `queued success callback cannot overwrite a newer request but still records committed recent`() {
     val fixture = fixture()
     val first = romFile("first.gb", "FIRST")
@@ -923,7 +1061,10 @@ class RomOpenServiceTest {
     eventBus.close()
   }
 
-  private fun fixture(): Fixture {
+  private fun fixture(
+      metadataStore: DesktopRecentGameMetadataStore? = null,
+      clock: Clock = Clock.systemUTC(),
+  ): Fixture {
     val eventBus = EventBusImpl(null, "test", false)
     val worker = QueuedExecutorService()
     val ui = QueuedExecutor()
@@ -931,7 +1072,16 @@ class RomOpenServiceTest {
     val updates = mutableListOf<RomOpenUpdate>()
     val loads = mutableListOf<Controller.LoadRomEvent>()
     eventBus.register<Controller.LoadRomEvent> { loads += it }
-    val service = RomOpenService(eventBus, recents, updates::add, worker, ui)
+    val service =
+        RomOpenService(
+            eventBus,
+            recents,
+            updates::add,
+            worker,
+            ui,
+            metadataStore,
+            clock,
+        )
     return Fixture(eventBus, worker, ui, recents, updates, loads, service)
   }
 
@@ -978,6 +1128,22 @@ class RomOpenServiceTest {
     override fun remove(path: Path) {
       recorded.remove(path)
     }
+  }
+
+  private class FakeRecentMetadataNode : DesktopRecentMetadataNode {
+    private val values = mutableMapOf<String, String>()
+
+    override fun get(key: String): String? = values[key]
+
+    override fun put(key: String, value: String) {
+      values[key] = value
+    }
+
+    override fun remove(key: String) {
+      values.remove(key)
+    }
+
+    override fun flush() = Unit
   }
 
   private class QueuedExecutor : Executor {
@@ -1061,6 +1227,17 @@ class RomOpenServiceTest {
           output.putNextEntry(ZipEntry(name))
           output.write(bytes)
           output.closeEntry()
+        }
+      }
+    }
+
+    fun writeZipAllowingDuplicates(target: File, vararg entries: Pair<String, ByteArray>) {
+      org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream(target).use { output ->
+        entries.forEach { (name, bytes) ->
+          output.putArchiveEntry(
+              org.apache.commons.compress.archivers.zip.ZipArchiveEntry(name))
+          output.write(bytes)
+          output.closeArchiveEntry()
         }
       }
     }

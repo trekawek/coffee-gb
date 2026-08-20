@@ -160,6 +160,21 @@ class DesktopActionsTest {
   }
 
   @Test
+  fun `recent-open capability reflects the host handler and session availability`() {
+    val unsupported = DesktopActionRegistry(handlers(mutableListOf()))
+    val supported =
+        DesktopActionRegistry(
+            handlers(mutableListOf()).copy(openRecentGame = {}),
+        )
+
+    assertFalse(unsupported.canOpenRecentGame())
+    assertTrue(supported.canOpenRecentGame())
+
+    supported.update(DesktopCommandPresentation(sessionBusy = true))
+    assertFalse(supported.canOpenRecentGame())
+  }
+
+  @Test
   fun `gameplay bindings withdraw only matching unmodified application shortcuts`() {
     val shortcuts =
         DesktopShortcutRegistry(

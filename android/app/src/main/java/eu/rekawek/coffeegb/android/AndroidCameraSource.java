@@ -28,10 +28,23 @@ import java.util.function.Consumer;
  */
 final class AndroidCameraSource implements CameraSource, AutoCloseable {
 
+    enum Lens {
+        REAR,
+        FRONT;
+
+        static Lens fromToken(String token) {
+            return "front".equalsIgnoreCase(token) ? FRONT : REAR;
+        }
+    }
+
     interface Input extends AutoCloseable {
         void start(Consumer<CameraFrame> listener);
 
         void stop();
+
+        /** Rebinds the host camera when supported; test inputs may remain lens agnostic. */
+        default void setLens(Lens lens) {
+        }
 
         @Override
         default void close() {
@@ -52,6 +65,7 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
 
         private volatile boolean running;
         private volatile Consumer<CameraFrame> listener;
+        private Lens lens = Lens.REAR;
         // Accessed on the main thread only.
         private ProcessCameraProvider provider;
         private ImageAnalysis analysis;
@@ -75,6 +89,16 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
                 if (provider != null && analysis != null) {
                     provider.unbind(analysis);
                     analysis = null;
+                }
+            });
+        }
+
+        @Override
+        public void setLens(Lens lens) {
+            mainHandler.post(() -> {
+                this.lens = Objects.requireNonNull(lens, "lens");
+                if (running) {
+                    bind();
                 }
             });
         }
@@ -108,8 +132,11 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
                     if (analysis != null) {
                         nextProvider.unbind(analysis);
                     }
-                    nextProvider.bindToLifecycle(ProcessLifecycleOwner.get(),
-                            CameraSelector.DEFAULT_BACK_CAMERA, nextAnalysis);
+                    CameraSelector selector = lens == Lens.FRONT
+                            ? CameraSelector.DEFAULT_FRONT_CAMERA
+                            : CameraSelector.DEFAULT_BACK_CAMERA;
+                    nextProvider.bindToLifecycle(ProcessLifecycleOwner.get(), selector,
+                            nextAnalysis);
                     provider = nextProvider;
                     analysis = nextAnalysis;
                 } catch (InterruptedException interrupted) {
@@ -146,6 +173,7 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
 
     private volatile CameraFrame latest;
     private boolean enabled;
+    private Lens lens = Lens.REAR;
     private boolean cartridgeActive;
     private boolean hostActive = true;
     private volatile boolean capturing;
@@ -165,6 +193,19 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
         }
         this.enabled = enabled;
         apply();
+    }
+
+    synchronized void setLens(String token) {
+        Lens selected = Lens.fromToken(token);
+        if (closed || lens == selected) {
+            return;
+        }
+        lens = selected;
+        input.setLens(selected);
+    }
+
+    synchronized Lens lens() {
+        return lens;
     }
 
     synchronized void setCartridgeActive(boolean active) {

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import java.awt.event.ActionEvent
+import java.nio.file.Paths
 import javax.swing.AbstractAction
 import javax.swing.JMenu
 import javax.swing.JMenuBar
@@ -13,6 +14,23 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class SwingMenuTest {
+
+  @Test
+  fun `native recent menu prefers the exact-origin host route`() {
+    val path = Paths.get("/games/archive.zip")
+    val exact = mutableListOf<java.nio.file.Path>()
+    val legacy = mutableListOf<Pair<java.nio.file.Path, RomOpenSource>>()
+
+    openRecentRomPath(path, exact::add) { candidate, source -> legacy += candidate to source }
+
+    assertEquals(listOf(path), exact)
+    assertTrue(legacy.isEmpty())
+
+    exact.clear()
+    openRecentRomPath(path, null) { candidate, source -> legacy += candidate to source }
+    assertTrue(exact.isEmpty())
+    assertEquals(listOf(path to RomOpenSource.RECENT), legacy)
+  }
 
   @Test
   fun `Proposal 3 menu insertion follows the feature flag`() {

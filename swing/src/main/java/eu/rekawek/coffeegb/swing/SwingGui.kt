@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.swing.debug.JlineConsole
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.core.memory.cart.type.PocketCamera
 import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.swing.io.DesktopCameraSource
@@ -33,6 +34,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -133,7 +135,14 @@ class SwingGui private constructor(
   /** Reads Home previews outside Swing; every UI update is guarded by this monotonically rising id. */
   private val recentGamePreviewLoader = RecentGamePreviewLoader()
 
+  /** Exact title/time/archive identity paired with the legacy ordered recent-path list. */
+  private val recentGameMetadataStore = DesktopRecentGameMetadataStore()
+
   private val recentGamePreviewGeneration = AtomicLong()
+
+  private var activeRecentOrigin: RomOrigin? = null
+
+  private var activeRecentTitle: String? = null
 
   private var activeWindowTitle = "Coffee GB"
 
@@ -356,6 +365,7 @@ class SwingGui private constructor(
             onRecentChanged = ::updateRecentRoms,
             dialogFactory = desktopDialogFactory,
             onUpdate = ::handleRomOpenUpdate,
+            recentMetadataStore = recentGameMetadataStore,
         )
     jvmShutdown.installParticipant {
       runDesktopJvmShutdownSteps(
@@ -393,6 +403,7 @@ class SwingGui private constructor(
         DesktopActionRegistry(
             DesktopCommandHandlers(
                 openRom = { menu.openRomChooser() },
+                openRecentGame = { game -> romOpen.openRecent(game.path, game.origin) },
                 closeGame = { menu.requestCloseGame() },
                 preferences = ::showPreferences,
                 quit = ::requestClose,
@@ -435,6 +446,21 @@ class SwingGui private constructor(
                 },
                 preferencesForCategory = { category -> showPreferences(category) },
                 openAbout = { menu.showAbout() },
+                portableSettings =
+                    DesktopPortableSettingsAccess(
+                        properties = properties,
+                        eventBus = eventBus,
+                        displayController = displayController,
+                        gamepadCatalog = { emulator.gamepadCatalog().snapshot() },
+                        applyDeviceSettings = emulator::applyDeviceSettings,
+                        isCameraEnabled = { ::menu.isInitialized && menu.isCameraEnabled() },
+                        setCameraEnabled = { enabled ->
+                          if (::menu.isInitialized) menu.setCameraEnabled(enabled)
+                        },
+                        applyCameraSettings = { peripherals ->
+                          if (::menu.isInitialized) menu.applyCameraSettings(peripherals)
+                        },
+                    ),
             ),
             proposal3MenuAvailable = proposal3MenuEnabled,
             stateCatalogRefresh = stateUxController::refreshPortableCatalog,
@@ -470,6 +496,9 @@ class SwingGui private constructor(
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
             },
+            onOpenRecentRom = { path ->
+              romOpen.openRecent(path, recentGameMetadataStore.read(path)?.origin)
+            },
         )
     menu.addMenu()
 
@@ -478,7 +507,7 @@ class SwingGui private constructor(
         DesktopMainPanel(
             displayPanel,
             desktopActions,
-            onOpenRecent = { path -> romOpen.open(path, RomOpenSource.RECENT) },
+            onOpenRecent = { game -> romOpen.openRecent(game.path, game.origin) },
             onCancelTask = { romLoadingRequestId?.let(romOpen::cancel) },
             initialTokens = initialTheme.tokens,
         )
@@ -549,12 +578,17 @@ class SwingGui private constructor(
     eventBus.register<EmulationStartedEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {
         activeWindowTitle = "${event.romName} — Coffee GB"
+        activeRecentOrigin = event.origin
+        activeRecentTitle = event.romName
         romLoading = false
         romLoadingRequestId = null
         romSessionState.markStarted()
         desktopPlaybackState.sessionStarted(event.sessionGeneration)
         mainWindow.title = activeWindowTitle
         desktopUiCoordinator.opened(event.romName, event.sessionGeneration)
+        // RomOpenService records recents on its lifecycle worker. Refresh here as well as on its
+        // Opened callback so either EDT enqueue order produces an active live-preview entry.
+        updateRecentRoms()
       }
     }
     eventBus.register<Controller.SessionPresentationEvent> { event ->
@@ -589,6 +623,8 @@ class SwingGui private constructor(
             displayController.setFullscreen(false)
           }
           activeWindowTitle = "Coffee GB"
+          activeRecentOrigin = null
+          activeRecentTitle = null
           romSessionState.markStopped()
           desktopPlaybackState.sessionStopped()
           if (!romLoading) {
@@ -668,18 +704,72 @@ class SwingGui private constructor(
     if (::menu.isInitialized) menu.updateRecentRoms()
     if (::desktopMainPanel.isInitialized) {
       val paths = properties.recentRoms.getPaths()
-      desktopMainPanel.updateRecentGames(paths.map(::DesktopRecentGame))
+      val fallbackGames = paths.map(::recentGameFromMetadata)
+      desktopMainPanel.updateRecentGames(fallbackGames)
+      if (::desktopActions.isInitialized) {
+        desktopActions.updatePortableRecentGames(portableRecentGames(fallbackGames))
+      }
       val generation = recentGamePreviewGeneration.incrementAndGet()
       val saves = properties.applicationSettings.saves
-      recentGamePreviewLoader.load(paths, saves) { games ->
+      recentGamePreviewLoader.load(fallbackGames, saves) { games ->
         dispatchSwingMutation {
           if (generation == recentGamePreviewGeneration.get() &&
               ::desktopMainPanel.isInitialized) {
             desktopMainPanel.updateRecentGames(games)
+            if (::desktopActions.isInitialized) {
+              desktopActions.updatePortableRecentGames(portableRecentGames(games))
+            }
           }
         }
       }
     }
+  }
+
+  private fun recentGameFromMetadata(path: Path): DesktopRecentGame {
+    val normalized = normalizedRecentPath(path)
+    val metadata = recentGameMetadataStore.read(normalized)
+    return recentGameSeed(normalized, metadata, activeRecentOrigin, activeRecentTitle)
+  }
+
+  private fun portableRecentGames(games: List<DesktopRecentGame>): List<PortableMenuRecentGame> {
+    val normalizedTitles = games.map { it.title.trim().ifBlank { recentGameFallbackTitle(it.path) } }
+    val titleCounts = normalizedTitles.groupingBy { it.lowercase(Locale.ROOT) }.eachCount()
+    val usedLabels = mutableSetOf<String>()
+    return games.mapIndexed { index, game ->
+      val title = normalizedTitles[index]
+      var label =
+          if (titleCounts[title.lowercase(Locale.ROOT)] == 1) title
+          else "$title / ${recentGameQualifier(game)}"
+      if (!usedLabels.add(label.lowercase(Locale.ROOT))) {
+        var suffix = 2
+        while (!usedLabels.add("${label.lowercase(Locale.ROOT)} #$suffix")) suffix++
+        label = "$label #$suffix"
+      }
+      portableRecentGame(game, label)
+    }
+  }
+
+  private fun portableRecentGame(
+      game: DesktopRecentGame,
+      label: String = game.title,
+  ): PortableMenuRecentGame {
+    val image = game.thumbnail
+    val preview =
+        if (image == null) {
+          eu.rekawek.coffeegb.ui.menu.MenuPreview.empty()
+        } else {
+          val rgb = image.copyRgb()
+          val argb = IntArray(rgb.size) { index -> 0xff000000.toInt() or rgb[index] }
+          eu.rekawek.coffeegb.ui.menu.MenuPreview.ready(image.width, image.height, argb)
+        }
+    return PortableMenuRecentGame(
+        path = game.path,
+        label = label,
+        preview = preview,
+        lastPlayed = portableRecentLastPlayed(game.lastPlayed),
+        origin = game.origin,
+        active = game.active,
+    )
   }
 
   private fun handleRomOpenUpdate(update: RomOpenUpdate) {

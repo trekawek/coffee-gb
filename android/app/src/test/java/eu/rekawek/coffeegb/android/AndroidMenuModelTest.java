@@ -18,11 +18,10 @@ public class AndroidMenuModelTest {
 
     @Test
     public void settingsExposesOnlyInlineEditableRoutes() {
-        assertEquals(List.of("audio"),
+        assertEquals(List.of("system", "display", "audio", "peripherals"),
                 AndroidMenuModel.settingsPage().items().stream()
                         .map(MenuPageSpec.Item::id).toList());
-        assertEquals("audio", AndroidMenuModel.settingsPage().preferredFocusId());
-        assertEquals("", AndroidMenuModel.settingsPage().items().get(0).detail());
+        assertEquals("system", AndroidMenuModel.settingsPage().preferredFocusId());
     }
 
     @Test
@@ -47,13 +46,11 @@ public class AndroidMenuModelTest {
         assertIds(AndroidMenuModel.optionalDevicesPage(
                         new AndroidMenuModel.DevicesDraft(false, false, false), "READY",
                         MenuPreview.empty()),
-                "rumble", "live-camera", "game-boy-printer", "calibrate-tilt",
-                "preview-printer-paper", "export-share-paper", "save-devices",
-                "cancel-devices");
+                "camera", "gamepad", "gps");
         assertIds(AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "READY"),
                 "paper-status");
-        assertIds(AndroidMenuModel.systemPage("video-status"),
-                "video-status", "profile-status", "rewind-save-status", "back");
+        assertIds(AndroidMenuModel.systemPage("dmg-games"),
+                "dmg-games", "cgb-games", "bootstrap");
         assertIds(AndroidMenuModel.dataMediaPage(new AndroidMenuModel.TransferAvailability(
                         true, true, "READY / NATIVE PICKER")),
                 "import-battery", "export-battery", "import-state-0", "export-state-0",
@@ -175,10 +172,10 @@ public class AndroidMenuModelTest {
         assertEquals("", AndroidMenuModel.touchPage(
                 AndroidMenuModel.resetTouchDraft(), true).sideHeading());
 
-        MenuPageSpec system = AndroidMenuModel.systemPage("profile-status");
-        assertEquals("profile-status", system.preferredFocusId());
-        assertTrue(system.items().stream().anyMatch(item -> item.detail()
-                .equals("NEAREST-NEIGHBOUR / ASPECT FIT")));
+        MenuPageSpec system = AndroidMenuModel.systemPage("bootstrap");
+        assertEquals("bootstrap", system.preferredFocusId());
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
+                system.items().stream().map(MenuPageSpec.Item::id).toList());
 
         MenuPageSpec about = AndroidMenuModel.aboutPage("1.2.3", "OPEN");
         assertTrue(about.sideLines().contains("MIT LICENSE"));
@@ -202,20 +199,51 @@ public class AndroidMenuModelTest {
     }
 
     @Test
-    public void optionalPrinterExportIsEnabledOnlyForReadyPaper() {
-        AndroidMenuModel.DevicesDraft draft =
-                new AndroidMenuModel.DevicesDraft(false, false, true);
-        for (MenuPreview preview : List.of(MenuPreview.loading(), MenuPreview.empty())) {
-            MenuPageSpec page = AndroidMenuModel.optionalDevicesPage(draft, "READY", preview);
-            assertFalse(page.items().stream()
-                    .filter(item -> item.id().equals("export-share-paper"))
-                    .findFirst().orElseThrow().enabled());
-        }
-        MenuPageSpec ready = AndroidMenuModel.optionalDevicesPage(draft, "READY",
-                MenuPreview.ready(1, 1, new int[]{0xffffffff}));
-        assertTrue(ready.items().stream()
-                .filter(item -> item.id().equals("export-share-paper"))
-                .findFirst().orElseThrow().enabled());
+    public void expandedSettingsPagesExposeStableRowsAndDetails() {
+        assertEquals(List.of("sgb-border", "dmg-colors"),
+                AndroidMenuModel.displayPage(true, false).items().stream()
+                        .map(MenuPageSpec.Item::id).toList());
+        assertEquals("ON", AndroidMenuModel.displayPage(true, false).items().get(0).detail());
+        assertEquals("GREEN", AndroidMenuModel.displayPage(true, false).items().get(1).detail());
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
+                AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "dmg-games")
+                        .items().stream().map(MenuPageSpec.Item::id).toList());
+        assertEquals("DMG", AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "dmg-games")
+                .items().get(0).detail());
+    }
+
+    @Test
+    public void recentGamesPageUsesSelectedNameTimestampAndDetachedPreview() {
+        MenuPreview preview = MenuPreview.ready(2, 1, new int[]{0xff102030, 0xff405060});
+        MenuPageSpec page = AndroidMenuModel.recentGamesPage(List.of(
+                new MenuPageSpec.RecentGame("recent:7", "TETRIS.GB", "TODAY",
+                        true, preview)), "recent:7");
+
+        assertEquals(MenuRoute.RECENT_GAMES, page.route());
+        assertEquals(List.of("recent:7"), page.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals("TETRIS.GB", page.items().get(0).label());
+        assertEquals(List.of("LAST PLAYED: TODAY"), page.sideLines());
+        assertEquals(preview, page.preview());
+        assertEquals("recent:7", page.preferredFocusId());
+    }
+
+    @Test
+    public void emptyRecentGamesPageIsSafeAndBackOnly() {
+        MenuPageSpec page = AndroidMenuModel.recentGamesPage(List.of(), null);
+        assertEquals(List.of("recent-games-status"), page.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals("NO RECENT GAMES", page.items().get(0).label());
+        assertEquals(List.of("", "", "B BACK"), page.footerHints());
+    }
+
+    @Test
+    public void loadingRecentGamesPageIsExplicitAndInert() {
+        MenuPageSpec page = AndroidMenuModel.recentGamesPage(List.of(), null, true);
+        assertEquals(List.of("recent-games-loading"), page.items().stream()
+                .map(MenuPageSpec.Item::id).toList());
+        assertEquals("LOADING RECENT GAMES", page.items().get(0).label());
+        assertEquals(List.of("", "", "B BACK"), page.footerHints());
     }
 
     private static void assertIds(MenuPageSpec page, String... expected) {

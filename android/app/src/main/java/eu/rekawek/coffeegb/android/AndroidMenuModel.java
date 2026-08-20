@@ -48,13 +48,125 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec settingsPage() {
-        // Keep this list deliberately short.  A settings row is only useful when its
-        // value can be changed in this overlay; platform-only or read-only status does not
-        // belong here.
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
-                        item("audio", "AUDIO", "", true)),
-                "audio",
+                        item("system", "SYSTEM", "", true),
+                        item("display", "DISPLAY", "", true),
+                        item("audio", "AUDIO", "", true),
+                        item("peripherals", "PERIPHERALS", "", true)),
+                "system",
                 MenuPreview.empty());
+    }
+
+    static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {
+        return page(MenuRoute.DISPLAY, "COFFEE GB", "DISPLAY", "", "", List.of(), List.of(
+                item("sgb-border", "SGB BORDER", onOff(sgbBorder), true),
+                item("dmg-colors", "DMG COLORS", grayscale ? "GREY" : "GREEN", true)),
+                "sgb-border", MenuPreview.empty());
+    }
+
+    static MenuPageSpec systemPage(String dmgGames, String cgbGames, String bootstrap,
+            String preferredFocusId) {
+        return page(MenuRoute.SYSTEM, "COFFEE GB", "SYSTEM", "", "", List.of(), List.of(
+                item("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
+                item("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
+                item("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true)),
+                preferredFocusId, MenuPreview.empty());
+    }
+
+    static MenuPageSpec optionalDevicesPage(String camera, String gamepad, boolean gps,
+            List<ChoiceValue> gamepadChoices) {
+        return page(MenuRoute.OPTIONAL_DEVICES, "COFFEE GB", "PERIPHERALS", "", "", List.of(),
+                List.of(
+                        item("camera", "CAMERA", cameraLabel(camera), true),
+                        item("gamepad", "GAMEPAD", gamepadLabel(gamepad, gamepadChoices), true),
+                        item("gps", "GPS", onOff(gps), true)),
+                "camera", MenuPreview.empty());
+    }
+
+    static MenuPageSpec optionPickerPage(String title, List<ChoiceValue> choices,
+            String selectedToken) {
+        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
+        for (ChoiceValue choice : choices) {
+            items.add(item("choice:" + choice.token(), choice.label(),
+                    choice.token().equals(selectedToken) ? "SELECTED" : "", choice.enabled()));
+        }
+        boolean fallback = items.isEmpty() || items.stream().noneMatch(MenuPageSpec.Item::enabled);
+        if (fallback) {
+            // A missing option is a safe, inert page rather than a token the Activity could
+            // accidentally persist. Keep the status visible so a transient device/query
+            // failure is understandable, while requiring B to leave the picker.
+            items.clear();
+            items.add(item("picker-status", "NOT AVAILABLE", "", true));
+        }
+        String preferred = items.stream().filter(MenuPageSpec.Item::enabled)
+                .findFirst().map(MenuPageSpec.Item::id).orElse(items.get(0).id());
+        if (selectedToken != null) {
+            String selectedId = "choice:" + selectedToken;
+            if (items.stream().anyMatch(item -> item.id().equals(selectedId) && item.enabled())) {
+                preferred = selectedId;
+            }
+        }
+        return page(MenuRoute.OPTION_PICKER, "COFFEE GB", title, "", "", List.of(), items,
+                preferred, MenuPreview.empty(), fallback ? BACK_ONLY_HINTS : HINTS);
+    }
+
+    /**
+     * Builds the host-fed Recent Games page.  The portable page owns the left preview aperture;
+     * Android only supplies detached metadata and the currently focused screenshot.
+     */
+    static MenuPageSpec recentGamesPage(List<MenuPageSpec.RecentGame> games,
+            String focusedId) {
+        return MenuPageSpec.recentGames(games, focusedId);
+    }
+
+    static MenuPageSpec recentGamesPage(List<MenuPageSpec.RecentGame> games,
+            String focusedId, boolean loading) {
+        if (!loading) {
+            return recentGamesPage(games, focusedId);
+        }
+        return page(MenuRoute.RECENT_GAMES, "COFFEE GB", "RECENT GAMES", "", "",
+                List.of(), List.of(item("recent-games-loading", "LOADING RECENT GAMES", "",
+                        true)), "recent-games-loading", MenuPreview.empty(), BACK_ONLY_HINTS);
+    }
+
+    private static String cameraLabel(String token) {
+        return switch (token == null ? "off" : token.toLowerCase(java.util.Locale.US)) {
+            case "rear" -> "REAR";
+            case "front" -> "FRONT";
+            case "unavailable" -> "UNAVAILABLE";
+            default -> "OFF";
+        };
+    }
+
+    private static String gamepadLabel(String token, List<ChoiceValue> choices) {
+        if (token == null || token.equals("none")) {
+            return "OFF";
+        }
+        if (token.equals("auto")) {
+            return "AUTO";
+        }
+        for (ChoiceValue choice : choices) {
+            if (choice.token().equals(token)) {
+                return choice.label();
+            }
+        }
+        return "UNAVAILABLE";
+    }
+
+    private static String systemChoiceLabel(String token) {
+        if (token == null) {
+            return "AUTO";
+        }
+        return switch (token.toLowerCase(java.util.Locale.US)) {
+            case "auto" -> "AUTO";
+            case "dmg" -> "DMG";
+            case "cgb" -> "CGB";
+            case "sgb" -> "SGB";
+            case "skip" -> "SKIP";
+            case "fast-forward", "fast_forward" -> "FAST-FORWARD";
+            case "full" -> "FULL";
+            default -> token;
+        };
     }
 
     static MenuPageSpec audioPage(AudioDraft draft) {
@@ -78,25 +190,7 @@ final class AndroidMenuModel {
 
     static MenuPageSpec optionalDevicesPage(DevicesDraft draft, String status,
             MenuPreview paperPreview) {
-        boolean paperReady = printerPreviewReady(paperPreview);
-        String paperState = switch (paperPreview.state()) {
-            case LOADING -> "LOADING";
-            case EMPTY -> "EMPTY";
-            case READY -> "READY";
-        };
-        return page(MenuRoute.OPTIONAL_DEVICES, "COFFEE GB", "OPTIONAL DEVICES", "",
-                "PERIPHERALS", List.of("CARTRIDGE DEPENDENT", status, "CAMERA PERMISSION NATIVE"),
-                List.of(
-                        item("rumble", "RUMBLE", onOff(draft.rumble()), true),
-                        item("live-camera", "LIVE CAMERA", onOff(draft.camera()), true),
-                        item("game-boy-printer", "GAME BOY PRINTER", onOff(draft.printer()), true),
-                        item("calibrate-tilt", "CALIBRATE TILT", "IMMEDIATE", true),
-                        item("preview-printer-paper", "PREVIEW PRINTER PAPER", paperState, true),
-                        item("export-share-paper", "EXPORT & SHARE PAPER",
-                                paperReady ? "NATIVE PNG" : paperState, paperReady),
-                        item("save-devices", "SAVE", "COMMIT", true),
-                        item("cancel-devices", "CANCEL", "DISCARD", true)),
-                "rumble", MenuPreview.empty());
+        return optionalDevicesPage(draft.camera() ? "rear" : "off", "auto", false, List.of());
     }
 
     static MenuPageSpec controllerPage(String controllerName, Map<Button, String> labels,
@@ -134,13 +228,7 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec systemPage(String preferredFocusId) {
-        return page(MenuRoute.SYSTEM, "COFFEE GB", "SYSTEM", "", "RUNTIME",
-                List.of("COFFEE GB ANDROID", "FIXED THIS SESSION", "READ-ONLY STATUS"), List.of(
-                        item("video-status", "VIDEO STATUS", "NEAREST-NEIGHBOUR / ASPECT FIT", true),
-                        item("profile-status", "SYSTEM PROFILE", "SELECTED ON ROM OPEN / FIXED THIS SESSION", true),
-                        item("rewind-save-status", "REWIND & SAVE", "PORTABLE DEFAULTS / LIVE CHANGES UNAVAILABLE", true),
-                        item("back", "BACK", "RETURN", true)),
-                preferredFocusId, MenuPreview.empty());
+        return systemPage("AUTO", "AUTO", "SKIP", preferredFocusId);
     }
 
     static MenuPageSpec dataMediaPage(TransferAvailability availability) {
@@ -299,6 +387,18 @@ final class AndroidMenuModel {
 
     record DevicesCommit(boolean rumble, boolean printer, boolean persistedCamera,
                          boolean cameraEnabled, boolean requestCameraPermission) {
+    }
+
+    record ChoiceValue(String token, String label, boolean enabled) {
+        ChoiceValue(String token, String label) {
+            this(token, label, true);
+        }
+
+        ChoiceValue {
+            if (token == null || token.isBlank() || label == null || label.isBlank()) {
+                throw new IllegalArgumentException("Choice token and label are required");
+            }
+        }
     }
 
     record TransferAvailability(boolean enabled, boolean runtimePresent, String detail) {

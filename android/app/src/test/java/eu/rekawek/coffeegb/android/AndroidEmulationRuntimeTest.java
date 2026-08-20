@@ -1,8 +1,14 @@
 package eu.rekawek.coffeegb.android;
 
+import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import org.junit.Test;
 
+import java.util.List;
+
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 public class AndroidEmulationRuntimeTest {
@@ -21,5 +27,58 @@ public class AndroidEmulationRuntimeTest {
         assertFalse(AndroidEmulationRuntime.isResetReload(null, true, 11L, 11L));
         assertFalse(AndroidEmulationRuntime.isResetReload(7L, true, 12L, 11L));
         assertFalse(AndroidEmulationRuntime.isResetReload(null, false, 12L, 11L));
+    }
+
+    @Test
+    public void recentArchiveCandidateFollowsExactEntryWhenItsOrdinalChanges() {
+        List<RomSourceSnapshot.ArchiveCandidate> changed = List.of(
+                new RomSourceSnapshot.ArchiveCandidate(2L, "bonus.gb", 0, 32_768L, "BONUS"),
+                new RomSourceSnapshot.ArchiveCandidate(5L, "games/tetris.gb", 0,
+                        32_768L, "TETRIS"));
+
+        assertEquals(Long.valueOf(5L), AndroidEmulationRuntime.resolveRecentCandidateToken(
+                changed, 1L, "games/tetris.gb", 0));
+    }
+
+    @Test
+    public void recentArchiveCandidateNeverFallsThroughToAReusedToken() {
+        List<RomSourceSnapshot.ArchiveCandidate> changed = List.of(
+                new RomSourceSnapshot.ArchiveCandidate(1L, "different.gb", 0,
+                        32_768L, "DIFFERENT"));
+
+        assertNull(AndroidEmulationRuntime.resolveRecentCandidateToken(
+                changed, 1L, "games/tetris.gb", 0));
+        assertNull(AndroidEmulationRuntime.resolveRecentCandidateToken(
+                changed, 1L, "", -1));
+    }
+
+    @Test
+    public void recentArchiveResolutionDoesNotDependOnInventoryHeaderTitle() {
+        List<RomSourceSnapshot.ArchiveCandidate> candidates = List.of(
+                new RomSourceSnapshot.ArchiveCandidate(7L, "games/tetris.gbc", 0,
+                        32_768L, "SCRAMBLED INVENTORY TITLE"));
+
+        assertEquals(Long.valueOf(7L), AndroidEmulationRuntime.resolveRecentCandidateToken(
+                candidates, 7L, "games/tetris.gbc", 0));
+    }
+
+    @Test
+    public void recentHashRejectsChangedRomButAllowsSafeLegacyEntry() {
+        String original = "a".repeat(64);
+        String changed = "b".repeat(64);
+
+        assertTrue(AndroidEmulationRuntime.recentHashMatches(original, original));
+        assertTrue(AndroidEmulationRuntime.recentHashMatches(original.toUpperCase(), original));
+        assertFalse(AndroidEmulationRuntime.recentHashMatches(original, changed));
+        assertTrue(AndroidEmulationRuntime.recentHashMatches("", changed));
+    }
+
+    @Test
+    public void archiveCandidatesFromOneDocumentHaveSeparatePreviewKeys() {
+        assertNotEquals(
+                RecentSafDocuments.previewKey("content://roms/collection.zip", 1L,
+                        "tetris.gb", 0),
+                RecentSafDocuments.previewKey("content://roms/collection.zip", 2L,
+                        "zelda.gb", 0));
     }
 }

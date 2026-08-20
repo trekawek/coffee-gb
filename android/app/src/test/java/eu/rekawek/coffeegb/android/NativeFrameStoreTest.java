@@ -81,6 +81,25 @@ public class NativeFrameStoreTest {
     }
 
     @Test
+    public void grayscaleAffectsDmgFramesButNotTheStoredSelectionForCgb() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            int[] pixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            pixels[0] = 1;
+            store.setGrayscale(true);
+            store.publish(new Display.DmgFrameReadyEvent(pixels));
+            int grayscale = requireSnapshot(store).pixels()[0];
+            store.setGrayscale(false);
+            store.publish(new Display.DmgFrameReadyEvent(pixels));
+            int green = requireSnapshot(store).pixels()[0];
+            assertEquals(0xffaaaaaa, grayscale);
+            assertEquals(0xff99c886, green);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
     public void claimingTheNewestFrameDropsStaleQueuedFramesWithoutRetainingCorePixels() {
         NativeFrameStore store = new NativeFrameStore();
         try {
