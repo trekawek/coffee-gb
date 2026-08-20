@@ -315,6 +315,22 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
     }
 
     @Override
+    public void resetForMissingState() {
+        background.clear();
+        clearedBackground.clear();
+        spriteFifo.clear();
+        spriteFifo.poppedPixel = 0;
+        spriteFifo.poppedPalette = 0;
+        spriteFifo.poppedBgPriority = false;
+        java.util.Arrays.fill(delayEntry, 0);
+        java.util.Arrays.fill(delayStamp, 0L);
+        delayHead = 0;
+        delaySize = 0;
+        outputTicks = 0;
+        linePixels = 0;
+    }
+
+    @Override
     public ComponentState<ColorPixelFifo> captureState() {
         materializeStateQueues();
         return new ColorPixelFifoState(
@@ -354,9 +370,7 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
 
     @Override
     public void restoreState(ComponentState<ColorPixelFifo> state) {
-        if (!(state instanceof ColorPixelFifoState mem)) {
-            throw new IllegalArgumentException("Invalid state type");
-        }
+        ColorPixelFifoState mem = validatedState(state);
         statePixels.restoreState(mem.pixels);
         statePalettes.restoreState(mem.palettes);
         statePriorities.restoreState(mem.priorities);
@@ -387,6 +401,84 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         } else {
             delayHead = 0;
             delaySize = 0;
+            outputTicks = 0;
+        }
+    }
+
+    /**
+     * Validates a full CGB FIFO state without touching the live queues.  All three packed
+     * background views must retain the same fixed queue shape and cursor, including the
+     * optional retained-background queues used while a window fetch is in flight.
+     */
+    public static void validateState(ComponentState<?> state) {
+        validatedState(state);
+    }
+
+    private static ColorPixelFifoState validatedState(ComponentState<?> state) {
+        ColorPixelFifoState mem = validateStateAndReturn(state);
+        IntQueue.IntQueueState pixels = IntQueue.validateState(mem.pixels, 16);
+        IntQueue.IntQueueState palettes = IntQueue.validateState(mem.palettes, 16);
+        IntQueue.IntQueueState priorities = IntQueue.validateState(mem.priorities, 16);
+        validateAligned(pixels, palettes, priorities, "CGB background");
+        SpriteFifo.validateState(mem.spriteFifo);
+
+        boolean clearedAny = mem.clearedPixels != null
+                || mem.clearedPalettes != null
+                || mem.clearedPriorities != null;
+        if (clearedAny) {
+            if (mem.clearedPixels == null || mem.clearedPalettes == null
+                    || mem.clearedPriorities == null) {
+                throw new IllegalArgumentException("CGB cleared background state is incomplete");
+            }
+            IntQueue.IntQueueState clearedPixels = IntQueue.validateState(mem.clearedPixels, 16);
+            IntQueue.IntQueueState clearedPalettes = IntQueue.validateState(mem.clearedPalettes, 16);
+            IntQueue.IntQueueState clearedPriorities = IntQueue.validateState(mem.clearedPriorities, 16);
+            validateAligned(clearedPixels, clearedPalettes, clearedPriorities,
+                    "CGB cleared background");
+        }
+
+        if ((mem.delayEntry == null) != (mem.delayStamp == null)) {
+            throw new IllegalArgumentException("CGB delay state arrays must be paired");
+        }
+        if (mem.delayEntry != null
+                && (mem.delayEntry.length != 8 || mem.delayStamp.length != 8)) {
+            throw new IllegalArgumentException("CGB delay state capacity doesn't match");
+        }
+        if (mem.delayHead < 0 || mem.delayHead >= 8
+                || mem.delaySize < 0 || mem.delaySize > 8) {
+            throw new IllegalArgumentException("Invalid CGB delay state cursor");
+        }
+        if (mem.outputTicks < 0) {
+            throw new IllegalArgumentException("CGB output ticks cannot be negative");
+        }
+        if (mem.delayStamp != null) {
+            for (long stamp : mem.delayStamp) {
+                if (stamp < 0 || stamp > mem.outputTicks) {
+                    throw new IllegalArgumentException("CGB delay age is outside output time");
+                }
+            }
+        }
+        if (mem.linePixels < 0 || mem.linePixels > 160) {
+            throw new IllegalArgumentException("CGB line pixel count is outside 0..160");
+        }
+        return mem;
+    }
+
+    private static ColorPixelFifoState validateStateAndReturn(ComponentState<?> state) {
+        if (!(state instanceof ColorPixelFifoState mem)) {
+            throw new IllegalArgumentException("Invalid CGB pixel FIFO state type");
+        }
+        return mem;
+    }
+
+    private static void validateAligned(
+            IntQueue.IntQueueState pixels,
+            IntQueue.IntQueueState palettes,
+            IntQueue.IntQueueState priorities,
+            String label) {
+        if (pixels.size() != palettes.size() || pixels.size() != priorities.size()
+                || pixels.offset() != palettes.offset() || pixels.offset() != priorities.offset()) {
+            throw new IllegalArgumentException(label + " queues are not aligned");
         }
     }
 

@@ -81,4 +81,15 @@ public interface PixelFifo {
     /** Discards background pixels retained by {@link #clearBg()}. */
     default void discardClearedBg() {
     }
+
+    /**
+     * Clears all transient FIFO/output timing state after a snapshot cannot be restored.
+     * Implementations with an absolute output clock override this default to reset that clock;
+     * this hook is only used on the fail-closed deoptimization path, never per tick.
+     */
+    default void resetForMissingState() {
+        clear();
+        clearOutput();
+        startLine();
+    }
 }

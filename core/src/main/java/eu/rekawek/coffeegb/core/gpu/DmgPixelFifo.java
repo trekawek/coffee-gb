@@ -329,6 +329,26 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
     }
 
     @Override
+    public void resetForMissingState() {
+        pixels.clear();
+        spriteFifo.clear();
+        spriteFifo.poppedPixel = 0;
+        spriteFifo.poppedPalette = 0;
+        spriteFifo.poppedBgPriority = false;
+        java.util.Arrays.fill(delayEntry, 0);
+        java.util.Arrays.fill(delayStamp, 0L);
+        delayHead = 0;
+        delaySize = 0;
+        outputTicks = 0;
+        linePixels = 0;
+        outCount = 0;
+        firstEntry = -1;
+        firstBgp = 0;
+        firstObp0 = 0;
+        firstObp1 = 0;
+    }
+
+    @Override
     public ComponentState<DmgPixelFifo> captureState() {
         return new DmgPixelFifoState(pixels.captureState(), spriteFifo.captureState(),
                 delayEntry.clone(), delayStamp.clone(), delayHead, delaySize, outputTicks);
@@ -401,9 +421,7 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
 
     @Override
     public void restoreState(ComponentState<DmgPixelFifo> state) {
-        if (!(state instanceof DmgPixelFifoState mem)) {
-            throw new IllegalArgumentException("Invalid state type");
-        }
+        DmgPixelFifoState mem = validatedState(state);
         pixels.restoreState(mem.pixels);
         spriteFifo.restoreState(mem.spriteFifo);
         // mementos serialized by older versions lack the delay-line fields
@@ -416,6 +434,54 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
         } else {
             delayHead = 0;
             delaySize = 0;
+            outputTicks = 0;
+        }
+    }
+
+    /**
+     * Validates a full DMG FIFO state without touching any live queue or output latch.  This is
+     * intentionally stricter than the legacy restore path: production FIFOs are always 16/8
+     * entries, and a malformed nested state must be rejected before a timing skeleton deopts.
+     */
+    public static void validateState(ComponentState<?> state) {
+        validatedState(state);
+    }
+
+    private static DmgPixelFifoState validatedState(ComponentState<?> state) {
+        if (!(state instanceof DmgPixelFifoState mem)) {
+            throw new IllegalArgumentException("Invalid DMG pixel FIFO state type");
+        }
+        IntQueue.validateState(mem.pixels, 16);
+        SpriteFifo.validateState(mem.spriteFifo);
+        validateDelayState(mem.delayEntry, mem.delayStamp, mem.delayHead, mem.delaySize,
+                mem.outputTicks);
+        return mem;
+    }
+
+    private static void validateDelayState(
+            int[] delayEntry,
+            long[] delayStamp,
+            int delayHead,
+            int delaySize,
+            long outputTicks) {
+        if ((delayEntry == null) != (delayStamp == null)) {
+            throw new IllegalArgumentException("DMG delay state arrays must be paired");
+        }
+        if (delayEntry != null && (delayEntry.length != 8 || delayStamp.length != 8)) {
+            throw new IllegalArgumentException("DMG delay state capacity doesn't match");
+        }
+        if (delayHead < 0 || delayHead >= 8 || delaySize < 0 || delaySize > 8) {
+            throw new IllegalArgumentException("Invalid DMG delay state cursor");
+        }
+        if (outputTicks < 0) {
+            throw new IllegalArgumentException("DMG output ticks cannot be negative");
+        }
+        if (delayStamp != null) {
+            for (long stamp : delayStamp) {
+                if (stamp < 0 || stamp > outputTicks) {
+                    throw new IllegalArgumentException("DMG delay age is outside output time");
+                }
+            }
         }
     }
 

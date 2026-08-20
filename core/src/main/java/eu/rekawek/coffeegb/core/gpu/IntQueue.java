@@ -143,18 +143,34 @@ public class IntQueue implements StatefulComponent<IntQueue> {
 
     @Override
     public void restoreState(ComponentState<IntQueue> state) {
-        if (!(state instanceof IntQueueState mem)) {
-            throw new IllegalArgumentException("Invalid state type");
-        }
-        if (this.array.length != mem.array.length) {
-            throw new IllegalArgumentException("ComponentState array length doesn't match");
-        }
+        IntQueueState mem = validateState(state, this.array.length);
         System.arraycopy(mem.array, 0, this.array, 0, this.array.length);
         this.size = mem.size;
         this.offset = mem.offset;
     }
 
-    private record IntQueueState(int[] array, int size, int offset) implements ComponentState<IntQueue> {
+    /**
+     * Validates a queue memento without touching the live queue.  Pixel FIFOs are fixed
+     * production-capacity queues; accepting a shorter or larger array would either truncate
+     * state or make a later restore partially mutate before failing.
+     */
+    static IntQueueState validateState(ComponentState<?> state, int expectedCapacity) {
+        if (!(state instanceof IntQueueState mem)) {
+            throw new IllegalArgumentException("Invalid IntQueue state type");
+        }
+        if (mem.array == null || mem.array.length != expectedCapacity) {
+            throw new IllegalArgumentException("IntQueue state array capacity doesn't match");
+        }
+        if (mem.size < 0 || mem.size > expectedCapacity) {
+            throw new IllegalArgumentException("Invalid IntQueue state size");
+        }
+        if (mem.offset < 0 || mem.offset >= expectedCapacity) {
+            throw new IllegalArgumentException("Invalid IntQueue state offset");
+        }
+        return mem;
+    }
+
+    record IntQueueState(int[] array, int size, int offset) implements ComponentState<IntQueue> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

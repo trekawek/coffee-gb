@@ -301,6 +301,65 @@ class DetachedStateTest {
   }
 
   @Test
+  fun scalarFifoRecordsCannotCrossTimingAndVisibleGpuRoles() {
+    session(configuration().setGameboyType(GameboyType.DMG)).use { session ->
+      repeat(400) { session.gameboy.tick() }
+      val before = session.captureDetachedState()
+      val gpu = before.machine.record(GPU_MEMENTO)
+      val timing = gpu.field("pixelTransferPhaseMemento") as RecordState
+      val output = gpu.field("pixelMachineMemento") as RecordState
+      val timingFifo = timing.field("fifoMemento") as RecordState
+      val outputFifo = output.field("fifoMemento") as RecordState
+
+      val outputScalar =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  GPU_MEMENTO,
+                  "pixelMachineMemento",
+                  output.replaceField("fifoMemento", timingFifo),
+              ))
+      assertRejectedBeforeMutation(session, before, outputScalar, "scalar output injection")
+
+      val swappedRoles =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  GPU_MEMENTO,
+                  "pixelTransferPhaseMemento",
+                  timing.replaceField("fifoMemento", outputFifo),
+              ).replaceRecordField(
+                  GPU_MEMENTO,
+                  "pixelMachineMemento",
+                  output.replaceField("fifoMemento", timingFifo),
+              ))
+      assertRejectedBeforeMutation(session, before, swappedRoles, "swapped timing/output FIFO records")
+
+      val nullOutput =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  GPU_MEMENTO,
+                  "pixelMachineMemento",
+                  NullState,
+              ))
+      assertRejectedBeforeMutation(session, before, nullOutput, "scalar timing with null output fallback")
+
+      val malformedFull =
+          outputFifo.replaceRecordField(
+              INT_QUEUE_MEMENTO,
+              "array",
+              Int32ArrayState(IntArray(15)),
+          )
+      val malformedTiming =
+          before.withMachineRoot(
+              before.machine.root.replaceRecordField(
+                  GPU_MEMENTO,
+                  "pixelTransferPhaseMemento",
+                  timing.replaceField("fifoMemento", malformedFull),
+              ))
+      assertRejectedBeforeMutation(session, before, malformedTiming, "malformed full FIFO shape")
+    }
+  }
+
+  @Test
   fun dmgFifoRuntimePresenceMatchesHardwareBeforeAnyLiveMutation() {
     listOf(GameboyType.DMG, GameboyType.SGB).forEach { hardware ->
       session(configuration().setGameboyType(hardware)).use { session ->

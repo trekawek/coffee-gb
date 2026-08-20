@@ -237,8 +237,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
 
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
-        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0);
-        this.pixelTransferPhase.setRenderOutput(false);
+        this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0, true);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
         this.pixelMachine.setOamReaderBus(oamSearchPhase);
 
@@ -2337,6 +2336,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (!(state instanceof GpuState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
+
+        // Preflight both dot machines before touching RAM, palettes, display, or the timing
+        // skeleton.  The null output component is the released one-machine snapshot shape and
+        // is valid only when the timing component itself carries a same-family full FIFO; the
+        // PixelTransfer role check rejects a scalar fallback before any live mutation.
+        pixelTransferPhase.validateStateForRestore(mem.pixelTransferPhaseMemento);
+        pixelMachine.validateStateForRestore(
+                mem.pixelMachineMemento != null
+                        ? mem.pixelMachineMemento
+                        : mem.pixelTransferPhaseMemento);
 
         if (videoRam0 instanceof Ram) {
             ((Ram) videoRam0).restoreState(mem.videoRam0Memento);

@@ -499,6 +499,27 @@ internal object DetachedStateAdapter {
       return
     }
 
+    val outputTicksIndex = fields.indexOfFirst { it.name == "outputTicks" }
+    val outputTicks =
+        if (outputTicksIndex >= 0) {
+          (fields[outputTicksIndex].value as? Int64State)?.value ?: return
+        } else {
+          return
+        }
+    val retainedStamps = stamps.copyValue()
+    // The released overfull representation could retain absolute delay ages while its
+    // output-clock field remained at the pre-ring baseline. Keep those ages and their physical
+    // order unchanged, but advance the detached clock to the newest retained age so the current
+    // FIFO validator can represent the same ring. Negative ages remain untouched and therefore
+    // fail current semantic validation instead of being silently repaired.
+    if (outputTicks < 0 || retainedStamps.any { it < 0 }) {
+      return
+    }
+    val newestRetainedStamp = retainedStamps.maxOrNull() ?: return
+    if (newestRetainedStamp > outputTicks) {
+      fields[outputTicksIndex] = StateField("outputTicks", Int64State(newestRetainedStamp))
+    }
+
     // The old counter could grow past the physical ring while writes continued modulo capacity.
     // Its last `capacity` logical entries therefore begin S-C slots after the original head.
     // Compute in Long so an otherwise valid positive legacy counter cannot overflow the rebase.
@@ -1120,6 +1141,36 @@ internal object StateGraph {
   }
 
   private class Compatibility {
+    private companion object {
+      private const val GPU_STATE =
+          "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState"
+      private const val PIXEL_TRANSFER_STATE =
+          "eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer\$PixelTransferState"
+      private const val INT_QUEUE_STATE =
+          "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState"
+      private const val SPRITE_FIFO_STATE =
+          "eu.rekawek.coffeegb.core.gpu.SpriteFifo\$SpriteFifoState"
+      private const val DMG_FIFO_STATE =
+          "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState"
+      private const val COLOR_FIFO_STATE =
+          "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
+      private const val SCALAR_DMG_FIFO_STATE =
+          "eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State"
+      private const val SCALAR_COLOR_FIFO_STATE =
+          "eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State"
+      private val DMG_FIFO_STATE_VARIANTS =
+          setOf(
+              DMG_FIFO_STATE,
+              SCALAR_DMG_FIFO_STATE,
+          )
+      private val COLOR_FIFO_STATE_VARIANTS =
+          setOf(
+              COLOR_FIFO_STATE,
+              SCALAR_COLOR_FIFO_STATE,
+          )
+      private val FULL_FIFO_STATE_VARIANTS = setOf(DMG_FIFO_STATE, COLOR_FIFO_STATE)
+    }
+
     fun value(
         candidate: StateValue,
         target: StateValue,
@@ -1146,7 +1197,16 @@ internal object StateGraph {
             return
           }
           if (candidate.typeId != target.typeId) {
+            if (isPixelTransferFifoStatePair(candidate, target, path, owner, field)) {
+              // E2b introduces a scalar FIFO only for the unshifted timing skeleton. A
+              // released full FIFO in this memento slot is still a valid legacy candidate, and
+              // a previously deoptimized skeleton may provide a full candidate to a scalar
+              // target. The role/path check and fixed-shape validation happen before this early
+              // return; output-machine swaps and malformed records never reach restore.
+              return
+            }
             if (isDynamicMulticartGameState(owner, field)) {
+>>>>>>> 01f7a691 (Use scalar FIFO for timing skeleton)
               // This board commits a selected game by replacing its virtual child mapper. The
               // candidate record has already passed the child-mapper policy; its type is not a
               // target-owned invariant of the surrounding physical cartridge.
@@ -1176,7 +1236,12 @@ internal object StateGraph {
             if (left.name != right.name) {
               throw StateApplyException("$path has an incompatible field order")
             }
-            value(left.value, right.value, "$path.${left.name}", type, left.name, false)
+            if (type == GPU_STATE && left.name == "pixelMachineMemento" &&
+                left.value === NullState) {
+              validateLegacyPixelMachineFallback(candidate, target, path)
+            } else {
+              value(left.value, right.value, "$path.${left.name}", type, left.name, false)
+            }
           }
         }
         candidate is PrimitiveArrayState<*> && target is PrimitiveArrayState<*> -> {
@@ -1196,6 +1261,250 @@ internal object StateGraph {
         }
       }
     }
+
+    private fun isPixelTransferFifoStatePair(
+        candidate: RecordState,
+        target: RecordState,
+        path: String,
+        owner: String?,
+        field: String?,
+    ): Boolean {
+      if (owner != PIXEL_TRANSFER_STATE || field != "fifoMemento" ||
+          !path.endsWith(".pixelTransferPhaseMemento.fifoMemento")) return false
+      val candidateClass = recordClass(candidate).name
+      val targetClass = recordClass(target).name
+      val sameFamily =
+          (candidateClass in DMG_FIFO_STATE_VARIANTS && targetClass in DMG_FIFO_STATE_VARIANTS) ||
+              (candidateClass in COLOR_FIFO_STATE_VARIANTS && targetClass in COLOR_FIFO_STATE_VARIANTS)
+      if (sameFamily) {
+        validatePixelTransferFifoStateShape(candidate, path)
+      }
+      return sameFamily
+    }
+
+    private fun validateLegacyPixelMachineFallback(
+        candidateGpu: RecordState,
+        targetGpu: RecordState,
+        path: String,
+    ) {
+      val fallback = candidateGpu.field("pixelTransferPhaseMemento", path)
+      val targetOutput = targetGpu.field("pixelMachineMemento", path)
+      val fallbackTransfer = fallback as? RecordState
+          ?: throw StateApplyException(
+              "$path.pixelMachineMemento is null but the timing fallback is missing")
+      val targetTransfer = targetOutput as? RecordState
+          ?: throw StateApplyException(
+              "$path.pixelMachineMemento is null but the target output state is missing")
+      val fallbackFifo = transferFifo(fallbackTransfer, "$path.pixelTransferPhaseMemento")
+      val targetFifo = transferFifo(targetTransfer, "$path.pixelMachineMemento")
+      val fallbackClass = recordClass(fallbackFifo).name
+      val targetClass = recordClass(targetFifo).name
+      if (fallbackClass !in FULL_FIFO_STATE_VARIANTS ||
+          targetClass !in FULL_FIFO_STATE_VARIANTS ||
+          (fallbackClass == DMG_FIFO_STATE) != (targetClass == DMG_FIFO_STATE)) {
+        throw StateApplyException(
+            "$path.pixelMachineMemento null fallback requires a same-hardware full FIFO")
+      }
+      validatePixelTransferFifoStateShape(
+          fallbackFifo, "$path.pixelTransferPhaseMemento.fifoMemento")
+      // The fallback is restored into the visible machine too. Validate its complete
+      // PixelTransferState shape against that target before the caller mutates either machine.
+      value(
+          fallbackTransfer,
+          targetTransfer,
+          "$path.pixelMachineMemento[fallback]",
+          GPU_STATE,
+          "pixelMachineMemento",
+      )
+    }
+
+    private fun transferFifo(transfer: RecordState, path: String): RecordState {
+      if (recordClass(transfer).name != PIXEL_TRANSFER_STATE) {
+        throw StateApplyException("$path has ${recordClass(transfer).name}, expected $PIXEL_TRANSFER_STATE")
+      }
+      return transfer.field("fifoMemento", path) as? RecordState
+          ?: throw StateApplyException("$path.fifoMemento is missing")
+    }
+
+    private fun validatePixelTransferFifoStateShape(state: RecordState, path: String) {
+      when (recordClass(state).name) {
+        DMG_FIFO_STATE -> {
+          validateQueue(state.field("pixels", path), "$path.pixels")
+          validateSprite(state.field("spriteFifo", path), "$path.spriteFifo")
+          validateDelay(state, path)
+        }
+        COLOR_FIFO_STATE -> {
+          val pixels = validateQueue(state.field("pixels", path), "$path.pixels")
+          val palettes = validateQueue(state.field("palettes", path), "$path.palettes")
+          val priorities = validateQueue(state.field("priorities", path), "$path.priorities")
+          requireSameQueueShape(pixels, palettes, "$path.palettes")
+          requireSameQueueShape(pixels, priorities, "$path.priorities")
+          validateSprite(state.field("spriteFifo", path), "$path.spriteFifo")
+          validateDelay(state, path)
+          val cleared = listOf(
+              state.field("clearedPixels", path),
+              state.field("clearedPalettes", path),
+              state.field("clearedPriorities", path),
+          )
+          if (cleared.any { it !== NullState } && cleared.any { it === NullState }) {
+            throw StateApplyException("$path has a partially present cleared-FIFO triplet")
+          }
+          if (cleared.all { it !== NullState }) {
+            val clearedPixels = validateQueue(cleared[0], "$path.clearedPixels")
+            val clearedPalettes = validateQueue(cleared[1], "$path.clearedPalettes")
+            val clearedPriorities = validateQueue(cleared[2], "$path.clearedPriorities")
+            requireSameQueueShape(clearedPixels, clearedPalettes, "$path.clearedPalettes")
+            requireSameQueueShape(clearedPixels, clearedPriorities, "$path.clearedPriorities")
+          }
+          requireRange(state.field("linePixels", path), "$path.linePixels", 0, 160)
+        }
+        SCALAR_DMG_FIFO_STATE -> validateScalarDmg(state, path)
+        SCALAR_COLOR_FIFO_STATE -> validateScalarColor(state, path)
+      }
+    }
+
+    private fun validateScalarDmg(state: RecordState, path: String) {
+      requireRange(state.field("backgroundSize", path), "$path.backgroundSize", 0, 16)
+      requireRange(state.field("spriteSize", path), "$path.spriteSize", 0, 8)
+      requireNonNegative(state.field("spriteUnderflow", path), "$path.spriteUnderflow")
+      validateScalarDelay(state, path)
+      requireRange(state.field("linePixels", path), "$path.linePixels", 0, 160)
+      requireNonNegative(state.field("outCount", path), "$path.outCount")
+      val first = requireBoolean(state.field("firstEntryPresent", path), "$path.firstEntryPresent")
+      if (first && requireInt(state.field("outCount", path), "$path.outCount") != 1) {
+        throw StateApplyException("$path.firstEntryPresent requires outCount 1")
+      }
+    }
+
+    private fun validateScalarColor(state: RecordState, path: String) {
+      requireRange(state.field("backgroundSize", path), "$path.backgroundSize", 0, 16)
+      requireRange(state.field("clearedBackgroundSize", path), "$path.clearedBackgroundSize", 0, 16)
+      requireRange(state.field("spriteSize", path), "$path.spriteSize", 0, 8)
+      requireNonNegative(state.field("spriteUnderflow", path), "$path.spriteUnderflow")
+      requireRange(state.field("delayHead", path), "$path.delayHead", 0, 7)
+      requireRange(state.field("delaySize", path), "$path.delaySize", 0, 8)
+      requireNonNegative(state.field("outputTicks", path), "$path.outputTicks")
+      requireRange(state.field("linePixels", path), "$path.linePixels", 0, 160)
+    }
+
+    private fun validateScalarDelay(state: RecordState, path: String) {
+      val stamps = state.field("delayStamp", path) as? Int64ArrayState
+          ?: throw StateApplyException("$path.delayStamp is not a long array")
+      if (stamps.size != 8) {
+        throw StateApplyException("$path.delayStamp has length ${stamps.size}, expected 8")
+      }
+      requireRange(state.field("delayHead", path), "$path.delayHead", 0, 7)
+      requireRange(state.field("delaySize", path), "$path.delaySize", 0, 8)
+      val ticks = requireLong(state.field("outputTicks", path), "$path.outputTicks")
+      stamps.copyValue().forEachIndexed { index, stamp ->
+        if (stamp < 0 || stamp > ticks) {
+          throw StateApplyException("$path.delayStamp[$index] is outside outputTicks")
+        }
+      }
+    }
+
+    private fun validateQueue(value: StateValue, path: String): QueueShape {
+      val queue = value as? RecordState
+          ?: throw StateApplyException("$path is not a record")
+      if (recordClass(queue).name != INT_QUEUE_STATE) {
+        throw StateApplyException("$path has ${recordClass(queue).name}, expected $INT_QUEUE_STATE")
+      }
+      val array = queue.field("array", path) as? Int32ArrayState
+          ?: throw StateApplyException("$path.array is not an int array")
+      if (array.size != 16) {
+        throw StateApplyException("$path.array has length ${array.size}, expected 16")
+      }
+      val size = requireInt(queue.field("size", path), "$path.size")
+      val offset = requireInt(queue.field("offset", path), "$path.offset")
+      requireRange(size, "$path.size", 0, 16)
+      requireRange(offset, "$path.offset", 0, 15)
+      return QueueShape(size, offset)
+    }
+
+    private fun validateSprite(value: StateValue, path: String) {
+      val sprite = value as? RecordState
+          ?: throw StateApplyException("$path is not a record")
+      if (recordClass(sprite).name != SPRITE_FIFO_STATE) {
+        throw StateApplyException("$path has ${recordClass(sprite).name}, expected $SPRITE_FIFO_STATE")
+      }
+      listOf("pixel", "palette", "priority").forEach { name ->
+        val array = sprite.field(name, path) as? Int32ArrayState
+            ?: throw StateApplyException("$path.$name is not an int array")
+        if (array.size != 8) {
+          throw StateApplyException("$path.$name has length ${array.size}, expected 8")
+        }
+      }
+      val bgPriority = sprite.field("bgPriority", path) as? BooleanArrayState
+          ?: throw StateApplyException("$path.bgPriority is not a boolean array")
+      if (bgPriority.size != 8) {
+        throw StateApplyException("$path.bgPriority has length ${bgPriority.size}, expected 8")
+      }
+      requireRange(sprite.field("head", path), "$path.head", 0, 7)
+      requireRange(sprite.field("size", path), "$path.size", 0, 8)
+      requireNonNegative(sprite.field("underflow", path), "$path.underflow")
+    }
+
+    private fun validateDelay(state: RecordState, path: String) {
+      val entries = state.field("delayEntry", path)
+      val stamps = state.field("delayStamp", path)
+      if ((entries === NullState) != (stamps === NullState)) {
+        throw StateApplyException("$path has only one delay-line array")
+      }
+      if (entries === NullState) {
+        requireRange(state.field("delayHead", path), "$path.delayHead", 0, 0)
+        requireRange(state.field("delaySize", path), "$path.delaySize", 0, 0)
+        return
+      }
+      val entryArray = entries as? Int32ArrayState
+          ?: throw StateApplyException("$path.delayEntry is not an int array")
+      val stampArray = stamps as? Int64ArrayState
+          ?: throw StateApplyException("$path.delayStamp is not a long array")
+      if (entryArray.size != 8 || stampArray.size != 8) {
+        throw StateApplyException("$path delay arrays must both have length 8")
+      }
+      requireRange(state.field("delayHead", path), "$path.delayHead", 0, 7)
+      requireRange(state.field("delaySize", path), "$path.delaySize", 0, 8)
+    }
+
+    private fun requireSameQueueShape(left: QueueShape, right: QueueShape, path: String) {
+      if (left != right) {
+        throw StateApplyException("$path is not aligned with its sibling queue")
+      }
+    }
+
+    private fun requireRange(value: StateValue, path: String, minimum: Int, maximum: Int) {
+      requireRange(requireInt(value, path), path, minimum, maximum)
+    }
+
+    private fun requireRange(value: Int, path: String, minimum: Int, maximum: Int) {
+      if (value !in minimum..maximum) {
+        throw StateApplyException("$path has invalid value $value (expected $minimum..$maximum)")
+      }
+    }
+
+    private fun requireNonNegative(value: StateValue, path: String) {
+      if (requireInt(value, path) < 0) {
+        throw StateApplyException("$path is negative")
+      }
+    }
+
+    private fun requireBoolean(value: StateValue, path: String): Boolean =
+        (value as? BooleanState)?.value
+            ?: throw StateApplyException("$path is not boolean")
+
+    private fun requireInt(value: StateValue, path: String): Int =
+        (value as? Int32State)?.value
+            ?: throw StateApplyException("$path is not an int")
+
+    private fun requireLong(value: StateValue, path: String): Long =
+        (value as? Int64State)?.value
+            ?: throw StateApplyException("$path is not a long")
+
+    private data class QueueShape(val size: Int, val offset: Int)
+
+    private fun RecordState.field(name: String, path: String): StateValue =
+        fields.singleOrNull { it.name == name }?.value
+            ?: throw StateApplyException("$path is missing $name")
 
     /**
      * File-backed local sessions and service-free transferred sessions deliberately use different

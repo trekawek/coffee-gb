@@ -143,9 +143,7 @@ public class SpriteFifo implements StatefulComponent<SpriteFifo> {
 
     @Override
     public void restoreState(ComponentState<SpriteFifo> state) {
-        if (!(state instanceof SpriteFifoState mem)) {
-            throw new IllegalArgumentException("Invalid state type");
-        }
+        SpriteFifoState mem = validateState(state);
         System.arraycopy(mem.pixel, 0, pixel, 0, 8);
         System.arraycopy(mem.palette, 0, palette, 0, 8);
         System.arraycopy(mem.priority, 0, priority, 0, 8);
@@ -155,7 +153,25 @@ public class SpriteFifo implements StatefulComponent<SpriteFifo> {
         this.underflow = mem.underflow;
     }
 
-    private record SpriteFifoState(
+    /** Validates a sprite FIFO memento without mutating the live FIFO. */
+    static SpriteFifoState validateState(ComponentState<?> state) {
+        if (!(state instanceof SpriteFifoState mem)) {
+            throw new IllegalArgumentException("Invalid SpriteFifo state type");
+        }
+        if (mem.pixel == null || mem.pixel.length != 8
+                || mem.palette == null || mem.palette.length != 8
+                || mem.priority == null || mem.priority.length != 8
+                || mem.bgPriority == null || mem.bgPriority.length != 8) {
+            throw new IllegalArgumentException("SpriteFifo state array capacity doesn't match");
+        }
+        if (mem.head < 0 || mem.head >= 8 || mem.size < 0 || mem.size > 8
+                || mem.underflow < 0) {
+            throw new IllegalArgumentException("Invalid SpriteFifo state cursor");
+        }
+        return mem;
+    }
+
+    record SpriteFifoState(
             int[] pixel, int[] palette, int[] priority, boolean[] bgPriority, int head, int size, int underflow)
             implements ComponentState<SpriteFifo> {
     }
