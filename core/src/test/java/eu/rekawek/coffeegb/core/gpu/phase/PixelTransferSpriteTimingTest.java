@@ -54,10 +54,10 @@ public class PixelTransferSpriteTimingTest {
         aborted.transfer.start();
         int elapsed = 0;
         while (!aborted.transfer.isObjectFetchInProgress()) {
-            aborted.transfer.tick();
+            step(aborted.transfer);
             elapsed++;
         }
-        aborted.transfer.tick();
+        step(aborted.transfer);
         elapsed++;
         aborted.lcdc.set(0x91);
         int abortedRemaining = runToEnd(aborted.transfer);
@@ -79,25 +79,25 @@ public class PixelTransferSpriteTimingTest {
             if (i == 2) {
                 early.registers.put(GpuRegister.SCX, 4);
             }
-            early.transfer.tick();
+            step(early.transfer);
         }
-        early.transfer.tick();
+        step(early.transfer);
         assertEquals(-15, early.transfer.getPosition());
 
         Harness colliding = doubleSpeedStartupHarness();
         colliding.transfer.start();
         for (int i = 0; i < 4; i++) {
-            colliding.transfer.tick();
+            step(colliding.transfer);
         }
         colliding.registers.put(GpuRegister.SCX, 4);
         ComponentState<PixelTransfer> collisionState = colliding.transfer.captureState();
-        colliding.transfer.tick();
+        step(colliding.transfer);
         assertEquals(-7, colliding.transfer.getPosition());
 
         Harness restored = doubleSpeedStartupHarness();
         restored.registers.put(GpuRegister.SCX, 4);
         restored.transfer.restoreState(collisionState);
-        restored.transfer.tick();
+        step(restored.transfer);
         assertEquals(-7, restored.transfer.getPosition());
     }
 
@@ -110,7 +110,7 @@ public class PixelTransferSpriteTimingTest {
         boolean active;
         do {
             states.add(reference.transfer.captureState());
-            active = reference.transfer.tick();
+            active = step(reference.transfer);
             totalTicks++;
         } while (active);
 
@@ -136,13 +136,18 @@ public class PixelTransferSpriteTimingTest {
         int ticks = 0;
         boolean active;
         do {
-            active = transfer.tick();
+            active = step(transfer);
             ticks++;
             if (ticks > 1000) {
                 throw new AssertionError("pixel transfer did not finish");
             }
         } while (active);
         return ticks;
+    }
+
+    private static boolean step(PixelTransfer transfer) {
+        transfer.outputTick();
+        return transfer.tick();
     }
 
     private static Harness doubleSpeedStartupHarness() {

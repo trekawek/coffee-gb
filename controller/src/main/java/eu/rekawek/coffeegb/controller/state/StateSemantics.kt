@@ -550,7 +550,13 @@ internal object StateSemantics {
             it.range("position", -16, 160); it.range("objAttributesValue", -1, 0xff)
             it.range("objRefreshAttrsValue", -1, 0xff); it.range("objRefreshPops", 0, 8)
             it.nonNegative("entryTicks"); it.nonNegative("windowPendingTicks")
-            it.recordType("fifoMemento", DMG_FIFO_STATE, COLOR_FIFO_STATE)
+            it.recordType(
+                "fifoMemento",
+                DMG_FIFO_STATE,
+                COLOR_FIFO_STATE,
+                SCALAR_DMG_FIFO_STATE,
+                SCALAR_COLOR_FIFO_STATE,
+            )
             if (it.value("pendingWindowDisplayWrites") != null) {
               it.recordElements("pendingWindowDisplayWrites", DELAYED_WINDOW_WRITE)
             }
@@ -842,6 +848,28 @@ internal object StateSemantics {
           constrained("GameShark mode/bank/data are bytes and the destination is a 16-bit address.") {
             it.range("mode", 0, 0xff); it.range("bank", 0, 0xff)
             it.range("address", 0, 0xffff); it.range("data", 0, 0xff)
+          })
+      put("eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State",
+          constrained("The DMG scalar FIFO preserves bounded queue occupancy, delay cursors, and output latches.") {
+            it.range("backgroundSize", 0, 16)
+            it.range("spriteSize", 0, 8); it.nonNegative("spriteUnderflow")
+            it.require(it.longArray("delayStamp").size == 8, "must have an eight-entry delay ring")
+            it.range("delayHead", 0, 7); it.range("delaySize", 0, 8)
+            it.range("outputTicks", 0L, Long.MAX_VALUE)
+            val outputTicks = it.long("outputTicks")
+            it.require(it.longArray("delayStamp").all { stamp -> stamp in 0L..outputTicks },
+                "has a delay age outside the output clock")
+            it.range("linePixels", 0, 160)
+            it.nonNegative("outCount")
+            it.require(!it.boolean("firstEntryPresent") || it.int("outCount") == 1,
+                "has a first-pixel latch without output count 1")
+          })
+      put("eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State",
+          constrained("The CGB scalar FIFO preserves bounded active/retained occupancy and output cursors.") {
+            it.range("backgroundSize", 0, 16); it.range("clearedBackgroundSize", 0, 16)
+            it.range("spriteSize", 0, 8); it.nonNegative("spriteUnderflow")
+            it.range("delayHead", 0, 7); it.range("delaySize", 0, 8)
+            it.range("outputTicks", 0L, Long.MAX_VALUE); it.range("linePixels", 0, 160)
           })
 
       // Explicitly audited records with no scalar relationship beyond schema, target dimensions,
@@ -1857,6 +1885,10 @@ internal object StateSemantics {
   private const val DMG_FIFO_STATE = "eu.rekawek.coffeegb.core.gpu.DmgPixelFifo\$DmgPixelFifoState"
   private const val COLOR_FIFO_STATE =
       "eu.rekawek.coffeegb.core.gpu.ColorPixelFifo\$ColorPixelFifoState"
+  private const val SCALAR_DMG_FIFO_STATE =
+      "eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State"
+  private const val SCALAR_COLOR_FIFO_STATE =
+      "eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State"
   private const val INT_QUEUE_STATE = "eu.rekawek.coffeegb.core.gpu.IntQueue\$IntQueueState"
   private const val PENDING_PPU_WRITE = "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState"
   private const val DELAYED_WINDOW_WRITE =

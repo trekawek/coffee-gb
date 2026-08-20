@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.state.Int32ArrayState
 import eu.rekawek.coffeegb.controller.state.Int32MapState
 import eu.rekawek.coffeegb.controller.state.Int32State
 import eu.rekawek.coffeegb.controller.state.Int64ArrayState
+import eu.rekawek.coffeegb.controller.state.Int64State
 import eu.rekawek.coffeegb.controller.state.ListState
 import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.ObjectArrayState
@@ -583,6 +584,7 @@ class SnapshotManagerTest {
               }
       assertEquals(8, migrated.int("delaySize"))
       assertEquals(expectedHead, migrated.int("delayHead"))
+      assertEquals(107L, migrated.long("outputTicks"))
       assertContentEquals(expectedEntries, migrated.orderedIntRing(expectedHead, 8))
       assertContentEquals(expectedStamps, migrated.orderedLongRing(expectedHead, 8))
     }
@@ -882,6 +884,9 @@ class SnapshotManagerTest {
 
   private fun RecordState.int(name: String): Int =
       (fields.single { it.name == name }.value as Int32State).value
+
+  private fun RecordState.long(name: String): Long =
+      (fields.single { it.name == name }.value as Int64State).value
 
   private fun RecordState.intArray(name: String): IntArray =
       (fields.single { it.name == name }.value as Int32ArrayState).copyValue()

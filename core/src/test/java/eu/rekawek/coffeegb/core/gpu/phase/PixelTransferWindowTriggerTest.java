@@ -127,7 +127,7 @@ public class PixelTransferWindowTriggerTest {
         h.transfer.start();
         int ticks = 0;
         int remainingTicks = 1000;
-        while (h.transfer.tick() && remainingTicks-- > 0) {
+        while (step(h.transfer) && remainingTicks-- > 0) {
             ticks++;
             // Run the line through the final visible-pixel comparator match.
         }
@@ -153,7 +153,7 @@ public class PixelTransferWindowTriggerTest {
         noTerminalMatch.transfer.checkWindowY();
         noTerminalMatch.transfer.start();
         int ordinaryTicks = 0;
-        while (noTerminalMatch.transfer.tick()) {
+        while (step(noTerminalMatch.transfer)) {
             ordinaryTicks++;
         }
         assertEquals("the terminal window start extends the physical transfer by four dots",
@@ -191,12 +191,12 @@ public class PixelTransferWindowTriggerTest {
         Harness h = startCgbWindow();
         int startPosition = h.transfer.getPosition();
 
-        h.transfer.tick();
+        step(h.transfer);
         assertEquals("an enabled StartWindowDraw state stalls pixel output",
                 startPosition, h.transfer.getPosition());
 
         h.lcdc.set(0x91);
-        h.transfer.tick();
+        step(h.transfer);
         assertEquals("a disabled StartWindowDraw state plots one retained background pixel",
                 startPosition + 1, h.transfer.getPosition());
         assertFalse("clearing LCDC.5 clears the accepted CGB window state",
@@ -206,7 +206,7 @@ public class PixelTransferWindowTriggerTest {
 
         int remainingTicks = 20;
         while (h.transfer.isCgbWindowStartActive() && remainingTicks-- > 0) {
-            h.transfer.tick();
+            step(h.transfer);
         }
         assertTrue("the six-state startup must finish", remainingTicks > 0);
         assertFalse("the CGB returns to the background after the startup sequence",
@@ -217,7 +217,7 @@ public class PixelTransferWindowTriggerTest {
     public void cgbDisabledWindowStartRoundTripsThroughMemento() {
         Harness h = startCgbWindow();
         h.lcdc.set(0x91);
-        h.transfer.tick();
+        step(h.transfer);
         ComponentState<PixelTransfer> disabledStart = h.transfer.captureState();
 
         int firstTicks = finishWindowStart(h.transfer);
@@ -241,17 +241,17 @@ public class PixelTransferWindowTriggerTest {
         h.transfer.start();
 
         while (h.transfer.getPosition() < -7) {
-            h.transfer.tick();
+            step(h.transfer);
         }
         h.lcdc.set(0xb1);
         ComponentState<PixelTransfer> risingEdge = h.transfer.captureState();
 
-        h.transfer.tick();
+        step(h.transfer);
         assertFalse("the comparator dot sees the pre-write LCDC.5 value",
                 h.transfer.hasActivatedWindowOnLine());
 
         h.transfer.restoreState(risingEdge);
-        h.transfer.tick();
+        step(h.transfer);
         assertFalse("the inhibited edge must survive save-state restoration",
                 h.transfer.hasActivatedWindowOnLine());
     }
@@ -268,7 +268,7 @@ public class PixelTransferWindowTriggerTest {
 
         int remainingTicks = 1000;
         while (h.transfer.getPosition() < 159 && remainingTicks-- > 0) {
-            h.transfer.tick();
+            step(h.transfer);
         }
         assertTrue("the output machine must reach the terminal comparator",
                 remainingTicks > 0);
@@ -277,7 +277,7 @@ public class PixelTransferWindowTriggerTest {
         assertFalse("the lookahead must see the same inhibited enable edge as tick()",
                 h.transfer.willStartCgbTerminalWindow());
         assertFalse("the rising edge must finish the line without a terminal start",
-                h.transfer.tick());
+                step(h.transfer));
         assertFalse(h.transfer.hasCgbTerminalWindowStarted());
     }
 
@@ -295,19 +295,24 @@ public class PixelTransferWindowTriggerTest {
 
         int remainingTicks = 100;
         while (h.transfer.getPosition() < 1 && remainingTicks-- > 0) {
-            h.transfer.tick();
+            step(h.transfer);
         }
         assertTrue("the shifted output machine must reach the held f4 comparator",
                 remainingTicks > 0);
 
         h.lcdc.set(0xb1);
-        h.transfer.tick();
+        step(h.transfer);
         assertTrue("SCX=5 holds X=WX for the double-speed re-enable edge",
                 h.transfer.isWindowActivationPending());
 
-        h.transfer.tick();
+        step(h.transfer);
         assertTrue("the held comparator must commit a window activation",
                 h.transfer.hasActivatedWindowOnLine());
+    }
+
+    private static boolean step(PixelTransfer transfer) {
+        transfer.outputTick();
+        return transfer.tick();
     }
 
     private static Harness startCgbWindow() {
@@ -321,7 +326,7 @@ public class PixelTransferWindowTriggerTest {
 
         int remainingTicks = 100;
         while (!h.transfer.isCgbWindowStartActive() && remainingTicks-- > 0) {
-            h.transfer.tick();
+            step(h.transfer);
         }
         assertTrue("the WX comparator must enter StartWindowDraw", remainingTicks > 0);
         return h;
@@ -330,7 +335,7 @@ public class PixelTransferWindowTriggerTest {
     private static int finishWindowStart(PixelTransfer transfer) {
         int ticks = 0;
         while (transfer.isCgbWindowStartActive() && ticks < 20) {
-            transfer.tick();
+            step(transfer);
             ticks++;
         }
         assertTrue("the six-state startup must finish", ticks < 20);
@@ -348,7 +353,7 @@ public class PixelTransferWindowTriggerTest {
 
         h.transfer.start();
         int ticks = 1;
-        while (h.transfer.tick()) {
+        while (step(h.transfer)) {
             ticks++;
         }
         return ticks;

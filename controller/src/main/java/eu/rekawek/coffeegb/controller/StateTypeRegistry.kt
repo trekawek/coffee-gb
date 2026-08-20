@@ -121,6 +121,11 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$LoaderMbc5\$LoaderMbc5State",
           "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Unlicensed256M\$Unlicensed256MState",
+          // E2b scalar timing FIFO payloads live in PixelTransferState.fifoMemento.  Append-only
+          // registration keeps existing StateFile v1 IDs stable while allowing ordinary
+          // controller snapshots to carry the new occupancy/delay state.
+          "eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State",
+          "eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State",
       )
 
   val legacyRecordClassNames =

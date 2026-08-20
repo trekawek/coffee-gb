@@ -38,7 +38,18 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     private static final int WINDOW_Y_CURRENT_LINE_CHECKPOINT = 2;
     private static final int WINDOW_Y_UPCOMING_LINE_CHECKPOINT = 4;
 
-    private final PixelFifo fifo;
+    // The FIFO is deliberately mutable only at explicit routing/restore boundaries.  The
+    // unshifted timing skeleton binds a scalar FIFO; the shifted output machine binds the full
+    // payload FIFO for all visible/SGB/debug output work.
+    private PixelFifo fifo;
+
+    private final PixelFifo fullFifo;
+
+    private final PixelFifo timingFifo;
+
+    private final boolean timingSkeleton;
+
+    private boolean renderOutput = true;
 
     private final Fetcher fetcher;
 
@@ -211,6 +222,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     private final int[] objRefreshZip = new int[8];
 
+    // The released PixelTransfer/Fetcher memento descriptors still omit the window D1 refresh
+    // latch and its source tile metadata.  Preserve those descriptors here; a versioned runtime
+    // supplement is required before mid-refresh save/restore can claim exact continuation.
+
     private final int[] objRefreshNewZip = new int[8];
 
     // window first-tile D1 refresh (see Fetcher.takeWindowRefresh)
@@ -265,6 +280,33 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             VRamTransfer vRamTransfer,
             SpeedMode speedMode,
             int entryDelay) {
+        this(display, videoRam0, videoRam1, oemRam, lcdc, r, gbc, bgPalette, oamPalette, sprites,
+                vRamTransfer, speedMode, entryDelay, false);
+    }
+
+    /**
+     * Builds a dot machine with an explicit output role.
+     *
+     * <p>{@code timingSkeleton} is the only production guard that permits scalar storage.  It
+     * is intentionally separate from constructor order and from the host render-output switch:
+     * a visible/output machine can never acquire a scalar FIFO merely because output is
+     * suppressed.</p>
+     */
+    public PixelTransfer(
+            Display display,
+            AddressSpace videoRam0,
+            AddressSpace videoRam1,
+            AddressSpace oemRam,
+            Lcdc lcdc,
+            GpuRegisterValues r,
+            boolean gbc,
+            ColorPalette bgPalette,
+            ColorPalette oamPalette,
+            SpritePosition[] sprites,
+            VRamTransfer vRamTransfer,
+            SpeedMode speedMode,
+            int entryDelay,
+            boolean timingSkeleton) {
         this.entryDelay = entryDelay;
 
         this.r = r;
@@ -272,11 +314,19 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         this.gbc = gbc;
         this.speedMode = speedMode;
         this.speedModeValue = speedMode.getSpeedMode();
-        if (gbc) {
-            this.fifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
-        } else {
-            this.fifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
+        if (timingSkeleton && entryDelay != 0) {
+            throw new IllegalArgumentException("Scalar timing storage requires the unshifted machine");
         }
+        this.timingSkeleton = timingSkeleton;
+        if (gbc) {
+            this.fullFifo = new ColorPixelFifo(display, lcdc, bgPalette, oamPalette, r, speedMode);
+            this.timingFifo = timingSkeleton ? new ScalarTimingColorPixelFifo() : null;
+        } else {
+            this.fullFifo = new DmgPixelFifo(display, lcdc, r, vRamTransfer);
+            this.timingFifo = timingSkeleton ? new ScalarTimingDmgPixelFifo() : null;
+        }
+        this.fifo = timingSkeleton ? timingFifo : fullFifo;
+        this.renderOutput = !timingSkeleton;
         this.fetcher = new Fetcher(
                 fifo, videoRam0, videoRam1, oemRam, lcdc, r, gbc, entryDelay);
         this.sprites = sprites;
@@ -305,11 +355,66 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /** Enables/disables visible pixel resolution for this dot machine. */
     public void setRenderOutput(boolean renderOutput) {
+        if (timingSkeleton) {
+            if (renderOutput) {
+                // The role is immutable: switching a live timing skeleton to output would lose
+                // its scalar queue/delay state.  The GPU creates the shifted output machine
+                // separately, so no production path needs this transition.
+                throw new IllegalStateException("Timing skeleton cannot render output");
+            }
+            this.renderOutput = false;
+            // A failed/incompatible restore may deliberately deopt this skeleton to its full
+            // FIFO.  Keep that fail-closed representation until a compatible scalar restore
+            // explicitly rebinds it; a repeated host-side "output=false" notification must not
+            // discard the recovered full queue mid-line.
+            if (fifo == timingFifo) {
+                bindTimingFifo();
+            }
+            return;
+        }
+        this.renderOutput = renderOutput;
         if (fifo instanceof ColorPixelFifo colorPixelFifo) {
             colorPixelFifo.setRenderOutput(renderOutput);
         } else if (fifo instanceof DmgPixelFifo dmgPixelFifo) {
             dmgPixelFifo.setRenderOutput(renderOutput);
         }
+    }
+
+    /** Whether this dot machine is the explicitly designated unshifted timing skeleton. */
+    public boolean isTimingSkeleton() {
+        return timingSkeleton;
+    }
+
+    /** Whether scalar timing storage is currently bound to this dot machine. */
+    public boolean usesScalarTimingFifo() {
+        return timingSkeleton && !renderOutput && fifo == timingFifo;
+    }
+
+    private void bindTimingFifo() {
+        if (!timingSkeleton || timingFifo == null) {
+            throw new IllegalStateException("Scalar timing FIFO is not allowed for this machine");
+        }
+        if (fifo != timingFifo) {
+            fifo = timingFifo;
+            fetcher.setFifo(fifo);
+        }
+    }
+
+    private void bindFullFifo() {
+        if (fullFifo instanceof ColorPixelFifo colorPixelFifo) {
+            colorPixelFifo.setRenderOutput(renderOutput);
+        } else if (fullFifo instanceof DmgPixelFifo dmgPixelFifo) {
+            dmgPixelFifo.setRenderOutput(renderOutput);
+        }
+        if (fifo != fullFifo) {
+            fifo = fullFifo;
+            fetcher.setFifo(fifo);
+        }
+    }
+
+    private void deoptToFullFifo() {
+        bindFullFifo();
+        fullFifo.resetForMissingState();
     }
 
     public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {
@@ -379,10 +484,50 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     public DmgPixelFifo.RuntimeState captureDmgFifoRuntimeState() {
-        return fifo instanceof DmgPixelFifo dmgFifo ? dmgFifo.captureRuntimeState() : null;
+        if (fifo instanceof DmgPixelFifo dmgFifo) {
+            return dmgFifo.captureRuntimeState();
+        }
+        if (fifo instanceof ScalarTimingDmgPixelFifo scalar) {
+            ScalarTimingDmgPixelFifo.State state = scalar.captureTimingState();
+            // The historical supplement predates the scalar queue state.  Preserve its
+            // first-pixel/line fields for old callers; the complete scalar state is carried by
+            // the PixelTransferState fifoMemento.
+            return new DmgPixelFifo.RuntimeState(
+                    state.linePixels(),
+                    state.outCount(),
+                    state.firstEntryPresent() ? 0 : -1,
+                    0,
+                    0,
+                    0);
+        }
+        return null;
     }
 
     public void validateDmgFifoRuntimeState(DmgPixelFifo.RuntimeState state) {
+        if (fifo instanceof ScalarTimingDmgPixelFifo scalar) {
+            if (state == null) {
+                throw new IllegalArgumentException("DMG scalar FIFO runtime state is missing");
+            }
+            if (state.firstEntry() < -1 || state.firstEntry() > 0x3f) {
+                throw new IllegalArgumentException("Invalid pending DMG first-pixel entry");
+            }
+            if (state.linePixels() < 0 || state.linePixels() > 160 || state.outCount() < 0) {
+                throw new IllegalArgumentException("Invalid DMG scalar output position");
+            }
+            // Keep the historical supplement's first-pixel latch invariants even though the
+            // scalar FIFO does not retain palette bytes.  This lets old detached snapshots be
+            // validated before any live mutation rather than silently accepting an impossible
+            // latch and partially overwriting scalar timing state.
+            if (state.firstEntry() >= 0 && state.outCount() != 1) {
+                throw new IllegalArgumentException("Pending DMG first pixel requires output count 1");
+            }
+            if (state.firstBgp() < 0 || state.firstBgp() > 0xff
+                    || state.firstObp0() < 0 || state.firstObp0() > 0xff
+                    || state.firstObp1() < 0 || state.firstObp1() > 0xff) {
+                throw new IllegalArgumentException("Invalid pending DMG first-pixel palette");
+            }
+            return;
+        }
         if (!(fifo instanceof DmgPixelFifo dmgFifo)) {
             if (state != null) {
                 throw new IllegalArgumentException("DMG pixel FIFO state supplied for a CGB FIFO");
@@ -396,6 +541,19 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         validateDmgFifoRuntimeState(state);
         if (fifo instanceof DmgPixelFifo dmgFifo) {
             dmgFifo.restoreRuntimeState(state);
+        } else if (fifo instanceof ScalarTimingDmgPixelFifo scalar) {
+            ScalarTimingDmgPixelFifo.State current = scalar.captureTimingState();
+            scalar.restoreTimingState(new ScalarTimingDmgPixelFifo.State(
+                    current.backgroundSize(),
+                    current.spriteSize(),
+                    current.spriteUnderflow(),
+                    current.delayStamp(),
+                    current.delayHead(),
+                    current.delaySize(),
+                    current.outputTicks(),
+                    state.linePixels(),
+                    state.outCount(),
+                    state.firstEntry() >= 0));
         }
     }
 
@@ -1203,6 +1361,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             fifoMemento = capture == null
                     ? ((ColorPixelFifo) fifo).captureState()
                     : ((ColorPixelFifo) fifo).captureState(capture);
+        } else if (fifo instanceof ScalarTimingDmgPixelFifo scalar) {
+            fifoMemento = capture == null ? scalar.captureState() : scalar.captureState(capture);
+        } else if (fifo instanceof ScalarTimingColorPixelFifo scalar) {
+            fifoMemento = scalar.captureState();
         }
 
         return new PixelTransferState(
@@ -1266,13 +1428,13 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             throw new IllegalArgumentException("Invalid state type");
         }
 
-        fetcher.restoreState(mem.fetcherMemento);
+        // FIFO validation is deliberately a separate, non-mutating phase.  In particular, a
+        // wrong-family full state must not deopt a scalar skeleton before the nested shape/type
+        // check has rejected it.
+        validateStateForRestore(mem);
+        restoreFifoState(mem.fifoMemento);
 
-        if (fifo instanceof DmgPixelFifo && mem.fifoMemento != null) {
-            ((DmgPixelFifo) fifo).restoreState((ComponentState<DmgPixelFifo>) mem.fifoMemento);
-        } else if (fifo instanceof ColorPixelFifo && mem.fifoMemento != null) {
-            ((ColorPixelFifo) fifo).restoreState((ComponentState<ColorPixelFifo>) mem.fifoMemento);
-        }
+        fetcher.restoreState(mem.fetcherMemento);
 
         this.entryTicks = mem.entryTicks;
         this.lcdEnableFirstLine = mem.lcdEnableFirstLine;
@@ -1344,6 +1506,103 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
             this.windowXOverride = -1;
         }
         fetcher.setWindowYTriggered(windowYTriggered);
+    }
+
+    /**
+     * Validates the FIFO portion of a PixelTransfer memento without rebinding the live FIFO.
+     * Full states are accepted only for this machine's hardware family; scalar states are
+     * accepted only by the explicitly designated unshifted timing skeleton of that family.
+     */
+    public void validateStateForRestore(ComponentState<PixelTransfer> state) {
+        if (!(state instanceof PixelTransferState mem)) {
+            throw new IllegalArgumentException("Invalid PixelTransfer state type");
+        }
+        validateFifoState(mem.fifoMemento);
+    }
+
+    private void validateFifoState(ComponentState<?> state) {
+        if (state == null) {
+            // A missing FIFO component is an old/partial snapshot.  restoreFifoState handles it
+            // by fail-closed reset/deoptimization rather than retaining future scalar state.
+            return;
+        }
+        if (state instanceof ScalarTimingDmgPixelFifo.State scalarDmg) {
+            if (!(timingSkeleton && !renderOutput && !gbc)) {
+                throw new IllegalArgumentException(
+                        "DMG scalar FIFO state requires the matching timing skeleton");
+            }
+            ((ScalarTimingDmgPixelFifo) timingFifo).validate(scalarDmg);
+            return;
+        }
+        if (state instanceof ScalarTimingColorPixelFifo.State scalarColor) {
+            if (!(timingSkeleton && !renderOutput && gbc)) {
+                throw new IllegalArgumentException(
+                        "CGB scalar FIFO state requires the matching timing skeleton");
+            }
+            ((ScalarTimingColorPixelFifo) timingFifo).validate(scalarColor);
+            return;
+        }
+        if (gbc) {
+            ColorPixelFifo.validateState(state);
+        } else {
+            DmgPixelFifo.validateState(state);
+        }
+    }
+
+    /**
+     * Restores the FIFO payload/occupancy in the already released memento field.  Scalar states
+     * are recognized explicitly; a missing state or valid legacy/full state may deoptimize a
+     * timing skeleton, while scalar states are accepted only by their matching role and hardware
+     * mode. Invalid or misrouted scalar state is rejected before any live FIFO is rebound.
+     */
+    @SuppressWarnings("unchecked")
+    private void restoreFifoState(ComponentState<?> state) {
+        validateFifoState(state);
+        if (state instanceof ScalarTimingDmgPixelFifo.State scalarDmg) {
+            if (timingSkeleton && !renderOutput && !gbc) {
+                ScalarTimingDmgPixelFifo scalar = (ScalarTimingDmgPixelFifo) timingFifo;
+                // Validate before rebinding a previously deoptimized skeleton.  An invalid
+                // scalar record must be rejected without changing either the role or the live
+                // FIFO representation.
+                scalar.validate(scalarDmg);
+                bindTimingFifo();
+                scalar.restoreTimingState(scalarDmg);
+                return;
+            }
+            throw new IllegalArgumentException(
+                    "DMG scalar FIFO state requires the matching timing skeleton");
+        }
+        if (state instanceof ScalarTimingColorPixelFifo.State scalarColor) {
+            if (timingSkeleton && !renderOutput && gbc) {
+                ScalarTimingColorPixelFifo scalar = (ScalarTimingColorPixelFifo) timingFifo;
+                scalar.validate(scalarColor);
+                bindTimingFifo();
+                scalar.restoreTimingState(scalarColor);
+                return;
+            }
+            throw new IllegalArgumentException(
+                    "CGB scalar FIFO state requires the matching timing skeleton");
+        }
+
+        if (fifo instanceof ScalarTimingDmgPixelFifo
+                || fifo instanceof ScalarTimingColorPixelFifo) {
+            // Full/legacy state is authoritative.  Scalar state is never inferred from its
+            // payload, and a missing state cannot leave the current scalar queue live.
+            deoptToFullFifo();
+        }
+        if (fifo instanceof DmgPixelFifo dmgFifo) {
+            if (state == null) {
+                dmgFifo.resetForMissingState();
+            } else {
+                dmgFifo.restoreState((ComponentState<DmgPixelFifo>) state);
+            }
+        } else if (fifo instanceof ColorPixelFifo colorFifo) {
+            if (state == null) {
+                colorFifo.resetForMissingState();
+            } else {
+                colorFifo.restoreState((ComponentState<ColorPixelFifo>) state);
+            }
+        }
     }
 
     private record PixelTransferState(

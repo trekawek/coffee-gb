@@ -66,7 +66,7 @@ public class Fetcher implements StatefulComponent<Fetcher> {
     public static final int GET_TILE_DATA_HIGH_T2 = 5;
     public static final int PUSH = 6;
 
-    private final PixelFifo fifo;
+    private PixelFifo fifo;
 
     private AddressSpace videoRam0;
 
@@ -185,6 +185,15 @@ public class Fetcher implements StatefulComponent<Fetcher> {
         this.oemRam = oemRam;
         this.r = registers;
         this.lcdc = lcdc;
+    }
+
+    /**
+     * Rebinds the FIFO used by this fetcher at an explicit PixelTransfer routing boundary.
+     * The timing skeleton binds its scalar FIFO before a line starts; the visible machine keeps
+     * its full payload FIFO for the lifetime of the fetcher.
+     */
+    public void setFifo(PixelFifo fifo) {
+        this.fifo = java.util.Objects.requireNonNull(fifo, "fifo");
     }
 
     public void setDebugAddressSpaces(
