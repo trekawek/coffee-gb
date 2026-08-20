@@ -29,8 +29,13 @@ adjacent parent/candidate runs in 12 randomized seven-row blocks:
   --candidate-apk /path/to/candidate-signed.apk \
   --color-slot <color-capable-recent-slot> \
   --non-color-slot <non-color-recent-slot> \
+  --execution-mode accuracy \
   --output-dir /path/to/private-report-dir
 ```
+
+`--execution-mode` accepts `accuracy` (the default) or `performance`. Run the matrix separately
+for each mode; the app emits the selected strategy as `execution_mode` in both `matrix_run` and
+`final_result` records. The setting is session-scoped and never enters save-state data.
 
 The two recent slots are selected by the user for the appropriate color/non-color workload. The
 app assigns and durably persists random opaque workload nonces after selection; the host nonce

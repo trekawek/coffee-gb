@@ -84,6 +84,7 @@ public final class BenchmarkMatrix {
             "requested_hardware", "requested_profile", "profile", "effective_gbc",
             "effective_dmg_compat", "effective_mode", "device_id", "speed_mode_initial",
             "build_profile",
+            "execution_mode",
             "clock_ticks_num", "clock_ticks_den", "clock_frames_num",
             "clock_frames_den", "clock_ticks_frame", "thermal_start",
             "battery_temp_start", "display_refresh_start_millihz", "display_state_start",
@@ -120,6 +121,7 @@ public final class BenchmarkMatrix {
             "submission_interval_fps", "wall_ms", "fps", "requested_profile", "profile",
             "effective_gbc", "effective_dmg_compat", "effective_mode", "device_id",
             "speed_mode_initial", "speed_mode_final", "clock_ticks_num", "clock_ticks_den",
+            "execution_mode",
             "clock_frames_num", "clock_frames_den", "clock_ticks_frame",
             "workload_nonce", "warmup", "input_contract",
             "drain_success",
@@ -653,6 +655,11 @@ public final class BenchmarkMatrix {
             if (!Set.of("dmg", "mgb", "cgb", "sgb", "sgb2").contains(value)) {
                 errors.add("line " + lineNumber + ": invalid hardware family");
             }
+            return;
+        }
+        if ("execution_mode".equals(key)
+                && !Set.of("accuracy", "performance").contains(value)) {
+            errors.add("line " + lineNumber + ": invalid execution mode");
             return;
         }
         if ("run_side".equals(key) || "first_side".equals(key)) {

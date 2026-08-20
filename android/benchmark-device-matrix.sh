@@ -48,7 +48,8 @@ GATE_SCRIPT=${COFFEE_GB_M2_GATE_SCRIPT:-$SCRIPT_DIR/surface-timestats-gate.sh}
 
 usage() {
   echo "usage: benchmark-device-matrix.sh --parent-apk <signed.apk> --candidate-apk <signed.apk>" >&2
-  echo "       --color-slot <0..9> --non-color-slot <0..9> [--output-dir <dir>]" >&2
+  echo "       --color-slot <0..9> --non-color-slot <0..9>" >&2
+  echo "       [--execution-mode accuracy|performance] [--output-dir <dir>]" >&2
 }
 
 fatal() {
@@ -80,11 +81,13 @@ candidate_apk=
 color_slot=
 non_color_slot=
 output_dir=
+execution_mode=accuracy
 parent_seen=false
 candidate_seen=false
 color_seen=false
 non_color_seen=false
 output_seen=false
+execution_mode_seen=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -123,6 +126,13 @@ while [ "$#" -gt 0 ]; do
       output_seen=true
       shift 2
       ;;
+    --execution-mode|--mode)
+      require_arg "$@"
+      [ "$execution_mode_seen" = false ] || { usage; exit 2; }
+      execution_mode=$(printf '%s' "$2" | tr 'A-Z' 'a-z')
+      execution_mode_seen=true
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -136,6 +146,11 @@ done
 
 [ -n "$parent_apk" ] && [ -n "$candidate_apk" ] \
   && [ -n "$color_slot" ] && [ -n "$non_color_slot" ] || { usage; exit 2; }
+
+case "$execution_mode" in
+  accuracy|performance) : ;;
+  *) fatal "execution mode must be accuracy or performance" ;;
+esac
 
 case "$color_slot" in 0|1|2|3|4|5|6|7|8|9) : ;; *) fatal "color catalog slot must be 0..9" ;; esac
 case "$non_color_slot" in 0|1|2|3|4|5|6|7|8|9) : ;; *) fatal "non-color catalog slot must be 0..9" ;; esac
@@ -814,9 +829,9 @@ run_one() {
   arm_token=$(make_token a)
 
   run_number=$((run_number + 1))
-  printf 'run=%s/%s block=%s row_order=%s row=%s side=%s first_side=%s rate=%s\n' \
+  printf 'run=%s/%s block=%s row_order=%s row=%s side=%s first_side=%s mode=%s rate=%s\n' \
     "$run_number" "$TOTAL_RUNS" "$matrix_block" "$row_order" "$row" "$run_side" \
-    "$first_side" "$rate"
+    "$first_side" "$execution_mode" "$rate"
 
   adb_shell_checked am force-stop "$PACKAGE"
   if ! adb_capture "$tmp_dir/install" install -r -d --no-streaming "$apk"; then
@@ -856,6 +871,7 @@ run_one() {
     --es coffee_gb_thermal_window m2 \
     --ez coffee_gb_thermal_valid true \
     --ei coffee_gb_surface_rate_hz "$rate" \
+    --es coffee_gb_execution_mode "$execution_mode" \
     --ei coffee_gb_recent_slot "$slot" \
     || fatal "visible benchmark Activity launch failed"
   if ! awk 'tolower($0) ~ /status:[[:space:]]*ok/ { ok=1 } END { exit(ok ? 0 : 1) }' "$tmp_dir/launch"; then
@@ -906,6 +922,7 @@ run_one() {
   require_line_field "$matrix_run_line" run_side "$run_side"
   require_line_field "$matrix_run_line" first_side "$first_side"
   require_line_field "$matrix_run_line" benchmark_generation "$benchmark_generation"
+  require_line_field "$matrix_run_line" execution_mode "$execution_mode"
   require_line_field "$matrix_run_line" requested_hardware "$profile"
   require_line_field "$matrix_run_line" warmup true
   require_line_field "$matrix_run_line" input_contract none
@@ -932,6 +949,7 @@ run_one() {
   require_line_field "$final_line" matrix_block "$matrix_block"
   require_line_field "$final_line" row_order "$row_order"
   require_line_field "$final_line" run_side "$run_side"
+  require_line_field "$final_line" execution_mode "$execution_mode"
   require_line_field "$final_line" frame 600
   require_line_field "$final_line" ready_count 600
   require_line_field "$final_line" submitted_count 600

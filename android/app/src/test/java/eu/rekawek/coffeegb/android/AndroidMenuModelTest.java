@@ -18,7 +18,7 @@ public class AndroidMenuModelTest {
 
     @Test
     public void settingsExposesOnlyInlineEditableRoutes() {
-        assertEquals(List.of("system", "display", "audio", "peripherals"),
+        assertEquals(List.of("system", "display", "audio", "peripherals", "execution-mode"),
                 AndroidMenuModel.settingsPage().items().stream()
                         .map(MenuPageSpec.Item::id).toList());
         assertEquals("system", AndroidMenuModel.settingsPage().preferredFocusId());

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.core.ExecutionMode;
 
 import org.junit.Test;
 
@@ -18,6 +19,7 @@ public class DiagnosticsOptionsTest {
         assertFalse(options.enabled);
         assertEquals(DiagnosticsOptions.Hardware.AUTO, options.hardware);
         assertTrue(options.audioOutput);
+        assertEquals(ExecutionMode.ACCURACY, options.executionMode);
     }
 
     @Test
@@ -31,6 +33,24 @@ public class DiagnosticsOptionsTest {
         assertEquals(DiagnosticsOptions.Render.FRAME_SINK, options.render);
         assertTrue(options.runtimeWarmup);
         assertFalse(options.launchRecent);
+        assertEquals(ExecutionMode.ACCURACY, options.executionMode);
+    }
+
+    @Test
+    public void executionModeIsAClosedLaunchAllowListWithAccuracyFallback() {
+        DiagnosticsOptions performance = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance");
+        DiagnosticsOptions malformed = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "turbo");
+
+        assertEquals(ExecutionMode.PERFORMANCE, performance.executionMode);
+        assertEquals("performance", DiagnosticsOptions.executionModeValue(performance.executionMode));
+        assertEquals(ExecutionMode.ACCURACY, malformed.executionMode);
+        assertEquals("accuracy", DiagnosticsOptions.executionModeValue(malformed.executionMode));
     }
 
     @Test

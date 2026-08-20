@@ -559,6 +559,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
                 + " input_contract=none"
+                + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode)
                 + " thermal_window=" + options.thermalWindow
                 + " audio=" + (options.audioOutput ? "on" : "off")
                 + " render=" + (options.render == DiagnosticsOptions.Render.FRAME_SINK
@@ -830,7 +831,8 @@ final class AndroidBenchmarkDiagnostics {
                 + " benchmark_generation=" + benchmarkGeneration
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
-                + " input_contract=none";
+                + " input_contract=none"
+                + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode);
     }
 
     private String matrixHardwareEvidenceFields() {
