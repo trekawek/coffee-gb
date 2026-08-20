@@ -231,10 +231,18 @@ interface Controller : AutoCloseable {
 
   data class GameboyTypeEvent(val gameboyType: GameboyType) : Event
 
-  /** Canonical stable profile identity for diagnostics and future replay metadata. */
+  /**
+   * Canonical stable profile identity plus the machine state resolved at session activation.
+   * The speed value is an initial/boot-resolved sample; it is not a promise that a game cannot
+   * switch CPU speed later in the session.
+   */
   data class HardwareProfileEvent(
       val profile: HardwareProfile,
       val identity: HardwareProfileIdentity = profile.identity(),
+      /** Actual SpeedMode/GPU flags sampled after bootstrap or state materialization. */
+      val effectiveGbc: Boolean? = null,
+      val effectiveDmgCompat: Boolean? = null,
+      val effectiveSpeedMode: Int? = null,
   ) : Event
 
   /** Posted while the rewind key is held; the emulation plays backwards while active. */

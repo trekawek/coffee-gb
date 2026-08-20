@@ -34,7 +34,7 @@ public final class EmulationService extends Service implements AudioManager.OnAu
         nextStartOptions = checked;
         intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
                 .putExtra(DiagnosticsOptions.EXTRA_HARDWARE,
-                        checked.hardware == DiagnosticsOptions.Hardware.DMG ? "dmg" : "auto")
+                        checked.hardware.externalValue())
                 .putExtra(DiagnosticsOptions.EXTRA_AUDIO, checked.audioOutput)
                 .putExtra(DiagnosticsOptions.EXTRA_RENDER,
                         checked.render == DiagnosticsOptions.Render.FRAME_SINK ? "sink" : "presentation")

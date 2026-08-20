@@ -4083,7 +4083,16 @@ class BasicController private constructor(
 
     postSessionEventSafely(session, AddPatches(patches))
     postSessionEventSafely(session, Controller.GameboyTypeEvent(session.config.gameboyType))
-    postSessionEventSafely(session, Controller.HardwareProfileEvent(session.config.hardwareProfile))
+    val effectiveSpeedMode = session.gameboy.getSpeedMode()
+    val effectiveGpu = session.gameboy.getGpu()
+    postSessionEventSafely(
+        session,
+        Controller.HardwareProfileEvent(
+            session.config.hardwareProfile,
+            effectiveGbc = effectiveGpu.isGbc(),
+            effectiveDmgCompat = effectiveGpu.isDmgCompatMode(),
+            effectiveSpeedMode = effectiveSpeedMode.getSpeedMode(),
+        ))
     postSessionEventSafely(session, Controller.SessionPauseSupportEvent(true))
     postSessionEventSafely(
         session,

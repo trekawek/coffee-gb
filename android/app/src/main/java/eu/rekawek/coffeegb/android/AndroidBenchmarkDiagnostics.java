@@ -4,6 +4,8 @@ import android.os.Debug;
 import android.os.SystemClock;
 import android.util.Log;
 
+import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 
 /**
@@ -36,6 +38,11 @@ final class AndroidBenchmarkDiagnostics {
     private long allocBytesStart;
     private long frames;
     private HardwareProfile profile;
+    private Boolean effectiveGbc;
+    private Boolean effectiveDmgCompat;
+    private Integer effectiveSpeedMode;
+    private DiagnosticsOptions.EffectiveMode effectiveMode = DiagnosticsOptions.EffectiveMode.UNKNOWN;
+    private ClockSpec effectiveClock;
     private boolean emulationStarted;
 
     AndroidBenchmarkDiagnostics(DiagnosticsOptions options) {
@@ -67,9 +74,15 @@ final class AndroidBenchmarkDiagnostics {
         allocBytesStart = 0L;
         frames = 0L;
         profile = null;
+        effectiveGbc = null;
+        effectiveDmgCompat = null;
+        effectiveSpeedMode = null;
+        effectiveMode = DiagnosticsOptions.EffectiveMode.UNKNOWN;
+        effectiveClock = null;
         emulationStarted = false;
         record("event=session_launch launch_ns=" + launchNanos
                 + " hardware=" + options.hardware.name().toLowerCase()
+                + " requested_hardware=" + options.hardware.externalValue()
                 + " audio=" + (options.audioOutput ? "on" : "off")
                 + " render=" + (options.render == DiagnosticsOptions.Render.FRAME_SINK
                         ? "sink" : "presentation")
@@ -91,13 +104,27 @@ final class AndroidBenchmarkDiagnostics {
         }
     }
 
-    void hardwareProfile(HardwareProfile next) {
-        if (!enabled || next == null) {
+    void hardwareProfile(Controller.HardwareProfileEvent next) {
+        if (!enabled || next == null || next.getProfile() == null) {
             return;
         }
-        profile = next;
-        record("event=hardware_profile profile=" + next.id()
-                + " family=" + next.family().name().toLowerCase());
+        profile = next.getProfile();
+        effectiveGbc = next.getEffectiveGbc();
+        effectiveDmgCompat = next.getEffectiveDmgCompat();
+        effectiveSpeedMode = next.getEffectiveSpeedMode();
+        effectiveMode = DiagnosticsOptions.EffectiveMode.classify(
+                profile, effectiveGbc, effectiveDmgCompat);
+        effectiveClock = next.getIdentity() == null ? null : next.getIdentity().clockSpec();
+        record("event=hardware_profile requested_hardware=" + options.hardware.externalValue()
+                + " requested_profile=" + requestedProfile()
+                + " profile=" + profile.id()
+                + " family=" + profile.family().name().toLowerCase()
+                + " effective_gbc=" + valueOrUnknown(effectiveGbc)
+                + " effective_dmg_compat=" + valueOrUnknown(effectiveDmgCompat)
+                + " effective_mode=" + effectiveMode.externalValue()
+                + " speed_mode_initial=" + valueOrUnknown(effectiveSpeedMode)
+                + " speed_mode_sample=boot_resolved"
+                + " " + clockFields());
     }
 
     /** Called on the emulation/event thread before the first physical frame. */
@@ -118,7 +145,14 @@ final class AndroidBenchmarkDiagnostics {
         emulationStarted = true;
         record("event=emulation_started wall_ns=" + preparationNanos
                 + " prep_ms=" + elapsedMillis(preparationNanos, preparationOrigin)
-                + " hardware=" + (profile == null ? "unknown" : profile.id()));
+                + " requested_hardware=" + options.hardware.externalValue()
+                + " profile=" + (profile == null ? "unknown" : profile.id())
+                + " effective_gbc=" + valueOrUnknown(effectiveGbc)
+                + " effective_dmg_compat=" + valueOrUnknown(effectiveDmgCompat)
+                + " effective_mode=" + effectiveMode.externalValue()
+                + " speed_mode_initial=" + valueOrUnknown(effectiveSpeedMode)
+                + " speed_mode_sample=boot_resolved"
+                + " " + clockFields());
         openNanos = 0L;
     }
 
@@ -170,6 +204,8 @@ final class AndroidBenchmarkDiagnostics {
                 + " wall_delta_ms=" + elapsedMillis(current, launchNanos)
                 + " fps=" + format(fps)
                 + " interval_fps=" + format(intervalFps)
+                + " effective_mode=" + effectiveMode.externalValue()
+                + " speed_mode_sample=boot_resolved"
                 + " controller_cpu_ms=" + (cpuElapsed / NANOS_PER_MILLI)
                 + " controller_util_pct=" + format(utilization)
                 + " gc_count_delta=" + delta(globalGcCount(), gcCountStart)
@@ -180,6 +216,8 @@ final class AndroidBenchmarkDiagnostics {
         if (frame == FINAL_FRAME) {
             record("event=final_result frame=600 wall_ms="
                     + elapsedMillis(current, firstFrameNanos) + " fps=" + format(fps)
+                    + " effective_mode=" + effectiveMode.externalValue()
+                    + " speed_mode_sample=boot_resolved"
                     + " controller_cpu_ms=" + (cpuElapsed / NANOS_PER_MILLI)
                     + " controller_util_pct=" + format(utilization)
                     + " gc_count_delta=" + delta(globalGcCount(), gcCountStart)
@@ -242,6 +280,28 @@ final class AndroidBenchmarkDiagnostics {
 
     private static String format(double value) {
         return String.format(java.util.Locale.ROOT, "%.3f", value);
+    }
+
+    private String requestedProfile() {
+        HardwareProfile requested = options.hardware.profileOverride();
+        return requested == null ? "auto" : requested.id();
+    }
+
+    private static String valueOrUnknown(Object value) {
+        return value == null ? "unknown" : String.valueOf(value);
+    }
+
+    private String clockFields() {
+        if (effectiveClock == null) {
+            return "clock_ticks_num=unknown clock_ticks_den=unknown"
+                    + " clock_frames_num=unknown clock_frames_den=unknown"
+                    + " clock_ticks_frame=unknown";
+        }
+        return "clock_ticks_num=" + effectiveClock.ticksPerSecondNumerator()
+                + " clock_ticks_den=" + effectiveClock.ticksPerSecondDenominator()
+                + " clock_frames_num=" + effectiveClock.controllerFramesPerSecondNumerator()
+                + " clock_frames_den=" + effectiveClock.controllerFramesPerSecondDenominator()
+                + " clock_ticks_frame=" + effectiveClock.controllerTicksPerFrame();
     }
 
     private static void record(String message) {

@@ -2,6 +2,9 @@ package eu.rekawek.coffeegb.android;
 
 import android.content.Intent;
 
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+
 import java.util.Locale;
 
 /**
@@ -22,8 +25,92 @@ final class DiagnosticsOptions {
     static final String EXTRA_RECENT = "coffee_gb_recent";
 
     enum Hardware {
-        AUTO,
-        DMG
+        AUTO("auto", null),
+        DMG("dmg", HardwareProfileRegistry.DMG),
+        MGB("mgb", HardwareProfileRegistry.MGB),
+        CGB("cgb", HardwareProfileRegistry.CGB),
+        CGB0("cgb0", HardwareProfileRegistry.CGB0),
+        SGB("sgb", HardwareProfileRegistry.SGB),
+        SGB2("sgb2", HardwareProfileRegistry.SGB2);
+
+        private final String externalValue;
+        private final HardwareProfile profileOverride;
+
+        Hardware(String externalValue, HardwareProfile profileOverride) {
+            this.externalValue = externalValue;
+            this.profileOverride = profileOverride;
+        }
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        HardwareProfile profileOverride() {
+            return profileOverride;
+        }
+
+        static Hardware fromExternalValue(String value) {
+            if (value == null || value.isBlank()) {
+                return AUTO;
+            }
+            String normalized = value.trim().toLowerCase(Locale.ROOT);
+            if ("forced-dmg".equals(normalized)) {
+                return DMG;
+            }
+            for (Hardware hardware : values()) {
+                if (hardware.externalValue.equals(normalized)) {
+                    return hardware;
+                }
+            }
+            return AUTO;
+        }
+    }
+
+    /** Redacted effective hardware labels used only in benchmark diagnostics. */
+    enum EffectiveMode {
+        UNKNOWN("unknown"),
+        DMG("dmg"),
+        MGB("mgb"),
+        CGB_NATIVE("cgb-native"),
+        CGB0_NATIVE("cgb0-native"),
+        CGB_DMG_COMPAT("cgb-dmg-compat"),
+        CGB0_DMG_COMPAT("cgb0-dmg-compat"),
+        SGB("sgb"),
+        SGB2("sgb2");
+
+        private final String externalValue;
+
+        EffectiveMode(String externalValue) {
+            this.externalValue = externalValue;
+        }
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        static EffectiveMode classify(HardwareProfile profile, Boolean effectiveGbc,
+                Boolean effectiveDmgCompat) {
+            if (profile == null || effectiveGbc == null || effectiveDmgCompat == null
+                    || effectiveGbc != profile.capabilities().cgbMode()) {
+                return UNKNOWN;
+            }
+            switch (profile.id()) {
+                case "dmg":
+                    return !effectiveGbc && !effectiveDmgCompat ? DMG : UNKNOWN;
+                case "mgb":
+                    return !effectiveGbc && !effectiveDmgCompat ? MGB : UNKNOWN;
+                case "cgb":
+                    return effectiveDmgCompat ? CGB_DMG_COMPAT : CGB_NATIVE;
+                case "cgb0":
+                    return effectiveDmgCompat ? CGB0_DMG_COMPAT : CGB0_NATIVE;
+                case "sgb":
+                    return !effectiveGbc && !effectiveDmgCompat ? SGB : UNKNOWN;
+                case "sgb2":
+                    return !effectiveGbc && !effectiveDmgCompat ? SGB2 : UNKNOWN;
+                default:
+                    return UNKNOWN;
+            }
+        }
     }
 
     enum Render {
@@ -93,11 +180,7 @@ final class DiagnosticsOptions {
     }
 
     private static Hardware parseHardware(String value) {
-        if (value == null || value.isBlank() || "auto".equalsIgnoreCase(value)) {
-            return Hardware.AUTO;
-        }
-        return "dmg".equalsIgnoreCase(value) || "forced-dmg".equalsIgnoreCase(value)
-                ? Hardware.DMG : Hardware.AUTO;
+        return Hardware.fromExternalValue(value);
     }
 
     private static Render parseRender(String value) {

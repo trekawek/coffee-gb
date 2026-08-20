@@ -1587,8 +1587,15 @@ class LinkedController(
       return
     }
     postHostEventSafely(Controller.GameboyTypeEvent(replacement.event.config.gameboyType))
+    val effectiveSpeedMode = candidate.gameboy.getSpeedMode()
+    val effectiveGpu = candidate.gameboy.getGpu()
     postHostEventSafely(
-        Controller.HardwareProfileEvent(replacement.event.config.hardwareProfile))
+        Controller.HardwareProfileEvent(
+            replacement.event.config.hardwareProfile,
+            effectiveGbc = effectiveGpu.isGbc(),
+            effectiveDmgCompat = effectiveGpu.isDmgCompatMode(),
+            effectiveSpeedMode = effectiveSpeedMode.getSpeedMode(),
+        ))
     postHostEventSafely(Controller.SessionPauseSupportEvent(false))
     postHostEventSafely(Controller.SessionSnapshotSupportEvent(null))
     installUnsupportedDebugPort()

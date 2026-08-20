@@ -677,6 +677,71 @@ class BasicControllerTest {
   }
 
   @Test
+  fun hardwareProfileEventReportsResolvedCgbCompatibilityNativeAndCgb0() {
+    val nonColorRom =
+        Files.createTempFile("coffee-gb-cgb-compat-profile", ".gb").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0
+              })
+        }
+    val colorRom =
+        Files.createTempFile("coffee-gb-cgb-native-profile", ".gbc").toFile().also { file ->
+          file.writeBytes(
+              ROM.readBytes().also { bytes ->
+                bytes[0x143] = 0x80.toByte()
+              })
+        }
+    val eventBus = EventBusImpl()
+    val profileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
+    eventBus.register<HardwareProfileEvent> { profileEvents.add(it) }
+    val properties = EmulatorProperties(HardwareProfileRegistry.CGB)
+    properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = "SKIP"
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(nonColorRom))
+      val compat = assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(HardwareProfileRegistry.CGB, compat.profile)
+      assertEquals(true, compat.effectiveGbc)
+      assertEquals(true, compat.effectiveDmgCompat)
+      assertEquals(1, compat.effectiveSpeedMode)
+
+      eventBus.post(LoadRomEvent(colorRom))
+      val native = assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(HardwareProfileRegistry.CGB, native.profile)
+      assertEquals(true, native.effectiveGbc)
+      assertEquals(false, native.effectiveDmgCompat)
+      assertEquals(1, native.effectiveSpeedMode)
+    } finally {
+      controller.close()
+      eventBus.close()
+    }
+
+    val cgb0EventBus = EventBusImpl()
+    val cgb0ProfileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
+    cgb0EventBus.register<HardwareProfileEvent> { cgb0ProfileEvents.add(it) }
+    val cgb0Properties = EmulatorProperties(HardwareProfileRegistry.CGB0)
+    cgb0Properties.properties[EmulatorProperties.Key.BootstrapMode.propertyName] = "SKIP"
+    val cgb0Controller = BasicController(cgb0EventBus, cgb0Properties, null)
+    cgb0Controller.startController()
+    try {
+      cgb0EventBus.post(LoadRomEvent(colorRom))
+      val cgb0 = assertNotNull(cgb0ProfileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(HardwareProfileRegistry.CGB0, cgb0.profile)
+      assertEquals(true, cgb0.effectiveGbc)
+      assertEquals(false, cgb0.effectiveDmgCompat)
+      assertEquals(1, cgb0.effectiveSpeedMode)
+    } finally {
+      cgb0Controller.close()
+      cgb0EventBus.close()
+      nonColorRom.delete()
+      colorRom.delete()
+    }
+  }
+
+  @Test
   fun sgbBorderOptionUpdatesPortableCaptureIdentityAtFrameBoundary() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
