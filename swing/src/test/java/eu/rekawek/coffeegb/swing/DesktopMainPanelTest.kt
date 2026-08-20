@@ -162,6 +162,28 @@ class DesktopMainPanelTest {
   }
 
   @Test
+  fun `idle portable menu reveals the display card instead of the home card`() {
+    onEdt {
+      val surface = JPanel()
+      val panel =
+          DesktopMainPanel(
+              gameSurface = surface,
+              actions = actions(),
+              onOpenRecent = {},
+              onCancelTask = {},
+              initialTokens = DesktopThemeTokens.capture(DesktopAppearance.SYSTEM),
+          )
+
+      val gameCard = requireNotNull(surface.parent)
+      assertFalse(gameCard.isVisible)
+      panel.setPortableMenuVisible(true)
+      assertTrue(gameCard.isVisible)
+      panel.setPortableMenuVisible(false)
+      assertFalse(gameCard.isVisible)
+    }
+  }
+
+  @Test
   fun `portable Library startup suppresses the legacy home recent thumbnails`() {
     onEdt {
       val panel = panel(actions(), showHomeRecentGames = false)

@@ -100,6 +100,8 @@ internal class DesktopMainPanel(
   private val game = JPanel(BorderLayout())
   private val footer = JPanel(BorderLayout())
   private var presentation = DesktopPresentation()
+  /** The portable menu is painted by [game]'s display surface, including while the desktop is idle. */
+  private var portableMenuVisible = false
   private var exactOneCommandBarSuppressed = false
   private val cardHost =
       object : JPanel(cards) {
@@ -142,13 +144,27 @@ internal class DesktopMainPanel(
     presentation = next
     actions.updatePresentation(next)
     val playing = next.gameTitle != null
-    cards.show(cardHost, if (playing) GAME_CARD else HOME_CARD)
+    updateVisibleCard(playing)
     updateCommandBarVisibility(allowExactOneReveal = false)
     commandBar.setNetplaySummary(next.netplaySummary)
     commandBar.synchronizeStateSlot(next.commands.stateSlot)
     taskBanner.render(next.task)
     statusBar.render(next)
     getAccessibleContext().accessibleDescription = next.visibleStatus
+    revalidate()
+    repaint()
+  }
+
+  /**
+   * Reveals the display card for a Proposal 3 overlay even when no ROM is loaded.
+   *
+   * The legacy Home card otherwise owns the idle center area, which would leave a correctly
+   * rendered portable Library frame hidden behind its Swing controls.
+   */
+  fun setPortableMenuVisible(visible: Boolean) {
+    if (portableMenuVisible == visible) return
+    portableMenuVisible = visible
+    updateVisibleCard(presentation.gameTitle != null)
     revalidate()
     repaint()
   }
@@ -177,6 +193,10 @@ internal class DesktopMainPanel(
   }
 
   fun current(): DesktopPresentation = presentation
+
+  private fun updateVisibleCard(playing: Boolean) {
+    cards.show(cardHost, if (playing || portableMenuVisible) GAME_CARD else HOME_CARD)
+  }
 
   override fun desktopThemeChanged(tokens: DesktopThemeTokens) {
     this.tokens = tokens
