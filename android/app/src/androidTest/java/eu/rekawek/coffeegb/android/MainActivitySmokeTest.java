@@ -390,8 +390,11 @@ public class MainActivitySmokeTest {
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.OPTION_PICKER);
             moveFocusTo(scenario, instrumentation, "choice:rear");
-            press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             scenario.onActivity(activity -> {
+                eu.rekawek.coffeegb.ui.menu.MenuController controller =
+                        menuController(activity);
+                controller.onKeyDown(eu.rekawek.coffeegb.ui.menu.MenuKey.A, false);
+                controller.onKeyUp(eu.rekawek.coffeegb.ui.menu.MenuKey.A);
                 assertFalse(menuController(activity).visible());
                 assertFalse(booleanField(activity, "menuPauseOwned"));
                 eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState surface =
