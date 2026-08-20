@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.ir.InfraredEndpoint
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub
@@ -128,6 +129,17 @@ class ReplayCompatibilityValidationTest {
         )
       }
     }
+  }
+
+  @Test
+  fun `recording requires accuracy until replay identity carries execution mode`() {
+    StateCodecTestSupport.session(
+            StateCodecTestSupport.configuration().setExecutionMode(ExecutionMode.PERFORMANCE))
+        .use { session ->
+          assertReason(ReplayCompatibilityReason.BEHAVIOR_MISMATCH) {
+            ReplayCompatibility.validateRecording(session, ReplayInitialMode.EMBEDDED_SESSION_STATE)
+          }
+        }
   }
 
   @Test

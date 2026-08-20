@@ -80,6 +80,7 @@ import eu.rekawek.coffeegb.controller.network.v9.V9TargetGeneration
 import eu.rekawek.coffeegb.controller.network.v9.V9PreparedCheckpoint
 import eu.rekawek.coffeegb.controller.network.v9.V9ValidatedCheckpoint
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.GameboyConfiguration
 import eu.rekawek.coffeegb.core.GameboyType
@@ -194,7 +195,11 @@ class LinkedController(
       BatteryFlush::persist
 
   private val localSessionPreparer =
-      RomSessionPreparer(configure = { it.setPlayerInputSource(PlayerInputSource.RELEASED) })
+      RomSessionPreparer(
+          configure = {
+            it.setPlayerInputSource(PlayerInputSource.RELEASED)
+                .setExecutionMode(ExecutionMode.ACCURACY)
+          })
 
   @VisibleForTesting
   internal var prepareLocalRom: (LoadRomEvent) -> PreparedSession = { event ->
@@ -1332,6 +1337,7 @@ class LinkedController(
     // Protocol v8 owns linked P1 at frame boundaries and cannot represent local SGB P2-P4.
     // Apply this before materialization: Joypad captures the configured source in its constructor.
     event.config.setPlayerInputSource(PlayerInputSource.RELEASED)
+        .setExecutionMode(ExecutionMode.ACCURACY)
     val previousSession = sessions[localPlayer]
     val capture = previousSession?.gameboy?.prepareCartridgeFlush()
     val candidateLinks =

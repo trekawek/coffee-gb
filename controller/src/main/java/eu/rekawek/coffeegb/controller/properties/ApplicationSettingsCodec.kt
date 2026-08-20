@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.nio.file.Path
@@ -38,6 +39,7 @@ object ApplicationSettingsCodec {
   const val REWIND_MEMORY_MIB_KEY = "saves.rewindMemoryMiB"
   const val AUTOSAVE_POLICY_KEY = "saves.autosavePolicy"
   const val RESUME_POLICY_KEY = "saves.resumePolicy"
+  const val EXECUTION_MODE_KEY = "system.executionMode"
   internal const val PRESERVED_UNKNOWN_COLLISIONS_PREFIX =
       "settings.preservedUnknownCollisions."
 
@@ -68,6 +70,7 @@ object ApplicationSettingsCodec {
   private val versionSevenFixedKeys = versionSixFixedKeys + CAMERA_DEVICE_INDEX_KEY
   private val versionEightFixedKeys =
       versionSevenFixedKeys + setOf(DESKTOP_APPEARANCE_KEY, DESKTOP_COMMAND_BAR_VISIBLE_KEY)
+  private val versionNineFixedKeys = versionEightFixedKeys + EXECUTION_MODE_KEY
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -89,6 +92,7 @@ object ApplicationSettingsCodec {
             version == "5" ||
             version == "6" ||
             version == "7" ||
+            version == "8" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -193,6 +197,7 @@ object ApplicationSettingsCodec {
         settings.advanced.cgbGamesProfile,
     )
     known[EmulatorProperties.Key.BootstrapMode.propertyName] = settings.advanced.bootstrapMode.name
+    known[EXECUTION_MODE_KEY] = settings.advanced.executionMode.name
     settings.advanced.datelSlotRom?.let {
       known[EmulatorProperties.Key.DatelSlotRom.propertyName] = it.toString()
     }
@@ -443,6 +448,11 @@ object ApplicationSettingsCodec {
                                 "Invalid ${EmulatorProperties.Key.BootstrapMode.propertyName}: $it")
                           }
                         } ?: BootstrapMode.SKIP,
+                    executionMode =
+                        raw[EXECUTION_MODE_KEY]?.let {
+                          runCatching { ExecutionMode.valueOf(it) }
+                              .getOrDefault(ExecutionMode.ACCURACY)
+                        } ?: ExecutionMode.ACCURACY,
                     datelSlotRom =
                         raw[EmulatorProperties.Key.DatelSlotRom.propertyName]
                             ?.takeUnless(String::isEmpty)
@@ -481,6 +491,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 9 -> versionNineFixedKeys
           sourceVersion >= 8 -> versionEightFixedKeys
           sourceVersion >= 7 -> versionSevenFixedKeys
           sourceVersion >= 6 -> versionSixFixedKeys
@@ -962,7 +973,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionEightFixedKeys ||
+      key in versionNineFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

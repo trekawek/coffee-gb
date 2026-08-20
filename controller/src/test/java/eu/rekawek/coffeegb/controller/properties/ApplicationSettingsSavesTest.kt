@@ -39,7 +39,10 @@ class ApplicationSettingsSavesTest {
       assertEquals(future, migrated.unknownProperties, "schema ${version ?: 0}")
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+      )
       assertEquals("false", canonical[ApplicationSettingsCodec.BATTERY_SAVES_KEY])
       assertEquals("true", canonical[ApplicationSettingsCodec.REWIND_ENABLED_KEY])
       assertEquals("30", canonical[ApplicationSettingsCodec.REWIND_SECONDS_KEY])
@@ -80,7 +83,10 @@ class ApplicationSettingsSavesTest {
     previous.clear()
 
     val encoded = ApplicationSettingsCodec.encode(document)
-    assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
     assertEquals(
         Path.of("/new/é").toString(),
         encoded[ApplicationSettingsCodec.SAVE_DIRECTORY_KEY],

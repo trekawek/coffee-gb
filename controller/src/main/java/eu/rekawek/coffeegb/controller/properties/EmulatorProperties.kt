@@ -212,6 +212,7 @@ internal constructor(
     DmgGamesType("system.dmgGames"),
     CgbGamesType("system.cgbGames"),
     BootstrapMode("system.bootstrapMode"),
+    ExecutionMode("system.executionMode"),
     DisplayScale("display.scale"),
     DisplayGrayscale("display.grayscale"),
     DisplayBlending("display.blending"),

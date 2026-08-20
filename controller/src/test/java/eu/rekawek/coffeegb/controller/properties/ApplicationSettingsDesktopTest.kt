@@ -18,7 +18,10 @@ class ApplicationSettingsDesktopTest {
     assertTrue(defaults.desktop.commandBarVisible)
 
     val encoded = ApplicationSettingsCodec.encode(ApplicationSettingsDocument(defaults))
-    assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
     assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_WIDTH_KEY in encoded)
     assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_HEIGHT_KEY in encoded)
     assertEquals("LIGHT", encoded[ApplicationSettingsCodec.DESKTOP_APPEARANCE_KEY])
@@ -54,7 +57,10 @@ class ApplicationSettingsDesktopTest {
 
         val encoded = ApplicationSettingsCodec.encode(document)
 
-        assertEquals("8", encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+        assertEquals(
+            ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+            encoded[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+        )
         assertEquals(appearance.name, encoded[ApplicationSettingsCodec.DESKTOP_APPEARANCE_KEY])
         assertEquals(
             commandBarVisible.toString(),
@@ -95,7 +101,10 @@ class ApplicationSettingsDesktopTest {
       assertEquals(future, migrated.unknownProperties, "schema ${version ?: 0}")
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+      )
       assertEquals("LIGHT", canonical[ApplicationSettingsCodec.DESKTOP_APPEARANCE_KEY])
       assertEquals("true", canonical[ApplicationSettingsCodec.DESKTOP_COMMAND_BAR_VISIBLE_KEY])
       assertTrue(
@@ -153,7 +162,10 @@ class ApplicationSettingsDesktopTest {
     }
 
     val canonical = ApplicationSettingsStore.decodeProperties(Files.readAllBytes(path))
-    assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
     assertEquals("LIGHT", canonical[ApplicationSettingsCodec.DESKTOP_APPEARANCE_KEY])
     assertEquals("true", canonical[ApplicationSettingsCodec.DESKTOP_COMMAND_BAR_VISIBLE_KEY])
     assertTrue(
@@ -200,7 +212,10 @@ class ApplicationSettingsDesktopTest {
       assertEquals(future, migrated.unknownProperties, "schema ${version ?: 0}")
 
       val canonical = ApplicationSettingsCodec.encode(migrated)
-      assertEquals("8", canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY])
+      assertEquals(
+          ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+          canonical[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+      )
       assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_WIDTH_KEY in canonical)
       assertFalse(ApplicationSettingsCodec.DESKTOP_WINDOW_HEIGHT_KEY in canonical)
       assertTrue(

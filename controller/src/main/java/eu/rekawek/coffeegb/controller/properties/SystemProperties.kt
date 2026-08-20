@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
@@ -32,4 +33,9 @@ class SystemProperties(private val properties: EmulatorProperties) {
     get() =
         properties.overrides.bootstrapMode
             ?: properties.applicationSettings.advanced.bootstrapMode
+
+  val executionMode: ExecutionMode
+    get() =
+        properties.overrides.executionMode
+            ?: properties.applicationSettings.advanced.executionMode
 }

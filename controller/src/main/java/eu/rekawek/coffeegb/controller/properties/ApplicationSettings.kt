@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
@@ -555,6 +556,8 @@ data class ApplicationSettings(
       val bootstrapMode: BootstrapMode = BootstrapMode.SKIP,
       val datelSlotRom: Path? = null,
       val fullChangerCharacter: String? = null,
+      /** Execution strategy for newly created sessions; Accuracy is the compatibility default. */
+      val executionMode: ExecutionMode = ExecutionMode.ACCURACY,
   )
 
   sealed class ProfileSelection {
@@ -573,7 +576,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 8
+    const val CURRENT_SCHEMA_VERSION = 9
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -618,6 +621,8 @@ data class ApplicationSettingsOverrides(
     val runtimeWarmupEnabled: Boolean? = null,
     /** Transient benchmark policy; never persisted into user settings or save state. */
     val benchmarkPolicyEnabled: Boolean = false,
+    /** Transient execution-mode selection; it takes precedence over persisted settings. */
+    val executionMode: ExecutionMode? = null,
 ) {
   init {
     hardwareProfile?.let(HardwareProfileRegistry::requireRegistered)
