@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
@@ -28,6 +29,7 @@ class SystemPreferencesEditorTest {
                 dmgGamesProfile = explicit(HardwareProfileRegistry.DMG),
                 cgbGamesProfile = explicit(HardwareProfileRegistry.CGB),
                 bootstrapMode = BootstrapMode.SKIP,
+                executionMode = ExecutionMode.PERFORMANCE,
                 datelSlotRom = slotRom,
                 fullChangerCharacter = "MARIO",
             )
@@ -36,12 +38,14 @@ class SystemPreferencesEditorTest {
         selectProfile(editor.dmgGamesProfile, explicit(HardwareProfileRegistry.SGB2))
         selectProfile(editor.cgbGamesProfile, ApplicationSettings.ProfileSelection.Auto)
         selectBootstrap(editor, BootstrapMode.NORMAL)
+        selectExecutionMode(editor, ExecutionMode.ACCURACY)
 
         assertEquals(
             ApplicationSettings.Advanced(
                 dmgGamesProfile = explicit(HardwareProfileRegistry.SGB2),
                 cgbGamesProfile = ApplicationSettings.ProfileSelection.Auto,
                 bootstrapMode = BootstrapMode.NORMAL,
+                executionMode = ExecutionMode.ACCURACY,
                 datelSlotRom = slotRom,
                 fullChangerCharacter = "MARIO",
             ),
@@ -118,6 +122,25 @@ class SystemPreferencesEditorTest {
       }
 
   @Test
+  fun `execution mode control exposes the reference default and guarded performance option`() =
+      onEdt {
+        val editor =
+            SystemPreferencesEditor(
+                ApplicationSettings.Advanced(executionMode = ExecutionMode.PERFORMANCE))
+        val options =
+            (0 until editor.executionMode.itemCount).map(editor.executionMode::getItemAt)
+
+        assertEquals(
+            listOf(
+                ExecutionMode.ACCURACY to "Accuracy (cycle/dot-accurate reference)",
+                ExecutionMode.PERFORMANCE to "Performance (guarded batching)",
+            ),
+            options.map { it.mode to it.label },
+        )
+        assertEquals(ExecutionMode.PERFORMANCE, editor.validatedAdvanced().executionMode)
+      }
+
+  @Test
   fun `system controls have accessible names label associations and mnemonics`() =
       onEdt {
         val editor = SystemPreferencesEditor(ApplicationSettings.Advanced())
@@ -135,6 +158,10 @@ class SystemPreferencesEditorTest {
             editor.bootstrapMode,
             labels.single { it.text == "Bootstrap:" }.labelFor,
         )
+        assertSame(
+            editor.executionMode,
+            labels.single { it.text == "Execution mode:" }.labelFor,
+        )
         assertEquals(
             KeyEvent.VK_D,
             labels.single { it.text == "DMG games:" }.displayedMnemonic,
@@ -148,6 +175,10 @@ class SystemPreferencesEditorTest {
             labels.single { it.text == "Bootstrap:" }.displayedMnemonic,
         )
         assertEquals(
+            KeyEvent.VK_E,
+            labels.single { it.text == "Execution mode:" }.displayedMnemonic,
+        )
+        assertEquals(
             "DMG game hardware profile",
             editor.dmgGamesProfile.accessibleContext.accessibleName,
         )
@@ -158,6 +189,10 @@ class SystemPreferencesEditorTest {
         assertEquals(
             "Bootstrap mode",
             editor.bootstrapMode.accessibleContext.accessibleName,
+        )
+        assertEquals(
+            "Execution mode",
+            editor.executionMode.accessibleContext.accessibleName,
         )
       }
 
@@ -185,6 +220,16 @@ class SystemPreferencesEditorTest {
     editor.bootstrapMode.selectedItem =
         (0 until editor.bootstrapMode.itemCount)
             .map(editor.bootstrapMode::getItemAt)
+            .single { it.mode == mode }
+  }
+
+  private fun selectExecutionMode(
+      editor: SystemPreferencesEditor,
+      mode: ExecutionMode,
+  ) {
+    editor.executionMode.selectedItem =
+        (0 until editor.executionMode.itemCount)
+            .map(editor.executionMode::getItemAt)
             .single { it.mode == mode }
   }
 

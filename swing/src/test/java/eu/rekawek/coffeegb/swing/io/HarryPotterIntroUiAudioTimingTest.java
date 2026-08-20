@@ -383,7 +383,8 @@ public class HarryPotterIntroUiAudioTimingTest {
                 advanced.getCgbGamesProfile(),
                 bootstrapMode,
                 advanced.getDatelSlotRom(),
-                advanced.getFullChangerCharacter());
+                advanced.getFullChangerCharacter(),
+                advanced.getExecutionMode());
         return settings.copy(
                 settings.getSchemaVersion(),
                 settings.getGeneral(),

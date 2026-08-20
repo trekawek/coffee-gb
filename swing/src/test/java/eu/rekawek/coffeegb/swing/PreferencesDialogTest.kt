@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.GamepadSelection
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings.RomChangeConfirmationPolicy
 import eu.rekawek.coffeegb.controller.properties.ControllerProperties
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.joypad.Button
 import java.awt.Component
@@ -184,6 +185,7 @@ class PreferencesDialogTest {
     val dialogSnapshot =
         ApplicationSettings.Advanced(
             bootstrapMode = BootstrapMode.SKIP,
+            executionMode = ExecutionMode.PERFORMANCE,
             datelSlotRom = Paths.get("stale-datel-slot.gb"),
             fullChangerCharacter = "STALE",
         )
@@ -205,12 +207,17 @@ class PreferencesDialogTest {
             gamepadTunings = latest.input.gamepadTunings,
             cameraDeviceIndex = latest.peripherals.cameraDeviceIndex,
             audio = latest.audio,
-            advanced = dialogSnapshot.copy(bootstrapMode = BootstrapMode.NORMAL),
+            advanced =
+                dialogSnapshot.copy(
+                    bootstrapMode = BootstrapMode.NORMAL,
+                    executionMode = ExecutionMode.ACCURACY,
+                ),
         )
 
     val updated = edit.applyTo(latest)
 
     assertEquals(BootstrapMode.NORMAL, updated.advanced.bootstrapMode)
+    assertEquals(ExecutionMode.ACCURACY, updated.advanced.executionMode)
     assertEquals(latest.advanced.datelSlotRom, updated.advanced.datelSlotRom)
     assertEquals(
         latest.advanced.fullChangerCharacter,

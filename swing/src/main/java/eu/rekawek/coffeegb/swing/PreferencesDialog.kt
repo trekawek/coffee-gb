@@ -114,6 +114,7 @@ internal data class PreferencesEdit(
                     dmgGamesProfile = edited.dmgGamesProfile,
                     cgbGamesProfile = edited.cgbGamesProfile,
                     bootstrapMode = edited.bootstrapMode,
+                    executionMode = edited.executionMode,
                 )
               } ?: current.advanced,
           input =
