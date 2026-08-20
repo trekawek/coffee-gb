@@ -57,6 +57,14 @@ final class AndroidMenuModel {
                 MenuPreview.empty());
     }
 
+    static MenuPageSpec libraryPage(boolean runtimeAvailable) {
+        return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "", "", List.of(), List.of(
+                        item("recent-games", "RECENT GAMES", "", runtimeAvailable),
+                        item("open-rom", "OPEN ROM", "", runtimeAvailable),
+                        item("settings", "SETTINGS", "", true)),
+                runtimeAvailable ? "recent-games" : "settings", MenuPreview.empty());
+    }
+
     static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {
         return page(MenuRoute.DISPLAY, "COFFEE GB", "DISPLAY", "", "", List.of(), List.of(
                 item("sgb-border", "SGB BORDER", onOff(sgbBorder), true),

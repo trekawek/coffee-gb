@@ -65,12 +65,7 @@ internal class SwingProposal3Menu(
             }
 
             override fun onHeaderSelected(route: MenuRoute) {
-              // The unavailable Library fallback intentionally has no header action. Keep the
-              // host boundary inert there as well as in the row list; only a live presentation
-              // supplied with the capable OPEN ROM source may launch the desktop chooser.
-              if (route == MenuRoute.LIBRARY && commands.isEnabled(DesktopCommand.OPEN_ROM)) {
-                runNativeRomChooser()
-              }
+              // Proposal 3 uses B for back navigation and exposes actions only as menu rows.
             }
 
             override fun onBackIntercepted(route: MenuRoute) {
@@ -668,18 +663,18 @@ internal class SwingProposal3Menu(
       MenuRoute.LIBRARY -> {
         val libraryItems =
             listOf(
-                item("recent-rom", "RECENT ROMS", commands.canOpenRecentGame()),
+                item("recent-games", "RECENT GAMES", commands.canOpenRecentGame()),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
+                item("settings", "SETTINGS", settings != null || inlineAudioAvailable),
             )
         if (hasEnabledNonBack(libraryItems)) {
           page(
               "LIBRARY",
-              "RECENT ROMS",
-              listOf("DOCUMENT PICKER  NATIVE", "RECENT METADATA  PRIVATE", "ZIP  MULTI-ROM"),
+              "",
+              emptyList(),
               libraryItems,
-              preferredFocus =
-                  if (commands.canOpenRecentGame()) "recent-rom" else "open-rom",
-              headerAction = if (enabled(DesktopCommand.OPEN_ROM)) "OPEN ROM" else "",
+              preferredFocus = libraryItems.firstOrNull { it.enabled() }?.id(),
+              headerAction = "",
           )
         } else {
           unavailablePage("LIBRARY", "library-status")
@@ -958,8 +953,9 @@ internal class SwingProposal3Menu(
           }
       MenuRoute.LIBRARY ->
           when (id) {
-            "recent-rom" -> if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
+            "recent-games" -> if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
             "open-rom" -> runNativeRomChooser()
+            "settings" -> openRoute(MenuRoute.SETTINGS)
           }
       MenuRoute.ABOUT ->
           if (id == "privacy-notices") runAboutAndHide()

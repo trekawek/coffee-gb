@@ -236,10 +236,6 @@ public final class Proposal3MenuCompositor {
             }
         }
 
-        if (route == MenuRoute.LIBRARY) {
-            addSyntheticAction(prepared, actionIds, "open-rom", "OPEN ROM",
-                    findEnabledSource(items, "open-rom"));
-        }
         if (route == MenuRoute.CHOOSE_ROM) {
             addSyntheticAction(prepared, actionIds, "open-selected", "OPEN SELECTED",
                     findEnabledSource(items, "open-selected"));
@@ -260,7 +256,6 @@ public final class Proposal3MenuCompositor {
             case SAVE_STATES, RECENT_GAMES -> List.of();
             case AUDIO, TOUCH_CONTROLS -> List.of();
             case OPTIONAL_DEVICES -> List.of("save-devices", "cancel-devices");
-            case LIBRARY -> List.of("open-rom");
             case CHOOSE_ROM -> List.of("open-selected", "cancel");
             case ABOUT -> List.of("source");
             case CONFIRM_ACTION -> List.of("cancel", "confirm");
@@ -290,7 +285,7 @@ public final class Proposal3MenuCompositor {
             return "recent-" + rowCount;
         }
         if (route == MenuRoute.LIBRARY
-                && ("recent-rom".equals(id) || id.startsWith("recent:"))) {
+                && ("recent-games".equals(id) || id.startsWith("recent:"))) {
             return "recent-" + rowCount;
         }
         if (route == MenuRoute.CHOOSE_ROM && id.startsWith("archive:")) {
@@ -315,7 +310,6 @@ public final class Proposal3MenuCompositor {
             case SAVE_STATES, RECENT_GAMES -> false;
             case AUDIO, DISPLAY, TOUCH_CONTROLS, OPTION_PICKER -> false;
             case OPTIONAL_DEVICES -> id.equals("save-devices") || id.equals("cancel-devices");
-            case LIBRARY -> id.equals("open-rom");
             case CHOOSE_ROM -> id.equals("open-selected") || id.equals("cancel");
             case ABOUT -> id.equals("source") || id.equals("third-party");
             case CONFIRM_ACTION -> id.equals("cancel") || id.equals("confirm");
@@ -397,6 +391,10 @@ public final class Proposal3MenuCompositor {
             // including the source artwork's button outline.
             paintSurface(raster, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR,
                     Proposal3OverlayCatalog.Surface.PAPER, false);
+        } else if (route == MenuRoute.LIBRARY) {
+            // The custom opener illustration remains on the left, while the row below is now
+            // the sole Open ROM affordance. Clear the source artwork's outlined header button.
+            paintPaperAperture(raster, Proposal3OverlayCatalog.OPEN_ROM_HEADER);
         }
         if (route == MenuRoute.SETTINGS || route == MenuRoute.AUDIO
                 || route == MenuRoute.DISPLAY
@@ -499,6 +497,7 @@ public final class Proposal3MenuCompositor {
                     || presentation.route() == MenuRoute.SYSTEM
                     || presentation.route() == MenuRoute.OPTIONAL_DEVICES
                     || presentation.route() == MenuRoute.OPTION_PICKER
+                    || presentation.route() == MenuRoute.LIBRARY
                     || presentation.route() == MenuRoute.RECENT_GAMES
                     ? "" : display(presentation.headerAction());
             case FOOTER_DPAD -> display(footer[0]);
@@ -972,9 +971,6 @@ public final class Proposal3MenuCompositor {
     }
 
     private static String actionLabel(MenuRoute route, Entry entry, int index) {
-        if (route == MenuRoute.LIBRARY) {
-            return "OPEN ROM";
-        }
         if (route == MenuRoute.ABOUT) {
             return "GITHUB.COM/TREKAWEK/COFFEE-GB";
         }
@@ -987,7 +983,7 @@ public final class Proposal3MenuCompositor {
     private static boolean supportsDetail(MenuRoute route, Entry entry) {
         return switch (route) {
             case AUDIO, DISPLAY, TOUCH_CONTROLS, CONTROLLER_MAPPING,
-                    OPTIONAL_DEVICES, LIBRARY, SYSTEM, OPTION_PICKER -> true;
+                    OPTIONAL_DEVICES, SYSTEM, OPTION_PICKER -> true;
             default -> false;
         };
     }
@@ -1396,7 +1392,7 @@ public final class Proposal3MenuCompositor {
                 case "preview-printer-paper" -> "PRINTER PAPER";
                 default -> display(e.label);
             };
-            case LIBRARY -> libraryLabel(e, index);
+            case LIBRARY -> display(e.label);
             case CHOOSE_ROM -> chooseLabel(e, index);
             case OPTION_PICKER -> display(e.label);
             case SYSTEM -> switch (e.id) {
@@ -1452,8 +1448,7 @@ public final class Proposal3MenuCompositor {
                 case "rumble", "live-camera", "game-boy-printer" -> "OFF";
                 default -> "";
             };
-            case LIBRARY -> index == 0 ? "TODAY" : index == 1 ? "YESTERDAY"
-                    : index == 2 ? "3 DAYS AGO" : "";
+            case LIBRARY -> "";
             case SYSTEM -> switch (e.id) {
                 case "dmg-games", "cgb-games" -> "AUTO";
                 case "bootstrap" -> "SKIP";
@@ -1467,15 +1462,6 @@ public final class Proposal3MenuCompositor {
                 default -> "";
             };
             default -> "";
-        };
-    }
-
-    private static String libraryLabel(Entry e, int index) {
-        return switch (index) {
-            case 0 -> "ADVENTURE BOY.GB";
-            case 1 -> "POCKET CAMERA.GBC";
-            case 2 -> "COFFEE TEST.ZIP";
-            default -> display(e.label);
         };
     }
 

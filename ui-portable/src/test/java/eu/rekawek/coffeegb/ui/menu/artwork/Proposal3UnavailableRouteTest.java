@@ -11,6 +11,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 /** Regression coverage for status-only routes supplied by hosts without a platform capability. */
 public class Proposal3UnavailableRouteTest {
@@ -20,12 +21,8 @@ public class Proposal3UnavailableRouteTest {
         MenuPresentation presentation = statusOnly(MenuRoute.LIBRARY, "library-status");
 
         assertFalse(presentation.items().stream().anyMatch(item -> "open-rom".equals(item.id())));
-        int[] pixels = new Proposal3MenuCompositor().compose(presentation).orElseThrow()
-                .copyPixels();
-        MenuRect action = Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).actions().get(0)
-                .bounds();
-        assertEquals("unavailable Library must leave the action strip blank", 0,
-                inkPixels(pixels, action));
+        assertTrue(Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).actions().isEmpty());
+        new Proposal3MenuCompositor().compose(presentation).orElseThrow();
     }
 
     @Test

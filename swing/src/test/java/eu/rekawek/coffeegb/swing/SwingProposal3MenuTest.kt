@@ -80,8 +80,8 @@ class SwingProposal3MenuTest {
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
       assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
-      assertEquals(listOf("recent-rom", "open-rom"), menu.visibleItemIdsForTest())
-      assertEquals("recent-rom", menu.focusedItemIdForTest())
+      assertEquals(listOf("recent-games", "open-rom", "settings"), menu.visibleItemIdsForTest())
+      assertEquals("recent-games", menu.focusedItemIdForTest())
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
     }
@@ -91,8 +91,8 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `open rom row delegates to desktop native chooser command boundary`() {
-    val bridge = FakeBridge()
+  fun `library open rom row delegates to desktop native chooser command boundary`() {
+    val bridge = FakeBridge(gameLoaded = false)
     val frames = mutableListOf<MenuArgbFrame?>()
     val menu =
         SwingProposal3Menu(
@@ -103,7 +103,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
     javax.swing.SwingUtilities.invokeAndWait {
-      repeat(3) { press(menu, MenuKey.DOWN) }
+      press(menu, MenuKey.DOWN)
       assertEquals("open-rom", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.START, false))
       assertTrue(menu.onKeyUp(MenuKey.START))
@@ -112,6 +112,19 @@ class SwingProposal3MenuTest {
     assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
     assertTrue(frames.any { it != null })
     assertTrue(frames.last() == null)
+  }
+
+  @Test
+  fun `library settings row opens the same settings route as pause menu`() {
+    val menu = newMenu(FakeBridge(gameLoaded = false))
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      repeat(2) { press(menu, MenuKey.DOWN) }
+      assertEquals("settings", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+    }
   }
 
   @Test

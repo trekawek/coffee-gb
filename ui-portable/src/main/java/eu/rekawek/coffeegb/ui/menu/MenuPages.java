@@ -82,13 +82,11 @@ final class MenuPages {
                             item("export-state-0", "EXPORT STATE SLOT 0"),
                             item("export-screenshot", "EXPORT SCREENSHOT"),
                             item("preview-printer-paper", "PRINTER PAPER")));
-            case LIBRARY -> page(route, "COFFEE GB", "LIBRARY", "OPEN ROM", "RECENT ROMS",
-                    List.of("RECENT GAMES", "SELECT ROM", ""),
+            case LIBRARY -> page(route, "COFFEE GB", "LIBRARY", "", "", List.of(),
                     items(
-                            item("recent-rom", "ADVENTURE BOY.GB", "TODAY"),
+                            item("recent-games", "RECENT GAMES"),
                             item("open-rom", "OPEN ROM"),
-                            item("choose-rom", "POCKET CAMERA.GBC", "YESTERDAY"),
-                            item("clear-recent", "COFFEE TEST.ZIP", "3 DAYS AGO")));
+                            item("settings", "SETTINGS")));
             case CHOOSE_ROM -> page(route, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
                     List.of("COFFEE TEST.ZIP", "3 ROMS FOUND", ""),
                     items(
