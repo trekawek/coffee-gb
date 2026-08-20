@@ -29,6 +29,8 @@ import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.Display;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.RomImage;
@@ -90,10 +92,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Serializes a UI-thread pause capture with owner-thread presentation publication. */
     private final Object presentationLock = new Object();
     private final RuntimeLifecycleGate lifecycle = new RuntimeLifecycleGate();
-    private final NativeFrameStore frames = new NativeFrameStore();
+    private final DiagnosticsOptions diagnosticsOptions;
+    private final AndroidBenchmarkDiagnostics diagnostics;
+    private final NativeFrameStore frames;
     /** Session timing belongs to the service, not to a short-lived Activity attachment. */
     private final PlayTimeTracker playTime = new PlayTimeTracker();
-    private final EmulatorProperties properties = new EmulatorProperties(androidSettingsOverrides());
+    private final EmulatorProperties properties;
     private final AndroidInputRouter input;
 
     private volatile RuntimeState state = RuntimeState.stopped();
@@ -151,7 +155,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private volatile String pauseSnapshotTitle = "";
 
     public AndroidEmulationRuntime(Context context) {
+        this(context, DiagnosticsOptions.disabled());
+    }
+
+    AndroidEmulationRuntime(Context context, DiagnosticsOptions options) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
+        diagnosticsOptions = options == null ? DiagnosticsOptions.disabled() : options;
+        diagnostics = new AndroidBenchmarkDiagnostics(diagnosticsOptions);
+        frames = new NativeFrameStore(diagnostics);
+        properties = new EmulatorProperties(androidSettingsOverrides(diagnosticsOptions));
+        diagnostics.sessionLaunch();
         input = new AndroidInputRouter(properties.getPlayerInputSource(),
                 new AndroidControllerMappings(this.context));
         submit(this::initialize);
@@ -159,7 +172,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Android has no rewind control yet; disable its snapshot work without changing saved settings. */
     static ApplicationSettingsOverrides androidSettingsOverrides() {
-        return new ApplicationSettingsOverrides(null, null, null, false, false);
+        return androidSettingsOverrides(DiagnosticsOptions.disabled());
+    }
+
+    static ApplicationSettingsOverrides androidSettingsOverrides(DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        HardwareProfile profile = checked.enabled && checked.hardware == DiagnosticsOptions.Hardware.DMG
+                ? HardwareProfileRegistry.DMG : null;
+        return new ApplicationSettingsOverrides(profile, null, null, false,
+                checked.enabled && checked.runtimeWarmup);
     }
 
     public RuntimeState state() {
@@ -563,6 +584,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Reads persisted recent grants on the runtime owner and publishes redacted choices. */
     public void requestRecentDocuments() {
         submit(() -> {
+            // The QA launcher has one deliberately read-only identity path below. Do not expose
+            // the mutable Library catalog to it: readable() may migrate legacy metadata, prune
+            // revoked grants, and clean preview files. A benchmark does not offer that UI list.
+            if (diagnostics.enabled()) {
+                pendingRecents = List.of();
+                publish(RuntimeState.Phase.FAILED,
+                        "Recent ROM catalog is unavailable in benchmark mode.",
+                        List.of(), activeLayout != null, state.paused(), false);
+                return;
+            }
             List<Uri> recent = new RecentSafDocuments(context).readable();
             if (recent.isEmpty()) {
                 publish(RuntimeState.Phase.FAILED,
@@ -584,10 +615,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     void requestRecentGames(Consumer<List<RecentGame>> callback) {
         Consumer<List<RecentGame>> checked = Objects.requireNonNull(callback, "callback");
         submit(() -> {
-            NativeFrameStore.Snapshot currentFrame = frames.snapshot();
-            persistActiveRecentGame(currentFrame);
+            NativeFrameStore.Snapshot currentFrame = diagnostics.enabled()
+                    ? null : frames.snapshot();
+            if (!diagnostics.enabled()) {
+                persistActiveRecentGame(currentFrame);
+            }
             deliverRecentGames(checked);
-            if (currentSource != null && currentFrame == null) {
+            if (!diagnostics.enabled() && currentSource != null && currentFrame == null) {
                 scheduleRecentGamesRefresh(checked, currentSource, activeOpenRequestId, 0);
             }
         });
@@ -605,6 +639,26 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             RecentSafDocuments.Entry entry = pendingRecentGames.get((int) token);
             pendingRecentGames = List.of();
             openRecentGame(entry);
+        });
+    }
+
+    /** Starts the newest readable Recent Games entry without presenting its metadata to the UI. */
+    void launchMostRecentBenchmarkGame() {
+        if (!diagnostics.enabled() || !diagnosticsOptions.launchRecent) {
+            return;
+        }
+        submit(() -> {
+            RecentSafDocuments.Entry recent = new RecentSafDocuments(context)
+                    .mostRecentReadableEntry();
+            if (recent == null) {
+                diagnostics.noRecentEntry();
+                publish(RuntimeState.Phase.FAILED,
+                        "No readable recent game is available for benchmark.", List.of(),
+                        false, false, false);
+                return;
+            }
+            diagnostics.openStart();
+            openRecentGame(recent);
         });
     }
 
@@ -659,7 +713,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeCamera.pause();
         }
         submit(() -> {
-            persistActiveRecentGame(frames.snapshot());
+            persistCurrentRecentGame();
             if (controller == null) {
                 return;
             }
@@ -709,7 +763,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void stop() {
         input.releaseAll();
         submit(() -> {
-            persistActiveRecentGame(frames.snapshot());
+            persistCurrentRecentGame();
             clearPendingSource();
             if (!closeController()) {
                 publish(RuntimeState.Phase.FAILED,
@@ -874,7 +928,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         deadlines.shutdownNow();
         try {
             owner.execute(() -> {
-                persistActiveRecentGame(frames.snapshot());
+                persistCurrentRecentGame();
                 clearPendingSource();
                 closeController();
                 activeLayout = null;
@@ -935,7 +989,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     submit(this::drainPendingStateRequests);
                 },
                 StateUxSessionEvent.class);
-        audio = new AndroidAudioSink(context, eventBus);
+        audio = diagnostics.enabled() && !diagnosticsOptions.audioOutput
+                ? AndroidAudioSink.disabled(eventBus)
+                : new AndroidAudioSink(context, eventBus, diagnostics);
+        if (diagnostics.enabled() && !diagnosticsOptions.audioOutput) {
+            diagnostics.audioStats(new AndroidAudioSink.AudioStats(0, 0, 0, 0));
+        }
         audio.start();
         rumble = new AndroidRumbleSink(context, eventBus, false);
         tilt = new AndroidTiltSink(context, eventBus);
@@ -966,7 +1025,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 }),
                 Controller.RomLoadingEvent.class);
         eventBus.register(
-                (Controller.EmulationStartedEvent event) -> submit(() -> {
+                (Controller.EmulationStartedEvent event) -> {
+                    // This callback runs synchronously on the controller thread. Keep the CPU
+                    // sample on that thread instead of the runtime owner executor.
+                    diagnostics.emulationStarted();
+                    submit(() -> {
                     boolean requestedOpen = event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId;
                     // Reset reloads the current cartridge without a host open-request id. Its
@@ -991,7 +1054,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                             activeCamera.setCartridgeActive(cameraOpenRequestId
                                     == activeOpenRequestId && cameraRequiredForOpenRequest);
                         }
-                        if (currentSource != null) {
+                        if (currentSource != null && !diagnostics.enabled()) {
                             NativeFrameStore.Snapshot recentFrame = frames.snapshot();
                             persistActiveRecentGame(recentFrame);
                             if (recentFrame == null) {
@@ -1009,7 +1072,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                                 "Loaded " + event.getRomName() + ". App-private saves are ready.",
                                 List.of(), true, false, false);
                     }
-                }),
+                    });
+                },
                 Controller.EmulationStartedEvent.class);
         eventBus.register(
                 (Controller.SessionPresentationEvent event) -> submit(() -> {
@@ -1033,7 +1097,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 (Controller.EmulationStoppedEvent event) -> submit(() -> {
                     if (!closed.get()) {
-                        persistActiveRecentGame(frames.snapshot());
+                        if (!diagnostics.enabled()) {
+                            persistActiveRecentGame(frames.snapshot());
+                        }
                         publish(RuntimeState.Phase.STOPPED,
                                 "Game stopped. Choose a ROM or ZIP document.",
                                 List.of(), false, false, false);
@@ -1044,9 +1110,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.LoadRomFailedEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
-                        new RecentSafDocuments(context).removeGame(currentSource,
-                                activeCandidateToken, activeArchiveEntryName,
-                                activeArchiveEntryOccurrence);
+                        if (!diagnostics.enabled()) {
+                            new RecentSafDocuments(context).removeGame(currentSource,
+                                    activeCandidateToken, activeArchiveEntryName,
+                                    activeArchiveEntryOccurrence);
+                        }
                         publish(RuntimeState.Phase.FAILED,
                                 "Coffee GB could not load the selected ROM.",
                                 List.of(), false, true, false);
@@ -1101,7 +1169,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void openRom(Uri uri) {
-        persistActiveRecentGame(frames.snapshot());
+        persistCurrentRecentGame();
         clearPendingSource();
         frames.clear();
         publish(RuntimeState.Phase.OPENING, "Opening selected ROM…", List.of(), false, true, false);
@@ -1124,7 +1192,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             publish(RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION,
                     "Choose ROM from archive.", choices, false, true, false);
         } catch (Exception failure) {
-            forgetRevokedPermission(uri);
+            if (!diagnostics.enabled()) {
+                forgetRevokedPermission(uri);
+            }
             publish(RuntimeState.Phase.FAILED,
                     "Coffee GB could not open this document. Check its permission and format.",
                     List.of(), activeLayout != null, state.paused(), false);
@@ -1133,7 +1203,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Reopens the exact game-level archive entry retained by the recent catalog. */
     private void openRecentGame(RecentSafDocuments.Entry recent) {
-        persistActiveRecentGame(frames.snapshot());
+        persistCurrentRecentGame();
         clearPendingSource();
         publish(RuntimeState.Phase.OPENING, "Opening recent game…", List.of(),
                 false, true, false);
@@ -1212,11 +1282,24 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     ? snapshot.loadSingle()
                     : snapshot.load(token);
             Rom rom = new Rom(image);
-            String hash = StateIdentity.INSTANCE.hash(rom).hex();
-            if (recent != null && !recentHashMatches(recent.romHash(), hash)) {
-                recentGameUnavailable(recent,
-                        "That recent game has changed since it was last played.");
+            String hash;
+            if (diagnostics.enabled() && recent != null
+                    && RecentSafDocuments.hasValidRomHash(recent.romHash())) {
+                // The benchmark reuses the recent catalog identity and intentionally does not
+                // hash cartridge bytes or write a new recent preview. Normal opens retain the
+                // existing change-detection path below.
+                hash = recent.romHash().toLowerCase(java.util.Locale.ROOT);
+            } else if (diagnostics.enabled()) {
+                diagnostics.noRecentEntry();
+                recentGameUnavailable(recent, "Recent game identity is unavailable.");
                 return;
+            } else {
+                hash = StateIdentity.INSTANCE.hash(rom).hex();
+                if (recent != null && !recentHashMatches(recent.romHash(), hash)) {
+                    recentGameUnavailable(recent,
+                            "That recent game has changed since it was last played.");
+                    return;
+                }
             }
             StateStorageLayout layout = persistenceStore.layout(hash);
             // Preserve the currently paused session until the candidate has been positively
@@ -1246,8 +1329,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     image, null, persistenceStore, activeOpenRequestId, true));
         } catch (Exception failure) {
             if (recent == null) {
-                forgetRevokedPermission(source);
-            } else {
+                if (!diagnostics.enabled()) {
+                    forgetRevokedPermission(source);
+                }
+            } else if (!diagnostics.enabled()) {
                 new RecentSafDocuments(context).removeGame(recent);
             }
             activeLayout = null;
@@ -1563,6 +1648,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void scheduleRecentPreview(Uri source, long openRequestId, int attempt) {
+        if (diagnostics.enabled()) {
+            return;
+        }
         deadlines.schedule(() -> submit(() -> {
             if (currentSource == null || !currentSource.equals(source)
                     || activeOpenRequestId != openRequestId) {
@@ -1579,6 +1667,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void scheduleRecentGamesRefresh(Consumer<List<RecentGame>> callback, Uri source,
             long openRequestId, int attempt) {
+        if (diagnostics.enabled()) {
+            return;
+        }
         deadlines.schedule(() -> submit(() -> {
             if (currentSource == null || !currentSource.equals(source)
                     || activeOpenRequestId != openRequestId) {
@@ -1604,6 +1695,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void deliverRecentGames(Consumer<List<RecentGame>> callback) {
+        if (diagnostics.enabled()) {
+            // The benchmark launch already selected its identity through the read-only v3
+            // scanner. Avoid the normal menu catalog because it can write migration/pruning
+            // metadata and delete stale preview files.
+            pendingRecentGames = List.of();
+            mainHandler.post(() -> callback.accept(List.of()));
+            return;
+        }
         List<RecentSafDocuments.Entry> entries =
                 new RecentSafDocuments(context).readableEntries();
         pendingRecentGames = List.copyOf(entries);
@@ -1617,7 +1716,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void persistActiveRecentGame(NativeFrameStore.Snapshot snapshot) {
-        if (currentSource == null || activeRomTitle == null || activeRomTitle.isBlank()
+        if (diagnostics.enabled() || currentSource == null || activeRomTitle == null
+                || activeRomTitle.isBlank()
                 || activeLayout == null) {
             return;
         }
@@ -1626,8 +1726,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 activeRomHash, snapshot);
     }
 
+    private void persistCurrentRecentGame() {
+        if (!diagnostics.enabled()) {
+            persistActiveRecentGame(frames.snapshot());
+        }
+    }
+
     private void recentGameUnavailable(RecentSafDocuments.Entry recent, String message) {
-        new RecentSafDocuments(context).removeGame(recent);
+        if (!diagnostics.enabled()) {
+            new RecentSafDocuments(context).removeGame(recent);
+        }
         boolean active = activeLayout != null;
         boolean paused = active && state.paused();
         publish(active ? (paused ? RuntimeState.Phase.PAUSED : RuntimeState.Phase.RUNNING)

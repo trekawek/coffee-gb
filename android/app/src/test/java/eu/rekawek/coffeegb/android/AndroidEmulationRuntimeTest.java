@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import org.junit.Test;
 
@@ -82,6 +83,29 @@ public class AndroidEmulationRuntimeTest {
         assertTrue(AndroidEmulationRuntime.recentHashMatches(original.toUpperCase(), original));
         assertFalse(AndroidEmulationRuntime.recentHashMatches(original, changed));
         assertTrue(AndroidEmulationRuntime.recentHashMatches("", changed));
+    }
+
+    @Test
+    public void benchmarkRecentIdentityRequiresAFullHexSha256Hash() {
+        assertTrue(RecentSafDocuments.hasValidRomHash("a".repeat(64)));
+        assertTrue(RecentSafDocuments.hasValidRomHash("ABCDEF0123456789".repeat(4)));
+        assertFalse(RecentSafDocuments.hasValidRomHash(""));
+        assertFalse(RecentSafDocuments.hasValidRomHash("a".repeat(63)));
+        assertFalse(RecentSafDocuments.hasValidRomHash("a".repeat(64) + "0"));
+        assertFalse(RecentSafDocuments.hasValidRomHash("g".repeat(64)));
+    }
+
+    @Test
+    public void benchmarkOverridesAreTransientAndCanForceDmgWithWarmup() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "forced-dmg", false, "sink", true, true, false);
+        try (EmulatorProperties properties =
+                     new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides(options))) {
+            assertEquals(HardwareProfileRegistry.DMG,
+                    properties.getOverrides().getHardwareProfile());
+            assertEquals(Boolean.TRUE, properties.getOverrides().getRuntimeWarmupEnabled());
+            assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
+        }
     }
 
     @Test

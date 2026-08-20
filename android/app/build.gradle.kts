@@ -138,6 +138,7 @@ android {
     versionCode = 1
     versionName = coffeeGbVersion
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "false")
   }
 
   buildTypes {
@@ -145,6 +146,11 @@ android {
       isMinifyEnabled = true
       isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+    }
+    create("benchmark") {
+      initWith(getByName("release"))
+      matchingFallbacks += listOf("release")
+      buildConfigField("boolean", "DIAGNOSTICS_ENABLED", "true")
     }
   }
 

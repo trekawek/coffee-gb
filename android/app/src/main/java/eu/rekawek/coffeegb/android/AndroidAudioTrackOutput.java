@@ -73,8 +73,11 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
                     return null;
                 }
                 int actualRate = track.getSampleRate();
+                int actualBuffer = Math.max(0, track.getBufferSizeInFrames()) * 4;
+                int configured = Math.max(minimum, sampleRate * 4 / 100);
                 return new AndroidAudioTrackOutput(track,
-                        actualRate > 0 ? actualRate : sampleRate);
+                        actualRate > 0 ? actualRate : sampleRate,
+                        minimum, configured, actualBuffer);
             } catch (RuntimeException unavailable) {
                 if (track != null) {
                     track.release();
@@ -86,15 +89,28 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
 
     private final AudioTrack track;
     private final int sampleRate;
+    private final int minimumBufferBytes;
+    private final int configuredBufferBytes;
+    private final int actualBufferBytes;
 
-    private AndroidAudioTrackOutput(AudioTrack track, int sampleRate) {
+    private AndroidAudioTrackOutput(AudioTrack track, int sampleRate, int minimumBufferBytes,
+            int configuredBufferBytes, int actualBufferBytes) {
         this.track = track;
         this.sampleRate = sampleRate;
+        this.minimumBufferBytes = minimumBufferBytes;
+        this.configuredBufferBytes = configuredBufferBytes;
+        this.actualBufferBytes = actualBufferBytes;
     }
 
     @Override
     public int sampleRate() {
         return sampleRate;
+    }
+
+    @Override
+    public AndroidAudioSink.AudioStats audioStats() {
+        return new AndroidAudioSink.AudioStats(sampleRate, minimumBufferBytes,
+                configuredBufferBytes, actualBufferBytes);
     }
 
     @Override
