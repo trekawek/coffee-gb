@@ -40,6 +40,7 @@ final class NativeFrameStore implements AutoCloseable {
 
     private final Slot[] slots = new Slot[SLOT_COUNT];
     private final CopyOnWriteArraySet<Listener> listeners = new CopyOnWriteArraySet<>();
+    private final AndroidBenchmarkDiagnostics diagnostics;
 
     private long nextSequence;
     private long droppedFrames;
@@ -49,6 +50,11 @@ final class NativeFrameStore implements AutoCloseable {
     private boolean closed;
 
     NativeFrameStore() {
+        this(null);
+    }
+
+    NativeFrameStore(AndroidBenchmarkDiagnostics diagnostics) {
+        this.diagnostics = diagnostics;
         for (int index = 0; index < slots.length; index++) {
             slots[index] = new Slot();
         }
@@ -73,6 +79,12 @@ final class NativeFrameStore implements AutoCloseable {
         if (sgbOutput) {
             return;
         }
+        if (diagnostics != null) {
+            diagnostics.physicalFrame();
+            if (diagnostics.frameSink()) {
+                return;
+            }
+        }
         Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
         if (slot == null) {
             return;
@@ -83,6 +95,12 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     void publish(Display.GbcFrameReadyEvent event) {
+        if (diagnostics != null) {
+            diagnostics.physicalFrame();
+            if (diagnostics.frameSink()) {
+                return;
+            }
+        }
         Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
         if (slot == null) {
             return;
@@ -105,9 +123,18 @@ final class NativeFrameStore implements AutoCloseable {
     void setHardwareProfile(HardwareProfile profile) {
         sgbOutput = Objects.requireNonNull(profile, "profile")
                 .capabilities().superGameboyCommands();
+        if (diagnostics != null) {
+            diagnostics.hardwareProfile(profile);
+        }
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {
+        if (diagnostics != null) {
+            diagnostics.physicalFrame();
+            if (diagnostics.frameSink()) {
+                return;
+            }
+        }
         int width = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_WIDTH : Display.DISPLAY_WIDTH;
         int height = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_HEIGHT : Display.DISPLAY_HEIGHT;
         Slot slot = reserve(width, height);

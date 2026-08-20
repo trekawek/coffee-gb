@@ -22,8 +22,16 @@ final class AndroidAudioSink implements AutoCloseable {
         Output open();
     }
 
+    record AudioStats(int sampleRate, int minimumBufferBytes, int configuredBufferBytes,
+                      int actualBufferBytes) {
+    }
+
     interface Output {
         int sampleRate();
+
+        default AudioStats audioStats() {
+            return new AudioStats(sampleRate(), 0, 0, 0);
+        }
 
         void play();
 
@@ -38,7 +46,8 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     record Stats(int sampleRate, long overruns, long underruns, long restarts, boolean paused,
-                 boolean active) {
+                 boolean active, int minimumBufferBytes, int configuredBufferBytes,
+                 int actualBufferBytes) {
     }
 
     private static final long POLL_MILLIS = 20L;
@@ -46,6 +55,8 @@ final class AndroidAudioSink implements AutoCloseable {
 
     private final OutputFactory outputFactory;
     private final AudioManager audioManager;
+    private final boolean enabled;
+    private final AndroidBenchmarkDiagnostics diagnostics;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean reopenRequested = new AtomicBoolean();
     private final AtomicLong underruns = new AtomicLong();
@@ -69,26 +80,49 @@ final class AndroidAudioSink implements AutoCloseable {
     private volatile int volume = 100;
     private volatile boolean hasProducedPcm;
     private volatile int sampleRate;
+    private volatile int minimumBufferBytes;
+    private volatile int configuredBufferBytes;
+    private volatile int actualBufferBytes;
     private volatile Thread worker;
 
     AndroidAudioSink(Context context, EventBus eventBus) {
         this(eventBus, new AndroidAudioTrackOutput.Factory(),
-                Objects.requireNonNull(context, "context").getSystemService(AudioManager.class));
+                Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
+                true, null);
+    }
+
+    AndroidAudioSink(Context context, EventBus eventBus,
+            AndroidBenchmarkDiagnostics diagnostics) {
+        this(eventBus, new AndroidAudioTrackOutput.Factory(),
+                Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
+                true, diagnostics);
     }
 
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory) {
-        this(eventBus, outputFactory, null);
+        this(eventBus, outputFactory, null, true, null);
     }
 
-    private AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, AudioManager audioManager) {
+    private AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, AudioManager audioManager,
+            boolean enabled, AndroidBenchmarkDiagnostics diagnostics) {
         this.outputFactory = Objects.requireNonNull(outputFactory, "outputFactory");
         this.audioManager = audioManager;
+        this.enabled = enabled;
+        this.diagnostics = diagnostics;
         EventBus bus = Objects.requireNonNull(eventBus, "eventBus");
-        bus.register(this::onSoundSample, Sound.SoundSampleEvent.class);
-        bus.register(event -> setMuted(!event.enabled()), Sound.SoundEnabledEvent.class);
+        if (enabled) {
+            bus.register(this::onSoundSample, Sound.SoundSampleEvent.class);
+            bus.register(event -> setMuted(!event.enabled()), Sound.SoundEnabledEvent.class);
+        }
+    }
+
+    static AndroidAudioSink disabled(EventBus eventBus) {
+        return new AndroidAudioSink(eventBus, () -> null, null, false, null);
     }
 
     void start() {
+        if (!enabled) {
+            return;
+        }
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("Android audio sink can only be started once");
         }
@@ -130,7 +164,13 @@ final class AndroidAudioSink implements AutoCloseable {
     Stats stats() {
         BoundedPcmQueue active = queue;
         return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
-                restarts.get(), paused, running.get());
+                restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
+                actualBufferBytes);
+    }
+
+    AudioStats audioStats() {
+        return new AudioStats(sampleRate, minimumBufferBytes, configuredBufferBytes,
+                actualBufferBytes);
     }
 
     void requestRouteReopen() {
@@ -200,6 +240,13 @@ final class AndroidAudioSink implements AutoCloseable {
                         activeQueue.clear();
                     }
                     sampleRate = output.sampleRate();
+                    AudioStats outputStats = output.audioStats();
+                    minimumBufferBytes = outputStats.minimumBufferBytes();
+                    configuredBufferBytes = outputStats.configuredBufferBytes();
+                    actualBufferBytes = outputStats.actualBufferBytes();
+                    if (diagnostics != null) {
+                        diagnostics.audioStats(outputStats);
+                    }
                     hasProducedPcm = false;
                     if (!paused) {
                         output.play();
@@ -241,6 +288,9 @@ final class AndroidAudioSink implements AutoCloseable {
         } finally {
             queue = null;
             sampleRate = 0;
+            minimumBufferBytes = 0;
+            configuredBufferBytes = 0;
+            actualBufferBytes = 0;
             release(output);
         }
     }

@@ -163,6 +163,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuRoute printerPaperEntryParent;
     private MenuStackSnapshot deferredMenuFocusRestore = MenuStackSnapshot.hidden();
     private boolean activityResumed;
+    private DiagnosticsOptions diagnosticsOptions = DiagnosticsOptions.disabled();
+    private boolean benchmarkRecentLaunchRequested;
     // Android 6-8 can return from a cancelled permission Activity without delivering its result.
     private MenuExternalSurfaceState legacyCameraPermissionFallbackSurface;
     private boolean legacyCameraPermissionFallbackPosted;
@@ -228,13 +230,24 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     == PackageManager.PERMISSION_GRANTED);
             runtime.setGamepadSelection(gamepadSelection(settings));
             runtime.setGpsEnabled(settings.getBoolean(PREF_GPS_ENABLED, false));
-            runtime.setDisplayGrayscale("grey".equals(displayColors(settings)));
-            runtime.setSgbBorder(settings.getBoolean(PREF_DISPLAY_BORDER, false));
-            applySystemSettings(runtime, settings);
+            if (!diagnosticsOptions.enabled) {
+                runtime.setDisplayGrayscale("grey".equals(displayColors(settings)));
+                runtime.setSgbBorder(settings.getBoolean(PREF_DISPLAY_BORDER, false));
+            }
+            // Benchmark options are transient and must not rewrite the persisted system
+            // selectors while the QA variant is comparing hardware profiles.
+            if (!diagnosticsOptions.enabled) {
+                applySystemSettings(runtime, settings);
+            }
             applyState(runtime.state());
             dispatchPendingDocumentResult();
             restoreExternalSurfaceIfRequested();
             restoreSuspendedMenu();
+            if (diagnosticsOptions.enabled && diagnosticsOptions.launchRecent
+                    && !benchmarkRecentLaunchRequested) {
+                benchmarkRecentLaunchRequested = true;
+                runtime.launchMostRecentBenchmarkGame();
+            }
         }
 
         @Override
@@ -272,6 +285,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        diagnosticsOptions = BuildConfig.DIAGNOSTICS_ENABLED
+                ? DiagnosticsOptions.fromIntent(getIntent()) : DiagnosticsOptions.disabled();
+        if (diagnosticsOptions.enabled) {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                    | android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+                    | android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setTurnScreenOn(true);
+                setShowWhenLocked(true);
+            }
+        }
         printerContinuationPreferences = getApplicationContext().getSharedPreferences(
                 PRINTER_CONTINUATION_PREFS, MODE_PRIVATE);
         restoreActivityState(savedInstanceState);
@@ -379,7 +403,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 printerContinuationListener);
         inputManager = getSystemService(InputManager.class);
         inputManager.registerInputDeviceListener(inputDevices, null);
-        EmulationService.start(this);
+        if (diagnosticsOptions.enabled) {
+            EmulationService.start(this, diagnosticsOptions);
+        } else {
+            EmulationService.start(this);
+        }
         if (!bound) {
             bindService(new Intent(this, EmulationService.class), connection, BIND_AUTO_CREATE);
         }

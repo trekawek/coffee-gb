@@ -7,6 +7,14 @@ die() {
   exit 1
 }
 
+requested_variant="${1:-release}"
+[[ "$#" -le 1 ]] || die "usage: $0 [release|benchmark]"
+case "$requested_variant" in
+  release|--release) build_variant="release" ;;
+  benchmark|qa|--benchmark|--qa) build_variant="benchmark" ;;
+  *) die "unknown build variant '$requested_variant' (expected release or benchmark)" ;;
+esac
+
 resolve_executable() {
   local requested="$1"
 
@@ -120,9 +128,17 @@ debug_keystore="$user_home/.android/debug.keystore"
 [[ -f "$debug_keystore" ]] || die "standard Android debug keystore not found: $debug_keystore"
 
 android_maven_repo="$repo_root/build/android-m2"
-unsigned_apk="$repo_root/android/app/build/outputs/apk/release/app-release-unsigned.apk"
-aligned_apk="$repo_root/android/app/build/outputs/apk/release/app-release-qa-r8-aligned.apk"
-signed_apk="$repo_root/android/app/build/outputs/apk/release/coffee-gb-qa-r8.apk"
+apk_dir="$repo_root/android/app/build/outputs/apk/$build_variant"
+unsigned_apk="$apk_dir/app-$build_variant-unsigned.apk"
+if [[ "$build_variant" == "release" ]]; then
+  aligned_apk="$apk_dir/app-release-qa-r8-aligned.apk"
+  signed_apk="$apk_dir/coffee-gb-qa-r8.apk"
+  gradle_task="assembleRelease"
+else
+  aligned_apk="$apk_dir/app-benchmark-qa-r8-aligned.apk"
+  signed_apk="$apk_dir/coffee-gb-benchmark-qa-r8.apk"
+  gradle_task="assembleBenchmark"
+fi
 
 mkdir -p "$android_maven_repo"
 cd -- "$repo_root"
@@ -132,18 +148,18 @@ echo "Installing controller, ui-portable, and dependencies into $android_maven_r
   -Dkotlin.compiler.daemon=false \
   "-Dmaven.repo.local=$android_maven_repo"
 
-echo "Building the R8 release APK"
+echo "Building the R8 $build_variant APK"
 ANDROID_SDK_ROOT="$sdk_root" ANDROID_HOME="$sdk_root" \
   "$repo_root/android/gradlew" -p "$repo_root/android" \
-  "-PcoffeeGbMavenRepository=$android_maven_repo" :app:assembleRelease
+  "-PcoffeeGbMavenRepository=$android_maven_repo" ":app:$gradle_task"
 
-[[ -f "$unsigned_apk" ]] || die "release build did not produce the unsigned APK: $unsigned_apk"
+[[ -f "$unsigned_apk" ]] || die "$build_variant build did not produce the unsigned APK: $unsigned_apk"
 
 echo "Using Android build-tools $build_tools_version"
-echo "Aligning the release APK"
+echo "Aligning the $build_variant APK"
 "$zipalign_bin" -f -p 4 "$unsigned_apk" "$aligned_apk"
 
-echo "Signing the QA APK"
+echo "Signing the QA APK with the debug keystore"
 "$apksigner_bin" sign \
   --ks "$debug_keystore" \
   --ks-key-alias androiddebugkey \
@@ -153,7 +169,7 @@ echo "Signing the QA APK"
   "$aligned_apk"
 "$apksigner_bin" verify --verbose "$signed_apk"
 
-echo "Installing the QA APK with adb -r (app data preserved)"
+echo "Installing the $build_variant QA APK with adb -r (app data preserved)"
 "$adb_bin" install -r "$signed_apk"
 
 echo "Installed $signed_apk"

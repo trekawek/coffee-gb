@@ -17,29 +17,51 @@ import android.os.IBinder;
 public final class EmulationService extends Service implements AudioManager.OnAudioFocusChangeListener {
 
     private final RuntimeBinder binder = new RuntimeBinder();
+    private static volatile DiagnosticsOptions nextStartOptions = DiagnosticsOptions.disabled();
 
     private AndroidEmulationRuntime runtime;
     private AudioManager audioManager;
+    private DiagnosticsOptions pendingOptions = DiagnosticsOptions.disabled();
 
     public static void start(Context context) {
+        nextStartOptions = DiagnosticsOptions.disabled();
         context.startService(new Intent(context, EmulationService.class));
+    }
+
+    static void start(Context context, DiagnosticsOptions options) {
+        Intent intent = new Intent(context, EmulationService.class);
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        nextStartOptions = checked;
+        intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
+                .putExtra(DiagnosticsOptions.EXTRA_HARDWARE,
+                        checked.hardware == DiagnosticsOptions.Hardware.DMG ? "dmg" : "auto")
+                .putExtra(DiagnosticsOptions.EXTRA_AUDIO, checked.audioOutput)
+                .putExtra(DiagnosticsOptions.EXTRA_RENDER,
+                        checked.render == DiagnosticsOptions.Render.FRAME_SINK ? "sink" : "presentation")
+                .putExtra(DiagnosticsOptions.EXTRA_WARMUP, checked.runtimeWarmup)
+                .putExtra(DiagnosticsOptions.EXTRA_RECENT, checked.launchRecent);
+        context.startService(intent);
     }
 
     @Override
     public void onCreate() {
         super.onCreate();
         audioManager = getSystemService(AudioManager.class);
-        runtime = new AndroidEmulationRuntime(this);
+        pendingOptions = nextStartOptions;
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // The system must not recreate a stopped process and imply that its in-memory game lived.
+        pendingOptions = BuildConfig.DIAGNOSTICS_ENABLED
+                ? DiagnosticsOptions.fromIntent(intent) : DiagnosticsOptions.disabled();
+        ensureRuntime();
         return START_NOT_STICKY;
     }
 
     @Override
     public IBinder onBind(Intent intent) {
+        ensureRuntime();
         runtime.onHostVisible();
         requestAudioFocus();
         return binder;
@@ -76,6 +98,12 @@ public final class EmulationService extends Service implements AudioManager.OnAu
             runtime.close();
         }
         super.onDestroy();
+    }
+
+    private void ensureRuntime() {
+        if (runtime == null) {
+            runtime = new AndroidEmulationRuntime(this, pendingOptions);
+        }
     }
 
     @Override

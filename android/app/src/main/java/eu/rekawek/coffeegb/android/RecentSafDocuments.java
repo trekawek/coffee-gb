@@ -113,6 +113,52 @@ final class RecentSafDocuments {
         return List.copyOf(result);
     }
 
+    /**
+     * Returns only the newest readable identity for the benchmark launcher.  Unlike the menu
+     * catalog path this never decodes a persisted thumbnail or constructs a display row.  It
+     * deliberately reads only the current v3 catalog: migration, repair, pruning, and preview
+     * cleanup are all writes and therefore do not belong on the benchmark launch path.
+     */
+    Entry mostRecentReadableEntry() {
+        String encoded = preferences.getString(KEY_GAME_ENTRIES, null);
+        if (encoded == null || encoded.isBlank()) {
+            return null;
+        }
+        try {
+            JSONArray array = new JSONArray(encoded);
+            for (int index = 0; index < array.length(); index++) {
+                JSONObject object = array.optJSONObject(index);
+                if (object == null) {
+                    continue;
+                }
+                String encodedUri = object.optString("uri", "");
+                if (encodedUri.isBlank()) {
+                    continue;
+                }
+                StoredEntry entry = stored(Uri.parse(encodedUri),
+                        object.optString("romName", ""),
+                        object.optLong("candidateToken",
+                                RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN),
+                        object.optString("entryName", ""),
+                        object.optInt("entryOccurrence", -1),
+                        object.optString("romHash", ""),
+                        object.optLong("lastPlayed", 0L));
+                if (hasValidRomHash(entry.romHash()) && hasPersistedReadPermission(entry.uri())) {
+                    return new Entry(entry.uri(), entry.romName(), entry.candidateToken(),
+                            entry.archiveEntryName(), entry.archiveEntryOccurrence(),
+                            entry.romHash(), entry.lastPlayedMillis(), MenuPreview.empty());
+                }
+            }
+        } catch (Exception ignored) {
+            // A malformed private catalog is not repaired by a benchmark launch.
+        }
+        return null;
+    }
+
+    static boolean hasValidRomHash(String value) {
+        return value != null && value.matches("[0-9a-fA-F]{64}");
+    }
+
     /** Compatibility path used by the existing document-level Library chooser. */
     List<Uri> readable() {
         LinkedHashSet<Uri> uris = new LinkedHashSet<>();
@@ -456,6 +502,7 @@ final class RecentSafDocuments {
                  int archiveEntryOccurrence, String romHash, long lastPlayedMillis,
                  MenuPreview preview) {
         Entry {
+            romHash = normalizeHash(romHash);
             preview = preview == null ? MenuPreview.empty() : preview;
         }
     }
