@@ -381,6 +381,9 @@ internal data class PreparedSessionState(
  */
 internal object DetachedStateAdapter {
 
+  private const val SCALAR_TIMING_DMG_FIFO =
+      "eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State"
+
   fun capture(gameboy: Gameboy): MachineState =
       MachineState(
           StateGraph.captureRoot(gameboy.captureState(), GAMEBOY_ROOT),
@@ -610,7 +613,58 @@ internal object DetachedStateAdapter {
     } catch (failure: IllegalArgumentException) {
       throw StateApplyException("Detached machine runtime layout is incompatible", failure)
     }
+    validateScalarTimingSupplement(state.root, state.dmgFifoRuntime)
   }
+
+  /**
+   * The DMG timing skeleton carries the same output position in two state planes: its scalar
+   * component record and the historical machine-level supplement.  Both planes are retained for
+   * compatibility, but the supplement is applied after the component graph.  Check their shared
+   * fields before either plane can mutate the live machine; otherwise a contradictory,
+   * individually-valid snapshot would silently let the supplement overwrite the scalar record.
+   */
+  private fun validateScalarTimingSupplement(
+      root: RecordState,
+      runtime: DmgFifoRuntimeState?,
+  ) {
+    val scalarId = StateTypeRegistry.recordClassNames.indexOf(SCALAR_TIMING_DMG_FIFO) + 1
+    check(scalarId > 0) { "State registry has no $SCALAR_TIMING_DMG_FIFO" }
+    val records = ArrayList<RecordState>()
+    fun visit(value: StateValue) {
+      when (value) {
+        is RecordState -> {
+          if (value.typeId == scalarId) records += value
+          value.fields.forEach { visit(it.value) }
+        }
+        is ObjectArrayState -> value.values.forEach(::visit)
+        is ListState -> value.values.forEach(::visit)
+        is Int32MapState -> value.entries.forEach { visit(it.value) }
+        else -> Unit
+      }
+    }
+    visit(root)
+    if (records.isEmpty()) return
+    val timing = runtime?.timing
+        ?: throw StateApplyException("Scalar DMG timing state has no runtime supplement")
+    records.forEachIndexed { index, scalar ->
+      val linePixels = scalarInt(scalar, "linePixels")
+      val outCount = scalarInt(scalar, "outCount")
+      val firstEntryPresent = scalarBoolean(scalar, "firstEntryPresent")
+      if (linePixels != timing.linePixels || outCount != timing.outCount
+          || firstEntryPresent != (timing.firstEntry >= 0)) {
+        throw StateApplyException(
+            "Scalar DMG timing state disagrees with runtime supplement at record $index")
+      }
+    }
+  }
+
+  private fun scalarInt(record: RecordState, name: String): Int =
+      (record.fields.singleOrNull { it.name == name }?.value as? Int32State)?.value
+          ?: throw StateApplyException("Scalar DMG timing field $name is malformed")
+
+  private fun scalarBoolean(record: RecordState, name: String): Boolean =
+      (record.fields.singleOrNull { it.name == name }?.value as? BooleanState)?.value
+          ?: throw StateApplyException("Scalar DMG timing field $name is malformed")
 
   private fun eu.rekawek.coffeegb.core.hardware.HardwareProfile.toMachineHardware() =
       when (family()) {

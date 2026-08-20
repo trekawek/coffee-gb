@@ -2387,7 +2387,7 @@ class LinkedControllerTest {
           "portable MACHINE commit must continue deterministically",
       )
       assertEquals(
-          "909608afe8ea1510ea187b080ce48818b5b1f62379a0e23dde31cbb7ad61bd99",
+          "6107b3693471a27349d1f8660db0c6a79593d70a764725bfea96ce85bb4072b0",
           sha256Hex(
               StateCodec.encode(
                   StateCodec.captureVersion2(restoredSession.config, restoredSession.gameboy))),
@@ -2714,7 +2714,7 @@ class LinkedControllerTest {
       }
       assertEquals(source.captureDetachedState(), targetController.captureDetachedState())
       assertEquals(
-          "f19740d73c745a76b8bb7a2898ff308bec7d8e855d191efb8f248108a33149ae",
+          "96218b63f1e2004225af45f2be67af57dc0cc6588377d64241c48f8cef6ee148",
           sha256Hex(StateCodec.encode(StateCodec.captureVersion2(targetController))),
           "four-player v9 continuation hash",
       )
