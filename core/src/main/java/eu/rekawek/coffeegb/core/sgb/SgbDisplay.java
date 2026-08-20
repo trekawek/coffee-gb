@@ -266,10 +266,12 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         int height = sgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
         int[] result = new int[width * height];
 
-        for (int x = offsetX; x < offsetX + width; x++) {
-            for (int y = offsetY; y < offsetY + height; y++) {
-                int sgbPixel = sgbBuffer[x + y * SGB_DISPLAY_WIDTH];
-                int mask = sgbMask[x + y * SGB_DISPLAY_WIDTH];
+        for (int y = offsetY; y < offsetY + height; y++) {
+            int sgbRowOffset = y * SGB_DISPLAY_WIDTH;
+            int resultRowOffset = (y - offsetY) * width;
+            for (int x = offsetX; x < offsetX + width; x++) {
+                int sgbPixel = sgbBuffer[x + sgbRowOffset];
+                int mask = sgbMask[x + sgbRowOffset];
                 int dmgPixel;
                 if (x >= DMG_WINDOW_X && x < DMG_WINDOW_X + DISPLAY_WIDTH && y >= DMG_WINDOW_Y && y < DMG_WINDOW_Y + DISPLAY_HEIGHT) {
                     int dmgX = x - DMG_WINDOW_X;
@@ -292,7 +294,7 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
                 } else {
                     dmgPixel = 0;
                 }
-                int i = (x - offsetX) + (y - offsetY) * width;
+                int i = (x - offsetX) + resultRowOffset;
                 if (mask == 0) {
                     result[i] = translateGbcRgb(dmgPixel);
                 } else {

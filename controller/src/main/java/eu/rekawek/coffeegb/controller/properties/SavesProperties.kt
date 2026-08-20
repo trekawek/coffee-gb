@@ -15,7 +15,7 @@ class SavesProperties(private val properties: EmulatorProperties) {
             ?: properties.applicationSettings.saves.batterySavesEnabled
 
   val rewindEnabled: Boolean
-    get() = properties.applicationSettings.saves.rewindEnabled
+    get() = properties.overrides.rewindEnabled ?: properties.applicationSettings.saves.rewindEnabled
 
   val rewindSeconds: Int
     get() = properties.applicationSettings.saves.rewindSeconds

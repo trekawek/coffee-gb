@@ -18,6 +18,38 @@ import org.junit.Test
 class TimingTickerTest {
 
   @Test
+  fun `frame entry accounts for one complete cadence`() {
+    val now = AtomicLong(0)
+    val ticker = TimingTicker(
+        LongSupplier { now.addAndGet(1_000_000_000L) },
+        LongConsumer {},
+    )
+    val clock = ClockSpec(1_000, 10, 1)
+
+    repeat(3) { ticker.runFrame(clock) }
+
+    assertEquals(3, ticker.completedFrames)
+    kotlin.test.assertTrue(ticker.hasPacingDebt)
+  }
+
+  @Test
+  fun `frame entry resets an incomplete tick cadence`() {
+    val now = AtomicLong(0)
+    val ticker = TimingTicker(
+        LongSupplier { now.addAndGet(1_000_000_000L) },
+        LongConsumer {},
+    )
+    val clock = ClockSpec(1_000, 10, 1)
+
+    repeat(5) { ticker.run(clock) }
+    ticker.runFrame(clock)
+    repeat(clock.controllerTicksPerFrame() - 1) { ticker.run(clock) }
+    assertEquals(1, ticker.completedFrames)
+    ticker.run(clock)
+    assertEquals(2, ticker.completedFrames)
+  }
+
+  @Test
   fun `controller pacing boundary uses supplied session clock`() {
     val now = AtomicLong(0)
     val parked = mutableListOf<Long>()
@@ -75,7 +107,7 @@ class TimingTickerTest {
 
     runFrame()
     val parksBeforeDelay = parked.size
-    assertEquals(1, parksBeforeDelay)
+    assertEquals(2, parksBeforeDelay)
 
     // One frame interval plus host delay leaves roughly 20 ms of debt after the next
     // frame deadline is advanced. The old one-frame re-anchor discarded this debt.
@@ -114,7 +146,7 @@ class TimingTickerTest {
 
     runFrame()
     val parksBeforeDelay = parked.size
-    assertEquals(1, parksBeforeDelay)
+    assertEquals(2, parksBeforeDelay)
 
     now.addAndGet(100_000_000L)
     repeat(3) { runFrame() }
@@ -173,10 +205,10 @@ class TimingTickerTest {
     val clock = ClockSpec(1, 1, 1)
 
     repeat(2_000) { ticker.run(clock) }
-    assertEquals(2_000, seam.parkCalls)
+    assertEquals(4_000, seam.parkCalls)
     assertTrue(
-        seam.nanoTimeCalls > seam.parkCalls * 10,
-        "the deterministic clock must force repeated final-stretch wait iterations",
+        seam.nanoTimeCalls <= seam.parkCalls * 3 + 4,
+        "the deterministic clock must not force a scheduler-polling storm",
     )
 
     var minimumAllocated = Long.MAX_VALUE

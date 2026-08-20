@@ -709,14 +709,17 @@ class ApplicationSettingsStoreTest {
             hardwareProfile = HardwareProfileRegistry.DMG,
             bootstrapMode = BootstrapMode.FAST_FORWARD,
             batterySavesEnabled = true,
+            rewindEnabled = false,
         )
 
     EmulatorProperties(path, overrides, debounceMillis = 60_000).use { properties ->
       assertEquals(HardwareProfileRegistry.MGB, properties.system.dmgGamesProfile)
       assertEquals(BootstrapMode.FAST_FORWARD, properties.system.bootstrapMode)
       assertTrue(properties.saves.batterySavesEnabled)
+      assertFalse(properties.saves.rewindEnabled)
       assertEquals(BootstrapMode.NORMAL, properties.applicationSettings.advanced.bootstrapMode)
       assertFalse(properties.applicationSettings.saves.batterySavesEnabled)
+      assertTrue(properties.applicationSettings.saves.rewindEnabled)
 
       val rom = Rom(Path.of("src/test/resources/roms/cpu_instrs.gb").toFile())
       val configuration = Controller.createGameboyConfig(properties, rom)
@@ -730,6 +733,7 @@ class ApplicationSettingsStoreTest {
     assertEquals(HardwareProfileRegistry.MGB, reloaded.advanced.dmgGamesProfile.explicitProfileOrNull())
     assertEquals(BootstrapMode.NORMAL, reloaded.advanced.bootstrapMode)
     assertFalse(reloaded.saves.batterySavesEnabled)
+    assertTrue(reloaded.saves.rewindEnabled)
   }
 
   @Test

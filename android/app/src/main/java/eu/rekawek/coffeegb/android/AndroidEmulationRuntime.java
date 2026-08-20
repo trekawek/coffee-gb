@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot;
 import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker;
 import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
 import eu.rekawek.coffeegb.controller.state.StateIdentity;
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
@@ -92,7 +93,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final NativeFrameStore frames = new NativeFrameStore();
     /** Session timing belongs to the service, not to a short-lived Activity attachment. */
     private final PlayTimeTracker playTime = new PlayTimeTracker();
-    private final EmulatorProperties properties = new EmulatorProperties();
+    private final EmulatorProperties properties = new EmulatorProperties(androidSettingsOverrides());
     private final AndroidInputRouter input;
 
     private volatile RuntimeState state = RuntimeState.stopped();
@@ -154,6 +155,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         input = new AndroidInputRouter(properties.getPlayerInputSource(),
                 new AndroidControllerMappings(this.context));
         submit(this::initialize);
+    }
+
+    /** Android has no rewind control yet; disable its snapshot work without changing saved settings. */
+    static ApplicationSettingsOverrides androidSettingsOverrides() {
+        return new ApplicationSettingsOverrides(null, null, null, false);
     }
 
     public RuntimeState state() {
@@ -938,6 +944,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         camera.setEnabled(cameraEnabled);
         PocketCamera.setCameraSource(camera);
         printer = new AndroidPrinterStore();
+        // The profile event is dispatched synchronously before the controller starts ticking.
+        // NativeFrameStore must know whether a DMG event is transfer input for SGB before it
+        // receives the first physical frame.
+        eventBus.register(
+                event -> frames.setHardwareProfile(event.getProfile()),
+                Controller.HardwareProfileEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);

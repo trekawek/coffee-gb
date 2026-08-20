@@ -723,21 +723,19 @@ class BasicController private constructor(
             !timingTicker.disabled &&
             timingTicker.hasPacingDebt,
     )
-    repeat(frameTicks) {
-      if (rewound || (!isEffectivelyPaused() && !isRewinding)) {
-        val gameboy = session?.gameboy
-        if (gameboy != null) {
-          relinquishDebugBreakpointPauseOwnership()
-          if (trackDebugHistory) {
-            tickWithDebugHistory(gameboy, frameTicks)
-          } else {
-            gameboy.tick()
-          }
-          emulated = true
+    val gameboy = session?.gameboy
+    if (gameboy != null && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
+      relinquishDebugBreakpointPauseOwnership()
+      repeat(frameTicks) {
+        if (trackDebugHistory) {
+          tickWithDebugHistory(gameboy, frameTicks)
+        } else {
+          gameboy.tick()
         }
       }
-      timingTicker.run(clockSpec)
+      emulated = true
     }
+    timingTicker.runFrame(clockSpec)
     if (emulated) {
       debugMasterTick = Math.addExact(debugMasterTick, frameTicks.toLong())
       debugFrame = Math.addExact(debugFrame, 1L)
@@ -4235,7 +4233,7 @@ class BasicController private constructor(
     pendingResume = null
     releaseResumePause()
     isRewinding = false
-    rewindManager = configuredRewindManager(saves)
+    rewindManager = configuredRewindManager(saves, properties.overrides.rewindEnabled)
     val currentSession = session ?: return
     val romHashes =
         checkNotNull(currentRomHashes) {
@@ -5418,13 +5416,18 @@ internal fun interface LiveBatteryStorageResolver {
 
 private fun configuredRewindManager(
     properties: EmulatorProperties
-): RewindManager = configuredRewindManager(properties.applicationSettings.saves)
+): RewindManager =
+    configuredRewindManager(
+        properties.applicationSettings.saves,
+        properties.overrides.rewindEnabled,
+    )
 
 private fun configuredRewindManager(
-    saves: ApplicationSettings.Saves
+    saves: ApplicationSettings.Saves,
+    rewindEnabledOverride: Boolean? = null,
 ): RewindManager =
     RewindManager(
-        enabled = saves.rewindEnabled,
+        enabled = rewindEnabledOverride ?: saves.rewindEnabled,
         durationSeconds = saves.rewindSeconds,
         memoryBudgetBytes = saves.rewindMemoryMiB.toLong() * 1024L * 1024L,
     )
