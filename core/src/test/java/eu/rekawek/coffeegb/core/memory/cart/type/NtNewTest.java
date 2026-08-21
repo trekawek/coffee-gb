@@ -1,5 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -10,8 +12,40 @@ import java.io.IOException;
 import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class NtNewTest {
+
+    @Test
+    public void detectsTheMakonDigimonFourRelease() throws IOException {
+        byte[] data = new byte[0x100000];
+        byte[] title = "DIGIMON 4".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, data, 0x0134, title.length);
+        int[] logo = {
+                0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d, 0x00, 0x0b,
+                0x03, 0x73, 0x00, 0x83, 0x00, 0x0c, 0x00, 0x0d,
+                0x00, 0x08, 0x11, 0x1f, 0x88, 0x89, 0x00, 0x0e,
+                0xdc, 0xcc, 0x6e, 0xe6, 0xdd, 0xdd, 0xd9, 0x99,
+                0xbb, 0xbb, 0x67, 0x63, 0x6e, 0x0e, 0xec, 0xcc,
+                0xdd, 0xdc, 0x99, 0x9f, 0xbb, 0xb9, 0x33, 0x3e
+        };
+        for (int i = 0; i < logo.length; i++) {
+            data[0x0104 + i] = (byte) logo[i];
+        }
+        data[0x0143] = (byte) 0x80;
+        data[0x0144] = 'M';
+        data[0x0145] = 'K';
+        data[0x0147] = 0x19;
+        data[0x0148] = 0x05;
+        data[0x0149] = 0x02;
+
+        Rom rom = new Rom(data);
+        Cartridge cartridge = new Cartridge(rom, Battery.NULL_BATTERY);
+
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_NEW,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(cartridge.getMemoryController() instanceof NtNew);
+    }
 
     @Test
     public void changesFromA16KiBWindowToIndependent8KiBWindows() throws IOException {
