@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.DmaOamAddressSpace;
+import eu.rekawek.coffeegb.core.memory.Hdma;
 import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.io.Serializable;
@@ -49,6 +50,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private final Dma dma;
 
+    // Optional because standalone GPU fixtures predate Gameboy-owned HDMA. Gameboy attaches
+    // the real controller before emulation starts so the CGB timing cursor can fail closed on
+    // both active and newly-started VRAM-DMA bursts.
+    private transient Hdma hdma;
+
     private final Lcdc lcdc;
 
     private final boolean gbc;
@@ -71,7 +77,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     // Construction-time capability supplied by Gameboy.  This is deliberately a positive,
     // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB
-    // sessions without history/replay may enter the timing-skeleton cursor below.
+    // and native CGB/CGB0 sessions without history/replay may enter the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
 
     private final ColorPalette bgPalette;
@@ -200,6 +206,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // not emulated hardware state, and intentionally remains outside the canonical memento.
     private transient boolean performanceObservationBlocked;
 
+    // A PERFORMANCE cursor is not allowed to run until Gameboy has resolved the boot-ROM
+    // compatibility handoff. This is session metadata rather than hardware state: restoring a
+    // mid-boot snapshot derives it again from BiosShadow, and SKIP boot notifies us at init end.
+    private transient boolean bootCompatibilityResolved;
+
     // Deferred timing-skeleton work for one proven DMG background line.  These fields are
     // transient by design; capture/restore first materializes and therefore never serializes a
     // lazy cursor.
@@ -255,7 +266,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.performanceSteadyTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && (hardwareProfile == HardwareProfileRegistry.DMG
-                || hardwareProfile == HardwareProfileRegistry.MGB);
+                || hardwareProfile == HardwareProfileRegistry.MGB
+                || hardwareProfile == HardwareProfileRegistry.CGB
+                || hardwareProfile == HardwareProfileRegistry.CGB0);
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -832,7 +845,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private boolean canStartSteadyTiming() {
         return performanceSteadyTiming
                 && !mutablePpuStateExposed
-                && !gbc
+                && bootCompatibilityResolved
                 && !dmgCompatValue
                 && speedModeValue == 1
                 && !performanceObservationBlocked
@@ -841,6 +854,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && !dma.isTransferInProgress()
                 && !dma.ownsOamForPpu()
                 && !dma.hasPpuOamOwnershipTransitionThisTick()
+                && (!gbc || (hdma != null && !hdma.hasActiveOrPendingTransfer()))
                 && mode == Mode.PixelTransfer
                 && phase == pixelTransferPhase
                 && line > 0
@@ -853,6 +867,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && !wyWrittenThisLine
                 && !r.hasPendingConflictLatches()
                 && !lcdc.hasPendingConflictLatches()
+                && !lcdc.isTileSelectGlitch()
                 && !r.isWxJustChanged()
                 && !lcdc.isWindowDisplay()
                 && !pixelTransferPhase.isWindowActive()
@@ -881,7 +896,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // per-dot eligibility check after the span has been armed.
         return !dma.isTransferInProgress()
                 && !dma.ownsOamForPpu()
-                && !dma.hasPpuOamOwnershipTransitionThisTick();
+                && !dma.hasPpuOamOwnershipTransitionThisTick()
+                && (!gbc || (hdma != null && !hdma.hasActiveOrPendingTransfer()));
     }
 
     /** Materializes the transient cursor before any observer, write, or state boundary. */
@@ -2332,6 +2348,25 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     public void setPerformanceObservationBlocked(boolean blocked) {
         materializeSteadyTiming();
         performanceObservationBlocked = blocked;
+    }
+
+    /**
+     * Publishes the Gameboy boot/compatibility boundary to the performance guard. A false value
+     * is deliberately fail-closed and materializes any cursor already armed before the boundary.
+     */
+    public void setBootCompatibilityResolved(boolean resolved) {
+        materializeSteadyTiming();
+        bootCompatibilityResolved = resolved;
+    }
+
+    /**
+     * Attaches the Gameboy-owned CGB VRAM-DMA controller. The timing cursor remains disabled
+     * while a transfer owns or is about to own the PPU/CPU bus; standalone GPU fixtures leave
+     * this unset and therefore retain their historical scalar behavior.
+     */
+    public void setHdma(Hdma hdma) {
+        materializeSteadyTiming();
+        this.hdma = hdma;
     }
 
     public long getDebugPpuFrame() {

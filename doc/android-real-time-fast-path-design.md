@@ -250,6 +250,24 @@ Differential coverage compares full canonical state at arm, uninterrupted full-s
 line boundaries, invalidating writes, retained aliases, window-history fallback, cross-mode
 restore continuation, visible-frame hashes, and audio-buffer hashes.
 
+**Second retained slice (2026-08-21):** The same exact timing cursor also covers native CGB and
+CGB0 steady background lines. The specialized fetcher preserves CGB tile-map attributes, VRAM
+bank selection, X/Y flips, palettes, and tile addressing while the shifted color pixel machine
+continues to produce every visible pixel on its ordinary dot path. CGB DMG-compatibility, SGB,
+and SGB2 remain scalar. The cursor cannot arm before boot compatibility is resolved, during OAM
+DMA or VRAM DMA, after a tile-select conflict, in double speed, or across a register/memory,
+debugger, history, save-state, or mutable-alias boundary.
+
+The keep gate used a generated CGB-compatible loop with visible color output and all four APU
+channels enabled: 20,000,000 warm-up T followed by 100,000,000 measured T in eight alternating
+Accuracy/Performance pairs per revision. Native CGB improved from 17.408M to 17.871M T/s
+(+2.59%; paired median +2.90%), and CGB0 improved from 17.296M to 17.978M T/s (+3.79%; paired
+median +3.97%). Every pair improved. Each mode produced the same 1,424 physical frames, 1,430
+audio buffers, 99,964,150 stereo sample frames, and identical frame/audio hashes. A scalar-only
+control run measured just +0.77% CGB and +0.18% CGB0 apparent mode difference, below the retained
+effect. Focused full-span, boot, GDMA, compatibility, invalidation, and cross-mode restore tests
+were followed by the full core unit suite, Mealybug, DMG/CGB acid, Mooneye, and Blargg suites.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.

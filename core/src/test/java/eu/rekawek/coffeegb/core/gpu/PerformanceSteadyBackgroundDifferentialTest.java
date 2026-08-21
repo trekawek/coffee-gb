@@ -41,6 +41,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     private static final List<HardwareProfile> SUPPORTED_PROFILES =
             List.of(HardwareProfileRegistry.DMG, HardwareProfileRegistry.MGB);
 
+    private static final List<HardwareProfile> NATIVE_CGB_PROFILES =
+            List.of(HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0);
+
     @Test
     public void uninterruptedSpanMatchesAccuracyForEveryFineScx() throws Exception {
         for (HardwareProfile profile : SUPPORTED_PROFILES) {
@@ -63,6 +66,140 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                             profile.id() + " uninterrupted scx=" + scx);
                 }
             }
+        }
+    }
+
+    @Test
+    public void nativeCgbAndCgb0SteadySpanMatchesAccuracyWithBankedAttributes() throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            for (int scx : new int[]{0, 3, 7}) {
+                try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, scx);
+                        Session performance = new Session(ExecutionMode.PERFORMANCE, profile, scx)) {
+                    enterSteadyLine(accuracy);
+                    enterSteadyLine(performance);
+
+                    tickPair(accuracy, performance);
+                    assertTrue(profile.id() + " must arm its native CGB cursor",
+                            lazyCursor(performance.gpu));
+
+                    while (accuracy.gpu.getMode() == Mode.PixelTransfer) {
+                        tickPair(accuracy, performance);
+                    }
+                    assertEquals(Mode.HBlank, performance.gpu.getMode());
+                    assertFalse(lazyCursor(performance.gpu));
+                    assertSameState(accuracy, performance,
+                            profile.id() + " color span scx=" + scx);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void unresolvedBootCompatibilityFailsClosedUntilResolved() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            performance.gpu.setBootCompatibilityResolved(false);
+            tickPair(accuracy, performance);
+            assertFalse("unresolved boot compatibility must keep PERFORMANCE scalar",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "unresolved boot compatibility");
+
+            performance.gpu.setBootCompatibilityResolved(true);
+            while (performance.gpu.getLine() == STEADY_LINE
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue("resolved boot compatibility should permit native CGB cursor",
+                    lazyCursor(performance.gpu));
+        }
+    }
+
+    @Test
+    public void nativeCgbVramAttributeWriteMaterializesAndPreventsRearm() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+
+            accuracy.gpu.setByte(0xff4f, 1);
+            performance.gpu.setByte(0xff4f, 1);
+            accuracy.gpu.setByte(0x9800, 0x03);
+            performance.gpu.setByte(0x9800, 0x03);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB VRAM1 attribute write materialization");
+
+            while (accuracy.gpu.getLine() == STEADY_LINE
+                    && accuracy.gpu.getMode() == Mode.PixelTransfer) {
+                tickPair(accuracy, performance);
+            }
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB VRAM write remains exact");
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityRemainsScalar() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2, false);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2, false)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertFalse("CGB DMG-compatibility must not arm the native color cursor",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB DMG-compatibility scalar fallback");
+        }
+    }
+
+    @Test
+    public void nativeCgbGdmaStartMaterializesTheCursor() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+
+            startOneBlockGdma(accuracy.gameboy);
+            startOneBlockGdma(performance.gameboy);
+            tickPair(accuracy, performance);
+            assertFalse("GDMA must materialize the deferred timing span",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "GDMA cursor materialization");
+        }
+    }
+
+    @Test
+    public void nativeCgbHblankDmaArmMaterializesAndKeepsCursorScalar() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue("native CGB cursor should be armed before HBlank DMA",
+                    lazyCursor(performance.gpu));
+
+            startOneBlockHblankDma(accuracy.gameboy);
+            startOneBlockHblankDma(performance.gameboy);
+            tickPair(accuracy, performance);
+            assertFalse("an armed HBlank DMA must materialize the deferred span",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "HBlank DMA armed cursor materialization");
         }
     }
 
@@ -328,6 +465,49 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         }
     }
 
+    @Test
+    public void nativeCgbCheckpointRestoresIntoBothModesThroughFrameAndAudioEdges()
+            throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            try (Session source = new Session(ExecutionMode.PERFORMANCE, profile, 5);
+                    Session accuracy = new Session(ExecutionMode.ACCURACY, profile, 5);
+                    Session performance = new Session(ExecutionMode.PERFORMANCE, profile, 5)) {
+                enterSteadyLine(source);
+                enterSteadyLine(accuracy);
+                enterSteadyLine(performance);
+                tickPair(source, accuracy);
+                tickPair(source, performance);
+                for (int i = 0; i < 22; i++) {
+                    source.gameboy.tick();
+                    accuracy.gameboy.tick();
+                    performance.gameboy.tick();
+                }
+                assertTrue(profile.id() + " checkpoint should capture an armed cursor",
+                        lazyCursor(source.gpu));
+
+                ComponentState<Gameboy> saved = source.gameboy.captureStateWithoutTimeSource();
+                accuracy.gameboy.restoreStateSilently(saved);
+                performance.gameboy.restoreStateSilently(saved);
+                assertFalse(lazyCursor(accuracy.gpu));
+                assertFalse(lazyCursor(performance.gpu));
+                assertSameState(accuracy, performance, profile.id() + " restored checkpoint");
+
+                for (int i = 0; i < 145_000; i++) {
+                    tickPair(accuracy, performance);
+                }
+                assertSameState(accuracy, performance, profile.id() + " cross-mode continuation");
+                assertEquals(accuracy.events.frameCount, performance.events.frameCount);
+                assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+                assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertTrue(profile.id() + " synthetic run must publish a visible frame",
+                        accuracy.events.frameCount > 0);
+                assertTrue(profile.id() + " synthetic run must publish an audio buffer",
+                        accuracy.events.audioCount > 0);
+            }
+        }
+    }
+
     private static void enterSteadyLine(Session session) {
         while (session.gpu.getLine() != STEADY_LINE
                 || session.gpu.getMode() != Mode.PixelTransfer) {
@@ -352,6 +532,24 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         assertEquals(left.gameboy.tick(), right.gameboy.tick());
     }
 
+    private static void startOneBlockGdma(Gameboy gameboy) {
+        var addressSpace = gameboy.getAddressSpace();
+        addressSpace.setByte(0xff51, 0x00);
+        addressSpace.setByte(0xff52, 0x00);
+        addressSpace.setByte(0xff53, 0x00);
+        addressSpace.setByte(0xff54, 0x00);
+        addressSpace.setByte(0xff55, 0x00);
+    }
+
+    private static void startOneBlockHblankDma(Gameboy gameboy) {
+        var addressSpace = gameboy.getAddressSpace();
+        addressSpace.setByte(0xff51, 0x00);
+        addressSpace.setByte(0xff52, 0x00);
+        addressSpace.setByte(0xff53, 0x00);
+        addressSpace.setByte(0xff54, 0x00);
+        addressSpace.setByte(0xff55, 0x80);
+    }
+
     private static void assertSameState(Session left, Session right, String point)
             throws Exception {
         assertEquals(point, stateDigest(left.gameboy), stateDigest(right.gameboy));
@@ -367,13 +565,47 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         return cursor.getBoolean(gpu);
     }
 
-    private static byte[] syntheticRom() {
+    private static byte[] syntheticRom(HardwareProfile profile, boolean nativeColor) {
         byte[] rom = new byte[0x8000];
         rom[0x100] = (byte) 0xc3; // JP $0100: a stable CPU-side workload with no MMIO writes
         rom[0x101] = 0;
         rom[0x102] = 1;
         rom[0x147] = 0;
+        if (nativeColor && profile.family() == HardwareProfile.Family.CGB) {
+            rom[0x143] = (byte) 0x80;
+        }
         return rom;
+    }
+
+    private static void configureNativeCgb(Gpu gpu) {
+        if (!gpu.isGbc()) {
+            return;
+        }
+        // Tile 2 in bank 0 and bank 1 deliberately differ. Attribute 0x6d selects bank 1,
+        // palette 5, X flip, and Y flip, exercising every CGB property consumed by the exact
+        // fetcher while the scalar timing FIFO retains only occupancy.
+        gpu.setByte(0xff4f, 0);
+        for (int row = 0; row < 8; row++) {
+            gpu.setByte(0x8020 + row * 2, 0x18 ^ row * 3);
+            gpu.setByte(0x8021 + row * 2, 0x81 ^ row * 5);
+        }
+        for (int i = 0; i < 0x20; i++) {
+            gpu.setByte(0x9800 + i, 2);
+        }
+        gpu.setByte(0xff4f, 1);
+        for (int row = 0; row < 8; row++) {
+            gpu.setByte(0x8020 + row * 2, 0xa5 ^ row * 7);
+            gpu.setByte(0x8021 + row * 2, 0x42 ^ row * 11);
+        }
+        for (int i = 0; i < 0x20; i++) {
+            gpu.setByte(0x9800 + i, 0x6d);
+        }
+        gpu.setByte(0xff4f, 0);
+
+        gpu.setByte(0xff68, 0x80 | (5 << 3));
+        for (int value : new int[]{0x1f, 0x00, 0x00, 0x3e, 0x00, 0x7c, 0x10, 0x42}) {
+            gpu.setByte(0xff69, value);
+        }
     }
 
     private static DebugInstrumentation cpuOnlyInstrumentation() {
@@ -486,6 +718,13 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             }
         }
 
+        private void onCgbFrame(Display.GbcFrameReadyEvent event) {
+            frameCount++;
+            for (int pixel : event.pixels()) {
+                mix(pixel);
+            }
+        }
+
         private void onAudio(Sound.SoundSampleEvent event) {
             audioCount++;
             for (int sample : event.buffer()) {
@@ -511,9 +750,15 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         private final Gpu gpu;
 
         private Session(ExecutionMode mode, HardwareProfile profile, int scx) throws Exception {
+            this(mode, profile, scx, true);
+        }
+
+        private Session(ExecutionMode mode, HardwareProfile profile, int scx,
+                        boolean nativeColor) throws Exception {
             eventBus.register(events::onFrame, Display.DmgFrameReadyEvent.class);
+            eventBus.register(events::onCgbFrame, Display.GbcFrameReadyEvent.class);
             eventBus.register(events::onAudio, Sound.SoundSampleEvent.class);
-            gameboy = new Gameboy.GameboyConfiguration(new Rom(syntheticRom()))
+            gameboy = new Gameboy.GameboyConfiguration(new Rom(syntheticRom(profile, nativeColor)))
                     .setHardwareProfile(profile)
                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                     .setExecutionMode(mode)
@@ -525,6 +770,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             for (int address = 0x8000; address < 0xa000; address++) {
                 gpu.writeVideoRam0ForCore(address,
                         (address * 37 ^ address >>> 3 ^ 0x5a) & 0xff);
+            }
+            if (nativeColor) {
+                configureNativeCgb(gpu);
             }
             gpu.setByte(0xff42, (scx * 19 + 3) & 0xff);
             gpu.setByte(0xff43, scx);

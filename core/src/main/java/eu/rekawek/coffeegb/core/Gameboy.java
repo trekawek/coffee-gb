@@ -277,6 +277,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         mmu.setGpu(gpu);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
+        gpu.setHdma(hdma);
         sound = new Sound(timer, speedMode, gbc, clockSpec);
         joypad = new Joypad(interruptManager, sgbBus, sgb, configuration.playerInputSource);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
@@ -511,6 +512,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             clearCgbBootOamShadowPending = false;
         }
         bootCompatibilityResolved = true;
+        gpu.setBootCompatibilityResolved(true);
     }
 
     /**
@@ -1755,6 +1757,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !blankCgbBootTilePending
                 && !clearBootTilemapPending
                 && !clearCgbBootOamShadowPending;
+        gpu.setBootCompatibilityResolved(bootCompatibilityResolved);
     }
 
     /**

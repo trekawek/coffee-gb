@@ -484,16 +484,19 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     /**
-     * Replays a deferred DMG background span after the GPU's coarse performance cursor reaches
-     * an observation boundary.  The caller has already proved that this is the unshifted
-     * scalar machine on a normal-speed, no-sprite/no-window line; keeping that proof outside the
-     * loop removes the branch-heavy general PixelTransfer path without changing its canonical
-     * Fetcher/FIFO state.
+     * Replays a deferred background span after the GPU's coarse performance cursor reaches an
+     * observation boundary. The caller has already proved that this is the unshifted scalar
+     * machine on a normal-speed, no-sprite/no-window line; keeping that proof outside the loop
+     * removes the branch-heavy general PixelTransfer path without changing its canonical
+     * Fetcher/FIFO state. Native CGB uses the same structural scalar FIFO, while Fetcher retains
+     * its exact CGB map-attribute, bank, and tile-flip reads.
      */
     public void advanceSteadyBackgroundSpan(int ticks) {
-        if (!timingSkeleton || gbc || !(fifo instanceof ScalarTimingDmgPixelFifo)
+        if (!timingSkeleton
+                || !(fifo instanceof ScalarTimingDmgPixelFifo
+                || fifo instanceof ScalarTimingColorPixelFifo)
                 || ticks < 0) {
-            throw new IllegalStateException("Invalid steady DMG timing span");
+            throw new IllegalStateException("Invalid steady background timing span");
         }
         for (int i = 0; i < ticks; i++) {
             fifo.outputTick();
