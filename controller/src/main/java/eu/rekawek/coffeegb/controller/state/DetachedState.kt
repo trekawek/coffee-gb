@@ -90,11 +90,38 @@ class RecordState(val typeId: Int, fields: Collection<StateField>) : StateValue 
   val fields: List<StateField> = Collections.unmodifiableList(ArrayList(fields))
 
   override fun equals(other: Any?): Boolean =
-      other is RecordState && typeId == other.typeId && fields == other.fields
+      other is RecordState && typeId == other.typeId && canonicalFields() == other.canonicalFields()
 
-  override fun hashCode(): Int = 31 * typeId + fields.hashCode()
+  override fun hashCode(): Int = 31 * typeId + canonicalFields().hashCode()
 
   override fun toString(): String = "RecordState(typeId=$typeId, fields=$fields)"
+
+  /**
+   * Portable state treats defaultable PERFORMANCE suffixes as logical metadata rather than part
+   * of the historical record identity. Keep equality/hashCode aligned with StateCodec and replay
+   * hashing so a decoded legacy prefix compares equal to a freshly captured current record.
+   * Unknown record IDs remain structurally comparable for malformed-state diagnostics.
+   */
+  private fun canonicalFields(): List<StateField> {
+    if (typeId !in 1..StateTypeRegistry.recordClasses.size) return fields
+    return try {
+      val canonical = StateGraph.canonicalRecordFields(this)
+      // A decoded intermediate GPU record (window counter only) is logically equivalent to the
+      // historical sentinel when the counter is still -1. Keep this equality-only normalization
+      // out of StateGraph.canonicalRecordFields: the portable codec must preserve that 34-field
+      // wire shape exactly when it is explicitly supplied.
+      val typeName = StateTypeRegistry.recordClasses[typeId - 1].name
+      if (typeName == "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" &&
+          canonical.lastOrNull()?.name == "performanceWindowLineCounter" &&
+          canonical.lastOrNull()?.value == Int32State(-1)) {
+        canonical.dropLast(1)
+      } else {
+        canonical
+      }
+    } catch (_: StateApplyException) {
+      fields
+    }
+  }
 }
 
 sealed class PrimitiveArrayState<T>(
@@ -952,6 +979,49 @@ internal object StateGraph {
 
   fun restore(value: StateValue): Any? = Restore().value(value, null, 0)
 
+  /**
+   * Returns the stable wire/hash view of one record without changing the detached value itself.
+   * PERFORMANCE appends only defaultable execution metadata to the historical Sound/GPU records;
+   * when those fields are at their legacy defaults, omit them for canonical encoding and replay
+   * hashing. Non-default metadata, and already-decoded historical prefixes, remain untouched.
+   */
+  internal fun canonicalRecordFields(value: RecordState): List<StateField> {
+    val fields = value.fields
+    val typeName = recordClass(value).name
+    return when (typeName) {
+      "eu.rekawek.coffeegb.core.sound.Sound\$SoundState" -> {
+        if (fields.size >= 2 &&
+            fields.takeLast(2).map(StateField::name) ==
+                listOf("performanceSamplePhase", "audioDecimation") &&
+            fields[fields.lastIndex - 1].value == Int32State(0) &&
+            fields.last().value == Int32State(1)) {
+          fields.dropLast(2)
+        } else {
+          fields
+        }
+      }
+      "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" -> {
+        if (fields.size >= 4 &&
+            fields.takeLast(4).map(StateField::name) ==
+                listOf(
+                    "performanceWindowLineCounter",
+                    "performanceScanlineCursor",
+                    "performanceScanlineLine",
+                    "performanceScanlineEndTick",
+                ) &&
+            fields[fields.lastIndex - 2].value == BooleanState(false) &&
+            fields[fields.lastIndex - 1].value == BooleanState(false) &&
+            fields.last().value == Int32State(0)) {
+          val counter = fields[fields.lastIndex - 3].value
+          if (counter == Int32State(-1)) fields.dropLast(4) else fields.dropLast(3)
+        } else {
+          fields
+        }
+      }
+      else -> fields
+    }
+  }
+
   /** Validates target-dependent restore preconditions without touching the live target. */
   fun validateCompatible(candidate: StateValue, target: StateValue, path: String) {
     Compatibility().value(candidate, target, path, null, null)
@@ -978,6 +1048,58 @@ internal object StateGraph {
   private fun recordClass(value: RecordState): Class<*> =
       StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
           ?: throw StateApplyException("Unknown detached record type ID ${value.typeId}")
+
+  private fun stateWithPerformanceDefaults(
+      value: RecordState,
+      typeName: String,
+      expectedNames: List<String>,
+  ): List<StateField> {
+    val names = expectedNames
+    val soundType = typeName == "eu.rekawek.coffeegb.core.sound.Sound\$SoundState"
+        || typeName == "eu.rekawek.coffeegb.core.sound.Sound\$SoundMemento"
+    if (soundType && value.fields.size == names.size - 2) {
+      val prefix = names.dropLast(2)
+      if (value.fields.map { it.name } == prefix) {
+        // The compact PERFORMANCE mixer fields were appended after the historical Sound state.
+        // Released detached/legacy files omit them; zero/one means an empty decimation window
+        // with the historical full-rate source and is the only safe default that preserves the
+        // old machine/audio boundary.
+        return value.fields + listOf(
+            StateField("performanceSamplePhase", Int32State(0)),
+            StateField("audioDecimation", Int32State(1)),
+        )
+      }
+    }
+
+    val gpuType = typeName == "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState"
+    if (!gpuType) {
+      return value.fields
+    }
+    // PERFORMANCE state is append-only. First accept snapshots made after the window-row
+    // counter landed but before the direct cursor fields, then the older shape with neither
+    // addition. All omitted fields are transient/derived defaults and therefore safe to append
+    // without weakening the rest of the strict record inventory.
+    val directPrefix = names.dropLast(3)
+    if (value.fields.size == directPrefix.size
+        && value.fields.map { it.name } == directPrefix) {
+      return value.fields + listOf(
+          StateField("performanceScanlineCursor", BooleanState(false)),
+          StateField("performanceScanlineLine", BooleanState(false)),
+          StateField("performanceScanlineEndTick", Int32State(0)),
+      )
+    }
+    val legacyPrefix = names.dropLast(4)
+    if (value.fields.size == legacyPrefix.size
+        && value.fields.map { it.name } == legacyPrefix) {
+      return value.fields + listOf(
+          StateField("performanceWindowLineCounter", Int32State(-1)),
+          StateField("performanceScanlineCursor", BooleanState(false)),
+          StateField("performanceScanlineLine", BooleanState(false)),
+          StateField("performanceScanlineEndTick", Int32State(0)),
+      )
+    }
+    return value.fields
+  }
 
   private class Capture(private val admittedRecordIds: Map<Class<*>, Int>) {
     private var references = 0L
@@ -1119,13 +1241,18 @@ internal object StateGraph {
     private fun restoreRecord(value: RecordState, depth: Int): Any {
       val type = recordClass(value)
       val components = StateRecordIntrospection.components(type)
-      if (value.fields.size != components.size ||
-          value.fields.indices.any { value.fields[it].name != components[it].name }) {
+      val fields = StateGraph.stateWithPerformanceDefaults(
+          value,
+          type.name,
+          components.map { it.name },
+      )
+      if (fields.size != components.size ||
+          fields.indices.any { fields[it].name != components[it].name }) {
         throw StateApplyException("Invalid ${type.name} field inventory")
       }
       val args =
           components.indices.map { index ->
-            this.value(value.fields[index].value, components[index].genericType, depth + 1)
+            this.value(fields[index].value, components[index].genericType, depth + 1)
           }.toTypedArray()
       val constructor = type.getDeclaredConstructor(*components.map { it.type }.toTypedArray())
       constructor.isAccessible = true
@@ -1280,13 +1407,21 @@ internal object StateGraph {
             throw StateApplyException(
                 "$path has ${recordClass(candidate).name}, expected ${recordClass(target).name}")
           }
-          val type = recordClass(target).name
-          if (candidate.fields.size != target.fields.size) {
+          val targetClass = recordClass(target)
+          val type = targetClass.name
+          // Normalize both sides against the current component schema. A target may itself be
+          // a historical detached prefix (for example, a PERFORMANCE candidate applied to an
+          // ACCURACY snapshot), so deriving the schema from target.fields would leave the two
+          // records at different arities and reject a valid cross-mode restore.
+          val schemaNames = StateRecordIntrospection.components(targetClass).map { it.name }
+          val candidateFields = StateGraph.stateWithPerformanceDefaults(candidate, type, schemaNames)
+          val targetFields = StateGraph.stateWithPerformanceDefaults(target, type, schemaNames)
+          if (candidateFields.size != targetFields.size) {
             throw StateApplyException("$path has an incompatible field count")
           }
-          candidate.fields.indices.forEach { index ->
-            val left = candidate.fields[index]
-            val right = target.fields[index]
+          candidateFields.indices.forEach { index ->
+            val left = candidateFields[index]
+            val right = targetFields[index]
             if (left.name != right.name) {
               throw StateApplyException("$path has an incompatible field order")
             }

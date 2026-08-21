@@ -5,6 +5,7 @@ import android.media.AudioDeviceCallback;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.sound.Sound;
 
 import java.util.Objects;
@@ -117,6 +118,8 @@ final class AndroidAudioSink implements AutoCloseable {
     private volatile boolean paused;
     private volatile boolean muted;
     private volatile int volume = 100;
+    /** Source cadence is latched by the controller's HardwareProfile event. */
+    private volatile ClockSpec sourceClock = ClockSpec.LEGACY;
     private volatile boolean hasProducedPcm;
     private volatile int sampleRate;
     private volatile int minimumBufferBytes;
@@ -219,6 +222,24 @@ final class AndroidAudioSink implements AutoCloseable {
         wakeConsumer();
     }
 
+    /**
+     * Selects the fixed source-buffer size used by the next audio queue. Profile events arrive
+     * before the first sound event; if the worker already opened its default queue, rebuild it
+     * without ever allocating from the controller callback.
+     */
+    void setClockSpec(ClockSpec nextClock) {
+        ClockSpec checked = Objects.requireNonNull(nextClock, "nextClock");
+        if (sourceClock.equals(checked)) {
+            return;
+        }
+        sourceClock = checked;
+        if (running.get()) {
+            reopenRequested.set(true);
+            clearQueuedPcm();
+            wakeConsumer();
+        }
+    }
+
     void setVolume(int nextVolume) {
         if (nextVolume < 0 || nextVolume > 100) {
             throw new IllegalArgumentException("Audio volume must be between 0 and 100");
@@ -271,6 +292,11 @@ final class AndroidAudioSink implements AutoCloseable {
 
     Thread workerThreadForTesting() {
         return worker;
+    }
+
+    int sourceSamplesForTesting() {
+        BoundedPcmQueue active = queue;
+        return active == null ? 0 : active.maximumSourceSamples();
     }
 
     @Override
@@ -347,13 +373,17 @@ final class AndroidAudioSink implements AutoCloseable {
                     } else {
                         outputOpenedOnce = true;
                     }
-                    if (activeQueue == null || sampleRate != output.sampleRate()) {
+                    ClockSpec queueClock = sourceClock;
+                    int expectedSourceSamples = Math.multiplyExact(
+                            queueClock.controllerTicksPerFrame(), 2);
+                    if (activeQueue == null || sampleRate != output.sampleRate()
+                            || activeQueue.maximumSourceSamples() != expectedSourceSamples) {
                         if (BuildConfig.DIAGNOSTICS_ENABLED && activeQueue != null) {
                             clearAndAccount(activeQueue);
                         } else if (activeQueue != null) {
                             activeQueue.clear();
                         }
-                        activeQueue = new BoundedPcmQueue(output.sampleRate());
+                        activeQueue = new BoundedPcmQueue(output.sampleRate(), queueClock);
                         queue = activeQueue;
                     } else {
                         if (BuildConfig.DIAGNOSTICS_ENABLED) {
@@ -408,6 +438,14 @@ final class AndroidAudioSink implements AutoCloseable {
                     continue;
                 }
                 try {
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        synchronized (pcmAccounting) {
+                            pcmAccounting.adjustEnqueued(
+                                    frame.length() - frame.accountingBytes(),
+                                    frame.length() / 4L - frame.accountingBytes() / 4L);
+                            accountQueueDiscards(activeQueue);
+                        }
+                    }
                     if (BuildConfig.DIAGNOSTICS_ENABLED) {
                         WriteResult result = writeFullyWithAccounting(output, frame);
                         synchronized (pcmAccounting) {
@@ -600,6 +638,8 @@ final class AndroidAudioSink implements AutoCloseable {
 
         void enqueued(long bytes, long frames);
 
+        void adjustEnqueued(long bytes, long frames);
+
         void written(long bytes, long frames);
 
         void discarded(long bytes);
@@ -621,6 +661,10 @@ final class AndroidAudioSink implements AutoCloseable {
 
         @Override
         public void enqueued(long bytes, long frames) {
+        }
+
+        @Override
+        public void adjustEnqueued(long bytes, long frames) {
         }
 
         @Override
@@ -666,6 +710,13 @@ final class AndroidAudioSink implements AutoCloseable {
 
         @Override
         public void enqueued(long bytes, long frames) {
+            enqueuedBytes += bytes;
+            enqueuedFrames += frames;
+            pendingBytes += bytes;
+        }
+
+        @Override
+        public void adjustEnqueued(long bytes, long frames) {
             enqueuedBytes += bytes;
             enqueuedFrames += frames;
             pendingBytes += bytes;

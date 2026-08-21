@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.trace.ApuTrace;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -21,6 +22,22 @@ import java.util.Arrays;
 import java.util.Objects;
 
 public class Sound implements AddressSpace, StatefulComponent<Sound> {
+
+    /**
+     * PERFORMANCE audio is intentionally represented at one fifty-fifth of the master-tick
+     * rate. The source is sampled at approximately 76.26 kHz, which is still comfortably above
+     * the host audio band and gives the emulator a 55-master-tick quiet window in which to batch
+     * the PSG. 55 also divides the historical 69,905-T controller chunk exactly (1,271 samples),
+     * so compact audio cannot drift one source tick per frame. The pending span is transient:
+     * CPU-visible operations and state boundaries materialize it before observing or serializing
+     * channel state.
+     */
+    private static final int PERFORMANCE_AUDIO_DECIMATION = 55;
+
+    /** SGB frame clocks retain the historical exact-frame compact stream for now. */
+    private static final int SGB_PERFORMANCE_AUDIO_DECIMATION = 11;
+
+    private static final int ACCURACY_AUDIO_DECIMATION = 1;
 
     private static final int CGB_BOOT_DIV_APU_OFFSET = 2;
 
@@ -65,13 +82,27 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private final int[] buffer;
 
+    /** Clock identity advertised for the compact PERFORMANCE source stream. */
+    private final ClockSpec outputClockSpec;
+
+    private final boolean performanceAudio;
+
+    private final int performanceAudioDecimation;
+
     private int i = 0;
+
+    /** PERFORMANCE-only decimation state; included in save states at a mid-window boundary. */
+    private int performanceSamplePhase;
+
+    /**
+     * PERFORMANCE-only channel clocks deferred by quiet spans. This is deliberately not part of
+     * SoundState: captureState() materializes it first and restoreState() always resets it.
+     */
+    private transient int pendingPerformanceTicks;
 
     private final Timer timer;
 
     private final boolean gbc;
-
-    private final ClockSpec clockSpec;
 
     private transient EventBus eventBus = EventBus.NULL_EVENT_BUS;
 
@@ -106,11 +137,28 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc,
                  ClockSpec clockSpec) {
+        this(timer, speedMode, gbc, clockSpec, ExecutionMode.ACCURACY);
+    }
+
+    /**
+     * Builds the sound device for a specific execution mode.  The four-argument constructor is
+     * deliberately retained as the exact/legacy default for standalone components and older
+     * callers; only a Gameboy explicitly configured for PERFORMANCE opts into compact host audio.
+     */
+    public Sound(Timer timer, eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode, boolean gbc,
+                 ClockSpec clockSpec, ExecutionMode executionMode) {
         this.timer = timer;
         this.speedMode = speedMode;
         this.gbc = gbc;
-        this.clockSpec = clockSpec;
-        this.buffer = new int[Math.multiplyExact(clockSpec.controllerTicksPerFrame(), 2)];
+        Objects.requireNonNull(clockSpec, "clockSpec");
+        this.performanceAudio = Objects.requireNonNull(executionMode, "executionMode")
+                == ExecutionMode.PERFORMANCE;
+        this.performanceAudioDecimation = performanceAudio && isSgbClock(clockSpec)
+                ? SGB_PERFORMANCE_AUDIO_DECIMATION : PERFORMANCE_AUDIO_DECIMATION;
+        this.outputClockSpec = performanceAudio
+                ? decimatedClock(clockSpec, performanceAudioDecimation)
+                : clockSpec;
+        this.buffer = new int[Math.multiplyExact(outputClockSpec.controllerTicksPerFrame(), 2)];
         frameSequencerDivOffset = gbc ? CGB_BOOT_DIV_APU_OFFSET : 0;
         mode1 = new SoundMode1(frameSequencer, gbc);
         mode2 = new SoundMode2(frameSequencer, gbc);
@@ -119,6 +167,22 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         allModes = new AbstractSoundMode[]{mode1, mode2, mode3, mode4};
         // Initial volume
         r.setByte(0xFF24, 0x77);
+    }
+
+    private static ClockSpec decimatedClock(ClockSpec source, int decimation) {
+        return new ClockSpec(
+                source.ticksPerSecondNumerator(),
+                Math.multiplyExact(source.ticksPerSecondDenominator(), decimation),
+                source.controllerFramesPerSecondNumerator(),
+                source.controllerFramesPerSecondDenominator());
+    }
+
+    private int audioDecimation() {
+        return performanceAudio ? performanceAudioDecimation : ACCURACY_AUDIO_DECIMATION;
+    }
+
+    private static boolean isSgbClock(ClockSpec clockSpec) {
+        return ClockSpec.SGB.equals(clockSpec) || ClockSpec.SGB2.equals(clockSpec);
     }
 
     public void init(EventBus eventBus) {
@@ -130,6 +194,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     public void tick(boolean divReset) {
+        materializePendingPerformanceTicks();
         if (!enabled) {
             play(0, 0);
             return;
@@ -158,6 +223,59 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             mixChannels();
         }
         play(mixedLeft, mixedRight);
+    }
+
+    /**
+     * Defers a PERFORMANCE-only quiet span without visiting the four channel dispatches for
+     * every master tick. The caller must split the span at CPU-visible sound writes,
+     * frame-sequencer commits, DIV resets, and compact-output boundaries. The channel clocks are
+     * materialized arithmetically at the next such boundary.
+     */
+    public void tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!performanceAudio || debugHooks != null || outputObserver != null
+                || performanceSamplePhase + ticks >= performanceAudioDecimation) {
+            materializePendingPerformanceTicks();
+            for (int j = 0; j < ticks; j++) {
+                tick(false);
+            }
+            return;
+        }
+        pendingPerformanceTicks = Math.addExact(pendingPerformanceTicks, ticks);
+        performanceSamplePhase += ticks;
+    }
+
+    /**
+     * Makes deferred PERFORMANCE channel clocks visible without producing host samples. This is
+     * the sole transition from the lazy span representation back to canonical channel state.
+     */
+    public void materializePendingPerformanceTicks() {
+        int ticks = pendingPerformanceTicks;
+        if (ticks <= 0) {
+            return;
+        }
+        pendingPerformanceTicks = 0;
+        if (!enabled) {
+            return;
+        }
+        int channel1 = mode1.tickPerformanceSpan(ticks);
+        int channel2 = mode2.tickPerformanceSpan(ticks);
+        int channel3 = mode3.tickPerformanceSpan(ticks);
+        int channel4 = mode4.tickPerformanceSpan(ticks);
+        boolean channelOutputsChanged = channel1 != channels[0]
+                | channel2 != channels[1]
+                | channel3 != channels[2]
+                | channel4 != channels[3];
+        mixerDirty |= channelOutputsChanged;
+        channels[0] = channel1;
+        channels[1] = channel2;
+        channels[2] = channel3;
+        channels[3] = channel4;
+        if (mixerDirty) {
+            mixChannels();
+        }
     }
 
     private void mixChannels() {
@@ -243,6 +361,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (firedStep < 0) {
             return;
         }
+        materializePendingPerformanceTicks();
         int enabledBefore = getDebugEnabledChannelMask();
         notifyDebugEvent(ApuTrace.Kind.FRAME_SEQUENCER_STEP, -1, -1, firedStep);
         for (AbstractSoundMode m : allModes) m.tickEnvelopeClock(firedStep);
@@ -262,7 +381,38 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         return frameSequencerClockPhase == 1;
     }
 
+    /** True when a DIV edge has queued a frame-sequencer side effect not yet committed. */
+    public boolean hasPendingFrameSequencerClock() {
+        return pendingFrameSequencerStep >= 0;
+    }
+
+    /** Returns the largest compact-output-safe quiet span not crossing the next sample slot. */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || !performanceAudio || debugHooks != null || outputObserver != null
+                || pendingFrameSequencerStep >= 0) {
+            return 0;
+        }
+        return Math.min(requested,
+                performanceAudioDecimation - performanceSamplePhase - 1);
+    }
+
+    /**
+     * Defers the Sound clock belonging to a scalar PERFORMANCE scheduler boundary. CPU-visible
+     * work in that tick has already had a chance to materialize pending clocks through get/set
+     * accessors; only the next compact-output boundary needs to run this tick immediately.
+     */
+    public void tickPerformanceBoundary(boolean divReset) {
+        if (!performanceAudio || debugHooks != null || outputObserver != null
+                || performanceSamplePhase + 1 >= performanceAudioDecimation) {
+            tick(divReset);
+            return;
+        }
+        pendingPerformanceTicks = Math.addExact(pendingPerformanceTicks, 1);
+        performanceSamplePhase++;
+    }
+
     public void onSpeedSwitch() {
+        materializePendingPerformanceTicks();
         frameSequencerClockPhase = (frameSequencerClockPhase + 1) & 3;
     }
 
@@ -272,11 +422,18 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (observer != null) {
             observer.onSample(left, right);
         }
+        if (performanceAudio) {
+            if (performanceSamplePhase < performanceAudioDecimation - 1) {
+                performanceSamplePhase++;
+                return;
+            }
+            performanceSamplePhase = 0;
+        }
         buffer[i] = left;
         buffer[i + 1] = right;
         i += 2;
         if (i == buffer.length) {
-            eventBus.post(new SoundSampleEvent(buffer, clockSpec));
+            eventBus.post(new SoundSampleEvent(buffer, outputClockSpec));
             i = 0;
         }
     }
@@ -304,6 +461,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     @Override
     public void setByte(int address, int value) {
+        materializePendingPerformanceTicks();
         if (address == 0xff26) {
             int enabledBefore = getDebugEnabledChannelMask();
             if ((value & (1 << 7)) == 0) {
@@ -381,6 +539,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     /** Installs an optional owner-thread observer without emitting an alignment event. */
     public void setDebugHooks(DebugHooks debugHooks) {
+        materializePendingPerformanceTicks();
         this.debugHooks = debugHooks;
     }
 
@@ -391,6 +550,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      */
     public boolean attachOutputObserver(SoundOutputObserver observer) {
         Objects.requireNonNull(observer, "observer");
+        materializePendingPerformanceTicks();
         if (outputObserver != null) {
             return false;
         }
@@ -401,6 +561,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     /** Detaches only the observer that currently owns the transient tap. */
     public boolean detachOutputObserver(SoundOutputObserver observer) {
         Objects.requireNonNull(observer, "observer");
+        materializePendingPerformanceTicks();
         if (outputObserver != observer) {
             return false;
         }
@@ -448,6 +609,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     /** Captures internal APU state without applying CPU register masks or wave-RAM locks. */
     public DebugAudioInspection captureDebugAudioInspection() {
+        materializePendingPerformanceTicks();
         var debugChannels = new java.util.ArrayList<DebugAudioChannelInspection>(4);
         for (int i = 0; i < allModes.length; i++) {
             AbstractSoundMode mode = allModes[i];
@@ -475,6 +637,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     public int getDebugFrameSequencerStep() {
+        materializePendingPerformanceTicks();
         return frameSequencer.getDebugStep();
     }
 
@@ -502,6 +665,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     @Override
     public int getByte(int address) {
+        materializePendingPerformanceTicks();
 
         int result;
         if (address == 0xff26) {
@@ -552,26 +716,29 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     public void enableChannel(int i, boolean enabled) {
+        materializePendingPerformanceTicks();
         overriddenEnabled[i] = enabled;
         mixerDirty = true;
     }
 
     @Override
     public ComponentState<Sound> captureState() {
+        materializePendingPerformanceTicks();
         return captureState(null);
     }
 
     @Override
     public ComponentState<Sound> captureState(MachineStateCapture capture) {
+        materializePendingPerformanceTicks();
         var allModeMementos = new ComponentState[allModes.length];
         for (int i = 0; i < allModes.length; i++) {
             allModeMementos[i] = capture == null
                     ? allModes[i].captureState()
                     : allModes[i].captureState(capture);
         }
-        // Only the prefix before i has been written. The rest is overwritten before the
-        // next SoundSampleEvent can expose it, so retaining the full ~546 KiB frame buffer
-        // in every rewind state wastes memory and creates a G1 humongous allocation.
+        // Only the prefix before i has been written. The rest is overwritten before the next
+        // SoundSampleEvent can expose it, so retaining the full frame buffer in every rewind
+        // state wastes memory and creates a G1 humongous allocation.
         int[] pendingSamples = capture == null ? Arrays.copyOf(buffer, i) : capture.ints(buffer, i);
         return new SoundState(
                 allModeMementos,
@@ -581,11 +748,14 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
                 enabled,
                 capture == null ? overriddenEnabled.clone() : capture.booleans(overriddenEnabled),
                 pendingSamples, i, pendingFrameSequencerStep,
-                frameSequencerClockPhase, frameSequencerDivOffset);
+                frameSequencerClockPhase, frameSequencerDivOffset,
+                performanceSamplePhase,
+                audioDecimation());
     }
 
     @Override
     public void declareMachineStatePayloads(MachineStateCapture capture) {
+        materializePendingPerformanceTicks();
         r.declareMachineStatePayloads(capture);
         capture.declareInts(buffer, i);
     }
@@ -604,13 +774,29 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (this.overriddenEnabled.length != mem.overriddenEnabled.length) {
             throw new IllegalArgumentException("ComponentState overriddenEnabled length doesn't match");
         }
-        if (mem.i < 0 || mem.i >= this.buffer.length || (mem.i & 1) != 0) {
+        if (mem.i < 0 || (mem.i & 1) != 0) {
             throw new IllegalArgumentException("ComponentState buffer position is invalid");
         }
         // New mementos retain only buffer[0..i). Accept the former full-buffer shape as
-        // well so save states written by older Coffee GB versions remain loadable.
-        if (mem.buffer.length != mem.i && mem.buffer.length != this.buffer.length) {
-            throw new IllegalArgumentException("ComponentState buffer length doesn't match");
+        // well so save states written by older Coffee GB versions remain loadable. A state made
+        // by the other execution mode can have a larger pending prefix; that host-only audio
+        // backlog is discarded below while all emulated channel state is retained.
+        if (mem.buffer.length < mem.i || (mem.buffer.length & 1) != 0) {
+            throw new IllegalArgumentException("ComponentState buffer length doesn't contain its prefix");
+        }
+        if (mem.audioDecimation != ACCURACY_AUDIO_DECIMATION
+                && mem.audioDecimation != SGB_PERFORMANCE_AUDIO_DECIMATION
+                && mem.audioDecimation != PERFORMANCE_AUDIO_DECIMATION) {
+            throw new IllegalArgumentException("ComponentState audio decimation is invalid");
+        }
+        if (mem.performanceSamplePhase < 0
+                || mem.performanceSamplePhase >= mem.audioDecimation) {
+            throw new IllegalArgumentException("ComponentState audio decimation phase is invalid");
+        }
+        if (mem.audioDecimation == ACCURACY_AUDIO_DECIMATION
+                && mem.performanceSamplePhase != 0) {
+            throw new IllegalArgumentException(
+                    "ComponentState full-rate audio decimation phase is invalid");
         }
         for (int i = 0; i < allModes.length; i++) {
             this.allModes[i].restoreState(mem.allModeMementos[i]);
@@ -623,11 +809,18 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         System.arraycopy(mem.channels, 0, this.channels, 0, this.channels.length);
         this.enabled = mem.enabled();
         System.arraycopy(mem.overriddenEnabled, 0, this.overriddenEnabled, 0, this.overriddenEnabled.length);
-        System.arraycopy(mem.buffer, 0, this.buffer, 0, mem.i);
-        this.i = mem.i;
+        int restoredBufferIndex = Math.min(mem.i, this.buffer.length - 2);
+        boolean pendingAudioFits = mem.audioDecimation == audioDecimation()
+                && mem.i == restoredBufferIndex;
+        if (pendingAudioFits) {
+            System.arraycopy(mem.buffer, 0, this.buffer, 0, restoredBufferIndex);
+        }
+        this.i = pendingAudioFits ? restoredBufferIndex : 0;
         this.pendingFrameSequencerStep = mem.pendingFrameSequencerStep;
         this.frameSequencerClockPhase = mem.frameSequencerClockPhase;
         this.frameSequencerDivOffset = mem.frameSequencerDivOffset;
+        this.performanceSamplePhase = pendingAudioFits ? mem.performanceSamplePhase : 0;
+        this.pendingPerformanceTicks = 0;
         this.mixerDirty = true;
 
     }
@@ -646,7 +839,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
                                 boolean enabled, boolean[] overriddenEnabled, int[] buffer,
                                 int i, int pendingFrameSequencerStep,
                                 int frameSequencerClockPhase,
-                                int frameSequencerDivOffset) implements ComponentState<Sound> {
+                                int frameSequencerDivOffset,
+                                int performanceSamplePhase,
+                                int audioDecimation) implements ComponentState<Sound> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

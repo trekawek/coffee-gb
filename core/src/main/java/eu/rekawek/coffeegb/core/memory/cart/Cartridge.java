@@ -211,6 +211,33 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
         addressSpace.tick();
     }
 
+    /**
+     * Returns the largest PERFORMANCE span that can advance a clocked mapper arithmetically.
+     * Unclocked ROMs have no per-tick work and therefore inherit the requested span unchanged.
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0) {
+            return 0;
+        }
+        return clocked ? addressSpace.performanceQuietSpanLimit(requested) : requested;
+    }
+
+    /** Advances a mapper span without invoking its scalar tick callback. */
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0) {
+            return false;
+        }
+        return !clocked || addressSpace.tickPerformanceQuietSpan(ticks);
+    }
+
+    /** Applies a span after the caller has passed {@link #performanceQuietSpanLimit(int)}. */
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0 || !clocked) {
+            return;
+        }
+        addressSpace.tickPerformanceQuietSpanTrusted(ticks);
+    }
+
     /** Returns whether the mapper has a clocked hardware component. */
     public boolean isClocked() {
         return clocked;

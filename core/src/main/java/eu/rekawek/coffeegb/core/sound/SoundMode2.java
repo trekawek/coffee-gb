@@ -101,6 +101,42 @@ public class SoundMode2 extends AbstractSoundMode {
         return getCurrentOutput();
     }
 
+    /** Advances a short quiet span without dispatching the channel once per master tick. */
+    int tickPerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return getCurrentOutput();
+        }
+        int firstPhase = (phase - 1) & 3;
+        int edgeCount = (firstPhase & 1) != 0 ? (ticks + 1) / 2 : ticks / 2;
+        int firstEdgePosition = (firstPhase & 1) != 0 ? 1 : 2;
+        phase = (phase - ticks) & 3;
+        int reloadedAt = 0;
+        justReloadedTicks = Math.max(0, justReloadedTicks - ticks);
+        if (!channelEnabled || !dacEnabled) {
+            return 0;
+        }
+        // A normal pulse period is commonly longer than the compact window. A whole quiet
+        // window with no expiry is just a divider subtraction; retain the loop only when an
+        // actual waveform edge can occur inside it.
+        if (freqDivider >= edgeCount) {
+            freqDivider -= edgeCount;
+        } else {
+            for (int edge = 0; edge < edgeCount; edge++) {
+                if (freqDivider-- == 0) {
+                    resetFreqDivider();
+                    i = (i + 1) % 8;
+                    lastOutput = ((getDuty() & (1 << i)) >> i);
+                    sampleSuppressed = false;
+                    reloadedAt = firstEdgePosition + edge * 2;
+                }
+            }
+        }
+        if (reloadedAt != 0) {
+            justReloadedTicks = Math.max(0, 4 - (ticks - reloadedAt));
+        }
+        return getCurrentOutput();
+    }
+
     @Override
     public int getCurrentOutput() {
         return (sampleSuppressed ? 0 : lastOutput) * volumeEnvelope.getVolume();

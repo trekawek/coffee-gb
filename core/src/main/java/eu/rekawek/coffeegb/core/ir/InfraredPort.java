@@ -26,6 +26,8 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
  */
 public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPort> {
 
+    private static final int PERFORMANCE_MAX_QUIET_SPAN = 3;
+
     private final boolean gbc;
 
     private final SpeedMode speedMode;
@@ -92,6 +94,38 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         }
         if (debugHooks != null) {
             notifyDebugSignalChange();
+        }
+    }
+
+    /**
+     * Returns the exact idle CGB IR span.  External endpoints and the FullChanger are deliberately
+     * fail-closed: their callbacks or pulse edges must remain visible in the scalar ordering.
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
+                || fullChangerActive
+                || endpoint != InfraredEndpoint.NULL_ENDPOINT
+                || serialEndpoint != SerialEndpoint.NULL_ENDPOINT
+                || debugHooks != null) {
+            return 0;
+        }
+        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    public boolean canTickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        return canTickPerformanceQuietSpan(ticks);
+    }
+
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Infrared quiet span is not eligible: " + ticks);
         }
     }
 

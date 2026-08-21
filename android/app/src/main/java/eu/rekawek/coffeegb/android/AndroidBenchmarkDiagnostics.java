@@ -16,6 +16,7 @@ import android.util.Log;
 import android.view.Display;
 
 import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 
@@ -1073,7 +1074,7 @@ final class AndroidBenchmarkDiagnostics {
         if (!sample.stayAwake) {
             stayAwakeBadCount++;
         }
-        if (sample.threadPriority != 0) {
+        if (sample.threadPriority != expectedThreadPriority()) {
             priorityBadCount++;
         }
         if (sample.appImportance != 100) {
@@ -1094,6 +1095,11 @@ final class AndroidBenchmarkDiagnostics {
 
     private static boolean validBatteryTemperature(int deciCelsius) {
         return deciCelsius >= 0 && deciCelsius <= 400;
+    }
+
+    private int expectedThreadPriority() {
+        return options.executionMode == ExecutionMode.PERFORMANCE
+                ? AndroidPerformanceBoost.PERFORMANCE_THREAD_PRIORITY : 0;
     }
 
     private static int stayOnPluggedMask(Context context) {

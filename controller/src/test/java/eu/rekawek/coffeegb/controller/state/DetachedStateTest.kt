@@ -386,6 +386,71 @@ class DetachedStateTest {
   }
 
   @Test
+  fun olderGpuDetachedStateDefaultsTheAppendedPerformanceSuffix() {
+    session(configuration().setGameboyType(GameboyType.DMG)).use { session ->
+      repeat(400) { session.gameboy.tick() }
+      val before = session.captureDetachedState()
+      val gpu = before.machine.record(GPU_MEMENTO)
+
+      // Simulate a detached snapshot made before the window-row counter and direct cursor
+      // fields were appended. The adapter must add their safe scalar defaults before reflection
+      // restores the current GpuState constructor.
+      val oldGpu = RecordState(gpu.typeId, gpu.fields.dropLast(4))
+      val oldShape = before.withMachineRoot(before.machine.root.replaceRecord(GPU_MEMENTO, oldGpu))
+      DetachedStateAdapter.apply(session, oldShape)
+      assertEquals(before, session.captureDetachedState())
+
+      // Also cover the intermediate shape that already carried the window counter but omitted
+      // the three direct-line fields.
+      val windowOnlyGpu = RecordState(gpu.typeId, gpu.fields.dropLast(3))
+      val windowOnlyShape =
+          before.withMachineRoot(before.machine.root.replaceRecord(GPU_MEMENTO, windowOnlyGpu))
+      DetachedStateAdapter.apply(session, windowOnlyShape)
+      assertEquals(before, session.captureDetachedState())
+    }
+  }
+
+  @Test
+  fun defaultPerformanceGpuSuffixesHaveHistoricalRecordIdentity() {
+    session(configuration().setGameboyType(GameboyType.DMG)).use { session ->
+      repeat(400) { session.gameboy.tick() }
+      val gpu = session.captureDetachedState().machine.record(GPU_MEMENTO)
+      assertEquals(-1, gpu.int("performanceWindowLineCounter"))
+
+      val historical = RecordState(gpu.typeId, gpu.fields.dropLast(4))
+      val intermediate = RecordState(gpu.typeId, gpu.fields.dropLast(3))
+      assertEquals(historical, gpu)
+      assertEquals(historical, intermediate)
+      assertEquals(historical.hashCode(), gpu.hashCode())
+      assertEquals(historical.hashCode(), intermediate.hashCode())
+
+      val nonDefault = gpu.replaceField("performanceWindowLineCounter", Int32State(0))
+      assertNotEquals(historical, nonDefault)
+
+      // An explicitly supplied intermediate record remains a 34-field wire value; equality
+      // normalization must not make StateCodec rewrite it to the historical 33-field prefix.
+      val captured = StateCodec.capture(session)
+      val capturedRoot = captured.root as SessionStateRoot
+      val intermediateFile =
+          StateFile(
+              captured.identities,
+              SessionStateRoot(
+                  capturedRoot.session.withMachineRoot(
+                      capturedRoot.session.machine.root.replaceRecord(GPU_MEMENTO, intermediate),
+                  ),
+              ),
+              captured.diagnostics,
+              captured.formatVersion,
+          )
+      val bytes = StateCodec.encode(intermediateFile)
+      val decoded = StateCodec.decode(bytes)
+      val decodedGpu = (decoded.root as SessionStateRoot).session.machine.record(GPU_MEMENTO)
+      assertEquals(34, decodedGpu.fields.size)
+      assertContentEquals(bytes, StateCodec.encode(decoded))
+    }
+  }
+
+  @Test
   fun dmgFifoRuntimePresenceMatchesHardwareBeforeAnyLiveMutation() {
     listOf(GameboyType.DMG, GameboyType.SGB).forEach { hardware ->
       session(configuration().setGameboyType(hardware)).use { session ->
@@ -1617,6 +1682,28 @@ class DetachedStateTest {
                   )
                 },
             )
+          }
+          is ObjectArrayState -> ObjectArrayState(value.values.map(::replace))
+          is ListState -> ListState(value.values.map(::replace))
+          is Int32MapState ->
+              Int32MapState(value.entries.map { Int32MapEntry(it.key, replace(it.value)) })
+          else -> value
+        }
+    return replace(this) as RecordState
+  }
+
+  private fun RecordState.replaceRecord(
+      ownerClass: String,
+      replacement: RecordState,
+  ): RecordState {
+    fun replace(value: StateValue): StateValue =
+        when (value) {
+          is RecordState -> {
+            if (MementoClassNames.record(value.typeId) == ownerClass) {
+              replacement
+            } else {
+              RecordState(value.typeId, value.fields.map { StateField(it.name, replace(it.value)) })
+            }
           }
           is ObjectArrayState -> ObjectArrayState(value.values.map(::replace))
           is ListState -> ListState(value.values.map(::replace))

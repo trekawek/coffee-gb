@@ -139,10 +139,29 @@ public class RealTimeClock implements StatefulComponent<RealTimeClock> {
         if (halt || emulationPaused) {
             return;
         }
-        subSecondTicks = Math.addExact(subSecondTicks, clockSpec.secondPhaseUnitsPerTick());
-        if (subSecondTicks >= clockSpec.secondPhaseLimit()) {
-            subSecondTicks -= clockSpec.secondPhaseLimit();
-            advanceSeconds(1);
+        advanceTicks(1);
+    }
+
+    /**
+     * Advances the master-tick oscillator without walking one tick at a time.  The RTC has no
+     * interrupt edge: reads observe only the accumulated phase at a later CPU bus boundary, so
+     * carrying whole seconds here is exactly equivalent to {@link #tick()}.
+     */
+    public void tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0 || halt || emulationPaused) {
+            return;
+        }
+        advanceTicks(ticks);
+    }
+
+    private void advanceTicks(int ticks) {
+        long phase = Math.addExact(
+                subSecondTicks,
+                Math.multiplyExact((long) ticks, clockSpec.secondPhaseUnitsPerTick()));
+        long wholeSeconds = phase / clockSpec.secondPhaseLimit();
+        subSecondTicks = phase % clockSpec.secondPhaseLimit();
+        if (wholeSeconds != 0) {
+            advanceSeconds(wholeSeconds);
         }
     }
 

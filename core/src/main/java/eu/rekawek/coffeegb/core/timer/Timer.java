@@ -12,6 +12,15 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public class Timer implements AddressSpace, StatefulComponent<Timer> {
 
+    /**
+     * PERFORMANCE's phase scheduler currently asks peripherals to cover at most the three
+     * non-bus clocks between two normal-speed CPU machine cycles.  Keeping the bound here makes
+     * the component API safe for callers which do not have the CPU phase information available.
+     */
+    private static final int PERFORMANCE_MAX_QUIET_SPAN = 3;
+
+    private static final int FRAME_SEQUENCER_DIV_BIT = 12;
+
     private final SpeedMode speedMode;
 
     private final InterruptManager interruptManager;
@@ -96,6 +105,149 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         for (int i = 0; i < speed; i++) {
             tickCpuClock();
         }
+    }
+
+    /**
+     * Returns the largest normal-speed PERFORMANCE span which can be advanced without visiting
+     * the per-clock timer state machine.
+     *
+     * <p>The limit stops before every observable timer edge: a selected timer falling edge,
+     * overflow/reload/interrupt or HALT-wake transition, the DMG divider-ripple diagnostic, and
+     * the raw divider edge which can clock the APU frame sequencer.  The CGB boot offset is
+     * included conservatively as a second possible frame-sequencer tap.  A zero result means the
+     * caller must use the scalar path.  The returned value is never greater than
+     * {@link #PERFORMANCE_MAX_QUIET_SPAN}.</p>
+     *
+     * <p>This method is deliberately state-only and does not consume interrupt acknowledge
+     * signals or clear transient flags.  That makes it safe to use as a preflight before the
+     * caller decides whether to take the bulk path.</p>
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || speedMode.getSpeedMode() != 1 || debugHooks != null
+                || divReset || overflow || haltWakeDelay != 0
+                || haltBugDivRippleVisible || suppressNextInterruptRequest) {
+            return 0;
+        }
+
+        int span = Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        span = capBefore(span, clocksToTimerFallingEdge());
+        span = capBefore(span, clocksToPendingDividerRipple());
+        span = capBefore(span, clocksToFrameSequencerEdge(0));
+        if (speedMode.isGbc()) {
+            // Sound's later-revision CGB boot state uses a +2 DIV tap offset until the first
+            // FF04 reset. Timer does not own that offset, so include both phases and take the
+            // conservative limit. After a reset the extra candidate is harmless.
+            span = capBefore(span, clocksToFrameSequencerEdge(2));
+        }
+        return Math.max(0, span);
+    }
+
+    /** Returns the largest safe span using the scheduler's normal three-clock bound. */
+    public int performanceQuietSpanLimit() {
+        return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    /** True when the requested span can be applied by {@link #tickPerformanceQuietSpan(int)}. */
+    public boolean canTickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /**
+     * Advances an already-preflighted quiet span arithmetically.
+     *
+     * <p>There are no timer edges inside an eligible span, so DIV and the divider input latch are
+     * the only changing state.  Interrupt acknowledgement is still handled at the span's first
+     * clock exactly as in {@link #tick()}; this preserves the CPU acknowledge window without
+     * requiring a per-clock callback.  A false return guarantees that this method made no state
+     * change.</p>
+     */
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (!canTickPerformanceQuietSpan(ticks)) {
+            return false;
+        }
+
+        // Keep the acknowledge gate at the same beginning-of-tick position as tick().  The
+        // preflight above excludes every timer edge in the span, so an acknowledgement can only
+        // update the manager's acknowledge/suppression latches and cannot make an interior timer
+        // transition arrive late.
+        acknowledgeInterruptIfNeeded();
+        divReset = false;
+        div = (div + ticks) & 0xffff;
+        previousBit = timerInput(div, tac);
+        if (ticksSinceDivReset != Integer.MAX_VALUE) {
+            ticksSinceDivReset += ticks;
+        }
+        // Scalar tick() clears this one-tick diagnostic at the beginning of every clock.  An
+        // eligible span cannot contain the carry which sets it, so it is settled by the end.
+        haltBugDivRippleVisible = false;
+        return true;
+    }
+
+    /** Applies a span after the caller has already passed {@link #canTickPerformanceQuietSpan(int)}. */
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Timer quiet span is not eligible: " + ticks);
+        }
+    }
+
+    /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */
+    public boolean advancePerformanceQuietSpan(int ticks) {
+        return tickPerformanceQuietSpan(ticks);
+    }
+
+    /** Trusted naming alias for schedulers which use the GPU's advance-oriented vocabulary. */
+    public void advancePerformanceQuietSpanTrusted(int ticks) {
+        tickPerformanceQuietSpanTrusted(ticks);
+    }
+
+    private static int capBefore(int currentLimit, long eventDistance) {
+        if (eventDistance == Long.MAX_VALUE) {
+            return currentLimit;
+        }
+        // The event at distance d belongs to the scalar tick which advances to that state.  A
+        // quiet span may therefore consume at most d-1 clocks.
+        return Math.min(currentLimit, (int) Math.max(0, eventDistance - 1));
+    }
+
+    /** Distance to the next falling edge of the selected TIMA input. */
+    private long clocksToTimerFallingEdge() {
+        boolean enabled = (tac & 0x04) != 0;
+        if (!enabled) {
+            // DMG TAC writes retain previousBit.  Disabling a timer while that stale latch is
+            // high produces the falling edge on the following divider clock.
+            return previousBit ? 1 : Long.MAX_VALUE;
+        }
+
+        int bitPos = FREQ_TO_BIT[tac & 0x03];
+        int period = 1 << (bitPos + 1);
+        int halfPeriod = period >>> 1;
+        int phase = div & (period - 1);
+        if (previousBit) {
+            // A stale high latch with the input already low settles immediately; otherwise the
+            // next low half-period boundary supplies the falling edge.
+            return phase < halfPeriod ? 1L : period - phase;
+        }
+        // With a low previous latch, the next falling edge is the next low-boundary after a full
+        // period.  This remains correct whether the current sampled input is low or high.
+        return period - phase;
+    }
+
+    /** Distance to a potential low transition of the selected DIV/APU tap. */
+    private long clocksToFrameSequencerEdge(int divOffset) {
+        int period = 1 << (FRAME_SEQUENCER_DIV_BIT + 1);
+        int phase = (div + divOffset) & (period - 1);
+        return period - phase;
+    }
+
+    /** Distance to the carry which exposes the one-tick DMG HALT-bug ripple. */
+    private long clocksToPendingDividerRipple() {
+        if (!haltBugDivRipplePending) {
+            return Long.MAX_VALUE;
+        }
+        return 0x100 - (div & 0xff);
     }
 
     private void acknowledgeInterruptIfNeeded() {

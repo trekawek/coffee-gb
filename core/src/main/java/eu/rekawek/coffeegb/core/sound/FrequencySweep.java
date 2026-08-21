@@ -130,6 +130,33 @@ public class FrequencySweep implements StatefulComponent<FrequencySweep> {
         }
     }
 
+    /**
+     * Advances the delayed sweep pipeline across a short PERFORMANCE quiet span. The caller
+     * must have established that no calculation expires inside the span; that case is kept on
+     * the scalar path because its overflow can disable CH1 before a pulse edge in the same span.
+     */
+    void tickPerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        restartHold = Math.max(0, restartHold - ticks);
+        if (calculationDelay == 0 || (shift == 0 && !unshiftedCalculation)) {
+            return;
+        }
+        calculationDelay -= ticks;
+    }
+
+    boolean calculationExpiresWithin(int ticks) {
+        return calculationExpiryOffset(ticks) > 0;
+    }
+
+    /** Returns the one-based master-tick offset of a pending calculation, or zero. */
+    int calculationExpiryOffset(int ticks) {
+        return ticks > 0 && calculationDelay > 0
+                && !(shift == 0 && !unshiftedCalculation)
+                && calculationDelay <= ticks ? calculationDelay : 0;
+    }
+
     private void scheduleCalculation(int oneMhzTicks, boolean unshifted) {
         calculationDelay = oneMhzTicks * 4;
         unshiftedCalculation = unshifted;

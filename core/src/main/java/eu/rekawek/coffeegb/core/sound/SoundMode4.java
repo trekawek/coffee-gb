@@ -72,6 +72,21 @@ public class SoundMode4 extends AbstractSoundMode {
         return getCurrentOutput();
     }
 
+    /** Advances a short PERFORMANCE quiet span and applies any resulting LFSR edges. */
+    int tickPerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return getCurrentOutput();
+        }
+        int steps = polynomialCounter.advancePerformanceSpan(ticks);
+        if (channelEnabled && dacEnabled) {
+            boolean widthMode7 = (nr3 & (1 << 3)) != 0;
+            for (int i = 0; i < steps; i++) {
+                lastResult = lfsr.nextBit(widthMode7);
+            }
+        }
+        return getCurrentOutput();
+    }
+
     @Override
     public int getCurrentOutput() {
         return lastResult * volumeEnvelope.getVolume();

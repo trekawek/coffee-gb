@@ -227,6 +227,39 @@ public class SoundMode3 extends AbstractSoundMode {
         return lastOutput;
     }
 
+    /** Advances a short PERFORMANCE quiet span on the fixed 2-MHz wave lattice. */
+    int tickPerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return getCurrentOutput();
+        }
+        int firstEdgePosition = clock2Mhz ? 2 : 1;
+        int edgeCount = clock2Mhz ? ticks / 2 : (ticks + 1) / 2;
+        int lastReadPosition = 0;
+        ticksSinceRead += ticks;
+        if (channelEnabled && freqDivider > edgeCount) {
+            freqDivider -= edgeCount;
+        } else if (channelEnabled) {
+            for (int edge = 0; edge < edgeCount; edge++) {
+                if (--freqDivider == 0) {
+                    resetFreqDivider();
+                    i = (i + 1) & 31;
+                    int stale = applyVolume((buffer >> 4) & 0x0f);
+                    int out = getWaveEntry();
+                    // getWaveEntry() resets ticksSinceRead at the edge; remember its timestamp so
+                    // the ticks after the final edge are restored below.
+                    lastReadPosition = firstEdgePosition + edge * 2;
+                    lastOutput = triggered ? stale : out;
+                    triggered = false;
+                }
+            }
+        }
+        clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+        if (lastReadPosition != 0) {
+            ticksSinceRead = ticks - lastReadPosition;
+        }
+        return getCurrentOutput();
+    }
+
     @Override
     public int getCurrentOutput() {
         return channelEnabled ? lastOutput : 0;

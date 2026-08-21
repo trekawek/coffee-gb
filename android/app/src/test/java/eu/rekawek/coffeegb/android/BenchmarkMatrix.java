@@ -888,6 +888,7 @@ public final class BenchmarkMatrix {
         int rowOrder = integer(fields, "row_order", lineNumber, errors);
         String requestedProfile = requiredToken(fields, "requested_profile", lineNumber, errors);
         String profile = requiredToken(fields, "profile", lineNumber, errors);
+        String executionMode = fields.getOrDefault("execution_mode", "accuracy");
         String workloadNonce = requiredToken(fields, "workload_nonce", lineNumber, errors);
         boolean warmup = booleanValue(fields, "warmup", lineNumber, errors);
         String inputContract = requiredToken(fields, "input_contract", lineNumber, errors);
@@ -971,7 +972,8 @@ public final class BenchmarkMatrix {
         }
         runs.put(key, new RunBuilder(key, lineNumber, artifactId, pairId, block, rowOrder, row,
                 side, firstSide, device, thermalWindow, requestedProfile, profile,
-                effectiveGbc, effectiveDmgCompat, effectiveMode, speedModeInitial, clock, audio,
+                effectiveGbc, effectiveDmgCompat, effectiveMode, executionMode,
+                speedModeInitial, clock, audio,
                 render, !unavailable, environment, workloadNonce, warmup, inputContract,
                 surfaceVoteHz, displayTargetHz, surfaceContentRateMillihz, benchmarkGeneration,
                 audioStart));
@@ -1029,6 +1031,7 @@ public final class BenchmarkMatrix {
             Boolean effectiveDmgCompat = strictBoolean(fields, "effective_dmg_compat",
                     lineNumber, errors);
             String effectiveMode = requiredToken(fields, "effective_mode", lineNumber, errors);
+            String executionMode = fields.getOrDefault("execution_mode", "accuracy");
             int speedModeInitial = integer(fields, "speed_mode_initial", lineNumber, errors);
             int speedModeFinal = integer(fields, "speed_mode_final", lineNumber, errors);
             int surfaceVoteHz = integer(fields, "surface_vote_hz", lineNumber, errors);
@@ -1050,7 +1053,7 @@ public final class BenchmarkMatrix {
             }
             run.finalFields = new FinalFields(
                     artifactId, benchmarkGeneration, requestedProfile, profile, effectiveGbc, effectiveDmgCompat,
-                    effectiveMode, speedModeInitial, speedModeFinal, clock, deviceId, start, end,
+                    effectiveMode, executionMode, speedModeInitial, speedModeFinal, clock, deviceId, start, end,
                     audio,
                     integer(fields, "frame", lineNumber, errors),
                     integer(fields, "ready_count", lineNumber, errors),
@@ -1786,6 +1789,7 @@ public final class BenchmarkMatrix {
                 || run.effectiveGbc != result.effectiveGbc
                 || run.effectiveDmgCompat != result.effectiveDmgCompat
                 || !run.effectiveMode.equals(result.effectiveMode)
+                || !run.executionMode.equals(result.executionMode)
                 || run.speedModeInitial != result.speedModeInitial
                 || !run.clock.equals(result.clock)
                 || !run.deviceId.equals(result.deviceId)
@@ -1827,7 +1831,7 @@ public final class BenchmarkMatrix {
                 && result.presentationIntervalFps > maximumCadence)) {
             errors.add(run.key + " cadence exceeds the nominal hardware rate");
         }
-        if (!validEnvironment(run.environment, result.environmentEnd)) {
+        if (!validEnvironment(run.environment, result.environmentEnd, run.executionMode)) {
             errors.add(run.key + " intrinsic thermal/display/power evidence is missing or ineligible");
         }
         if (!validSustainedEnvironment(result, run.row, run.environment)) {
@@ -2075,7 +2079,7 @@ public final class BenchmarkMatrix {
     private static RunEvidence runEvidence(RunBuilder run) {
         FinalFields result = run.finalFields;
         boolean environmentEligible = result != null
-                && validEnvironment(run.environment, result.environmentEnd);
+                && validEnvironment(run.environment, result.environmentEnd, run.executionMode);
         boolean audioEligible = result != null && validAudio(result.audio, run.row, result.clock,
                 result.readyCount, result.readyFirstNanos, result.readyLastNanos,
                 result.readyIntervalFps, true);
@@ -2463,7 +2467,10 @@ public final class BenchmarkMatrix {
         return initial == 1 && finalMode == 1;
     }
 
-    private static boolean validEnvironment(EnvironmentFields start, EnvironmentFields end) {
+    private static boolean validEnvironment(EnvironmentFields start, EnvironmentFields end,
+            String executionMode) {
+        int expectedPriority = "performance".equals(executionMode)
+                ? AndroidPerformanceBoost.PERFORMANCE_THREAD_PRIORITY : 0;
         if (start == null || end == null
                 || start.thermalStatus != MAX_THERMAL_STATUS
                 || end.thermalStatus != MAX_THERMAL_STATUS
@@ -2483,7 +2490,7 @@ public final class BenchmarkMatrix {
                 || !Boolean.FALSE.equals(end.powerSave)
                 || !Boolean.TRUE.equals(start.stayAwake)
                 || !Boolean.TRUE.equals(end.stayAwake)
-                || start.threadPriority != 0 || end.threadPriority != 0
+                || start.threadPriority != expectedPriority || end.threadPriority != expectedPriority
                 || start.appImportance != 100 || end.appImportance != 100
                 || start.systemLoadMilli < 0 || end.systemLoadMilli < 0
                 || start.cpuCount <= 0 || end.cpuCount <= 0
@@ -2900,6 +2907,7 @@ public final class BenchmarkMatrix {
         final Boolean effectiveGbc;
         final Boolean effectiveDmgCompat;
         final String effectiveMode;
+        final String executionMode;
         final int speedModeInitial;
         final ClockFields clock;
         final boolean audio;
@@ -2928,7 +2936,7 @@ public final class BenchmarkMatrix {
                 String matrixBlock, int rowOrder, Row row, Side side, Side firstSide,
                 String deviceId, String thermalWindow, String requestedProfile, String profile,
                 Boolean effectiveGbc, Boolean effectiveDmgCompat, String effectiveMode,
-                int speedModeInitial, ClockFields clock, boolean audio,
+                String executionMode, int speedModeInitial, ClockFields clock, boolean audio,
                 String render, boolean available, EnvironmentFields environment,
                 String workloadNonce, boolean warmup, String inputContract, int surfaceVoteHz,
                 int displayTargetHz, int surfaceContentRateMillihz, long benchmarkGeneration,
@@ -2949,6 +2957,7 @@ public final class BenchmarkMatrix {
             this.effectiveGbc = effectiveGbc;
             this.effectiveDmgCompat = effectiveDmgCompat;
             this.effectiveMode = effectiveMode;
+            this.executionMode = executionMode;
             this.speedModeInitial = speedModeInitial;
             this.clock = clock;
             this.audio = audio;
@@ -2969,6 +2978,7 @@ public final class BenchmarkMatrix {
     private record FinalFields(String artifactId, long benchmarkGeneration,
             String requestedProfile, String profile,
             Boolean effectiveGbc, Boolean effectiveDmgCompat, String effectiveMode,
+            String executionMode,
             int speedModeInitial, int speedModeFinal, ClockFields clock, String deviceId,
             EnvironmentFields environmentStart, EnvironmentFields environmentEnd,
             AudioFields audio, int frame, int readyCount, int submittedCount, int droppedCount,

@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.controller.state.StateImage;
 import eu.rekawek.coffeegb.controller.state.StatePngCodec;
 import eu.rekawek.coffeegb.controller.state.StateStorageLayout;
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent;
+import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
@@ -203,6 +204,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
+    }
+
+    private ExecutionMode executionModeForSession() {
+        if (diagnostics.enabled()) {
+            return diagnosticsOptions.executionMode;
+        }
+        try {
+            return properties.getSystem().getExecutionMode();
+        } catch (RuntimeException unavailable) {
+            return ExecutionMode.ACCURACY;
+        }
     }
 
     /** Service-owned native frames for a short-lived {@link CoffeeGbSurfaceView} attachment. */
@@ -1178,6 +1190,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 event -> {
                     frames.setHardwareProfile(event.getProfile());
+                    AndroidAudioSink activeAudio = audio;
+                    if (activeAudio != null) {
+                        activeAudio.setClockSpec(event.getProfile().clockSpec());
+                    }
                     diagnostics.hardwareProfile(event);
                 },
                 Controller.HardwareProfileEvent.class);
@@ -1218,6 +1234,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.EmulationStartedEvent event) -> {
                     // This callback runs synchronously on the controller thread. Keep the CPU
                     // sample on that thread instead of the runtime owner executor.
+                    AndroidPerformanceBoost.apply(executionModeForSession());
                     if (diagnostics.enabled()) {
                         // BasicController materializes benchmark sessions paused.  Diagnostics
                         // now reports ANCHOR_READY; the host must arm a generation explicitly.
@@ -1292,16 +1309,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 }),
                 Controller.SessionPresentationEvent.class);
         eventBus.register(
-                (Controller.EmulationStoppedEvent event) -> submit(() -> {
-                    if (!closed.get()) {
-                        if (!diagnostics.enabled()) {
-                            persistActiveRecentGame(frames.snapshot());
+                (Controller.EmulationStoppedEvent event) -> {
+                    // The BasicController thread survives between sessions; do not let a prior
+                    // PERFORMANCE session leave its scheduler hint on an idle/Accuracy session.
+                    AndroidPerformanceBoost.apply(ExecutionMode.ACCURACY);
+                    submit(() -> {
+                        if (!closed.get()) {
+                            if (!diagnostics.enabled()) {
+                                persistActiveRecentGame(frames.snapshot());
+                            }
+                            publish(RuntimeState.Phase.STOPPED,
+                                    "Game stopped. Choose a ROM or ZIP document.",
+                                    List.of(), false, false, false);
                         }
-                        publish(RuntimeState.Phase.STOPPED,
-                                "Game stopped. Choose a ROM or ZIP document.",
-                                List.of(), false, false, false);
-                    }
-                }),
+                    });
+                },
                 Controller.EmulationStoppedEvent.class);
         eventBus.register(
                 (Controller.LoadRomFailedEvent event) -> submit(() -> {

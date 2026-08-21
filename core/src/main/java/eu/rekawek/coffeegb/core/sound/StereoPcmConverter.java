@@ -59,13 +59,26 @@ public final class StereoPcmConverter {
      */
     public int render(int[] source, ClockSpec clockSpec, int masterVolume, boolean muted,
                       byte[] target) {
+        return render(source, source.length, clockSpec, masterVolume, muted, target);
+    }
+
+    /**
+     * Converts only the first {@code sourceLength} entries of a fixed source buffer. Hosts that
+     * hand off preallocated source storage can therefore retain bounded allocation without
+     * padding a frame with synthetic zero ticks.
+     */
+    public int render(int[] source, int sourceLength, ClockSpec clockSpec, int masterVolume,
+                      boolean muted, byte[] target) {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(target, "target");
+        if (sourceLength < 0 || sourceLength > source.length || (sourceLength & 1) != 0) {
+            throw new IllegalArgumentException("Source length must be an even in-range value");
+        }
         if (masterVolume < 0 || masterVolume > 100) {
             throw new IllegalArgumentException("Master volume must be between 0 and 100");
         }
         selectClock(Objects.requireNonNull(clockSpec, "clockSpec"));
-        int ticks = source.length / 2;
+        int ticks = sourceLength / 2;
         int required = maximumPcmBytes(ticks, activeClock);
         if (target.length < required) {
             throw new IllegalArgumentException("PCM target is smaller than the maximum output");

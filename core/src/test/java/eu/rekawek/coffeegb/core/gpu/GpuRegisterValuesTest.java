@@ -91,6 +91,19 @@ public class GpuRegisterValuesTest {
         assertEquals(0x27, registers.getEffective(GpuRegister.WX));
     }
 
+    @Test
+    public void conflictPresenceCacheCoversPendingAndVisibleTwoTickLifetime() {
+        GpuRegisterValues registers = configured(false);
+        assertFalse(registers.hasPendingConflictLatches());
+
+        registers.setByte(GpuRegister.BGP.getAddress(), 0x1b);
+        assertTrue(registers.hasPendingConflictLatches());
+        registers.tickConflicts();
+        assertTrue(registers.hasPendingConflictLatches());
+        registers.tickConflicts();
+        assertFalse(registers.hasPendingConflictLatches());
+    }
+
     private static void verifySequences(boolean gbc, int remaining,
                                         LegacyConflictModel expected,
                                         GpuRegisterValues actual) {

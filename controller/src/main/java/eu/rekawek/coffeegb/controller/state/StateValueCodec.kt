@@ -108,14 +108,14 @@ internal object StateValueCodec {
           StateTypeRegistry.recordClasses.getOrNull(value.typeId - 1)
               ?: throw StateEncodeException("Unknown detached record type ID ${value.typeId}")
       val components = StateRecordIntrospection.components(type)
-      if (value.fields.size != components.size ||
-          value.fields.indices.any { value.fields[it].name != components[it].name }) {
+      val fields = StateGraph.canonicalRecordFields(value)
+      if (fields.map { it.name } !in acceptedFieldInventories(type, components)) {
         throw StateEncodeException("Detached record ${type.name} has an invalid field inventory")
       }
       writer.writeByte(RECORD)
       writer.writeU32(value.typeId.toLong())
-      writer.writeU32(value.fields.size.toLong())
-      value.fields.forEach { field ->
+      writer.writeU32(fields.size.toLong())
+      fields.forEach { field ->
         writer.writeString(field.name)
         write(field.value, depth + 1)
       }
@@ -220,17 +220,21 @@ internal object StateValueCodec {
 
     private fun readRecord(depth: Int): RecordState {
       val typeId = requireTypeId(reader.readU32(), StateTypeRegistry.recordClasses.size, "record")
-      val components = StateRecordIntrospection.components(StateTypeRegistry.recordClasses[typeId - 1])
+      val type = StateTypeRegistry.recordClasses[typeId - 1]
+      val components = StateRecordIntrospection.components(type)
       val count =
           PortableBounds.requireCount(
               reader.readU32(),
               StateLimits.PORTABLE_MAX_COLLECTION_ENTRIES.toLong(),
               "Detached record field count",
           )
-      if (count != components.size) malformed("Detached record type $typeId has $count fields")
+      val acceptedInventories = acceptedFieldInventories(type, components)
+      if (acceptedInventories.none { it.size == count }) {
+        malformed("Detached record type $typeId has $count fields")
+      }
       val fields =
           ArrayList<StateField>(count).also { result ->
-            components.forEach { component ->
+            components.take(count).forEach { component ->
               val name = reader.readString()
               if (name != component.name) {
                 malformed(
@@ -325,6 +329,26 @@ internal object StateValueCodec {
         )
       }
       return value.toInt()
+    }
+  }
+
+  /**
+   * StateFile v1/v2 are byte-stable formats.  The PERFORMANCE fields appended to these two
+   * records are transient/defaultable, so released files with their historical prefixes remain
+   * valid and must be retained at their original arity for exact re-encoding.  Restore-time
+   * normalization supplies the omitted values before constructing the live Java record.
+   */
+  private fun acceptedFieldInventories(
+      type: Class<*>,
+      components: List<StateRecordComponent>,
+  ): List<List<String>> {
+    val names = components.map { it.name }
+    return when (type.name) {
+      "eu.rekawek.coffeegb.core.sound.Sound\$SoundState" ->
+          listOf(names, names.dropLast(2))
+      "eu.rekawek.coffeegb.core.gpu.Gpu\$GpuState" ->
+          listOf(names, names.dropLast(3), names.dropLast(4))
+      else -> listOf(names)
     }
   }
 

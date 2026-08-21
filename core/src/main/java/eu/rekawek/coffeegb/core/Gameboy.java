@@ -217,6 +217,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Session-only retirement observation state; deliberately absent from machine state. */
     private transient boolean debugRetirementTrackingActive;
 
+    /** PERFORMANCE scheduler diagnostics; deliberately absent from portable machine state. */
+    private transient long performanceBulkSpanCount;
+
+    private transient long performanceBulkTicks;
+
     public Gameboy(Rom rom) {
         this(new GameboyConfiguration(rom));
     }
@@ -230,8 +235,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Session metadata; deliberately excluded from the emulated machine state. */
     private final ExecutionMode executionMode;
 
+    /** History replay keeps its service-free deterministic scheduler on the scalar path. */
+    private final boolean debugHistoryReplay;
+
     public Gameboy(GameboyConfiguration configuration) {
         this.executionMode = Objects.requireNonNull(configuration.executionMode, "executionMode");
+        this.debugHistoryReplay = configuration.debugHistoryReplay;
         this.hardwareProfile = HardwareProfileRegistry.requireRegistered(configuration.hardwareProfile);
         if (configuration.bootstrapMode != BootstrapMode.SKIP
                 && !Bios.hasBundledBootRom(hardwareProfile)) {
@@ -278,7 +287,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
         gpu.setHdma(hdma);
-        sound = new Sound(timer, speedMode, gbc, clockSpec);
+        sound = new Sound(timer, speedMode, gbc, clockSpec, executionMode);
         joypad = new Joypad(interruptManager, sgbBus, sgb, configuration.playerInputSource);
         serialPort = new SerialPort(interruptManager, gbc, speedMode);
         infraredPort = new InfraredPort(gbc, speedMode);
@@ -722,6 +731,181 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return result;
     }
 
+    /**
+     * Advances a bounded number of master ticks on the owning emulation thread.
+     *
+     * <p>PERFORMANCE callers use this frame-sized seam so the controller does not pay a
+     * Kotlin/Java callback and repeat-loop boundary for every dot. The method still routes
+     * through the same {@link #tick()} state machine, including frame-ready events, while the
+     * hot scheduler inside {@code tickSubsystems()} splits CPU phase-only ticks and defers
+     * proven background raster spans. ACCURACY retains the exact scalar behavior.</p>
+     *
+     * @return the number of frame-ready events emitted while advancing the requested ticks
+     */
+    public int runTicks(int ticks) {
+        if (ticks < 0) {
+            throw new IllegalArgumentException("ticks must be non-negative");
+        }
+        return Math.toIntExact(runTicks((long) ticks));
+    }
+
+    /** Long-count counterpart for headless benchmark and fast-forward callers. */
+    public long runTicks(long ticks) {
+        if (ticks < 0) {
+            throw new IllegalArgumentException("ticks must be non-negative");
+        }
+        if (executionMode == ExecutionMode.PERFORMANCE
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && !debugHistoryReplay) {
+            return runPerformanceTicks(ticks);
+        }
+        long frameEvents = 0;
+        for (long i = 0; i < ticks; i++) {
+            if (tick()) {
+                frameEvents++;
+            }
+        }
+        return frameEvents;
+    }
+
+    /**
+     * PERFORMANCE-only frame loop. At a normal-speed CPU boundary the scalar tick remains the
+     * authority; between boundaries, a short span can advance the independent peripherals while
+     * the CPU/PPU/STAT hot paths use their bulk phase methods. The span is intentionally capped
+     * at the next CPU boundary, so a guest write, interrupt, DMA request, or speed switch always
+     * returns to the scalar path before it can be observed late.
+     */
+    private long runPerformanceTicks(long ticks) {
+        gpu.setPerformanceScanlineEnabled(true);
+        try {
+            long frameEvents = 0;
+            long remaining = ticks;
+            while (remaining > 0) {
+                int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
+                // At a machine-cycle boundary the CPU limit is zero. Do not walk the GPU's
+                // direct/steady eligibility predicates on those scalar-authority iterations.
+                int span = cpuSpanLimit > 0
+                        ? Math.min(cpuSpanLimit, timer.performanceQuietSpanLimit(cpuSpanLimit)) : 0;
+                if (span > 0) {
+                    span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
+                    span = Math.min(span, joypad.performanceQuietSpanLimit(span));
+                    span = Math.min(span, sound.performanceQuietSpanLimit(span));
+                    if (cartridgeClocked) {
+                        span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+                    }
+                    if (slotCartridgeClocked) {
+                        span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+                    }
+                    if (gbc) {
+                        span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
+                    }
+                    span = Math.min(span, gpu.performanceQuietSpanLimit());
+                    span = Math.min(span, statRegister.performanceQuietSpanLimit(span));
+                }
+                // The two subsystem limits are int-sized, while runTicks accepts a long. A small
+                // final request must never consume past its caller-visible budget (or return a
+                // negative remainder) merely because a whole quiet span was available.
+                if (remaining < span) {
+                    span = (int) remaining;
+                }
+                boolean reachesCpuBoundary = span > 0 && span == cpuSpanLimit;
+                boolean directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
+                boolean steadyRasterSpan = span > 0 && !directRasterSpan
+                        && gpu.isPerformanceSteadyCursorActive();
+                if (span > 0
+                        && !warmResetRequested
+                        && speedSwitchTailTicks == 0
+                        && cpu.performancePhaseOnlySpanEligible()
+                        && cpu.performanceNoPendingPpuReadPhase()
+                        && !dma.isTransferInProgress()
+                        && (!gbc || !hdma.hasActiveOrPendingTransfer())
+                        && timer.canTickPerformanceQuietSpan(span)
+                        && serialPort.canTickPerformanceQuietSpan(span)
+                        && joypad.canTickPerformanceQuietSpan(span)
+                        && (!cartridgeClocked
+                        || cartridge.performanceQuietSpanLimit(span) >= span)
+                        && (!slotCartridgeClocked
+                        || slotCartridge.performanceQuietSpanLimit(span) >= span)
+                        && (!gbc || infraredPort.performanceQuietSpanLimit(span) >= span)
+                        && statRegister.canTickPerformanceQuietSpan(span)) {
+                    tickPerformanceQuietSpan(span, directRasterSpan, steadyRasterSpan);
+                    remaining -= span;
+                    performanceBulkSpanCount++;
+                    performanceBulkTicks += span;
+                    // The fourth tick is still the scalar CPU-boundary authority. Fuse it here
+                    // only when the bulk span consumed the whole phase distance; a peripheral
+                    // horizon-shortened span must return through the normal preflight loop.
+                    if (reachesCpuBoundary && remaining > 0) {
+                        if (tick()) {
+                            frameEvents++;
+                        }
+                        remaining--;
+                    }
+                    continue;
+                }
+                if (tick()) {
+                    frameEvents++;
+                }
+                remaining--;
+            }
+            return frameEvents;
+        } finally {
+            // A caller may mix the frame-sized seam with scalar/debug/state operations. Sound's
+            // PERFORMANCE scheduler can have a pending sub-sample span even when this method
+            // exits at the caller's tick budget, so publish canonical channel state before the
+            // next operation observes the machine.
+            sound.materializePendingPerformanceTicks();
+            // A caller may mix the frame-sized seam with scalar/debug operations. Suppress new
+            // direct-line arms after this call; an already armed line is materialized at the
+            // first scalar tick, while a subsequent PERFORMANCE call can resume it safely.
+            gpu.setPerformanceScanlineEnabled(false);
+        }
+    }
+
+    /** Advances the non-CPU-bus peripherals for one preflighted quiet span. */
+    private void tickPerformanceQuietSpan(int ticks, boolean directRasterSpan,
+                                          boolean steadyRasterSpan) {
+        if (cartridgeClocked) {
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+
+        // Timer preflight excludes every DIV/timer edge in this span. Advance its divider once,
+        // then sample the final DIV value exactly once so the APU's rising-bit latch remains in
+        // the same state as the scalar per-tick sequence.
+        timer.tickPerformanceQuietSpanTrusted(ticks);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a PERFORMANCE quiet span";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(ticks);
+
+        serialPort.tickPerformanceQuietSpanTrusted(ticks);
+        if (gbc) {
+            infraredPort.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        joypad.tickPerformanceQuietSpanTrusted(ticks);
+
+        // No CPU bus boundary exists inside this span. Advance the free-running phase once;
+        // running-state preflight proves Cpu.onPeripheralsTicked() is a no-op here.
+        cpu.advancePerformancePhaseOnlyTrusted(ticks);
+        gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
+        statRegister.tickPerformanceQuietSpanTrusted(ticks);
+    }
+
+    /** Number of all-subsystem PERFORMANCE bulk spans taken by the current session. */
+    long getPerformanceBulkSpanCount() {
+        return performanceBulkSpanCount;
+    }
+
+    /** Number of master ticks covered by all-subsystem PERFORMANCE bulk spans. */
+    long getPerformanceBulkTicks() {
+        return performanceBulkTicks;
+    }
+
     private Mode tickSubsystems() {
         int statReadPhaseFlags = cpu.getStatReadPhaseFlags();
         boolean mode0InterruptEdgeNextTick = statRegister.beginCpuReadPhase(statReadPhaseFlags);
@@ -869,7 +1053,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     gpu.setCpuRetiringInstructionForHdma(false);
                 }
             } else {
-                cpu.tick();
+                tickCpuPerformanceAware();
             }
         }
         if (!speedSwitching && cpu.isSpeedSwitching()) {
@@ -905,7 +1089,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (dma.requiresClockTick(dmaCpuClockPaused)) {
             dma.tick(dmaCpuClockPaused, halted);
         }
-        sound.tick(divReset);
+        if (executionMode == ExecutionMode.PERFORMANCE) {
+            sound.tickPerformanceBoundary(divReset);
+        } else {
+            sound.tick(divReset);
+        }
         serialPort.tick();
         if (gbc) {
             infraredPort.tick();
@@ -922,10 +1110,36 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else if (gbc) {
             hdma.advanceHblankRequest();
         }
-        Mode mode = gpu.tick();
-        statRegister.tick();
+        boolean performanceSteadyCursor = executionMode == ExecutionMode.PERFORMANCE
+                && gpu.isPerformanceSteadyCursorActive();
+        boolean performanceQuietRaster = performanceSteadyCursor
+                && gpu.isPerformanceSteadyTickQuiet();
+        Mode mode = performanceSteadyCursor ? gpu.tickPerformanceSteady() : gpu.tick();
+        if (performanceQuietRaster && mode == null) {
+            statRegister.tickPerformanceQuietIfSafe();
+        } else {
+            statRegister.tick();
+        }
         cpu.onPeripheralsTicked();
         return mode;
+    }
+
+    /**
+     * Keeps the normal scheduler's exact bus work at machine-cycle boundaries while avoiding
+     * the full CPU sequencer on the three intervening normal-speed master ticks. DMA, speed
+     * switch, debugger and history paths deliberately stay on their scalar branches above.
+     */
+    private void tickCpuPerformanceAware() {
+        if (executionMode != ExecutionMode.PERFORMANCE
+                || debugInstrumentation != null
+                || debugRetirementTrackingActive
+                || debugHistoryReplay) {
+            cpu.tick();
+            return;
+        }
+        if (!cpu.tickPhaseOnly()) {
+            cpu.tickAtMachineCycle();
+        }
     }
 
     public AddressSpace getAddressSpace() {

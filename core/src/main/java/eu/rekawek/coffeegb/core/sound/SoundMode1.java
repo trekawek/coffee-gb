@@ -129,6 +129,62 @@ public class SoundMode1 extends AbstractSoundMode {
         return getCurrentOutput();
     }
 
+    /** Advances a short PERFORMANCE quiet span while retaining pulse-edge state exactly. */
+    int tickPerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return getCurrentOutput();
+        }
+        // A delayed sweep calculation can disable CH1 at an exact master tick. This is a rare
+        // control-pipeline event, so retain the scalar channel ordering for this bounded span;
+        // ordinary spans (the hot path) are handled as 2-MHz events below.
+        int calculationAt = frequencySweep.calculationExpiryOffset(ticks);
+        if (calculationAt > 0) {
+            for (int i = 0; i < ticks; i++) {
+                tick(false);
+            }
+            return getCurrentOutput();
+        }
+
+        frequencySweep.tickPerformanceSpan(ticks);
+        return advancePulseSpan(ticks);
+    }
+
+    private int advancePulseSpan(int ticks) {
+        int firstPhase = (phase - 1) & 3;
+        int edgeCount = (firstPhase & 1) != 0 ? (ticks + 1) / 2 : ticks / 2;
+        int firstEdgePosition = (firstPhase & 1) != 0 ? 1 : 2;
+        phase = (phase - ticks) & 3;
+        int reloadedAt = 0;
+        justReloadedTicks = Math.max(0, justReloadedTicks - ticks);
+        boolean e = channelEnabled;
+        e = updateSweep() && e;
+        e = dacEnabled && e;
+        if (!e) {
+            return 0;
+        }
+        // The normal tone periods are much longer than one compact window. When no pulse edge
+        // can occur, subtract the whole 2-MHz edge count arithmetically and avoid a loop whose
+        // body would otherwise run once per APU edge for every lazy span.
+        if (freqDivider >= edgeCount) {
+            freqDivider -= edgeCount;
+        } else {
+            for (int edge = 0; edge < edgeCount; edge++) {
+                if (freqDivider-- == 0) {
+                    justReloadedFromSweep = frequencySweep.consumeFrequencyUpdate();
+                    resetFreqDivider();
+                    i = (i + 1) % 8;
+                    lastOutput = ((getDuty() & (1 << i)) >> i);
+                    sampleSuppressed = false;
+                    reloadedAt = firstEdgePosition + edge * 2;
+                }
+            }
+        }
+        if (reloadedAt != 0) {
+            justReloadedTicks = Math.max(0, 4 - (ticks - reloadedAt));
+        }
+        return getCurrentOutput();
+    }
+
     @Override
     public int getCurrentOutput() {
         return (sampleSuppressed ? 0 : lastOutput) * volumeEnvelope.getVolume();

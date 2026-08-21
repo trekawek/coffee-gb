@@ -15,6 +15,33 @@ public interface MemoryController extends AddressSpace, StatefulComponent<Memory
     default void tick() {
     }
 
+    /**
+     * Returns the largest PERFORMANCE span which can advance this mapper without entering its
+     * scalar clock path.  Clocked controllers must opt in explicitly; this conservative default
+     * keeps newly added mapper hardware on the exact scheduler until its clock contract is known.
+     */
+    default int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0) {
+            return 0;
+        }
+        return isClocked() ? 0 : requested;
+    }
+
+    /** Applies an already-preflighted PERFORMANCE span. */
+    default boolean tickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /** Applies a span after the caller has passed {@link #performanceQuietSpanLimit(int)}. */
+    default void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Memory-controller quiet span is not eligible: " + ticks);
+        }
+    }
+
     default void setClockPaused(boolean paused) {
     }
 

@@ -568,6 +568,118 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         statEvaluationDirty = false;
     }
 
+    /**
+     * Performs the invariant portion of a quiet PERFORMANCE STAT tick.
+     *
+     * <p>During a proven sprite/window-free mode-3 span no STAT source, event checkpoint, or
+     * interrupt acknowledge can change.  The clock and transient CPU-read phase still advance,
+     * but the level evaluator and its large collection of scheduled-event branches can wait
+     * for the next boundary.  A false result asks the caller to run the complete scalar tick.</p>
+     */
+    public boolean tickPerformanceQuietIfSafe() {
+        if (statEvaluationDirty
+                || gpu.isStatEventCheckpointForTick()
+                || nextLycIrqEvent == lycIrqClock + 1
+                || pendingLycWriteIrq == lycIrqClock + 1
+                || pendingLycComparatorIrq == lycIrqClock + 1
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode2PublicationClock == lycIrqClock + 1
+                || pendingCgbMode0Interrupt
+                || interruptManager.hasPpuTickSignals()) {
+            tick();
+            return false;
+        }
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview();
+        lycIrqClock++;
+        clearCpuStatReadPhase();
+        return true;
+    }
+
+    /** Returns whether a short no-CPU-bus span can keep STAT on its invariant clock path. */
+    public boolean canTickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0 || statEvaluationDirty || gpu.isStatEventCheckpointForTick()
+                || gpu.isStatEventCheckpointWithin(ticks)
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode0Interrupt
+                || interruptManager.hasPpuTickSignals()) {
+            return false;
+        }
+        long endClock = lycIrqClock + ticks;
+        return (nextLycIrqEvent == NO_LYC_IRQ_EVENT || nextLycIrqEvent > endClock)
+                && (pendingLycWriteIrq == NO_LYC_IRQ_EVENT || pendingLycWriteIrq > endClock)
+                && (pendingLycComparatorIrq == NO_LYC_IRQ_EVENT
+                || pendingLycComparatorIrq > endClock);
+    }
+
+    /**
+     * Returns the largest short PERFORMANCE span which can stay on STAT's invariant clock path.
+     * The scheduler normally asks for at most the three non-bus clocks before a CPU boundary;
+     * trying the small candidates in descending order keeps this preflight state-only while
+     * allowing a nearby STAT checkpoint to shorten, rather than reject, the span.
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0) {
+            return 0;
+        }
+        int limit = Math.min(requested, 3);
+        for (int candidate = limit; candidate > 0; candidate--) {
+            if (canTickPerformanceQuietSpan(candidate)) {
+                return candidate;
+            }
+        }
+        return 0;
+    }
+
+    /** Advances the invariant STAT clock for a span whose CPU bus is known to be idle. */
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        // The caller preflights the GPU checkpoint before advancing the raster counters. At
+        // this point Gpu has already moved to the span's end, which may itself be a line/STAT
+        // checkpoint (notably the 447->448 HBlank tail); re-reading that live GPU predicate
+        // would reject an otherwise valid span after the fact.
+        if (!canTickPerformanceQuietSpanStateOnly(ticks)) {
+            return false;
+        }
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview(ticks);
+        lycIrqClock += ticks;
+        clearCpuStatReadPhase();
+        return true;
+    }
+
+    /** Applies a span after the caller has already passed canTickPerformanceQuietSpan. */
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview(ticks);
+        lycIrqClock += ticks;
+        clearCpuStatReadPhase();
+    }
+
+    private boolean canTickPerformanceQuietSpanStateOnly(int ticks) {
+        if (ticks <= 0 || statEvaluationDirty
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode0Interrupt
+                || interruptManager.hasPpuTickSignals()) {
+            return false;
+        }
+        long endClock = lycIrqClock + ticks;
+        return (nextLycIrqEvent == NO_LYC_IRQ_EVENT || nextLycIrqEvent > endClock)
+                && (pendingLycWriteIrq == NO_LYC_IRQ_EVENT || pendingLycWriteIrq > endClock)
+                && (pendingLycComparatorIrq == NO_LYC_IRQ_EVENT
+                || pendingLycComparatorIrq > endClock);
+    }
+
     public void onLcdEnabled() {
         refreshGpuTiming();
         clearCpuStatReadPhase();

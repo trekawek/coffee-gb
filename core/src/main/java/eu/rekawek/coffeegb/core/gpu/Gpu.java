@@ -90,6 +90,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // revision-specific timing is measured independently.
     private final boolean performanceDmgCompatTiming;
 
+    // The line-at-a-time renderer is a deliberately broader PERFORMANCE escape hatch than the
+    // guarded steady-background cursor. It is enabled only by Gameboy.runTicks(), so existing
+    // direct Gpu.tick() probes and ACCURACY remain on their calibrated dot pipelines.
+    private final boolean performanceScanlineCapable;
+
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
@@ -103,6 +108,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // calibrated CPU-visible mode/STAT/lock timing. They diverge only when a mid-line
     // write changes a stall length within the 4-tick skew.
     private final PixelTransfer pixelMachine;
+
+    private final PerformanceScanlineRenderer performanceScanlineRenderer;
 
     private final StatRegister statRegister;
 
@@ -231,6 +238,28 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private transient long steadyTimingDmaGeneration;
     private transient long steadyTimingHdmaGeneration;
 
+    // Session-only counters for the PERFORMANCE raster fast path. They are deliberately
+    // transient: exposing how often a speculative cursor happened to arm must not alter a
+    // portable machine snapshot or its restore behavior.
+    private transient long performanceSteadyFastTicks;
+    private transient long performanceSteadyFastFallbacks;
+
+    private transient boolean performanceScanlineEnabled;
+    private transient boolean performanceScanlineCursor;
+    // Remains set through HBlank after the cursor hands off, because PixelTransfer was stopped
+    // at mode-3 entry and its position/FIFO no longer describe the coarse line. CPU-visible
+    // helpers use this line-scoped marker until the next OAM-to-mode-3 boundary.
+    private transient boolean performanceScanlineLine;
+    private transient int performanceScanlineEndTick;
+    private transient long performanceScanlineFastTicks;
+    private transient long performanceScanlineLines;
+    private transient long performanceScanlineFallbacks;
+    private transient boolean performanceRenderOutput = true;
+    // PixelTransfer's fetcher is stopped after a direct line is composed, so its internal
+    // window row cannot advance on later lines. Keep the coarse row as stable emulated state and
+    // feed it to the line renderer at each mode-3 entry.
+    private int performanceWindowLineCounter = -1;
+
     // Public mutable component accessors predate the performance executor. Once one of those
     // aliases escapes, a later write cannot be observed by Gpu, so this session stays scalar.
     // This is session metadata, not emulated hardware state, and deliberately survives restore.
@@ -295,6 +324,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && hardwareProfile == HardwareProfileRegistry.CGB;
+        this.performanceScanlineCapable = executionMode == ExecutionMode.PERFORMANCE
+                && !debugHistoryReplay
+                && (hardwareProfile == HardwareProfileRegistry.DMG
+                || hardwareProfile == HardwareProfileRegistry.MGB
+                || hardwareProfile == HardwareProfileRegistry.CGB
+                || hardwareProfile == HardwareProfileRegistry.CGB0);
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -315,6 +350,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
 
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
+        this.performanceScanlineRenderer = new PerformanceScanlineRenderer(
+                videoRam0, videoRam1, oamRam, lcdc, r, bgPalette, oamPalette,
+                gbc, false, oamSearchPhase.getSprites());
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0, true);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
         this.pixelMachine.setOamReaderBus(oamSearchPhase);
@@ -338,7 +376,44 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      */
     public void setRenderOutput(boolean renderOutput) {
         materializeSteadyTiming();
+        performanceRenderOutput = renderOutput;
         pixelMachine.setRenderOutput(renderOutput);
+    }
+
+    /**
+     * Enables the approximate line-at-a-time raster path for a PERFORMANCE run loop.
+     *
+     * <p>The flag is intentionally separate from {@link #performanceSteadyTiming}: unit tests
+     * and tools that call {@link #tick()} directly continue to exercise the calibrated scalar
+     * or guarded steady cursor. A frame-sized {@code Gameboy.runTicks} call opts in explicitly.
+     * Disabling the flag suppresses new arms; an already armed cursor remains resumable until
+     * its predicted handoff, so a caller can safely mix frame-sized and scalar scheduling.</p>
+     */
+    public void setPerformanceScanlineEnabled(boolean enabled) {
+        if (enabled && !performanceScanlineCapable) {
+            return;
+        }
+        performanceScanlineEnabled = enabled;
+    }
+
+    /** Number of complete scanlines rendered by the approximate PERFORMANCE path. */
+    public long getPerformanceScanlineLines() {
+        return performanceScanlineLines;
+    }
+
+    /** Number of master dots skipped by the line-at-a-time raster path. */
+    public long getPerformanceScanlineFastTicks() {
+        return performanceScanlineFastTicks;
+    }
+
+    /** Number of line-at-a-time candidates that failed their safety predicate. */
+    public long getPerformanceScanlineFallbacks() {
+        return performanceScanlineFallbacks;
+    }
+
+    /** Current coarse window row used by the PERFORMANCE line compositor. */
+    public int getPerformanceWindowLineCounter() {
+        return performanceWindowLineCounter;
     }
 
     private AddressSpace getAddressSpace(int address) {
@@ -561,6 +636,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return ticksInLine < 80;
         }
         if (mode == Mode.PixelTransfer) {
+            if (performanceScanlineLine) {
+                // The direct renderer snapshots palettes at mode-3 entry and treats later
+                // writes as next-line updates; CPU palette reads remain locked for the whole
+                // coarse transfer rather than observing the entry position left in PixelTransfer.
+                return false;
+            }
             // Before the CPU/PPU clock mux has moved, the palette latch closes with
             // the mode-3 skeleton. After a speed switch it follows the fetch-start
             // phase instead. At double speed the first internal transfer dot is
@@ -579,6 +660,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             // A double-speed CPU can sample the closing latch one dot before the
             // internal mode-3 transition.
             return false;
+        }
+        if (performanceScanlineLine && mode == Mode.HBlank) {
+            // The direct line was fully composed at mode-3 entry; use the coarse output-latch
+            // tail rather than the frozen PixelTransfer position when reopening CGB palettes.
+            return !gbc || ticksInLine >= hblankIntFrom + 8;
         }
         if (!firstLine
                 && speedModeValue == 1
@@ -612,38 +698,58 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return null;
         }
 
+        // The scheduler flag only gates new arms. An already rendered line remains a valid
+        // coarse cursor after a runTicks call returns, so a mixed scalar caller can finish the
+        // predicted handoff without shortening the line or reviving the stopped FIFOs. PPU
+        // writes, observation, DMA, and other explicit invalidators still call
+        // disablePerformanceScanlineCursor() synchronously.
+        boolean performanceScanlineTick = performanceScanlineCursor;
         if (!pendingPpuWrites.isEmpty()) {
             advancePendingPpuWrites();
         }
-        pixelMachine.advanceDelayedWindowWrites();
 
-        // write-conflict mixes settle and the LCD output stage advances every tick,
-        // in all modes (the last pixels of a line leave the delay line during HBlank)
-        r.tickConflicts();
-        lcdc.tickConflicts();
+        // A line-at-a-time render has already produced all visible pixels from the mode-3 entry
+        // snapshot. Keep register write/conflict latches and delayed write queues alive, but skip
+        // the two FIFO machines and their window checkpoints until the coarse handoff.
         boolean earlyWindowFrameEdge = !gbc || speedModeValue == 1;
-        if (earlyWindowFrameEdge && line == 153 && ticksInLine == 454) {
-            pixelTransferPhase.resetWindowLineCounter();
-            pixelMachine.resetWindowLineCounter();
-        }
-        int windowYCheckpoint = PixelTransfer.windowYCheckpoint(
-                gbc, speedModeValue, line, ticksInLine);
-        int timingWindowWy = pixelTransferPhase.advanceWindowYDelay();
-        int outputWindowWy = pixelMachine.advanceWindowYDelay();
-        if (windowYCheckpoint != 0) {
-            pixelTransferPhase.sampleWindowY(windowYCheckpoint, timingWindowWy);
-            pixelMachine.sampleWindowY(windowYCheckpoint, outputWindowWy);
-        }
-        // Both dot machines enqueue popped pixels into an eight-slot LCD delay line.
-        // The timing-only skeleton has a throwaway Display, but its delay line still
-        // participates in window rewind/refresh bookkeeping and must advance as a
-        // bounded ring just like the shifted output machine.
-        boolean timingTickDeferred = deferSteadyTimingDot();
-        if (!timingTickDeferred) {
-            pixelTransferPhase.outputTick();
-        }
-        if (!(timingTickDeferred && steadyOutputCursor)) {
-            pixelMachine.outputAndMachineTick();
+        boolean timingTickDeferred = false;
+        if (!performanceScanlineTick) {
+            pixelMachine.advanceDelayedWindowWrites();
+
+            // write-conflict mixes settle and the LCD output stage advances every tick,
+            // in all modes (the last pixels of a line leave the delay line during HBlank)
+            r.tickConflicts();
+            lcdc.tickConflicts();
+            if (earlyWindowFrameEdge && line == 153 && ticksInLine == 454) {
+                pixelTransferPhase.resetWindowLineCounter();
+                pixelMachine.resetWindowLineCounter();
+            }
+            int windowYCheckpoint = PixelTransfer.windowYCheckpoint(
+                    gbc, speedModeValue, line, ticksInLine);
+            int timingWindowWy = pixelTransferPhase.advanceWindowYDelay();
+            int outputWindowWy = pixelMachine.advanceWindowYDelay();
+            if (windowYCheckpoint != 0) {
+                pixelTransferPhase.sampleWindowY(windowYCheckpoint, timingWindowWy);
+                pixelMachine.sampleWindowY(windowYCheckpoint, outputWindowWy);
+            }
+            // Both dot machines enqueue popped pixels into an eight-slot LCD delay line.
+            // The timing-only skeleton has a throwaway Display, but its delay line still
+            // participates in window rewind/refresh bookkeeping and must advance as a
+            // bounded ring just like the shifted output machine.
+            boolean candidateTimingTickDeferred = deferSteadyTimingDot();
+            timingTickDeferred = candidateTimingTickDeferred;
+            if (!timingTickDeferred) {
+                pixelTransferPhase.outputTick();
+            }
+            if (!(timingTickDeferred && steadyOutputCursor)) {
+                pixelMachine.outputAndMachineTick();
+            }
+        } else {
+            // The direct path still settles one-tick DMG/CGB conflict latches. It intentionally
+            // leaves the PixelTransfer positions at mode-3 entry; CPU-visible locks use the
+            // coarse mode and the line handoff below publishes the predicted endpoint.
+            r.tickConflicts();
+            lcdc.tickConflicts();
         }
 
         Mode oldMode = mode;
@@ -660,6 +766,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // the LCDC write itself, while the machine-cycle-locked line grid starts one
         // tick later (lcdon_timing-GS vs the steady-state line phase)
         if (ticksInLine == lineLength) {
+            performanceScanlineLine = false;
             ticksInLine = 0;
             lastCpuVramWriteTick = Integer.MIN_VALUE;
             firstLine = false;
@@ -676,6 +783,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             line++;
             if (line == 154) {
                 line = 0;
+                // PixelTransfer resets its own window master at the physical frame edge. Keep
+                // the coarse compositor's independent counter on that same edge, including
+                // frames that contained scalar/deoptimized lines.
+                performanceWindowLineCounter = -1;
                 firstFrameAfterLcdEnable = false;
                 lateDoubleSpeedLineZeroWindowEnable = false;
                 if (!earlyWindowFrameEdge) {
@@ -702,11 +813,19 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                         // machine cycle earlier in the line-0 picture; the STAT
                         // interrupt itself is NOT shifted - intr_1_2_timing-GS)
                         pixelMachine.start(line == 0 ? -4 : 0, firstLine);
+                        synchronizePerformanceWindowLineCounter();
+                        if (canStartPerformanceScanline()) {
+                            armPerformanceScanline();
+                        }
                     }
                     break;
 
                 case PixelTransfer:
-                    if (pixelTransferDone) {
+                    if (performanceScanlineCursor) {
+                        if (ticksInLine >= performanceScanlineEndTick) {
+                            finishPerformanceScanlineHandoff();
+                        }
+                    } else if (pixelTransferDone) {
                         pixelTransferDone = false;
                         mode = Mode.HBlank;
                     } else {
@@ -804,6 +923,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                     DebugPpuMode.VBLANK);
         }
 
+        // Scalar/deoptimized lines still advance PixelTransfer's hardware window master. Keep
+        // the coarse counter monotonic with that machine so a later direct line starts from the
+        // same row after a write/DMA/debug fallback. Direct lines deliberately stop both
+        // machines after rendering and publish their row to both machines at arm time.
+        if (!performanceScanlineCursor) {
+            synchronizePerformanceWindowLineCounter();
+        }
+
         if (oldMode == mode) {
             return null;
         } else {
@@ -811,8 +938,417 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
     }
 
+    private boolean canStartPerformanceScanline() {
+        return performanceScanlineEnabled
+                && performanceScanlineCapable
+                && bootCompatibilityResolved
+                && !performanceObservationBlocked
+                && !mutablePpuStateExposed
+                && debugHooks == null
+                && (speedModeValue == 1 || gbc && speedModeValue == 2)
+                && lcdEnabled
+                && !firstLine
+                && mode == Mode.PixelTransfer
+                && phase == pixelTransferPhase
+                && dma != null
+                && !dma.isTransferInProgress()
+                && !dma.ownsOamForPpu()
+                && !dma.hasPpuOamOwnershipTransitionThisTick()
+                && pendingPpuWrites.isEmpty()
+                && !r.hasPendingConflictLatches()
+                && !lcdc.hasPendingConflictLatches();
+    }
+
+    private void armPerformanceScanline() {
+        performanceScanlineRenderer.setDmgCompat(dmgCompatValue);
+        int predictedEnd = performanceScanlineRenderer.predictMode3End(line);
+        int lineLength = firstLine ? 455 : 456;
+        // The renderer's predictor is an absolute line tick. Keep one dot in reserve for the
+        // visible mode handoff and fail closed if an unusual profile/register combination would
+        // predict past the line boundary.
+        if (predictedEnd <= ticksInLine || predictedEnd >= lineLength) {
+            performanceScanlineFallbacks++;
+            return;
+        }
+        performanceScanlineCursor = true;
+        performanceScanlineLine = true;
+        performanceScanlineEndTick = predictedEnd;
+        boolean windowCounterAdvances = performanceWindowCounterAdvancesOnLine();
+        int windowLine = windowCounterAdvances ? ++performanceWindowLineCounter : -1;
+        if (windowCounterAdvances) {
+            // Both PixelTransfer instances are stopped below. Publish the same row to each
+            // before stopping them so a scalar fallback on the next line cannot render from an
+            // older window master after the direct line has already advanced it.
+            pixelTransferPhase.setWindowLineCounterForPerformance(performanceWindowLineCounter);
+            pixelMachine.setWindowLineCounterForPerformance(performanceWindowLineCounter);
+        }
+        if (performanceRenderOutput) {
+            performanceScanlineRenderer.renderLine(display, line, windowLine);
+        }
+        // The ordinary mode-3 starts above have initialized both machines for their state
+        // shape. They must not remain active after the direct composition or their delayed
+        // output would append a duplicate line during HBlank.
+        pixelTransferPhase.finishPerformanceLine();
+        pixelMachine.finishPerformanceLine();
+    }
+
+    private void finishPerformanceScanlineHandoff() {
+        performanceScanlineCursor = false;
+        performanceScanlineEndTick = 0;
+        performanceScanlineLines++;
+        if (gbc && !firstLine) {
+            mode = Mode.HBlank;
+        } else {
+            pixelTransferDone = true;
+        }
+        // The broad path intentionally uses a conservative mode-0 tail for lines whose exact
+        // object/window fetch schedule was not replayed. STAT remains scalar at this boundary.
+        int hblankTail = !gbc && (lcdc.isObjDisplay() || lcdc.isWindowDisplay()) ? 4 : 2;
+        hblankIntFrom = ticksInLine + hblankTail;
+        if (mode0IntFrom == Integer.MAX_VALUE) {
+            mode0IntFrom = hblankIntFrom;
+        }
+    }
+
+    private boolean performanceWindowCounterAdvancesOnLine() {
+        int wx = r.get(WX) & 0xff;
+        return lcdc.isWindowDisplay()
+                && (gbc || lcdc.isBgAndWindowDisplay())
+                && line >= (r.get(WY) & 0xff)
+                // DMG WX=166 still advances the internal window row at the terminal
+                // comparator even though it produces no visible window pixel. CGB accepts
+                // the same terminal comparator as a one-pixel HBlank-side start.
+                && wx <= 166;
+    }
+
+    private void synchronizePerformanceWindowLineCounter() {
+        // The counter is host-side PERFORMANCE metadata.  Accuracy/SGB scalar rendering must
+        // leave it at its historical sentinel so portable state/replay encodings stay stable;
+        // a capable PERFORMANCE session keeps tracking it even while the cursor is temporarily
+        // disabled by a fallback or invalidator.
+        if (!performanceScanlineCapable) {
+            return;
+        }
+        int scalarCounter = Math.max(pixelTransferPhase.getWindowLineCounter(),
+                pixelMachine.getWindowLineCounter());
+        if (scalarCounter > performanceWindowLineCounter) {
+            performanceWindowLineCounter = scalarCounter;
+        }
+    }
+
+    private void disablePerformanceScanlineCursor() {
+        if (!performanceScanlineCursor) {
+            performanceScanlineEndTick = 0;
+            return;
+        }
+        performanceScanlineCursor = false;
+        performanceScanlineLine = true;
+        performanceScanlineEndTick = 0;
+        // Explicit invalidators publish the next scalar handoff so a PPU write, mutable
+        // observer, DMA, or debugger attachment cannot retain a half-rendered line. Ordinary
+        // capture does not call this method: an already rendered cursor is serialized intact.
+        if (mode == Mode.PixelTransfer && !pixelTransferDone) {
+            pixelTransferDone = true;
+            if (hblankIntFrom == Integer.MAX_VALUE) {
+                hblankIntFrom = ticksInLine + 1;
+            }
+            if (mode0IntFrom == Integer.MAX_VALUE) {
+                mode0IntFrom = hblankIntFrom;
+            }
+        }
+    }
+
+    /** Number of following dots that stay inside a direct line-at-a-time mode-3 span. */
+    public int performanceScanlineQuietSpanLimit() {
+        if (!performanceScanlineCursor
+                || ticksInLine + 1 >= performanceScanlineEndTick
+                || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches()
+                || lcdc.hasPendingConflictLatches()
+                || dma == null
+                || dma.isTransferInProgress()
+                || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || gbc && (hdma == null || hdma.hasActiveOrPendingTransfer())) {
+            return 0;
+        }
+        return performanceScanlineEndTick - ticksInLine - 1;
+    }
+
+    /** Number of following dots available to either PERFORMANCE raster fast path. */
+    public int performanceRasterQuietSpanLimit() {
+        int scanline = performanceScanlineQuietSpanLimit();
+        return scanline > 0 ? scanline : performanceSteadyQuietSpanLimit();
+    }
+
+    /**
+     * Returns a counter-only PERFORMANCE span in direct mode 3, its HBlank tail, or VBlank.
+     * OAM search deliberately remains scalar so the next line's selected sprite list is still
+     * produced for the scanline compositor. The returned span never crosses a line boundary.
+     */
+    public int performanceQuietSpanLimit() {
+        int raster = performanceRasterQuietSpanLimit();
+        if (raster > 0) {
+            return raster;
+        }
+        if (!performanceScanlineEnabled
+                || !performanceScanlineCapable
+                || performanceObservationBlocked
+                || mutablePpuStateExposed
+                || debugHooks != null
+                || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches()
+                || lcdc.hasPendingConflictLatches()
+                || mode != Mode.HBlank && mode != Mode.VBlank
+                // A scalar/steady PixelTransfer line can still have delayed output pixels in
+                // its HBlank tail. Only a line rendered by the direct compositor has proven
+                // that both machines were abandoned with an empty output tail.
+                || mode == Mode.HBlank && !performanceScanlineLine
+                || !lcdEnabled
+                || !bootCompatibilityResolved
+                || dma == null
+                || dma.isTransferInProgress()
+                || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || gbc && (hdma == null || hdma.hasActiveOrPendingTransfer())) {
+            return 0;
+        }
+        int lineLength = firstLine ? 455 : 456;
+        return Math.max(0, lineLength - ticksInLine - 1);
+    }
+
+    /** Advances a preflighted raster span without entering either PixelTransfer machine. */
+    public boolean advancePerformanceRasterQuietSpan(int ticks) {
+        if (ticks <= 0) {
+            return ticks == 0;
+        }
+        int scanlineLimit = performanceScanlineQuietSpanLimit();
+        if (scanlineLimit > 0) {
+            if (ticks > scanlineLimit) {
+                return false;
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+            if (!gbc) {
+                directOamReadCorruptionThisTick = false;
+                suppressNextDirectOamReadCorruption = false;
+                directOamWriteCorruptionThisTick = false;
+                suppressNextDirectOamWriteCorruption = false;
+            }
+            return true;
+        }
+        return advancePerformanceSteadyQuietSpan(ticks);
+    }
+
+    /** Advances a preflighted direct/HBlank/VBlank span without touching the dot machines. */
+    public boolean advancePerformanceQuietSpan(int ticks) {
+        if (ticks <= 0) {
+            return ticks == 0;
+        }
+        int raster = performanceRasterQuietSpanLimit();
+        if (raster > 0) {
+            return advancePerformanceRasterQuietSpan(ticks);
+        }
+        int limit = performanceQuietSpanLimit();
+        if (limit <= 0 || ticks > limit) {
+            return false;
+        }
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        performanceScanlineFastTicks += ticks;
+        if (!gbc) {
+            directOamReadCorruptionThisTick = false;
+            suppressNextDirectOamReadCorruption = false;
+            directOamWriteCorruptionThisTick = false;
+            suppressNextDirectOamWriteCorruption = false;
+        }
+        return true;
+    }
+
+    /**
+     * Advances a span after Gameboy has already selected and preflighted its cursor kind.
+     *
+     * <p>The owner-thread scheduler is the only caller. Peripheral callbacks in the span do
+     * not mutate PPU/DMA state, so repeating the full raster eligibility scan here only burns
+     * the gain on every three-dot CPU phase. The booleans are captured immediately before the
+     * preflight and fail closed if an unexpected lifecycle callback cleared a cursor.</p>
+     */
+    public void advancePerformanceQuietSpanTrusted(int ticks, boolean directRaster,
+                                                    boolean steadyRaster) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (directRaster && steadyRaster) {
+            throw new IllegalStateException("conflicting PERFORMANCE raster cursor kinds");
+        }
+        if (directRaster) {
+            if (!performanceScanlineCursor) {
+                throw new IllegalStateException("direct PERFORMANCE cursor changed in quiet span");
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        } else if (steadyRaster) {
+            if (!steadyTimingCursor) {
+                throw new IllegalStateException("steady PERFORMANCE cursor changed in quiet span");
+            }
+            steadyTimingTicks += ticks;
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceSteadyFastTicks += ticks;
+        } else {
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        }
+        if (!gbc) {
+            directOamReadCorruptionThisTick = false;
+            suppressNextDirectOamReadCorruption = false;
+            directOamWriteCorruptionThisTick = false;
+            suppressNextDirectOamWriteCorruption = false;
+        }
+    }
+
+    /** Whether the broad line-at-a-time cursor is active. */
+    public boolean isPerformanceScanlineCursorActive() {
+        return performanceScanlineCursor;
+    }
+
+    /**
+     * Advances one dot of an already armed, sprite/window-free PERFORMANCE span.
+     *
+     * <p>The regular {@link #tick()} method has to revisit pending writes, conflict latches,
+     * window checkpoints, the shifted output machine, OAM ownership and the general phase
+     * state on every dot.  Once {@link #canStartSteadyTiming()} has proven that none of those
+     * inputs can change, the background span methods can advance both pixel machines and the
+     * raster counters directly.  Any invalidation falls back to the scalar method after
+     * materializing the deferred prefix.</p>
+     */
+    public Mode tickPerformanceSteady() {
+        if (!steadyTimingCursor || !steadyTimingStillEligible()
+                || performanceObservationBlocked || debugHooks != null
+                || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()) {
+            performanceSteadyFastFallbacks++;
+            return tick();
+        }
+
+        performanceSteadyFastTicks++;
+        timingGeneration++;
+        cpuLyReadAcrossLineEdge = false;
+        if (!gbc) {
+            directOamReadCorruptionThisTick = false;
+            suppressNextDirectOamReadCorruption = false;
+            directOamWriteCorruptionThisTick = false;
+            suppressNextDirectOamWriteCorruption = false;
+        }
+
+        // The cursor is only armed in an enabled normal-speed mode-3 span. A CPU write to
+        // LCDC/SCX/WX/BGP materializes it synchronously before reaching this method, and DMA
+        // generation changes are checked above, so the per-dot conflict/window work is empty.
+        steadyTimingTicks++;
+        ticksInLine++;
+        if (ticksInLine < steadyTimingEndTick) {
+            return null;
+        }
+
+        // Include the boundary's preceding dots in the exact replay before publishing the
+        // mode-3 endpoint. The scalar path uses the same hblank/mode-0 latch values below.
+        int ticks = steadyTimingTicks;
+        boolean output = steadyOutputCursor;
+        steadyTimingCursor = false;
+        steadyTimingTicks = 0;
+        steadyTimingEndTick = 0;
+        steadyOutputCursor = false;
+        steadyTimingDmaGeneration = 0;
+        steadyTimingHdmaGeneration = 0;
+        if (ticks > 0) {
+            pixelTransferPhase.advanceSteadyBackgroundSpan(ticks);
+            if (output) {
+                pixelMachine.advanceSteadyBackgroundOutputSpan(ticks);
+            }
+        }
+
+        Mode oldMode = mode;
+        if (gbc && !firstLine) {
+            mode = Mode.HBlank;
+        } else {
+            pixelTransferDone = true;
+        }
+        hblankIntFrom = ticksInLine
+                + (firstLine || (!gbc && pixelTransferPhase.hasObjectsOnLine()) ? 4 : 2);
+        if (mode0IntFrom == Integer.MAX_VALUE) {
+            mode0IntFrom = hblankIntFrom;
+        }
+        return oldMode == mode ? null : mode;
+    }
+
+    /** Whether the next dot can use the branch-free steady raster update. */
+    public boolean isPerformanceSteadyTickQuiet() {
+        return steadyTimingCursor && steadyTimingStillEligible()
+                && ticksInLine + 1 < steadyTimingEndTick
+                && !performanceObservationBlocked
+                && debugHooks == null
+                && pendingPpuWrites.isEmpty()
+                && !r.hasPendingConflictLatches()
+                && !lcdc.hasPendingConflictLatches();
+    }
+
+    /** Number of following dots that remain strictly inside the deferred steady span. */
+    public int performanceSteadyQuietSpanLimit() {
+        if (!isPerformanceSteadyTickQuiet()) {
+            return 0;
+        }
+        return steadyTimingEndTick - ticksInLine - 1;
+    }
+
+    /**
+     * Advances several invariant background dots in one raster call. The span excludes the
+     * predicted handoff dot; the caller returns to the scalar scheduler for that boundary so
+     * STAT/host frame events retain their ordinary publication ordering. Pixel machines are
+     * deliberately not advanced here: the cursor is a deferred replay, and
+     * {@link #tickPerformanceSteady()} materializes the accumulated span exactly once at the
+     * handoff. Advancing them here as well would replay the same dots a second time.
+     */
+    public boolean advancePerformanceSteadyQuietSpan(int ticks) {
+        if (ticks < 0 || ticks > performanceSteadyQuietSpanLimit()) {
+            return false;
+        }
+        if (ticks == 0) {
+            return true;
+        }
+        steadyTimingTicks += ticks;
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        performanceSteadyFastTicks += ticks;
+        if (!gbc) {
+            directOamReadCorruptionThisTick = false;
+            suppressNextDirectOamReadCorruption = false;
+            directOamWriteCorruptionThisTick = false;
+            suppressNextDirectOamWriteCorruption = false;
+        }
+        return true;
+    }
+
+    /** Whether the speculative background cursor is currently holding a deferred span. */
+    public boolean isPerformanceSteadyCursorActive() {
+        return steadyTimingCursor;
+    }
+
+    /** Number of dots advanced by the PERFORMANCE raster fast path. */
+    public long getPerformanceSteadyFastTicks() {
+        return performanceSteadyFastTicks;
+    }
+
+    /** Number of speculative raster dots that deoptimized to the scalar path. */
+    public long getPerformanceSteadyFastFallbacks() {
+        return performanceSteadyFastFallbacks;
+    }
+
     /** Rephases the CGB CPU-readable PPU latches when the CPU clock mux changes. */
     public void onSpeedSwitch() {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         timingGeneration++;
         prepareForTick();
@@ -822,12 +1358,22 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Refreshes cached PPU timing mode after an owner-thread source change. */
     public void prepareForTick() {
+        // A restored direct cursor is still valid when SpeedMode merely replays the same
+        // serialized clock mode and invokes its listener. Only an actual speed/compatibility
+        // change invalidates the line-start snapshot; preserving the cursor keeps restore
+        // observationally equivalent to an uninterrupted PERFORMANCE run.
+        if (performanceScanlineCursor && timingModeDirty
+                && (speedModeValue != speedMode.getSpeedMode()
+                || dmgCompatValue != speedMode.isDmgCompat())) {
+            disablePerformanceScanlineCursor();
+        }
         materializeSteadyTiming();
         if (timingModeDirty) {
             int newSpeedModeValue = speedMode.getSpeedMode();
             boolean newDmgCompatValue = speedMode.isDmgCompat();
             speedModeValue = newSpeedModeValue;
             dmgCompatValue = newDmgCompatValue;
+            performanceScanlineRenderer.setDmgCompat(newDmgCompatValue);
             pixelTransferPhase.prepareForTick(newSpeedModeValue, newDmgCompatValue);
             pixelMachine.prepareForTick(newSpeedModeValue, newDmgCompatValue);
             timingModeDirty = false;
@@ -836,6 +1382,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
     public void onSpeedSwitchComplete() {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         timingGeneration++;
         speedSwitchCompletedThisLine = true;
@@ -843,6 +1390,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Captures the CPU/PPU phase selected when a double-speed mode-2 IRQ is accepted. */
     public void onDoubleSpeedMode2Dispatch() {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         timingGeneration++;
         doubleSpeedMode2DispatchStatTailThisLine = true;
@@ -961,6 +1509,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     private void exposeMutablePpuState() {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         mutablePpuStateExposed = true;
     }
@@ -1178,6 +1727,33 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Scheduler-only lookahead for a short quiet span. The one-dot checkpoint query is useful
+     * at a scalar boundary, but a three-dot CPU phase must not jump over a future mode/STAT
+     * edge (notably dot 448, the mode-0 edge, or its +2 HALT synchronizer). Keep this deliberately
+     * conservative: callers already cap spans before a line edge, and rejecting the few dots
+     * around every possible checkpoint is much cheaper than replaying a mutated STAT latch.
+     */
+    boolean isStatEventCheckpointWithin(int ticks) {
+        if (ticks <= 0 || !lcdEnabled) {
+            return false;
+        }
+        int lineLength = firstLine ? 455 : 456;
+        int mode0InterruptTick = getMode0InterruptTickForTick();
+        for (int offset = 1; offset <= ticks; offset++) {
+            int candidate = ticksInLine + offset;
+            if (candidate >= lineLength
+                    || candidate < 13
+                    || candidate >= 448
+                    || candidate == mode0InterruptTick
+                    || (line < 144 && mode0InterruptTick != Integer.MAX_VALUE
+                    && candidate == mode0InterruptTick + 2)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
      */
     public void corruptOam(SpriteBug.CorruptionType type) {
@@ -1342,6 +1918,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         materializeSteadyTiming();
         if (!lcdEnabled) {
             return 0;
+        }
+        if (performanceScanlineLine && (mode == Mode.PixelTransfer || mode == Mode.HBlank)) {
+            return mode == Mode.PixelTransfer
+                    ? Mode.PixelTransfer.ordinal() : Mode.HBlank.ordinal();
         }
         if (gbc && !dmgCompatValue) {
             // Gambatte's frame-tail getStat window: native CGB exposes a one-dot
@@ -1727,6 +2307,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     /** Returns the normal-speed STAT mode sampled at the end of a rephased CPU read. */
     int getCpuVisibleStatMode() {
         int visibleMode = getVisibleStatMode();
+        if (performanceScanlineLine) {
+            return visibleMode;
+        }
         if (gbc && !dmgCompatValue && speedModeValue == 1
                 && mode == Mode.HBlank && dma.ownsOamForPpu()
                 && pixelTransferPhase.hasObjectsOnLine()
@@ -2053,6 +2636,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (mode == Mode.PixelTransfer) {
             return gbc && pixelTransferDone;
         }
+        if (performanceScanlineLine && mode == Mode.HBlank) {
+            return !gbc || write || ticksInLine >= hblankIntFrom + 4;
+        }
         if (gbc && mode == Mode.HBlank) {
             if (pixelTransferPhase.hasObjectsOnLine()) {
                 // The object fetch path releases the read latch one dot after the
@@ -2195,6 +2781,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                     ? position <= -16
                     : position >= -8 && position < -4;
         }
+        if (performanceScanlineLine && mode == Mode.HBlank) {
+            return !gbc || write || ticksInLine >= hblankIntFrom + 4;
+        }
         if (gbc && !write && mode == Mode.HBlank) {
             if (followsCpuVramWrite()) {
                 return true;
@@ -2236,6 +2825,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Keeps the VRAM slot owned by a CPU instruction that won HDMA arbitration. */
     public void setCpuRetiringInstructionForHdma(boolean retiring) {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         cpuRetiringInstructionForHdma = retiring;
     }
@@ -2274,6 +2864,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     private void disableLcd() {
+        disablePerformanceScanlineCursor();
+        performanceScanlineLine = false;
+        performanceWindowLineCounter = -1;
         if (!lcdEnabled) {
             return;
         }
@@ -2317,9 +2910,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     private void enableLcd() {
+        disablePerformanceScanlineCursor();
+        performanceScanlineLine = false;
         if (lcdEnabled) {
             return;
         }
+        performanceWindowLineCounter = -1;
         this.line = 0;
         // the line grid is locked to the machine-cycle phase: enabling the LCD starts
         // the line one tick after the LCDC write, matching the power-on grid
@@ -2392,6 +2988,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * Materialization is synchronous so an observer never sees a partially deferred PPU span.
      */
     public void setPerformanceObservationBlocked(boolean blocked) {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         performanceObservationBlocked = blocked;
     }
@@ -2401,7 +2998,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * is deliberately fail-closed and materializes any cursor already armed before the boundary.
      */
     public void setBootCompatibilityResolved(boolean resolved) {
-        materializeSteadyTiming();
+        if (!resolved && bootCompatibilityResolved) {
+            disablePerformanceScanlineCursor();
+            materializeSteadyTiming();
+        }
         bootCompatibilityResolved = resolved;
     }
 
@@ -2411,6 +3011,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * this unset and therefore retain their historical scalar behavior.
      */
     public void setHdma(Hdma hdma) {
+        disablePerformanceScanlineCursor();
         materializeSteadyTiming();
         this.hdma = hdma;
     }
@@ -2583,11 +3184,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public ComponentState<Gpu> captureState() {
+        // Capture is observationally pure. In particular, RewindManager captures can happen
+        // between any two master dots while the approximate renderer has already published a
+        // complete line. Do not deopt the live cursor (which would shorten mode 3 and mutate
+        // STAT/lock state); retain the coarse cursor and marker in the memento instead.
         materializeSteadyTiming();
         ComponentState<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.captureState() : null;
         ComponentState<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.captureState() : null;
 
-        return new GpuState(videoRam0Memento, videoRam1Memento, display.captureState(), lcdc.captureState(), bgPalette.captureState(), oamPalette.captureState(), oamSearchPhase.captureState(), pixelTransferPhase.captureState(), pixelMachine.captureState(), r.captureState(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, capturePendingPpuWrites(), cpuVisiblePpuRegisters.clone());
+        return new GpuState(videoRam0Memento, videoRam1Memento, display.captureState(), lcdc.captureState(), bgPalette.captureState(), oamPalette.captureState(), oamSearchPhase.captureState(), pixelTransferPhase.captureState(), pixelMachine.captureState(), r.captureState(), lcdEnabled, displayEnabledDelay, line, ticksInLine, firstLine, lcdEnableClockPhase, firstFrameAfterLcdEnable, pixelTransferDone, hblankIntFrom, mode0IntFrom, statModeLatchRephasedBySpeedSwitch, speedSwitchCompletedThisLine, lyReadLatchRephasedBySpeedSwitch, scxWrittenThisLine, doubleSpeedMode2DispatchStatTailThisLine, doubleSpeedMode2DispatchCrossedLineEdge, earlyScxStatTailThisLine, wyWrittenThisLine, lateDoubleSpeedLineZeroWindowEnable, lastCpuVramWriteTick, mode, capturePendingPpuWrites(), cpuVisiblePpuRegisters.clone(), performanceWindowLineCounter, performanceScanlineCursor, performanceScanlineLine, performanceScanlineEndTick);
     }
 
     @Override
@@ -2631,7 +3236,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 lastCpuVramWriteTick,
                 mode,
                 capturePendingPpuWrites(),
-                capture.ints(cpuVisiblePpuRegisters));
+                capture.ints(cpuVisiblePpuRegisters),
+                performanceWindowLineCounter,
+                performanceScanlineCursor,
+                performanceScanlineLine,
+                performanceScanlineEndTick);
     }
 
     private List<PendingPpuWriteState> capturePendingPpuWrites() {
@@ -2664,9 +3273,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 mem.pixelMachineMemento != null
                         ? mem.pixelMachineMemento
                         : mem.pixelTransferPhaseMemento);
+        validatePerformanceCursorState(mem);
 
         // Candidate dot-machine shapes are now proven. Canonicalize the current private cursor
         // only after that preflight; the incoming state will replace both machines below.
+        disablePerformanceScanlineCursor();
+        // Canonicalize only the current target cursor. The incoming direct-line marker and
+        // cursor are restored below after the component state has been installed.
+        performanceScanlineLine = false;
         materializeSteadyTiming();
 
         if (videoRam0 instanceof Ram) {
@@ -2714,6 +3328,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.cpuRetiringInstructionForHdma = false;
         this.cpuLyReadAcrossLineEdge = false;
         this.mode = mem.mode;
+        performanceScanlineCursor = mem.performanceScanlineCursor;
+        performanceScanlineEndTick = mem.performanceScanlineEndTick;
+        performanceScanlineLine = mem.performanceScanlineLine;
+        this.performanceWindowLineCounter = mem.performanceWindowLineCounter;
         pendingPpuWrites.clear();
         if (mem.pendingPpuWrites != null) {
             mem.pendingPpuWrites.stream()
@@ -2739,6 +3357,26 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         timingGeneration++;
     }
 
+    private void validatePerformanceCursorState(GpuState state) {
+        if (state.performanceWindowLineCounter < -1) {
+            throw new IllegalArgumentException("Invalid PERFORMANCE window line counter");
+        }
+        int lineLength = state.firstLine ? 455 : 456;
+        if (state.performanceScanlineCursor) {
+            if (state.mode != Mode.PixelTransfer || !state.performanceScanlineLine
+                    || state.performanceScanlineEndTick <= state.ticksInLine
+                    || state.performanceScanlineEndTick >= lineLength) {
+                throw new IllegalArgumentException("Invalid active PERFORMANCE scanline cursor");
+            }
+        } else if (state.performanceScanlineEndTick != 0) {
+            throw new IllegalArgumentException("Inactive PERFORMANCE cursor retains an endpoint");
+        }
+        if (state.performanceScanlineLine
+                && state.mode != Mode.PixelTransfer && state.mode != Mode.HBlank) {
+            throw new IllegalArgumentException("Invalid PERFORMANCE line marker");
+        }
+    }
+
     private record GpuState(ComponentState<Ram> videoRam0Memento, ComponentState<Ram> videoRam1Memento,
                               ComponentState<Display> displayMemento, ComponentState<Lcdc> lcdcMemento,
                               ComponentState<ColorPalette> bgPaletteMemento, ComponentState<ColorPalette> oamPaletteMemento,
@@ -2761,7 +3399,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                               boolean lateDoubleSpeedLineZeroWindowEnable,
                               int lastCpuVramWriteTick, Mode mode,
                               List<PendingPpuWriteState> pendingPpuWrites,
-                              int[] cpuVisiblePpuRegisters) implements ComponentState<Gpu> {
+                              int[] cpuVisiblePpuRegisters,
+                              int performanceWindowLineCounter,
+                              boolean performanceScanlineCursor,
+                              boolean performanceScanlineLine,
+                              int performanceScanlineEndTick) implements ComponentState<Gpu> {
     }
 
     /** Importer-only compatibility record for released local snapshots. */

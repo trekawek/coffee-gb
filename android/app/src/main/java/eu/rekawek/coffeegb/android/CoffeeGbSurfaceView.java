@@ -53,6 +53,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint displayPaint = new Paint();
+    /** Paint for the already-rasterized skin/matte layer.  It must not filter an exact-size blit. */
+    private final Paint staticLayerPaint = new Paint();
     private final Paint skinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint transientPanelPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint transientTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -89,6 +91,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         super(context);
         videoPaint.setFilterBitmap(false);
         displayPaint.setColor(Color.BLACK);
+        staticLayerPaint.setFilterBitmap(false);
         skinPaint.setFilterBitmap(true);
         transientPanelPaint.setColor(Color.argb(210, 0, 0, 0));
         transientTextPaint.setColor(Color.WHITE);
@@ -459,6 +462,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         return height >= width ? portraitSkin : landscapeSkin;
     }
 
+    /** Package-private seam for verifying that a static layer is invalidated on resize/rotation. */
+    static boolean staticLayerMatches(Bitmap layer, int cachedWidth, int cachedHeight,
+            RasterSkin cachedSkin, int width, int height, RasterSkin skin) {
+        return layer != null && cachedWidth == width && cachedHeight == height
+                && cachedSkin == skin;
+    }
+
     /** Applies Android's non-disruptive game frame-rate hint once for this Surface lifecycle. */
     private void applySurfaceFrameRateHint(SurfaceHolder holder) {
         if (surfaceFrameRateHintApplied) {
@@ -481,6 +491,18 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private final SurfaceHolder holder;
         private boolean running = true;
         private boolean frameAvailable;
+        /**
+         * The baked skin is unchanged for the lifetime of a Surface and used to be scaled and
+         * composited on every game frame. Keep one exact-size transparent overlay per renderer
+         * so the hot path can blit it after the 160x144 frame and transient UI.
+         *
+         * <p>The cache lives on the renderer rather than the View: a Surface recreation gets a
+         * fresh cache and the old potentially-large bitmap becomes collectible with its thread.
+         */
+        private Bitmap staticLayer;
+        private int staticLayerWidth;
+        private int staticLayerHeight;
+        private RasterSkin staticLayerSkin;
         /** Hardware Canvas is preferred, but one failed lock permanently selects the safe fallback
          * for this short-lived renderer. A new Surface gets a fresh RenderThread. */
         private boolean hardwareCanvasAvailable = true;
@@ -615,10 +637,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 return false;
             }
             try {
-                canvas.drawColor(CANVAS_MATTE);
                 RasterSkin skin = skinFor(canvas.getWidth(), canvas.getHeight());
                 SkinTransform transform = skin.transform(canvas.getWidth(), canvas.getHeight());
                 RectF display = skin.displayBounds(transform);
+                canvas.drawColor(CANVAS_MATTE);
                 canvas.drawRect(display, displayPaint);
                 if (frame != null) {
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
@@ -638,11 +660,33 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     menuRenderer.draw(canvas, menu, display);
                 }
                 drawTransientMessage(canvas, display);
-                skin.draw(canvas, skinPaint, transform);
+                drawCachedSkin(canvas, skin, transform);
             } finally {
                 holder.unlockCanvasAndPost(canvas);
             }
             return true;
+        }
+
+        /**
+         * Draws the immutable skin overlay. This is intentionally exact in view coordinates:
+         * the only scaled operation is performed once when a Surface or orientation changes,
+         * instead of once per submitted game frame. Matte and aperture fills stay before the
+         * video/menu layers, while this cached overlay retains the original final compositing
+         * order and masks the same rounded corners.
+         */
+        private void drawCachedSkin(Canvas canvas, RasterSkin skin, SkinTransform transform) {
+            int width = canvas.getWidth();
+            int height = canvas.getHeight();
+            if (!staticLayerMatches(staticLayer, staticLayerWidth, staticLayerHeight,
+                    staticLayerSkin, width, height, skin)) {
+                staticLayer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                staticLayerWidth = width;
+                staticLayerHeight = height;
+                staticLayerSkin = skin;
+                Canvas layerCanvas = new Canvas(staticLayer);
+                skin.draw(layerCanvas, skinPaint, transform);
+            }
+            canvas.drawBitmap(staticLayer, 0, 0, staticLayerPaint);
         }
 
         /**

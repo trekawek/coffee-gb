@@ -1,12 +1,14 @@
 package eu.rekawek.coffeegb.core.rtc;
 
 import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource;
 import org.junit.Before;
 import org.junit.Test;
 
 import java.util.concurrent.TimeUnit;
+import java.util.Random;
 
 import static org.junit.Assert.*;
 
@@ -225,6 +227,42 @@ public class RealTimeTimeSourceTest {
         rtc.setSeconds(59);
         tick(Gameboy.TICKS_PER_SEC);
         assertClockEquals(0, 0, 0, 0);
+    }
+
+    @Test
+    public void performanceRtcSpanMatchesScalarTicksAcrossRandomRollovers() {
+        // A deliberately small deterministic clock makes second/minute/day boundaries reachable
+        // without spending millions of test ticks.  The arithmetic path must still retain the
+        // same masked-register and halt semantics as the scalar oscillator.
+        ClockSpec spec = new ClockSpec(97, 1, 1);
+        Random random = new Random(0x5eedc0deL);
+        for (int seed = 0; seed < 32; seed++) {
+            RealTimeClock scalar = new RealTimeClock(new VirtualTimeSource(), spec);
+            RealTimeClock bulk = new RealTimeClock(new VirtualTimeSource(), spec);
+            scalar.setDayCounter(random.nextInt(0x400));
+            bulk.setDayCounter(scalar.getDayCounter());
+            scalar.setHours(random.nextInt(0x40));
+            bulk.setHours(scalar.getHours());
+            scalar.setMinutes(random.nextInt(0x80));
+            bulk.setMinutes(scalar.getMinutes());
+            scalar.setSeconds(random.nextInt(0x80));
+            bulk.setSeconds(scalar.getSeconds());
+            scalar.setCounterOverflow((seed & 1) != 0);
+            bulk.setCounterOverflow(scalar.isCounterOverflow());
+
+            for (int round = 0; round < 24; round++) {
+                boolean halt = random.nextBoolean();
+                scalar.setHalt(halt);
+                bulk.setHalt(halt);
+                int ticks = 1 + random.nextInt(240);
+                for (int i = 0; i < ticks; i++) {
+                    scalar.tick();
+                }
+                bulk.tickPerformanceQuietSpan(ticks);
+                assertEquals("seed=" + seed + ", round=" + round,
+                        scalar.captureState(), bulk.captureState());
+            }
+        }
     }
 
     @Test

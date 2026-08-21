@@ -16,6 +16,9 @@ import org.slf4j.LoggerFactory;
 
 public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
+    /** Keep the component-side bulk contract bounded like the normal-speed CPU phase. */
+    private static final int PERFORMANCE_MAX_QUIET_SPAN = 3;
+
     private static final Logger LOG = LoggerFactory.getLogger(SerialPort.class);
 
     private transient SerialEndpoint serialEndpoint = SerialEndpoint.NULL_ENDPOINT;
@@ -76,6 +79,74 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         for (int i = 0; i < speed; i++) {
             tickCpuClock();
         }
+    }
+
+    /**
+     * Returns the largest exact PERFORMANCE span for an idle link port.
+     *
+     * <p>The NULL endpoint has no wall-clock work and a stopped transfer has no serial edge to
+     * deliver.  In that state the only serial state which advances is the free-running 8-bit
+     * phase.  External endpoints, active transfers, HALT wake delay, debug hooks, and the
+     * interrupt acknowledge path remain scalar so endpoint callbacks and trace ordering cannot
+     * be observed late.</p>
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0
+                || speedMode.getSpeedMode() != 1
+                || serialEndpoint != SerialEndpoint.NULL_ENDPOINT
+                || (sc & 0x80) != 0
+                || haltWakeDelay != 0
+                || debugHooks != null) {
+            return 0;
+        }
+        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    /** Returns the largest safe span using the scheduler's normal three-clock bound. */
+    public int performanceQuietSpanLimit() {
+        return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    /** True when the requested span can be applied by {@link #tickPerformanceQuietSpan(int)}. */
+    public boolean canTickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /**
+     * Advances an idle NULL-endpoint serial port without entering its per-clock callback path.
+     * A pending acknowledge is consumed at the same beginning-of-tick boundary as scalar
+     * execution; no active transfer exists in an eligible span, so this cannot create a hidden
+     * shift or completion event.
+     *
+     * @return false without mutation when the state is not exactly bulk-safe
+     */
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (!canTickPerformanceQuietSpan(ticks)) {
+            return false;
+        }
+        acknowledgeInterruptIfNeeded();
+        serialClocks = (serialClocks + ticks) & 0xff;
+        return true;
+    }
+
+    /** Applies a span after the caller has already passed {@link #canTickPerformanceQuietSpan(int)}. */
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Serial quiet span is not eligible: " + ticks);
+        }
+    }
+
+    /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */
+    public boolean advancePerformanceQuietSpan(int ticks) {
+        return tickPerformanceQuietSpan(ticks);
+    }
+
+    /** Trusted naming alias for schedulers which use the GPU's advance-oriented vocabulary. */
+    public void advancePerformanceQuietSpanTrusted(int ticks) {
+        tickPerformanceQuietSpanTrusted(ticks);
     }
 
     private void acknowledgeInterruptIfNeeded() {
