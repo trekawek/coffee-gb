@@ -93,6 +93,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case HIDDEN_MMM01 -> new Mmm01(rom, battery, false);
             case MANI_32K_MULTICART -> new Mani32kMulticart(rom);
             case SL_MULTICART -> new SlMulticart(rom, battery);
+            case UNLICENSED_256M -> new Unlicensed256M(
+                    rom, battery, rtcTimeSource, clockSpec);
             case DUZ_MULTICART -> new DuzMulticart(rom, battery);
             case BHGOS_MULTICART -> new BhgosMulticart(rom, battery);
             case MAKON_NT_OLD_2 -> new MakonNtOld2(rom, battery);
@@ -288,7 +290,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
      * The regular validation remains strict once the mapper state has been restored.
      */
     public void validateRtcRuntimeStateForRestoreCandidate(RealTimeClock.RuntimeState state) {
-        if (addressSpace instanceof Mbc5Multicart) {
+        if (addressSpace instanceof Mbc5Multicart
+                || addressSpace instanceof Unlicensed256M) {
             if (state != null) {
                 validateRtcPauseBoundary(state);
             }
@@ -316,6 +319,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             return mbc3;
         }
         if (addressSpace instanceof Mbc5Multicart multicart) {
+            return multicart.getActiveMbc3();
+        }
+        if (addressSpace instanceof Unlicensed256M multicart) {
             return multicart.getActiveMbc3();
         }
         return null;
