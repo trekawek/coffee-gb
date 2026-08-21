@@ -228,6 +228,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private transient int steadyTimingTicks;
     private transient int steadyTimingEndTick;
     private transient boolean steadyOutputCursor;
+    private transient long steadyTimingDmaGeneration;
+    private transient long steadyTimingHdmaGeneration;
 
     // Public mutable component accessors predate the performance executor. Once one of those
     // aliases escapes, a later write cannot be observed by Gpu, so this session stays scalar.
@@ -859,12 +861,19 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             steadyTimingTicks++;
             return true;
         }
+        // Most dots cannot arm a steady span. Keep the full predicate off this hot path;
+        // only the exact fetch-start boundary can begin one.
+        if (!performanceSteadyTiming || mode != Mode.PixelTransfer || ticksInLine != 80) {
+            return false;
+        }
         if (!canStartSteadyTiming()) {
             return false;
         }
         steadyTimingCursor = true;
         steadyTimingTicks = 1;
         steadyTimingEndTick = 248 + (r.get(SCX) & 7);
+        steadyTimingDmaGeneration = dma == null ? 0 : dma.getPpuBusGeneration();
+        steadyTimingHdmaGeneration = hdma == null ? 0 : hdma.getPpuBusGeneration();
         // The ordinary CGB compatibility row is independently gated by canStartSteadyTiming()
         // (CGB profile, normal speed, resolved boot handoff, and no mutable/observable state).
         // Its shifted ColorPixelFifo owns the DMG BGP/OBP remap and CGB palette lookup, so it
@@ -923,13 +932,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     private boolean steadyTimingStillEligible() {
-        // All emulator-owned invalidators materialize synchronously. DMA is the one external
-        // owner that can change without entering Gpu, so this is intentionally the only live
-        // per-dot eligibility check after the span has been armed.
-        return !dma.isTransferInProgress()
-                && !dma.ownsOamForPpu()
-                && !dma.hasPpuOamOwnershipTransitionThisTick()
-                && (!gbc || (hdma != null && !hdma.hasActiveOrPendingTransfer()));
+        // All emulator-owned invalidators materialize synchronously. The two DMA engines are
+        // the only owners that can change bus state without entering Gpu, so compare their
+        // cheap transient generations after paying the full predicates at arm time.
+        return (dma == null || dma.getPpuBusGeneration() == steadyTimingDmaGeneration)
+                && (hdma == null || hdma.getPpuBusGeneration() == steadyTimingHdmaGeneration);
     }
 
     /** Materializes the transient cursor before any observer, write, or state boundary. */
@@ -943,6 +950,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         steadyTimingTicks = 0;
         steadyTimingEndTick = 0;
         steadyOutputCursor = false;
+        steadyTimingDmaGeneration = 0;
+        steadyTimingHdmaGeneration = 0;
         if (ticks > 0) {
             pixelTransferPhase.advanceSteadyBackgroundSpan(ticks);
             if (output) {

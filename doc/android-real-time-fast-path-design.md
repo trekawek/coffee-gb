@@ -395,6 +395,30 @@ transfers, and 1,424 audio buffers with identical hashes: DMG `2e7fc66e75da1265`
 differential coverage passed 31/31 tests, and the full core suite passed 1,666 tests with 8
 expected skips. No SGB command, frame/audio work, or cadence behavior changed.
 
+**Tenth retained slice (2026-08-21):** The guarded steady-timing cursor now hoists its only
+possible arm point (`PixelTransfer`, line tick 80) ahead of the full predicate. Once armed, it
+compares transient Dma and Hdma bus generations instead of polling their full per-dot ownership
+predicates. The complete predicates still run when the cursor is armed; actual OAM/VRAM-DMA
+start, active tick, stop, completion, speed-rephase, and restore boundaries advance the relevant
+generation. Idle HDMA callbacks do not invalidate the cursor. A changed generation materializes
+the cursor and resumes scalar Accuracy ordering. The generations are session-transient and are
+not memento fields.
+
+The measured keep gate for this slice used synthetic repository-owned DMG/MGB loop fixtures with
+visible output and audio enabled, 5,000,000-T warm-up, 20,000,000-T measured windows, and four
+fresh-JVM samples per row with the DMG/MGB order alternated each pair. Clean `f7c88d46`
+PERFORMANCE medians were 55.9084 ns/T (DMG) and 55.9021 ns/T (MGB); the candidate medians were
+54.5075 ns/T and 54.2612 ns/T, respectively, for gains of **+2.57%** and **+3.03%**. Every run
+produced 285 physical frames. The current policy retains a slice when the controlled paired
+median improves by at least 2.5% on one exercised required row, with no exact-output, cadence,
+or material regression on the other exercised rows. No overclocking, frame skipping, audio
+suppression, or frontend pacing change is part of this slice.
+
+Focused generation/differential coverage passed 110/110 tests. The seven-row smoke is the
+31-test `PerformanceSteadyBackgroundDifferentialTest` covering DMG, MGB, native CGB, CGB0,
+CGB DMG-compatibility, SGB, and SGB2; it matched frame/audio/VRAM/SGB hashes, physical event
+counts, and cadence. The full core suite passed 1,668 tests with 8 expected skips.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.
