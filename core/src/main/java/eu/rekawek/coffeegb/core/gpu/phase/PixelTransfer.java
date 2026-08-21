@@ -483,6 +483,46 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
     }
 
+    /**
+     * Replays a deferred DMG background span after the GPU's coarse performance cursor reaches
+     * an observation boundary.  The caller has already proved that this is the unshifted
+     * scalar machine on a normal-speed, no-sprite/no-window line; keeping that proof outside the
+     * loop removes the branch-heavy general PixelTransfer path without changing its canonical
+     * Fetcher/FIFO state.
+     */
+    public void advanceSteadyBackgroundSpan(int ticks) {
+        if (!timingSkeleton || gbc || !(fifo instanceof ScalarTimingDmgPixelFifo)
+                || ticks < 0) {
+            throw new IllegalStateException("Invalid steady DMG timing span");
+        }
+        for (int i = 0; i < ticks; i++) {
+            fifo.outputTick();
+            renderSteadyBackgroundPixel();
+            fetcher.advanceSteadyBackground(position);
+        }
+    }
+
+    private void renderSteadyBackgroundPixel() {
+        if (position >= -16 && position <= -9) {
+            if ((position & 7) == (outputScx & 7)) {
+                position = -8;
+            } else if (position == -9) {
+                fifo.dropPixel();
+                position = -16;
+                return;
+            }
+        }
+        if (position < 0) {
+            fifo.dropPixel();
+            position++;
+            return;
+        }
+        if (position < 160) {
+            fifo.putPixelToScreen();
+            position++;
+        }
+    }
+
     public DmgPixelFifo.RuntimeState captureDmgFifoRuntimeState() {
         if (fifo instanceof DmgPixelFifo dmgFifo) {
             return dmgFifo.captureRuntimeState();
@@ -706,6 +746,10 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         return !pendingWindowDisplayWrites.isEmpty();
     }
 
+    public boolean hasDelayedWindowXWrite() {
+        return !pendingWindowXWrites.isEmpty();
+    }
+
     boolean isWindowDisplay() {
         return windowDisplayOverride >= 0
                 ? windowDisplayOverride != 0 : lcdc.isWindowDisplay();
@@ -835,7 +879,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         return windowYTriggered || windowWy == r.get(LY);
     }
 
-    boolean isWindowYTriggered() {
+    public boolean isWindowYTriggered() {
         return windowYTriggered;
     }
 

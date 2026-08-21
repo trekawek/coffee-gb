@@ -269,7 +269,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         statRegister = new StatRegister(interruptManager);
         gpu = new Gpu(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
                 configuration.mealybugDmgBlob,
-                cartridgeProperties.has(CartridgeProperties.Feature.EARLY_CGB_LY_READ_EDGE));
+                cartridgeProperties.has(CartridgeProperties.Feature.EARLY_CGB_LY_READ_EDGE),
+                executionMode, hardwareProfile, configuration.debugHistoryReplay);
         mmu.setGpu(gpu);
         statRegister.init(gpu);
         hdma = new Hdma(getAddressSpace(), speedMode);
@@ -465,10 +466,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 expanded |= 0x03;
             }
         }
-        gpu.getVideoRam0().setByte(address, expanded);
-        gpu.getVideoRam0().setByte(address + 1, 0);
-        gpu.getVideoRam0().setByte(address + 2, expanded);
-        gpu.getVideoRam0().setByte(address + 3, 0);
+        gpu.writeVideoRam0ForCore(address, expanded);
+        gpu.writeVideoRam0ForCore(address + 1, 0);
+        gpu.writeVideoRam0ForCore(address + 2, expanded);
+        gpu.writeVideoRam0ForCore(address + 3, 0);
         return address + 4;
     }
 
@@ -484,7 +485,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // logo residue in its 16 data bytes. Do not sanitize any other cartridge or
             // any other part of VRAM: boot-state-dependent software still sees hardware.
             for (int address = 0x80a0; address < 0x80b0; address++) {
-                gpu.getVideoRam0().setByte(address, 0);
+                gpu.writeVideoRam0ForCore(address, 0);
             }
             blankCgbBootTilePending = false;
         }
@@ -493,7 +494,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // the visible strings, but never clears the boot logo's tile-map entries.
             // Period emulators launched it from a zeroed map, which is its intended UI.
             for (int address = 0x9800; address < 0xa000; address++) {
-                gpu.getVideoRam0().setByte(address, 0);
+                gpu.writeVideoRam0ForCore(address, 0);
             }
             clearBootTilemapPending = false;
         }
@@ -1017,14 +1018,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 timer.getDebugTac(), timer.isDebugOverflowPending(),
                 timer.getDebugOverflowDelayTicks());
 
-        var gpuRegisters = gpu.getRegisters();
         DebugPpuState debugPpu = new DebugPpuState(
                 gpu.isLcdEnabled(), toDebugPpuMode(), gpu.getLine(),
-                Math.max(0, gpu.getTicksInLine()), gpu.getLcdc().get(),
+                Math.max(0, gpu.getTicksInLine()), gpu.getLcdcValueForCore(),
                 statRegister.getByte(0xff41),
-                gpuRegisters.get(GpuRegister.SCY), gpuRegisters.get(GpuRegister.SCX),
-                gpuRegisters.get(GpuRegister.LYC), gpuRegisters.get(GpuRegister.WY),
-                gpuRegisters.get(GpuRegister.WX));
+                gpu.getRegisterValueForCore(GpuRegister.SCY),
+                gpu.getRegisterValueForCore(GpuRegister.SCX),
+                gpu.getRegisterValueForCore(GpuRegister.LYC),
+                gpu.getRegisterValueForCore(GpuRegister.WY),
+                gpu.getRegisterValueForCore(GpuRegister.WX));
 
         int nr50 = sound.getByte(0xff24);
         int nr51 = sound.getByte(0xff25);
@@ -1162,7 +1164,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         int key0 = cgbHardware ? speedMode.getByte(0xff4c) : -1;
         int key1 = cgbHardware ? speedMode.getByte(0xff4d) : -1;
         int vbk = cgbHardware
-                ? 0xfe | (gpu.getRegisters().get(GpuRegister.VBK) & 1) : -1;
+                ? 0xfe | (gpu.getRegisterValueForCore(GpuRegister.VBK) & 1) : -1;
         int svbk = cgbHardware ? mmu.getDebugSvbk() : -1;
         int opri = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff6c) : -1;
         int ff72 = cgbHardware ? mmu.getDebugUndocumentedGbcRegister(0xff72) : -1;

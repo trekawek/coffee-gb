@@ -116,6 +116,11 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
                 || pendingMixValues[GpuRegister.WX.ordinal()] >= 0;
     }
 
+    /** Whether a write-conflict value is still waiting for a PPU tick. */
+    boolean hasPendingConflictLatches() {
+        return conflictTickNeeded || hasConflictLatch();
+    }
+
     public void put(GpuRegister reg, int value) {
         values[reg.ordinal()] = value;
     }

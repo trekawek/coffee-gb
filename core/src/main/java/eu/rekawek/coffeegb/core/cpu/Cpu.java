@@ -1065,7 +1065,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             // sampled from that bus, not the gated CPU read value.
             int pc = registers.getPC();
             if (gpu != null && pc >= 0x8000 && pc < 0xa000) {
-                haltPrefetchedOpcode = gpu.getVideoRam().getByte(pc);
+                haltPrefetchedOpcode = gpu.readSelectedVideoRamForCore(pc);
             }
             haltOpcodePrefetchValid = true;
         }

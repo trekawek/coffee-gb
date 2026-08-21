@@ -88,6 +88,11 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         return ((mixValue >= 0 ? mixValue : value) & 0x02) != 0;
     }
 
+    /** Whether an LCDC conflict or tile-select strobe is still waiting for a PPU tick. */
+    boolean hasPendingConflictLatches() {
+        return mixValue >= 0 || pendingMixValue >= 0 || tileSelectGlitchWrite;
+    }
+
     /** Called once per GPU tick: the mix value lives for the single tick after the write. */
     void tickConflicts() {
         dmgBlobBackgroundEnable = pendingDmgBlobBackgroundEnable;

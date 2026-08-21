@@ -411,6 +411,70 @@ public class Fetcher implements StatefulComponent<Fetcher> {
     }
 
     /**
+     * Advances the DMG background fetcher for a proven steady, window-free line.
+     *
+     * <p>The regular method deliberately carries all live window, CGB, object-fetch, and
+     * write-conflict cases on every dot.  The performance timing cursor calls this method only
+     * after hoisting those guards for the whole deferred span.  It is intentionally DMG-only:
+     * the caller must keep the shifted output machine on its ordinary path and must materialize
+     * before any register or memory observer.</p>
+     */
+    public void advanceSteadyBackground(int position) {
+        switch (state) {
+            case GET_TILE_T1:
+                sampleXBase(position, false, false);
+                state = GET_TILE_T2;
+                break;
+            case GET_TILE_T2:
+                state = GET_TILE_DATA_LOW_T1;
+                break;
+            case GET_TILE_DATA_LOW_T1:
+                state = GET_TILE_DATA_LOW_T2;
+                break;
+            case GET_TILE_DATA_LOW_T2:
+                sampleX(false);
+                sampleY(false, -1);
+                tileMapAddress = lcdc.getBgTileMapDisplay() + tileMapOffset;
+                tileId = videoRam0.getByte(tileMapAddress);
+                tileAttributes = TileAttributes.EMPTY;
+                state = GET_TILE_DATA_HIGH_T1;
+                break;
+            case GET_TILE_DATA_HIGH_T1:
+                state = GET_TILE_DATA_HIGH_T2;
+                break;
+            case GET_TILE_DATA_HIGH_T2:
+                tileData1 = getTileData(tileId, effectiveY(false, -1) & 7, 0,
+                        lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(),
+                        TileAttributes.EMPTY, 8);
+                data2Pending = true;
+                data2TileSelectGlitch = false;
+                data2Delay = fifo.getLength() != 0 ? 2 : 0;
+                state = PUSH;
+                // The high-byte read and the push share this dot when the FIFO is empty.
+                if (fifo.getLength() == 0) {
+                    readData2(false, -1);
+                    fifo.enqueue8Pixels(zip(tileData1, tileData2, false), TileAttributes.EMPTY);
+                    state = GET_TILE_T1;
+                }
+                break;
+            case PUSH:
+                if (data2Pending && --data2Delay <= 0) {
+                    readData2(false, -1);
+                }
+                if (fifo.getLength() == 0) {
+                    if (data2Pending) {
+                        readData2(false, -1);
+                    }
+                    fifo.enqueue8Pixels(zip(tileData1, tileData2, false), TileAttributes.EMPTY);
+                    state = GET_TILE_T1;
+                }
+                break;
+            default:
+                throw new IllegalStateException("Unknown fetcher state: " + state);
+        }
+    }
+
+    /**
      * The DMG recomputes the fetch line from LY+SCY at the data reads; the CGB (rev D and
      * later) uses the value cached at the tile index fetch.
      */

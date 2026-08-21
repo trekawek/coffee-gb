@@ -234,6 +234,22 @@ the affected dot; no frame is published from an uncommitted line.
 **Tests/measurement:** Mealybug, DMG acid, CGB acid/GBC hardware, CGB0 timing, SGB border/transfer,
 mid-line write differential traces, save/restore at every line event, and per-row measurements.
 
+**First retained slice (2026-08-21):** PERFORMANCE may defer and replay only the unshifted DMG
+timing skeleton for a normal-speed, sprite-free, window-free steady background line on the DMG
+and MGB profiles. The shifted pixel-producing machine, output delay, frame publication, APU, CPU,
+DMA observation, and master-tick cadence still run once per T. Writes, reads/observers, DMA
+ownership, delayed PPU writes, FIFO deoptimization, window history, save/restore, and mutable
+component alias escape materialize or disable the slice before it can affect canonical state.
+Every other profile and line shape remains scalar.
+
+The keep gate used a synthetic in-memory loop with visible output and all four APU channels
+enabled: 5,000,000 warm-up T followed by 30,000,000 measured T, six interleaved samples per mode.
+All samples produced 427 physical frames. Median throughput was 17.952M T/s in ACCURACY versus
+18.694M T/s in PERFORMANCE on DMG (+4.13%), and 18.173M versus 18.682M T/s on MGB (+2.80%).
+Differential coverage compares full canonical state at arm, uninterrupted full-span endpoints,
+line boundaries, invalidating writes, retained aliases, window-history fallback, cross-mode
+restore continuation, visible-frame hashes, and audio-buffer hashes.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.
