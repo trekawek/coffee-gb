@@ -22,6 +22,7 @@ public final class CartridgeProperties {
         HIDDEN_MMM01,
         MANI_32K_MULTICART,
         SL_MULTICART,
+        UNLICENSED_256M,
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
@@ -115,6 +116,8 @@ public final class CartridgeProperties {
                     Mapper.MANI_32K_MULTICART),
             mapper("SL multicart", CartridgeProperties::isSlMulticart,
                     Mapper.SL_MULTICART),
+            mapper("Unlicensed 256M multicart", CartridgeProperties::isUnlicensed256m,
+                    Mapper.UNLICENSED_256M),
             mapper("Duz multicart", CartridgeProperties::isDuzMulticart,
                     Mapper.DUZ_MULTICART),
             mapper("Blue Hippo G.B.O.S. multicart", CartridgeProperties::isBhgosMulticart,
@@ -396,6 +399,18 @@ public final class CartridgeProperties {
                 || info.data.length == 0x1000000)
                 && info.title().startsWith("TIMER MONSTER");
         return pokemon36In1 || vastFameMulticart;
+    }
+
+    private static boolean isUnlicensed256m(RomInfo info) {
+        int[] entry = {0x00, 0xc3, 0x00, 0x40};
+        return info.data.length == 0x400000
+                && "GB HiCol".equals(info.title())
+                && matches(info.data, 0x0100, entry)
+                && info.hasValidLogo()
+                && info.byteAt(0x0143) == 0x80
+                && info.rawType() == 0x03
+                && info.byteAt(0x0148) == 0x01
+                && info.byteAt(0x0149) == 0x00;
     }
 
     private static boolean isBhgosMulticart(RomInfo info) {
