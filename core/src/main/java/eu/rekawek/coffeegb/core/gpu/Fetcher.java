@@ -411,13 +411,13 @@ public class Fetcher implements StatefulComponent<Fetcher> {
     }
 
     /**
-     * Advances the DMG background fetcher for a proven steady, window-free line.
+     * Advances the background fetcher for a proven steady, window-free line.
      *
      * <p>The regular method deliberately carries all live window, CGB, object-fetch, and
-     * write-conflict cases on every dot.  The performance timing cursor calls this method only
-     * after hoisting those guards for the whole deferred span.  It is intentionally DMG-only:
-     * the caller must keep the shifted output machine on its ordinary path and must materialize
-     * before any register or memory observer.</p>
+     * write-conflict cases on every dot. The performance timing cursor calls this method only
+     * after hoisting those guards for the whole deferred span. CGB map attributes and banked
+     * tile reads remain on this exact path; only payload construction is omitted by its scalar
+     * FIFO. The caller must materialize before any register or memory observer.</p>
      */
     public void advanceSteadyBackground(int position) {
         switch (state) {
@@ -432,11 +432,15 @@ public class Fetcher implements StatefulComponent<Fetcher> {
                 state = GET_TILE_DATA_LOW_T2;
                 break;
             case GET_TILE_DATA_LOW_T2:
-                sampleX(false);
+                if (!gbc) {
+                    sampleX(false);
+                }
                 sampleY(false, -1);
                 tileMapAddress = lcdc.getBgTileMapDisplay() + tileMapOffset;
                 tileId = videoRam0.getByte(tileMapAddress);
-                tileAttributes = TileAttributes.EMPTY;
+                tileAttributes = gbc
+                        ? TileAttributes.valueOf(videoRam1.getByte(tileMapAddress))
+                        : TileAttributes.EMPTY;
                 state = GET_TILE_DATA_HIGH_T1;
                 break;
             case GET_TILE_DATA_HIGH_T1:
@@ -445,7 +449,7 @@ public class Fetcher implements StatefulComponent<Fetcher> {
             case GET_TILE_DATA_HIGH_T2:
                 tileData1 = getTileData(tileId, effectiveY(false, -1) & 7, 0,
                         lcdc.getBgWindowTileData(), lcdc.isBgWindowTileDataSigned(),
-                        TileAttributes.EMPTY, 8);
+                        tileAttributes, 8);
                 data2Pending = true;
                 data2TileSelectGlitch = false;
                 data2Delay = fifo.getLength() != 0 ? 2 : 0;
@@ -453,7 +457,8 @@ public class Fetcher implements StatefulComponent<Fetcher> {
                 // The high-byte read and the push share this dot when the FIFO is empty.
                 if (fifo.getLength() == 0) {
                     readData2(false, -1);
-                    fifo.enqueue8Pixels(zip(tileData1, tileData2, false), TileAttributes.EMPTY);
+                    fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()),
+                            tileAttributes);
                     state = GET_TILE_T1;
                 }
                 break;
@@ -465,7 +470,8 @@ public class Fetcher implements StatefulComponent<Fetcher> {
                     if (data2Pending) {
                         readData2(false, -1);
                     }
-                    fifo.enqueue8Pixels(zip(tileData1, tileData2, false), TileAttributes.EMPTY);
+                    fifo.enqueue8Pixels(zip(tileData1, tileData2, tileAttributes.isXflip()),
+                            tileAttributes);
                     state = GET_TILE_T1;
                 }
                 break;

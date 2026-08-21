@@ -738,6 +738,18 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         } else return !hblankTransfer;
     }
 
+    /**
+     * Returns the raw programmed-transfer latch, including an HBlank DMA that is
+     * armed between bursts or while its next HBlank request is being synchronized.
+     *
+     * <p>This is deliberately distinct from {@link #isTransferInProgress()}, which
+     * reports only a transfer currently owning the bus. PPU fast paths must fail
+     * closed for the whole lifetime of a programmed VRAM-DMA request.</p>
+     */
+    public boolean hasActiveOrPendingTransfer() {
+        return transferInProgress;
+    }
+
     /** Captures the retained HDMA latches and current block progress without bus reads. */
     public DebugHardwareInspection.VramDma captureDebugVramDmaInspection() {
         int sourceAddress = src & 0xfff0;
