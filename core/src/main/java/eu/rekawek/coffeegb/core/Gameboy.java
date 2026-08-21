@@ -2005,14 +2005,24 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // asking to change the following physical frame.
         if (!requestedFrameRenderSuppression) {
             if (frameRenderSuppressed) {
-                frameRenderSuppressed = false;
-                gpu.setRenderOutput(true);
+                resumeHostFrameRenderingAtVBlank();
             }
             return;
         }
         // Sustained catch-up pressure still presents every other physical LCD frame.
-        frameRenderSuppressed = !frameRenderSuppressed;
-        gpu.setRenderOutput(!frameRenderSuppressed);
+        if (frameRenderSuppressed) {
+            resumeHostFrameRenderingAtVBlank();
+        } else {
+            frameRenderSuppressed = true;
+            gpu.setRenderOutput(false);
+        }
+    }
+
+    /** Starts a complete host scanout after any hidden partial frame. Called only at VBlank. */
+    private void resumeHostFrameRenderingAtVBlank() {
+        display.discardPartialFrame();
+        frameRenderSuppressed = false;
+        gpu.setRenderOutput(true);
     }
 
     /** Current aggregate emulated motor output, without invoking host services. */
