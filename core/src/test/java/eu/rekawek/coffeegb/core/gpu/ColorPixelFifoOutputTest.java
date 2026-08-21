@@ -127,6 +127,70 @@ public class ColorPixelFifoOutputTest {
         assertArrayEquals(longArrayField(general.fifo, "delayStamp"), longArrayField(fast.fifo, "delayStamp"));
     }
 
+    @Test
+    public void compatibilityRemapsBackgroundThroughBgpBeforeCgbPaletteLookup() {
+        Fixture fixture = new Fixture();
+        fixture.fifo.setDmgCompat(true);
+        fixture.registers.put(GpuRegister.BGP, 0x1b); // raw 1 -> DMG shade 2
+        fixture.bgPalette.getPalette(0)[2] = 0x1234;
+
+        fixture.fifo.outputTick();
+        fixture.enqueuePixels(TileAttributes.EMPTY);
+        fixture.fifo.putPixelToScreen();
+        fixture.fifo.outputTick();
+
+        assertEquals(0x1234, displayPixel(fixture.display, 0));
+    }
+
+    @Test
+    public void compatibilityRemapsObjectThroughObpAndUsesTheDmgPaletteSelector() {
+        Fixture fixture = new Fixture();
+        fixture.fifo.setDmgCompat(true);
+        fixture.registers.put(GpuRegister.OBP1, 0x1b); // raw 2 -> DMG shade 1
+        fixture.oamPalette.getPalette(1)[1] = 0x4567;
+
+        fixture.fifo.outputTick();
+        fixture.enqueuePixels(TileAttributes.EMPTY);
+        fixture.fifo.setOverlay(
+                new int[]{2, 2, 2, 2, 2, 2, 2, 2}, 0,
+                TileAttributes.valueOf(0x10), 0); // OBP1
+        fixture.fifo.putPixelToScreen();
+        fixture.fifo.outputTick();
+
+        assertEquals(0x4567, displayPixel(fixture.display, 0));
+    }
+
+    @Test
+    public void compatibilityRetainsCgbBackgroundPaletteAttributeAfterBgpRemap() {
+        Fixture fixture = new Fixture();
+        fixture.fifo.setDmgCompat(true);
+        fixture.registers.put(GpuRegister.BGP, 0xe4); // identity DMG shade mapping
+        fixture.bgPalette.getPalette(3)[1] = 0x6789;
+
+        fixture.fifo.outputTick();
+        fixture.enqueuePixels(TileAttributes.valueOf(3));
+        fixture.fifo.putPixelToScreen();
+        fixture.fifo.outputTick();
+
+        assertEquals(0x6789, displayPixel(fixture.display, 0));
+    }
+
+    @Test
+    public void compatibilityBlanksBackgroundWhenLcdcBgEnableIsCleared() {
+        Fixture fixture = new Fixture();
+        fixture.fifo.setDmgCompat(true);
+        fixture.lcdc.set(0x92); // OBJ enabled, BG/window disabled
+        fixture.bgPalette.getPalette(0)[0] = 0x2345;
+        fixture.bgPalette.getPalette(0)[3] = 0x6789;
+
+        fixture.fifo.outputTick();
+        fixture.enqueuePixels(TileAttributes.EMPTY);
+        fixture.fifo.putPixelToScreen();
+        fixture.fifo.outputTick();
+
+        assertEquals(0x2345, displayPixel(fixture.display, 0));
+    }
+
     /** The timestamp loop used by the pre-fast-path suppressed implementation. */
     private static void drainWithGeneralTimestampLoop(ColorPixelFifo fifo) {
         long outputTicks = longField(fifo, "outputTicks") + 1;
@@ -206,12 +270,16 @@ public class ColorPixelFifoOutputTest {
 
         private final ColorPalette bgPalette = new ColorPalette(0xff68);
 
+        private final ColorPalette oamPalette = new ColorPalette(0xff6a);
+
+        private final GpuRegisterValues registers = new GpuRegisterValues();
+
+        private final Lcdc lcdc = new Lcdc();
+
         private final ColorPixelFifo fifo;
 
         private Fixture() {
-            GpuRegisterValues registers = new GpuRegisterValues();
             registers.setGbc(true);
-            Lcdc lcdc = new Lcdc();
             lcdc.setGbc(true);
             lcdc.set(0x93);
             bgPalette.getPalette(0)[1] = 0x001f;
@@ -221,13 +289,17 @@ public class ColorPixelFifoOutputTest {
                     display,
                     lcdc,
                     bgPalette,
-                    new ColorPalette(0xff6a),
+                    oamPalette,
                     registers,
                     new SpeedMode(true));
         }
 
         private void enqueuePixels() {
-            fifo.enqueue8Pixels(new int[]{1, 2, 3, 1, 2, 3, 1, 2}, TileAttributes.EMPTY);
+            enqueuePixels(TileAttributes.EMPTY);
+        }
+
+        private void enqueuePixels(TileAttributes attributes) {
+            fifo.enqueue8Pixels(new int[]{1, 2, 3, 1, 2, 3, 1, 2}, attributes);
         }
 
         private void putPixels(int count) {

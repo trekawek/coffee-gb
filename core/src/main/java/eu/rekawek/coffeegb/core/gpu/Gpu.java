@@ -81,8 +81,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // may enter the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
 
-    // The shifted output machine has a separate guarded span for DMG/MGB and native CGB/CGB0.
-    // Compatibility and SGB output remain scalar until their own pixel-domain proof exists.
+    // The shifted output machine has a separate guarded span for DMG/MGB, ordinary CGB
+    // compatibility, and native CGB/CGB0. SGB output remains scalar until its own pixel-domain
+    // proof exists.
     private final boolean performanceSteadyOutput;
 
     // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
@@ -863,11 +864,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         steadyTimingCursor = true;
         steadyTimingTicks = 1;
         steadyTimingEndTick = 248 + (r.get(SCX) & 7);
-        // Native CGB/CGB0 output is safe only after the cartridge compatibility handoff has
-        // resolved to native color. The same CGB hardware profile can host a non-color cart;
-        // its timing cursor remains eligible, but the shifted compatibility renderer stays
-        // scalar until a separate proof covers its BGP/OBP path.
-        steadyOutputCursor = performanceSteadyOutput && !dmgCompatValue;
+        // The ordinary CGB compatibility row is independently gated by canStartSteadyTiming()
+        // (CGB profile, normal speed, resolved boot handoff, and no mutable/observable state).
+        // Its shifted ColorPixelFifo owns the DMG BGP/OBP remap and CGB palette lookup, so it
+        // can share the same output span as native color. CGB0 compatibility remains scalar
+        // because its timing cursor is not eligible in the first place.
+        steadyOutputCursor = performanceSteadyOutput;
         return true;
     }
 

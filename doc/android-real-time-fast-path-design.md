@@ -271,13 +271,13 @@ were followed by the full core unit suite, Mealybug, DMG/CGB acid, Mooneye, and 
 
 **Third retained slice (2026-08-21):** The same scalar CGB timing FIFO is also eligible for the
 ordinary CGB hardware with a non-color cartridge after the boot compatibility handoff has
-resolved. The shifted color pixel machine remains responsible for the visible DMG-compatible
-palette/BGP/OBP behavior, so the cursor only defers the unshifted timing skeleton and does not
-change compatibility rendering or cadence. CGB0 DMG-compatibility remains explicitly scalar
-until its revision-specific timing is measured; native CGB0 remains eligible under the preceding
-slice. VBK/SVBK compatibility masking, fine-SCX line spans, boot-resolution gating, write
-materialization, and cross-mode frame/audio continuation are covered by synthetic differential
-tests.
+resolved. The shifted color pixel machine remains authoritative for the visible DMG-compatible
+palette/BGP/OBP behavior; its guarded output span is retained separately below, so this timing
+slice itself does not change compatibility rendering or cadence. CGB0 DMG-compatibility remains
+explicitly scalar until its revision-specific timing is measured; native CGB0 remains eligible
+under the preceding slice. VBK/SVBK compatibility masking, fine-SCX line spans, boot-resolution
+gating, write materialization, and cross-mode frame/audio continuation are covered by synthetic
+differential tests.
 
 The compatibility keep gate used the same generated visible-output loop with all four APU
 channels enabled: 20,000,000 warm-up T followed by 100,000,000 measured T in eight alternating
@@ -339,7 +339,26 @@ produced exactly 1,424 frames, 1,430 audio buffers, and 99,964,150 stereo sample
 (199,928,300 scalar samples) with identical frame and audio hashes. Differential coverage
 exercises all fine-SCX phases, both revisions, VRAM bank selection, all eight palettes, X/Y flip
 and tile priority, full-frame cadence and events, save-state materialization, and scalar fallback
-for compatibility and SGB profiles.
+for CGB0 compatibility and SGB profiles.
+
+**Seventh retained slice (2026-08-21):** The shifted `ColorPixelFifo` output span now also covers
+ordinary CGB hardware running a non-color cartridge after the boot compatibility handoff has
+resolved. The existing guard remains required: normal speed, ordinary CGB profile, no mutable or
+observable PPU state, no debugger/history/replay observation, no DMA/HDMA ownership, no delayed
+window write, and no speed-switch or other invalidation boundary. Materialization replays the
+authoritative compatibility path, including DMG BGP/OBP remapping, CGB palette selection, tile
+attributes, VRAM bank, flips, and priority, while preserving every visible pixel and event.
+CGB0 DMG-compatibility and SGB/SGB2 visible output remain scalar; native CGB/CGB0 color rows are
+unchanged from the preceding slice.
+
+The compatibility keep gate used synthetic non-color headers and fresh JVMs with visible output,
+audio enabled, and 20,000,000-T warm-up followed by 100,000,000-T measured windows in four
+alternating baseline/current pairs. PERFORMANCE gains were +4.29%, +9.25%, +5.74%, and +10.41%
+(median +7.49%; every pair positive). Every run produced 1,424 frames with hash
+`52b45dc8387dc325` and 1,430 audio buffers with hash `6a288efa319482d5`; frame cadence remained
+70,224 T. Materialization was forced within each measured window. Focused compatibility/FIFO
+coverage passed 37/37 tests, and the full core suite passed 1,662 tests with 8 skips. No frame
+skipping, audio suppression, overclocking, or frontend pacing change is part of the slice.
 
 ### 6. Instruction-level CPU batching
 
