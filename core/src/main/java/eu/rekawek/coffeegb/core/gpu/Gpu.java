@@ -81,8 +81,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // may enter the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
 
-    // The shifted output machine has a separate guarded span only for DMG/MGB.  Native CGB,
-    // compatibility and SGB output remain scalar until their own pixel-domain proof exists.
+    // The shifted output machine has a separate guarded span for DMG/MGB and native CGB/CGB0.
+    // Compatibility and SGB output remain scalar until their own pixel-domain proof exists.
     private final boolean performanceSteadyOutput;
 
     // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
@@ -285,7 +285,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.performanceSteadyOutput = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && (hardwareProfile == HardwareProfileRegistry.DMG
-                || hardwareProfile == HardwareProfileRegistry.MGB);
+                || hardwareProfile == HardwareProfileRegistry.MGB
+                || hardwareProfile == HardwareProfileRegistry.CGB
+                || hardwareProfile == HardwareProfileRegistry.CGB0);
         this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && hardwareProfile == HardwareProfileRegistry.CGB;
@@ -861,7 +863,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         steadyTimingCursor = true;
         steadyTimingTicks = 1;
         steadyTimingEndTick = 248 + (r.get(SCX) & 7);
-        steadyOutputCursor = performanceSteadyOutput;
+        // Native CGB/CGB0 output is safe only after the cartridge compatibility handoff has
+        // resolved to native color. The same CGB hardware profile can host a non-color cart;
+        // its timing cursor remains eligible, but the shifted compatibility renderer stays
+        // scalar until a separate proof covers its BGP/OBP path.
+        steadyOutputCursor = performanceSteadyOutput && !dmgCompatValue;
         return true;
     }
 
