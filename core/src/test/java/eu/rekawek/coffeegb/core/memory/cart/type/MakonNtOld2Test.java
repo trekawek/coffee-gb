@@ -76,8 +76,26 @@ public class MakonNtOld2Test {
     }
 
     @Test
+    public void detectsSonicAdventure8SingleCart() throws IOException {
+        Rom rom = new Rom(sonicAdventure8Rom("SONIC 7"));
+
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_OLD_2,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(new Cartridge(rom, Battery.NULL_BATTERY)
+                .getMemoryController() instanceof MakonNtOld2);
+    }
+
+    @Test
     public void doesNotDetectSuperMarioSpecial3FromLicenseeAlone() throws IOException {
         byte[] data = superMarioSpecial3Rom("ANOTHER GAME");
+
+        assertEquals(CartridgeProperties.Mapper.STANDARD,
+                new Rom(data).getCartridgeProperties().getMapper());
+    }
+
+    @Test
+    public void doesNotDetectSonicAdventure8FromLicenseeAlone() throws IOException {
+        byte[] data = sonicAdventure8Rom("ANOTHER GAME");
 
         assertEquals(CartridgeProperties.Mapper.STANDARD,
                 new Rom(data).getCartridgeProperties().getMapper());
@@ -185,6 +203,18 @@ public class MakonNtOld2Test {
     }
 
     private static byte[] superMarioSpecial3Rom(String title) {
+        byte[] data = new byte[32 * 0x4000];
+        byte[] titleBytes = title.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(titleBytes, 0, data, 0x0134, titleBytes.length);
+        data[0x0143] = (byte) 0x80;
+        data[0x0144] = 'M';
+        data[0x0145] = 'K';
+        data[0x0147] = 0x01;
+        data[0x0148] = 0x03;
+        return data;
+    }
+
+    private static byte[] sonicAdventure8Rom(String title) {
         byte[] data = new byte[32 * 0x4000];
         byte[] titleBytes = title.getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(titleBytes, 0, data, 0x0134, titleBytes.length);
