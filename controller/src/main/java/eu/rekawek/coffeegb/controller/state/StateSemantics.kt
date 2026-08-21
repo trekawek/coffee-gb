@@ -1730,6 +1730,11 @@ internal object StateSemantics {
           it.intValues("ram", 0, 0xff)
           it.range("lowRomBank", 0, 0xff); it.range("highRomBank", 0, 0xff)
         }
+    target[GGB81_STATE] =
+        constrained("GGB81 retains an MBC5 child and one of eight data-bit permutations.") {
+          it.requiredRecordType("delegateState", MBC5_STATE)
+          it.range("dataSwapMode", 0, 7)
+        }
     target[MBC5_MULTICART_LOADER_STATE] =
         constrained("The MBC5 menu loader preserves a bounded two-bank transition window.") {
           it.requiredRecordType("mbc5State", MBC5_STATE)
@@ -1951,6 +1956,7 @@ internal object StateSemantics {
   private const val MBC5_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
   private const val BASIC_ROM_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.BasicRom\$BasicRomState"
   private const val NTNEW_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState"
+  private const val GGB81_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.Ggb81\$Ggb81State"
   private const val MBC5_MULTICART_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
   private const val UNLICENSED_256M_STATE =
