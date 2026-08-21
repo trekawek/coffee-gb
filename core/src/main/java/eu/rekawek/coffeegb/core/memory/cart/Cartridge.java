@@ -408,11 +408,13 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
                 == CartridgeProperties.Mapper.XPLODER_GB;
         // MBC6 persists both its SRAM and flash although its header type has no BATTERY segment.
         // Pocket Camera likewise has 128 KiB of cartridge RAM, including compatibility-profiled
-        // dumps whose nominal header is not 0xFC. These are mapper capabilities, not a claim that
-        // a save file already exists.
+        // dumps whose nominal header is not 0xFC. Makon's newer N&T board supplies 8 KiB of
+        // battery-backed RAM even though its raw header type is the non-battery MBC5 value 0x19.
+        // These are mapper capabilities, not a claim that a save file already exists.
         boolean mapperPersists = rom.getType().isMbc6()
                 || rom.getType().isPocketCamera()
-                || mapper == CartridgeProperties.Mapper.POCKET_CAMERA;
+                || mapper == CartridgeProperties.Mapper.POCKET_CAMERA
+                || mapper == CartridgeProperties.Mapper.MAKON_NT_NEW;
         if (rom.getType().isBattery() || xploderGb || mapperPersists) {
             // Existing MBC implementations expose RAM in 8 KiB banks. Plain ROM+RAM
             // is the exception: its 2 KiB header size is mirrored across A000-BFFF.
@@ -426,6 +428,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             }
             if (mapper == CartridgeProperties.Mapper.UNLICENSED_256M) {
                 ramSize = 0x80000;
+            }
+            if (mapper == CartridgeProperties.Mapper.MAKON_NT_NEW) {
+                ramSize = 0x2000;
             }
             if (xploderGb) {
                 ramSize = 0x20000;
