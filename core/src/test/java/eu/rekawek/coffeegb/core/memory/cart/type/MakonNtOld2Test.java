@@ -66,6 +66,24 @@ public class MakonNtOld2Test {
     }
 
     @Test
+    public void detectsSuperMarioSpecial3SingleCart() throws IOException {
+        Rom rom = new Rom(superMarioSpecial3Rom("SUPER MARIO 3"));
+
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_OLD_2,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(new Cartridge(rom, Battery.NULL_BATTERY)
+                .getMemoryController() instanceof MakonNtOld2);
+    }
+
+    @Test
+    public void doesNotDetectSuperMarioSpecial3FromLicenseeAlone() throws IOException {
+        byte[] data = superMarioSpecial3Rom("ANOTHER GAME");
+
+        assertEquals(CartridgeProperties.Mapper.STANDARD,
+                new Rom(data).getCartridgeProperties().getMapper());
+    }
+
+    @Test
     public void masksBanksToTheSelectedGameSizeAndSupportsAlternateWiring()
             throws IOException {
         MemoryController mapper = new MakonNtOld2(
@@ -163,6 +181,18 @@ public class MakonNtOld2Test {
         data[0x0143] = (byte) 0x80;
         data[0x0147] = 0x19; // MBC5 in the menu's standard header
         data[0x0148] = 0x06; // 2 MiB
+        return data;
+    }
+
+    private static byte[] superMarioSpecial3Rom(String title) {
+        byte[] data = new byte[32 * 0x4000];
+        byte[] titleBytes = title.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(titleBytes, 0, data, 0x0134, titleBytes.length);
+        data[0x0143] = (byte) 0x80;
+        data[0x0144] = 'M';
+        data[0x0145] = 'K';
+        data[0x0147] = 0x01;
+        data[0x0148] = 0x03;
         return data;
     }
 
