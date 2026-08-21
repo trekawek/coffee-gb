@@ -254,9 +254,10 @@ restore continuation, visible-frame hashes, and audio-buffer hashes.
 CGB0 steady background lines. The specialized fetcher preserves CGB tile-map attributes, VRAM
 bank selection, X/Y flips, palettes, and tile addressing while the shifted color pixel machine
 continues to produce every visible pixel on its ordinary dot path. CGB DMG-compatibility, SGB,
-and SGB2 remain scalar. The cursor cannot arm before boot compatibility is resolved, during OAM
-DMA or VRAM DMA, after a tile-select conflict, in double speed, or across a register/memory,
-debugger, history, save-state, or mutable-alias boundary.
+and SGB2 remain scalar in this native-color slice; CGB DMG-compatibility is covered by the
+following compatibility-specific slice. The cursor cannot arm before boot compatibility is
+resolved, during OAM or VRAM DMA, after a tile-select conflict, in double speed, or across a
+register/memory, debugger, history, save-state, or mutable-alias boundary.
 
 The keep gate used a generated CGB-compatible loop with visible color output and all four APU
 channels enabled: 20,000,000 warm-up T followed by 100,000,000 measured T in eight alternating
@@ -267,6 +268,23 @@ audio buffers, 99,964,150 stereo sample frames, and identical frame/audio hashes
 control run measured just +0.77% CGB and +0.18% CGB0 apparent mode difference, below the retained
 effect. Focused full-span, boot, GDMA, compatibility, invalidation, and cross-mode restore tests
 were followed by the full core unit suite, Mealybug, DMG/CGB acid, Mooneye, and Blargg suites.
+
+**Third retained slice (2026-08-21):** The same scalar CGB timing FIFO is also eligible for the
+ordinary CGB hardware with a non-color cartridge after the boot compatibility handoff has
+resolved. The shifted color pixel machine remains responsible for the visible DMG-compatible
+palette/BGP/OBP behavior, so the cursor only defers the unshifted timing skeleton and does not
+change compatibility rendering or cadence. CGB0 DMG-compatibility remains explicitly scalar
+until its revision-specific timing is measured; native CGB0 remains eligible under the preceding
+slice. VBK/SVBK compatibility masking, fine-SCX line spans, boot-resolution gating, write
+materialization, and cross-mode frame/audio continuation are covered by synthetic differential
+tests.
+
+The compatibility keep gate used the same generated visible-output loop with all four APU
+channels enabled: 20,000,000 warm-up T followed by 100,000,000 measured T in eight alternating
+Accuracy/Performance pairs. Both modes produced 1,424 physical frames per run. Accuracy's median
+throughput was 17.996M T/s versus 18.462M T/s in PERFORMANCE (+2.59%); every alternating pair
+improved. The comparison is against the prior scalar compatibility path, with no frame skipping,
+audio suppression, or clock change.
 
 ### 6. Instruction-level CPU batching
 
