@@ -379,6 +379,22 @@ frames), with identical hashes: DMG `fb52ae884637f115`, SGB `f3f0be1f4ae27c61`, 
 tests and the full core suite passed 1,665 tests with 8 expected skips. No SGB2 output batching,
 command skipping, frame/audio suppression, or cadence change is part of this slice.
 
+**Ninth retained slice (2026-08-21):** The existing guarded shifted-output cursor now admits only
+SGB2 visible pixel output; the preceding SGB output row remains unchanged. The authoritative
+`DmgPixelFifo`/`Display` path, `SgbDisplay` border composition, and SGB VRAM-transfer path remain
+exact. SGB2 retains its immutable `ClockSpec` ratio of 262144/4389 controller frames per second
+(about 59.7275 FPS) and the exact 70,224-T physical LCD frame cadence.
+
+The keep gate used a synthetic repository-owned SGB2 fixture with visible output and audio enabled,
+20,000,000-T warm-up, 100,000,000-T measured work, forced materialization in each measured window,
+and four alternating fresh-JVM baseline/current PERFORMANCE pairs. Pair gains were +7.248%,
++6.635%, +5.771%, and +7.011%; median baseline throughput was 18.8988M T/s versus 20.1883M T/s
+current (+6.823%). Every run produced exactly 1,424 DMG frames, 1,424 SGB frames, 1,424 VRAM
+transfers, and 1,424 audio buffers with identical hashes: DMG `2e7fc66e75da1265`, SGB
+`8ca8f66168e6c3f5`, VRAM transfer `b2407aa99fd18f25`, and audio `ad04b8195103ab25`. Focused
+differential coverage passed 31/31 tests, and the full core suite passed 1,666 tests with 8
+expected skips. No SGB command, frame/audio work, or cadence behavior changed.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.
