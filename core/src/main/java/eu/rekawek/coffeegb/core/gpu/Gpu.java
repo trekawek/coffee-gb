@@ -82,8 +82,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private final boolean performanceSteadyTiming;
 
     // The shifted output machine has a separate guarded span for DMG/MGB, ordinary CGB
-    // compatibility, native CGB/CGB0, and the measured SGB row. SGB2 remains scalar until its
-    // own pixel-domain proof exists.
+    // compatibility, native CGB/CGB0, and both measured SGB rows.
     private final boolean performanceSteadyOutput;
 
     // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
@@ -289,7 +288,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || hardwareProfile == HardwareProfileRegistry.MGB
                 || hardwareProfile == HardwareProfileRegistry.CGB
                 || hardwareProfile == HardwareProfileRegistry.CGB0
-                || hardwareProfile == HardwareProfileRegistry.SGB);
+                || hardwareProfile == HardwareProfileRegistry.SGB
+                || hardwareProfile == HardwareProfileRegistry.SGB2);
         this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && hardwareProfile == HardwareProfileRegistry.CGB;
