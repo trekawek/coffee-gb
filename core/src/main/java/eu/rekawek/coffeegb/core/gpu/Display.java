@@ -92,6 +92,18 @@ public class Display implements StatefulComponent<Display> {
         }
     }
 
+    /**
+     * Discards an incomplete host scanout without changing the panel image being held.
+     *
+     * <p>A state restore can land in the middle of a visible frame. Rendering stays suppressed
+     * through the next VBlank, but the first frame after that boundary must start at pixel zero;
+     * retaining the restored write cursor would append the new top rows below the old partial
+     * scanout and briefly publish a vertically wrapped composite.</p>
+     */
+    public void discardPartialFrame() {
+        i = 0;
+    }
+
     public void enableLcd() {
         i = 0;
         enabled = true;
