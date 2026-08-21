@@ -330,6 +330,15 @@ deopt to Accuracy without muting or dropping audio.
 deterministic audio comparison, save/restore inside a block, frame/audio event differential, and
 per-row audio-on measurements.
 
+**Current sequencing decision (2026-08-21):** Do not add a Sound-local lazy cursor. It would
+still pay the surrounding CPU/Timer/PPU call graph once per T and repeats the measured-negative
+shape of earlier local executors. The first APU implementation must be a vertical slice of the
+shared exact horizon: `Sound.nextEventHorizonTicks` stops before DIV/frame-sequencer, waveform,
+length/envelope/sweep, wave-RAM, register, observer, and sample-buffer boundaries, while
+`Sound.advanceExact` updates canonical channel state and emits every stereo sample. It lands only
+with a coordinator slice that also deletes scalar work in the other participating components and
+shows a whole-core audio-on improvement.
+
 ### 8. Automatic deoptimization and compatibility coverage
 
 **Change:** Consolidate guard state and deoptimization reasons in core. Make every strategy report
