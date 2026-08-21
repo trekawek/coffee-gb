@@ -26,6 +26,7 @@ public final class CartridgeProperties {
         DUZ_MULTICART,
         BHGOS_MULTICART,
         MAKON_NT_OLD_2,
+        MAKON_NT_NEW,
         LI_CHENG,
         GOWIN,
         GGB81,
@@ -125,6 +126,8 @@ public final class CartridgeProperties {
                     Mapper.BHGOS_MULTICART),
             mapper("Makon/NT old type 2 multicart", CartridgeProperties::isMakonNtOld2,
                     Mapper.MAKON_NT_OLD_2),
+            mapper("Makon/NT new single cart", CartridgeProperties::isMakonNtNew,
+                    Mapper.MAKON_NT_NEW),
             mapper("Li Cheng unlicensed mapper", CartridgeProperties::isLiCheng,
                     Mapper.LI_CHENG),
             mapper("Gowin protection mapper", CartridgeProperties::isGowin,
@@ -429,6 +432,18 @@ public final class CartridgeProperties {
                 || info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
                 && info.byteAt(0x0102) == 0xe0;
+    }
+
+    private static boolean isMakonNtNew(RomInfo info) {
+        return info.data.length == 0x100000
+                && info.title().startsWith("DIGIMON 4")
+                && info.hasValidLogo()
+                && info.byteAt(0x0143) == 0x80
+                && info.byteAt(0x0144) == 'M'
+                && info.byteAt(0x0145) == 'K'
+                && info.rawType() == 0x19
+                && info.byteAt(0x0148) == 0x05
+                && info.byteAt(0x0149) == 0x02;
     }
 
     private static boolean isLiCheng(RomInfo info) {

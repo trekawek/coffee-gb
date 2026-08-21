@@ -98,6 +98,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case DUZ_MULTICART -> new DuzMulticart(rom, battery);
             case BHGOS_MULTICART -> new BhgosMulticart(rom, battery);
             case MAKON_NT_OLD_2 -> new MakonNtOld2(rom, battery);
+            case MAKON_NT_NEW -> new NtNew(rom, battery);
             case LI_CHENG -> new LiCheng(rom, battery);
             case GOWIN -> new Gowin(rom, battery);
             case GGB81 -> new Ggb81(rom, battery);
