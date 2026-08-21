@@ -286,6 +286,23 @@ throughput was 17.996M T/s versus 18.462M T/s in PERFORMANCE (+2.59%); every alt
 improved. The comparison is against the prior scalar compatibility path, with no frame skipping,
 audio suppression, or clock change.
 
+**Fourth retained slice (2026-08-21):** SGB and SGB2 use the same monochrome timing skeleton,
+so the guarded cursor also covers those two profiles. The full shifted pixel machine still
+produces every DMG pixel and feeds the SGB VRAM-transfer path once per output dot. Joypad packet
+reception, SGB commands, palette and border composition, physical frame publication, and audio
+remain on their ordinary exact paths. Both profiles retain a 70,224-T physical LCD frame while
+their immutable clock specifications yield separate wall-clock cadences: approximately
+61.1679 FPS for SGB and 59.7275 FPS for SGB2.
+
+The keep gate used generated in-memory SGB sessions with the border and audio enabled: a
+10,000,000-T warm-up followed by 5,000,000-T measurements in eight alternating pairs per row.
+SGB improved from a 305.871 ms median to 296.719 ms (+3.08%); SGB2 improved from 303.778 ms to
+294.934 ms (+3.00%). Every run produced the same 71 physical frames, 71 SGB border frames, and
+71 audio buffers with identical frame, border, and audio hashes. Differential tests cover all
+fine-SCX values, the exact 70,224-T frame grid, VRAM-transfer payloads, and a PAL01 Joypad command
+while the timing cursor is armed. No SGB command, border, audio, frame, or master-clock work is
+batched or skipped by this slice.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.
