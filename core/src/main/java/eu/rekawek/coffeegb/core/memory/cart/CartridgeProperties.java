@@ -431,7 +431,20 @@ public final class CartridgeProperties {
                 || headerCrc == 0x0b1b808a // Super Donkey Kong 5 (rumble)
                 || info.data.length > 0x80000
                 && "POKEBOM USA".equals(info.title())
-                && info.byteAt(0x0102) == 0xe0;
+                && info.byteAt(0x0102) == 0xe0
+                || isSuperMarioSpecial3(info);
+    }
+
+    private static boolean isSuperMarioSpecial3(RomInfo info) {
+        return info.data.length == 0x80000
+                && "SUPER MARIO 3".equals(info.title())
+                && info.byteAt(0x0143) == 0x80
+                && info.byteAt(0x0144) == 'M'
+                && info.byteAt(0x0145) == 'K'
+                && info.byteAt(0x0146) == 0x00
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x03
+                && info.byteAt(0x0149) == 0x00;
     }
 
     private static boolean isMakonNtNew(RomInfo info) {
