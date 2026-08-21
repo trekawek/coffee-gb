@@ -27,6 +27,9 @@ import java.util.concurrent.CopyOnWriteArraySet;
 
 public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
+    /** Keep the component-side bulk contract bounded like the normal-speed CPU phase. */
+    private static final int PERFORMANCE_MAX_QUIET_SPAN = 3;
+
     private static final Logger LOG = LoggerFactory.getLogger(Joypad.class);
 
     /** Number of JOYP clock samples used by the hardware's input glitch filter. */
@@ -270,6 +273,74 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return;
         }
         tickInputSlowPath();
+    }
+
+    /**
+     * Returns the largest exact PERFORMANCE span for a settled released-input JOYP receiver.
+     *
+     * <p>The released default source cannot produce a poll or a physical transition, and a
+     * settled four-sample receiver has no electrical edge to process.  Only the free-running
+     * BOGA clock phase changes, so it can be advanced arithmetically.  Custom sources, SGB packet
+     * receivers, debug/timeline observers, and any pending input mutation stay on the scalar
+     * path.</p>
+     */
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0
+                || !releasedInputFastPathEligible
+                || playerInputSource != PlayerInputSource.RELEASED
+                || inputChangedSinceLastTick
+                || !buttons.isEmpty()
+                || players != 0
+                || inputTimelineObserver != null
+                || debugHooks != null
+                || isSgb) {
+            return 0;
+        }
+        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    /** Returns the largest safe span using the scheduler's normal three-clock bound. */
+    public int performanceQuietSpanLimit() {
+        return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);
+    }
+
+    /** True when the requested span can be applied by {@link #tickPerformanceQuietSpan(int)}. */
+    public boolean canTickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /**
+     * Advances a settled released-input JOYP receiver without polling or filtering each tick.
+     *
+     * @return false without mutation when a host input, observer, SGB, or debug edge could make
+     *         a scalar callback observable
+     */
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (!canTickPerformanceQuietSpan(ticks)) {
+            return false;
+        }
+        tick += ticks;
+        return true;
+    }
+
+    /** Applies a span after the caller has already passed {@link #canTickPerformanceQuietSpan(int)}. */
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Joypad quiet span is not eligible: " + ticks);
+        }
+    }
+
+    /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */
+    public boolean advancePerformanceQuietSpan(int ticks) {
+        return tickPerformanceQuietSpan(ticks);
+    }
+
+    /** Trusted naming alias for schedulers which use the GPU's advance-oriented vocabulary. */
+    public void advancePerformanceQuietSpanTrusted(int ticks) {
+        tickPerformanceQuietSpanTrusted(ticks);
     }
 
     private void tickInputSlowPath() {

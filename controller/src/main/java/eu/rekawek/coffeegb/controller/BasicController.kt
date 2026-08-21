@@ -71,6 +71,7 @@ import eu.rekawek.coffeegb.controller.state.StateWorkerResult
 import eu.rekawek.coffeegb.controller.state.StateWorkspace
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.debug.DebugButton
@@ -776,11 +777,18 @@ class BasicController private constructor(
     val gameboy = session?.gameboy
     if (gameboy != null && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
       relinquishDebugBreakpointPauseOwnership()
-      repeat(frameTicks) {
-        if (trackDebugHistory) {
-          tickWithDebugHistory(gameboy, frameTicks)
-        } else {
-          gameboy.tick()
+      if (!trackDebugHistory && !rewound && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
+        // The core owns the frame-sized loop in ordinary PERFORMANCE mode. Debug/history
+        // paths remain on their per-tick hooks so every observation and checkpoint boundary is
+        // still materialized before the next callback.
+        gameboy.runTicks(frameTicks)
+      } else {
+        repeat(frameTicks) {
+          if (trackDebugHistory) {
+            tickWithDebugHistory(gameboy, frameTicks)
+          } else {
+            gameboy.tick()
+          }
         }
       }
       emulated = true

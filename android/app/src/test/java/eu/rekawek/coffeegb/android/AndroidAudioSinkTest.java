@@ -73,6 +73,32 @@ public class AndroidAudioSinkTest {
     }
 
     @Test
+    public void profileFrameBudgetRebuildsSourceQueueBeforeSgbAudio() throws Exception {
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        FakeFactory factory = new FakeFactory();
+        AndroidAudioSink sink = new AndroidAudioSink(events, factory);
+        sink.start();
+        try {
+            await("audio output", () -> sink.stats().sampleRate() == 44_100);
+
+            // SGB2's 70,224-tick frame is larger than the legacy 69,905-tick source slot. The
+            // profile callback must rebuild the queue before this event arrives; otherwise the
+            // fixed-storage producer drops it instead of allocating on the emulation thread.
+            sink.setClockSpec(ClockSpec.SGB2);
+            await("SGB2 source queue rebuild", () -> factory.opens.get() >= 2
+                    && sink.stats().restarts() >= 1
+                    && sink.sourceSamplesForTesting() == ClockSpec.SGB2.controllerTicksPerFrame() * 2);
+
+            FakeOutput sgbOutput = factory.current();
+            events.post(new Sound.SoundSampleEvent(audibleSamples(ClockSpec.SGB2), ClockSpec.SGB2));
+            await("SGB2 PCM write", () -> sgbOutput.writes.size() == 1);
+            assertTrue(sgbOutput.writes.get(0).length > 0);
+        } finally {
+            sink.close();
+        }
+    }
+
+    @Test
     public void benchmarkBaselineAndConcurrentSnapshotsRemainCoherentAcrossPartialWrites()
             throws Exception {
         if (!BuildConfig.DIAGNOSTICS_ENABLED) {
@@ -141,7 +167,11 @@ public class AndroidAudioSinkTest {
     }
 
     private static int[] audibleSamples() {
-        int ticks = ClockSpec.LEGACY.controllerTicksPerFrame();
+        return audibleSamples(ClockSpec.LEGACY);
+    }
+
+    private static int[] audibleSamples(ClockSpec clockSpec) {
+        int ticks = clockSpec.controllerTicksPerFrame();
         int[] samples = new int[ticks * 2];
         for (int tick = 0; tick < ticks; tick++) {
             samples[tick * 2] = 480;

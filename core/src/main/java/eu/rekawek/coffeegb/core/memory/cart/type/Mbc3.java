@@ -142,6 +142,23 @@ public class Mbc3 implements MemoryController {
     }
 
     @Override
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || debugHooks != null) {
+            return 0;
+        }
+        return requested;
+    }
+
+    @Override
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0 || debugHooks != null || performanceQuietSpanLimit(ticks) < ticks) {
+            return false;
+        }
+        clock.tickPerformanceQuietSpan(ticks);
+        return true;
+    }
+
+    @Override
     public boolean isClocked() {
         return true;
     }

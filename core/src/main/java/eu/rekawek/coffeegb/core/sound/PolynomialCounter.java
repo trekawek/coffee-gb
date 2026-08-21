@@ -96,6 +96,46 @@ public class PolynomialCounter implements StatefulComponent<PolynomialCounter> {
         return !oldBit && newBit;
     }
 
+    /** Advances the free-running noise counter over a short quiet span. */
+    int advancePerformanceSpan(int ticks) {
+        if (ticks <= 0) {
+            return 0;
+        }
+        int edgeCount = clock2Mhz ? ticks / 2 : (ticks + 1) / 2;
+        int steps = 0;
+        alignment = (alignment + edgeCount) & 3;
+        if (!backgroundActive) {
+            clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+            return 0;
+        }
+        // Until the next prescaler reload, the active noise state is only a countdown. Avoid
+        // visiting each 2-MHz edge when this whole compact window stays in that quiet interval.
+        if (edgeCount > 0 && counterCountdown > edgeCount) {
+            counterCountdown -= edgeCount;
+            countdownReloaded = false;
+            clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+            return 0;
+        }
+        for (int edge = 0; edge < edgeCount; edge++) {
+            if (--counterCountdown > 0) {
+                countdownReloaded = false;
+                continue;
+            }
+            int divisor = (nr43 & 0b111) << 2;
+            counterCountdown = divisor == 0 ? 2 : divisor;
+            int mask = 1 << (nr43 >> 4);
+            boolean oldBit = (counter & mask) != 0;
+            counter = (counter + 1) & 0x3fff;
+            boolean newBit = (counter & mask) != 0;
+            countdownReloaded = true;
+            if (!oldBit && newBit) {
+                steps++;
+            }
+        }
+        clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+        return steps;
+    }
+
     @Override
     public ComponentState<PolynomialCounter> captureState() {
         return new PolynomialCounterState(nr43, counter, counterCountdown, clock2Mhz, alignment, backgroundActive,

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.PointF;
 import android.graphics.RectF;
 import android.view.View;
@@ -14,6 +15,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -66,6 +68,26 @@ public class RasterSkinAndroidTest {
                         menu.isImportantForAccessibility());
             });
         }
+    }
+
+    @Test
+    public void staticSurfaceLayerKeyIsStableUntilSurfaceOrSkinChanges() {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        RasterSkin portrait = RasterSkin.portrait(context);
+        RasterSkin landscape = RasterSkin.landscape(context);
+        Bitmap layer = Bitmap.createBitmap(920, 1884, Bitmap.Config.ARGB_8888);
+
+        assertTrue(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
+                920, 1884, portrait));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
+                1884, 920, landscape));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
+                920, 1883, portrait));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
+                920, 1884, landscape));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(null, 920, 1884, portrait,
+                920, 1884, portrait));
+        layer.recycle();
     }
 
     private static View findMenuOverlay(View view) {

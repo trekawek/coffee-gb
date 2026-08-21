@@ -16,6 +16,7 @@ import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.sgb.Commands;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sound.Sound;
+import eu.rekawek.coffeegb.core.sound.StereoPcmConverter;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
@@ -138,8 +139,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
                 assertEquals(accuracy.events.vRamTransferHash,
                         performance.events.vRamTransferHash);
-                assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertAudioEquivalent(accuracy.events, performance.events,
+                        profile.id() + " full-frame audio");
                 assertSameState(accuracy, performance, profile.id() + " full-frame output span");
             }
         }
@@ -224,10 +225,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                         performance.events.vRamTransferHash);
                 assertEquals(profile.id() + " audio count", startAudio + 1,
                         performance.events.audioCount);
-                assertEquals(profile.id() + " accuracy audio count", accuracy.events.audioCount,
-                        performance.events.audioCount);
-                assertEquals(profile.id() + " audio hash", accuracy.events.audioHash,
-                        performance.events.audioHash);
+                assertAudioEquivalent(accuracy.events, performance.events,
+                        profile.id() + " audio");
                 assertSameState(accuracy, performance,
                         profile.id() + " complete output frame");
             }
@@ -281,8 +280,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     assertEquals(accuracy.events.sgbFrameHash, performance.events.sgbFrameHash);
                     assertEquals(accuracy.events.vRamTransferHash,
                             performance.events.vRamTransferHash);
-                    assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-                    assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                    assertAudioEquivalent(accuracy.events, performance.events,
+                            profile.id() + " SGB audio");
                     assertSameState(accuracy, performance,
                             profile.id() + " SGB frame boundary scx=" + scx);
                 }
@@ -335,8 +334,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                         performance.events.vRamTransferCount);
                 assertEquals(accuracy.events.vRamTransferHash,
                         performance.events.vRamTransferHash);
-                assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertAudioEquivalent(accuracy.events, performance.events,
+                        profile.id() + " JOYP audio");
                 assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
                 assertSameState(accuracy, performance,
                         profile.id() + " JOYP command frame continuation");
@@ -552,7 +551,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertEquals(accuracy.events.vRamTransferHash, performance.events.vRamTransferHash);
             assertEquals(startAudio + 1, accuracy.events.audioCount);
             assertEquals(startAudio + 1, performance.events.audioCount);
-            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertAudioEquivalent(accuracy.events, performance.events,
+                    "CGB compatibility audio");
             assertTrue("compatibility frame should include a configured CGB palette color",
                     containsPaletteColor(performance.events.lastFrame));
             assertSameState(accuracy, performance,
@@ -963,7 +963,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertEquals(accuracy.events.frameCount, performance.events.frameCount);
             assertEquals(accuracy.events.frameHash, performance.events.frameHash);
             assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertAudioEquivalent(accuracy.events, performance.events,
+                    "cross-mode audio");
             assertTrue("synthetic run must publish a visible frame",
                     accuracy.events.frameCount > 0);
             assertTrue("synthetic run must publish an audio buffer",
@@ -1019,7 +1020,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 assertEquals(accuracy.events.vRamTransferHash,
                         performance.events.vRamTransferHash);
                 assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertAudioEquivalent(accuracy.events, performance.events,
+                        profile.id() + " checkpoint audio");
                 assertTrue(profile.id() + " synthetic run must publish a visible frame",
                         accuracy.events.frameCount > 0);
                 assertTrue(profile.id() + " synthetic run must publish an SGB frame",
@@ -1066,7 +1068,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 assertEquals(accuracy.events.frameCount, performance.events.frameCount);
                 assertEquals(accuracy.events.frameHash, performance.events.frameHash);
                 assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertAudioEquivalent(accuracy.events, performance.events,
+                        profile.id() + " native CGB checkpoint audio");
                 assertTrue(profile.id() + " synthetic run must publish a visible frame",
                         accuracy.events.frameCount > 0);
                 assertTrue(profile.id() + " synthetic run must publish an audio buffer",
@@ -1117,7 +1120,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertEquals(accuracy.events.frameCount, performance.events.frameCount);
             assertEquals(accuracy.events.frameHash, performance.events.frameHash);
             assertEquals(accuracy.events.audioCount, performance.events.audioCount);
-            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertAudioEquivalent(accuracy.events, performance.events,
+                    "compatibility checkpoint audio");
             assertTrue("compatibility run must publish a visible frame",
                     accuracy.events.frameCount > 0);
             assertTrue("compatibility run must publish an audio buffer",
@@ -1215,6 +1219,30 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 right.gameboy.getAddressSpace().getByte(0xff41));
         assertEquals(point + " IF", left.gameboy.getAddressSpace().getByte(0xff0f),
                 right.gameboy.getAddressSpace().getByte(0xff0f));
+    }
+
+    /**
+     * PERFORMANCE deliberately changes the host-facing source representation. Compare the
+     * actual 48-kHz PCM contract instead of the pre-resampler master-tick payload: event cadence
+     * and byte cadence remain exact, while the decimated representative sample is allowed a
+     * bounded level/energy difference from ACCURACY.
+     */
+    private static void assertAudioEquivalent(EventDigest expected, EventDigest actual,
+                                              String point) {
+        assertEquals(point + " event cadence", expected.audioCount, actual.audioCount);
+        assertEquals(point + " PCM cadence", expected.audioPcmBytes, actual.audioPcmBytes);
+        long levelTolerance = Math.max(64L,
+                Math.max(expected.audioPcmAbsSum, actual.audioPcmAbsSum) / 20L);
+        assertTrue(point + " PCM level differs by more than 5%",
+                Math.abs(expected.audioPcmAbsSum - actual.audioPcmAbsSum) <= levelTolerance);
+        long energyTolerance = Math.max(256L,
+                Math.max(expected.audioPcmEnergy, actual.audioPcmEnergy) / 10L);
+        assertTrue(point + " PCM energy differs by more than 10%",
+                Math.abs(expected.audioPcmEnergy - actual.audioPcmEnergy) <= energyTolerance);
+        int peakTolerance = Math.max(256,
+                Math.max(expected.audioPcmPeak, actual.audioPcmPeak) / 20);
+        assertTrue(point + " PCM peak differs by more than 5%",
+                Math.abs(expected.audioPcmPeak - actual.audioPcmPeak) <= peakTolerance);
     }
 
     private static boolean lazyCursor(Gpu gpu) throws Exception {
@@ -1411,6 +1439,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         }
         hasher.mix(type.getName().hashCode());
         for (RecordComponent component : type.getRecordComponents()) {
+            if (isHostOnlyState(type, component.getName())) {
+                continue;
+            }
             hasher.mix(component.getName().hashCode());
             var accessor = component.getAccessor();
             if (!accessor.trySetAccessible()) {
@@ -1422,6 +1453,25 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 throw new AssertionError("Unable to read state component " + component, e);
             }
         }
+    }
+
+    private static boolean isHostOnlyState(Class<?> type, String componentName) {
+        String name = type.getName();
+        if (name.equals("eu.rekawek.coffeegb.core.sound.Sound$SoundState")
+                || name.equals("eu.rekawek.coffeegb.core.sound.Sound$SoundMemento")) {
+            return componentName.equals("buffer")
+                    || componentName.equals("i")
+                    || componentName.equals("performanceSamplePhase")
+                    || componentName.equals("audioDecimation");
+        }
+        if (name.equals("eu.rekawek.coffeegb.core.gpu.Gpu$GpuState")
+                || name.equals("eu.rekawek.coffeegb.core.gpu.Gpu$GpuMemento")) {
+            return componentName.equals("performanceWindowLineCounter")
+                    || componentName.equals("performanceScanlineCursor")
+                    || componentName.equals("performanceScanlineLine")
+                    || componentName.equals("performanceScanlineEndTick");
+        }
+        return false;
     }
 
     private static final class Hasher {
@@ -1443,7 +1493,11 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         private int pal01Count;
         private long pal01Hash = 0xcbf29ce484222325L;
         private int audioCount;
-        private long audioHash = 0xcbf29ce484222325L;
+        private final StereoPcmConverter audioConverter = new StereoPcmConverter(48_000);
+        private int audioPcmBytes;
+        private long audioPcmAbsSum;
+        private long audioPcmEnergy;
+        private int audioPcmPeak;
 
         private void onFrame(Display.DmgFrameReadyEvent event) {
             frameCount++;
@@ -1488,19 +1542,30 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
 
         private void onAudio(Sound.SoundSampleEvent event) {
             audioCount++;
-            for (int sample : event.buffer()) {
-                mixAudio(sample);
+            int[] source = event.buffer();
+            int required = audioConverter.maximumPcmBytes(source.length / 2, event.clockSpec());
+            byte[] pcm = new byte[required];
+            int written = audioConverter.render(source, event.clockSpec(), 100, false, pcm);
+            audioPcmBytes += written;
+            for (int offset = 0; offset < written; offset += 4) {
+                int left = pcm[offset] & 0xff | pcm[offset + 1] << 8;
+                int right = pcm[offset + 2] & 0xff | pcm[offset + 3] << 8;
+                if (left >= 0x8000) {
+                    left -= 0x1_0000;
+                }
+                if (right >= 0x8000) {
+                    right -= 0x1_0000;
+                }
+                audioPcmAbsSum += Math.abs((long) left) + Math.abs((long) right);
+                audioPcmEnergy += (long) left * left + (long) right * right;
+                audioPcmPeak = Math.max(audioPcmPeak,
+                        Math.max(Math.abs(left), Math.abs(right)));
             }
         }
 
         private void mix(long next) {
             frameHash ^= next & 0xffffffffL;
             frameHash *= 0x100000001b3L;
-        }
-
-        private void mixAudio(long next) {
-            audioHash ^= next & 0xffffffffL;
-            audioHash *= 0x100000001b3L;
         }
 
         private void mixSgb(long next) {

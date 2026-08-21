@@ -29,6 +29,7 @@ import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateFile
+import eu.rekawek.coffeegb.controller.state.StateGraph
 import eu.rekawek.coffeegb.controller.state.StateValue
 import eu.rekawek.coffeegb.controller.state.StringState
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
@@ -319,7 +320,7 @@ object ReplayStateHasher {
         is RecordState -> {
           byte(7)
           int(value.typeId)
-          val fields = value.fields.sortedBy(StateField::name)
+          val fields = StateGraph.canonicalRecordFields(value).sortedBy(StateField::name)
           int(fields.size)
           fields.forEach {
             string(it.name)

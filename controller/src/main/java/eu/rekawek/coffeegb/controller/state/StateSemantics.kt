@@ -252,19 +252,45 @@ internal object StateSemantics {
                 it.require(index >= 0 && index % 2 == 0,
                     "has invalid stereo sample index $index")
                 it.require(
-                    samples.size == index || (samples.size > index && samples.size % 2 == 0),
+                    samples.size >= index && samples.size % 2 == 0,
                     "buffer length ${samples.size} is neither the pending prefix nor a bounded stereo full buffer")
                 it.range("pendingFrameSequencerStep", -1, 7)
                 it.range("frameSequencerClockPhase", 0, 3)
+                val samplePhase = it.int("performanceSamplePhase")
+                val decimation = it.int("audioDecimation")
+                it.require(decimation == 1 || decimation == 11 || decimation == 55,
+                    "has unsupported audio decimation")
+                it.require(samplePhase in 0 until decimation,
+                    "has invalid audio decimation phase $samplePhase for decimation $decimation")
+                it.require(decimation != 1 || samplePhase == 0,
+                    "full-rate audio must have zero decimation phase")
               },
               { fields, clock ->
-                val capacity = Math.multiplyExact(clock.controllerTicksPerFrame(), 2)
+                val decimation = fields.int("audioDecimation").toLong()
+                val numerator = Math.multiplyExact(
+                    clock.ticksPerSecondNumerator(),
+                    clock.controllerFramesPerSecondDenominator(),
+                )
+                val denominator = Math.multiplyExact(
+                    Math.multiplyExact(
+                        clock.ticksPerSecondDenominator(),
+                        clock.controllerFramesPerSecondNumerator(),
+                    ),
+                    decimation,
+                )
+                // Sound advertises a decimated ClockSpec whose controller budget is the exact
+                // floor of the source rational rate divided by the compact-stream decimation;
+                // dividing the already-floored source budget is not equivalent for every custom
+                // clock. Reconstruct the same rational floor here before checking the wire shape.
+                val capacity = Math.multiplyExact(Math.floorDiv(numerator, denominator), 2L)
                 val index = fields.int("i")
                 val samples = fields.intArray("buffer")
-                fields.require(index < capacity,
+                fields.require(index.toLong() < capacity,
                     "has stereo sample index $index outside target-clock capacity $capacity")
-                fields.require(samples.size == index || samples.size == capacity,
-                    "buffer length ${samples.size} does not match index $index or target-clock capacity $capacity")
+                fields.require(
+                    samples.size.toLong() == index.toLong() || samples.size.toLong() == capacity,
+                    "buffer length ${samples.size} is neither the pending prefix length $index " +
+                        "nor the target-clock full-buffer capacity $capacity")
               },
           ))
       put("eu.rekawek.coffeegb.core.timer.Timer\$TimerState",
@@ -531,6 +557,26 @@ internal object StateSemantics {
                   "has ${registers.size} CPU-visible PPU registers")
               it.require(registers.all { value -> value in -1..0xff },
                   "has an invalid CPU-visible PPU register")
+            }
+            val windowLineCounter = it.int("performanceWindowLineCounter")
+            it.require(windowLineCounter >= -1,
+                "has invalid PERFORMANCE window line counter=$windowLineCounter")
+            val mode = it.enumName("mode")
+            val lineLength = if (it.boolean("firstLine")) 455 else 456
+            val cursor = it.boolean("performanceScanlineCursor")
+            val lineMarker = it.boolean("performanceScanlineLine")
+            val endTick = it.int("performanceScanlineEndTick")
+            if (cursor) {
+              it.require(mode == "PixelTransfer" && lineMarker
+                  && endTick > it.int("ticksInLine") && endTick < lineLength,
+                  "has an invalid active PERFORMANCE scanline cursor")
+            } else {
+              it.require(endTick == 0,
+                  "inactive PERFORMANCE cursor retains endpoint $endTick")
+            }
+            if (lineMarker) {
+              it.require(mode == "PixelTransfer" || mode == "HBlank",
+                  "has an invalid PERFORMANCE line marker in mode $mode")
             }
           })
       put("eu.rekawek.coffeegb.core.gpu.phase.OamSearch\$OamSearchState",

@@ -162,21 +162,24 @@ public class Cpu implements StatefulComponent<Cpu> {
         this.timer = timer;
     }
 
-    public void tick() {
+    /**
+     * Advances the CPU clock phase without entering the instruction sequencer when this
+     * master tick is not a CPU machine-cycle boundary.
+     *
+     * <p>The ordinary emulator used to call {@link #tick()} for every master tick.  In
+     * normal speed three of those four calls only update the free-running phase and the
+     * synchronizer used by the PPU interrupt path.  PERFORMANCE can use this split to keep
+     * those calls on a small, allocation-free path while retaining the complete scalar
+     * sequencer at every boundary.  The return value is {@code true} when the caller must
+     * not enter the machine-cycle sequencer.</p>
+     */
+    public boolean tickPhaseOnly() {
         // VRAM DMA performs the next opcode fetch before taking the bus. Once the
         // burst releases the CPU, this ordinary machine cycle consumes that held
         // opcode and resumes the instruction pipeline.
         hdmaOpcodePrefetched = false;
 
-        boolean phasedPpuInput = interruptManager.isPhasedMode2InterruptRequested();
-        if (phasedPpuInput && !phasedPpuInputHigh) {
-            int cpuCycleTicks = 4 / speedMode.getSpeedMode();
-            fastPhasedPpuDispatch = (cpuCycleTicks == 4 && clockCycle == 1)
-                    || interruptManager.isFirstLineMode2InterruptRequested();
-        } else if (!phasedPpuInput) {
-            fastPhasedPpuDispatch = false;
-        }
-        phasedPpuInputHigh = phasedPpuInput;
+        updatePhasedPpuInput();
 
         if (state == State.SPEED_SWITCH) {
             if (speedSwitchTicks > 0) {
@@ -186,14 +189,104 @@ public class Cpu implements StatefulComponent<Cpu> {
                 speedSwitchTicks = 0;
                 state = State.OPCODE;
             }
-            return;
+            return true;
         }
 
         if (++clockCycle >= (4 / speedMode.getSpeedMode())) {
             clockCycle = 0;
         } else {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Returns the number of following master ticks that are guaranteed not to reach a CPU
+     * machine-cycle boundary. A zero result deliberately selects the scalar scheduler for
+     * double-speed, speed-switch, and rephased interrupt paths.
+     */
+    public int performancePhaseOnlySpanLimit() {
+        if (speedMode.getSpeedMode() != 1 || state == State.SPEED_SWITCH || clockCycle < 0) {
+            return 0;
+        }
+        return Math.max(0, 3 - clockCycle);
+    }
+
+    /**
+     * Whether a PERFORMANCE phase-only span may safely call the peripheral wake callback.
+     *
+     * <p>HALT entry and wake are deliberately kept on the scalar scheduler.  The callback can
+     * rephase {@link #clockCycle} for the HALT bug, or change the CPU state as an interrupt edge
+     * becomes visible.  The interrupt sequencer and locked/paused states are likewise cheap to
+     * leave scalar; a phase-only span is only useful while the ordinary instruction sequencer is
+     * active.</p>
+     */
+    public boolean performancePhaseOnlySpanEligible() {
+        return haltEntrySampleTicks == 0
+                && (state == State.OPCODE
+                || state == State.EXT_OPCODE
+                || state == State.OPERAND
+                || state == State.RUNNING);
+    }
+
+    /**
+     * Returns false while a CPU-visible STAT/IF read phase still needs the scalar scheduler's
+     * begin/finish hooks.  The phase markers are intentionally treated conservatively: unlike a
+     * normal opcode boundary they can alter the sampled IF/STAT value on the very first dot after
+     * a machine cycle, before StatRegister's bulk preflight observes the edge.
+     */
+    public boolean performanceNoPendingPpuReadPhase() {
+        return getStatReadPhaseFlags() == 0
+                && !interruptManager.hasPendingCpuReadPhase();
+    }
+
+    /**
+     * Advances a preflighted non-boundary phase without repeatedly entering {@link #tick()}.
+     * The caller must keep {@code ticks <= performancePhaseOnlySpanLimit()}.
+     */
+    public boolean advancePerformancePhaseOnly(int ticks) {
+        if (ticks < 0 || ticks > performancePhaseOnlySpanLimit()
+                || !performancePhaseOnlySpanEligible()) {
+            return false;
+        }
+        if (ticks == 0) {
+            return true;
+        }
+        hdmaOpcodePrefetched = false;
+        updatePhasedPpuInput();
+        clockCycle += ticks;
+        return true;
+    }
+
+    /** Advances a span after Gameboy has preflighted the normal-speed CPU phase and state. */
+    public void advancePerformancePhaseOnlyTrusted(int ticks) {
+        if (ticks <= 0) {
             return;
         }
+        hdmaOpcodePrefetched = false;
+        updatePhasedPpuInput();
+        clockCycle += ticks;
+    }
+
+    private void updatePhasedPpuInput() {
+        boolean phasedPpuInput = interruptManager.isPhasedMode2InterruptRequested();
+        if (phasedPpuInput && !phasedPpuInputHigh) {
+            int cpuCycleTicks = 4 / speedMode.getSpeedMode();
+            fastPhasedPpuDispatch = (cpuCycleTicks == 4 && clockCycle == 1)
+                    || interruptManager.isFirstLineMode2InterruptRequested();
+        } else if (!phasedPpuInput) {
+            fastPhasedPpuDispatch = false;
+        }
+        phasedPpuInputHigh = phasedPpuInput;
+    }
+
+    /**
+     * Runs the instruction sequencer after {@link #tickPhaseOnly()} reached a machine-cycle
+     * boundary.  This is public for the core scheduler; callers must not invoke it unless the
+     * phase method returned {@code false}.
+     */
+    public void tickAtMachineCycle() {
 
         if (state == State.LOCKED) {
             return;
@@ -497,6 +590,13 @@ public class Cpu implements StatefulComponent<Cpu> {
                 case SPEED_SWITCH:
                     return;
             }
+        }
+    }
+
+    /** Advances one master tick, retaining the historical scalar entry point. */
+    public void tick() {
+        if (!tickPhaseOnly()) {
+            tickAtMachineCycle();
         }
     }
 

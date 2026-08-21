@@ -648,6 +648,18 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         machineActive = false;
     }
 
+    /**
+     * Stops a line that was already composed by PERFORMANCE's direct scanline renderer.
+     *
+     * <p>The normal GPU starts both dot machines at mode-3 entry. Leaving them active after a
+     * direct composition would enqueue the same 160 pixels again during the coarse handoff and
+     * HBlank tail. The next scanline's {@link #start(int, boolean)} rebuilds their FIFOs.</p>
+     */
+    public void finishPerformanceLine() {
+        machineActive = false;
+        fifo.clearOutput();
+    }
+
     public int getPosition() {
         return position;
     }
@@ -927,8 +939,23 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         return windowPendingTicks > 0;
     }
 
-    int getWindowLineCounter() {
+    /** Current window row counter, exposed to the PERFORMANCE line compositor seam. */
+    public int getWindowLineCounter() {
         return windowLineCounter;
+    }
+
+    /**
+     * Publishes the row selected by the PERFORMANCE line compositor.
+     *
+     * <p>The compositor abandons both dot machines after taking a line-start snapshot. If a
+     * later write/deoptimization resumes scalar PixelTransfer, it must continue from the same
+     * window row rather than replaying the older machine counter.</p>
+     */
+    public void setWindowLineCounterForPerformance(int value) {
+        if (value < -1) {
+            throw new IllegalArgumentException("window line counter must be >= -1");
+        }
+        windowLineCounter = value;
     }
 
     public boolean isCgbWindowStartActive() {

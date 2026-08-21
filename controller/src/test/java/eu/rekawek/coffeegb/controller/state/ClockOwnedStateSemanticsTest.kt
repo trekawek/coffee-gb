@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.cpu.InterruptManager
 import eu.rekawek.coffeegb.core.cpu.SpeedMode
@@ -123,6 +124,33 @@ class ClockOwnedStateSemanticsTest {
     assertEquals(capacity, emitted.single().size)
     assertContentEquals(pending.takeLast(2).toIntArray(), emitted.single().sliceArray(index - 2 until index))
     bus.close()
+  }
+
+  @Test
+  fun performanceSoundUsesCompactClockCapacityAndPhaseBounds() {
+    val clock = ClockSpec.LEGACY
+    val speedMode = SpeedMode(true)
+    val sound = Sound(
+        Timer(InterruptManager(true), speedMode), speedMode, true, clock, ExecutionMode.PERFORMANCE)
+    val compactCapacity = 1_271 * 2
+    val base = record(sound.captureState())
+    val valid =
+        base
+            .replaceField("i", Int32State(compactCapacity - 2))
+            .replaceField("buffer", Int32ArrayState(IntArray(compactCapacity)))
+            .replaceField("performanceSamplePhase", Int32State(54))
+            .replaceField("audioDecimation", Int32State(55))
+    StateSemantics.validateForClock(soundState(valid), clock)
+
+    assertFailsWith<StateApplyException> {
+      StateSemantics.validateForClock(
+          soundState(valid.replaceField("performanceSamplePhase", Int32State(55))), clock)
+    }
+    assertFailsWith<StateApplyException> {
+      StateSemantics.validateForClock(
+          soundState(valid.replaceField("buffer", Int32ArrayState(IntArray(compactCapacity + 2)))),
+          clock)
+    }
   }
 
   @Test

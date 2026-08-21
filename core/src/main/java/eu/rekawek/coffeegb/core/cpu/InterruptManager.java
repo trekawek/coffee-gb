@@ -333,6 +333,30 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         return result;
     }
 
+    /**
+     * Returns whether the PPU/STAT side still has an acknowledge or FF0F-clear edge to
+     * consume on the next peripheral tick.  PERFORMANCE uses this read-only guard before
+     * taking its quiet STAT path; ordinary callers continue to use
+     * {@link #consumePpuTickSignals()}.
+     */
+    public boolean hasPpuTickSignals() {
+        return (interruptAcknowledges & PPU_INTERRUPT_MASK) != 0
+                || lcdcInterruptFlagWriteClear;
+    }
+
+    /**
+     * Returns whether a CPU-visible PPU/IF read mask or preview is still latched for the next
+     * peripheral tick. PERFORMANCE uses this cheap state-only predicate before skipping
+     * Gameboy.tickSubsystems' CPU-read begin/finish hooks; it deliberately avoids decoding the
+     * current instruction on every normal-speed phase candidate.
+     */
+    public boolean hasPendingCpuReadPhase() {
+        return maskVBlankOnNextRead
+                || maskLcdcUntilNextPeripheralTick
+                || maskMode0LcdcReadTicks > 0
+                || cpuReadInterruptPreview != 0;
+    }
+
     public void finishTimerInterruptAcknowledge() {
         clearInterruptState(InterruptType.Timer);
     }
@@ -436,6 +460,16 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
         if (maskMode0LcdcReadTicks > 0) {
             maskMode0LcdcReadTicks--;
         }
+        cpuReadInterruptPreview = 0;
+    }
+
+    /** Bulk counterpart used only when no CPU bus callback can occur in the span. */
+    public void finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview(int ticks) {
+        if (ticks < 0) {
+            throw new IllegalArgumentException("ticks must be non-negative");
+        }
+        maskLcdcUntilNextPeripheralTick = false;
+        maskMode0LcdcReadTicks = Math.max(0, maskMode0LcdcReadTicks - ticks);
         cpuReadInterruptPreview = 0;
     }
 

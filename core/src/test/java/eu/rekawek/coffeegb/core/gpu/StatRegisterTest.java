@@ -64,6 +64,35 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void performanceQuietSpanLooksAheadAcrossLineStatAndHaltCheckpoints() {
+        Fixture lineTail = quietFixture();
+        lineTail.advanceTo(1, 445);
+        assertTrue(lineTail.stat.canTickPerformanceQuietSpan(1));
+        assertTrue(lineTail.stat.canTickPerformanceQuietSpan(2));
+        assertFalse("a three-dot span must not jump over dot 448",
+                lineTail.stat.canTickPerformanceQuietSpan(3));
+
+        Fixture mode0Probe = quietFixture();
+        int probeTicks = 0;
+        while (mode0Probe.gpu.getMode0InterruptTick() == Integer.MAX_VALUE
+                && probeTicks++ < 1_000) {
+            mode0Probe.tick();
+        }
+        assertTrue("mode-0 prediction was not published", probeTicks < 1_000);
+        int mode0Tick = mode0Probe.gpu.getMode0InterruptTick();
+        Fixture mode0 = quietFixture();
+        mode0.advanceTo(1, mode0Tick - 2);
+        assertTrue(mode0.stat.canTickPerformanceQuietSpan(1));
+        assertFalse("span must stop at the mode-0 edge",
+                mode0.stat.canTickPerformanceQuietSpan(2));
+
+        Fixture haltWake = quietFixture();
+        haltWake.advanceTo(1, mode0Tick);
+        assertFalse("span must stop at the mode-0 +2 HALT synchronizer",
+                haltWake.stat.canTickPerformanceQuietSpan(2));
+    }
+
+    @Test
     public void hblankEnableMasksStatWriteGlitchAtOamBoundary() {
         Fixture fixture = new Fixture();
         fixture.advanceToHBlank();

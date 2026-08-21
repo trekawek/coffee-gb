@@ -101,8 +101,12 @@ final class NativeFrameStore implements AutoCloseable {
         if (slot == null) {
             return;
         }
-        event.toRgb(slot.pixels, grayscale);
-        makeOpaque(slot.pixels, Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT);
+        int[] palette = grayscale ? Display.DmgFrameReadyEvent.COLORS_GRAYSCALE
+                : Display.DmgFrameReadyEvent.COLORS;
+        int[] source = event.pixels();
+        for (int index = 0; index < source.length; index++) {
+            slot.pixels[index] = palette[source[index]] | 0xff000000;
+        }
         publish(slot);
     }
 
@@ -117,8 +121,11 @@ final class NativeFrameStore implements AutoCloseable {
         if (slot == null) {
             return;
         }
-        event.toRgb(slot.pixels, false);
-        makeOpaque(slot.pixels, Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT);
+        int[] source = event.pixels();
+        for (int index = 0; index < source.length; index++) {
+            slot.pixels[index] = Display.GbcFrameReadyEvent.translateGbcRgb(source[index])
+                    | 0xff000000;
+        }
         publish(slot);
     }
 

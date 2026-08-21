@@ -118,7 +118,11 @@ public class GpuRegisterValues implements AddressSpace, StatefulComponent<GpuReg
 
     /** Whether a write-conflict value is still waiting for a PPU tick. */
     boolean hasPendingConflictLatches() {
-        return conflictTickNeeded || hasConflictLatch();
+        // Every write path sets the derived bit, and tickConflicts keeps it asserted for the
+        // visible one-tick mix before clearing the latch. Avoid rescanning the five registers on
+        // every PERFORMANCE candidate; restoreState recomputes the bit from the serialized
+        // banks before the first post-restore query.
+        return conflictTickNeeded;
     }
 
     public void put(GpuRegister reg, int value) {
