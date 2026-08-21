@@ -505,6 +505,41 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         }
     }
 
+    /**
+     * Replays a deferred fixed-background span on the shifted, pixel-producing machine.
+     *
+     * <p>This deliberately uses the real full FIFO, output delay line, display and VRAM
+     * transfer rather than deriving pixels from the tile map.  The GPU only calls it after
+     * proving that this machine is on the same sprite/window-free steady line as the timing
+     * skeleton, and materializes it before any observable boundary.</p>
+     */
+    public void advanceSteadyBackgroundOutputSpan(int ticks) {
+        if (timingSkeleton || !(fifo instanceof DmgPixelFifo) || ticks < 0) {
+            throw new IllegalStateException("Invalid steady background output span");
+        }
+        // The shifted machine starts four dots behind the timing skeleton.  Its entry
+        // countdown still has observable fetcher/SCX bookkeeping.  Consume that short prefix
+        // through the exact machine once, then keep the long steady loop branch-free.
+        int startupTicks = machineActive ? Math.min(ticks, entryTicks) : 0;
+        int i = 0;
+        for (; i < startupTicks; i++) {
+            fifo.outputTick();
+            if (machineActive) {
+                if (!tick()) {
+                    machineActive = false;
+                }
+            } else {
+                renderSteadyBackgroundPixel();
+                fetcher.advanceSteadyBackground(position);
+            }
+        }
+        for (; i < ticks; i++) {
+            fifo.outputTick();
+            renderSteadyBackgroundPixel();
+            fetcher.advanceSteadyBackground(position);
+        }
+    }
+
     private void renderSteadyBackgroundPixel() {
         if (position >= -16 && position <= -9) {
             if ((position & 7) == (outputScx & 7)) {

@@ -81,6 +81,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // may enter the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
 
+    // The shifted output machine has a separate guarded span only for DMG/MGB.  Native CGB,
+    // compatibility and SGB output remain scalar until their own pixel-domain proof exists.
+    private final boolean performanceSteadyOutput;
+
     // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
     // ordinary CGB profile; CGB0 compatibility remains on the scalar reference path until its
     // revision-specific timing is measured independently.
@@ -223,6 +227,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private transient boolean steadyTimingCursor;
     private transient int steadyTimingTicks;
     private transient int steadyTimingEndTick;
+    private transient boolean steadyOutputCursor;
 
     // Public mutable component accessors predate the performance executor. Once one of those
     // aliases escapes, a later write cannot be observed by Gpu, so this session stays scalar.
@@ -277,6 +282,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || hardwareProfile == HardwareProfileRegistry.CGB0
                 || hardwareProfile == HardwareProfileRegistry.SGB
                 || hardwareProfile == HardwareProfileRegistry.SGB2);
+        this.performanceSteadyOutput = executionMode == ExecutionMode.PERFORMANCE
+                && !debugHistoryReplay
+                && (hardwareProfile == HardwareProfileRegistry.DMG
+                || hardwareProfile == HardwareProfileRegistry.MGB);
         this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && hardwareProfile == HardwareProfileRegistry.CGB;
@@ -627,7 +636,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (!timingTickDeferred) {
             pixelTransferPhase.outputTick();
         }
-        pixelMachine.outputAndMachineTick();
+        if (!(timingTickDeferred && steadyOutputCursor)) {
+            pixelMachine.outputAndMachineTick();
+        }
 
         Mode oldMode = mode;
         int oldLine = line;
@@ -850,6 +861,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         steadyTimingCursor = true;
         steadyTimingTicks = 1;
         steadyTimingEndTick = 248 + (r.get(SCX) & 7);
+        steadyOutputCursor = performanceSteadyOutput;
         return true;
     }
 
@@ -917,11 +929,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return;
         }
         int ticks = steadyTimingTicks;
+        boolean output = steadyOutputCursor;
         steadyTimingCursor = false;
         steadyTimingTicks = 0;
         steadyTimingEndTick = 0;
+        steadyOutputCursor = false;
         if (ticks > 0) {
             pixelTransferPhase.advanceSteadyBackgroundSpan(ticks);
+            if (output) {
+                pixelMachine.advanceSteadyBackgroundOutputSpan(ticks);
+            }
         }
     }
 
