@@ -24,9 +24,17 @@ import java.util.Arrays;
  */
 public final class Unlicensed256M implements MemoryController {
 
+    private static final int SRAM_SLOT_SIZE = 0x8000;
+
+    private static final int SRAM_SLOT_COUNT = 16;
+
     private final int[] cartridge;
 
     private final Mbc5 menu;
+
+    private final Battery battery;
+
+    private final int[] sharedRam = new int[SRAM_SLOT_SIZE * SRAM_SLOT_COUNT];
 
     private final TimeSource timeSource;
 
@@ -60,7 +68,10 @@ public final class Unlicensed256M implements MemoryController {
             TimeSource timeSource,
             ClockSpec clockSpec) {
         this.cartridge = rom.getRom();
-        this.menu = new Mbc5(rom, battery);
+        this.menu = new Mbc5(rom, Battery.NULL_BATTERY);
+        this.battery = battery;
+        Arrays.fill(sharedRam, 0xff);
+        battery.loadRam(sharedRam);
         this.timeSource = timeSource;
         this.clockSpec = clockSpec;
         this.guardedTimeSource = () -> stateTimeSourceAccessSuppressed
@@ -76,6 +87,9 @@ public final class Unlicensed256M implements MemoryController {
     public void setByte(int address, int value) {
         value &= 0xff;
         if (selectedGame != null) {
+            if (!isSramEnabled() && address >= 0xa000 && address < 0xc000) {
+                return;
+            }
             selectedGame.setByte(address, value);
             return;
         }
@@ -93,6 +107,12 @@ public final class Unlicensed256M implements MemoryController {
 
     @Override
     public int getByte(int address) {
+        if (selectedGame != null
+                && !isSramEnabled()
+                && address >= 0xa000
+                && address < 0xc000) {
+            return 0xff;
+        }
         return selectedGame == null ? menu.getByte(address) : selectedGame.getByte(address);
     }
 
@@ -146,7 +166,6 @@ public final class Unlicensed256M implements MemoryController {
 
     @Override
     public void flushRam() {
-        menu.flushRam();
         if (selectedGame != null) {
             selectedGame.flushRam();
         }
@@ -192,17 +211,24 @@ public final class Unlicensed256M implements MemoryController {
         } catch (IOException e) {
             throw new IllegalStateException("Unable to create selected multicart view", e);
         }
+        Battery childBattery = isSramEnabled()
+                ? new SlotBattery((selectedPage >>> 6) & 0x0f)
+                : Battery.NULL_BATTERY;
         if (gameRom.getType().isMbc1()) {
-            return new Mbc1(gameRom, Battery.NULL_BATTERY);
+            return new Mbc1(gameRom, childBattery);
         } else if (gameRom.getType().isMbc2()) {
-            return new Mbc2(gameRom, Battery.NULL_BATTERY);
+            return new Mbc2(gameRom, childBattery);
         } else if (gameRom.getType().isMbc3()) {
-            return new Mbc3(gameRom, Battery.NULL_BATTERY, guardedTimeSource, clockSpec);
+            return new Mbc3(gameRom, childBattery, guardedTimeSource, clockSpec);
         } else if (gameRom.getType().isMbc5()) {
-            return new Mbc5(gameRom, Battery.NULL_BATTERY);
+            return new Mbc5(gameRom, childBattery);
         } else {
-            return new BasicRom(gameRom, Battery.NULL_BATTERY);
+            return new BasicRom(gameRom, childBattery);
         }
+    }
+
+    private boolean isSramEnabled() {
+        return (configuration & 0x40) == 0;
     }
 
     private byte[] createGameImage(int baseRomBank, int romBanks) {
@@ -236,6 +262,7 @@ public final class Unlicensed256M implements MemoryController {
     public ComponentState<MemoryController> captureState() {
         return new Unlicensed256MState(
                 menu.captureState(),
+                sharedRam.clone(),
                 selectedPage,
                 pageMask,
                 configuration,
@@ -246,6 +273,7 @@ public final class Unlicensed256M implements MemoryController {
     public ComponentState<MemoryController> captureState(MachineStateCapture capture) {
         return new Unlicensed256MState(
                 menu.captureState(capture),
+                capture.ints(sharedRam),
                 selectedPage,
                 pageMask,
                 configuration,
@@ -254,6 +282,7 @@ public final class Unlicensed256M implements MemoryController {
 
     @Override
     public void declareMachineStatePayloads(MachineStateCapture capture) {
+        capture.declareInts(sharedRam);
         menu.declareMachineStatePayloads(capture);
         if (selectedGame != null) {
             selectedGame.declareMachineStatePayloads(capture);
@@ -266,6 +295,10 @@ public final class Unlicensed256M implements MemoryController {
             throw new IllegalArgumentException("Invalid state type");
         }
         menu.restoreState(mem.menuState);
+        if (mem.sharedRam.length != sharedRam.length) {
+            throw new IllegalArgumentException("ComponentState shared RAM length doesn't match");
+        }
+        System.arraycopy(mem.sharedRam, 0, sharedRam, 0, sharedRam.length);
         selectedPage = mem.selectedPage;
         pageMask = mem.pageMask;
         configuration = mem.configuration;
@@ -283,10 +316,68 @@ public final class Unlicensed256M implements MemoryController {
 
     private record Unlicensed256MState(
             ComponentState<MemoryController> menuState,
+            int[] sharedRam,
             int selectedPage,
             int pageMask,
             int configuration,
             ComponentState<MemoryController> selectedGameState)
             implements ComponentState<MemoryController> {
+    }
+
+    /** A selected game's mapper sees only its 32 KiB slice of the board's shared SRAM. */
+    private final class SlotBattery implements Battery {
+
+        private final int offset;
+
+        private SlotBattery(int slot) {
+            offset = slot * SRAM_SLOT_SIZE;
+        }
+
+        @Override
+        public void loadRam(int[] ram) {
+            Arrays.fill(ram, 0xff);
+            System.arraycopy(sharedRam, offset, ram, 0, Math.min(ram.length, SRAM_SLOT_SIZE));
+        }
+
+        @Override
+        public void saveRam(int[] ram) {
+            System.arraycopy(ram, 0, sharedRam, offset, Math.min(ram.length, SRAM_SLOT_SIZE));
+            battery.saveRam(sharedRam);
+        }
+
+        @Override
+        public void loadRamWithClock(int[] ram, long[] clockData) {
+            loadRam(ram);
+            if (clockData != null) {
+                Arrays.fill(clockData, 0);
+            }
+        }
+
+        @Override
+        public void saveRamWithClock(int[] ram, long[] clockData) {
+            saveRam(ram);
+        }
+
+        @Override
+        public void flush() {
+            battery.flush();
+        }
+
+        @Override
+        public DebugHistoryReplayShape debugHistoryReplayShape() {
+            return new DebugHistoryReplayShape(DebugHistoryReplayKind.NULL, 0);
+        }
+
+        @Override
+        public ComponentState<Battery> captureState() {
+            return null;
+        }
+
+        @Override
+        public void restoreState(ComponentState<Battery> state) {
+            if (state != null) {
+                throw new IllegalArgumentException("Slot battery has no independent state");
+            }
+        }
     }
 }

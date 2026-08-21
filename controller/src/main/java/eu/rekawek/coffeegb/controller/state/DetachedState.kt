@@ -1131,7 +1131,7 @@ internal object StateGraph {
       if (candidate === NullState || target === NullState) {
         if (candidate !== target &&
             !isAuditedNullable(owner, field, element) &&
-            !isDynamicMbc5MulticartGameState(owner, field)) {
+            !isDynamicMulticartGameState(owner, field)) {
           throw StateApplyException("$path has incompatible state presence")
         }
         return
@@ -1146,7 +1146,7 @@ internal object StateGraph {
             return
           }
           if (candidate.typeId != target.typeId) {
-            if (isDynamicMbc5MulticartGameState(owner, field)) {
+            if (isDynamicMulticartGameState(owner, field)) {
               // This board commits a selected game by replacing its virtual child mapper. The
               // candidate record has already passed the child-mapper policy; its type is not a
               // target-owned invariant of the surrounding physical cartridge.
@@ -1320,8 +1320,8 @@ internal object StateGraph {
       owner to field in if (element) AUDITED_NULLABLE_ELEMENTS else AUDITED_NULLABLE_FIELDS
 
   /** The board's committed child mapper can be absent or one of several native MBC records. */
-  private fun isDynamicMbc5MulticartGameState(owner: String?, field: String?): Boolean =
-      owner == MBC5_MULTICART_STATE && field == "selectedGameState"
+  private fun isDynamicMulticartGameState(owner: String?, field: String?): Boolean =
+      owner in DYNAMIC_MULTICART_STATES && field == "selectedGameState"
 
   private val VARIABLE_ARRAY_FIELDS =
       setOf(
@@ -1373,8 +1373,11 @@ internal object StateGraph {
   private const val FILE_BATTERY_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
 
-  private const val MBC5_MULTICART_STATE =
-      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
+  private val DYNAMIC_MULTICART_STATES =
+      setOf(
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Unlicensed256M\$Unlicensed256MState",
+      )
 
   /**
    * Exact nullable locations in the pinned legacy graph. Nullability is a field contract, not a

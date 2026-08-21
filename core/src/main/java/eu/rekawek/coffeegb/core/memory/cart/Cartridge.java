@@ -395,6 +395,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             if (mapper == CartridgeProperties.Mapper.SL_MULTICART) {
                 ramSize = 0x20000;
             }
+            if (mapper == CartridgeProperties.Mapper.UNLICENSED_256M) {
+                ramSize = 0x80000;
+            }
             if (xploderGb) {
                 ramSize = 0x20000;
             }

@@ -1,15 +1,23 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
+import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -71,7 +79,80 @@ public class Unlicensed256MTest {
         assertEquals(0xc3, mapper.getByte(0x4000));
     }
 
-    private static void configure(MemoryController mapper, int page, int invertedMask, int flags) {
+    @Test
+    public void persistsTheSelectedGames32KiBPageInTheShared512KiBImage() throws IOException {
+        Rom rom = new Rom(multicartRom());
+        Path save = Files.createTempFile("unlicensed-256m", ".sav");
+        try {
+            byte[] initial = new byte[0x80000];
+            Arrays.fill(initial, (byte) 0xff);
+            initial[slotRamOffset(5, 2, 0x123)] = 0x5a;
+            initial[slotRamOffset(4, 2, 0x123)] = 0x4a;
+            Files.write(save, initial);
+
+            assertTrue(Cartridge.supportsBatterySave(rom));
+            Cartridge cartridge = persistentCartridge(rom, save);
+            configure(cartridge, 0x60, 0xe0, 0x91);
+            cartridge.setByte(0x0000, 0x0a);
+            cartridge.setByte(0x4000, 0x02);
+            assertEquals(0x5a, cartridge.getByte(0xa123));
+            cartridge.setByte(0xa123, 0x6b);
+            cartridge.flushBattery();
+
+            byte[] saved = Files.readAllBytes(save);
+            assertEquals(0x80000, saved.length);
+            assertEquals(0x6b, saved[slotRamOffset(5, 2, 0x123)] & 0xff);
+            assertEquals(0x4a, saved[slotRamOffset(4, 2, 0x123)] & 0xff);
+
+            Cartridge reloaded = persistentCartridge(rom, save);
+            configure(reloaded, 0x60, 0xe0, 0x91);
+            reloaded.setByte(0x0000, 0x0a);
+            reloaded.setByte(0x4000, 0x02);
+            assertEquals(0x6b, reloaded.getByte(0xa123));
+        } finally {
+            Files.deleteIfExists(save);
+        }
+    }
+
+    @Test
+    public void configurationBitSixDisconnectsSharedSram() throws IOException {
+        Rom rom = new Rom(multicartRom());
+        Path save = Files.createTempFile("unlicensed-256m-disabled", ".sav");
+        try {
+            byte[] initial = new byte[0x80000];
+            Arrays.fill(initial, (byte) 0xff);
+            initial[slotRamOffset(5, 2, 0x123)] = 0x5a;
+            Files.write(save, initial);
+
+            Cartridge cartridge = persistentCartridge(rom, save);
+            configure(cartridge, 0x60, 0xe0, 0xd1);
+            cartridge.setByte(0x0000, 0x0a);
+            cartridge.setByte(0x4000, 0x02);
+            assertEquals(0xff, cartridge.getByte(0xa123));
+            cartridge.setByte(0xa123, 0x6b);
+            assertEquals(0xff, cartridge.getByte(0xa123));
+            cartridge.flushBattery();
+
+            assertArrayEquals(initial, Files.readAllBytes(save));
+        } finally {
+            Files.deleteIfExists(save);
+        }
+    }
+
+    private static Cartridge persistentCartridge(Rom rom, Path save) {
+        return new Cartridge(
+                rom,
+                true,
+                BatteryStorage.direct(save),
+                new SystemTimeSource(),
+                ClockSpec.LEGACY);
+    }
+
+    private static int slotRamOffset(int slot, int ramBank, int address) {
+        return slot * 0x8000 + ramBank * 0x2000 + address;
+    }
+
+    private static void configure(AddressSpace mapper, int page, int invertedMask, int flags) {
         mapper.setByte(0x7000, page);
         mapper.setByte(0x7001, invertedMask);
         mapper.setByte(0x7002, flags);
@@ -87,7 +168,7 @@ public class Unlicensed256MTest {
         data[0x0101] = (byte) 0xc3;
         data[0x0102] = 0x00;
         data[0x0103] = 0x40;
-        putHeader(data, 0xc0, "SELECTED", 0x19, 0x05, 0x00);
+        putHeader(data, 0xc0, "SELECTED", 0x1b, 0x05, 0x03);
         return data;
     }
 

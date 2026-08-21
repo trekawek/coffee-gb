@@ -61,6 +61,26 @@ class StateCoverageMatrixTest {
               Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
             },
             mapper(
+                "Unlicensed256M",
+                listOf(
+                    0x7000 to 0x60,
+                    0x7001 to 0xe0,
+                    0x7002 to 0x91,
+                    0x2000 to 0x03,
+                    0x0000 to 0x0a,
+                    0x4000 to 0x02,
+                    0xa000 to 0x2a,
+                ),
+                listOf(0x0100, 0x4000, 0xa000),
+            ) {
+              Unlicensed256M(
+                  unlicensed256MFixture(),
+                  Battery.NULL_BATTERY,
+                  VirtualTimeSource(120_000),
+                  ClockSpec.LEGACY,
+              )
+            },
+            mapper(
                 "Mbc5Multicart",
                 listOf(
                     0xb000 to 0x20,
@@ -222,7 +242,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(32, registeredMapperRecords.size)
+    assertEquals(33, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -811,6 +831,17 @@ class StateCoverageMatrixTest {
     return Rom(bytes)
   }
 
+  private fun unlicensed256MFixture(): Rom {
+    val bytes = ByteArray(0x400000)
+    repeat(bytes.size / 0x4000) { bank -> bytes[bank * 0x4000] = bank.toByte() }
+    val selected = 0xc0 * 0x4000
+    bytes[selected + 0x143] = 0x80.toByte()
+    bytes[selected + 0x147] = 0x1b
+    bytes[selected + 0x148] = 0x05
+    bytes[selected + 0x149] = 0x03
+    return Rom(bytes)
+  }
+
   private companion object {
     const val MBC5_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5\$Mbc5State"
     const val MBC6_MEMENTO = "eu.rekawek.coffeegb.core.memory.cart.type.Mbc6\$Mbc6State"
@@ -829,6 +860,7 @@ class StateCoverageMatrixTest {
             "Mbc2",
             "Mbc3",
             "Mbc5",
+            "Unlicensed256M",
             "Mbc5Multicart",
             "LiCheng",
             "XploderGb",
