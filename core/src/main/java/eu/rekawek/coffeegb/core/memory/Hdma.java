@@ -161,6 +161,9 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
 
     private transient DmaTrace.Engine debugDmaEngine = DmaTrace.Engine.VRAM_GENERAL;
 
+    // Session-transient generation for the GPU's guarded PPU bus cursor.
+    private transient long ppuBusGeneration;
+
     public Hdma(AddressSpace addressSpace) {
         this(addressSpace, new SpeedMode(false));
     }
@@ -168,6 +171,10 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     public Hdma(AddressSpace addressSpace, SpeedMode speedMode) {
         this.addressSpace = addressSpace;
         this.speedMode = speedMode;
+    }
+
+    public long getPpuBusGeneration() {
+        return ppuBusGeneration;
     }
 
     private void setCpuRequestArbitration(CpuRequestArbitration arbitration) {
@@ -186,6 +193,9 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
      * @return {@code true} when this tick completed a 16-byte transfer block
      */
     public boolean tick() {
+        if (transferInProgress) {
+            ppuBusGeneration++;
+        }
         sourceBusSample = null;
         if (!isTransferInProgress()) {
             return false;
@@ -293,6 +303,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
                 break;
             case HDMA5:
                 if (transferInProgress && hblankTransfer) {
+                    ppuBusGeneration++;
                     length = value & 0x7f;
                     if ((value & (1 << 7)) == 0) {
                         stopTransfer(value);
@@ -568,6 +579,9 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
      * affected here; a later HBlank may still request it while the clock is stopped.
      */
     public boolean onSpeedSwitch() {
+        if (transferInProgress) {
+            ppuBusGeneration++;
+        }
         speedSwitchInProgress = true;
         speedSwitchStartedWithoutRequest = hblankRequestTicks < 0;
         pauseOamDmaForSpeedSwitchBurst = false;
@@ -596,6 +610,9 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     public void onSpeedSwitchComplete() {
+        if (transferInProgress) {
+            ppuBusGeneration++;
+        }
         speedSwitchInProgress = false;
         if (!transferInProgress) {
             pauseOamDmaForSpeedSwitchBurst = false;
@@ -785,6 +802,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     private void startTransfer(int reg) {
+        ppuBusGeneration++;
         // A back-to-back double-speed GDMA grant retains the source sequencer's
         // two-tick hand-off instead of taking the phase of a fresh source setup.
         boolean resumedDoubleSpeedGdma = speedMode.getSpeedMode() == 2
@@ -841,11 +859,13 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         length = reg & 0x7f;
         preserveLengthAfterCurrentBlock = false;
         if (hblankRequestTicks == 0 && !requestOverlappedCpuWrite) {
+            ppuBusGeneration++;
             // A request that has crossed the PPU/CPU boundary cannot be retracted.
             // Disabling HDMA prevents later blocks, while this latched block still
             // observes the newly written length.
             stopAfterCurrentBlock = true;
         } else {
+            ppuBusGeneration++;
             notifyDmaEvent(DmaTrace.Kind.CANCELLED);
             transferInProgress = false;
             hblankRequestTicks = -1;
@@ -988,6 +1008,7 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         this.cpuRequestAllowsLateInterrupt = cpuRequestArbitration == CpuRequestArbitration.CPU
                 && mem.cpuRequestAllowsLateInterrupt;
         this.haltOpcodeRequestLatched = mem.haltOpcodeRequestLatched;
+        ppuBusGeneration++;
         if (debugHooks != null && transferInProgress) {
             alignDebugDmaObservation();
         }

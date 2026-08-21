@@ -83,6 +83,9 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
 
     private transient boolean debugMemoryHooks;
 
+    // Session-transient generation for the GPU's guarded PPU bus cursor.
+    private transient long ppuBusGeneration;
+
     public Dma(AddressSpace addressSpace, AddressSpace oam, SpeedMode speedMode) {
         this.addressSpace = new DmaAddressSpace(addressSpace, speedMode.isGbc());
         this.speedMode = speedMode;
@@ -90,6 +93,10 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         // FF46 most commonly powers up as 00 on CGB and FF on DMG.
         // Doc Cosmos reads FF46 to choose the phase of its title-screen scroller.
         regValue = speedMode.isGbc() ? 0x00 : 0xff;
+    }
+
+    public long getPpuBusGeneration() {
+        return ppuBusGeneration;
     }
 
     @Override
@@ -106,6 +113,9 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
     }
 
     public void tick(boolean cpuClockPaused, boolean haltEntryLatency) {
+        if (transferInProgress) {
+            ppuBusGeneration++;
+        }
         oamOwnedForPpuBeforeTick = oamOwnedForPpu;
         if (cpuClockPaused && !this.cpuClockPaused) {
             pauseEntryClocks = haltEntryLatency ? PAUSE_ENTRY_CLOCKS : 0;
@@ -188,6 +198,9 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
      * completed, without waiting for the ordinary four-clock release tail.
      */
     public void onSpeedSwitch() {
+        if (transferInProgress) {
+            ppuBusGeneration++;
+        }
         if (transferInProgress && currentByte >= 0xa0) {
             finishTransfer();
         }
@@ -204,6 +217,7 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
 
     @Override
     public void setByte(int address, int value) {
+        ppuBusGeneration++;
         if (transferInProgress) {
             notifyDmaEvent(DmaTrace.Kind.CANCELLED, currentByte);
         }
@@ -567,6 +581,7 @@ public class Dma implements AddressSpace, StatefulComponent<Dma> {
         this.vramDmaBusAddress = -1;
         this.vramDmaBusCollisionObserved = mem.vramDmaBusCollisionObserved;
         this.cpuInterruptStackWrite = false;
+        ppuBusGeneration++;
     }
 
     public record DmaState(boolean transferInProgress, boolean restarted, int from, int ticks,
