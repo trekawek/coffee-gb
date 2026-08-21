@@ -7,12 +7,14 @@ import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
 import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
 import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
+import eu.rekawek.coffeegb.core.sgb.Commands;
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.core.sound.Sound;
-import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
@@ -43,6 +45,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
 
     private static final List<HardwareProfile> NATIVE_CGB_PROFILES =
             List.of(HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0);
+
+    private static final List<HardwareProfile> SGB_PROFILES =
+            List.of(HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2);
 
     @Test
     public void uninterruptedSpanMatchesAccuracyForEveryFineScx() throws Exception {
@@ -91,6 +96,102 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                             profile.id() + " color span scx=" + scx);
                 }
             }
+        }
+    }
+
+    @Test
+    public void sgbAndSgb2SteadySpanPreservesFramesTransfersAudioAndCadence()
+            throws Exception {
+        for (HardwareProfile profile : SGB_PROFILES) {
+            for (int scx = 0; scx < 8; scx++) {
+                try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, scx);
+                        Session performance = new Session(ExecutionMode.PERFORMANCE, profile, scx)) {
+                    enterSteadyLine(accuracy);
+                    enterSteadyLine(performance);
+
+                    tickPair(accuracy, performance);
+                    assertTrue(profile.id() + " must arm its SGB timing cursor",
+                            lazyCursor(performance.gpu));
+                    assertEquals(profile, performance.gameboy.getHardwareProfile());
+                    assertSgbCadence(profile, performance.gameboy.getClockSpec());
+
+                    int startLine = performance.gpu.getLine();
+                    int startTicksInLine = performance.gpu.getTicksInLine();
+                    int startDmgFrames = performance.events.frameCount;
+                    int startSgbFrames = performance.events.sgbFrameCount;
+                    int startTransfers = performance.events.vRamTransferCount;
+                    long startMasterTicks = performance.masterTicks;
+
+                    int elapsed = 0;
+                    do {
+                        tickPair(accuracy, performance);
+                        elapsed++;
+                        assertTrue(profile.id() + " did not return to the same PPU phase",
+                                elapsed <= 70_224);
+                    } while (performance.gpu.getLine() != startLine
+                            || performance.gpu.getTicksInLine() != startTicksInLine);
+
+                    assertEquals(profile.id() + " exact LCD frame length", 70_224, elapsed);
+                    assertEquals(profile.id() + " master tick accounting", 70_224,
+                            performance.masterTicks - startMasterTicks);
+                    assertEquals(startDmgFrames + 1, performance.events.frameCount);
+                    assertEquals(startDmgFrames + 1, accuracy.events.frameCount);
+                    assertEquals(startSgbFrames + 1, performance.events.sgbFrameCount);
+                    assertEquals(startSgbFrames + 1, accuracy.events.sgbFrameCount);
+                    assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
+                    assertEquals(startTransfers + 1, accuracy.events.vRamTransferCount);
+                    assertEquals(accuracy.events.sgbFrameHash, performance.events.sgbFrameHash);
+                    assertEquals(accuracy.events.vRamTransferHash,
+                            performance.events.vRamTransferHash);
+                    assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+                    assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                    assertSameState(accuracy, performance,
+                            profile.id() + " SGB frame boundary scx=" + scx);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void sgbJoypadCommandLeavesArmedCursorAndRenderedStateIdentical()
+            throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.SGB, 3);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.SGB, 3)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue("SGB cursor should be armed before JOYP transfer",
+                    lazyCursor(performance.gpu));
+
+            sendSgbPal01Command(accuracy.gameboy);
+            sendSgbPal01Command(performance.gameboy);
+            assertEquals("Accuracy must deliver the PAL01 packet", 1,
+                    accuracy.events.pal01Count);
+            assertEquals("Performance must deliver the PAL01 packet", 1,
+                    performance.events.pal01Count);
+            assertEquals(accuracy.events.pal01Hash, performance.events.pal01Hash);
+            assertTrue("JOYP/SGB command must not disturb the independent PPU cursor",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "SGB JOYP command while armed");
+
+            int targetLine = performance.gpu.getLine();
+            int targetTicks = performance.gpu.getTicksInLine();
+            for (int i = 0; i < 70_224; i++) {
+                tickPair(accuracy, performance);
+            }
+            assertEquals(targetLine, performance.gpu.getLine());
+            assertEquals(targetTicks, performance.gpu.getTicksInLine());
+            assertEquals(accuracy.events.sgbFrameCount, performance.events.sgbFrameCount);
+            assertEquals(accuracy.events.sgbFrameHash, performance.events.sgbFrameHash);
+            assertEquals(accuracy.events.vRamTransferCount,
+                    performance.events.vRamTransferCount);
+            assertEquals(accuracy.events.vRamTransferHash,
+                    performance.events.vRamTransferHash);
+            assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertSameState(accuracy, performance, "SGB JOYP command frame continuation");
         }
     }
 
@@ -653,7 +754,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     private static void enterSteadyLine(Session session) {
         while (session.gpu.getLine() != STEADY_LINE
                 || session.gpu.getMode() != Mode.PixelTransfer) {
-            session.gameboy.tick();
+            session.tick();
         }
     }
 
@@ -665,13 +766,13 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         while (session.gpu.getLine() != 0
                 || session.gpu.getMode() != Mode.HBlank
                 || session.gpu.getTicksInLine() < 300) {
-            session.gameboy.tick();
+            session.tick();
         }
         session.gpu.setByte(0xff40, 0x91);
     }
 
     private static void tickPair(Session left, Session right) {
-        assertEquals(left.gameboy.tick(), right.gameboy.tick());
+        assertEquals(left.tick(), right.tick());
     }
 
     private static void startOneBlockGdma(Gameboy gameboy) {
@@ -690,6 +791,47 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         addressSpace.setByte(0xff53, 0x00);
         addressSpace.setByte(0xff54, 0x00);
         addressSpace.setByte(0xff55, 0x80);
+    }
+
+    private static void sendSgbPal01Command(Gameboy gameboy) {
+        int[] packet = new int[16];
+        packet[0] = 1; // PAL01, one packet
+        for (int i = 1; i < packet.length - 1; i++) {
+            packet[i] = (i * 0x13 + 7) & 0xff;
+        }
+        var addressSpace = gameboy.getAddressSpace();
+        writeJoypadSelector(addressSpace, 0x30);
+        writeJoypadSelector(addressSpace, 0x00);
+        writeJoypadSelector(addressSpace, 0x30);
+        for (int bitIndex = 0; bitIndex < packet.length * 8; bitIndex++) {
+            int bit = packet[bitIndex / 8] >> (bitIndex & 7) & 1;
+            writeJoypadSelector(addressSpace, bit == 0 ? 0x20 : 0x10);
+            writeJoypadSelector(addressSpace, 0x30);
+        }
+        writeJoypadSelector(addressSpace, 0x20);
+        writeJoypadSelector(addressSpace, 0x30);
+    }
+
+    private static void assertSgbCadence(HardwareProfile profile, ClockSpec clockSpec) {
+        if (profile == HardwareProfileRegistry.SGB) {
+            assertEquals(140_625L, clockSpec.controllerFramesPerSecondNumerator());
+            assertEquals(2_299L, clockSpec.controllerFramesPerSecondDenominator());
+        } else {
+            assertEquals(HardwareProfileRegistry.SGB2, profile);
+            assertEquals(262_144L, clockSpec.controllerFramesPerSecondNumerator());
+            assertEquals(4_389L, clockSpec.controllerFramesPerSecondDenominator());
+        }
+    }
+
+    private static void writeJoypadSelector(eu.rekawek.coffeegb.core.AddressSpace addressSpace,
+                                            int selector) {
+        addressSpace.setByte(0xff00, selector);
+    }
+
+    private static EventBusImpl sgbBus(Gameboy gameboy) throws Exception {
+        var field = Gameboy.class.getDeclaredField("sgbBus");
+        field.setAccessible(true);
+        return (EventBusImpl) field.get(gameboy);
     }
 
     private static void assertSameState(Session left, Session right, String point)
@@ -849,6 +991,12 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     private static final class EventDigest {
         private int frameCount;
         private long frameHash = 0xcbf29ce484222325L;
+        private int sgbFrameCount;
+        private long sgbFrameHash = 0xcbf29ce484222325L;
+        private int vRamTransferCount;
+        private long vRamTransferHash = 0xcbf29ce484222325L;
+        private int pal01Count;
+        private long pal01Hash = 0xcbf29ce484222325L;
         private int audioCount;
         private long audioHash = 0xcbf29ce484222325L;
 
@@ -864,6 +1012,31 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             frameCount++;
             for (int pixel : event.pixels()) {
                 mix(pixel);
+            }
+        }
+
+        private void onSgbFrame(SgbDisplay.SgbFrameReadyEvent event) {
+            sgbFrameCount++;
+            mixSgb(event.includeBorder() ? 1 : 0);
+            for (int pixel : event.buffer()) {
+                mixSgb(pixel);
+            }
+        }
+
+        private void onVramTransfer(VRamTransfer.VRamTransferComplete event) {
+            vRamTransferCount++;
+            for (int pixel : event.buffer()) {
+                mixTransfer(pixel);
+            }
+        }
+
+        private void onPal01(Commands.Pal01Cmd event) {
+            pal01Count++;
+            for (int color : event.getPalette0()) {
+                mixPal01(color);
+            }
+            for (int color : event.getPalette1()) {
+                mixPal01(color);
             }
         }
 
@@ -883,6 +1056,21 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             audioHash ^= next & 0xffffffffL;
             audioHash *= 0x100000001b3L;
         }
+
+        private void mixSgb(long next) {
+            sgbFrameHash ^= next & 0xffffffffL;
+            sgbFrameHash *= 0x100000001b3L;
+        }
+
+        private void mixTransfer(long next) {
+            vRamTransferHash ^= next & 0xffffffffL;
+            vRamTransferHash *= 0x100000001b3L;
+        }
+
+        private void mixPal01(long next) {
+            pal01Hash ^= next & 0xffffffffL;
+            pal01Hash *= 0x100000001b3L;
+        }
     }
 
     private static final class Session implements AutoCloseable {
@@ -890,6 +1078,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         private final EventDigest events = new EventDigest();
         private final Gameboy gameboy;
         private final Gpu gpu;
+        private long masterTicks;
 
         private Session(ExecutionMode mode, HardwareProfile profile, int scx) throws Exception {
             this(mode, profile, scx, true);
@@ -899,15 +1088,21 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                         boolean nativeColor) throws Exception {
             eventBus.register(events::onFrame, Display.DmgFrameReadyEvent.class);
             eventBus.register(events::onCgbFrame, Display.GbcFrameReadyEvent.class);
+            eventBus.register(events::onSgbFrame, SgbDisplay.SgbFrameReadyEvent.class);
             eventBus.register(events::onAudio, Sound.SoundSampleEvent.class);
             gameboy = new Gameboy.GameboyConfiguration(new Rom(syntheticRom(profile, nativeColor)))
                     .setHardwareProfile(profile)
                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                     .setExecutionMode(mode)
                     .setSupportBatterySave(false)
-                    .setDisplaySgbBorder(false)
+                    .setDisplaySgbBorder(profile.capabilities().superGameboyBorder())
                     .build();
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            if (profile.capabilities().superGameboyCommands()) {
+                sgbBus(gameboy).register(events::onVramTransfer,
+                        VRamTransfer.VRamTransferComplete.class);
+                sgbBus(gameboy).register(events::onPal01, Commands.Pal01Cmd.class);
+            }
             gpu = gameboy.getGpu();
             for (int address = 0x8000; address < 0xa000; address++) {
                 gpu.writeVideoRam0ForCore(address,
@@ -918,6 +1113,12 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             }
             gpu.setByte(0xff42, (scx * 19 + 3) & 0xff);
             gpu.setByte(0xff43, scx);
+        }
+
+        private boolean tick() {
+            boolean result = gameboy.tick();
+            masterTicks++;
+            return result;
         }
 
         @Override

@@ -77,8 +77,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     // Construction-time capability supplied by Gameboy.  This is deliberately a positive,
     // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB,
-    // ordinary CGB compatibility, and native CGB/CGB0 sessions without history/replay may enter
-    // the timing-skeleton cursor.
+    // SGB/SGB2, ordinary CGB compatibility, and native CGB/CGB0 sessions without history/replay
+    // may enter the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
 
     // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
@@ -274,7 +274,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && (hardwareProfile == HardwareProfileRegistry.DMG
                 || hardwareProfile == HardwareProfileRegistry.MGB
                 || hardwareProfile == HardwareProfileRegistry.CGB
-                || hardwareProfile == HardwareProfileRegistry.CGB0);
+                || hardwareProfile == HardwareProfileRegistry.CGB0
+                || hardwareProfile == HardwareProfileRegistry.SGB
+                || hardwareProfile == HardwareProfileRegistry.SGB2);
         this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && hardwareProfile == HardwareProfileRegistry.CGB;
