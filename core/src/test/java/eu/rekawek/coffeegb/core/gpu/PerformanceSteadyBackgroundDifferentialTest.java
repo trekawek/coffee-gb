@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.sgb.Commands;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
@@ -145,7 +146,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     }
 
     @Test
-    public void cgbDmgCompatibilityRetainsScalarOutputWhileTimingCursorIsArmed()
+    public void cgbDmgCompatibilityArmsColorOutputWhileTimingCursorIsArmed()
             throws Exception {
         try (Session accuracy = new Session(ExecutionMode.ACCURACY,
                 HardwareProfileRegistry.CGB, 3, false);
@@ -155,10 +156,10 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             enterSteadyLine(performance);
             tickPair(accuracy, performance);
             assertTrue(lazyCursor(performance.gpu));
-            assertFalse("CGB DMG-compatibility output must remain scalar",
+            assertTrue("CGB DMG-compatibility output must arm the color cursor",
                     outputCursor(performance.gpu));
             assertSameState(accuracy, performance,
-                    "CGB DMG-compatibility scalar output fallback");
+                    "CGB DMG-compatibility color output arm");
         }
     }
 
@@ -399,6 +400,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 tickPair(accuracy, performance);
                 assertTrue("CGB DMG-compatibility should arm the color timing cursor",
                         lazyCursor(performance.gpu));
+                assertTrue("CGB DMG-compatibility should arm the color output cursor",
+                        outputCursor(performance.gpu));
 
                 while (accuracy.gpu.getMode() == Mode.PixelTransfer) {
                     tickPair(accuracy, performance);
@@ -406,9 +409,58 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 assertEquals(Mode.HBlank, performance.gpu.getMode());
                 assertEquals(accuracy.gpu.getTicksInLine(), performance.gpu.getTicksInLine());
                 assertFalse(lazyCursor(performance.gpu));
+                assertFalse(outputCursor(performance.gpu));
                 assertSameState(accuracy, performance,
                         "CGB DMG-compatibility color span scx=" + scx);
             }
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityOutputCursorPreservesFrameTransferAudioAndCadence()
+            throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 5, false);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 5, false)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue("compatibility output cursor must be armed",
+                    outputCursor(performance.gpu));
+
+            int startLine = performance.gpu.getLine();
+            int startTicksInLine = performance.gpu.getTicksInLine();
+            int startFrames = performance.events.frameCount;
+            int startTransfers = performance.events.vRamTransferCount;
+            int startAudio = performance.events.audioCount;
+            long startMasterTicks = performance.masterTicks;
+
+            for (int i = 0; i < 70_224; i++) {
+                tickPair(accuracy, performance);
+            }
+
+            assertEquals("compatibility line after one LCD frame", startLine,
+                    performance.gpu.getLine());
+            assertEquals("compatibility dot after one LCD frame", startTicksInLine,
+                    performance.gpu.getTicksInLine());
+            assertEquals("compatibility exact LCD frame length", 70_224,
+                    performance.masterTicks - startMasterTicks);
+            assertEquals(startFrames + 1, accuracy.events.frameCount);
+            assertEquals(startFrames + 1, performance.events.frameCount);
+            assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+            assertEquals(startTransfers + 1, accuracy.events.vRamTransferCount);
+            assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
+            assertEquals(accuracy.events.vRamTransferHash, performance.events.vRamTransferHash);
+            assertEquals(startAudio + 1, accuracy.events.audioCount);
+            assertEquals(startAudio + 1, performance.events.audioCount);
+            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertTrue("compatibility frame should include a configured CGB palette color",
+                    containsPaletteColor(performance.events.lastFrame));
+            assertSameState(accuracy, performance,
+                    "CGB DMG-compatibility complete output frame");
+            assertFalse("compatibility output cursor must materialize at frame boundary",
+                    outputCursor(performance.gpu));
         }
     }
 
@@ -450,6 +502,21 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertFalse(lazyCursor(performance.gpu));
             assertSameState(accuracy, performance,
                     "CGB DMG-compatibility SCX write invalidation");
+
+            while (accuracy.gpu.getLine() == STEADY_LINE
+                    || accuracy.gpu.getMode() != Mode.PixelTransfer
+                    || accuracy.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+            assertTrue(outputCursor(performance.gpu));
+            accuracy.gpu.setByte(0xff40, 0x90); // clear LCDC.0, retain LCD and tile map
+            performance.gpu.setByte(0xff40, 0x90);
+            assertFalse(lazyCursor(performance.gpu));
+            assertFalse(outputCursor(performance.gpu));
+            assertSameState(accuracy, performance,
+                    "CGB DMG-compatibility LCDC.0 write invalidation");
         }
     }
 
@@ -466,6 +533,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             tickPair(accuracy, performance);
             assertFalse("unresolved compatibility handoff must remain scalar",
                     lazyCursor(performance.gpu));
+            assertFalse("unresolved compatibility handoff must keep output scalar",
+                    outputCursor(performance.gpu));
             assertSameState(accuracy, performance, "compatibility handoff unresolved");
 
             performance.gpu.setBootCompatibilityResolved(true);
@@ -477,6 +546,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             tickPair(accuracy, performance);
             assertTrue("resolved compatibility handoff should arm the cursor",
                     lazyCursor(performance.gpu));
+            assertTrue("resolved compatibility handoff should arm output",
+                    outputCursor(performance.gpu));
             assertSameState(accuracy, performance, "compatibility handoff resolved");
         }
     }
@@ -868,12 +939,18 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             }
             assertTrue("compatibility checkpoint should capture an armed cursor",
                     lazyCursor(source.gpu));
+            assertTrue("compatibility checkpoint should capture an armed output cursor",
+                    outputCursor(source.gpu));
 
             ComponentState<Gameboy> saved = source.gameboy.captureStateWithoutTimeSource();
             accuracy.gameboy.restoreStateSilently(saved);
             performance.gameboy.restoreStateSilently(saved);
             assertFalse(lazyCursor(accuracy.gpu));
             assertFalse(lazyCursor(performance.gpu));
+            assertFalse("restored compatibility checkpoint must materialize output",
+                    outputCursor(accuracy.gpu));
+            assertFalse("restored compatibility checkpoint must materialize output",
+                    outputCursor(performance.gpu));
             assertSameState(accuracy, performance, "compatibility restored checkpoint");
 
             for (int i = 0; i < 145_000; i++) {
@@ -1042,6 +1119,66 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         }
     }
 
+    /**
+     * Seeds a non-color CGB fixture with payload that exercises the current plain-CGB rendering
+     * semantics used after the compatibility handoff: physical palette RAM and VRAM-1 tile
+     * attributes remain part of the renderer even though the CPU-side VBK bus is masked. The
+     * bank-1 writes intentionally bypass that CPU mask as a synthetic physical-memory fixture.
+     */
+    private static void configureCompatibilityCgb(Gpu gpu) throws Exception {
+        gpu.setByte(0xff47, 0x1b); // reverse DMG shade mapping for BGP
+        gpu.setByte(0xff48, 0x39);
+        gpu.setByte(0xff49, 0x6c);
+
+        for (int row = 0; row < 8; row++) {
+            gpu.setByte(0x8020 + row * 2, 0x17 ^ row * 0x29);
+            gpu.setByte(0x8021 + row * 2, 0x83 ^ row * 0x35);
+            writeVideoRam1ForFixture(gpu, 0x8020 + row * 2, 0x3c ^ row * 0x17);
+            writeVideoRam1ForFixture(gpu, 0x8021 + row * 2, 0xc3 ^ row * 0x2b);
+        }
+        for (int i = 0; i < 0x400; i++) {
+            gpu.setByte(0x9800 + i, 2);
+            int attributes = (i & 7) | 0x08;
+            if ((i & 1) != 0) {
+                attributes |= 0x20; // X flip
+            }
+            if ((i & 2) != 0) {
+                attributes |= 0x40; // Y flip
+            }
+            if ((i & 4) != 0) {
+                attributes |= 0x80; // tile priority (visible when an object is present)
+            }
+            writeVideoRam1ForFixture(gpu, 0x9800 + i, attributes);
+        }
+        for (int palette = 0; palette < 8; palette++) {
+            gpu.setByte(0xff68, 0x80 | (palette << 3));
+            for (int color = 0; color < 4; color++) {
+                int value = 0x1000 | (palette << 6) | color;
+                gpu.setByte(0xff69, value & 0xff);
+                gpu.setByte(0xff69, value >>> 8);
+            }
+        }
+    }
+
+    private static void writeVideoRam1ForFixture(Gpu gpu, int address, int value)
+            throws Exception {
+        var field = Gpu.class.getDeclaredField("videoRam1");
+        field.setAccessible(true);
+        ((Ram) field.get(gpu)).setByte(address, value);
+    }
+
+    private static boolean containsPaletteColor(int[] frame) {
+        if (frame == null) {
+            return false;
+        }
+        for (int pixel : frame) {
+            if ((pixel & 0x1000) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static DebugInstrumentation cpuOnlyInstrumentation() {
         DebugInstrumentation instrumentation = new DebugInstrumentation(
                 2,
@@ -1141,6 +1278,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     private static final class EventDigest {
         private int frameCount;
         private long frameHash = 0xcbf29ce484222325L;
+        private int[] lastFrame;
         private int sgbFrameCount;
         private long sgbFrameHash = 0xcbf29ce484222325L;
         private int vRamTransferCount;
@@ -1160,6 +1298,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
 
         private void onCgbFrame(Display.GbcFrameReadyEvent event) {
             frameCount++;
+            lastFrame = event.pixels().clone();
             for (int pixel : event.pixels()) {
                 mix(pixel);
             }
@@ -1260,6 +1399,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             }
             if (nativeColor) {
                 configureNativeCgb(gpu);
+            } else if (profile.family() == HardwareProfile.Family.CGB) {
+                configureCompatibilityCgb(gpu);
             }
             gpu.setByte(0xff42, (scx * 19 + 3) & 0xff);
             gpu.setByte(0xff43, scx);
