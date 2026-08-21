@@ -387,11 +387,15 @@ public final class CartridgeProperties {
                 'P', 'O', 'K', 'E', 'M', 'O', 'N', '_',
                 'G', 'L', 'D', 'A', 'A', 'U', 'J'
         };
-        return info.data.length == 0x400000
+        boolean pokemon36In1 = info.data.length == 0x400000
                 && matches(info.data, 0x0134, title)
                 && info.byteAt(0x0143) == 0x80
                 && info.rawType() == 0x10
                 && info.byteAt(0x0148) == 0x06;
+        boolean vastFameMulticart = (info.data.length == 0x800000
+                || info.data.length == 0x1000000)
+                && info.title().startsWith("TIMER MONSTER");
+        return pokemon36In1 || vastFameMulticart;
     }
 
     private static boolean isBhgosMulticart(RomInfo info) {
