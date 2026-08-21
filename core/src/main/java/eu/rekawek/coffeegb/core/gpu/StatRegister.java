@@ -248,7 +248,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     private void refreshGpuTiming() {
         long generation = gpu.getTimingGeneration();
         if (generation != timingGeneration) {
-            gpu.captureStatTiming(timing);
+            gpu.captureStatTimingForTick(timing);
             timingGeneration = generation;
         }
     }
@@ -258,7 +258,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         this.gpu = gpu;
         refreshGpuTiming();
         this.gbc = gpu.isGbc();
-        this.registers = gpu.getRegisters();
+        this.registers = gpu.getRegistersForStat();
         lycIrqStatSource = enableBits;
         lycIrqValueSource = registers.get(LYC);
         lycIrqStatLatch = lycIrqStatSource;
@@ -276,7 +276,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         lycIrqClock++;
         clearCpuStatReadPhase();
         int ppuTickSignals = interruptManager.consumePpuTickSignals();
-        boolean statEventCheckpoint = gpu.isStatEventCheckpoint();
+        boolean statEventCheckpoint = gpu.isStatEventCheckpointForTick();
         boolean scheduledEvent = nextLycIrqEvent == lycIrqClock
                 || pendingLycWriteIrq == lycIrqClock
                 || pendingLycComparatorIrq == lycIrqClock;
@@ -745,7 +745,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         boolean mode0SourceEnabled = mode0Enabled
                 && !((mode0IrqStatLatch & 0x40) != 0 && line == mode0IrqLycLatch);
         boolean dmgMode0 = mode0SourceEnabled
-                && gpu.isDmgTerminalWindowMode0ReadPreviewPhase();
+                && gpu.isDmgTerminalWindowMode0ReadPreviewPhaseForTick();
         boolean nativeNormalRephased = gbc && !dmgCompat
                 && !doubleSpeed && timing.statModeLatchRephasedBySpeedSwitch;
         boolean doubleSpeedMode0 = gbc && !dmgCompat && doubleSpeed

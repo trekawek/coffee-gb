@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.gpu;
 import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace;
 import eu.rekawek.coffeegb.core.debug.DebugByteData;
 import eu.rekawek.coffeegb.core.debug.DebugGraphicsHardwareMode;
@@ -11,6 +12,8 @@ import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.debug.DebugPpuMode;
 import eu.rekawek.coffeegb.core.debug.trace.PpuTrace;
 import eu.rekawek.coffeegb.core.gpu.phase.*;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -65,6 +68,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private long timingGeneration;
 
     private final boolean earlyCgbLyReadEdge;
+
+    // Construction-time capability supplied by Gameboy.  This is deliberately a positive,
+    // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB
+    // sessions without history/replay may enter the timing-skeleton cursor below.
+    private final boolean performanceSteadyTiming;
 
     private final ColorPalette bgPalette;
 
@@ -188,6 +196,18 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private transient DebugHooks debugHooks;
 
+    // Deferred timing-skeleton work for one proven DMG background line.  These fields are
+    // transient by design; capture/restore first materializes and therefore never serializes a
+    // lazy cursor.
+    private transient boolean steadyTimingCursor;
+    private transient int steadyTimingTicks;
+    private transient int steadyTimingEndTick;
+
+    // Public mutable component accessors predate the performance executor. Once one of those
+    // aliases escapes, a later write cannot be observed by Gpu, so this session stays scalar.
+    // This is session metadata, not emulated hardware state, and deliberately survives restore.
+    private transient boolean mutablePpuStateExposed;
+
     /** Monotonic physical frame-ready count used only by debugger observations. */
     private long debugPpuFrame;
 
@@ -209,6 +229,17 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                StatRegister statRegister, boolean gbc,
                eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
                boolean mealybugDmgBlob, boolean earlyCgbLyReadEdge) {
+        this(display, dma, oamRam, vRamTransfer, statRegister, gbc, speedMode,
+                mealybugDmgBlob, earlyCgbLyReadEdge,
+                ExecutionMode.ACCURACY, null, false);
+    }
+
+    public Gpu(Display display, Dma dma, Ram oamRam, VRamTransfer vRamTransfer,
+               StatRegister statRegister, boolean gbc,
+               eu.rekawek.coffeegb.core.cpu.SpeedMode speedMode,
+               boolean mealybugDmgBlob, boolean earlyCgbLyReadEdge,
+               ExecutionMode executionMode, HardwareProfile hardwareProfile,
+               boolean debugHistoryReplay) {
         this.statRegister = statRegister;
         Arrays.fill(cpuVisiblePpuRegisters, -1);
         this.display = display;
@@ -217,6 +248,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.gbc = gbc;
         this.speedMode = speedMode;
         this.earlyCgbLyReadEdge = earlyCgbLyReadEdge;
+        this.performanceSteadyTiming = executionMode == ExecutionMode.PERFORMANCE
+                && !debugHistoryReplay
+                && (hardwareProfile == HardwareProfileRegistry.DMG
+                || hardwareProfile == HardwareProfileRegistry.MGB);
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -259,12 +294,13 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * final palette/display work for a deliberately unpresented frame.</p>
      */
     public void setRenderOutput(boolean renderOutput) {
+        materializeSteadyTiming();
         pixelMachine.setRenderOutput(renderOutput);
     }
 
     private AddressSpace getAddressSpace(int address) {
         if (videoRam0.accepts(address)) {
-            return isVramAvailableForCpu() ? getVideoRam() : null;
+            return isVramAvailableForCpu() ? selectedVideoRam() : null;
         } else if (oamRam.accepts(address)) {
             return !dma.isOamBlocked() && isOamAvailableForCpu() ? oamRam : null;
         } else if (lcdc.accepts(address)) {
@@ -281,6 +317,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public Ram getVideoRam() {
+        exposeMutablePpuState();
+        return selectedVideoRam();
+    }
+
+    private Ram selectedVideoRam() {
         if (gbc && (r.get(VBK) & 1) == 1) {
             return videoRam1;
         } else {
@@ -289,11 +330,25 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public Ram getVideoRam0() {
+        exposeMutablePpuState();
         return videoRam0;
     }
 
     public Ram getVideoRam1() {
+        exposeMutablePpuState();
         return videoRam1;
+    }
+
+    /** Core boot-state helper that does not expose a retained mutable RAM alias. */
+    public void writeVideoRam0ForCore(int address, int value) {
+        materializeSteadyTiming();
+        videoRam0.setByte(address, value);
+    }
+
+    /** Core HDMA helper that reads the selected physical bank without exposing its RAM object. */
+    public int readSelectedVideoRamForCore(int address) {
+        materializeSteadyTiming();
+        return selectedVideoRam().getByte(address);
     }
 
     @Override
@@ -304,6 +359,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByte(int address, int value) {
+        materializeSteadyTiming();
         timingGeneration++;
         cancelPendingPpuWrites(address);
         cancelDelayedPixelWindowWrite(address);
@@ -312,6 +368,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public void setByteFromCpu(int address, int value) {
+        materializeSteadyTiming();
         timingGeneration++;
         scheduleDmgPixelWindowWrite(address, value);
         if (address == LCDC_ADDRESS && gbc && lcdEnabled && mode == Mode.PixelTransfer) {
@@ -393,7 +450,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         if (videoRam0.accepts(address)) {
             lastCpuVramWriteTick = ticksInLine;
             if (isVramAvailableForCpu(true)) {
-                getVideoRam().setByte(address, value);
+                selectedVideoRam().setByte(address, value);
             }
             return;
         }
@@ -415,6 +472,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public int getByte(int address) {
+        materializeSteadyTiming();
         if (address >= LCDC_ADDRESS && address <= LAST_STANDARD_REGISTER_ADDRESS) {
             int cpuVisible = cpuVisiblePpuRegisters[address - LCDC_ADDRESS];
             if (cpuVisible >= 0) {
@@ -537,7 +595,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         // The timing-only skeleton has a throwaway Display, but its delay line still
         // participates in window rewind/refresh bookkeeping and must advance as a
         // bounded ring just like the shifted output machine.
-        pixelTransferPhase.outputTick();
+        boolean timingTickDeferred = deferSteadyTimingDot();
+        if (!timingTickDeferred) {
+            pixelTransferPhase.outputTick();
+        }
         pixelMachine.outputAndMachineTick();
 
         Mode oldMode = mode;
@@ -604,27 +665,39 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                         pixelTransferDone = false;
                         mode = Mode.HBlank;
                     } else {
-                        int oldPosition = pixelTransferPhase.getPosition();
-                        boolean terminalWindowAlreadyStarted =
-                                pixelTransferPhase.hasCgbTerminalWindowStarted();
-                        boolean active = phase.tick();
-                        if (mode0IntFrom != Integer.MAX_VALUE
-                                && !terminalWindowAlreadyStarted
-                                && pixelTransferPhase.hasCgbTerminalWindowStarted()
-                                && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()) {
-                            // The X=166 M0 event is independent of the later X=167
-                            // STAT/bus prediction. When both comparators collide, its
-                            // CPU-visible event crosses two dots after Coffee's early
-                            // right-edge prediction has been captured. That prediction
-                            // always crosses X=158->159 one tick before this terminal
-                            // X=159->160 commit, so mode0IntFrom is already finite.
-                            mode0IntFrom += 2;
-                        }
-                        if (oldPosition <= 158
-                                && mode0IntFrom == Integer.MAX_VALUE
-                                && pixelTransferPhase.getPosition() > 158
-                                && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()) {
-                            mode0IntFrom = ticksInLine + 3;
+                        boolean active;
+                        if (timingTickDeferred) {
+                            if (ticksInLine < steadyTimingEndTick) {
+                                break;
+                            }
+                            // Include the current dot in one exact, specialized replay. This
+                            // restores the canonical Fetcher/FIFO endpoint before the normal
+                            // mode-3/HBlank handoff below.
+                            materializeSteadyTiming();
+                            active = false;
+                        } else {
+                            int oldPosition = pixelTransferPhase.getPosition();
+                            boolean terminalWindowAlreadyStarted =
+                                    pixelTransferPhase.hasCgbTerminalWindowStarted();
+                            active = phase.tick();
+                            if (mode0IntFrom != Integer.MAX_VALUE
+                                    && !terminalWindowAlreadyStarted
+                                    && pixelTransferPhase.hasCgbTerminalWindowStarted()
+                                    && pixelTransferPhase.hasSpriteAtTerminalPredictionEdge()) {
+                                // The X=166 M0 event is independent of the later X=167
+                                // STAT/bus prediction. When both comparators collide, its
+                                // CPU-visible event crosses two dots after Coffee's early
+                                // right-edge prediction has been captured. That prediction
+                                // always crosses X=158->159 one tick before this terminal
+                                // X=159->160 commit, so mode0IntFrom is already finite.
+                                mode0IntFrom += 2;
+                            }
+                            if (oldPosition <= 158
+                                    && mode0IntFrom == Integer.MAX_VALUE
+                                    && pixelTransferPhase.getPosition() > 158
+                                    && pixelTransferPhase.hasSpriteAtMode0PredictionEdge()) {
+                                mode0IntFrom = ticksInLine + 3;
+                            }
                         }
                         if (active) {
                             break;
@@ -695,6 +768,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Rephases the CGB CPU-readable PPU latches when the CPU clock mux changes. */
     public void onSpeedSwitch() {
+        materializeSteadyTiming();
         timingGeneration++;
         prepareForTick();
         statModeLatchRephasedBySpeedSwitch = true;
@@ -703,6 +777,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Refreshes cached PPU timing mode after an owner-thread source change. */
     public void prepareForTick() {
+        materializeSteadyTiming();
         if (timingModeDirty) {
             int newSpeedModeValue = speedMode.getSpeedMode();
             boolean newDmgCompatValue = speedMode.isDmgCompat();
@@ -716,18 +791,111 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Retains the old CPU-readable STAT phase until the current scanline ends. */
     public void onSpeedSwitchComplete() {
+        materializeSteadyTiming();
         timingGeneration++;
         speedSwitchCompletedThisLine = true;
     }
 
     /** Captures the CPU/PPU phase selected when a double-speed mode-2 IRQ is accepted. */
     public void onDoubleSpeedMode2Dispatch() {
+        materializeSteadyTiming();
         timingGeneration++;
         doubleSpeedMode2DispatchStatTailThisLine = true;
     }
 
     long getTimingGeneration() {
         return timingGeneration;
+    }
+
+    private boolean deferSteadyTimingDot() {
+        if (steadyTimingCursor) {
+            if (!steadyTimingStillEligible()) {
+                materializeSteadyTiming();
+                return false;
+            }
+            steadyTimingTicks++;
+            return true;
+        }
+        if (!canStartSteadyTiming()) {
+            return false;
+        }
+        steadyTimingCursor = true;
+        steadyTimingTicks = 1;
+        steadyTimingEndTick = 248 + (r.get(SCX) & 7);
+        return true;
+    }
+
+    private boolean canStartSteadyTiming() {
+        return performanceSteadyTiming
+                && !mutablePpuStateExposed
+                && !gbc
+                && !dmgCompatValue
+                && speedModeValue == 1
+                && debugHooks == null
+                && dma != null
+                && !dma.isTransferInProgress()
+                && !dma.ownsOamForPpu()
+                && !dma.hasPpuOamOwnershipTransitionThisTick()
+                && mode == Mode.PixelTransfer
+                && phase == pixelTransferPhase
+                && line > 0
+                && !firstLine
+                && ticksInLine == 80
+                && !pixelTransferDone
+                && pendingPpuWrites.isEmpty()
+                && lastCpuVramWriteTick == Integer.MIN_VALUE
+                && !scxWrittenThisLine
+                && !wyWrittenThisLine
+                && !r.hasPendingConflictLatches()
+                && !lcdc.hasPendingConflictLatches()
+                && !r.isWxJustChanged()
+                && !lcdc.isWindowDisplay()
+                && !pixelTransferPhase.isWindowActive()
+                && !pixelTransferPhase.isWindowBeingFetched()
+                && !pixelTransferPhase.isWindowYTriggered()
+                && !pixelTransferPhase.isObjectFetchInProgress()
+                && !pixelTransferPhase.hasObjectsOnLine()
+                && pixelTransferPhase.usesScalarTimingFifo()
+                && !pixelTransferPhase.hasDelayedWindowDisplayWrite()
+                && !pixelTransferPhase.hasDelayedWindowXWrite()
+                && pixelTransferPhase.getPosition() == -16
+                && !pixelMachine.isWindowDisplayVisible()
+                && !pixelMachine.isWindowActive()
+                && !pixelMachine.isWindowBeingFetched()
+                && !pixelMachine.isWindowYTriggered()
+                && !pixelMachine.isObjectFetchInProgress()
+                && !pixelMachine.hasObjectsOnLine()
+                && !pixelMachine.hasDelayedWindowDisplayWrite()
+                && !pixelMachine.hasDelayedWindowXWrite()
+                && pixelMachine.getPosition() == -16;
+    }
+
+    private boolean steadyTimingStillEligible() {
+        // All emulator-owned invalidators materialize synchronously. DMA is the one external
+        // owner that can change without entering Gpu, so this is intentionally the only live
+        // per-dot eligibility check after the span has been armed.
+        return !dma.isTransferInProgress()
+                && !dma.ownsOamForPpu()
+                && !dma.hasPpuOamOwnershipTransitionThisTick();
+    }
+
+    /** Materializes the transient cursor before any observer, write, or state boundary. */
+    private void materializeSteadyTiming() {
+        if (!steadyTimingCursor) {
+            return;
+        }
+        int ticks = steadyTimingTicks;
+        steadyTimingCursor = false;
+        steadyTimingTicks = 0;
+        steadyTimingEndTick = 0;
+        if (ticks > 0) {
+            pixelTransferPhase.advanceSteadyBackgroundSpan(ticks);
+        }
+    }
+
+    private void exposeMutablePpuState() {
+        materializeSteadyTiming();
+        mutablePpuStateExposed = true;
     }
 
     public boolean isStatModeLatchRephasedBySpeedSwitch() {
@@ -865,6 +1033,12 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     void captureStatTiming(GpuTimingSnapshot target) {
+        materializeSteadyTiming();
+        captureStatTimingForTick(target);
+    }
+
+    /** Scheduler-only STAT snapshot; the owner has already advanced this GPU dot. */
+    void captureStatTimingForTick(GpuTimingSnapshot target) {
         target.line = line;
         target.ticksInLine = ticksInLine;
         target.lcdEnabled = lcdEnabled;
@@ -919,10 +1093,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * {@link GpuTimingSnapshot} in {@link StatRegister}.
      */
     boolean isStatEventCheckpoint() {
+        materializeSteadyTiming();
+        return isStatEventCheckpointForTick();
+    }
+
+    /** Scheduler-only checkpoint query that preserves the deferred timing span. */
+    boolean isStatEventCheckpointForTick() {
         if (!lcdEnabled) {
             return false;
         }
-        int mode0InterruptTick = getMode0InterruptTick();
+        int mode0InterruptTick = getMode0InterruptTickForTick();
         return ticksInLine < 13
                 || ticksInLine >= 448
                 || ticksInLine == mode0InterruptTick
@@ -1018,6 +1198,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * (native or compatibility mode), and two dots at double speed.
      */
     public int getVisibleLy() {
+        materializeSteadyTiming();
         if (!lcdEnabled) {
             return 0;
         }
@@ -1091,6 +1272,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * PPU mode bits as visible in the STAT register.
      */
     public int getVisibleStatMode() {
+        materializeSteadyTiming();
         if (!lcdEnabled) {
             return 0;
         }
@@ -1692,6 +1874,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * DMG and compatibility mode expose it during the first four ticks of line 0.
      */
     public boolean isMode2IntWindow() {
+        materializeSteadyTiming();
         if (!lcdEnabled) {
             return false;
         }
@@ -1707,6 +1890,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * 4-tick steps of the SCX scroll delay, and stays active until the end of the line.
      */
     public boolean isMode0IntWindow() {
+        materializeSteadyTiming();
         return lcdEnabled && line < 144 && ticksInLine >= getMode0InterruptTick();
     }
 
@@ -1719,10 +1903,16 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * visible in IF. A running CPU can sample IF immediately.
      */
     public boolean isMode0HaltWakeTick() {
+        materializeSteadyTiming();
         return lcdEnabled && line < 144 && ticksInLine == getMode0InterruptTick() + 2;
     }
 
     int getMode0InterruptTick() {
+        materializeSteadyTiming();
+        return getMode0InterruptTickForTick();
+    }
+
+    private int getMode0InterruptTickForTick() {
         // DMG normally follows the completed transfer latch. A selected object on
         // the X=166/167 prediction boundary keeps its physical fetch tail separate
         // from the already captured mode-0 interrupt edge, just as on CGB.
@@ -1738,8 +1928,13 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * the stored IF latch changes.
      */
     boolean isDmgTerminalWindowMode0ReadPreviewPhase() {
+        materializeSteadyTiming();
+        return isDmgTerminalWindowMode0ReadPreviewPhaseForTick();
+    }
+
+    boolean isDmgTerminalWindowMode0ReadPreviewPhaseForTick() {
         return !gbc && lcdEnabled && line < 144
-                && ticksInLine + 2 == getMode0InterruptTick()
+                && ticksInLine + 2 == getMode0InterruptTickForTick()
                 && lcdc.isBgAndWindowDisplay()
                 && lcdc.isWindowDisplay()
                 && lcdc.isObjDisplay()
@@ -1768,6 +1963,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public boolean isOamAvailableForCpu(boolean write) {
+        materializeSteadyTiming();
         if (!lcdEnabled) {
             return true;
         }
@@ -1973,6 +2169,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Keeps the VRAM slot owned by a CPU instruction that won HDMA arbitration. */
     public void setCpuRetiringInstructionForHdma(boolean retiring) {
+        materializeSteadyTiming();
         cpuRetiringInstructionForHdma = retiring;
     }
 
@@ -2101,6 +2298,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public void setDebugHooks(DebugHooks hooks) {
+        materializeSteadyTiming();
         debugHooks = hooks;
         if (hooks != null && hooks.requiresPpuMemoryAccessHooks()) {
             AddressSpace observedVideoRam0 = new DebugPpuAddressSpace(
@@ -2140,10 +2338,29 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public Lcdc getLcdc() {
+        exposeMutablePpuState();
         return lcdc;
     }
 
     public GpuRegisterValues getRegisters() {
+        exposeMutablePpuState();
+        return r;
+    }
+
+    /** Core observation helper that returns a value rather than a retained register alias. */
+    public int getRegisterValueForCore(GpuRegister register) {
+        materializeSteadyTiming();
+        return r.get(register);
+    }
+
+    /** Core observation helper that returns LCDC by value rather than exposing its object. */
+    public int getLcdcValueForCore() {
+        materializeSteadyTiming();
+        return lcdc.get();
+    }
+
+    /** Internal read-only alias retained by STAT; it never mutates PPU register storage. */
+    GpuRegisterValues getRegistersForStat() {
         return r;
     }
 
@@ -2165,6 +2382,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /** Captures raw physical PPU memories without applying CPU bus locks or DMA corruption. */
     public DebugGraphicsInspection captureDebugGraphicsInspection() {
+        materializeSteadyTiming();
         DebugGraphicsHardwareMode hardwareMode = !gbc
                 ? DebugGraphicsHardwareMode.DMG
                 : dmgCompatValue
@@ -2221,6 +2439,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * Native CGB hardware uses {@link ColorPixelFifo} and therefore has no supplement.
      */
     public DmgFifoRuntimeState captureDmgFifoRuntimeState() {
+        materializeSteadyTiming();
         if (gbc) {
             return null;
         }
@@ -2245,6 +2464,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     public void restoreDmgFifoRuntimeState(DmgFifoRuntimeState state) {
         validateDmgFifoRuntimeState(state);
+        materializeSteadyTiming();
         if (!gbc) {
             pixelTransferPhase.restoreDmgFifoRuntimeState(state.timing());
             pixelMachine.restoreDmgFifoRuntimeState(state.output());
@@ -2258,6 +2478,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     public ColorPalette getBgPalette() {
+        exposeMutablePpuState();
         return bgPalette;
     }
 
@@ -2267,6 +2488,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public ComponentState<Gpu> captureState() {
+        materializeSteadyTiming();
         ComponentState<Ram> videoRam0Memento = videoRam0 instanceof Ram ? videoRam0.captureState() : null;
         ComponentState<Ram> videoRam1Memento = videoRam1 instanceof Ram ? videoRam1.captureState() : null;
 
@@ -2275,6 +2497,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     @Override
     public ComponentState<Gpu> captureState(MachineStateCapture capture) {
+        materializeSteadyTiming();
         ComponentState<Ram> videoRam0Memento =
                 videoRam0 instanceof Ram ? videoRam0.captureState(capture) : null;
         ComponentState<Ram> videoRam1Memento =
@@ -2346,6 +2569,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 mem.pixelMachineMemento != null
                         ? mem.pixelMachineMemento
                         : mem.pixelTransferPhaseMemento);
+
+        // Candidate dot-machine shapes are now proven. Canonicalize the current private cursor
+        // only after that preflight; the incoming state will replace both machines below.
+        materializeSteadyTiming();
 
         if (videoRam0 instanceof Ram) {
             ((Ram) videoRam0).restoreState(mem.videoRam0Memento);
