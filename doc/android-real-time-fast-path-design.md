@@ -303,6 +303,26 @@ fine-SCX values, the exact 70,224-T frame grid, VRAM-transfer payloads, and a PA
 while the timing cursor is armed. No SGB command, border, audio, frame, or master-clock work is
 batched or skipped by this slice.
 
+**Fifth retained slice (2026-08-21):** On DMG and MGB only, the shifted pixel-producing
+machine now shares the guarded steady-background span. It does not rasterize from a cached tile
+map: materialization advances the real `DmgPixelFifo`, output-delay line, `Display`, SGB
+VRAM-transfer accumulator, and `Fetcher` in their original order. The shifted machine's four-dot
+entry delay is consumed exactly before a branch-free steady loop. CPU-visible PPU reads/writes,
+render-output changes, DMA ownership, debug/history observation, save/restore, sprites, windows,
+conflicts, and line/mode boundaries materialize or reject the span. CGB, CGB0, compatibility,
+SGB, and SGB2 retain the scalar visible-output machine while continuing to use their separately
+measured timing-skeleton cursor.
+
+The keep gate compared the frozen preceding PERFORMANCE implementation with this slice using a
+generated visible-output/four-channel-audio workload, isolated class loaders, 10,000,000-T
+warm-up, and 5,000,000-T measured windows. Across two independent eight-pair runs, all 16 pairs
+improved. The pooled paired-median throughput gain was +5.11% on DMG and +5.42% on MGB; pooled
+unpaired raw-median gains were +5.04% and +4.78%, respectively, reflecting run-level clock drift
+that the alternating pair statistic controls. Every measured run produced 71 identical frames
+and 71 identical audio buffers. Differential coverage now includes all fine-SCX phases,
+observation and render-suppression materialization, a complete 70,224-T frame, exact frame and
+VRAM-transfer hashes, audio hashes, and canonical-state equality.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.

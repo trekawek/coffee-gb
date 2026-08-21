@@ -75,6 +75,91 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     }
 
     @Test
+    public void dmgOutputCursorIsArmedAndMaterializedAtObservationBoundary() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.DMG, 3);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.DMG, 3)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+
+            assertTrue("DMG output cursor must be armed with the timing cursor",
+                    outputCursor(performance.gpu));
+
+            performance.gameboy.captureStateWithoutTimeSource();
+            assertFalse("capture must materialize the deferred output span",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "DMG output materialization");
+        }
+    }
+
+    @Test
+    public void suppressingRenderOutputMaterializesTheArmedOutputCursor() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.DMG, 3);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.DMG, 3)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(outputCursor(performance.gpu));
+
+            accuracy.gpu.setRenderOutput(false);
+            performance.gpu.setRenderOutput(false);
+            assertFalse("render-output change must materialize the cursor",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "render-output materialization");
+        }
+    }
+
+    @Test
+    public void dmgAndMgbOutputCursorPreservesFullFrameAndTransferEvents() throws Exception {
+        for (HardwareProfile profile : SUPPORTED_PROFILES) {
+            try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, 5);
+                    Session performance = new Session(ExecutionMode.PERFORMANCE, profile, 5)) {
+                enterSteadyLine(accuracy);
+                enterSteadyLine(performance);
+                tickPair(accuracy, performance);
+                assertTrue(profile.id() + " output cursor must be armed",
+                        outputCursor(performance.gpu));
+
+                int startFrames = performance.events.frameCount;
+                int startTransfers = performance.events.vRamTransferCount;
+                for (int i = 0; i < 70_224; i++) {
+                    tickPair(accuracy, performance);
+                }
+
+                assertEquals(startFrames + 1, accuracy.events.frameCount);
+                assertEquals(startFrames + 1, performance.events.frameCount);
+                assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+                assertEquals(startTransfers + 1, accuracy.events.vRamTransferCount);
+                assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
+                assertEquals(accuracy.events.vRamTransferHash,
+                        performance.events.vRamTransferHash);
+                assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+                assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+                assertSameState(accuracy, performance, profile.id() + " full-frame output span");
+            }
+        }
+    }
+
+    @Test
+    public void cgbRetainsScalarOutputWhileTimingCursorIsArmed() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 3);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 3)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+            assertFalse(outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB scalar output fallback");
+        }
+    }
+
+    @Test
     public void nativeCgbAndCgb0SteadySpanMatchesAccuracyWithBankedAttributes() throws Exception {
         for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
             for (int scx : new int[]{0, 3, 7}) {
@@ -849,6 +934,12 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         return cursor.getBoolean(gpu);
     }
 
+    private static boolean outputCursor(Gpu gpu) throws Exception {
+        var cursor = Gpu.class.getDeclaredField("steadyOutputCursor");
+        cursor.setAccessible(true);
+        return cursor.getBoolean(gpu);
+    }
+
     private static byte[] syntheticRom(HardwareProfile profile, boolean nativeColor) {
         byte[] rom = new byte[0x8000];
         rom[0x100] = (byte) 0xc3; // JP $0100: a stable CPU-side workload with no MMIO writes
@@ -1098,9 +1189,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     .setDisplaySgbBorder(profile.capabilities().superGameboyBorder())
                     .build();
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            sgbBus(gameboy).register(events::onVramTransfer,
+                    VRamTransfer.VRamTransferComplete.class);
             if (profile.capabilities().superGameboyCommands()) {
-                sgbBus(gameboy).register(events::onVramTransfer,
-                        VRamTransfer.VRamTransferComplete.class);
                 sgbBus(gameboy).register(events::onPal01, Commands.Pal01Cmd.class);
             }
             gpu = gameboy.getGpu();
