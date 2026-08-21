@@ -214,6 +214,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient DebugInstrumentation debugInstrumentation;
 
+    /** Session-only retirement observation state; deliberately absent from machine state. */
+    private transient boolean debugRetirementTrackingActive;
+
     public Gameboy(Rom rom) {
         this(new GameboyConfiguration(rom));
     }
@@ -933,12 +936,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Starts a debugger-local retirement sequence without changing emulated state. */
     public void enableDebugRetirementTracking() {
+        debugRetirementTrackingActive = true;
+        updatePerformanceObservationBlocker();
         cpu.enableDebugRetirementTracking();
     }
 
     /** Removes the optional retirement hook from the CPU hot path. */
     public void disableDebugRetirementTracking() {
         cpu.disableDebugRetirementTracking();
+        debugRetirementTrackingActive = false;
+        updatePerformanceObservationBlocker();
     }
 
     public long getDebugRetirementSequence() {
@@ -955,6 +962,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             instrumentation.alignMasterTick(completedMasterTick);
         }
         this.debugInstrumentation = instrumentation;
+        updatePerformanceObservationBlocker();
         var cpuHooks = instrumentation != null && instrumentation.requiresCpuHooks()
                 ? instrumentation : null;
         cpu.setDebugHooks(cpuHooks);
@@ -990,6 +998,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sound.setDebugHooks(
                 instrumentation != null && instrumentation.requiresApuHooks()
                         ? instrumentation : null);
+    }
+
+    private void updatePerformanceObservationBlocker() {
+        gpu.setPerformanceObservationBlocked(
+                debugInstrumentation != null || debugRetirementTrackingActive);
     }
 
     /**

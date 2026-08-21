@@ -2,6 +2,10 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.debug.DebugInstrumentation;
+import eu.rekawek.coffeegb.core.debug.breakpoint.DebugBreakpointKind;
+import eu.rekawek.coffeegb.core.debug.trace.TraceCategory;
+import eu.rekawek.coffeegb.core.debug.trace.TraceConfiguration;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
@@ -15,6 +19,7 @@ import org.junit.Test;
 import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.RecordComponent;
+import java.util.EnumSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -162,6 +167,95 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     }
 
     @Test
+    public void debugRetirementMaterializesAndBlocksUntilDetached() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.DMG, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.DMG, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+
+            performance.gameboy.enableDebugRetirementTracking();
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "retirement attach materialization");
+
+            // Keep retirement observation attached through the next eligible line. The
+            // canonical state must continue to match while the cursor stays scalar-deopted.
+            while (performance.gpu.getLine() == STEADY_LINE
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "retirement blocks re-arm");
+
+            performance.gameboy.disableDebugRetirementTracking();
+            while (performance.gpu.getLine() == STEADY_LINE + 1
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "retirement detach re-enables");
+        }
+    }
+
+    @Test
+    public void nonPpuInstrumentationSharesObservationBlockerWithRetirement() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.DMG, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.DMG, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+
+            DebugInstrumentation instrumentation = cpuOnlyInstrumentation();
+            assertFalse(instrumentation.requiresPpuHooks());
+            performance.gameboy.updateDebugInstrumentation(instrumentation, 0);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "non-PPU instrumentation attach");
+
+            while (performance.gpu.getLine() == STEADY_LINE
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "non-PPU instrumentation blocks re-arm");
+
+            // Both observation sources are aggregated: removing instrumentation alone must not
+            // re-enable the cursor while retirement tracking remains attached.
+            performance.gameboy.enableDebugRetirementTracking();
+            performance.gameboy.updateDebugInstrumentation(null, 0);
+            while (performance.gpu.getLine() == STEADY_LINE + 1
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "retirement keeps blocker after detach");
+
+            performance.gameboy.disableDebugRetirementTracking();
+            while (performance.gpu.getLine() == STEADY_LINE + 2
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "both observations detached");
+        }
+    }
+
+    @Test
     public void disabledWindowInsertionLatchFailsClosed() throws Exception {
         try (Session accuracy = new Session(ExecutionMode.ACCURACY,
                 HardwareProfileRegistry.DMG, 0);
@@ -280,6 +374,18 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         rom[0x102] = 1;
         rom[0x147] = 0;
         return rom;
+    }
+
+    private static DebugInstrumentation cpuOnlyInstrumentation() {
+        DebugInstrumentation instrumentation = new DebugInstrumentation(
+                2,
+                32,
+                8,
+                EnumSet.of(DebugBreakpointKind.PROGRAM_COUNTER),
+                EnumSet.of(TraceCategory.CPU));
+        instrumentation.configureTrace(new TraceConfiguration(
+                8, EnumSet.of(TraceCategory.CPU)));
+        return instrumentation;
     }
 
     private static long stateDigest(Gameboy gameboy) throws Exception {
