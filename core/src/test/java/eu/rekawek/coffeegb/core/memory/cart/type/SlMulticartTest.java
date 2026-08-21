@@ -57,6 +57,25 @@ public class SlMulticartTest {
     }
 
     @Test
+    public void detectsVastFameTimerMonsterMulticarts() throws IOException {
+        assertEquals(CartridgeProperties.Mapper.SL_MULTICART,
+                new Rom(timerMonsterRom(0x800000)).getCartridgeProperties().getMapper());
+        assertEquals(CartridgeProperties.Mapper.SL_MULTICART,
+                new Rom(timerMonsterRom(0x1000000)).getCartridgeProperties().getMapper());
+    }
+
+    private static byte[] timerMonsterRom(int size) {
+        byte[] rom = new byte[size];
+        byte[] title = "TIMER MONSTER  ".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, rom, 0x0134, title.length);
+        rom[0x0143] = (byte) 0x80;
+        rom[0x0147] = 0x1b;
+        rom[0x0148] = 0x06;
+        rom[0x0149] = 0x01;
+        return rom;
+    }
+
+    @Test
     public void configurationRelocatesBothRomWindowsAndUsesMbc1ZeroRemap()
             throws IOException {
         Cartridge cart = cartridge();
