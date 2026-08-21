@@ -5,10 +5,15 @@ import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage;
+import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 
 import static org.junit.Assert.assertEquals;
@@ -18,6 +23,51 @@ public class NtNewTest {
 
     @Test
     public void detectsTheMakonDigimonFourRelease() throws IOException {
+        Rom rom = new Rom(makonDigimonFourRom());
+        Cartridge cartridge = new Cartridge(rom, Battery.NULL_BATTERY);
+
+        assertEquals(CartridgeProperties.Mapper.MAKON_NT_NEW,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(cartridge.getMemoryController() instanceof NtNew);
+    }
+
+    @Test
+    public void persistsTheBoards8KiBRamDespiteItsNonBatteryHeader() throws IOException {
+        Rom rom = new Rom(makonDigimonFourRom());
+        Path save = Files.createTempFile("makon-nt-new", ".sav");
+        try {
+            byte[] initial = new byte[0x2000];
+            Arrays.fill(initial, (byte) 0xff);
+            initial[0x123] = 0x5a;
+            Files.write(save, initial);
+
+            assertTrue(Cartridge.supportsBatterySave(rom));
+            Cartridge cartridge = persistentCartridge(rom, save);
+            assertTrue(cartridge.getMemoryController() instanceof NtNew);
+            cartridge.setByte(0x0000, 0x0a);
+            assertEquals(0x5a, cartridge.getByte(0xa123));
+            cartridge.setByte(0xa123, 0x6b);
+            cartridge.flushBattery();
+
+            assertEquals(0x2000, Files.size(save));
+            Cartridge reloaded = persistentCartridge(rom, save);
+            reloaded.setByte(0x0000, 0x0a);
+            assertEquals(0x6b, reloaded.getByte(0xa123));
+        } finally {
+            Files.deleteIfExists(save);
+        }
+    }
+
+    private static Cartridge persistentCartridge(Rom rom, Path save) {
+        return new Cartridge(
+                rom,
+                true,
+                BatteryStorage.direct(save),
+                new SystemTimeSource(),
+                ClockSpec.LEGACY);
+    }
+
+    private static byte[] makonDigimonFourRom() {
         byte[] data = new byte[0x100000];
         byte[] title = "DIGIMON 4".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
         System.arraycopy(title, 0, data, 0x0134, title.length);
@@ -38,13 +88,7 @@ public class NtNewTest {
         data[0x0147] = 0x19;
         data[0x0148] = 0x05;
         data[0x0149] = 0x02;
-
-        Rom rom = new Rom(data);
-        Cartridge cartridge = new Cartridge(rom, Battery.NULL_BATTERY);
-
-        assertEquals(CartridgeProperties.Mapper.MAKON_NT_NEW,
-                rom.getCartridgeProperties().getMapper());
-        assertTrue(cartridge.getMemoryController() instanceof NtNew);
+        return data;
     }
 
     @Test
