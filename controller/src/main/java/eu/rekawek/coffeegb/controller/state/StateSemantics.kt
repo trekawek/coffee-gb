@@ -1628,6 +1628,27 @@ internal object StateSemantics {
             }
           }
         }
+    target[UNLICENSED_256M_STATE] =
+        constrained("The 256 Mbit board retains one shared 512 KiB SRAM image and a dynamically selected native mapper.") {
+          it.requiredRecordType("menuState", MBC5_STATE)
+          it.require(it.intArray("sharedRam").size == 0x80000,
+              "must have the board's full 512 KiB SRAM image")
+          it.intValues("sharedRam", 0, 0xff)
+          it.range("selectedPage", 0, 0x3ff); it.range("pageMask", 0, 0xff)
+          val configuration = it.int("configuration")
+          it.require(configuration == -1 || configuration in 0..0xff,
+              "has an invalid configuration $configuration")
+          if (configuration == -1) {
+            it.require(it.value("selectedGameState") == null,
+                "has a selected game without a committed configuration")
+          } else {
+            it.require((it.int("selectedPage") ushr 8) == (configuration and 0x03),
+                "has page bits inconsistent with its configuration")
+            it.requiredRecordType(
+                "selectedGameState", MBC1_STATE, MBC2_STATE, MBC3_STATE,
+                MBC5_STATE, BASIC_ROM_STATE)
+          }
+        }
     target[NTNEW_STATE] =
         constrained("Newer N&T/Makon banking retains two byte-sized 8 KiB selectors and one RAM page.") {
           it.recordType("batteryMemento", MEMORY_BATTERY_STATE, FILE_BATTERY_STATE)
@@ -1854,6 +1875,8 @@ internal object StateSemantics {
   private const val NTNEW_STATE = "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState"
   private const val MBC5_MULTICART_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
+  private const val UNLICENSED_256M_STATE =
+      "eu.rekawek.coffeegb.core.memory.cart.type.Unlicensed256M\$Unlicensed256MState"
   private const val MBC5_MULTICART_LOADER_STATE =
       "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$LoaderMbc5\$LoaderMbc5State"
   private const val MBC5_MULTICART_MBC2_OR_MBC3_MODE = 0xa0

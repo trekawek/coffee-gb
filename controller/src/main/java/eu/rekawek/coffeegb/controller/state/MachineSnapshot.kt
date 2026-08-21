@@ -727,7 +727,7 @@ private object SnapshotGraph {
           val type = recordClassName(value.typeId)
           if (isOwnershipRecord(type)) signature += value.typeId
           value.fields.forEach { field ->
-            if (!isDynamicMbc5MulticartGameState(type, field.name)) visit(field.value)
+            if (!isDynamicMulticartGameState(type, field.name)) visit(field.value)
           }
         }
         is SnapshotValues -> value.values.forEach(::visit)
@@ -750,7 +750,7 @@ private object SnapshotGraph {
           val type = value.javaClass.name
           if (isOwnershipRecord(type)) signature += typeId
           StateRecordIntrospection.components(value.javaClass).forEach { component ->
-            if (!isDynamicMbc5MulticartGameState(type, component.name)) {
+            if (!isDynamicMulticartGameState(type, component.name)) {
               visit(component.value(value))
             }
           }
@@ -773,11 +773,14 @@ private object SnapshotGraph {
       name.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.") ||
           name.startsWith("eu.rekawek.coffeegb.core.memory.cart.battery.")
 
-  private fun isDynamicMbc5MulticartGameState(owner: String, field: String): Boolean =
-      owner == MBC5_MULTICART_STATE && field == "selectedGameState"
+  private fun isDynamicMulticartGameState(owner: String, field: String): Boolean =
+      owner in DYNAMIC_MULTICART_STATES && field == "selectedGameState"
 
-  private const val MBC5_MULTICART_STATE =
-      "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState"
+  private val DYNAMIC_MULTICART_STATES =
+      setOf(
+          "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Unlicensed256M\$Unlicensed256MState",
+      )
 
   private class Restore {
     private var references = 0L

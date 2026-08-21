@@ -120,6 +120,7 @@ internal object StateTypeRegistry {
           "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$Mbc5MulticartState",
           "eu.rekawek.coffeegb.core.memory.cart.type.Mbc5Multicart\$LoaderMbc5\$LoaderMbc5State",
           "eu.rekawek.coffeegb.core.memory.cart.type.NtNew\$NtNewState",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Unlicensed256M\$Unlicensed256MState",
       )
 
   val legacyRecordClassNames =
