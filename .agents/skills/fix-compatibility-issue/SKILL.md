@@ -7,6 +7,8 @@ description: Reproduce, investigate, fix, test, and submit a Coffee GB game or R
 
 Handle one GitHub issue per branch and pull request. Preserve evidence from the failing behavior through the verified fix.
 
+Use the repository `gitshot` skill at `../gitshot/SKILL.md` for every GitHub screenshot upload. Read it before publishing visual evidence, inspect each image first, and follow its public-upload privacy warning.
+
 ## 1. Read and classify the issue
 
 1. Require an issue number or URL, then read its title, body, comments, labels, linked PRs, and every supplied attachment with `gh issue view` and the GitHub API as needed.
@@ -60,10 +62,12 @@ The PR description must explain:
 - `Fixes #<issue>` when the PR genuinely resolves the issue;
 - the after-fix screenshot when one exists and can be uploaded.
 
+For a visible compatibility fix, upload the stable evidence with `gitshot` and embed the returned Markdown in the PR description. Prefer a labelled before/after comparison when both frames are deterministic and safe to publish. If the upload fails, record the failure rather than committing screenshots to manufacture a URL.
+
 Do not claim hardware accuracy beyond the evidence collected.
 
 ## 6. Update the original issue
 
-After the PR URL exists, add a short issue comment beginning with `**AI-generated comment:**`. Link the PR and summarize the fix in one or two sentences. Attach or embed the after-fix screenshot when the available GitHub tooling supports image upload. If it cannot be uploaded, do not commit the image merely to manufacture a URL; mention the screenshot in the PR and keep the issue note concise.
+After the PR URL exists, add a short issue comment beginning with `**AI-generated comment:**`. Link the PR and summarize the fix in one or two sentences. Use `gitshot` to attach or embed the after-fix screenshot. If it cannot be uploaded, do not commit the image merely to manufacture a URL; mention the upload failure in the PR and keep the issue note concise.
 
 Finally report the branch, commit, PR URL, tests, reproduction result, and screenshot status. Do not merge the PR as part of this skill.
