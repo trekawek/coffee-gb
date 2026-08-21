@@ -29,7 +29,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Synthetic differential coverage for the DMG/MGB performance timing cursor.
+ * Synthetic differential coverage for the guarded DMG/MGB/CGB performance timing cursor.
  *
  * <p>The comparison is made against an ordinary ACCURACY session, including the complete
  * record-shaped machine state. No external ROM, save, title, or host path is involved.</p>
@@ -148,7 +148,36 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     }
 
     @Test
-    public void cgbDmgCompatibilityRemainsScalar() throws Exception {
+    public void cgbDmgCompatibilitySteadySpanMatchesAccuracyForEveryFineScx()
+            throws Exception {
+        for (int scx = 0; scx < 8; scx++) {
+            try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                    HardwareProfileRegistry.CGB, scx, false);
+                    Session performance = new Session(ExecutionMode.PERFORMANCE,
+                            HardwareProfileRegistry.CGB, scx, false)) {
+                assertTrue("synthetic non-CGB cartridge must resolve CGB compatibility",
+                        performance.gpu.isDmgCompatMode());
+                enterSteadyLine(accuracy);
+                enterSteadyLine(performance);
+                tickPair(accuracy, performance);
+                assertTrue("CGB DMG-compatibility should arm the color timing cursor",
+                        lazyCursor(performance.gpu));
+
+                while (accuracy.gpu.getMode() == Mode.PixelTransfer) {
+                    tickPair(accuracy, performance);
+                }
+                assertEquals(Mode.HBlank, performance.gpu.getMode());
+                assertEquals(accuracy.gpu.getTicksInLine(), performance.gpu.getTicksInLine());
+                assertFalse(lazyCursor(performance.gpu));
+                assertSameState(accuracy, performance,
+                        "CGB DMG-compatibility color span scx=" + scx);
+            }
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityMasksIoAndMaterializesOnScxWrite()
+            throws Exception {
         try (Session accuracy = new Session(ExecutionMode.ACCURACY,
                 HardwareProfileRegistry.CGB, 2, false);
                 Session performance = new Session(ExecutionMode.PERFORMANCE,
@@ -156,9 +185,78 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             enterSteadyLine(accuracy);
             enterSteadyLine(performance);
             tickPair(accuracy, performance);
-            assertFalse("CGB DMG-compatibility must not arm the native color cursor",
+            assertTrue(lazyCursor(performance.gpu));
+
+            // DMG compatibility keeps the physical CGB's VBK read mask but ignores its
+            // bank-select write; the separate CGB work-RAM bank register is open bus.
+            assertEquals(0xfe, performance.gameboy.getAddressSpace().getByte(0xff4f));
+            accuracy.gameboy.getAddressSpace().setByte(0xff4f, 1);
+            performance.gameboy.getAddressSpace().setByte(0xff4f, 1);
+            assertEquals(0xfe, performance.gameboy.getAddressSpace().getByte(0xff4f));
+            accuracy.gameboy.getAddressSpace().setByte(0xff70, 3);
+            performance.gameboy.getAddressSpace().setByte(0xff70, 3);
+            assertEquals(0xff, performance.gameboy.getAddressSpace().getByte(0xff70));
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB DMG-compatibility IO mask");
+
+            // Re-arm on a later eligible line. This makes the following write test independent
+            // of the intentional materialization caused by the direct IO reads above.
+            while (accuracy.gpu.getLine() == STEADY_LINE
+                    || accuracy.gpu.getMode() != Mode.PixelTransfer
+                    || accuracy.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue(lazyCursor(performance.gpu));
+            accuracy.gpu.setByte(0xff43, 6);
+            performance.gpu.setByte(0xff43, 6);
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance,
+                    "CGB DMG-compatibility SCX write invalidation");
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityBootResolutionControlsCursor() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB, 2, false);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 2, false)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            assertTrue(performance.gpu.isDmgCompatMode());
+            performance.gpu.setBootCompatibilityResolved(false);
+            tickPair(accuracy, performance);
+            assertFalse("unresolved compatibility handoff must remain scalar",
                     lazyCursor(performance.gpu));
-            assertSameState(accuracy, performance, "CGB DMG-compatibility scalar fallback");
+            assertSameState(accuracy, performance, "compatibility handoff unresolved");
+
+            performance.gpu.setBootCompatibilityResolved(true);
+            while (performance.gpu.getLine() == STEADY_LINE
+                    || performance.gpu.getMode() != Mode.PixelTransfer
+                    || performance.gpu.getTicksInLine() != 80) {
+                tickPair(accuracy, performance);
+            }
+            tickPair(accuracy, performance);
+            assertTrue("resolved compatibility handoff should arm the cursor",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "compatibility handoff resolved");
+        }
+    }
+
+    @Test
+    public void cgb0DmgCompatibilityRemainsScalarUntilMeasured() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.CGB0, 2, false);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB0, 2, false)) {
+            assertTrue(performance.gpu.isDmgCompatMode());
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertFalse("CGB0 DMG-compatibility must keep the unmeasured scalar path",
+                    lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "CGB0 compatibility scalar fallback");
         }
     }
 
@@ -505,6 +603,50 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 assertTrue(profile.id() + " synthetic run must publish an audio buffer",
                         accuracy.events.audioCount > 0);
             }
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityCheckpointRestoresIntoBothModesThroughFrameAndAudioEdges()
+            throws Exception {
+        try (Session source = new Session(ExecutionMode.PERFORMANCE,
+                HardwareProfileRegistry.CGB, 5, false);
+                Session accuracy = new Session(ExecutionMode.ACCURACY,
+                        HardwareProfileRegistry.CGB, 5, false);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.CGB, 5, false)) {
+            enterSteadyLine(source);
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(source, accuracy);
+            tickPair(source, performance);
+            for (int i = 0; i < 22; i++) {
+                source.gameboy.tick();
+                accuracy.gameboy.tick();
+                performance.gameboy.tick();
+            }
+            assertTrue("compatibility checkpoint should capture an armed cursor",
+                    lazyCursor(source.gpu));
+
+            ComponentState<Gameboy> saved = source.gameboy.captureStateWithoutTimeSource();
+            accuracy.gameboy.restoreStateSilently(saved);
+            performance.gameboy.restoreStateSilently(saved);
+            assertFalse(lazyCursor(accuracy.gpu));
+            assertFalse(lazyCursor(performance.gpu));
+            assertSameState(accuracy, performance, "compatibility restored checkpoint");
+
+            for (int i = 0; i < 145_000; i++) {
+                tickPair(accuracy, performance);
+            }
+            assertSameState(accuracy, performance, "compatibility cross-mode continuation");
+            assertEquals(accuracy.events.frameCount, performance.events.frameCount);
+            assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+            assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertTrue("compatibility run must publish a visible frame",
+                    accuracy.events.frameCount > 0);
+            assertTrue("compatibility run must publish an audio buffer",
+                    accuracy.events.audioCount > 0);
         }
     }
 

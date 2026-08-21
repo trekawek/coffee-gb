@@ -76,9 +76,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     private final boolean earlyCgbLyReadEdge;
 
     // Construction-time capability supplied by Gameboy.  This is deliberately a positive,
-    // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB
-    // and native CGB/CGB0 sessions without history/replay may enter the timing-skeleton cursor.
+    // profile-filtered permission rather than a raw execution mode: only normal-speed DMG/MGB,
+    // ordinary CGB compatibility, and native CGB/CGB0 sessions without history/replay may enter
+    // the timing-skeleton cursor.
     private final boolean performanceSteadyTiming;
+
+    // DMG-compatibility timing has a separate required matrix row. Keep it scoped to the
+    // ordinary CGB profile; CGB0 compatibility remains on the scalar reference path until its
+    // revision-specific timing is measured independently.
+    private final boolean performanceDmgCompatTiming;
 
     private final ColorPalette bgPalette;
 
@@ -269,6 +275,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || hardwareProfile == HardwareProfileRegistry.MGB
                 || hardwareProfile == HardwareProfileRegistry.CGB
                 || hardwareProfile == HardwareProfileRegistry.CGB0);
+        this.performanceDmgCompatTiming = executionMode == ExecutionMode.PERFORMANCE
+                && !debugHistoryReplay
+                && hardwareProfile == HardwareProfileRegistry.CGB;
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -846,7 +855,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return performanceSteadyTiming
                 && !mutablePpuStateExposed
                 && bootCompatibilityResolved
-                && !dmgCompatValue
+                && (!dmgCompatValue || performanceDmgCompatTiming)
                 && speedModeValue == 1
                 && !performanceObservationBlocked
                 && debugHooks == null
