@@ -360,6 +360,25 @@ alternating baseline/current pairs. PERFORMANCE gains were +4.29%, +9.25%, +5.74
 coverage passed 37/37 tests, and the full core suite passed 1,662 tests with 8 skips. No frame
 skipping, audio suppression, overclocking, or frontend pacing change is part of the slice.
 
+**Eighth retained slice (2026-08-21):** The existing guarded shifted-output cursor now also covers
+SGB visible pixel output, and only SGB. SGB2 remains on its scalar output machine; all DMG/MGB,
+native CGB/CGB0, and ordinary CGB DMG-compatibility rows retain their preceding behavior. The
+authoritative `DmgPixelFifo`/`Display` path still produces every DMG frame, while `SgbDisplay`
+border/palette composition and the SGB VRAM-transfer path remain exact. SGB keeps its immutable
+`ClockSpec` ratio of 140,625/2,299 controller frames per second (about 61.1679 FPS) and the exact
+70,224-T physical LCD frame cadence. No overclocking, frame skipping, or audio muting is involved.
+
+The keep gate used a synthetic repository-owned SGB fixture with visible output and audio enabled,
+20,000,000-T warm-up, 100,000,000-T measured work, forced materialization in each measured window,
+and four alternating fresh-JVM baseline/current PERFORMANCE pairs. Pair gains were +6.138%,
++5.116%, +5.743%, and +2.259%; median baseline throughput was 17.354659M T/s versus 18.247245M
+T/s current, a +5.143% median gain, with every pair positive. Each run produced exactly 1,424 DMG
+frames, 1,424 SGB frames, 1,424 VRAM transfers, and 1,424 audio buffers (99,998,976 stereo sample
+frames), with identical hashes: DMG `fb52ae884637f115`, SGB `f3f0be1f4ae27c61`, VRAM transfer
+`5b9d45e8a2f52aa5`, and audio `9ddab0d5125d71a5`. Focused SGB differential coverage passed 30/30
+tests and the full core suite passed 1,665 tests with 8 expected skips. No SGB2 output batching,
+command skipping, frame/audio suppression, or cadence change is part of this slice.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.

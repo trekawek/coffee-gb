@@ -32,7 +32,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Synthetic differential coverage for the guarded DMG/MGB/CGB performance timing cursor.
+ * Synthetic differential coverage for the guarded profile-specific PERFORMANCE PPU cursors.
  *
  * <p>The comparison is made against an ordinary ACCURACY session, including the complete
  * record-shaped machine state. No external ROM, save, title, or host path is involved.</p>
@@ -247,7 +247,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     tickPair(accuracy, performance);
                     assertTrue(profile.id() + " must arm its SGB timing cursor",
                             lazyCursor(performance.gpu));
-                    assertFalse(profile.id() + " output must remain scalar",
+                    assertEquals(profile.id() + " output cursor eligibility",
+                            profile == HardwareProfileRegistry.SGB,
                             outputCursor(performance.gpu));
                     assertEquals(profile, performance.gameboy.getHardwareProfile());
                     assertSgbCadence(profile, performance.gameboy.getClockSpec());
@@ -275,6 +276,7 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     assertEquals(startDmgFrames + 1, accuracy.events.frameCount);
                     assertEquals(startSgbFrames + 1, performance.events.sgbFrameCount);
                     assertEquals(startSgbFrames + 1, accuracy.events.sgbFrameCount);
+                    assertEquals(accuracy.events.frameHash, performance.events.frameHash);
                     assertEquals(startTransfers + 1, performance.events.vRamTransferCount);
                     assertEquals(startTransfers + 1, accuracy.events.vRamTransferCount);
                     assertEquals(accuracy.events.sgbFrameHash, performance.events.sgbFrameHash);
@@ -301,6 +303,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             tickPair(accuracy, performance);
             assertTrue("SGB cursor should be armed before JOYP transfer",
                     lazyCursor(performance.gpu));
+            assertTrue("SGB output cursor should remain armed before JOYP transfer",
+                    outputCursor(performance.gpu));
 
             sendSgbPal01Command(accuracy.gameboy);
             sendSgbPal01Command(performance.gameboy);
@@ -311,6 +315,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertEquals(accuracy.events.pal01Hash, performance.events.pal01Hash);
             assertTrue("JOYP/SGB command must not disturb the independent PPU cursor",
                     lazyCursor(performance.gpu));
+            assertTrue("JOYP/SGB command must not disturb the output cursor",
+                    outputCursor(performance.gpu));
             assertSameState(accuracy, performance, "SGB JOYP command while armed");
 
             int targetLine = performance.gpu.getLine();
@@ -329,6 +335,45 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertEquals(accuracy.events.audioCount, performance.events.audioCount);
             assertEquals(accuracy.events.audioHash, performance.events.audioHash);
             assertSameState(accuracy, performance, "SGB JOYP command frame continuation");
+        }
+    }
+
+    @Test
+    public void sgbRenderChangeMaterializesOutputCursor() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.SGB, 4);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.SGB, 4)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(outputCursor(performance.gpu));
+
+            accuracy.gpu.setRenderOutput(false);
+            performance.gpu.setRenderOutput(false);
+            assertFalse("SGB render-output change must materialize the cursor",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "SGB render-output materialization");
+        }
+    }
+
+    @Test
+    public void sgbOamDmaMaterializesOutputCursorBeforeTheNextDot() throws Exception {
+        try (Session accuracy = new Session(ExecutionMode.ACCURACY,
+                HardwareProfileRegistry.SGB, 2);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.SGB, 2)) {
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(accuracy, performance);
+            assertTrue(outputCursor(performance.gpu));
+
+            accuracy.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+            performance.gameboy.getAddressSpace().setByte(0xff46, 0xc0);
+            tickPair(accuracy, performance);
+            assertFalse("SGB OAM DMA must materialize the deferred output span",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "SGB OAM-DMA output materialization");
         }
     }
 
@@ -869,6 +914,64 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             assertTrue("synthetic run must publish a visible frame",
                     accuracy.events.frameCount > 0);
             assertTrue("synthetic run must publish an audio buffer",
+                    accuracy.events.audioCount > 0);
+        }
+    }
+
+    @Test
+    public void sgbCheckpointRestoresIntoBothModesThroughFrameTransferAndAudioEdges()
+            throws Exception {
+        try (Session source = new Session(ExecutionMode.PERFORMANCE,
+                HardwareProfileRegistry.SGB, 5);
+                Session accuracy = new Session(ExecutionMode.ACCURACY,
+                        HardwareProfileRegistry.SGB, 5);
+                Session performance = new Session(ExecutionMode.PERFORMANCE,
+                        HardwareProfileRegistry.SGB, 5)) {
+            enterSteadyLine(source);
+            enterSteadyLine(accuracy);
+            enterSteadyLine(performance);
+            tickPair(source, accuracy);
+            tickPair(source, performance);
+            for (int i = 0; i < 22; i++) {
+                source.tick();
+                accuracy.tick();
+                performance.tick();
+            }
+            assertTrue("SGB checkpoint should capture an armed timing cursor",
+                    lazyCursor(source.gpu));
+            assertTrue("SGB checkpoint should capture an armed output cursor",
+                    outputCursor(source.gpu));
+
+            ComponentState<Gameboy> saved = source.gameboy.captureStateWithoutTimeSource();
+            accuracy.gameboy.restoreStateSilently(saved);
+            performance.gameboy.restoreStateSilently(saved);
+            assertFalse(lazyCursor(accuracy.gpu));
+            assertFalse(lazyCursor(performance.gpu));
+            assertFalse("restored SGB checkpoint must materialize output",
+                    outputCursor(accuracy.gpu));
+            assertFalse("restored SGB checkpoint must materialize output",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance, "SGB restored checkpoint");
+
+            for (int i = 0; i < 145_000; i++) {
+                tickPair(accuracy, performance);
+            }
+            assertSameState(accuracy, performance, "SGB cross-mode continuation");
+            assertEquals(accuracy.events.frameCount, performance.events.frameCount);
+            assertEquals(accuracy.events.frameHash, performance.events.frameHash);
+            assertEquals(accuracy.events.sgbFrameCount, performance.events.sgbFrameCount);
+            assertEquals(accuracy.events.sgbFrameHash, performance.events.sgbFrameHash);
+            assertEquals(accuracy.events.vRamTransferCount,
+                    performance.events.vRamTransferCount);
+            assertEquals(accuracy.events.vRamTransferHash,
+                    performance.events.vRamTransferHash);
+            assertEquals(accuracy.events.audioCount, performance.events.audioCount);
+            assertEquals(accuracy.events.audioHash, performance.events.audioHash);
+            assertTrue("SGB synthetic run must publish a visible frame",
+                    accuracy.events.frameCount > 0);
+            assertTrue("SGB synthetic run must publish an SGB frame",
+                    accuracy.events.sgbFrameCount > 0);
+            assertTrue("SGB synthetic run must publish an audio buffer",
                     accuracy.events.audioCount > 0);
         }
     }
