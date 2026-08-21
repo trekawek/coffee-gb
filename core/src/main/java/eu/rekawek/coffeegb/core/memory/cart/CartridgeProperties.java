@@ -28,6 +28,7 @@ public final class CartridgeProperties {
         MAKON_NT_OLD_2,
         LI_CHENG,
         GOWIN,
+        GGB81,
         VF001_ZOOK,
         VF001_GENERAL,
         HITEK,
@@ -128,6 +129,8 @@ public final class CartridgeProperties {
                     Mapper.LI_CHENG),
             mapper("Gowin protection mapper", CartridgeProperties::isGowin,
                     Mapper.GOWIN),
+            mapper("Vast Fame GGB81 protection", CartridgeProperties::isGgb81,
+                    Mapper.GGB81),
             mapper("Vast Fame VF001 Zook protection", CartridgeProperties::isVf001Zook,
                     Mapper.VF001_ZOOK),
             mapper("Vast Fame VF001 protection", CartridgeProperties::isVf001General,
@@ -448,6 +451,18 @@ public final class CartridgeProperties {
                 && info.rawType() == 0x01
                 && info.byteAt(0x0148) == 0x04
                 && info.byteAt(0x0149) == 0x00;
+    }
+
+    private static boolean isGgb81(RomInfo info) {
+        return info.data.length == 0x80000
+                && "DIGIMON".equals(info.title())
+                && info.hasValidLogo()
+                && info.byteAt(0x0143) == 0x80
+                && info.byteAt(0x0144) == 'A'
+                && info.byteAt(0x0145) == '7'
+                && info.rawType() == 0x19
+                && info.byteAt(0x0148) == 0x06
+                && info.byteAt(0x0149) == 0x01;
     }
 
     private static boolean isVf001Zook(RomInfo info) {

@@ -100,6 +100,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
             case MAKON_NT_OLD_2 -> new MakonNtOld2(rom, battery);
             case LI_CHENG -> new LiCheng(rom, battery);
             case GOWIN -> new Gowin(rom, battery);
+            case GGB81 -> new Ggb81(rom, battery);
             case VF001_ZOOK -> new Vf001Zook(rom, battery);
             case VF001_GENERAL -> new Vf001General(rom, battery);
             case HITEK -> new Hitek(rom, battery);
