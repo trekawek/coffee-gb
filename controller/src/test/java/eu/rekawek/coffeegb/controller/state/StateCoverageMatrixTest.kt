@@ -60,6 +60,9 @@ class StateCoverageMatrixTest {
             mapper("Mbc5", listOf(0x0000 to 0x0a, 0x2000 to 0x25, 0x4000 to 0x0a, 0xa000 to 0x34)) {
               Mbc5(mutableRom(0x1e), Battery.NULL_BATTERY)
             },
+            mapper("Ggb81", listOf(0x2001 to 0x03), listOf(0x4000)) {
+              Ggb81(mutableRom(0x19), Battery.NULL_BATTERY)
+            },
             mapper(
                 "Unlicensed256M",
                 listOf(
@@ -242,7 +245,7 @@ class StateCoverageMatrixTest {
         StateTypeRegistry.recordClassNames.filter {
           it.startsWith("eu.rekawek.coffeegb.core.memory.cart.type.")
         }
-    assertEquals(33, registeredMapperRecords.size)
+    assertEquals(34, registeredMapperRecords.size)
   }
 
   private fun directState(controller: MemoryController): DirectState =
@@ -860,6 +863,7 @@ class StateCoverageMatrixTest {
             "Mbc2",
             "Mbc3",
             "Mbc5",
+            "Ggb81",
             "Unlicensed256M",
             "Mbc5Multicart",
             "LiCheng",

@@ -126,6 +126,7 @@ internal object StateTypeRegistry {
           // controller snapshots to carry the new occupancy/delay state.
           "eu.rekawek.coffeegb.core.gpu.ScalarTimingDmgPixelFifo\$State",
           "eu.rekawek.coffeegb.core.gpu.ScalarTimingColorPixelFifo\$State",
+          "eu.rekawek.coffeegb.core.memory.cart.type.Ggb81\$Ggb81State",
       )
 
   val legacyRecordClassNames =
