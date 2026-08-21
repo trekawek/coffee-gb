@@ -82,6 +82,38 @@ DMA/HDMA ownership change, PPU register or VRAM/OAM write, audio register write,
 SGB transfer, active endpoint, debugger/history/replay observer, save/restore, or an unknown
 hardware/profile state. The guard is fail-closed: an uncertain case uses Accuracy.
 
+### Event-horizon executor
+
+Instruction, PPU, and APU batching share one prerequisite: core components must state how far they
+can advance before scalar ordering matters. A horizon is measured in master T-cycles and is
+half-open: `nextEventHorizonTicks(max)` returns the largest `n` for which the next `n` ticks contain
+no observable boundary. A boundary on the next tick returns zero. `advanceExact(n)` is valid only
+for a positive `n` within that horizon and updates canonical component state directly.
+
+The first executor quantum is deliberately small: at most four T-cycles in normal speed and two in
+CGB double speed. It is eligible only when every participating component agrees. Initially that
+means an ordinary owner-thread session with no debugger/history/replay observer, active link or IR
+endpoint, SGB transfer, clocked cartridge, DMA/HDMA hand-off, speed switch, pending input, or
+unresolved PPU write. CPU horizons stop before a bus or interrupt boundary; Timer and Serial stop
+before their next edge; audio stops before a channel, frame-sequencer, register, or buffer event;
+PPU/STAT stop before a dot, mode, line, lock, interrupt, write, or frame boundary.
+
+`Gameboy.tick()` remains the exact one-T public reference. A bounded Performance executor may use
+the minimum component horizon; otherwise it immediately performs one Accuracy tick. Save/debug,
+restore, replay, and netplay boundaries materialize any transient cursor first. Horizon and cache
+fields are derived session data and never enter portable hardware state.
+
+The scheduler is introduced as vertical slices rather than a generic framework:
+
+1. Skip only phase/quiet work for CPU, Timer/DIV, inactive Serial, settled Joypad, and inactive DMA.
+2. Add exact constant-output APU blocks while still emitting every stereo sample.
+3. Add edge-free PPU/STAT spans while retaining both calibrated pixel machines.
+4. Extend CPU batching only between non-bus micro-operations and consolidate deoptimization
+   reporting.
+
+Each slice must delete real scalar work and pass its whole-core throughput gate. Merely moving the
+existing per-T loop behind a new API is not an optimization.
+
 ## Save states, replays, and netplay
 
 Save states remain canonical hardware-state captures. They do not serialize ExecutionMode or
