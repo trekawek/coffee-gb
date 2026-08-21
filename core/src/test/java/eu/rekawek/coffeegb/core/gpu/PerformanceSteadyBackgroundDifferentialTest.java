@@ -145,24 +145,27 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
     }
 
     @Test
-    public void cgbRetainsScalarOutputWhileTimingCursorIsArmed() throws Exception {
+    public void cgbDmgCompatibilityRetainsScalarOutputWhileTimingCursorIsArmed()
+            throws Exception {
         try (Session accuracy = new Session(ExecutionMode.ACCURACY,
-                HardwareProfileRegistry.CGB, 3);
+                HardwareProfileRegistry.CGB, 3, false);
                 Session performance = new Session(ExecutionMode.PERFORMANCE,
-                        HardwareProfileRegistry.CGB, 3)) {
+                        HardwareProfileRegistry.CGB, 3, false)) {
             enterSteadyLine(accuracy);
             enterSteadyLine(performance);
             tickPair(accuracy, performance);
             assertTrue(lazyCursor(performance.gpu));
-            assertFalse(outputCursor(performance.gpu));
-            assertSameState(accuracy, performance, "CGB scalar output fallback");
+            assertFalse("CGB DMG-compatibility output must remain scalar",
+                    outputCursor(performance.gpu));
+            assertSameState(accuracy, performance,
+                    "CGB DMG-compatibility scalar output fallback");
         }
     }
 
     @Test
     public void nativeCgbAndCgb0SteadySpanMatchesAccuracyWithBankedAttributes() throws Exception {
         for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
-            for (int scx : new int[]{0, 3, 7}) {
+            for (int scx = 0; scx < 8; scx++) {
                 try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, scx);
                         Session performance = new Session(ExecutionMode.PERFORMANCE, profile, scx)) {
                     enterSteadyLine(accuracy);
@@ -171,15 +174,61 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     tickPair(accuracy, performance);
                     assertTrue(profile.id() + " must arm its native CGB cursor",
                             lazyCursor(performance.gpu));
+                    assertTrue(profile.id() + " must arm its native CGB output cursor",
+                            outputCursor(performance.gpu));
 
                     while (accuracy.gpu.getMode() == Mode.PixelTransfer) {
                         tickPair(accuracy, performance);
                     }
                     assertEquals(Mode.HBlank, performance.gpu.getMode());
                     assertFalse(lazyCursor(performance.gpu));
+                    assertFalse(outputCursor(performance.gpu));
                     assertSameState(accuracy, performance,
                             profile.id() + " color span scx=" + scx);
                 }
+            }
+        }
+    }
+
+    @Test
+    public void nativeCgbAndCgb0OutputCursorPreservesFullFrameHashesAndCadence()
+            throws Exception {
+        for (HardwareProfile profile : NATIVE_CGB_PROFILES) {
+            try (Session accuracy = new Session(ExecutionMode.ACCURACY, profile, 5);
+                    Session performance = new Session(ExecutionMode.PERFORMANCE, profile, 5)) {
+                enterSteadyLine(accuracy);
+                enterSteadyLine(performance);
+                tickPair(accuracy, performance);
+                assertTrue(profile.id() + " output cursor must be armed",
+                        outputCursor(performance.gpu));
+
+                int startFrames = performance.events.frameCount;
+                int startTransfers = performance.events.vRamTransferCount;
+                int startAudio = performance.events.audioCount;
+                for (int i = 0; i < 70_224; i++) {
+                    tickPair(accuracy, performance);
+                }
+
+                assertEquals(profile.id() + " frame count", startFrames + 1,
+                        performance.events.frameCount);
+                assertEquals(profile.id() + " accuracy frame count", accuracy.events.frameCount,
+                        performance.events.frameCount);
+                assertEquals(profile.id() + " frame hash", accuracy.events.frameHash,
+                        performance.events.frameHash);
+                assertEquals(profile.id() + " VRAM transfer count", startTransfers + 1,
+                        performance.events.vRamTransferCount);
+                assertEquals(profile.id() + " accuracy VRAM transfer count",
+                        accuracy.events.vRamTransferCount, performance.events.vRamTransferCount);
+                assertEquals(profile.id() + " VRAM transfer hash", accuracy.events.vRamTransferHash,
+                        performance.events.vRamTransferHash);
+                assertEquals(profile.id() + " audio count", startAudio + 1,
+                        performance.events.audioCount);
+                assertEquals(profile.id() + " accuracy audio count", accuracy.events.audioCount,
+                        performance.events.audioCount);
+                assertEquals(profile.id() + " audio hash", accuracy.events.audioHash,
+                        performance.events.audioHash);
+                assertSameState(accuracy, performance,
+                        profile.id() + " complete output frame");
             }
         }
     }
@@ -197,6 +246,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                     tickPair(accuracy, performance);
                     assertTrue(profile.id() + " must arm its SGB timing cursor",
                             lazyCursor(performance.gpu));
+                    assertFalse(profile.id() + " output must remain scalar",
+                            outputCursor(performance.gpu));
                     assertEquals(profile, performance.gameboy.getHardwareProfile());
                     assertSgbCadence(profile, performance.gameboy.getClockSpec());
 
@@ -442,6 +493,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             tickPair(accuracy, performance);
             assertFalse("CGB0 DMG-compatibility must keep the unmeasured scalar path",
                     lazyCursor(performance.gpu));
+            assertFalse("CGB0 DMG-compatibility output must remain scalar",
+                    outputCursor(performance.gpu));
             assertSameState(accuracy, performance, "CGB0 compatibility scalar fallback");
         }
     }
@@ -768,6 +821,8 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
                 }
                 assertTrue(profile.id() + " checkpoint should capture an armed cursor",
                         lazyCursor(source.gpu));
+                assertTrue(profile.id() + " checkpoint should capture an armed output cursor",
+                        outputCursor(source.gpu));
 
                 ComponentState<Gameboy> saved = source.gameboy.captureStateWithoutTimeSource();
                 accuracy.gameboy.restoreStateSilently(saved);
@@ -956,9 +1011,9 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
         if (!gpu.isGbc()) {
             return;
         }
-        // Tile 2 in bank 0 and bank 1 deliberately differ. Attribute 0x6d selects bank 1,
-        // palette 5, X flip, and Y flip, exercising every CGB property consumed by the exact
-        // fetcher while the scalar timing FIFO retains only occupancy.
+        // Tile 2 in bank 0 and bank 1 deliberately differ. Attributes select bank 1, every
+        // palette, X/Y flip, and tile priority, exercising every CGB property consumed by the
+        // exact fetcher while the scalar timing FIFO retains only occupancy.
         gpu.setByte(0xff4f, 0);
         for (int row = 0; row < 8; row++) {
             gpu.setByte(0x8020 + row * 2, 0x18 ^ row * 3);
@@ -973,13 +1028,17 @@ public final class PerformanceSteadyBackgroundDifferentialTest {
             gpu.setByte(0x8021 + row * 2, 0x42 ^ row * 11);
         }
         for (int i = 0; i < 0x20; i++) {
-            gpu.setByte(0x9800 + i, 0x6d);
+            gpu.setByte(0x9800 + i, 0xe8 | (i & 7));
         }
         gpu.setByte(0xff4f, 0);
 
-        gpu.setByte(0xff68, 0x80 | (5 << 3));
-        for (int value : new int[]{0x1f, 0x00, 0x00, 0x3e, 0x00, 0x7c, 0x10, 0x42}) {
-            gpu.setByte(0xff69, value);
+        for (int palette = 0; palette < 8; palette++) {
+            gpu.setByte(0xff68, 0x80 | (palette << 3));
+            for (int color = 0; color < 4; color++) {
+                int value = (palette * 0x13 + color * 0x2d + 0x1f) & 0x7fff;
+                gpu.setByte(0xff69, value & 0xff);
+                gpu.setByte(0xff69, value >>> 8);
+            }
         }
     }
 

@@ -514,7 +514,9 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      * skeleton, and materializes it before any observable boundary.</p>
      */
     public void advanceSteadyBackgroundOutputSpan(int ticks) {
-        if (timingSkeleton || !(fifo instanceof DmgPixelFifo) || ticks < 0) {
+        if (timingSkeleton
+                || !(fifo instanceof DmgPixelFifo || fifo instanceof ColorPixelFifo)
+                || ticks < 0) {
             throw new IllegalStateException("Invalid steady background output span");
         }
         // The shifted machine starts four dots behind the timing skeleton.  Its entry

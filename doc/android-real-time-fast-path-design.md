@@ -323,6 +323,24 @@ and 71 identical audio buffers. Differential coverage now includes all fine-SCX 
 observation and render-suppression materialization, a complete 70,224-T frame, exact frame and
 VRAM-transfer hashes, audio hashes, and canonical-state equality.
 
+**Sixth retained slice (2026-08-21):** The same shifted-output span now covers native CGB and
+CGB0 while their full `ColorPixelFifo` remains authoritative. Materialization still performs the
+real banked tile and attribute reads, palette/priority resolution, one-dot color output delay,
+`Display` writes, and fetcher transitions. The guard requires resolved native-color operation;
+CGB and CGB0 DMG-compatibility, SGB, and SGB2 visible output remain scalar. All ordinary timing-
+cursor invalidators continue to materialize the output cursor before observation or mutation.
+
+The incremental keep gate compared the frozen `6d79d331` implementation with this slice using a
+generated native-color visible-output/audio workload, isolated class loaders, 20,000,000-T
+warm-up, and 100,000,000-T measured windows in four alternating pairs per revision. Every pair
+improved. Native CGB's paired-median throughput gain was +6.84% and its raw-median gain was
++7.01%; CGB0 measured +7.84% paired and +7.78% raw. All 32 Accuracy/Performance control runs
+produced exactly 1,424 frames, 1,430 audio buffers, and 99,964,150 stereo sample frames
+(199,928,300 scalar samples) with identical frame and audio hashes. Differential coverage
+exercises all fine-SCX phases, both revisions, VRAM bank selection, all eight palettes, X/Y flip
+and tile priority, full-frame cadence and events, save-state materialization, and scalar fallback
+for compatibility and SGB profiles.
+
 ### 6. Instruction-level CPU batching
 
 **Change:** Batch CPU instructions/machine cycles only between observable bus and interrupt events.
