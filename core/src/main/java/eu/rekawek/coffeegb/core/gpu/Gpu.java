@@ -196,6 +196,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     private transient DebugHooks debugHooks;
 
+    // Debugger/retirement observation requires the scalar PPU path. This is session metadata,
+    // not emulated hardware state, and intentionally remains outside the canonical memento.
+    private transient boolean performanceObservationBlocked;
+
     // Deferred timing-skeleton work for one proven DMG background line.  These fields are
     // transient by design; capture/restore first materializes and therefore never serializes a
     // lazy cursor.
@@ -831,6 +835,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && !gbc
                 && !dmgCompatValue
                 && speedModeValue == 1
+                && !performanceObservationBlocked
                 && debugHooks == null
                 && dma != null
                 && !dma.isTransferInProgress()
@@ -2318,6 +2323,15 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             pixelMachine.setDebugAddressSpaces(videoRam0, videoRam1, ppuOam);
             oamSearchPhase.setDebugAddressSpace(oamRam);
         }
+    }
+
+    /**
+     * Prevents the performance timing cursor while debugger-local observation is attached.
+     * Materialization is synchronous so an observer never sees a partially deferred PPU span.
+     */
+    public void setPerformanceObservationBlocked(boolean blocked) {
+        materializeSteadyTiming();
+        performanceObservationBlocked = blocked;
     }
 
     public long getDebugPpuFrame() {
