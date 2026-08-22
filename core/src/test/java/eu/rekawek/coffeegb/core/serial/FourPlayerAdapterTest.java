@@ -92,6 +92,27 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
+    public void jantakuBoyProfileSeedsAndBridgesItsTwoFfControlPacket() {
+        Rig rig = new Rig(true);
+
+        enterTransmission(rig, 1);
+
+        assertArrayEquals(new int[]{0xfd, 0xfd, 0xfd, 0xfd},
+                rig.transfer(0, 0, 0, 0));
+        for (int i = 0; i < 3; i++) {
+            assertArrayEquals(new int[]{0xff, 0xff, 0xff, 0xff},
+                    rig.transfer(i < 2 ? 0xff : 0, 0, 0, 0));
+        }
+
+        assertArrayEquals(new int[]{0xfd, 0xfd, 0xfd, 0xfd},
+                rig.transfer(0, 0, 0, 0));
+        for (int i = 0; i < 3; i++) {
+            assertArrayEquals(new int[]{0xff, 0xff, 0xff, 0xff},
+                    rig.transfer(0, 0, 0, 0));
+        }
+    }
+
+    @Test
     public void restartSequenceReturnsToPingAfterFullFfIndicatorPacket() {
         Rig rig = new Rig();
         enterTransmission(rig, 1);
@@ -166,14 +187,27 @@ public class FourPlayerAdapterTest {
         private int lastTransferTicks;
 
         private Rig() {
-            this(ClockSpec.LEGACY);
+            this(ClockSpec.LEGACY, false);
         }
 
         private Rig(ClockSpec clockSpec) {
+            this(clockSpec, false);
+        }
+
+        private Rig(boolean jantakuBoy) {
+            this(ClockSpec.LEGACY, jantakuBoy);
+        }
+
+        private Rig(ClockSpec clockSpec, boolean jantakuBoy) {
             FourPlayerAdapter adapter = new FourPlayerAdapter(clockSpec);
             for (int i = 0; i < ports.length; i++) {
                 ports[i] = new SerialPort(new InterruptManager(false), false, new SpeedMode(false));
-                ports[i].init(adapter.endpoint(i));
+                SerialEndpoint endpoint = adapter.endpoint(i);
+                if (jantakuBoy) {
+                    endpoint.enableCompatibilityProfile(
+                            SerialCompatibilityProfile.JANTAKU_BOY_FOUR_PLAYER_CONTROL_PACKET);
+                }
+                ports[i].init(endpoint);
             }
         }
 

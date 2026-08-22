@@ -69,6 +69,7 @@ public final class CartridgeProperties {
         CGB0_REVISION,
         MEALYBUG_DMG_BLOB,
         CODEBREAKER_RUMBLE,
+        JANTAKU_BOY_FOUR_PLAYER_PATCH,
         EARLY_CGB_LY_READ_EDGE,
         PRESERVE_INVALID_HEADER_CHECKSUM,
         SUPER_FIGHTERS_S_LIVE_PATCH
@@ -201,6 +202,9 @@ public final class CartridgeProperties {
             features("CodeBreaker in-game rumble demo",
                     CartridgeProperties::isCodeBreakerRumbleDemo,
                     Feature.CODEBREAKER_RUMBLE),
+            features("Jantaku Boy four-player transition workaround",
+                    CartridgeProperties::isJantakuBoyFourPlayer,
+                    Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -804,6 +808,27 @@ public final class CartridgeProperties {
 
     private static boolean isCodeBreakerRumbleDemo(RomInfo info) {
         return info.crc32() == 0xfd096905;
+    }
+
+    private static boolean isJantakuBoyFourPlayer(RomInfo info) {
+        int[] fourPlayerWait = {
+                0xf0, 0x9b, 0x47, 0x0e, 0x00, 0x21, 0x9d, 0xff,
+                0x3e, 0xfd, 0xbe, 0xc0, 0x71, 0x3e, 0xff, 0x23,
+                0x05, 0x20, 0xf7, 0x3e, 0x02, 0xe0, 0x99, 0x3e,
+                0x01, 0xe0, 0xa8
+        };
+        return info.data.length == 0x20000
+                && "JANTAKUBOY".equals(info.title())
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0146) == 0x00
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x02
+                && info.byteAt(0x0149) == 0x00
+                && matches(info.data, 0x0395, fourPlayerWait);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

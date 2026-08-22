@@ -60,6 +60,7 @@ import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
 import eu.rekawek.coffeegb.core.rumble.CodeBreakerRumble;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
+import eu.rekawek.coffeegb.core.serial.SerialCompatibilityProfile;
 import eu.rekawek.coffeegb.core.serial.SerialPort;
 import eu.rekawek.coffeegb.core.sgb.Background;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
@@ -164,6 +165,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final CodeBreakerRumble codeBreakerRumble;
 
+    private final boolean jantakuBoyFourPlayerPatch;
+
     private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
@@ -266,6 +269,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 CartridgeProperties.Feature.CLEAR_BOOT_TILEMAP);
         clearCgbBootOamShadowPending = cartridgeProperties.has(
                 CartridgeProperties.Feature.CLEAR_CGB_BOOT_OAM_SHADOW);
+        jantakuBoyFourPlayerPatch = cartridgeProperties.has(
+                CartridgeProperties.Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -587,6 +592,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         joypad.init(eventBus);
         display.init(eventBus);
         sound.init(eventBus);
+        if (jantakuBoyFourPlayerPatch) {
+            serialEndpoint.enableCompatibilityProfile(
+                    SerialCompatibilityProfile.JANTAKU_BOY_FOUR_PLAYER_CONTROL_PACKET);
+        }
         serialPort.init(serialEndpoint);
         infraredPort.setSerialEndpoint(serialEndpoint);
         infraredPort.init(eventBus, infraredEndpoint);
