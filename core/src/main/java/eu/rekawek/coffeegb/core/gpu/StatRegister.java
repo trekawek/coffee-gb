@@ -637,6 +637,51 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         return 0;
     }
 
+    /** Same checkpoint walk for settled HALT packets, without the ordinary three-dot cap. */
+    public int performanceSettledHaltSpanLimit(int requested) {
+        if (requested <= 0 || statEvaluationDirty || gpu.isStatEventCheckpointForTick()
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode0Interrupt
+                || interruptManager.hasPpuTickSignals()) {
+            return 0;
+        }
+        int limit = requested;
+        int gpuDistance = gpu.performanceStatCheckpointDistance();
+        if (gpuDistance != Integer.MAX_VALUE) {
+            limit = Math.min(limit, gpuDistance - 1);
+        }
+        long clock = lycIrqClock;
+        long event = nextLycIrqEvent;
+        if (event != NO_LYC_IRQ_EVENT) {
+            long distance = event - clock;
+            if (distance <= 0) {
+                return 0;
+            }
+            limit = Math.min(limit, (int) Math.min(Integer.MAX_VALUE, distance - 1));
+        }
+        event = pendingLycWriteIrq;
+        if (event != NO_LYC_IRQ_EVENT) {
+            long distance = event - clock;
+            if (distance <= 0) {
+                return 0;
+            }
+            limit = Math.min(limit, (int) Math.min(Integer.MAX_VALUE, distance - 1));
+        }
+        event = pendingLycComparatorIrq;
+        if (event != NO_LYC_IRQ_EVENT) {
+            long distance = event - clock;
+            if (distance <= 0) {
+                return 0;
+            }
+            limit = Math.min(limit, (int) Math.min(Integer.MAX_VALUE, distance - 1));
+        }
+        return Math.max(0, limit);
+    }
+
     /** Advances the invariant STAT clock for a span whose CPU bus is known to be idle. */
     public boolean tickPerformanceQuietSpan(int ticks) {
         // The caller preflights the GPU checkpoint before advancing the raster counters. At

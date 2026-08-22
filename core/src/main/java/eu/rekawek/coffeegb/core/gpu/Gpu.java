@@ -1754,6 +1754,43 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Distance in dots to the next future STAT checkpoint. The STAT caller rejects a checkpoint
+     * on the current dot before consulting this method. This is the scalar counterpart used by
+     * the settled-HALT horizon and intentionally avoids walking every candidate offset.
+     */
+    int performanceStatCheckpointDistance() {
+        if (!lcdEnabled) {
+            return Integer.MAX_VALUE;
+        }
+        int lineLength = firstLine ? 455 : 456;
+        int distance = Integer.MAX_VALUE;
+        if (ticksInLine < 13) {
+            distance = Math.min(distance, 13 - ticksInLine);
+        }
+        if (ticksInLine < 448) {
+            distance = Math.min(distance, 448 - ticksInLine);
+        } else {
+            distance = 1;
+        }
+        if (ticksInLine < lineLength) {
+            distance = Math.min(distance, lineLength - ticksInLine);
+        } else {
+            distance = 1;
+        }
+        int mode0InterruptTick = getMode0InterruptTickForTick();
+        if (mode0InterruptTick != Integer.MAX_VALUE) {
+            if (ticksInLine < mode0InterruptTick) {
+                distance = Math.min(distance, mode0InterruptTick - ticksInLine);
+            }
+            int mode0WakeTick = mode0InterruptTick + 2;
+            if (ticksInLine < mode0WakeTick) {
+                distance = Math.min(distance, mode0WakeTick - ticksInLine);
+            }
+        }
+        return distance;
+    }
+
+    /**
      * Applies the DMG OAM corruption bug if the PPU is currently scanning the OAM.
      */
     public void corruptOam(SpriteBug.CorruptionType type) {

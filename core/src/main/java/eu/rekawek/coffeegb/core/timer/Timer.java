@@ -142,6 +142,27 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return Math.max(0, span);
     }
 
+    /**
+     * Returns the same exact horizon for a settled normal-speed HALT span, without the ordinary
+     * three-dot scheduler cap. The DMG HALT side entrance bounds the request before calling this
+     * method; every divider, TIMA, overflow, wake, and frame-sequencer edge remains excluded.
+     */
+    public int performanceSettledHaltSpanLimit(int requested) {
+        if (requested <= 0 || speedMode.getSpeedMode() != 1 || debugHooks != null
+                || divReset || overflow || haltWakeDelay != 0
+                || haltBugDivRippleVisible || suppressNextInterruptRequest) {
+            return 0;
+        }
+        int span = requested;
+        span = capBefore(span, clocksToTimerFallingEdge());
+        span = capBefore(span, clocksToPendingDividerRipple());
+        span = capBefore(span, clocksToFrameSequencerEdge(0));
+        if (speedMode.isGbc()) {
+            span = capBefore(span, clocksToFrameSequencerEdge(2));
+        }
+        return Math.max(0, span);
+    }
+
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
     public int performanceQuietSpanLimit() {
         return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);

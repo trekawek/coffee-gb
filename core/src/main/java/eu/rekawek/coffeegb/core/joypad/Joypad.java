@@ -312,6 +312,35 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         return 0;
     }
 
+    /**
+     * Same settled released-input/PlayerInputHub horizon for a HALT packet, without the normal
+     * three-tick scheduler cap.  A hub poll remains the hard endpoint; a host update is sampled
+     * only by that poll, preserving the scalar visibility contract.
+     */
+    public int performanceSettledHaltSpanLimit(int requested) {
+        if (requested <= 0
+                || inputChangedSinceLastTick
+                || !buttons.isEmpty()
+                || players != 0
+                || inputTimelineObserver != null
+                || debugHooks != null
+                || isSgb) {
+            return 0;
+        }
+        if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
+            return requested;
+        }
+        if (playerInputHubFastPathEligible && playerInputSource instanceof PlayerInputHub) {
+            long residue = tick & (PLAYER_INPUT_HUB_POLL_TICKS - 1L);
+            long distance = (1L - residue) & (PLAYER_INPUT_HUB_POLL_TICKS - 1L);
+            if (distance == 0) {
+                distance = PLAYER_INPUT_HUB_POLL_TICKS;
+            }
+            return (int) Math.min((long) requested, Math.max(0, distance - 1));
+        }
+        return 0;
+    }
+
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
     public int performanceQuietSpanLimit() {
         return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);

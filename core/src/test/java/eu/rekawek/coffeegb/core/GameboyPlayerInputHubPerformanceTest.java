@@ -154,15 +154,24 @@ public final class GameboyPlayerInputHubPerformanceTest {
                 assertTrue("stable HALT had no substantial bulk coverage cgb=" + cgb
                                 + " ticks=" + performance.getPerformanceBulkTicks(),
                         performance.getPerformanceBulkTicks() > 1_000);
+                if (cgb) {
+                    assertEquals("CGB settled HALT must retain the ordinary three-dot cap",
+                            0, performance.getPerformanceBulkMaxTicks());
+                } else {
+                    assertTrue("DMG settled HALT never crossed a machine-cycle boundary"
+                                    + " maxSpan=" + performance.getPerformanceBulkMaxTicks(),
+                            performance.getPerformanceBulkMaxTicks() > 3);
+                }
             }
         }
     }
 
     @Test
-    public void settledHaltWakeEdgesMatchScalarForOneToThreeDotTails() throws Exception {
+    public void settledHaltWakeEdgesMatchScalarForShortAndLongTails() throws Exception {
+        int[] tails = {1, 3, 7, 17, 53};
         for (boolean cgb : new boolean[]{false, true}) {
             for (WakeSource wakeSource : WakeSource.values()) {
-                for (int tail = 1; tail <= 3; tail++) {
+                for (int tail : tails) {
                     PlayerInputHub hub = new PlayerInputHub();
                     hub.openSource(0);
                     try (Gameboy performance = haltSession(cgb, hub);
@@ -192,9 +201,11 @@ public final class GameboyPlayerInputHubPerformanceTest {
 
                         assertTrue(context(cgb, wakeSource, tail) + " did not wake",
                                 performance.getCpu().getState() != Cpu.State.HALTED);
-                        assertTrue(context(cgb, wakeSource, tail)
-                                        + " never committed a whole caller tail",
-                                sawWholeTail);
+                        if (tail <= 3) {
+                            assertTrue(context(cgb, wakeSource, tail)
+                                            + " never committed a whole caller tail",
+                                    sawWholeTail);
+                        }
 
                         // Continue past the wake boundary. Inactive OAM DMA must leave its
                         // HALT-pause latch on the same running-CPU value as the scalar machine.
@@ -210,6 +221,85 @@ public final class GameboyPlayerInputHubPerformanceTest {
                         assertRasterEquivalent(scalar, performance,
                                 context(cgb, wakeSource, tail));
                     }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void settledHaltRandomLongChunkTailsMatchFullState() throws Exception {
+        for (boolean cgb : new boolean[]{false, true}) {
+            PlayerInputHub performanceHub = new PlayerInputHub();
+            performanceHub.openSource(0);
+            try (Gameboy performance = haltSession(cgb, performanceHub);
+                    Gameboy scalar = haltSession(cgb,
+                            () -> PlayerInputSnapshot.released())) {
+                performance.runTicks(128);
+                runScalarTicks(scalar, 128);
+                Random random = new Random(0x6a17_2b9dL + (cgb ? 1 : 0));
+                for (int chunkIndex = 0; chunkIndex < 80; chunkIndex++) {
+                    int chunk = 4 + random.nextInt(50);
+                    long scalarFrames = runScalarTicks(scalar, chunk);
+                    long performanceFrames = performance.runTicks(chunk);
+                    assertEquals("random HALT tail frame cgb=" + cgb
+                                    + ", chunk=" + chunkIndex,
+                            scalarFrames, performanceFrames);
+                    assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                            "random HALT tail cgb=" + cgb + ", chunk=" + chunkIndex);
+                    assertRasterEquivalent(scalar, performance,
+                            "random HALT tail cgb=" + cgb + ", chunk=" + chunkIndex);
+                }
+                if (cgb) {
+                    assertEquals("CGB random HALT tails must retain the ordinary three-dot cap",
+                            0, performance.getPerformanceBulkMaxTicks());
+                } else {
+                    assertTrue("DMG random HALT tails never crossed a machine cycle",
+                            performance.getPerformanceBulkMaxTicks() > 3);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void settledHaltPlayerInputHubMutationWaitsForTheSixtyFourTickPoll() throws Exception {
+        for (boolean cgb : new boolean[]{false, true}) {
+            PlayerInputHub performanceHub = new PlayerInputHub();
+            PlayerInputHub.SourceHandle performanceSource = performanceHub.openSource(0);
+            AtomicReference<PlayerInputSnapshot> scalarInput = new AtomicReference<>(
+                    PlayerInputSnapshot.released());
+            try (Gameboy performance = haltSession(cgb, performanceHub);
+                    Gameboy scalar = haltSession(cgb, scalarInput::get)) {
+                performance.runTicks(128);
+                scalar.runTicks(128);
+                // Move away from the initial poll residue, then mutate both hosts before the
+                // next 64-T master-tick poll. The candidate must retain the hub's settled horizon
+                // until that poll, and both full canonical states must remain identical.
+                performance.runTicks(11);
+                scalar.runTicks(11);
+                Set<Button> held = Set.of(Button.A, Button.LEFT);
+                performanceSource.update(held);
+                // At tick 139 the next hub poll is tick 193. Keep the scalar oracle released
+                // through the 53 pre-poll dots, then publish the same snapshot immediately
+                // before the poll tick so the canonical states meet exactly at that boundary.
+                assertEquals("hub mutation pre-poll frame cgb=" + cgb,
+                        runScalarTicks(scalar, 53), performance.runTicks(53));
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "hub mutation before poll cgb=" + cgb);
+                scalarInput.set(snapshot(held));
+                assertEquals("hub mutation poll frame cgb=" + cgb,
+                        runScalarTicks(scalar, 1), performance.runTicks(1));
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "hub mutation at poll cgb=" + cgb);
+                int[] chunks = {7, 17, 31, 53, 7};
+                for (int chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+                    int chunk = chunks[chunkIndex];
+                    long scalarFrames = runScalarTicks(scalar, chunk);
+                    long performanceFrames = performance.runTicks(chunk);
+                    assertEquals("hub mutation frame cgb=" + cgb
+                                    + ", chunk=" + chunkIndex,
+                            scalarFrames, performanceFrames);
+                    assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                            "hub mutation cgb=" + cgb + ", chunk=" + chunkIndex);
                 }
             }
         }
