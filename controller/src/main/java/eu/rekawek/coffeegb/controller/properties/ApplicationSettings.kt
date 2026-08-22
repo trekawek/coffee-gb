@@ -617,6 +617,11 @@ data class ApplicationSettingsOverrides(
     val hardwareProfile: HardwareProfile? = null,
     val bootstrapMode: BootstrapMode? = null,
     val batterySavesEnabled: Boolean? = null,
+    /**
+     * Supplies a blank in-memory cartridge battery without reading or writing a local sidecar.
+     * Netplay children use this to retain the same portable-state graph as a transferred peer.
+     */
+    val forceInMemoryBattery: Boolean = false,
     val rewindEnabled: Boolean? = null,
     val runtimeWarmupEnabled: Boolean? = null,
     /** Transient benchmark policy; never persisted into user settings or save state. */

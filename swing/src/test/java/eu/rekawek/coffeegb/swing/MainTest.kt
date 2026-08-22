@@ -65,10 +65,12 @@ class MainTest {
     assertEquals(File("game.gb"), spaced.initialRom)
     assertEquals("play.local:7000", spaced.joinNetplayHost)
     assertTrue(spaced.suppressInitialAutosaveResume)
+    assertTrue(spaced.settingsOverrides.forceInMemoryBattery)
 
     val equals = execute("--join-netplay=localhost", "game.gb").singleLaunch()
     assertEquals("localhost", equals.joinNetplayHost)
     assertTrue(equals.suppressInitialAutosaveResume)
+    assertTrue(equals.settingsOverrides.forceInMemoryBattery)
 
     assertUsageFailure(
         execute("--join-netplay"),

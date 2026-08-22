@@ -1,12 +1,15 @@
 package eu.rekawek.coffeegb.controller.properties
 
 import eu.rekawek.coffeegb.controller.Controller
+import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.controller.state.StateIdentity
 import eu.rekawek.coffeegb.core.Gameboy
+import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.Rom
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import java.util.Properties
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -111,6 +114,37 @@ class ControllerPropertiesTest {
 
     assertSame(properties.playerInputSource, config.playerInputSource)
     assertSame(config.playerInputSource, config.forRestore().playerInputSource)
+  }
+
+  @Test
+  fun netplayLaunchUsesAnInMemoryBatteryWithoutEnablingSidecarPersistence() {
+    val bytes = StateCodecTestSupport.rom(cgb = true).also {
+      it[0x147] = 0x1b // MBC5 + RAM + battery
+      it[0x149] = 0x03 // 32 KiB RAM
+    }
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                hardwareProfile = HardwareProfileRegistry.CGB,
+                batterySavesEnabled = false,
+                forceInMemoryBattery = true,
+            ))
+    val configuration = Controller.createGameboyConfig(properties, Rom(bytes))
+
+    try {
+      assertFalse(configuration.isSupportBatterySave)
+      Session(configuration, EventBusImpl(), null, SerialEndpoint.NULL_ENDPOINT).use { session ->
+        assertEquals(
+            1,
+            session
+                .captureDetachedState()
+                .machine
+                .recordCount("eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"),
+        )
+      }
+    } finally {
+      properties.close()
+    }
   }
 
   @Test
