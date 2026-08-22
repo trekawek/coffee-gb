@@ -899,15 +899,28 @@ class Connection(
         else -> throw IOException("Unexpected network StateFile root ${file.root.kind}")
       }
     } catch (e: Exception) {
+      val detail = portableStateMismatchDetail(e)
       failProtocol(
           ProtocolErrorReason.INVALID_PORTABLE_STATE,
           IOException(
-              "Peer ${expectedRoot.name} StateFile does not match its ROM/profile or endpoint",
+              "Peer ${expectedRoot.name} StateFile does not match its ROM/profile or endpoint" +
+                  if (detail == null) "." else ": $detail",
               e,
           ),
       )
     }
   }
+
+  /**
+   * Protocol diagnostics reach a remote peer, so retain only the bounded and redacted public
+   * validation message. The top-level exception identifies the failed portable-state boundary;
+   * its cause chain can contain implementation and filesystem details that do not help a player.
+   */
+  private fun portableStateMismatchDetail(failure: Exception): String? =
+      failure.message
+          ?.takeIf(String::isNotBlank)
+          ?.let(NetplayDiagnosticSanitizer::redact)
+          ?.takeIf(String::isNotBlank)
 
   private fun readNetworkState(
       declaration: StateFileDeclaration,
