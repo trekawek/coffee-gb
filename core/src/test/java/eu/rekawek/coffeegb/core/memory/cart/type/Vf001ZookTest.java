@@ -86,6 +86,35 @@ public class Vf001ZookTest {
     }
 
     @Test
+    public void answersSuperFightersSBankCommandsAndVerificationReads() throws IOException {
+        MemoryController mapper = superFightersSMapper();
+
+        int[][] bankCommands = {
+                {0x36, 0x9f, 0x3b, 0xc0, 0x42},
+                {0x48, 0xe0, 0xb2, 0x36, 0x36},
+                {0x96, 0x64, 0x07, 0x1f, 0x1f},
+                {0xfa, 0xc5, 0xd8, 0x1f, 0x1f}
+        };
+        for (int[] command : bankCommands) {
+            write(mapper, 0x7081, command[0], command[1], command[2], command[3]);
+            assertEquals(command[4], mapper.getByte(0x4000));
+        }
+
+        write(mapper, 0x7080, 0x98, 0xa3, 0xa9, 0xce, 0xcc, 0x40, 0xff, 0xff,
+                0xef, 0x40, 0xff, 0xff, 0xac, 0x41, 0xff, 0xff, 0x8f, 0xa3);
+        assertEquals(0xce, mapper.getByte(0xa080));
+        mapper.setByte(0x7080, 0x98);
+        assertEquals(0xc3, mapper.getByte(0xa080));
+
+        write(mapper, 0x7080, 0xe0, 0xfe, 0xe0, 0x2f, 0xf8, 0x04, 0x30, 0x00,
+                0x06, 0x40, 0xe8, 0x08, 0x40, 0xf0, 0x0a, 0x40, 0xf8, 0x0c,
+                0x40, 0x00, 0xa4);
+        assertEquals(0x14, mapper.getByte(0xa080));
+        mapper.setByte(0x7080, 0x9b);
+        assertEquals(0x20, mapper.getByte(0xa080));
+    }
+
+    @Test
     public void stateRoundTripPreservesTheShiftWindowAndSelectedBank() throws IOException {
         MemoryController mapper = mapper();
         write(mapper, 0x7081, 0x46, 0x58, 0x54, 0x5f);
@@ -102,6 +131,11 @@ public class Vf001ZookTest {
 
     private static MemoryController mapper() throws IOException {
         return new Vf001Zook(new Rom(zookRom()), Battery.NULL_BATTERY);
+    }
+
+    private static MemoryController superFightersSMapper() throws IOException {
+        return new Cartridge(new Rom(superFightersSRom()), Battery.NULL_BATTERY)
+                .getMemoryController();
     }
 
     private static void write(MemoryController mapper, int address, int... values) {
@@ -132,6 +166,9 @@ public class Vf001ZookTest {
 
     private static byte[] superFightersSRom() {
         byte[] data = new byte[0x200000];
+        for (int bank = 0; bank < data.length / 0x4000; bank++) {
+            data[bank * 0x4000] = (byte) bank;
+        }
         byte[] title = "Super Fight's".getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(title, 0, data, 0x0134, title.length);
         data[0x0101] = (byte) 0xc3;
