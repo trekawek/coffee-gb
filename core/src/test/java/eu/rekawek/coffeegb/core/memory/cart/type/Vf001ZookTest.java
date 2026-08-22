@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class Vf001ZookTest {
@@ -36,6 +37,31 @@ public class Vf001ZookTest {
         withoutThunk[0x3ef5] ^= 1;
         assertEquals(CartridgeProperties.Mapper.STANDARD,
                 new Rom(withoutThunk).getCartridgeProperties().getMapper());
+    }
+
+    @Test
+    public void exposesTheUnpackedSuperFightersSVectors() throws IOException {
+        Rom rom = new Rom(superFightersSRom());
+
+        assertEquals(CartridgeProperties.Mapper.VF001_ZOOK,
+                rom.getCartridgeProperties().getMapper());
+        assertTrue(rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.SUPER_FIGHTERS_S_VECTOR_PATCH));
+
+        MemoryController mapper = new Cartridge(rom, Battery.NULL_BATTERY).getMemoryController();
+        assertEquals(0xc3, mapper.getByte(0x0008));
+        assertEquals(0xc3, mapper.getByte(0x0010));
+        assertEquals(0xc3, mapper.getByte(0x0018));
+        assertEquals(0x35, mapper.getByte(0x002f));
+        assertEquals(0x00, mapper.getByte(0x0007));
+        assertEquals(0x00, mapper.getByte(0x0030));
+
+        byte[] withoutPackedVectors = superFightersSRom();
+        withoutPackedVectors[0x0018] ^= 1;
+        Rom other = new Rom(withoutPackedVectors);
+        assertEquals(CartridgeProperties.Mapper.STANDARD, other.getCartridgeProperties().getMapper());
+        assertFalse(other.getCartridgeProperties().has(
+                CartridgeProperties.Feature.SUPER_FIGHTERS_S_VECTOR_PATCH));
     }
 
     @Test
@@ -101,6 +127,25 @@ public class Vf001ZookTest {
         System.arraycopy(title, 0, data, 0x0134, title.length);
         data[0x0147] = 0x01;
         data[0x0148] = 0x05;
+        return data;
+    }
+
+    private static byte[] superFightersSRom() {
+        byte[] data = new byte[0x200000];
+        byte[] title = "Super Fight's".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, data, 0x0134, title.length);
+        data[0x0101] = (byte) 0xc3;
+        data[0x0102] = 0x50;
+        data[0x0103] = 0x01;
+        data[0x0018] = (byte) 0x91;
+        data[0x0019] = 0x20;
+        data[0x001a] = (byte) 0xfa;
+        data[0x0143] = (byte) 0x80;
+        data[0x0144] = 'A';
+        data[0x0145] = '7';
+        data[0x0146] = 0x03;
+        data[0x0147] = 0x01;
+        data[0x0148] = 0x06;
         return data;
     }
 }
