@@ -4,6 +4,11 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
+
+    /** Enables a narrowly detected cartridge compatibility profile for this endpoint. */
+    default void enableCompatibilityProfile(SerialCompatibilityProfile profile) {
+    }
+
     /**
      * Returns the largest span for which omitting this endpoint's master-clock callback is exact.
      * During the admitted span {@link #tick()} and {@link #setExternalTransfer(boolean)} with a

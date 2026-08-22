@@ -27,6 +27,8 @@ public final class FourPlayerAdapter {
 
     private static final int PING_PACKET_GAP_TICKS = 51_548;
 
+    private static final int[] JANTAKU_BOY_CONTROL_PACKET = {0xfd, 0xff, 0xff, 0xff};
+
     private final int clockTicksPerBit;
 
     private final int pingByteGapTicks;
@@ -50,6 +52,8 @@ public final class FourPlayerAdapter {
     private final int[] pendingBits = new int[PLAYER_COUNT];
 
     private final boolean[] connected = new boolean[PLAYER_COUNT];
+
+    private final boolean[] jantakuBoyControlPacket = new boolean[PLAYER_COUNT];
 
     private final int[] consecutiveFf = new int[PLAYER_COUNT];
 
@@ -104,6 +108,7 @@ public final class FourPlayerAdapter {
             case PING -> packetByte == 0 ? 0xfe : statusMask();
             case TRANSMISSION_INDICATOR -> 0xcc;
             case PING_INDICATOR -> 0xff;
+            case JANTAKU_BOY_CONTROL -> JANTAKU_BOY_CONTROL_PACKET[packetByte];
             case TRANSMISSION -> transmissionBuffer[packetByte];
         };
     }
@@ -128,13 +133,14 @@ public final class FourPlayerAdapter {
 
     private int packetLength() {
         return switch (phase) {
-            case PING, TRANSMISSION_INDICATOR -> 4;
+            case PING, TRANSMISSION_INDICATOR, JANTAKU_BOY_CONTROL -> 4;
             case TRANSMISSION, PING_INDICATOR -> size * PLAYER_COUNT;
         };
     }
 
     private int byteGapTicks() {
-        if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR) {
+        if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR
+                || phase == Phase.JANTAKU_BOY_CONTROL) {
             return pingByteGapTicks;
         }
         return Math.addExact(
@@ -143,7 +149,8 @@ public final class FourPlayerAdapter {
     }
 
     private int packetGapTicks(int packetLength) {
-        if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR) {
+        if (phase == Phase.PING || phase == Phase.TRANSMISSION_INDICATOR
+                || phase == Phase.JANTAKU_BOY_CONTROL) {
             return Math.addExact(
                     pingPacketGapTicks,
                     Math.multiplyExact(rate & 0x0f, ticksPerMillisecond));
@@ -159,12 +166,18 @@ public final class FourPlayerAdapter {
     private void finishPacket() {
         switch (phase) {
             case PING -> finishPingPacket();
-            case TRANSMISSION_INDICATOR -> phase = Phase.TRANSMISSION;
+            case TRANSMISSION_INDICATOR -> {
+                phase = Phase.TRANSMISSION;
+                if (allPlayersUseJantakuBoyControlPacket() && size == 1) {
+                    transmissionBuffer = Arrays.copyOf(JANTAKU_BOY_CONTROL_PACKET, 16);
+                }
+            }
             case TRANSMISSION -> finishTransmissionPacket();
             case PING_INDICATOR -> {
                 phase = Phase.PING;
                 Arrays.fill(connected, false);
             }
+            case JANTAKU_BOY_CONTROL -> finishJantakuBoyControlPacket();
         }
         for (int[] playerReplies : replies) {
             Arrays.fill(playerReplies, 0);
@@ -198,6 +211,14 @@ public final class FourPlayerAdapter {
     }
 
     private void finishTransmissionPacket() {
+        if (restartPingRequested && allPlayersUseJantakuBoyControlPacket() && size == 1) {
+            // This title requires a non-standard control response at this restart boundary.
+            // Preserve the restart packet's framing/timing but return only the detected title's
+            // FD/FF/FF/FF response instead of disconnecting the four linked consoles.
+            phase = Phase.JANTAKU_BOY_CONTROL;
+            restartPingRequested = false;
+            return;
+        }
         int[] nextBuffer = new int[16];
         for (int player = 0; player < PLAYER_COUNT; player++) {
             // Games load byte 1 after receiving byte 0, so the first SIZE replies are physically
@@ -209,6 +230,21 @@ public final class FourPlayerAdapter {
             phase = Phase.PING_INDICATOR;
             restartPingRequested = false;
         }
+    }
+
+    private void finishJantakuBoyControlPacket() {
+        // Retain the control phase: this exact title expects this bridge response in place of
+        // the adapter's normal disconnect/re-ping sequence.
+        finishTransmissionPacket();
+    }
+
+    private boolean allPlayersUseJantakuBoyControlPacket() {
+        for (boolean enabled : jantakuBoyControlPacket) {
+            if (!enabled) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void observeReplyByte() {
@@ -223,7 +259,8 @@ public final class FourPlayerAdapter {
                 }
             } else if (phase == Phase.TRANSMISSION) {
                 consecutiveFf[player] = reply == 0xff ? consecutiveFf[player] + 1 : 0;
-                if (consecutiveFf[player] >= 3) {
+                int restartThreshold = allPlayersUseJantakuBoyControlPacket() ? 2 : 3;
+                if (consecutiveFf[player] >= restartThreshold) {
                     restartPingRequested = true;
                 }
             }
@@ -265,7 +302,8 @@ public final class FourPlayerAdapter {
         PING,
         TRANSMISSION_INDICATOR,
         TRANSMISSION,
-        PING_INDICATOR
+        PING_INDICATOR,
+        JANTAKU_BOY_CONTROL
     }
 
     private record AdapterState(int[] sb, boolean[] transferArmed, int[] pendingBits,
@@ -291,6 +329,13 @@ public final class FourPlayerAdapter {
 
         private Endpoint(int player) {
             this.player = player;
+        }
+
+        @Override
+        public void enableCompatibilityProfile(SerialCompatibilityProfile profile) {
+            if (profile == SerialCompatibilityProfile.JANTAKU_BOY_FOUR_PLAYER_CONTROL_PACKET) {
+                jantakuBoyControlPacket[player] = true;
+            }
         }
 
         @Override
