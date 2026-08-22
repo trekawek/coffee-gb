@@ -1387,7 +1387,6 @@ internal object StateGraph {
               return
             }
             if (isDynamicMulticartGameState(owner, field)) {
->>>>>>> 01f7a691 (Use scalar FIFO for timing skeleton)
               // This board commits a selected game by replacing its virtual child mapper. The
               // candidate record has already passed the child-mapper policy; its type is not a
               // target-owned invariant of the surrounding physical cartridge.
