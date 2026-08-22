@@ -216,18 +216,20 @@ public class Cpu implements StatefulComponent<Cpu> {
     /**
      * Whether a PERFORMANCE phase-only span may safely call the peripheral wake callback.
      *
-     * <p>HALT entry and wake are deliberately kept on the scalar scheduler.  The callback can
-     * rephase {@link #clockCycle} for the HALT bug, or change the CPU state as an interrupt edge
-     * becomes visible.  The interrupt sequencer and locked/paused states are likewise cheap to
-     * leave scalar; a phase-only span is only useful while the ordinary instruction sequencer is
-     * active.</p>
+     * <p>HALT entry and wake are deliberately kept on the scalar scheduler. Once HALT's entry
+     * sample has settled, however, the peripheral callback is a no-op until an existing quiet
+     * horizon reaches the next wake edge, so its non-boundary dots are eligible. The callback can
+     * otherwise rephase {@link #clockCycle} for the HALT bug or change the CPU state as an
+     * interrupt edge becomes visible. The interrupt sequencer and locked/paused states remain
+     * scalar.</p>
      */
     public boolean performancePhaseOnlySpanEligible() {
         return haltEntrySampleTicks == 0
                 && (state == State.OPCODE
                 || state == State.EXT_OPCODE
                 || state == State.OPERAND
-                || state == State.RUNNING);
+                || state == State.RUNNING
+                || state == State.HALTED);
     }
 
     /**

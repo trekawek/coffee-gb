@@ -18,6 +18,7 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
 
     private int bitIndex = 7;
 
+    /** Pairs two endpoints before session installation; this is not a concurrent hot-plug API. */
     public void init(Peer2PeerSerialEndpoint peer) {
         this.peer = peer;
         peer.peer = this;
@@ -26,6 +27,12 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
     /** True only while this endpoint has a live peer whose traffic must be replayed jointly. */
     public boolean isConnected() {
         return peer != null;
+    }
+
+    /** An unconnected cable is stably high and has no peer work; a connected cable stays scalar. */
+    @Override
+    public int performanceQuietSpanLimit(int requested) {
+        return requested > 0 && peer == null ? requested : 0;
     }
 
     @Override

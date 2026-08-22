@@ -5,6 +5,9 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.cpu.Cpu;
+import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
@@ -125,6 +128,93 @@ public final class GameboyPlayerInputHubPerformanceTest {
         }
     }
 
+    @Test
+    public void settledHaltMatchesScalarDmgAndCgbWithBulkCoverage() throws Exception {
+        for (boolean cgb : new boolean[]{false, true}) {
+            PlayerInputHub hub = new PlayerInputHub();
+            hub.openSource(0);
+            try (Gameboy performance = haltSession(cgb, hub);
+                    // A non-hub source deliberately makes Joypad's horizon zero, retaining the
+                    // PERFORMANCE components while forcing the scalar scheduler as the oracle.
+                    Gameboy scalar = haltSession(cgb,
+                            () -> PlayerInputSnapshot.released())) {
+                for (int chunk = 0; chunk < 120; chunk++) {
+                    performance.runTicks(100);
+                    scalar.runTicks(100);
+                }
+
+                assertEquals("HALT state cgb=" + cgb, Cpu.State.HALTED,
+                        performance.getCpu().getState());
+                assertEquals("scalar HALT state cgb=" + cgb, Cpu.State.HALTED,
+                        scalar.getCpu().getState());
+                assertEquals("HALT differential cgb=" + cgb + " "
+                                + componentHashes(scalar.captureState(), performance.captureState()),
+                        stateHash(scalar.captureState()), stateHash(performance.captureState()));
+                assertRasterEquivalent(scalar, performance, "HALT cgb=" + cgb);
+                assertTrue("stable HALT had no substantial bulk coverage cgb=" + cgb
+                                + " ticks=" + performance.getPerformanceBulkTicks(),
+                        performance.getPerformanceBulkTicks() > 1_000);
+            }
+        }
+    }
+
+    @Test
+    public void settledHaltWakeEdgesMatchScalarForOneToThreeDotTails() throws Exception {
+        for (boolean cgb : new boolean[]{false, true}) {
+            for (WakeSource wakeSource : WakeSource.values()) {
+                for (int tail = 1; tail <= 3; tail++) {
+                    PlayerInputHub hub = new PlayerInputHub();
+                    hub.openSource(0);
+                    try (Gameboy performance = haltSession(cgb, hub);
+                            Gameboy scalar = haltSession(cgb,
+                                    () -> PlayerInputSnapshot.released())) {
+                        settleHalt(performance, scalar, cgb, wakeSource, tail);
+                        armWakeSource(performance, wakeSource);
+                        armWakeSource(scalar, wakeSource);
+                        performance.resetPerformanceBulkCounters();
+                        scalar.resetPerformanceBulkCounters();
+
+                        boolean sawWholeTail = false;
+                        int elapsed = 0;
+                        while (performance.getCpu().getState() == Cpu.State.HALTED
+                                && elapsed < 2_000) {
+                            long bulkBefore = performance.getPerformanceBulkTicks();
+                            long performanceFrames = performance.runTicks(tail);
+                            long scalarFrames = runScalarTicks(scalar, tail);
+                            sawWholeTail |= performance.getPerformanceBulkTicks() - bulkBefore
+                                    == tail;
+                            assertEquals(context(cgb, wakeSource, tail) + " frame events",
+                                    scalarFrames, performanceFrames);
+                            assertEquals(context(cgb, wakeSource, tail) + " CPU wake tick",
+                                    scalar.getCpu().getState(), performance.getCpu().getState());
+                            elapsed += tail;
+                        }
+
+                        assertTrue(context(cgb, wakeSource, tail) + " did not wake",
+                                performance.getCpu().getState() != Cpu.State.HALTED);
+                        assertTrue(context(cgb, wakeSource, tail)
+                                        + " never committed a whole caller tail",
+                                sawWholeTail);
+
+                        // Continue past the wake boundary. Inactive OAM DMA must leave its
+                        // HALT-pause latch on the same running-CPU value as the scalar machine.
+                        assertEquals(context(cgb, wakeSource, tail) + " post-wake frame events",
+                                runScalarTicks(scalar, 8), performance.runTicks(8));
+                        ComponentState<Gameboy> scalarState = scalar.captureState();
+                        ComponentState<Gameboy> performanceState = performance.captureState();
+                        assertEquals(context(cgb, wakeSource, tail) + " DMA pause latch",
+                                recordComponentHash(scalarState, "dmaMemento"),
+                                recordComponentHash(performanceState, "dmaMemento"));
+                        assertStateEquivalent(scalarState, performanceState,
+                                context(cgb, wakeSource, tail));
+                        assertRasterEquivalent(scalar, performance,
+                                context(cgb, wakeSource, tail));
+                    }
+                }
+            }
+        }
+    }
+
     private static Gameboy session(boolean cgb, ExecutionMode mode, PlayerInputHub hub)
             throws Exception {
         return session(cgb, mode, (PlayerInputSource) hub);
@@ -143,12 +233,119 @@ public final class GameboyPlayerInputHubPerformanceTest {
         image[0x105] = (byte) 0xfe;
         image[0x143] = (byte) (cgb ? 0x80 : 0);
         image[0x147] = 0;
-        return new Gameboy.GameboyConfiguration(new Rom(image))
+        Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(image))
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setExecutionMode(mode)
                 .setSupportBatterySave(false)
                 .setPlayerInputSource(inputSource)
                 .build();
+        // Use the real disconnected cable endpoint used by the controller link path.  Its
+        // PERFORMANCE capability is intentionally distinct from the NULL endpoint and must
+        // remain quiet only while it has no peer.
+        gameboy.init(new EventBusImpl(null, null, false), new Peer2PeerSerialEndpoint(), null);
+        return gameboy;
+    }
+
+    private static Gameboy haltSession(boolean cgb, PlayerInputSource inputSource) throws Exception {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x76; // HALT with no interrupt sources enabled
+        image[0x101] = 0x00;
+        image[0x143] = (byte) (cgb ? 0x80 : 0);
+        image[0x147] = 0;
+        Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(image))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+        gameboy.init(new EventBusImpl(null, null, false), new Peer2PeerSerialEndpoint(), null);
+        return gameboy;
+    }
+
+    private static void settleHalt(Gameboy performance, Gameboy scalar, boolean cgb,
+                                   WakeSource wakeSource, int tail) {
+        performance.runTicks(128);
+        runScalarTicks(scalar, 128);
+        assertEquals(context(cgb, wakeSource, tail) + " candidate did not settle in HALT",
+                Cpu.State.HALTED, performance.getCpu().getState());
+        assertEquals(context(cgb, wakeSource, tail) + " oracle did not settle in HALT",
+                Cpu.State.HALTED, scalar.getCpu().getState());
+
+        // Arm mode-2 STAT only from a deasserted source so the tested interrupt is the next
+        // PPU edge, rather than the register write itself.
+        if (wakeSource == WakeSource.STAT) {
+            int guard = 0;
+            while (performance.getGpu().getVisibleStatMode() == 2 && guard++ < 100) {
+                performance.runTicks(1);
+                scalar.runTicks(1);
+            }
+            assertTrue(context(cgb, wakeSource, tail) + " STAT source did not deassert",
+                    performance.getGpu().getVisibleStatMode() != 2);
+        }
+        assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                context(cgb, wakeSource, tail) + " pre-arm");
+    }
+
+    private static void armWakeSource(Gameboy gameboy, WakeSource wakeSource) {
+        var bus = gameboy.getAddressSpace();
+        bus.setByte(0xffff, 0);
+        bus.setByte(0xff0f, 0);
+        if (wakeSource == WakeSource.TIMER) {
+            bus.setByte(0xff07, 0);
+            bus.setByte(0xff04, 0);
+            bus.setByte(0xff06, 0);
+            bus.setByte(0xff05, 0xff);
+            bus.setByte(0xff07, 0x05);
+            bus.setByte(0xffff, 0x04);
+        } else {
+            bus.setByte(0xff41, 0x20);
+            bus.setByte(0xff0f, 0);
+            bus.setByte(0xffff, 0x02);
+        }
+    }
+
+    private static long runScalarTicks(Gameboy scalar, int ticks) {
+        long frameEvents = 0;
+        for (int tick = 0; tick < ticks; tick++) {
+            frameEvents += scalar.runTicks(1);
+        }
+        return frameEvents;
+    }
+
+    private static String context(boolean cgb, WakeSource wakeSource, int tail) {
+        return "cgb=" + cgb + ", wake=" + wakeSource + ", tail=" + tail;
+    }
+
+    private static void assertStateEquivalent(ComponentState<Gameboy> scalar,
+                                              ComponentState<Gameboy> performance,
+                                              String context) {
+        int scalarHash = stateHash(scalar);
+        int performanceHash = stateHash(performance);
+        if (scalarHash != performanceHash) {
+            assertEquals(context + " " + componentHashes(scalar, performance),
+                    scalarHash, performanceHash);
+        }
+    }
+
+    private static int recordComponentHash(Object value, String componentName) {
+        for (RecordComponent component : value.getClass().getRecordComponents()) {
+            if (!component.getName().equals(componentName)) {
+                continue;
+            }
+            try {
+                var accessor = component.getAccessor();
+                accessor.setAccessible(true);
+                return stateHash(accessor.invoke(value));
+            } catch (ReflectiveOperationException e) {
+                throw new AssertionError("Cannot hash state component " + component, e);
+            }
+        }
+        throw new AssertionError("Missing record component " + componentName);
+    }
+
+    private enum WakeSource {
+        TIMER,
+        STAT
     }
 
     private static PlayerInputSnapshot snapshot(Set<Button> buttons) {

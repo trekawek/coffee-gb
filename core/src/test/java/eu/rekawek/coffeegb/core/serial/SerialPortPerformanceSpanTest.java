@@ -78,6 +78,24 @@ public class SerialPortPerformanceSpanTest {
         assertEquals(0, debug.performanceQuietSpanLimit(1));
     }
 
+    @Test
+    public void disconnectedPeerCableIsQuietButConnectedCableIsNot() {
+        Peer2PeerSerialEndpoint disconnected = new Peer2PeerSerialEndpoint();
+        SerialPort idle = new SerialPort(
+                new InterruptManager(false), false, new SpeedMode(false));
+        idle.init(disconnected);
+        assertEquals(3, idle.performanceQuietSpanLimit(3));
+
+        Peer2PeerSerialEndpoint first = new Peer2PeerSerialEndpoint();
+        Peer2PeerSerialEndpoint second = new Peer2PeerSerialEndpoint();
+        first.init(second);
+        SerialPort connected = new SerialPort(
+                new InterruptManager(false), false, new SpeedMode(false));
+        connected.init(first);
+        assertEquals(0, connected.performanceQuietSpanLimit(3));
+        assertEquals(0, first.performanceQuietSpanLimit(3));
+    }
+
     private static final class NoopEndpoint implements SerialEndpoint {
         @Override
         public void setSb(int sb) {

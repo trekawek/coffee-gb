@@ -339,7 +339,9 @@ final class AndroidBenchmarkDiagnostics {
         speedFinalSample = speedModeFinal == 1 || speedModeFinal == 2;
         record("event=speed_sample frame=600 effective_gbc=" + event.getEffectiveGbc()
                 + " effective_dmg_compat=" + event.getEffectiveDmgCompat()
-                + " speed_mode_final=" + speedModeFinal + " speed_mode_sample=frame_600");
+                + " speed_mode_final=" + speedModeFinal + " speed_mode_sample=frame_600"
+                + " performance_bulk_spans=" + event.getPerformanceBulkSpans()
+                + " performance_bulk_ticks=" + event.getPerformanceBulkTicks());
         if (phase == Phase.ARMED) {
             phase = Phase.CORE_FROZEN;
         }
