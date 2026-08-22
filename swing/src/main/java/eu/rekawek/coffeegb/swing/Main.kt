@@ -275,6 +275,7 @@ private fun parseCli(args: Array<String>): CliCommand {
                   hardwareProfile = profileOverride,
                   bootstrapMode = if (useBootstrap) BootstrapMode.NORMAL else null,
                   batterySavesEnabled = if (disableBatterySaves) false else null,
+                  forceInMemoryBattery = joinNetplayEndpoint != null,
               ),
       ))
 }
