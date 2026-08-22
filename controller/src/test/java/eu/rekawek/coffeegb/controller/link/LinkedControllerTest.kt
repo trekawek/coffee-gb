@@ -2961,6 +2961,7 @@ class LinkedControllerTest {
     val checkpoint = assertNotNull(checkpoints.poll(5, TimeUnit.SECONDS))
     assertTrue(checkpoint.frame > StateLimits.NETPLAY_FUTURE_FRAMES)
     assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
+    assertTrue(checkpoint.states.all { it.frame == checkpoint.frame })
     assertTrue(
         checkpoint.states.all {
           it.portableStateFile?.root is SessionStateRoot
