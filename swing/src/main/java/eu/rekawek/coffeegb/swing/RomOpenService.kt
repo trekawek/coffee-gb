@@ -48,13 +48,22 @@ data class RomOpenRequest(
     val recentPathToReplace: Path? = null,
     /** Exact path-backed ROM previously selected from this file or archive, when known. */
     val preferredOrigin: RomOrigin? = null,
+    /** Netplay children start from their host-synchronized state rather than a local resume. */
+    val allowAutosaveResume: Boolean = true,
 ) {
   constructor(
       path: Path,
       source: RomOpenSource,
       recentPathToReplace: Path? = null,
       preferredOrigin: RomOrigin? = null,
-  ) : this(listOf(RomOpenInput.LocalPath(path)), source, recentPathToReplace, preferredOrigin)
+      allowAutosaveResume: Boolean = true,
+  ) : this(
+      listOf(RomOpenInput.LocalPath(path)),
+      source,
+      recentPathToReplace,
+      preferredOrigin,
+      allowAutosaveResume,
+  )
 }
 
 /** Resolves a persisted archive identity against the newly snapshotted, bounded inventory. */
@@ -341,6 +350,7 @@ internal constructor(
             request.source,
             request.recentPathToReplace,
             request.preferredOrigin,
+            request.allowAutosaveResume,
         )
     val operation = Operation(nextRequestId.getAndIncrement(), boundedRequest)
     var unavailable = false
@@ -850,6 +860,7 @@ internal constructor(
               image,
               state = null,
               openRequestId = operation.id,
+              allowAutosaveResume = operation.request.allowAutosaveResume,
           ))
     } finally {
       operation.controllerDispatchComplete.countDown()

@@ -104,8 +104,8 @@ internal class DesktopRomOpen(
     archiveSelectionHost = host
   }
 
-  fun open(path: Path, source: RomOpenSource) {
-    open(listOf(RomOpenInput.LocalPath(path)), source)
+  fun open(path: Path, source: RomOpenSource, allowAutosaveResume: Boolean = true) {
+    open(listOf(RomOpenInput.LocalPath(path)), source, allowAutosaveResume)
   }
 
   /** Reopens a recent archive candidate by exact entry identity when the sidecar still matches. */
@@ -121,12 +121,16 @@ internal class DesktopRomOpen(
     )
   }
 
-  fun open(inputs: List<RomOpenInput>, source: RomOpenSource) {
+  fun open(
+      inputs: List<RomOpenInput>,
+      source: RomOpenSource,
+      allowAutosaveResume: Boolean = true,
+  ) {
     if (!SwingUtilities.isEventDispatchThread()) {
-      SwingUtilities.invokeLater { open(inputs, source) }
+      SwingUtilities.invokeLater { open(inputs, source, allowAutosaveResume) }
       return
     }
-    beginOpen(inputs, source)
+    beginOpen(inputs, source, allowAutosaveResume = allowAutosaveResume)
   }
 
   fun ownsVisibleRequest(requestId: Long): Boolean =
@@ -346,10 +350,18 @@ internal class DesktopRomOpen(
       source: RomOpenSource,
       recentPathToReplace: Path? = null,
       preferredOrigin: RomOrigin? = null,
+      allowAutosaveResume: Boolean = true,
   ): Long? {
     val singlePath = (inputs.singleOrNull() as? RomOpenInput.LocalPath)?.path
     if (singlePath != null && !confirm(singlePath)) return null
-    return service.open(RomOpenRequest(inputs, source, recentPathToReplace, preferredOrigin))
+    return service.open(
+        RomOpenRequest(
+            inputs,
+            source,
+            recentPathToReplace,
+            preferredOrigin,
+            allowAutosaveResume,
+        ))
   }
 
   private fun progressMessage(update: RomOpenUpdate.Progress): String {
