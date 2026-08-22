@@ -71,7 +71,7 @@ public final class CartridgeProperties {
         CODEBREAKER_RUMBLE,
         EARLY_CGB_LY_READ_EDGE,
         PRESERVE_INVALID_HEADER_CHECKSUM,
-        SUPER_FIGHTERS_S_VECTOR_PATCH
+        SUPER_FIGHTERS_S_LIVE_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -137,8 +137,8 @@ public final class CartridgeProperties {
                     Mapper.GGB81),
             mapper("Vast Fame VF001 Zook protection", CartridgeProperties::isVf001Zook,
                     Mapper.VF001_ZOOK),
-            features("Super Fighters S VF001 vector patch", CartridgeProperties::isSuperFightersS,
-                    Feature.SUPER_FIGHTERS_S_VECTOR_PATCH),
+            features("Super Fighters S VF001 live patch", CartridgeProperties::isSuperFightersS,
+                    Feature.SUPER_FIGHTERS_S_LIVE_PATCH),
             mapper("Vast Fame VF001 protection", CartridgeProperties::isVf001General,
                     Mapper.VF001_GENERAL),
             mapper("HiTek unlicensed mapper", CartridgeProperties::isHitek,

@@ -15,6 +15,8 @@ import eu.rekawek.coffeegb.core.state.MachineStateCapture;
  * by comparing it with its de-protected Rockman DX8 twin; the Super Fighters S entries are its
  * title-to-game verification reads. The observations and their provenance were published by the
  * Rustyboi project (Jacob McSwain, MIT License); they are data points, not a derived chip model.
+ * The exact Super Fighters S live patch also supplies its de-protected low-vector convention and
+ * the bank targets exercised on the path into gameplay.
  */
 public class Vf001Zook implements MemoryController {
 
@@ -22,14 +24,26 @@ public class Vf001Zook implements MemoryController {
 
     private static final int BANK_PORT = 0x7081;
 
-    private static final int SUPER_FIGHTERS_S_VECTOR_START = 0x0008;
+    private static final int SUPER_FIGHTERS_S_PATCH_START = 0x0000;
+
+    private static final int SUPER_FIGHTERS_S_CE_BYPASS_BANK = 0x42;
+
+    private static final int SUPER_FIGHTERS_S_CE_PROLOGUE_START = 0x454c;
+
+    private static final int SUPER_FIGHTERS_S_CE_BYPASS_START = 0x457d;
+
+    private static final int SUPER_FIGHTERS_S_CE93_BYPASS = 0x45df;
+
+    private static final int SUPER_FIGHTERS_S_JUMP_TABLE_START = 0x470a;
 
     /*
      * Super Fighters S's VF001-Zook board exposes these unpacked vectors instead of the
-     * packed bytes present in the raw ROM image. The table was recovered from the
-     * byte-identical, de-protected Super Fighters '99 vector targets published by Rustyboi.
+     * packed bytes present in the raw ROM image. The RST $00 tail-call convention is present in
+     * Kak's public working fix; the remaining vectors were recovered from the byte-identical,
+     * de-protected Super Fighters '99 targets published by Rustyboi.
      */
-    private static final int[] SUPER_FIGHTERS_S_VECTORS = {
+    private static final int[] SUPER_FIGHTERS_S_PATCH = {
+            0x78, 0x00, 0xea, 0x00, 0x20, 0xe0, 0xe0, 0xe9,
             0xc3, 0x61, 0x00, 0xfe, 0x00, 0xca, 0x22, 0x00,
             0xc3, 0x88, 0x00, 0x33, 0x00, 0xfe, 0x08, 0xca,
             0xc3, 0xa2, 0x00, 0x14, 0xca, 0x55, 0x00, 0xc3,
@@ -37,9 +51,26 @@ public class Vf001Zook implements MemoryController {
             0xf0, 0xff, 0xf6, 0x08, 0xe0, 0xff, 0xc9, 0x35
     };
 
+    /* Return through RST $38 for ordinary CE dispatch rows; preserve Kak's row-$2E tail. */
+    private static final int[] SUPER_FIGHTERS_S_CE_BYPASS = {
+            0xfa, 0xff, 0xce, 0xfe, 0x2e, 0x21, 0x38, 0x00,
+            0x20, 0x03, 0x21, 0x17, 0x1a, 0xc3, 0x8a, 0xce
+    };
+
+    private static final int[] SUPER_FIGHTERS_S_CE_PROLOGUE = {0xc9, 0xf0};
+
+    /* Direct targets for the 14 copied-WRAM JP $0000 stubs at $CFBE-$CFE5. */
+    private static final int[] SUPER_FIGHTERS_S_JUMP_TABLE = {
+            0xc3, 0x86, 0x34, 0xc3, 0x23, 0x10, 0xc3, 0x75, 0x37, 0xc3, 0xe4, 0x35,
+            0xc3, 0xbe, 0x38, 0xc3, 0xdc, 0x2d, 0xc3, 0xd5, 0x2d,
+            0xc3, 0x9b, 0x38, 0xc3, 0x8d, 0x38, 0xc3, 0x74, 0x35,
+            0xc3, 0xb8, 0x35, 0xc3, 0x1f, 0x36, 0xc3, 0xa5, 0x2e,
+            0xc3, 0x0e, 0x2f
+    };
+
     private final Mbc5 delegate;
 
-    private final boolean superFightersSVectorPatch;
+    private final boolean superFightersSLivePatch;
 
     private final int[] stream = new int[STREAM_MAX];
 
@@ -49,8 +80,8 @@ public class Vf001Zook implements MemoryController {
 
     public Vf001Zook(Rom rom, Battery battery) {
         delegate = new Mbc5(rom, battery);
-        superFightersSVectorPatch = rom.getCartridgeProperties().has(
-                CartridgeProperties.Feature.SUPER_FIGHTERS_S_VECTOR_PATCH);
+        superFightersSLivePatch = rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.SUPER_FIGHTERS_S_LIVE_PATCH);
     }
 
     @Override
@@ -94,7 +125,28 @@ public class Vf001Zook implements MemoryController {
         if (key < 0) {
             return;
         }
-        for (int[] response : BANK_RESPONSES) {
+        if (superFightersSLivePatch) {
+            selectExactResponseBank(key, SUPER_FIGHTERS_S_BANK_RESPONSES);
+            return;
+        }
+        selectResponseBank(key, BANK_RESPONSES);
+    }
+
+    private void selectExactResponseBank(int key, int[][] responses) {
+        for (int[] response : responses) {
+            if (response[0] == stream[key]
+                    && response[1] == stream[key + 1]
+                    && response[2] == stream[key + 2]
+                    && response[3] == stream[key + 3]) {
+                delegate.setByte(0x2000, response[4]);
+                delegate.setByte(0x3000, 0);
+                return;
+            }
+        }
+    }
+
+    private void selectResponseBank(int key, int[][] responses) {
+        for (int[] response : responses) {
             if (response[0] == stream[key]
                     && response[1] == stream[key + 1]
                     && response[2] == stream[key + 2]) {
@@ -107,10 +159,42 @@ public class Vf001Zook implements MemoryController {
 
     @Override
     public int getByte(int address) {
-        if (superFightersSVectorPatch
-                && address >= SUPER_FIGHTERS_S_VECTOR_START
-                && address < SUPER_FIGHTERS_S_VECTOR_START + SUPER_FIGHTERS_S_VECTORS.length) {
-            return SUPER_FIGHTERS_S_VECTORS[address - SUPER_FIGHTERS_S_VECTOR_START];
+        if (superFightersSLivePatch
+                && address >= SUPER_FIGHTERS_S_PATCH_START
+                && address < SUPER_FIGHTERS_S_PATCH_START + SUPER_FIGHTERS_S_PATCH.length) {
+            return SUPER_FIGHTERS_S_PATCH[address - SUPER_FIGHTERS_S_PATCH_START];
+        }
+        if (superFightersSLivePatch
+                && delegate.normalizeRomBank(delegate.getSelectedRomBank())
+                == SUPER_FIGHTERS_S_CE_BYPASS_BANK
+                && address >= SUPER_FIGHTERS_S_CE_PROLOGUE_START
+                && address < SUPER_FIGHTERS_S_CE_PROLOGUE_START
+                + SUPER_FIGHTERS_S_CE_PROLOGUE.length) {
+            return SUPER_FIGHTERS_S_CE_PROLOGUE[
+                    address - SUPER_FIGHTERS_S_CE_PROLOGUE_START];
+        }
+        if (superFightersSLivePatch
+                && delegate.normalizeRomBank(delegate.getSelectedRomBank())
+                == SUPER_FIGHTERS_S_CE_BYPASS_BANK
+                && address >= SUPER_FIGHTERS_S_CE_BYPASS_START
+                && address < SUPER_FIGHTERS_S_CE_BYPASS_START
+                + SUPER_FIGHTERS_S_CE_BYPASS.length) {
+            return SUPER_FIGHTERS_S_CE_BYPASS[address - SUPER_FIGHTERS_S_CE_BYPASS_START];
+        }
+        if (superFightersSLivePatch
+                && delegate.normalizeRomBank(delegate.getSelectedRomBank())
+                == SUPER_FIGHTERS_S_CE_BYPASS_BANK
+                && address == SUPER_FIGHTERS_S_CE93_BYPASS) {
+            return 0xc9;
+        }
+        if (superFightersSLivePatch
+                && delegate.normalizeRomBank(delegate.getSelectedRomBank())
+                == SUPER_FIGHTERS_S_CE_BYPASS_BANK
+                && address >= SUPER_FIGHTERS_S_JUMP_TABLE_START
+                && address < SUPER_FIGHTERS_S_JUMP_TABLE_START
+                + SUPER_FIGHTERS_S_JUMP_TABLE.length) {
+            return SUPER_FIGHTERS_S_JUMP_TABLE[
+                    address - SUPER_FIGHTERS_S_JUMP_TABLE_START];
         }
         if (address >= 0xa000 && address < 0xc000) {
             int register = (address >>> 8) & 0x0f;
@@ -193,6 +277,44 @@ public class Vf001Zook implements MemoryController {
                                    int[] stream, int streamLength, int bankPortRun)
             implements ComponentState<MemoryController> {
     }
+
+    /*
+     * Exact commands reached by the original Super Fighters S image. The first four and the
+     * verification streams below come from Rustyboi's published trace. The remaining commands
+     * were pinned by following the original control flow and matching each protected callsite to
+     * the literal bank in Kak's public working fix:
+     * https://bootleg.games/BGC_Forum/index.php?topic=3128.msg22599#msg22599
+     */
+    private static final int[][] SUPER_FIGHTERS_S_BANK_RESPONSES = {
+            {0x36, 0x9f, 0x3b, 0xc0, 0x42},
+            {0x48, 0xe0, 0xb2, 0xa3, 0x36},
+            {0x96, 0x64, 0x07, 0x33, 0x1f},
+            {0xfa, 0xc5, 0xd8, 0xb7, 0x1f},
+            {0x00, 0x00, 0x00, 0x00, 0x1d},
+            {0x7e, 0xc9, 0xf3, 0xcd, 0x1f},
+            {0x00, 0x00, 0x17, 0x00, 0x55},
+            {0x3e, 0xff, 0xe0, 0x47, 0x1f},
+            {0xd9, 0xcb, 0xfe, 0x21, 0x58},
+            {0x00, 0xd7, 0xcd, 0x52, 0x1d},
+            {0xca, 0xcc, 0x45, 0x3d, 0x52},
+            {0x9a, 0x45, 0xf1, 0x77, 0x1f},
+            {0x00, 0x00, 0x00, 0x7f, 0x45},
+            {0x45, 0x06, 0x01, 0x1a, 0x45},
+            {0x70, 0x60, 0x60, 0x60, 0x20},
+            {0x10, 0xcd, 0x02, 0x35, 0x1f},
+            {0x00, 0x01, 0x00, 0x00, 0x1f},
+            {0x00, 0x03, 0x38, 0xf4, 0x1f},
+            {0x81, 0x11, 0x11, 0x13, 0x1f},
+            {0xc3, 0xd3, 0x46, 0x21, 0x1f},
+            {0x80, 0x0e, 0x07, 0x03, 0x1f},
+            {0xb6, 0xcb, 0x34, 0x9e, 0x1d},
+            {0x72, 0x08, 0x05, 0xf6, 0x45},
+            {0x59, 0xcb, 0x66, 0xf9, 0x63},
+            {0xfe, 0x55, 0xd2, 0x97, 0x46},
+            {0xc6, 0x44, 0x21, 0x89, 0x46},
+            {0xc8, 0xaf, 0x16, 0x20, 0x47},
+            {0xa8, 0x3e, 0x5c, 0xc1, 0x45},
+    };
 
     /*
      * The response observations below were published by the Rustyboi project at
