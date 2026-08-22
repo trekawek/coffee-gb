@@ -382,7 +382,13 @@ internal object StateValueCodec {
             listOf("NONE", "REVERSE_PENDING", "PREEMPT_CPU", "YIELD_CPU"),
             listOf("IDLE", "COMMAND", "READING", "WRITING"),
             listOf("HANDSHAKE", "READY", "SENDING"),
-            listOf("PING", "TRANSMISSION_INDICATOR", "TRANSMISSION", "PING_INDICATOR"),
+            listOf(
+                "PING",
+                "TRANSMISSION_INDICATOR",
+                "TRANSMISSION",
+                "PING_INDICATOR",
+                "JANTAKU_BOY_CONTROL",
+            ),
             listOf("CANCEL", "FREEZE", "BLANK_BLACK", "BLANK_COLOR0"),
         )
 
