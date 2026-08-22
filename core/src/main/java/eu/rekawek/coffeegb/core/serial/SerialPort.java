@@ -84,16 +84,15 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     /**
      * Returns the largest exact PERFORMANCE span for an idle link port.
      *
-     * <p>The NULL endpoint has no wall-clock work and a stopped transfer has no serial edge to
-     * deliver.  In that state the only serial state which advances is the free-running 8-bit
-     * phase.  External endpoints, active transfers, HALT wake delay, debug hooks, and the
-     * interrupt acknowledge path remain scalar so endpoint callbacks and trace ordering cannot
-     * be observed late.</p>
+     * <p>A quiet endpoint has no wall-clock work and a stopped transfer has no serial edge to
+     * deliver. In that state the only serial state which advances is the free-running 8-bit
+     * phase. Other endpoints, active transfers, HALT wake delay, and debug hooks remain scalar so
+     * endpoint callbacks and trace ordering cannot be observed late.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0
                 || speedMode.getSpeedMode() != 1
-                || serialEndpoint != SerialEndpoint.NULL_ENDPOINT
+                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
                 || (sc & 0x80) != 0
                 || haltWakeDelay != 0
                 || debugHooks != null) {
@@ -113,7 +112,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     /**
-     * Advances an idle NULL-endpoint serial port without entering its per-clock callback path.
+     * Advances an idle quiet-endpoint serial port without entering its per-clock callback path.
      * A pending acknowledge is consumed at the same beginning-of-tick boundary as scalar
      * execution; no active transfer exists in an eligible span, so this cannot create a hidden
      * shift or completion event.
@@ -134,7 +133,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        // The packet preflight has already established an idle NULL endpoint and no pending
+        // The packet preflight has already established an idle quiet endpoint and no pending
         // acknowledge/transfer edge.  Do not repeat that walk on the hot commit path.
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;

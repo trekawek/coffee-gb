@@ -256,10 +256,22 @@ interface Controller : AutoCloseable {
       val effectiveGbc: Boolean,
       val effectiveDmgCompat: Boolean,
       val speedMode: Int,
+      val performanceBulkSpans: Long = 0L,
+      val performanceBulkTicks: Long = 0L,
   ) : Event {
+    /** Java/source compatibility for callers that predate bulk telemetry. */
+    constructor(
+        frame: Long,
+        effectiveGbc: Boolean,
+        effectiveDmgCompat: Boolean,
+        speedMode: Int,
+    ) : this(frame, effectiveGbc, effectiveDmgCompat, speedMode, 0L, 0L)
+
     init {
       require(frame > 0) { "Benchmark frame must be positive" }
       require(speedMode == 1 || speedMode == 2) { "Benchmark speed mode must be 1 or 2" }
+      require(performanceBulkSpans >= 0L) { "Benchmark bulk span count must be non-negative" }
+      require(performanceBulkTicks >= 0L) { "Benchmark bulk tick count must be non-negative" }
     }
   }
 

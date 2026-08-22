@@ -98,14 +98,15 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
     }
 
     /**
-     * Returns the exact idle CGB IR span.  External endpoints and the FullChanger are deliberately
-     * fail-closed: their callbacks or pulse edges must remain visible in the scalar ordering.
+     * Returns the exact idle CGB IR span. External infrared endpoints, non-quiet serial inputs,
+     * and the FullChanger are deliberately fail-closed: their callbacks or pulse edges must
+     * remain visible in the scalar ordering.
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
                 || fullChangerActive
                 || endpoint != InfraredEndpoint.NULL_ENDPOINT
-                || serialEndpoint != SerialEndpoint.NULL_ENDPOINT
+                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
                 || debugHooks != null) {
             return 0;
         }
@@ -124,8 +125,8 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         if (ticks <= 0) {
             return;
         }
-        // The packet preflight proves a disabled/null-endpoint IR state.  There is no arithmetic
-        // state to advance in that state, so the trusted commit is intentionally just a no-op.
+        // The packet preflight proves an inactive FullChanger, null IR endpoint, and quiet serial
+        // input. There is no arithmetic state to advance, so the trusted commit is a no-op.
     }
 
     @Override

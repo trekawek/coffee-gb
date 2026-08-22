@@ -823,7 +823,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         && cpu.performancePhaseOnlySpanEligible()
                         && cpu.performanceNoPendingPpuReadPhase()
                         && !dma.isTransferInProgress()
-                        && !dma.requiresClockTick(false)
+                        && !dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
                         && (!gbc || !hdma.hasActiveOrPendingTransfer())
                         // This is intentionally the one post-preflight volatile Joypad check.
                         // A legacy/debug/input mutation published after the horizon walk must
@@ -891,7 +891,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         joypad.tickPerformanceQuietSpanTrusted(ticks);
 
         // No CPU bus boundary exists inside this span. Advance the free-running phase once;
-        // running-state preflight proves Cpu.onPeripheralsTicked() is a no-op here.
+        // running state, or settled HALT, proves Cpu.onPeripheralsTicked() is a no-op here.
         cpu.advancePerformancePhaseOnlyTrusted(ticks);
         gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
@@ -904,13 +904,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
+    /** Resets the session-only PERFORMANCE bulk counters at benchmark arm. */
+    public void resetPerformanceBulkCounters() {
+        performanceBulkSpanCount = 0L;
+        performanceBulkTicks = 0L;
+    }
+
     /** Number of all-subsystem PERFORMANCE bulk spans taken by the current session. */
-    long getPerformanceBulkSpanCount() {
+    public long getPerformanceBulkSpanCount() {
         return performanceBulkSpanCount;
     }
 
     /** Number of master ticks covered by all-subsystem PERFORMANCE bulk spans. */
-    long getPerformanceBulkTicks() {
+    public long getPerformanceBulkTicks() {
         return performanceBulkTicks;
     }
 

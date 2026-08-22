@@ -557,6 +557,7 @@ class BasicController private constructor(
         benchmarkGeneration = it.generation
         benchmarkArmed = true
         benchmarkCoreFrozen = false
+        currentSession.gameboy.resetPerformanceBulkCounters()
         debugFrame = 0L
         debugMasterTick = 0L
         debugFramePosition = 0
@@ -581,6 +582,8 @@ class BasicController private constructor(
                 gpu.isGbc(),
                 gpu.isDmgCompatMode(),
                 speedMode.getSpeedMode(),
+                currentSession.gameboy.getPerformanceBulkSpanCount(),
+                currentSession.gameboy.getPerformanceBulkTicks(),
             ),
         )
         benchmarkCoreFrozen = true

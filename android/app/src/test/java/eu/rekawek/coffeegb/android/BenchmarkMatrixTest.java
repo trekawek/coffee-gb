@@ -88,6 +88,26 @@ public class BenchmarkMatrixTest {
     }
 
     @Test
+    public void validatesPerformanceBulkSpanAndTickTelemetryAsIntegers() {
+        List<String> valid = new ArrayList<>(syntheticSummaryLog(61.0, 62.0));
+        valid.add(
+                "event=speed_sample frame=600 effective_gbc=false"
+                        + " effective_dmg_compat=false speed_mode_final=1"
+                        + " speed_mode_sample=frame_600 performance_bulk_spans=12"
+                        + " performance_bulk_ticks=345");
+        BenchmarkMatrix.Report accepted = parse(valid);
+        assertTrue(accepted.errors().toString(), accepted.valid());
+
+        List<String> malformed = new ArrayList<>(valid);
+        int speedIndex = malformed.size() - 1;
+        malformed.set(speedIndex, malformed.get(speedIndex).replace("performance_bulk_ticks=345",
+                        "performance_bulk_ticks=not-a-number"));
+        BenchmarkMatrix.Report rejected = parse(malformed);
+        assertFalse(rejected.valid());
+        assertContains(rejected.errors(), "invalid integer performance_bulk_ticks");
+    }
+
+    @Test
     public void acceptsReadyOnlyFrameSinkContractButDoesNotUseItForVisibleGate() {
         List<String> sink = toSinkSummaryLog(syntheticSummaryLog(61.0, 62.0));
 

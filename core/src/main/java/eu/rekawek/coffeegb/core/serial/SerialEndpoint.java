@@ -5,6 +5,24 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
     /**
+     * Returns the largest span for which omitting this endpoint's master-clock callback is exact.
+     * During the admitted span {@link #tick()} and {@link #setExternalTransfer(boolean)} with a
+     * false argument must be inert, {@link #recvBit()} must return {@code -1}, and
+     * {@link #isSerialInputHigh()} must remain true. PERFORMANCE uses this capability instead of
+     * assuming that an endpoint's default methods are inert; external endpoints must opt in
+     * explicitly. Endpoint topology is configured before installation, or by the Gameboy owner
+     * thread between ticks, and must not change concurrently with this query or the admitted span.
+     */
+    default int performanceQuietSpanLimit(int requested) {
+        return 0;
+    }
+
+    /** Returns whether the endpoint is quiet for the requested PERFORMANCE span. */
+    default boolean canTickPerformanceQuietSpan(int ticks) {
+        return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /**
      * Releases deterministic ownership held by this endpoint before it is detached or discarded.
      *
      * <p>Most synchronous peripherals own no external lifecycle and therefore need no action. An
@@ -97,6 +115,11 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
                 @Override
                 public int sendBit() {
                     return 1;
+                }
+
+                @Override
+                public int performanceQuietSpanLimit(int requested) {
+                    return requested > 0 ? requested : 0;
                 }
             };
 }

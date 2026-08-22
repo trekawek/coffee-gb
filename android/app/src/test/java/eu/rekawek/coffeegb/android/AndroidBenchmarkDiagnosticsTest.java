@@ -179,7 +179,7 @@ public class AndroidBenchmarkDiagnosticsTest {
             diagnostics.frameReady();
         }
         diagnostics.benchmarkFrameBoundary(
-                new Controller.BenchmarkFrameBoundaryEvent(600L, true, true, 1));
+                new Controller.BenchmarkFrameBoundaryEvent(600L, true, true, 1, 12L, 345L));
         for (int submission = 1; submission <= 600; submission++) {
             diagnostics.frameSubmitted(submission);
         }
@@ -191,6 +191,12 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(finalRecord.contains("effective_gbc=true"));
         assertTrue(finalRecord.contains("effective_dmg_compat=true"));
         assertTrue(finalRecord.contains("effective_mode=cgb-dmg-compat"));
+        String speedRecord = records.stream()
+                .filter(line -> line.startsWith("event=speed_sample"))
+                .findFirst()
+                .orElseThrow();
+        assertTrue(speedRecord.contains("performance_bulk_spans=12"));
+        assertTrue(speedRecord.contains("performance_bulk_ticks=345"));
     }
 
     private static AndroidBenchmarkDiagnostics armedDiagnostics(long generation) {

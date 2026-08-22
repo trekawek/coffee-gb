@@ -798,6 +798,7 @@ public final class BenchmarkMatrix {
                 || key.endsWith("_ns")
                 || key.endsWith("_ms") || key.endsWith("_bytes") || key.endsWith("_frames")
                 || key.endsWith("_count") || key.endsWith("_events")
+                || key.endsWith("_spans") || key.endsWith("_ticks")
                 || key.endsWith("_millihz")
                 || key.endsWith("_milli") || key.endsWith("_rate") || key.endsWith("_status")
                 || key.endsWith("_hz")
@@ -850,7 +851,8 @@ public final class BenchmarkMatrix {
             case "benchmark_arm_rejected" -> Set.of("event", "phase", "reason");
             case "benchmark_anchor" -> Set.of("event", "success", "phase", "reason");
             case "speed_sample" -> Set.of("event", "frame", "effective_gbc",
-                    "effective_dmg_compat", "speed_mode_final", "speed_mode_sample");
+                    "effective_dmg_compat", "speed_mode_final", "speed_mode_sample",
+                    "performance_bulk_spans", "performance_bulk_ticks");
             case "first_frame" -> Set.of("event", "frame", "wall_ns", "since_launch_ms",
                     "prep_to_frame_ms");
             case "frames" -> Set.of("event", "frame", "ready_count", "submitted_count",
