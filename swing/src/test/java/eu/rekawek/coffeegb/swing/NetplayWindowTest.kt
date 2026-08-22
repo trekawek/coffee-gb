@@ -23,12 +23,16 @@ import java.awt.Component
 import java.awt.Container
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.AbstractButton
+import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JLabel
+import javax.swing.JRadioButton
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import javax.swing.SwingUtilities
@@ -138,7 +142,7 @@ class NetplayWindowTest {
       assertEquals(1, fixture.factoryCalls)
       assertEquals(2, fixture.view.showCalls)
 
-      onEdt { fixture.view.actions.startHosting(LinkMode.FOUR_PLAYER_ADAPTER) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.FOUR_PLAYER_ADAPTER, 0) }
       assertEquals(listOf(LinkMode.FOUR_PLAYER_ADAPTER), serverStarts.map { it.mode })
       val attemptId = serverStarts.single().attemptId
       assertTrue(attemptId > 0)
@@ -263,6 +267,70 @@ class NetplayWindowTest {
   }
 
   @Test
+  fun `initial CLI join waits for the loaded ROM and starts the client once`() {
+    val bus = EventBusImpl()
+    val starts = mutableListOf<StartClientEvent>()
+    bus.register<StartClientEvent>(starts::add)
+    val fixture = onEdt { HostFixture(bus, initialJoinEndpoint = validEndpoint("localhost")) }
+
+    try {
+      publishAvailableGame(bus)
+      flushEdt()
+
+      assertEquals(listOf("localhost"), starts.map { it.host })
+      assertEquals(NetplayPhase.CONNECTING, onEdt { fixture.host.currentPresentation().state.phase })
+
+      bus.post(Controller.EmulationStartedEvent("Tetris"))
+      flushEdt()
+      assertEquals(1, starts.size)
+    } finally {
+      onEdt { fixture.host.close() }
+      bus.close()
+    }
+  }
+
+  @Test
+  fun `host launches requested local clients after the server is listening`() {
+    val bus = EventBusImpl()
+    val starts = mutableListOf<StartServerEvent>()
+    val launches = mutableListOf<LocalLaunch>()
+    bus.register<StartServerEvent>(starts::add)
+    val fixture =
+        onEdt {
+          HostFixture(
+              bus,
+              localRomPath = { Path.of("Tetris.gb") },
+              localInstanceLauncher =
+                  LocalNetplayInstanceLauncher { rom, profile, endpoint, count ->
+                    launches += LocalLaunch(rom, profile.id(), endpoint.startClientValue, count)
+                    LocalNetplayInstanceLaunchResult(count, count, launcherAvailable = true)
+                  },
+          )
+        }
+
+    try {
+      publishAvailableGame(bus)
+      flushEdt()
+      onEdt { fixture.host.show() }
+      onEdt { fixture.view.actions.startHosting(LinkMode.FOUR_PLAYER_ADAPTER, 3) }
+      val attemptId = starts.single().attemptId
+
+      assertTrue(launches.isEmpty())
+      bus.post(ServerStartedEvent(LinkMode.FOUR_PLAYER_ADAPTER, attemptId))
+      flushEdt()
+
+      assertEquals(
+          listOf(LocalLaunch(Path.of("Tetris.gb"), "dmg", "localhost", 3)),
+          launches,
+      )
+      assertTrue(onEdt { fixture.host.currentPresentation().status.contains("Started 3 local") })
+    } finally {
+      onEdt { fixture.host.close() }
+      bus.close()
+    }
+  }
+
+  @Test
   fun `profile preflight rejects MGB and closing the retained host never disconnects`() {
     val bus = EventBusImpl()
     val stopRequests = AtomicInteger()
@@ -299,7 +367,10 @@ class NetplayWindowTest {
     bus.register<Controller.SetSerialPeripheralEvent> { selections += it.selection }
     bus.register<StartServerEvent>(starts::add)
     val confirmed = mutableListOf<Controller.SerialPeripheralSelection>()
-    val fixture = onEdt { HostFixture(bus) { selection -> confirmed += selection; true } }
+    val fixture =
+        onEdt {
+          HostFixture(bus, confirmPeripheralHandoff = { selection -> confirmed += selection; true })
+        }
 
     try {
       publishAvailableGame(bus)
@@ -309,7 +380,7 @@ class NetplayWindowTest {
       flushEdt()
 
       onEdt { fixture.host.show() }
-      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL, 0) }
       assertEquals(listOf(Controller.SerialPeripheralSelection.PRINTER), confirmed)
       assertEquals(Controller.SerialPeripheralSelection.PEER_TO_PEER, selections.last())
       assertTrue(starts.isEmpty(), "network startup waits for the serial ownership commit")
@@ -411,7 +482,7 @@ class NetplayWindowTest {
       flushEdt()
 
       onEdt { fixture.host.show() }
-      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL, 0) }
       val firstAttemptId = starts.single().attemptId
       bus.post(
           ServerStartFailedEvent(
@@ -466,7 +537,7 @@ class NetplayWindowTest {
       flushEdt()
       onEdt { fixture.host.show() }
 
-      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL, 0) }
       assertTrue(starts.isEmpty())
       assertEquals(NetplaySessionAction.CANCEL, onEdt { fixture.host.currentPresentation().sessionAction })
 
@@ -521,7 +592,7 @@ class NetplayWindowTest {
       flushEdt()
       onEdt { fixture.host.show() }
 
-      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL, 0) }
       bus.post(
           Controller.SerialPeripheralSelectionChangedEvent(
               Controller.SerialPeripheralSelection.PEER_TO_PEER))
@@ -642,7 +713,7 @@ class NetplayWindowTest {
     val bus = EventBusImpl()
     val starts = mutableListOf<StartServerEvent>()
     bus.register<StartServerEvent>(starts::add)
-    val fixture = onEdt { HostFixture(bus) { false } }
+    val fixture = onEdt { HostFixture(bus, confirmPeripheralHandoff = { false }) }
     try {
       publishAvailableGame(bus)
       bus.post(
@@ -651,7 +722,7 @@ class NetplayWindowTest {
       flushEdt()
 
       onEdt { fixture.host.show() }
-      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL) }
+      onEdt { fixture.view.actions.startHosting(LinkMode.NORMAL, 0) }
 
       assertTrue(starts.isEmpty())
       assertEquals(NetplayPhase.DISCONNECTED, onEdt { fixture.host.currentPresentation().state.phase })
@@ -724,9 +795,61 @@ class NetplayWindowTest {
       }
   }
 
+  @Test
+  fun `host card limits local clients for normal link and exposes one through three for adapter`() {
+    onEdt {
+      val starts = mutableListOf<Pair<LinkMode, Int>>()
+      val panel =
+          NetplayPanel(
+              NetplayWindowActions(
+                  { _ -> },
+                  { mode, count -> starts += mode to count },
+                  { _ -> },
+                  {},
+                  {},
+                  {},
+              ))
+      panel.render(
+          presentNetplay(
+              NetplayUiState(
+                  availability = NetplayAvailability.Available("Tetris", "dmg", "Game Boy"))))
+      val components = descendants(panel)
+      val checkbox =
+          components.filterIsInstance<JCheckBox>().single {
+            it.accessibleContext.accessibleName == "Start local Coffee GB instances"
+          }
+      val count =
+          components.filterIsInstance<JComboBox<*>>().single {
+            it.accessibleContext.accessibleName == "Number of local Coffee GB instances"
+          }
+      val normal = components.filterIsInstance<JRadioButton>().single { it.text == "2-player link" }
+      val adapter = components.filterIsInstance<JRadioButton>().single { it.text == "4-player adapter" }
+      val start = components.filterIsInstance<AbstractButton>().single { it.text == "Start hosting" }
+
+      assertEquals(listOf(1), (0 until count.itemCount).map(count::getItemAt))
+      assertFalse(count.isEnabled)
+      checkbox.doClick()
+      assertTrue(count.isEnabled)
+      adapter.doClick()
+      assertEquals(listOf(1, 2, 3), (0 until count.itemCount).map(count::getItemAt))
+      count.selectedItem = 3
+      start.doClick()
+      assertEquals(listOf(LinkMode.FOUR_PLAYER_ADAPTER to 3), starts)
+
+      normal.doClick()
+      assertEquals(listOf(1), (0 until count.itemCount).map(count::getItemAt))
+    }
+  }
+
   private class HostFixture(
       bus: EventBusImpl,
       confirmPeripheralHandoff: (Controller.SerialPeripheralSelection) -> Boolean = { true },
+      initialJoinEndpoint: NetplayV8Endpoint? = null,
+      localRomPath: () -> Path? = { null },
+      localInstanceLauncher: LocalNetplayInstanceLauncher =
+          LocalNetplayInstanceLauncher { _, _, _, count ->
+            LocalNetplayInstanceLaunchResult(count, count, launcherAvailable = true)
+          },
   ) {
     lateinit var view: RecordingNetplayView
     var factoryCalls = 0
@@ -737,9 +860,19 @@ class NetplayWindowTest {
               factoryCalls++
               RecordingNetplayView(actions).also { view = it }
             },
+            initialJoinEndpoint = initialJoinEndpoint,
+            localRomPath = localRomPath,
+            localInstanceLauncher = localInstanceLauncher,
             confirmPeripheralHandoff = confirmPeripheralHandoff,
         )
   }
+
+  private data class LocalLaunch(
+      val rom: Path,
+      val profile: String,
+      val endpoint: String,
+      val count: Int,
+  )
 
   private class RecordingNetplayView(val actions: NetplayWindowActions) : NetplayWindowView {
     val presentations = mutableListOf<NetplayUiPresentation>()
@@ -777,7 +910,7 @@ class NetplayWindowTest {
       assertIs<NetplayAddressValidation.Valid>(validateNetplayV8Address(value)).endpoint
 
   private fun noOpActions(): NetplayWindowActions =
-      NetplayWindowActions({ _ -> }, { _ -> }, { _ -> }, {}, {}, {})
+      NetplayWindowActions({ _ -> }, { _, _ -> }, { _ -> }, {}, {}, {})
 
   private fun descendants(component: Component): List<Component> =
       buildList {

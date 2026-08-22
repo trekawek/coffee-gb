@@ -39,6 +39,7 @@ class MainTest {
     assertEquals("", execution.stderr)
     assertFalse(request.debug)
     assertNull(request.initialRom)
+    assertNull(request.joinNetplayHost)
     assertNull(request.settingsOverrides.hardwareProfile)
     assertNull(request.settingsOverrides.bootstrapMode)
     assertNull(request.settingsOverrides.batterySavesEnabled)
@@ -55,6 +56,26 @@ class MainTest {
     assertEquals(HardwareProfileRegistry.DMG, request.settingsOverrides.hardwareProfile)
     assertEquals(BootstrapMode.NORMAL, request.settingsOverrides.bootstrapMode)
     assertEquals(false, request.settingsOverrides.batterySavesEnabled)
+  }
+
+  @Test
+  fun `join netplay accepts a direct host value and requires a ROM`() {
+    val spaced = execute("--join-netplay", "play.local:7000", "game.gb").singleLaunch()
+    assertEquals(File("game.gb"), spaced.initialRom)
+    assertEquals("play.local:7000", spaced.joinNetplayHost)
+
+    val equals = execute("--join-netplay=localhost", "game.gb").singleLaunch()
+    assertEquals("localhost", equals.joinNetplayHost)
+
+    assertUsageFailure(
+        execute("--join-netplay"),
+        "--join-netplay requires a hostname or IPv4 address",
+    )
+    assertUsageFailure(execute("--join-netplay", "localhost"), "--join-netplay requires a ROM file")
+    assertUsageFailure(
+        execute("--join-netplay", "play.local:0", "game.gb"),
+        "--join-netplay The port must be between 1 and 65535",
+    )
   }
 
   @Test
@@ -121,6 +142,7 @@ class MainTest {
               "--profile=<id>",
               "-b  --use-bootstrap",
               "-db --disable-battery-saves",
+              "--join-netplay HOST",
               "--debug",
               "-h  --help",
               "--version",
@@ -188,6 +210,10 @@ class MainTest {
             Failure(arrayOf("--profile="), "--profile requires one non-empty stable ID"),
             Failure(arrayOf("--profile=cgb=extra"), "--profile requires one non-empty stable ID"),
             Failure(arrayOf("--profile=CGB"), "Unknown hardware profile 'CGB'"),
+            Failure(
+                arrayOf("--join-netplay=host", "--join-netplay=other", "game.gb"),
+                "Option '--join-netplay' may be specified only once",
+            ),
             Failure(
                 arrayOf("--package-smoke", "game.gb"),
                 "--package-smoke cannot be combined with launch options or a ROM file",

@@ -16,9 +16,11 @@ private const val USAGE_ERROR = 2
 private const val DEVELOPMENT_VERSION = "development"
 
 /** Everything the CLI contributes to one desktop launch. CLI values remain process-local. */
-data class CliLaunchRequest(
+internal data class CliLaunchRequest(
     val debug: Boolean,
     val initialRom: File?,
+    /** Validated direct-host endpoint text to join after [initialRom] has opened. */
+    val joinNetplayHost: String?,
     val settingsOverrides: ApplicationSettingsOverrides,
 )
 
@@ -53,7 +55,12 @@ fun main(args: Array<String>) {
       ) { request ->
         // SwingGui installs the macOS open-file handler before resolving package natives so an
         // early Finder event cannot be lost during bootstrap.
-        run(request.debug, request.initialRom, request.settingsOverrides)
+        run(
+            request.debug,
+            request.initialRom,
+            request.settingsOverrides,
+            request.joinNetplayHost,
+        )
       }
   if (exitCode != SUCCESS) {
     exitProcess(exitCode)
@@ -119,19 +126,25 @@ private fun parseCli(args: Array<String>): CliCommand {
   var disableBatterySaves = false
   var profileId: String? = null
   var profileOccurrences = 0
+  var joinNetplayEndpoint: NetplayV8Endpoint? = null
   val positional = mutableListOf<String>()
 
-  for (argument in args) {
+  var index = 0
+  while (index < args.size) {
+    val argument = args[index]
     if (!parseOptions) {
       positional += argument
+      index++
       continue
     }
     if (argument == "--") {
       parseOptions = false
+      index++
       continue
     }
     if (argument == "-" || !argument.startsWith("-")) {
       positional += argument
+      index++
       continue
     }
     if (argument.startsWith("--profile=")) {
@@ -144,6 +157,13 @@ private fun parseCli(args: Array<String>): CliCommand {
         cliError("--profile requires one non-empty stable ID")
       }
       profileId = value
+      index++
+      continue
+    }
+    if (argument.startsWith("--join-netplay=")) {
+      if (joinNetplayEndpoint != null) repeatedOption("--join-netplay")
+      joinNetplayEndpoint = parseJoinNetplayEndpoint(argument.substringAfter("--join-netplay="))
+      index++
       continue
     }
 
@@ -181,8 +201,18 @@ private fun parseCli(args: Array<String>): CliCommand {
         disableBatterySaves = true
       }
       "--profile" -> cliError("--profile requires =<id>")
+      "--join-netplay" -> {
+        if (joinNetplayEndpoint != null) repeatedOption("--join-netplay")
+        val value = args.getOrNull(++index)
+            ?: cliError("--join-netplay requires a hostname or IPv4 address")
+        if (value.startsWith("-")) {
+          cliError("--join-netplay requires a hostname or IPv4 address")
+        }
+        joinNetplayEndpoint = parseJoinNetplayEndpoint(value)
+      }
       else -> cliError("Unknown option '$argument'")
     }
+    index++
   }
 
   if (positional.size > 1) {
@@ -197,6 +227,9 @@ private fun parseCli(args: Array<String>): CliCommand {
   if (profileId != null && (forceDmg || forceCgb)) {
     cliError("--profile conflicts with --force-dmg/--force-cgb")
   }
+  if (joinNetplayEndpoint != null && positional.isEmpty()) {
+    cliError("--join-netplay requires a ROM file")
+  }
   if (packageSmoke &&
       (debug ||
           forceDmg ||
@@ -204,6 +237,7 @@ private fun parseCli(args: Array<String>): CliCommand {
           useBootstrap ||
           disableBatterySaves ||
           profileId != null ||
+          joinNetplayEndpoint != null ||
           positional.isNotEmpty())) {
     cliError("--package-smoke cannot be combined with launch options or a ROM file")
   }
@@ -231,6 +265,7 @@ private fun parseCli(args: Array<String>): CliCommand {
       CliLaunchRequest(
           debug = debug,
           initialRom = positional.singleOrNull()?.let(::File),
+          joinNetplayHost = joinNetplayEndpoint?.startClientValue,
           settingsOverrides =
               ApplicationSettingsOverrides(
                   hardwareProfile = profileOverride,
@@ -239,6 +274,12 @@ private fun parseCli(args: Array<String>): CliCommand {
               ),
       ))
 }
+
+private fun parseJoinNetplayEndpoint(value: String): NetplayV8Endpoint =
+    when (val validation = validateNetplayV8Address(value)) {
+      is NetplayAddressValidation.Valid -> validation.endpoint
+      is NetplayAddressValidation.Invalid -> cliError("--join-netplay ${validation.message}")
+    }
 
 private fun validateBootstrapProfile(useBootstrap: Boolean, profile: HardwareProfile?) {
   if (useBootstrap && profile != null && !Bios.hasBundledBootRom(profile)) {
@@ -265,6 +306,7 @@ internal fun printUsage(stream: PrintStream) {
           HardwareProfileRegistry.supportedIds().joinToString(", "))
   stream.println("  -b  --use-bootstrap            Run the bundled boot ROM normally")
   stream.println("  -db --disable-battery-saves    Disable battery save reads and writes")
+  stream.println("      --join-netplay HOST        Join a netplay host after opening ROM_FILE")
   stream.println("      --debug                    Enable debug console")
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")
