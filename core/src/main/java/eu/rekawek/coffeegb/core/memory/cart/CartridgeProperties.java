@@ -70,7 +70,8 @@ public final class CartridgeProperties {
         MEALYBUG_DMG_BLOB,
         CODEBREAKER_RUMBLE,
         EARLY_CGB_LY_READ_EDGE,
-        PRESERVE_INVALID_HEADER_CHECKSUM
+        PRESERVE_INVALID_HEADER_CHECKSUM,
+        SUPER_FIGHTERS_S_VECTOR_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -136,6 +137,8 @@ public final class CartridgeProperties {
                     Mapper.GGB81),
             mapper("Vast Fame VF001 Zook protection", CartridgeProperties::isVf001Zook,
                     Mapper.VF001_ZOOK),
+            features("Super Fighters S VF001 vector patch", CartridgeProperties::isSuperFightersS,
+                    Feature.SUPER_FIGHTERS_S_VECTOR_PATCH),
             mapper("Vast Fame VF001 protection", CartridgeProperties::isVf001General,
                     Mapper.VF001_GENERAL),
             mapper("HiTek unlicensed mapper", CartridgeProperties::isHitek,
@@ -511,7 +514,8 @@ public final class CartridgeProperties {
                 0x21, 0x81, 0x70, 0x1a, 0x77, 0x13, 0x1a, 0x77, 0x13,
                 0x1a, 0x77, 0x13, 0x1a, 0x77, 0xfa, 0xff, 0x7f
         };
-        return info.crc32(0x0184, 0x30) == 0x42b773b8
+        return isSuperFightersS(info)
+                || info.crc32(0x0184, 0x30) == 0x42b773b8
                 && matches(info.data, 0x3ef5, bankSelectThunk);
     }
 
@@ -519,6 +523,24 @@ public final class CartridgeProperties {
         // Zhihuan Wang 2 shares its secondary-logo signature with genuine GGB81
         // cartridges, but this exact image programs the distinct VF001 protocol.
         return info.crc32() == 0xe6748d1f;
+    }
+
+    private static boolean isSuperFightersS(RomInfo info) {
+        int[] entry = {0x00, 0xc3, 0x50, 0x01};
+        int[] packedVectorPrefix = {0x91, 0x20, 0xfa};
+        // This is the original 2 MiB Super Fighters S header plus its packed-vector
+        // marker. Its VF001-Zook board exposes an unpacked vector view at boot.
+        return info.data.length == 0x200000
+                && "Super Fight's".equals(info.title())
+                && matches(info.data, 0x0100, entry)
+                && matches(info.data, 0x0018, packedVectorPrefix)
+                && info.byteAt(0x0143) == 0x80
+                && info.byteAt(0x0144) == 'A'
+                && info.byteAt(0x0145) == '7'
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x06
+                && info.byteAt(0x0149) == 0x00;
     }
 
     private static boolean isBbd(RomInfo info) {

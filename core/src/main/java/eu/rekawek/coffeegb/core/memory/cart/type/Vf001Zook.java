@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
@@ -20,7 +21,24 @@ public class Vf001Zook implements MemoryController {
 
     private static final int BANK_PORT = 0x7081;
 
+    private static final int SUPER_FIGHTERS_S_VECTOR_START = 0x0008;
+
+    /*
+     * Super Fighters S's VF001-Zook board exposes these unpacked vectors instead of the
+     * packed bytes present in the raw ROM image. The table was recovered from the
+     * byte-identical, de-protected Super Fighters '99 vector targets published by Rustyboi.
+     */
+    private static final int[] SUPER_FIGHTERS_S_VECTORS = {
+            0xc3, 0x61, 0x00, 0xfe, 0x00, 0xca, 0x22, 0x00,
+            0xc3, 0x88, 0x00, 0x33, 0x00, 0xfe, 0x08, 0xca,
+            0xc3, 0xa2, 0x00, 0x14, 0xca, 0x55, 0x00, 0xc3,
+            0xf0, 0xff, 0xe6, 0xf7, 0xe0, 0xff, 0xc9, 0x00,
+            0xf0, 0xff, 0xf6, 0x08, 0xe0, 0xff, 0xc9, 0x35
+    };
+
     private final Mbc5 delegate;
+
+    private final boolean superFightersSVectorPatch;
 
     private final int[] stream = new int[STREAM_MAX];
 
@@ -30,6 +48,8 @@ public class Vf001Zook implements MemoryController {
 
     public Vf001Zook(Rom rom, Battery battery) {
         delegate = new Mbc5(rom, battery);
+        superFightersSVectorPatch = rom.getCartridgeProperties().has(
+                CartridgeProperties.Feature.SUPER_FIGHTERS_S_VECTOR_PATCH);
     }
 
     @Override
@@ -86,6 +106,11 @@ public class Vf001Zook implements MemoryController {
 
     @Override
     public int getByte(int address) {
+        if (superFightersSVectorPatch
+                && address >= SUPER_FIGHTERS_S_VECTOR_START
+                && address < SUPER_FIGHTERS_S_VECTOR_START + SUPER_FIGHTERS_S_VECTORS.length) {
+            return SUPER_FIGHTERS_S_VECTORS[address - SUPER_FIGHTERS_S_VECTOR_START];
+        }
         if (address >= 0xa000 && address < 0xc000) {
             int register = (address >>> 8) & 0x0f;
             Response best = null;
