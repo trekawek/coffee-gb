@@ -10,3 +10,9 @@
 # created by a release build has the same schema as a debug or desktop build.
 -keepattributes MethodParameters,Signature
 -keep class * implements eu.rekawek.coffeegb.core.state.ComponentState { <fields>; <init>(...); }
+
+# Keep the DMG settled-HALT side entrance visible to R8's call graph without pinning its class
+# or method name; the ordinary PERFORMANCE scheduler remains free to optimize normally.
+-keepclassmembers,allowobfuscation class eu.rekawek.coffeegb.core.Gameboy {
+    private int tryPerformanceSettledDmgHaltSpan(long);
+}

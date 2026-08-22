@@ -214,6 +214,22 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
+     * Returns whether a settled normal-speed HALT can own a multi-machine-cycle PERFORMANCE
+     * span.  HALT entry and the first wake sample remain scalar; once both have settled, a
+     * halted CPU is only an idle NOP sequencer until the next wake edge.
+     */
+    public boolean performanceSettledHaltSpanEligible() {
+        return speedMode.getSpeedMode() == 1
+                && state == State.HALTED
+                && haltEntrySampleTicks == 0
+                && !synchronousHaltEntryStatPhase
+                && !asynchronousHaltEntryStatPhase
+                && !ordinaryHaltWakeStatPhase
+                && !interruptManager.isInterruptRequestedForHalt()
+                && !interruptManager.isInterruptRequestedWhileHaltWakeBlocked();
+    }
+
+    /**
      * Whether a PERFORMANCE phase-only span may safely call the peripheral wake callback.
      *
      * <p>HALT entry and wake are deliberately kept on the scalar scheduler. Once HALT's entry
@@ -269,6 +285,26 @@ public class Cpu implements StatefulComponent<Cpu> {
         hdmaOpcodePrefetched = false;
         updatePhasedPpuInput();
         clockCycle += ticks;
+    }
+
+    /**
+     * Advances a preflighted settled-HALT span, including complete idle machine cycles.  The
+     * next peripheral/wake edge is excluded by the caller's horizon, so no instruction
+     * sequencer callback is needed inside the span. The arithmetic consumes complete idle
+     * machine-cycle boundaries inside the span; only the excluded next event tick is left to
+     * the scalar scheduler.
+     */
+    public void advancePerformanceSettledHaltSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        hdmaOpcodePrefetched = false;
+        updatePhasedPpuInput();
+        int distanceToBoundary = 4 - clockCycle;
+        int completedBoundaries = ticks >= distanceToBoundary
+                ? 1 + (ticks - distanceToBoundary) / 4 : 0;
+        clockCycle = (clockCycle + ticks) & 0x03;
+        haltedCpuCycles = Math.min(2, haltedCpuCycles + completedBoundaries);
     }
 
     private void updatePhasedPpuInput() {

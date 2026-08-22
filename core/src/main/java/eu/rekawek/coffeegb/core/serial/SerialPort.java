@@ -101,6 +101,19 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
     }
 
+    /** Same idle-link horizon for a settled HALT packet, without the normal three-dot cap. */
+    public int performanceSettledHaltSpanLimit(int requested) {
+        if (requested <= 0
+                || speedMode.getSpeedMode() != 1
+                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
+                || (sc & 0x80) != 0
+                || haltWakeDelay != 0
+                || debugHooks != null) {
+            return 0;
+        }
+        return requested;
+    }
+
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
     public int performanceQuietSpanLimit() {
         return performanceQuietSpanLimit(PERFORMANCE_MAX_QUIET_SPAN);
