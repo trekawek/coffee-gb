@@ -184,6 +184,11 @@ class Connection(
     }
     eventBus.register<LinkedController.SessionStateReadyEvent> {
       if (server && mode == LinkMode.FOUR_PLAYER_ADAPTER) {
+        // A client can finish its TCP handshake before the host accepts its initial MACHINE
+        // state. Do not replace that client's just-started local controller with a partial
+        // checkpoint that has no state for its assigned physical port; its first checkpoint must
+        // instead be the authoritative one produced after the host has installed that port.
+        if (it.states.none { state -> state.player == player }) return@register
         sendSafely {
           // A checkpoint is one output transaction. Runtime traffic cannot split its state
           // records from the synchronization marker that commits them.
