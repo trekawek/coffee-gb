@@ -2969,6 +2969,9 @@ class LinkedController(
   }
 
   private fun broadcastCurrentState() {
+    // Freeze the boundary before capture so every ROM header and the final SYNCHRONIZE record
+    // describe the exact same frame.
+    val checkpointFrame = frame
     val states =
         sessions.mapIndexedNotNull { player, session ->
           val config = configs[player] ?: return@mapIndexedNotNull null
@@ -2981,7 +2984,7 @@ class LinkedController(
               portableState = null,
               gameboyType = config.gameboyType,
               bootstrapMode = config.bootstrapMode,
-              frame = frame,
+              frame = checkpointFrame,
               cgb0Revision = config.isCgb0Revision,
               hardwareProfileId = config.hardwareProfile.id(),
               mealybugDmgBlob = config.isMealybugDmgBlob,
@@ -2993,7 +2996,7 @@ class LinkedController(
           )
         }
     // Encoding and per-connection validation/compression are package work, not frame work.
-    eventBus.postAsync(SessionStateReadyEvent(frame, states))
+    eventBus.postAsync(SessionStateReadyEvent(checkpointFrame, states))
   }
 
   private fun isFourPlayerHost(): Boolean =
