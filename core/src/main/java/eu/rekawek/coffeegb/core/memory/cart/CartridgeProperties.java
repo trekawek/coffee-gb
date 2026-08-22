@@ -69,10 +69,11 @@ public final class CartridgeProperties {
         CGB0_REVISION,
         MEALYBUG_DMG_BLOB,
         CODEBREAKER_RUMBLE,
-        JANTAKU_BOY_FOUR_PLAYER_PATCH,
         EARLY_CGB_LY_READ_EDGE,
         PRESERVE_INVALID_HEADER_CHECKSUM,
-        SUPER_FIGHTERS_S_LIVE_PATCH
+        SUPER_FIGHTERS_S_LIVE_PATCH,
+        // Append new features: Feature ordinals are part of the StateFile v1 identity.
+        JANTAKU_BOY_FOUR_PLAYER_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
