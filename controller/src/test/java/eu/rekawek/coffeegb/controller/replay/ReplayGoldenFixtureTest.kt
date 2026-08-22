@@ -131,20 +131,20 @@ class ReplayGoldenFixtureTest {
   private companion object {
     const val RESOURCE_PATH = "/replay-v1/synthetic-input.cgbreplay"
     const val UPDATE_PROPERTY = "coffeeGb.updateReplayGolden"
-    const val EXPECTED_SIZE = 945
+    const val EXPECTED_SIZE = 944
     const val EXPECTED_SHA256 =
-        "316b08b9942674c1a46ac053c77dbad7ff53798b85f0e6092e0d4d3d6288325c"
+        "e71af449b3acebc4e184407648cd5551cbb517307fd0568a9278eeae9ae254e8"
     val EXPECTED_INSPECTION =
         """
         magic=CGBR format=1 checksum=true
-        required-features=0x0 optional-features=0x0 payload=873 decoded-sections=846 profile="dmg"
+        required-features=0x0 optional-features=0x0 payload=872 decoded-sections=846 profile="dmg"
         initial=BOOT_REFERENCE tick=0 frame=0 rtc=946684800000
         inputs=7 checkpoints=2 final-tick=69911 final-frame=1 embedded-state=false
         producer="coffee-gb-test/replay-v1" created=1700000123456 note="repository-owned synthetic input timeline"
         section=1 version=1 required=true compression=NONE encoded=92 decoded=92
         section=2 version=1 required=true compression=NONE encoded=28 decoded=28
         section=3 version=1 required=true compression=DEFLATE encoded=46 decoded=90
-        section=4 version=1 required=true compression=DEFLATE encoded=501 decoded=550
+        section=4 version=1 required=true compression=DEFLATE encoded=500 decoded=550
         section=5 version=1 required=false compression=NONE encoded=86 decoded=86
         """
             .trimIndent() + "\n"
