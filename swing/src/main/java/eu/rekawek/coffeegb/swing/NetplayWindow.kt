@@ -44,10 +44,14 @@ import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import java.nio.file.Path
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.ButtonGroup
+import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
+import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JDialog
 import javax.swing.JFrame
 import javax.swing.JComponent
@@ -229,6 +233,7 @@ internal data class NetplayUiState(
     val connectedPeers: Int = 0,
     val requiredPeers: Int = 0,
     val localPlayer: Int? = null,
+    val localInstanceCount: Int = 0,
     val failure: NetplayFailure? = null,
     val notice: String? = null,
 ) {
@@ -239,6 +244,7 @@ internal data class NetplayUiState(
       "Connected peer count cannot exceed the required count"
     }
     require(localPlayer == null || localPlayer in 0..3) { "Netplay player must be in 0..3" }
+    require(localInstanceCount in 0..3) { "Local instance count must be in 0..3" }
   }
 }
 
@@ -324,7 +330,7 @@ internal fun presentNetplay(state: NetplayUiState): NetplayUiPresentation {
 
 internal data class NetplayWindowActions(
     val selectSetup: (NetplaySetupView) -> Unit,
-    val startHosting: (LinkMode) -> Unit,
+    val startHosting: (LinkMode, Int) -> Unit,
     val join: (String) -> Unit,
     val stopSession: () -> Unit,
     val retry: () -> Unit,
@@ -352,6 +358,10 @@ internal fun interface NetplayWindowViewFactory {
 internal class NetplayWindowHost(
     rootEventBus: EventBus,
     private val viewFactory: NetplayWindowViewFactory,
+    private val initialJoinEndpoint: NetplayV8Endpoint? = null,
+    private val localRomPath: () -> Path? = { null },
+    private val localInstanceLauncher: LocalNetplayInstanceLauncher =
+        CurrentProcessLocalNetplayInstanceLauncher(),
     private val onPresentation: (NetplayUiPresentation) -> Unit = {},
     private val confirmPeripheralHandoff:
         (Controller.SerialPeripheralSelection) -> Boolean = { true },
@@ -367,6 +377,8 @@ internal class NetplayWindowHost(
   private var activeAttemptId: Long? = null
   private var cancellationAttemptId: Long? = null
   private var nextAttemptId = 1L
+  private var automaticJoinEndpoint = initialJoinEndpoint
+  private var pendingLocalInstanceLaunch: PendingLocalInstanceLaunch? = null
   private var closed = false
 
   private sealed interface PendingNetworkStart {
@@ -375,6 +387,7 @@ internal class NetplayWindowHost(
     data class Host(
         override val attemptId: Long,
         val mode: LinkMode,
+        val localInstanceCount: Int,
     ) : PendingNetworkStart
 
     data class Client(
@@ -383,9 +396,18 @@ internal class NetplayWindowHost(
     ) : PendingNetworkStart
   }
 
+  private data class PendingLocalInstanceLaunch(
+      val attemptId: Long,
+      val count: Int,
+  )
+
   constructor(
       owner: JFrame,
       rootEventBus: EventBus,
+      initialJoinEndpoint: NetplayV8Endpoint? = null,
+      localRomPath: () -> Path? = { null },
+      localInstanceLauncher: LocalNetplayInstanceLauncher =
+          CurrentProcessLocalNetplayInstanceLauncher(),
       onPresentation: (NetplayUiPresentation) -> Unit = {},
       confirmPeripheralHandoff: (Controller.SerialPeripheralSelection) -> Boolean = { true },
       initialBounds: Rectangle? = null,
@@ -395,6 +417,9 @@ internal class NetplayWindowHost(
       NetplayWindowViewFactory { actions ->
         SwingNetplayWindow(owner, actions, initialBounds, onBoundsChanged)
       },
+      initialJoinEndpoint,
+      localRomPath,
+      localInstanceLauncher,
       onPresentation,
       confirmPeripheralHandoff,
   )
@@ -441,12 +466,13 @@ internal class NetplayWindowHost(
     update(state.copy(setupView = setup, failure = null, notice = null))
   }
 
-  private fun startHosting(mode: LinkMode) {
+  private fun startHosting(mode: LinkMode, localInstanceCount: Int = 0) {
     requireNetplayEdt("Netplay host start")
     if (closed || state.phase != NetplayPhase.DISCONNECTED || !state.availability.available) return
+    if (localInstanceCount !in 0..mode.playerCount - 1) return
     val previous = serialSelectionForRestore()
     if (!mayTakePeerToPeerPort(previous)) return
-    val pending = PendingNetworkStart.Host(allocateAttemptId(), mode)
+    val pending = PendingNetworkStart.Host(allocateAttemptId(), mode, localInstanceCount)
     cancellationAttemptId = null
     update(
         state.copy(
@@ -458,6 +484,7 @@ internal class NetplayWindowHost(
             connectedPeers = 0,
             requiredPeers = mode.playerCount - 1,
             localPlayer = 0,
+            localInstanceCount = localInstanceCount,
             failure = null,
             notice = null,
         ))
@@ -487,6 +514,40 @@ internal class NetplayWindowHost(
             notice = null,
         ))
     preparePeerToPeerPort(pending, previous)
+  }
+
+  private fun startAutomaticJoinIfReady() {
+    val endpoint = automaticJoinEndpoint ?: return
+    if (state.phase != NetplayPhase.DISCONNECTED || !state.availability.available) return
+    automaticJoinEndpoint = null
+    join(endpoint.startClientValue)
+  }
+
+  private fun launchPendingLocalInstances(attemptId: Long) {
+    dispatchSwingMutation {
+      if (closed || state.role != NetplayRole.HOST || !matchesAttempt(attemptId)) {
+        return@dispatchSwingMutation
+      }
+      val pending = pendingLocalInstanceLaunch?.takeIf { it.attemptId == attemptId }
+          ?: return@dispatchSwingMutation
+      pendingLocalInstanceLaunch = null
+      val rom = localRomPath()
+      val profile = latestProfile
+      if (rom == null || profile == null) {
+        update(
+            state.copy(
+                notice =
+                    "Hosting is ready, but local client instances require a game opened directly from a file.",
+            ))
+        return@dispatchSwingMutation
+      }
+      val localhost =
+          (validateNetplayV8Address("localhost") as NetplayAddressValidation.Valid).endpoint
+      update(
+          state.copy(
+              notice = localInstanceLauncher.launch(rom, profile, localhost, pending.count).userMessage(),
+          ))
+    }
   }
 
   private fun serialSelectionForRestore(): Controller.SerialPeripheralSelection =
@@ -520,7 +581,13 @@ internal class NetplayWindowHost(
     if (closed || activeAttemptId != pending.attemptId || pendingNetworkStart != pending) return
     pendingNetworkStart = null
     when (pending) {
-      is PendingNetworkStart.Host -> eventBus.post(StartServerEvent(pending.mode, pending.attemptId))
+      is PendingNetworkStart.Host -> {
+        if (pending.localInstanceCount > 0) {
+          pendingLocalInstanceLaunch =
+              PendingLocalInstanceLaunch(pending.attemptId, pending.localInstanceCount)
+        }
+        eventBus.post(StartServerEvent(pending.mode, pending.attemptId))
+      }
       is PendingNetworkStart.Client ->
           eventBus.post(StartClientEvent(pending.endpoint.startClientValue, pending.attemptId))
     }
@@ -618,7 +685,7 @@ internal class NetplayWindowHost(
     val old = state
     update(disconnectedState(old.setupView))
     when (old.role) {
-      NetplayRole.HOST -> old.mode?.let(::startHosting)
+      NetplayRole.HOST -> old.mode?.let { startHosting(it, old.localInstanceCount) }
       NetplayRole.CLIENT -> old.endpoint?.startClientValue?.let(::join)
       null -> Unit
     }
@@ -648,6 +715,7 @@ internal class NetplayWindowHost(
           setupView = setup,
           mode = state.mode,
           endpoint = state.endpoint,
+          localInstanceCount = state.localInstanceCount,
           notice = notice,
       )
 
@@ -733,7 +801,10 @@ internal class NetplayWindowHost(
         if (closed) return@dispatchSwingMutation
         latestProfile = event.profile
         val game = state.availability.gameName
-        if (game != null) update(state.copy(availability = availability(game, event.profile)))
+        if (game != null) {
+          update(state.copy(availability = availability(game, event.profile)))
+          startAutomaticJoinIfReady()
+        }
       }
     }
     eventBus.register<Controller.EmulationStartedEvent> { event ->
@@ -744,6 +815,7 @@ internal class NetplayWindowHost(
             if (profile == null) NetplayAvailability.CheckingProfile(event.romName)
             else availability(event.romName, profile)
         update(state.copy(availability = availability))
+        startAutomaticJoinIfReady()
       }
     }
     eventBus.register<Controller.EmulationStoppedEvent> {
@@ -771,6 +843,7 @@ internal class NetplayWindowHost(
                 connectedPeers = 0,
                 requiredPeers = event.mode.playerCount - 1,
                 localPlayer = 0,
+                localInstanceCount = 0,
                 failure = null,
                 notice = null,
             ))
@@ -813,9 +886,11 @@ internal class NetplayWindowHost(
             failure = null,
         )
       }
+      launchPendingLocalInstances(event.attemptId)
     }
     eventBus.register<ServerStartFailedEvent> { event ->
       mutateHost(event.attemptId, terminal = true) {
+        clearPendingLocalInstanceLaunch(event.attemptId)
         val canceled = consumeCancellation(event.attemptId)
         restoreSerialPeripheralAfterNetplay()
         if (canceled) {
@@ -899,6 +974,7 @@ internal class NetplayWindowHost(
     }
     eventBus.register<ServerStoppedEvent> { event ->
       mutateHost(event.attemptId, terminal = true) {
+        clearPendingLocalInstanceLaunch(event.attemptId)
         val canceled = consumeCancellation(event.attemptId)
         restoreSerialPeripheralAfterNetplay()
         disconnectedState(
@@ -977,6 +1053,12 @@ internal class NetplayWindowHost(
           phase = NetplayPhase.FAILED,
           failure = NetplayFailure(kind, literalNetworkMessage(message)),
       )
+    }
+  }
+
+  private fun clearPendingLocalInstanceLaunch(attemptId: Long) {
+    if (pendingLocalInstanceLaunch?.attemptId == attemptId) {
+      pendingLocalInstanceLaunch = null
     }
   }
 
@@ -1152,6 +1234,9 @@ internal class NetplayPanel(private val actions: NetplayWindowActions) :
   private val availabilityMessages = mutableListOf<JTextArea>()
   private val normalMode = JRadioButton("2-player link", true)
   private val fourPlayerMode = JRadioButton("4-player adapter")
+  private val startLocalInstances = JCheckBox("Start")
+  private val localInstanceCount = JComboBox(DefaultComboBoxModel(arrayOf(1)))
+  private val localInstanceSuffix = JLabel("local Coffee GB instance and connect it to this host")
   private val startHosting = JButton("Start hosting")
   private val address = JTextField("127.0.0.1", 28)
   private val addressValidation = literalTextArea(" ", 2)
@@ -1241,6 +1326,7 @@ internal class NetplayPanel(private val actions: NetplayWindowActions) :
       setupLayout.show(setupCards, next.state.setupView.name)
       normalMode.isSelected = next.state.mode != LinkMode.FOUR_PLAYER_ADAPTER
       fourPlayerMode.isSelected = next.state.mode == LinkMode.FOUR_PLAYER_ADAPTER
+      updateLocalInstanceControls()
       if (next.state.setupView == NetplaySetupView.JOIN &&
           next.state.phase == NetplayPhase.DISCONNECTED &&
           next.state.endpoint != null &&
@@ -1277,11 +1363,32 @@ internal class NetplayPanel(private val actions: NetplayWindowActions) :
     modes.add(normalMode)
     modes.add(fourPlayerMode)
     addFormRow(form, 1, "Mode", modes)
-    addFormRow(form, 2, "Port", JLabel("6688 (fixed by protocol v8)"))
+    normalMode.addActionListener {
+      if (!rendering) updateLocalInstanceControls()
+    }
+    fourPlayerMode.addActionListener {
+      if (!rendering) updateLocalInstanceControls()
+    }
+
+    startLocalInstances.accessibleContext.accessibleName = "Start local Coffee GB instances"
+    startLocalInstances.accessibleContext.accessibleDescription =
+        "Launch local Coffee GB instances with this game and connect them to this host."
+    startLocalInstances.addActionListener { updateLocalInstanceControls() }
+    localInstanceCount.accessibleContext.accessibleName = "Number of local Coffee GB instances"
+    localInstanceCount.accessibleContext.accessibleDescription =
+        "Two-player link can launch one local client; the four-player adapter can launch one to three."
+    localInstanceCount.addActionListener { updateLocalInstanceSuffix() }
+    val localInstances = JPanel(FlowLayout(FlowLayout.LEADING, 4, 0))
+    localInstances.add(startLocalInstances)
+    localInstances.add(localInstanceCount)
+    localInstances.add(localInstanceSuffix)
+    addFormRow(form, 2, "Local clients", localInstances)
+
+    addFormRow(form, 3, "Port", JLabel("6688 (fixed by protocol v8)"))
     val availability = literalTextArea(" ", 3)
     availability.accessibleContext.accessibleName = "Hosting availability"
     availabilityMessages += availability
-    val availabilityConstraints = formValueConstraints(3)
+    val availabilityConstraints = formValueConstraints(4)
     availabilityConstraints.gridwidth = 2
     availabilityConstraints.gridx = 0
     form.add(availability, availabilityConstraints)
@@ -1304,12 +1411,34 @@ internal class NetplayPanel(private val actions: NetplayWindowActions) :
         "Start a direct TCP protocol-v8 server on port 6688."
     startHosting.addActionListener {
       actions.startHosting(
-          if (fourPlayerMode.isSelected) LinkMode.FOUR_PLAYER_ADAPTER else LinkMode.NORMAL)
+          if (fourPlayerMode.isSelected) LinkMode.FOUR_PLAYER_ADAPTER else LinkMode.NORMAL,
+          if (startLocalInstances.isSelected) localInstanceCount.selectedItem as Int else 0,
+      )
     }
     val buttons = JPanel(FlowLayout(FlowLayout.TRAILING, 0, 0))
     buttons.add(startHosting)
     card.add(buttons, BorderLayout.SOUTH)
     return card
+  }
+
+  private fun updateLocalInstanceControls() {
+    val options = if (fourPlayerMode.isSelected) arrayOf(1, 2, 3) else arrayOf(1)
+    val selected = localInstanceCount.selectedItem as? Int ?: 1
+    if ((0 until localInstanceCount.itemCount).map(localInstanceCount::getItemAt) != options.toList()) {
+      localInstanceCount.model = DefaultComboBoxModel(options)
+    }
+    localInstanceCount.selectedItem = selected.takeIf { it in options } ?: 1
+    localInstanceCount.isEnabled = startLocalInstances.isSelected
+    updateLocalInstanceSuffix()
+  }
+
+  private fun updateLocalInstanceSuffix() {
+    localInstanceSuffix.text =
+        if (localInstanceCount.selectedItem == 1) {
+          "local Coffee GB instance and connect it to this host"
+        } else {
+          "local Coffee GB instances and connect them to this host"
+        }
   }
 
   private fun createJoinCard(): JPanel {
