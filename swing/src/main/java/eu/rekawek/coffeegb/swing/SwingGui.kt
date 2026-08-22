@@ -80,6 +80,7 @@ private enum class ClosePersistenceDecision {
 class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
+    private val initialJoinNetplayHost: String?,
     private val properties: EmulatorProperties,
     private val mobileAdapterConfiguration: MobileAdapterConfigurationCoordinator,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
@@ -341,6 +342,13 @@ class SwingGui private constructor(
         NetplayWindowHost(
             owner = mainWindow,
             rootEventBus = eventBus,
+            initialJoinEndpoint = initialJoinNetplayHost?.let(::requireNetplayV8Endpoint),
+            localRomPath = {
+              activeRecentOrigin
+                  ?.takeIf { it.kind() == RomOrigin.Kind.DIRECT_FILE }
+                  ?.containerPath()
+                  ?.orElse(null)
+            },
             onPresentation = { presentation ->
               if (::desktopUiCoordinator.isInitialized) {
                 desktopUiCoordinator.netplaySummary(netplaySummary(presentation))
@@ -1241,6 +1249,7 @@ class SwingGui private constructor(
         debug: Boolean,
         initialRom: File?,
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
+        initialJoinNetplayHost: String? = null,
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
@@ -1284,6 +1293,7 @@ class SwingGui private constructor(
         SwingGui(
                 debug,
                 initialRom,
+                initialJoinNetplayHost,
                 properties,
                 mobileAdapterConfiguration,
                 mobileAdapterConfigurationUiState,
@@ -1299,6 +1309,10 @@ class SwingGui private constructor(
     }
   }
 }
+
+private fun requireNetplayV8Endpoint(value: String): NetplayV8Endpoint =
+    (validateNetplayV8Address(value) as? NetplayAddressValidation.Valid)?.endpoint
+        ?: throw IllegalArgumentException("Initial netplay host must be a valid protocol-v8 address")
 
 /** Keeps Proposal 3 construction and its input capture out of the default desktop startup path. */
 internal fun <T> installDesktopProposal3Menu(enabled: Boolean, install: () -> T): T? =
