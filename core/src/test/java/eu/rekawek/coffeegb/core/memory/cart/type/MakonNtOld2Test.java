@@ -17,6 +17,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class MakonNtOld2Test {
@@ -83,6 +84,24 @@ public class MakonNtOld2Test {
                 rom.getCartridgeProperties().getMapper());
         assertTrue(new Cartridge(rom, Battery.NULL_BATTERY)
                 .getMemoryController() instanceof MakonNtOld2);
+    }
+
+    @Test
+    public void detectedSonicAdventure8ControlsRumble() throws IOException {
+        Cartridge cartridge = new Cartridge(
+                new Rom(sonicAdventure8Rom("SONIC 7")), Battery.NULL_BATTERY);
+        List<Boolean> motorLog = new ArrayList<>();
+        EventBusImpl bus = new EventBusImpl(null, null, false);
+        bus.register(event -> motorLog.add(event.on()), RumbleEvent.class);
+        cartridge.init(bus);
+
+        cartridge.setByte(0x5001, 0x80); // enable the Rumble Version's mapper mode
+        cartridge.setByte(0x4000, 0x02); // old mode's motor bit
+        assertTrue(cartridge.isRumbleActive());
+        cartridge.setByte(0x4000, 0x00);
+        assertFalse(cartridge.isRumbleActive());
+
+        assertEquals(List.of(true, false), motorLog);
     }
 
     @Test
