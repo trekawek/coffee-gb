@@ -286,8 +286,6 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0
-                || !releasedInputFastPathEligible
-                || playerInputSource != PlayerInputSource.RELEASED
                 || inputChangedSinceLastTick
                 || !buttons.isEmpty()
                 || players != 0
@@ -296,7 +294,22 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 || isSgb) {
             return 0;
         }
-        return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
+            return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        }
+        if (playerInputHubFastPathEligible && playerInputSource instanceof PlayerInputHub) {
+            // The hub is sampled only on the post-increment residue 1.  The snapshot may change
+            // between polls, but that change is intentionally invisible until the next poll, so
+            // a span may advance only to the tick immediately before that residue.
+            long residue = tick & (PLAYER_INPUT_HUB_POLL_TICKS - 1L);
+            long distance = (1L - residue) & (PLAYER_INPUT_HUB_POLL_TICKS - 1L);
+            if (distance == 0) {
+                distance = PLAYER_INPUT_HUB_POLL_TICKS;
+            }
+            return Math.min(Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN),
+                    (int) Math.max(0, distance - 1));
+        }
+        return 0;
     }
 
     /** Returns the largest safe span using the scheduler's normal three-clock bound. */
@@ -328,9 +341,14 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (ticks <= 0) {
             return;
         }
-        if (!tickPerformanceQuietSpan(ticks)) {
-            throw new IllegalStateException("Joypad quiet span is not eligible: " + ticks);
-        }
+        // Gameboy has already preflighted the full packet and performs one final volatile
+        // eligibility read immediately before beginning the trusted packet commit.
+        tick += ticks;
+    }
+
+    /** One cheap owner-thread commit guard for the packet scheduler. */
+    public boolean isPerformanceQuietSpanStillEligible() {
+        return releasedInputFastPathEligible || playerInputHubFastPathEligible;
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */
@@ -718,6 +736,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (inputTimelineObserver != null) {
             return false;
         }
+        invalidateInputFastPaths();
         alignInputTimeline();
         this.inputTimelineObserver = observer;
         return true;
@@ -729,6 +748,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (inputTimelineObserver != observer) {
             return false;
         }
+        invalidateInputFastPaths();
         alignInputTimeline();
         inputTimelineObserver = null;
         return true;
@@ -736,6 +756,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     /** Installs an optional owner-thread observer without emitting an alignment event. */
     public void setDebugHooks(DebugHooks debugHooks) {
+        invalidateInputFastPaths();
         alignDebugInput();
         this.debugHooks = debugHooks;
     }

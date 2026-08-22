@@ -783,11 +783,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             long remaining = ticks;
             while (remaining > 0) {
                 int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
-                // At a machine-cycle boundary the CPU limit is zero. Do not walk the GPU's
-                // direct/steady eligibility predicates on those scalar-authority iterations.
-                int span = cpuSpanLimit > 0
-                        ? Math.min(cpuSpanLimit, timer.performanceQuietSpanLimit(cpuSpanLimit)) : 0;
+                // Build one primitive packet plan.  Every component horizon is evaluated once
+                // against the already-shortened tail; the trusted commits below must not repeat
+                // those walks on each normal-speed three-tick phase.
+                int span = cpuSpanLimit;
+                boolean directRasterSpan = false;
+                boolean steadyRasterSpan = false;
                 if (span > 0) {
+                    span = Math.min(span, timer.performanceQuietSpanLimit(span));
                     span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
                     span = Math.min(span, joypad.performanceQuietSpanLimit(span));
                     span = Math.min(span, sound.performanceQuietSpanLimit(span));
@@ -800,7 +803,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     if (gbc) {
                         span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
                     }
-                    span = Math.min(span, gpu.performanceQuietSpanLimit());
+                    int gpuSpanLimit = gpu.performanceQuietSpanLimit();
+                    span = Math.min(span, gpuSpanLimit);
+                    directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
+                    steadyRasterSpan = span > 0 && !directRasterSpan
+                            && gpu.isPerformanceSteadyCursorActive();
                     span = Math.min(span, statRegister.performanceQuietSpanLimit(span));
                 }
                 // The two subsystem limits are int-sized, while runTicks accepts a long. A small
@@ -810,25 +817,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     span = (int) remaining;
                 }
                 boolean reachesCpuBoundary = span > 0 && span == cpuSpanLimit;
-                boolean directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
-                boolean steadyRasterSpan = span > 0 && !directRasterSpan
-                        && gpu.isPerformanceSteadyCursorActive();
                 if (span > 0
                         && !warmResetRequested
                         && speedSwitchTailTicks == 0
                         && cpu.performancePhaseOnlySpanEligible()
                         && cpu.performanceNoPendingPpuReadPhase()
                         && !dma.isTransferInProgress()
+                        && !dma.requiresClockTick(false)
                         && (!gbc || !hdma.hasActiveOrPendingTransfer())
-                        && timer.canTickPerformanceQuietSpan(span)
-                        && serialPort.canTickPerformanceQuietSpan(span)
-                        && joypad.canTickPerformanceQuietSpan(span)
-                        && (!cartridgeClocked
-                        || cartridge.performanceQuietSpanLimit(span) >= span)
-                        && (!slotCartridgeClocked
-                        || slotCartridge.performanceQuietSpanLimit(span) >= span)
-                        && (!gbc || infraredPort.performanceQuietSpanLimit(span) >= span)
-                        && statRegister.canTickPerformanceQuietSpan(span)) {
+                        // This is intentionally the one post-preflight volatile Joypad check.
+                        // A legacy/debug/input mutation published after the horizon walk must
+                        // fall back to one scalar tick; a PlayerInputHub snapshot update does not
+                        // clear its eligibility and remains invisible until the next poll.
+                        && joypad.isPerformanceQuietSpanStillEligible()) {
                     tickPerformanceQuietSpan(span, directRasterSpan, steadyRasterSpan);
                     remaining -= span;
                     performanceBulkSpanCount++;
@@ -894,6 +895,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         cpu.advancePerformancePhaseOnlyTrusted(ticks);
         gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
+        if (gbc) {
+            // Scalar tick() publishes these post-GPU timing latches on every dot.  A packet
+            // reaches the same final observable state by overwriting them once at its end.
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+            cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        }
     }
 
     /** Number of all-subsystem PERFORMANCE bulk spans taken by the current session. */
