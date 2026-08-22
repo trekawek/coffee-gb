@@ -28,6 +28,21 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
+    public void ignoresMasterTransmissionCommandBeforeThePingAcknowledgement() {
+        Rig rig = new Rig();
+
+        // Boot-time serial traffic can contain AA before a port has completed the ping ACK.
+        // It must not permanently switch the adapter away from the connection phase.
+        rig.transfer(0xaa, 0, 0, 0);
+        rig.transfer(0, 0, 0, 0);
+        rig.transfer(0, 0, 0, 0);
+        rig.transfer(0, 0, 0, 0);
+
+        assertArrayEquals(new int[]{0xfe, 0xfe, 0xfe, 0xfe},
+                rig.transfer(0, 0, 0, 0));
+    }
+
+    @Test
     public void transmissionBroadcastsPreviousPacketWithoutCrossPacketSplicing() {
         Rig rig = new Rig();
 

@@ -218,7 +218,7 @@ public final class FourPlayerAdapter {
                 // Player 1 is the protocol master. Once it starts the AA command, complete the
                 // current ping packet before switching phases. Only three AA replies fit after
                 // the FE header; games may send the fourth alongside the first CC response.
-                if (player == 0 && reply == 0xaa) {
+                if (player == 0 && connected[player] && reply == 0xaa) {
                     transmissionRequested = true;
                 }
             } else if (phase == Phase.TRANSMISSION) {
