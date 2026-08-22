@@ -1,4 +1,5 @@
 import eu.rekawek.coffeegb.controller.Agent;
+import eu.rekawek.coffeegb.controller.state.StateImage;
 import eu.rekawek.coffeegb.core.debug.DebugResult;
 import eu.rekawek.coffeegb.core.debug.DebugSnapshot;
 import eu.rekawek.coffeegb.core.debug.DebugStepKind;
@@ -218,9 +219,14 @@ public final class PlayGbRom {
   }
 
   private void updateLatestFrame() {
-    BufferedImage candidate;
-    while ((candidate = agent.getFrame()) != null) {
-      latestFrame = candidate;
+    StateImage candidate;
+    while ((candidate = agent.getFrameImage()) != null) {
+      BufferedImage image =
+          new BufferedImage(candidate.getWidth(), candidate.getHeight(), BufferedImage.TYPE_INT_RGB);
+      int[] pixels = candidate.copyRgb();
+      image.setRGB(
+          0, 0, candidate.getWidth(), candidate.getHeight(), pixels, 0, candidate.getWidth());
+      latestFrame = image;
     }
   }
 
