@@ -81,6 +81,7 @@ class SwingGui private constructor(
     debug: Boolean,
     private val initialRom: File?,
     private val initialJoinNetplayHost: String?,
+    private val suppressInitialAutosaveResume: Boolean,
     private val properties: EmulatorProperties,
     private val mobileAdapterConfiguration: MobileAdapterConfigurationCoordinator,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
@@ -696,7 +697,11 @@ class SwingGui private constructor(
       Thread(console).start()
     }
     if (initialRom != null) {
-      romOpen.open(initialRom.toPath(), RomOpenSource.INITIAL_ARGUMENT)
+      romOpen.open(
+          initialRom.toPath(),
+          RomOpenSource.INITIAL_ARGUMENT,
+          allowAutosaveResume = !suppressInitialAutosaveResume,
+      )
     } else {
       // With Proposal 3 enabled, idle desktop startup is the same controller-friendly Library
       // entry point as Android. The default desktop home remains untouched when the flag is off.
@@ -1250,6 +1255,7 @@ class SwingGui private constructor(
         initialRom: File?,
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
         initialJoinNetplayHost: String? = null,
+        suppressInitialAutosaveResume: Boolean = false,
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
@@ -1294,6 +1300,7 @@ class SwingGui private constructor(
                 debug,
                 initialRom,
                 initialJoinNetplayHost,
+                suppressInitialAutosaveResume,
                 properties,
                 mobileAdapterConfiguration,
                 mobileAdapterConfigurationUiState,

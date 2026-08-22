@@ -81,6 +81,24 @@ class RomOpenServiceTest {
   }
 
   @Test
+  fun `a netplay child open does not request a local autosave resume`() {
+    val fixture = fixture()
+    try {
+      fixture.service.open(
+          RomOpenRequest(
+              romFile("netplay-child.gb", "NETPLAY_CHILD"),
+              RomOpenSource.INITIAL_ARGUMENT,
+              allowAutosaveResume = false,
+          ))
+      fixture.worker.runAll()
+
+      assertEquals(false, fixture.loads.single().allowAutosaveResume)
+    } finally {
+      fixture.close()
+    }
+  }
+
+  @Test
   fun `a desktop open reaches the Swing emulator controller after inspecting the ROM`() {
     val eventBus = EventBusImpl()
     val properties = EmulatorProperties()

@@ -21,6 +21,8 @@ internal data class CliLaunchRequest(
     val initialRom: File?,
     /** Validated direct-host endpoint text to join after [initialRom] has opened. */
     val joinNetplayHost: String?,
+    /** A netplay child receives its authoritative state from the host, never from a local resume. */
+    val suppressInitialAutosaveResume: Boolean,
     val settingsOverrides: ApplicationSettingsOverrides,
 )
 
@@ -60,6 +62,7 @@ fun main(args: Array<String>) {
             request.initialRom,
             request.settingsOverrides,
             request.joinNetplayHost,
+            request.suppressInitialAutosaveResume,
         )
       }
   if (exitCode != SUCCESS) {
@@ -266,6 +269,7 @@ private fun parseCli(args: Array<String>): CliCommand {
           debug = debug,
           initialRom = positional.singleOrNull()?.let(::File),
           joinNetplayHost = joinNetplayEndpoint?.startClientValue,
+          suppressInitialAutosaveResume = joinNetplayEndpoint != null,
           settingsOverrides =
               ApplicationSettingsOverrides(
                   hardwareProfile = profileOverride,

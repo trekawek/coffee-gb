@@ -40,6 +40,7 @@ class MainTest {
     assertFalse(request.debug)
     assertNull(request.initialRom)
     assertNull(request.joinNetplayHost)
+    assertFalse(request.suppressInitialAutosaveResume)
     assertNull(request.settingsOverrides.hardwareProfile)
     assertNull(request.settingsOverrides.bootstrapMode)
     assertNull(request.settingsOverrides.batterySavesEnabled)
@@ -63,9 +64,11 @@ class MainTest {
     val spaced = execute("--join-netplay", "play.local:7000", "game.gb").singleLaunch()
     assertEquals(File("game.gb"), spaced.initialRom)
     assertEquals("play.local:7000", spaced.joinNetplayHost)
+    assertTrue(spaced.suppressInitialAutosaveResume)
 
     val equals = execute("--join-netplay=localhost", "game.gb").singleLaunch()
     assertEquals("localhost", equals.joinNetplayHost)
+    assertTrue(equals.suppressInitialAutosaveResume)
 
     assertUsageFailure(
         execute("--join-netplay"),
