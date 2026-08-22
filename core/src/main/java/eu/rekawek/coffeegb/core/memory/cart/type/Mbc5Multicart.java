@@ -139,6 +139,16 @@ public class Mbc5Multicart implements MemoryController {
     }
 
     @Override
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0 || selectedGame == null) {
+            return;
+        }
+        // The enclosing packet preflight already checked the selected mapper's horizon and
+        // debug state; avoid re-entering the limit walk on commit.
+        selectedGame.tickPerformanceQuietSpanTrusted(ticks);
+    }
+
+    @Override
     public void setClockPaused(boolean paused) {
         clockPaused = paused;
         if (selectedGame != null) {

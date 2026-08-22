@@ -159,6 +159,15 @@ public class Mbc3 implements MemoryController {
     }
 
     @Override
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        // Cartridge/Gameboy has already established the mapper horizon and debug-free state.
+        clock.tickPerformanceQuietSpan(ticks);
+    }
+
+    @Override
     public boolean isClocked() {
         return true;
     }

@@ -147,6 +147,97 @@ public class JoypadHotPathTest {
     }
 
     @Test
+    public void playerInputHubQuietSpanStopsBeforeEveryPostIncrementPollResidue() {
+        int[] residues = {0, 1, 61, 62, 63};
+        int[] expected = {0, 3, 3, 2, 1};
+        for (boolean held : new boolean[]{false, true}) {
+            for (int i = 0; i < residues.length; i++) {
+                PlayerInputHub hub = new PlayerInputHub();
+                PlayerInputHub.SourceHandle source = hub.openSource(0);
+                if (held) {
+                    source.update(Set.of(Button.A));
+                }
+                Joypad joypad = new Joypad(
+                        new InterruptManager(false), EventBus.NULL_EVENT_BUS, false, hub);
+                joypad.setByte(JOYP, 0x00);
+                settlePlayerInputHub(joypad);
+                advanceToHubResidue(joypad, residues[i]);
+
+                assertTrue(playerInputHubFastPathEligible(joypad));
+                assertEquals("held=" + held + ", residue=" + residues[i], expected[i],
+                        joypad.performanceQuietSpanLimit(99));
+            }
+        }
+    }
+
+    @Test
+    public void playerInputHubBulkLeavesSnapshotAndFilterUntouchedUntilExactPoll() {
+        InterruptManager interrupts = new InterruptManager(false);
+        PlayerInputHub hub = new PlayerInputHub();
+        PlayerInputHub.SourceHandle source = hub.openSource(0);
+        Joypad joypad = new Joypad(interrupts, EventBus.NULL_EVENT_BUS, false, hub);
+        joypad.setByte(JOYP, 0x00);
+        settlePlayerInputHub(joypad);
+        advanceToHubResidue(joypad, 62);
+        assertEquals(2, joypad.performanceQuietSpanLimit(99));
+
+        ComponentState<Joypad> before = joypad.captureState();
+        ComponentState<InterruptManager> interruptBefore = interrupts.captureState();
+        source.update(Set.of(Button.A));
+        assertTrue(joypad.tickPerformanceQuietSpan(2));
+        assertEquals("hub changes are observed only by a poll", PlayerInputSnapshot.RELEASED,
+                joypad.getSampledInput());
+        assertEquals(inputHistory(before), inputHistory(joypad.captureState()));
+        assertEquals(filteredInputLines(before), filteredInputLines(joypad.captureState()));
+        assertEquals(interruptBefore, interrupts.captureState());
+
+        // The next scalar tick is the post-increment poll (residue 1), and only then adopts the
+        // changed immutable hub snapshot. The electrical filter still advances on its own clock.
+        joypad.tick();
+        assertSame(hub.sample(), joypad.getSampledInput());
+    }
+
+    @Test
+    public void playerInputHubTrustedBulkKeepsScalarContractAcrossCaptureRestore() {
+        PlayerInputHub hub = new PlayerInputHub();
+        PlayerInputHub.SourceHandle source = hub.openSource(0);
+        source.update(Set.of(Button.RIGHT));
+        InterruptManager interrupts = new InterruptManager(false);
+        Joypad joypad = new Joypad(interrupts, EventBus.NULL_EVENT_BUS, false, hub);
+        joypad.setByte(JOYP, 0x00);
+        settlePlayerInputHub(joypad);
+        advanceToHubResidue(joypad, 1);
+        ComponentState<Joypad> checkpoint = joypad.captureState();
+        ComponentState<InterruptManager> interruptCheckpoint = interrupts.captureState();
+
+        InterruptManager bulkInterrupts = new InterruptManager(false);
+        bulkInterrupts.restoreState(interruptCheckpoint);
+        Joypad bulk = new Joypad(bulkInterrupts, EventBus.NULL_EVENT_BUS, false, hub);
+        bulk.restoreState(checkpoint);
+        bulk.seedDeterministicReplayInput(Set.of(), hub.sample());
+        bulk.tick(); // restore intentionally clears derived eligibility; rebuild it off-poll
+        assertTrue(bulk.canTickPerformanceQuietSpan(3));
+        bulk.tickPerformanceQuietSpanTrusted(3);
+
+        InterruptManager scalarInterrupts = new InterruptManager(false);
+        scalarInterrupts.restoreState(interruptCheckpoint);
+        Joypad scalar = new Joypad(scalarInterrupts, EventBus.NULL_EVENT_BUS, false, hub);
+        scalar.restoreState(checkpoint);
+        scalar.seedDeterministicReplayInput(Set.of(), hub.sample());
+        scalar.tick();
+        for (int i = 0; i < 3; i++) {
+            scalar.tick();
+        }
+        assertEquals(tick(scalar.captureState()), tick(bulk.captureState()));
+        assertEquals(inputHistory(scalar.captureState()), inputHistory(bulk.captureState()));
+        assertEquals(filteredInputLines(scalar.captureState()),
+                filteredInputLines(bulk.captureState()));
+        assertEquals(inputChangedSinceLastTick(scalar.captureState()),
+                inputChangedSinceLastTick(bulk.captureState()));
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+    }
+
+    @Test
     public void playerInputHubChangesAreBoundedAndRetainOneMegahertzFilterTiming() {
         InterruptManager interrupts = new InterruptManager(false);
         interrupts.setByte(0xff0f, 0);
@@ -577,6 +668,13 @@ public class JoypadHotPathTest {
 
     private static void tickNonPollHubInterval(Joypad joypad) {
         for (int tick = 0; tick < Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1; tick++) {
+            joypad.tick();
+        }
+    }
+
+    private static void advanceToHubResidue(Joypad joypad, int residue) {
+        while ((tick(joypad.captureState()) & (Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1L))
+                != residue) {
             joypad.tick();
         }
     }

@@ -188,9 +188,17 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         if (ticks <= 0) {
             return;
         }
-        if (!tickPerformanceQuietSpan(ticks)) {
-            throw new IllegalStateException("Timer quiet span is not eligible: " + ticks);
+        // Gameboy has already preflighted this span and commits it as one packet.  Keep this
+        // path free of a second horizon walk; the scalar-safe state transitions are the same as
+        // tickPerformanceQuietSpan once the caller has established the quiet contract.
+        acknowledgeInterruptIfNeeded();
+        divReset = false;
+        div = (div + ticks) & 0xffff;
+        previousBit = timerInput(div, tac);
+        if (ticksSinceDivReset != Integer.MAX_VALUE) {
+            ticksSinceDivReset += ticks;
         }
+        haltBugDivRippleVisible = false;
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */

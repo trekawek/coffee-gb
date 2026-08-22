@@ -134,9 +134,10 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        if (!tickPerformanceQuietSpan(ticks)) {
-            throw new IllegalStateException("Serial quiet span is not eligible: " + ticks);
-        }
+        // The packet preflight has already established an idle NULL endpoint and no pending
+        // acknowledge/transfer edge.  Do not repeat that walk on the hot commit path.
+        acknowledgeInterruptIfNeeded();
+        serialClocks = (serialClocks + ticks) & 0xff;
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */

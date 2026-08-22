@@ -124,9 +124,8 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         if (ticks <= 0) {
             return;
         }
-        if (!tickPerformanceQuietSpan(ticks)) {
-            throw new IllegalStateException("Infrared quiet span is not eligible: " + ticks);
-        }
+        // The packet preflight proves a disabled/null-endpoint IR state.  There is no arithmetic
+        // state to advance in that state, so the trusted commit is intentionally just a no-op.
     }
 
     @Override
