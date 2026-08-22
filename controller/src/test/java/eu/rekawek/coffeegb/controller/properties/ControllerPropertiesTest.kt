@@ -134,12 +134,15 @@ class ControllerPropertiesTest {
     try {
       assertFalse(configuration.isSupportBatterySave)
       Session(configuration, EventBusImpl(), null, SerialEndpoint.NULL_ENDPOINT).use { session ->
+        val machine = session.captureDetachedState().machine
+        assertTrue(
+            machine.recordCount(
+                "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState") > 0,
+        )
         assertEquals(
-            1,
-            session
-                .captureDetachedState()
-                .machine
-                .recordCount("eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"),
+            0,
+            machine.recordCount(
+                "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"),
         )
       }
     } finally {

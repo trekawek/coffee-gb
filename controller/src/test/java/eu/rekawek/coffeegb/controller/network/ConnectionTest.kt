@@ -279,7 +279,7 @@ class ConnectionTest {
             gameboyType = GameboyType.DMG,
             bootstrapMode = Gameboy.BootstrapMode.SKIP,
             frame = 73,
-            player = 0,
+            player = 1,
             heldButtons = setOf(Button.START),
         )
     assertContentEquals(
@@ -299,6 +299,30 @@ class ConnectionTest {
     assertEquals(StateCodec.decode(checkNotNull(state.portableState)), game.portableState)
     assertEquals(setOf(Button.START), game.heldButtons)
     assertEquals(73, checkpoint.frame)
+  }
+
+  @Test
+  fun fourPlayerHostWaitsForCheckpointThatIncludesConnectedPlayer() {
+    val synchronized = LinkedBlockingQueue<Connection.SessionCheckpointEvent>()
+    receiverBus.register<Connection.SessionCheckpointEvent> { synchronized.add(it) }
+    connect(mode = LinkMode.FOUR_PLAYER_ADAPTER)
+
+    val state =
+        LinkedController.LocalRomLoadedEvent(
+            romFile = ROM.readBytes(),
+            batteryFile = null,
+            portableState = portableStates().second,
+            gameboyType = GameboyType.DMG,
+            bootstrapMode = Gameboy.BootstrapMode.SKIP,
+            frame = 73,
+            player = 0,
+        )
+    senderBus.post(LinkedController.SessionStateReadyEvent(73, listOf(state)))
+    assertEquals(null, synchronized.poll(200, TimeUnit.MILLISECONDS))
+
+    senderBus.post(LinkedController.SessionStateReadyEvent(73, listOf(state, state.copy(player = 1))))
+    val checkpoint = assertNotNull(synchronized.poll(5, TimeUnit.SECONDS))
+    assertEquals(listOf(0, 1), checkpoint.states.map { it.player })
   }
 
   @Test
