@@ -10,6 +10,14 @@ import org.junit.Test
 class LocalNetplayInstanceLauncherTest {
 
   @Test
+  fun `child processes inherit the host error stream`() {
+    assertEquals(
+        ProcessBuilder.Redirect.INHERIT,
+        localNetplayProcessBuilder(listOf("coffee-gb")).redirectError(),
+    )
+  }
+
+  @Test
   fun `jar launcher starts each client with the ROM profile and localhost join command`() {
     val started = mutableListOf<List<String>>()
     val rom = Path.of("test data", "Tetris.gb").toAbsolutePath().normalize()
