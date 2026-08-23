@@ -622,6 +622,8 @@ data class ApplicationSettingsOverrides(
      * Netplay children use this to retain the same portable-state graph as a transferred peer.
      */
     val forceInMemoryBattery: Boolean = false,
+    /** A netplay child receives its initial state from the host and must not create a local autosave. */
+    val suppressCloseAutosave: Boolean = false,
     val rewindEnabled: Boolean? = null,
     val runtimeWarmupEnabled: Boolean? = null,
     /** Transient benchmark policy; never persisted into user settings or save state. */

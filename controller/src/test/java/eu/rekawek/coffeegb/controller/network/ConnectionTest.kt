@@ -753,6 +753,23 @@ class ConnectionTest {
   }
 
   @Test
+  fun explicitlyPresentEmptyBatteryRoundTrips() {
+    val encoded = Connection.deflate(byteArrayOf(), StateLimits.BATTERY)
+    val declaration =
+        Connection.validateDeclaration(
+            0,
+            encoded.size,
+            StateLimits.BATTERY,
+            allowEmptyPayload = true,
+        )
+
+    assertContentEquals(
+        byteArrayOf(),
+        assertNotNull(Connection.inflate(encoded, declaration, StateLimits.BATTERY)),
+    )
+  }
+
+  @Test
   fun inflateRejectsCorruptionTrailingDataAndOutputPastDeclaration() {
     val limit = StateLimits.Payload("test payload", 4096, 4096)
     val original = ByteArray(1024) { (it % 31).toByte() }
