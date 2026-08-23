@@ -601,11 +601,14 @@ class TcpConnectionTest {
             73,
             player = 0,
         )
+    // Four-player clients wait for an atomic checkpoint that includes their own physical port.
+    val slowPeerState = state.copy(player = 1)
     val slow = handshakenRawClient(port)
     try {
       repeat(20) { attempt ->
         if (disconnected.isEmpty()) {
-          serverBus.post(LinkedController.SessionStateReadyEvent(attempt.toLong(), listOf(state)))
+          serverBus.post(
+              LinkedController.SessionStateReadyEvent(attempt.toLong(), listOf(slowPeerState)))
         }
       }
       // The queue needs enough compressed random ROM records to exceed its byte budget. On a
@@ -631,7 +634,7 @@ class TcpConnectionTest {
 
     // The old physical slot is reusable, proving that only the offending connection was removed.
     val replacement = handshakenRawClient(port)
-    serverBus.post(LinkedController.SessionStateReadyEvent(200, listOf(state)))
+    serverBus.post(LinkedController.SessionStateReadyEvent(200, listOf(slowPeerState)))
     Thread.sleep(100)
     val stopper = Thread(server::stop, "slow-reader-stop").also { it.start() }
     stopper.join(2_000)
