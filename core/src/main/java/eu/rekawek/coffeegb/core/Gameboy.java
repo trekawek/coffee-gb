@@ -77,6 +77,7 @@ import java.util.Optional;
 import java.util.concurrent.CancellationException;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntConsumer;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -230,6 +231,41 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Largest long DMG settled-HALT PERFORMANCE packet in this session (diagnostic only). */
     private transient int performanceBulkMaxTicks;
+
+    /** Bounded coarse CPU-epoch diagnostics; absent from portable state. */
+    private transient long performanceEpochCount;
+
+    private transient long performanceEpochTicks;
+
+    private transient int performanceEpochMaxTicks;
+
+    private transient long performanceEpochRasterFastTicks;
+
+    private transient long performanceEpochMode2ReplayTicks;
+
+    /** Subset of mode-2 epoch ticks committed by the allocation-free OAM transaction. */
+    private transient long performanceEpochMode2BulkTicks;
+
+    /** Raster transaction selected before the CPU observes its frozen peripheral view. */
+    private transient PerformanceEpochPpuPlan performanceEpochPpuPlan =
+            PerformanceEpochPpuPlan.NONE;
+
+    private transient int performanceEpochPrefixCommitted;
+
+    private transient boolean performanceEpochDirectRaster;
+
+    private transient boolean performanceEpochSteadyRaster;
+
+    private transient IntConsumer performanceEpochPrefixCommitter;
+
+    private transient IntConsumer performancePhysicalDmgEpochPrefixCommitter;
+
+    private enum PerformanceEpochPpuPlan {
+        NONE,
+        TRUSTED_RASTER,
+        MODE2_BULK,
+        MODE2_REPLAY
+    }
 
     public Gameboy(Rom rom) {
         this(new GameboyConfiguration(rom));
@@ -561,6 +597,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient volatile boolean warmResetRequested;
 
+    /** One-shot native-CGB PERFORMANCE scalar-prologue token; deliberately absent from mementos. */
+    private transient boolean nativeCgbScalarOwner;
+
     /** Cartridge hardware pulsing the console reset line (Datel Action Replay launch). */
     public void requestWarmReset(boolean nonCgbCart) {
         warmResetNonCgbCart = nonCgbCart;
@@ -568,6 +607,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private void applyWarmReset() {
+        nativeCgbScalarOwner = false;
         // the boot ROM leaves the LCD running with the DMG-compatible defaults
         interruptManager.disableInterrupts(false);
         mmu.setByte(0xffff, 0x00);
@@ -666,6 +706,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (warmResetRequested) {
             warmResetRequested = false;
             applyWarmReset();
+            // applyWarmReset() clears the owner before its hardware writes. Keep the
+            // scheduler-side invariant explicit for a reset observed in this tick.
+            nativeCgbScalarOwner = false;
         }
         if (cartridgeClocked) {
             cartridge.tick();
@@ -773,6 +816,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
+            if (isNativeCgbPerformanceEpochTopology()) {
+                return runNativeCgbPerformanceTicks(ticks);
+            }
+            if (isPhysicalDmgPerformanceEpochTopology()) {
+                return runPhysicalDmgPerformanceTicks(ticks);
+            }
             return runPerformanceTicks(ticks);
         }
         long frameEvents = 0;
@@ -782,6 +831,46 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
         }
         return frameEvents;
+    }
+
+    /**
+     * Advances at most {@code ticks}, stopping before the first tick for which {@code stop}
+     * returns true. This owner-thread seam is used by benchmark preconditioning to stop exactly
+     * after a synchronous native-frame callback without changing PERFORMANCE raster semantics.
+     *
+     * @return the exact number of master ticks executed
+     */
+    public int runTicksUntilStop(int ticks, BooleanSupplier stop) {
+        if (ticks < 0) {
+            throw new IllegalArgumentException("ticks must be non-negative");
+        }
+        Objects.requireNonNull(stop, "stop");
+        if (executionMode == ExecutionMode.PERFORMANCE
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && !debugHistoryReplay) {
+            // Benchmark preconditioning needs the PERFORMANCE compositor but must stop at the
+            // exact synchronous frame callback. Keep this rare seam scalar so neither a coarse
+            // CPU epoch nor the ordinary fused boundary can retire a post-endpoint tick.
+            gpu.setPerformanceScanlineEnabled(true);
+            try {
+                int executed = 0;
+                while (executed < ticks && !stop.getAsBoolean()) {
+                    tick();
+                    executed++;
+                }
+                return executed;
+            } finally {
+                sound.materializePendingPerformanceTicks();
+                gpu.setPerformanceScanlineEnabled(false);
+            }
+        }
+        int executed = 0;
+        while (executed < ticks && !stop.getAsBoolean()) {
+            tick();
+            executed++;
+        }
+        return executed;
     }
 
     /**
@@ -804,57 +893,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     }
                 }
                 int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
-                // Build one primitive packet plan.  Every component horizon is evaluated once
-                // against the already-shortened tail; the trusted commits below must not repeat
-                // those walks on each normal-speed three-tick phase.
-                int span = cpuSpanLimit;
-                boolean directRasterSpan = false;
-                boolean steadyRasterSpan = false;
-                if (span > 0) {
-                    span = Math.min(span, timer.performanceQuietSpanLimit(span));
-                    span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
-                    span = Math.min(span, joypad.performanceQuietSpanLimit(span));
-                    span = Math.min(span, sound.performanceQuietSpanLimit(span));
-                    if (cartridgeClocked) {
-                        span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
-                    }
-                    if (slotCartridgeClocked) {
-                        span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
-                    }
-                    if (gbc) {
-                        span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
-                    }
-                    int gpuSpanLimit = gpu.performanceQuietSpanLimit();
-                    span = Math.min(span, gpuSpanLimit);
-                    directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
-                    steadyRasterSpan = span > 0 && !directRasterSpan
-                            && gpu.isPerformanceSteadyCursorActive();
-                    span = Math.min(span, statRegister.performanceQuietSpanLimit(span));
-                }
-                // The two subsystem limits are int-sized, while runTicks accepts a long. A small
-                // final request must never consume past its caller-visible budget (or return a
-                // negative remainder) merely because a whole quiet span was available.
-                if (remaining < span) {
-                    span = (int) remaining;
-                }
+                int span = tryPerformancePhaseOnlySpan(remaining, cpuSpanLimit);
                 boolean reachesCpuBoundary = span > 0 && span == cpuSpanLimit;
-                if (span > 0
-                        && !warmResetRequested
-                        && speedSwitchTailTicks == 0
-                        && cpu.performancePhaseOnlySpanEligible()
-                        && cpu.performanceNoPendingPpuReadPhase()
-                        && !dma.isTransferInProgress()
-                        && !dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
-                        && (!gbc || !hdma.hasActiveOrPendingTransfer())
-                        // This is intentionally the one post-preflight volatile Joypad check.
-                        // A legacy/debug/input mutation published after the horizon walk must
-                        // fall back to one scalar tick; a PlayerInputHub snapshot update does not
-                        // clear its eligibility and remains invisible until the next poll.
-                        && joypad.isPerformanceQuietSpanStillEligible()) {
-                    tickPerformanceQuietSpan(span, directRasterSpan, steadyRasterSpan);
+                if (span > 0) {
                     remaining -= span;
-                    performanceBulkSpanCount++;
-                    performanceBulkTicks += span;
                     // The fourth tick is still the scalar CPU-boundary authority. Fuse it here
                     // only when the bulk span consumed the whole phase distance; a peripheral
                     // horizon-shortened span must return through the normal preflight loop.
@@ -886,9 +928,442 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
+     * Native-CGB double-speed scheduler. Transient event seams consume one scalar tick and then
+     * retry the epoch; DMA, STAT, audio, and raster boundaries therefore cannot disable the lane
+     * for the rest of a controller batch. If a STOP instruction leaves double speed, the
+     * untouched ordinary scheduler owns the remainder.
+     *
+     * <p>This is the explicit coarse contract of PERFORMANCE mode: for at most 54 master dots,
+     * ordinary CPU work observes a frozen peripheral view and peripheral IRQ visibility is
+     * coalesced at the packet boundary. An actual external read flushes the completed prefix
+     * before it is delegated, while an external write is published once after the current
+     * machine-cycle packet. Thus an access can retain at most the current dot's pre-CPU skew;
+     * mode/line, audio-sample, input-poll, timer-overflow, DMA, and frame callbacks remain scalar.
+     * ACCURACY and every observation/history/stop-aware path bypass this scheduler.</p>
+     */
+    private long runNativeCgbPerformanceTicks(long ticks) {
+        gpu.setPerformanceScanlineEnabled(true);
+        long frameEvents = 0;
+        long remaining = ticks;
+        try {
+            while (remaining > 0 && isNativeCgbPerformanceEpochTopology()) {
+                int committed = tryPerformanceEpoch(remaining);
+                if (committed > 0) {
+                    remaining -= committed;
+                    continue;
+                }
+                nativeCgbScalarOwner = !warmResetRequested
+                        && debugInstrumentation == null
+                        && !debugRetirementTrackingActive
+                        && !debugHistoryReplay;
+                if (tick()) {
+                    frameEvents++;
+                }
+                remaining--;
+            }
+        } finally {
+            nativeCgbScalarOwner = false;
+            sound.materializePendingPerformanceTicks();
+            gpu.setPerformanceScanlineEnabled(false);
+        }
+        if (remaining > 0) {
+            frameEvents += runPerformanceTicks(remaining);
+        }
+        return frameEvents;
+    }
+
+    /**
+     * Physical-DMG normal-speed coarse scheduler. Only the trusted rendered raster may join a
+     * CPU epoch; mode 2, STAT/line edges, DMA, IRQ/HALT, and every rejected topology retain the
+     * established normal-speed PERFORMANCE scheduler.
+     */
+    private long runPhysicalDmgPerformanceTicks(long ticks) {
+        gpu.setPerformanceScanlineEnabled(true);
+        long frameEvents = 0;
+        long remaining = ticks;
+        try {
+            while (remaining > 0 && isPhysicalDmgPerformanceEpochTopology()) {
+                int committed = tryPhysicalDmgPerformanceEpoch(remaining);
+                if (committed > 0) {
+                    remaining -= committed;
+                    continue;
+                }
+
+                // Preserve the pre-existing long settled-HALT side entrance before falling
+                // back to the ordinary scalar/phase scheduler.
+                if (cpu.getState() == Cpu.State.HALTED) {
+                    committed = tryPerformanceSettledDmgHaltSpan(remaining);
+                    if (committed > 0) {
+                        remaining -= committed;
+                        continue;
+                    }
+                }
+
+                // On a mode-2/checkpoint/event miss, retain the legacy 1-3-dot normal-speed
+                // packet rather than regressing every non-boundary dot to the scalar forest.
+                int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
+                int phaseSpan = tryPerformancePhaseOnlySpan(remaining, cpuSpanLimit);
+                if (phaseSpan > 0) {
+                    remaining -= phaseSpan;
+                    continue;
+                }
+
+                if (tick()) {
+                    frameEvents++;
+                }
+                remaining--;
+            }
+        } finally {
+            sound.materializePendingPerformanceTicks();
+            gpu.setPerformanceScanlineEnabled(false);
+        }
+        if (remaining > 0) {
+            frameEvents += runPerformanceTicks(remaining);
+        }
+        return frameEvents;
+    }
+
+    /**
+     * Attempts one non-owning normal-speed phase-only packet. The enclosing run loop owns Sound
+     * materialization and the PERFORMANCE scanline-enable lifecycle.
+     */
+    private int tryPerformancePhaseOnlySpan(long remaining, int cpuSpanLimit) {
+        // Build one primitive packet plan. Every component horizon is evaluated once against
+        // the already-shortened tail; trusted commits do not repeat the walks.
+        int span = cpuSpanLimit;
+        boolean directRasterSpan = false;
+        boolean steadyRasterSpan = false;
+        if (span > 0) {
+            span = Math.min(span, timer.performanceQuietSpanLimit(span));
+            span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
+            span = Math.min(span, joypad.performanceQuietSpanLimit(span));
+            span = Math.min(span, sound.performanceQuietSpanLimit(span));
+            if (cartridgeClocked) {
+                span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+            }
+            if (slotCartridgeClocked) {
+                span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+            }
+            if (gbc) {
+                span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
+            }
+            int gpuSpanLimit = gpu.performanceQuietSpanLimit();
+            span = Math.min(span, gpuSpanLimit);
+            directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
+            steadyRasterSpan = span > 0 && !directRasterSpan
+                    && gpu.isPerformanceSteadyCursorActive();
+            span = Math.min(span, statRegister.performanceQuietSpanLimit(span));
+        }
+        if (remaining < span) {
+            span = (int) remaining;
+        }
+        if (span <= 0
+                || warmResetRequested
+                || speedSwitchTailTicks != 0
+                || !cpu.performancePhaseOnlySpanEligible()
+                || !cpu.performanceNoPendingPpuReadPhase()
+                || dma.isTransferInProgress()
+                || dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
+                || gbc && hdma.hasActiveOrPendingTransfer()
+                // This is intentionally the one post-preflight volatile Joypad check.
+                || !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
+        tickPerformanceQuietSpan(span, directRasterSpan, steadyRasterSpan);
+        performanceBulkSpanCount++;
+        performanceBulkTicks += span;
+        return span;
+    }
+
+    /** Stable topology only; every tick-local blocker stays in {@link #canStartPerformanceEpoch()}. */
+    private boolean isNativeCgbPerformanceEpochTopology() {
+        return gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2;
+    }
+
+    /** Physical DMG/MGB only; CGB compatibility and both SGB clocks retain the legacy lane. */
+    private boolean isPhysicalDmgPerformanceEpochTopology() {
+        return hardwareProfile.family() == HardwareProfile.Family.DMG
+                && speedMode.getSpeedMode() == 1;
+    }
+
+    private boolean canStartPerformanceEpoch() {
+        return !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && !debugHistoryReplay
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && gpu.isLcdEnabled()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(false)
+                && !hdma.hasActiveOrPendingTransfer()
+                && !cartridgeClocked
+                && !slotCartridgeClocked
+                && serialPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS)
+                && infraredPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
+    }
+
+    /** Stable physical-DMG topology; tick-local CPU, timer, raster and STAT guards follow. */
+    private boolean canStartPhysicalDmgPerformanceEpoch() {
+        return !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && !debugHistoryReplay
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && gpu.isLcdEnabled()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(false)
+                && !cartridgeClocked
+                && !slotCartridgeClocked
+                && serialPort.performancePhysicalDmgEpochIdle(
+                        Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
+    }
+
+    /** Attempts and commits one bounded native-CGB epoch, returning its consumed ticks. */
+    private int tryPerformanceEpoch(long remaining) {
+        if (remaining <= 0 || !cpu.performanceEpochEntryEligible()
+                || !canStartPerformanceEpoch()) {
+            return 0;
+        }
+        int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
+        span = Math.min(span, timer.performanceEpochSpanLimit(span));
+        span = Math.min(span, sound.performanceEpochSpanLimit(span));
+        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+
+        PerformanceEpochPpuPlan ppuPlan;
+        int rasterSpan = gpu.performanceEpochSpanLimit(span);
+        if (rasterSpan > 0) {
+            span = Math.min(span, rasterSpan);
+            ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+        } else {
+            int mode2BulkSpan = gpu.performanceEpochMode2BulkSpanLimit(span);
+            if (mode2BulkSpan > 0) {
+                span = Math.min(span, mode2BulkSpan);
+                ppuPlan = PerformanceEpochPpuPlan.MODE2_BULK;
+            } else {
+                span = Math.min(span, gpu.performanceEpochMode2ReplaySpanLimit(span));
+                ppuPlan = PerformanceEpochPpuPlan.MODE2_REPLAY;
+            }
+        }
+        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        if (span <= 0) {
+            return 0;
+        }
+
+        // Linearization point for asynchronous host/reset mutations. A legacy input event that
+        // invalidated the horizon, or a reset published before this read, keeps the CPU scalar;
+        // a publication after it belongs to the next completed PERFORMANCE packet.
+        if (warmResetRequested || !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
+
+        performanceEpochDirectRaster = gpu.isPerformanceScanlineCursorActive();
+        performanceEpochSteadyRaster = !performanceEpochDirectRaster
+                && gpu.isPerformanceSteadyCursorActive();
+        performanceEpochPpuPlan = ppuPlan;
+        performanceEpochPrefixCommitted = 0;
+        if (performanceEpochPrefixCommitter == null) {
+            performanceEpochPrefixCommitter = this::commitPerformanceEpochPrefix;
+        }
+        cpu.setPerformanceEpochPrefixCommitter(performanceEpochPrefixCommitter);
+        int elapsed;
+        try {
+            elapsed = cpu.runPerformanceEpoch(span);
+        } finally {
+            cpu.setPerformanceEpochPrefixCommitter(null);
+        }
+        if (elapsed <= 0) {
+            return 0;
+        }
+        int suffix = elapsed - performanceEpochPrefixCommitted;
+        if (suffix > 0) {
+            commitPerformanceEpochPeripherals(suffix);
+        }
+        // The observer defers an unsafe write.  Replaying after the complete old-state
+        // prefix preserves the boundary semantics and guarantees one delegated write.
+        cpu.replayPerformanceEpochJournal();
+        boolean divReset = timer.consumeDivReset();
+        if (divReset) {
+            sound.tickFrameSequencer(true);
+            sound.commitFrameSequencerClock();
+            serialPort.onDivReset();
+        }
+        hdma.onCpuHaltState(cpu.getState() == Cpu.State.HALTED);
+        if (cpu.hasPendingPeripheralSample()) {
+            // The epoch can retire HALT immediately before the caller's budget ends. Publish
+            // the otherwise-inactive OAM-DMA pause latch in the same rare branch which already
+            // owns HALT's post-peripheral sample, so ordinary epochs gain no new hot check.
+            if (cpu.getState() == Cpu.State.HALTED && dma.requiresClockTick(true)) {
+                dma.tick(true, true);
+            }
+            cpu.onPeripheralsTicked();
+        }
+
+        performanceEpochCount++;
+        performanceEpochTicks += elapsed;
+        performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+        return elapsed;
+    }
+
+    /** Attempts one trusted-raster-only physical-DMG epoch. */
+    private int tryPhysicalDmgPerformanceEpoch(long remaining) {
+        if (remaining <= 0 || !cpu.performancePhysicalDmgEpochEntryEligible()
+                || !canStartPhysicalDmgPerformanceEpoch()) {
+            return 0;
+        }
+        int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
+        span = Math.min(span, timer.performancePhysicalDmgEpochSpanLimit(span));
+        span = Math.min(span, sound.performanceEpochSpanLimit(span));
+        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+
+        int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(span);
+        if (rasterSpan <= 0) {
+            return 0;
+        }
+        span = Math.min(span, rasterSpan);
+        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        if (span <= 0) {
+            return 0;
+        }
+
+        if (warmResetRequested || !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
+
+        performanceEpochDirectRaster = gpu.isPerformanceScanlineCursorActive();
+        performanceEpochSteadyRaster = !performanceEpochDirectRaster
+                && gpu.isPerformanceSteadyCursorActive();
+        performanceEpochPpuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+        performanceEpochPrefixCommitted = 0;
+        if (performancePhysicalDmgEpochPrefixCommitter == null) {
+            performancePhysicalDmgEpochPrefixCommitter =
+                    this::commitPhysicalDmgPerformanceEpochPrefix;
+        }
+        cpu.setPerformanceEpochPrefixCommitter(performancePhysicalDmgEpochPrefixCommitter);
+        int elapsed;
+        try {
+            elapsed = cpu.runPhysicalDmgPerformanceEpoch(span);
+        } finally {
+            cpu.setPerformanceEpochPrefixCommitter(null);
+        }
+        if (elapsed <= 0) {
+            return 0;
+        }
+        int suffix = elapsed - performanceEpochPrefixCommitted;
+        if (suffix > 0) {
+            commitPhysicalDmgPerformanceEpochPeripherals(suffix);
+        }
+        settlePhysicalDmgPerformanceEpochDmaHaltLatch();
+        cpu.replayPerformanceEpochJournal();
+        boolean divReset = timer.consumeDivReset();
+        if (divReset) {
+            sound.tickFrameSequencer(true);
+            sound.commitFrameSequencerClock();
+            serialPort.onDivReset();
+        }
+        if (cpu.hasPendingPeripheralSample()) {
+            cpu.onPeripheralsTicked();
+        }
+
+        performanceEpochCount++;
+        performanceEpochTicks += elapsed;
+        performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+        return elapsed;
+    }
+
+    /** Publishes the inactive OAM-DMA pause latch when an epoch retires HALT. */
+    private void settlePhysicalDmgPerformanceEpochDmaHaltLatch() {
+        if (cpu.getState() == Cpu.State.HALTED && dma.requiresClockTick(true)) {
+            // The scalar owner calls this after the HALT-fetch CPU boundary. Keep it before
+            // deferred FF46 replay so the existing journal's declared next-dot skew is intact.
+            dma.tick(true, true);
+        }
+    }
+
+    private void commitPerformanceEpochPrefix(int ticks) {
+        if (ticks <= performanceEpochPrefixCommitted) {
+            return;
+        }
+        commitPerformanceEpochPeripherals(ticks - performanceEpochPrefixCommitted);
+        performanceEpochPrefixCommitted = ticks;
+    }
+
+    /** Commits one old-state prefix without invoking the CPU synchronizer callback. */
+    private void commitPerformanceEpochPeripherals(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        timer.tickPerformanceEpochTrusted(ticks);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a PERFORMANCE epoch";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(ticks);
+        serialPort.tickPerformanceEpochIdle(ticks);
+        infraredPort.tickPerformanceEpochIdle(ticks);
+        joypad.tickPerformanceQuietSpanTrusted(ticks);
+
+        switch (performanceEpochPpuPlan) {
+            case TRUSTED_RASTER -> {
+                gpu.advancePerformanceEpochQuietSpanTrusted(
+                        ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+                statRegister.tickPerformanceQuietSpanTrusted(ticks);
+                performanceEpochRasterFastTicks += ticks;
+            }
+            case MODE2_BULK -> {
+                gpu.advancePerformanceMode2QuietSpanTrusted(ticks);
+                statRegister.tickPerformanceQuietSpanTrusted(ticks);
+                performanceEpochMode2ReplayTicks += ticks;
+                performanceEpochMode2BulkTicks += ticks;
+            }
+            case MODE2_REPLAY -> {
+                // The CPU and independently clocked peripherals have already consumed their
+                // frozen-view packet. Preserve scalar PPU ordering inside mode 2 so OAM-reader
+                // and STAT state are published dot-for-dot before the scalar hand-off tick.
+                for (int i = 0; i < ticks; i++) {
+                    gpu.tick();
+                    statRegister.tick();
+                }
+                performanceEpochMode2ReplayTicks += ticks;
+            }
+            case NONE -> throw new IllegalStateException(
+                    "PERFORMANCE epoch committed without a PPU plan");
+        }
+        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                gpu.isStatModeLatchRephasedBySpeedSwitch());
+    }
+
+    private void commitPhysicalDmgPerformanceEpochPrefix(int ticks) {
+        if (ticks <= performanceEpochPrefixCommitted) {
+            return;
+        }
+        commitPhysicalDmgPerformanceEpochPeripherals(
+                ticks - performanceEpochPrefixCommitted);
+        performanceEpochPrefixCommitted = ticks;
+    }
+
+    /** Physical-DMG prefix commit; CGB-only IR/HDMA state is deliberately absent. */
+    private void commitPhysicalDmgPerformanceEpochPeripherals(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        timer.tickPerformancePhysicalDmgEpochTrusted(ticks);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a physical-DMG PERFORMANCE epoch";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(ticks);
+        serialPort.tickPerformancePhysicalDmgEpochIdle(ticks);
+        joypad.tickPerformanceQuietSpanTrusted(ticks);
+        gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
+                ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+        statRegister.tickPerformanceQuietSpanTrusted(ticks);
+        performanceEpochRasterFastTicks += ticks;
+    }
+
+    /**
      * Attempts the long settled-HALT packet used only by the DMG PERFORMANCE side entrance.
      * Every horizon and volatile guard is read before the commit, so a zero result leaves the
-     * machine untouched and lets the ordinary Stage4 scheduler handle the next scalar phase.
+     * machine untouched and lets the ordinary PERFORMANCE scheduler handle the next scalar phase.
      */
     private int tryPerformanceSettledDmgHaltSpan(long remaining) {
         if (remaining <= 0 || !cpu.performanceSettledHaltSpanEligible()) {
@@ -1000,6 +1475,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceBulkSpanCount = 0L;
         performanceBulkTicks = 0L;
         performanceBulkMaxTicks = 0;
+        performanceEpochCount = 0L;
+        performanceEpochTicks = 0L;
+        performanceEpochMaxTicks = 0;
+        performanceEpochRasterFastTicks = 0L;
+        performanceEpochMode2ReplayTicks = 0L;
+        performanceEpochMode2BulkTicks = 0L;
+        performanceEpochPpuPlan = PerformanceEpochPpuPlan.NONE;
+        cpu.resetPerformanceEpochTelemetry();
     }
 
     /** Number of all-subsystem PERFORMANCE bulk spans taken by the current session. */
@@ -1017,14 +1500,44 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return performanceBulkMaxTicks;
     }
 
+    public long getPerformanceEpochCount() {
+        return performanceEpochCount;
+    }
+
+    public long getPerformanceEpochTicks() {
+        return performanceEpochTicks;
+    }
+
+    public int getPerformanceEpochMaxTicks() {
+        return performanceEpochMaxTicks;
+    }
+
+    public long getPerformanceEpochRasterFastTicks() {
+        return performanceEpochRasterFastTicks;
+    }
+
+    public long getPerformanceEpochMode2ReplayTicks() {
+        return performanceEpochMode2ReplayTicks;
+    }
+
+    public long getPerformanceEpochMode2BulkTicks() {
+        return performanceEpochMode2BulkTicks;
+    }
+
     private Mode tickSubsystems() {
+        boolean nativeCgbScalarOwnerTick = nativeCgbScalarOwner;
         int statReadPhaseFlags = cpu.getStatReadPhaseFlags();
-        boolean mode0InterruptEdgeNextTick = statRegister.beginCpuReadPhase(statReadPhaseFlags);
-        statRegister.finishCpuReadPhase(
-                cpu.getInterruptFlagReadMaskTicks(mode0InterruptEdgeNextTick),
-                cpu.isMode0InterruptDispatchPhased(mode0InterruptEdgeNextTick),
-                cpu.doesMode0InstructionWinInterruptAcceptance(
-                        mode0InterruptEdgeNextTick));
+        if (nativeCgbScalarOwnerTick) {
+            nativeCgbScalarOwner = false;
+            tickNativeCgbPerformanceStatPrologue(statReadPhaseFlags);
+        } else {
+            boolean mode0InterruptEdgeNextTick = statRegister.beginCpuReadPhase(statReadPhaseFlags);
+            statRegister.finishCpuReadPhase(
+                    cpu.getInterruptFlagReadMaskTicks(mode0InterruptEdgeNextTick),
+                    cpu.isMode0InterruptDispatchPhased(mode0InterruptEdgeNextTick),
+                    cpu.doesMode0InstructionWinInterruptAcceptance(
+                            mode0InterruptEdgeNextTick));
+        }
         boolean speedSwitching = cpu.isSpeedSwitching();
         boolean speedSwitchTail = speedSwitchTailTicks > 0;
         Cpu.State initialCpuState = cpu.getState();
@@ -1231,8 +1744,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             statRegister.tick();
         }
-        cpu.onPeripheralsTicked();
+        if (cpu.hasPendingPeripheralSample()) {
+            cpu.onPeripheralsTicked();
+        }
         return mode;
+    }
+
+    /** Specialized native-CGB CPU/STAT seam; called only by the one-shot scalar owner token. */
+    private void tickNativeCgbPerformanceStatPrologue(int statReadPhaseFlags) {
+        int phaseWord = gpu.getNativeCgbPerformancePhaseWord();
+        boolean mode0InterruptEdgeNextTick =
+                statRegister.beginNativeCgbPerformanceReadPhase(statReadPhaseFlags, phaseWord);
+        statRegister.finishNativeCgbPerformanceReadPhase(
+                mode0InterruptEdgeNextTick ? cpu.getInterruptFlagReadMaskTicks(true) : 0,
+                phaseWord);
     }
 
     /**
@@ -1328,8 +1853,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private void updatePerformanceObservationBlocker() {
-        gpu.setPerformanceObservationBlocked(
-                debugInstrumentation != null || debugRetirementTrackingActive);
+        boolean blocked = debugInstrumentation != null || debugRetirementTrackingActive;
+        if (blocked) {
+            // A synchronous callback may install observation while runNative is between dots.
+            // The following scalar tick must use the generic prologue and observation path.
+            nativeCgbScalarOwner = false;
+        }
+        gpu.setPerformanceObservationBlocked(blocked);
     }
 
     /**
@@ -2041,6 +2571,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private void restoreMachineState(GameboyState mem, boolean restoreCartridge) {
+        nativeCgbScalarOwner = false;
         biosShadow.restoreState(mem.biosShadowMemento());
         if (restoreCartridge) {
             cartridge.restoreState(mem.cartridgeMemento());

@@ -69,6 +69,27 @@ public class JoypadPerformanceSpanTest {
         assertEquals(0, sgb.performanceQuietSpanLimit(1));
     }
 
+    @Test
+    public void cachedHubSpanRejectsLegacyMutationUntilScalarReconciliation() {
+        PlayerInputHub hub = new PlayerInputHub();
+        Joypad joypad = new Joypad(
+                new InterruptManager(false), EventBus.NULL_EVENT_BUS, false, hub);
+        joypad.tick();
+        assertTrue(joypad.performanceSettledHaltSpanLimit(54) > 3);
+
+        joypad.setPressedButtons(java.util.Set.of(Button.A));
+        assertEquals(0, joypad.performanceSettledHaltSpanLimit(54));
+        assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+
+        joypad.setPressedButtons(java.util.Set.of());
+        assertEquals(0, joypad.performanceSettledHaltSpanLimit(54));
+        joypad.tick();
+        assertEquals("the mutation edge itself remains scalar", 0,
+                joypad.performanceSettledHaltSpanLimit(54));
+        joypad.tick();
+        assertTrue(joypad.performanceSettledHaltSpanLimit(54) > 3);
+    }
+
     private static void assertEquivalent(Joypad scalar, Joypad bulk) {
         assertEquals(scalar.getByte(0xff00), bulk.getByte(0xff00));
         assertEquals(scalar.getSampledInput(), bulk.getSampledInput());

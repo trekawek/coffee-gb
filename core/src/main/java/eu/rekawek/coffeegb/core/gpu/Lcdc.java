@@ -15,6 +15,10 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     private static final int CONFLICT_HISTORY_LENGTH = 8;
 
+    // Keep the fixed-point proof O(1) on PERFORMANCE horizons. A write conservatively
+    // reopens the history window; tickConflicts drains it one dot at a time.
+    private static final int PERFORMANCE_FIXED_POINT_DRAIN = CONFLICT_HISTORY_LENGTH + 1;
+
     private boolean gbc;
 
     private final boolean mealybugDmgBlob;
@@ -50,6 +54,9 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
     // Both histories advance together in tickConflicts(). Logical index 0 is the newest value;
     // this cursor maps it to the corresponding physical slot in the two circular buffers.
     private int historyHead;
+
+    // PERFORMANCE-only eligibility metadata; the portable memento restores conservatively.
+    private transient int performanceFixedPointDrain;
 
     // The transient machine-state path borrows primitive arrays synchronously. Linearize the
     // circular histories into these owner-thread scratch arrays so the state schema remains
@@ -93,6 +100,31 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         return mixValue >= 0 || pendingMixValue >= 0 || tileSelectGlitchWrite;
     }
 
+    /**
+     * Whether every per-dot LCDC latch is already at the native-CGB mode-2 fixed point.
+     *
+     * <p>{@link #hasPendingConflictLatches()} intentionally ignores history that is still
+     * visible to delayed consumers.  A coarse OAM scan must additionally prove that the
+     * tile-select pulse has drained and every delayed LCDC.2 sample equals the live value.
+     * Once this predicate holds, rotating the uniform circular histories is behaviorally a
+     * no-op (the cursor itself is neither serialized nor otherwise observable).</p>
+     */
+    boolean isPerformanceMode2FixedPoint() {
+        return gbc && isPerformanceQuietSpanFixedPoint();
+    }
+
+    /** Whether all delayed LCDC histories are uniform at the current value. */
+    boolean isPerformanceQuietSpanFixedPoint() {
+        return performanceFixedPointDrain == 0 && !hasPendingConflictLatches();
+    }
+
+    /** The fixed-point histories remain identical for an arbitrary positive quiet span. */
+    void advancePerformanceMode2FixedPointSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceMode2FixedPoint()) {
+            throw new IllegalStateException("LCDC is not at its PERFORMANCE mode-2 fixed point");
+        }
+    }
+
     /** Called once per GPU tick: the mix value lives for the single tick after the write. */
     void tickConflicts() {
         dmgBlobBackgroundEnable = pendingDmgBlobBackgroundEnable;
@@ -103,9 +135,13 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         tileSelectGlitchHistory[historyHead] = tileSelectGlitchWrite;
         tileSelectGlitchWrite = false;
         oamSizeHistory[historyHead] = value;
+        if (performanceFixedPointDrain > 0) {
+            performanceFixedPointDrain--;
+        }
     }
 
     void triggerTileSelectGlitch() {
+        performanceFixedPointDrain = PERFORMANCE_FIXED_POINT_DRAIN;
         tileSelectGlitchWrite = true;
     }
 
@@ -178,6 +214,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
      *     in the conflict-mix T-cycle instead of one T-cycle later
      */
     public void set(int value, boolean dropObjEnInMix) {
+        performanceFixedPointDrain = PERFORMANCE_FIXED_POINT_DRAIN;
         if (gbc) {
             // the CGB applies LCDC writes cleanly, without the DMG's conflict mix
             this.value = value;
@@ -202,6 +239,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
 
     public void setGbc(boolean gbc) {
         this.gbc = gbc;
+        performanceFixedPointDrain = PERFORMANCE_FIXED_POINT_DRAIN;
     }
 
     public int get() {
@@ -253,6 +291,7 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         }
         System.arraycopy(mem.oamSizeHistory, 0, oamSizeHistory, 0, oamSizeHistory.length);
         this.historyHead = 0;
+        this.performanceFixedPointDrain = PERFORMANCE_FIXED_POINT_DRAIN;
     }
 
     private int historyIndex(int dotsAgo) {

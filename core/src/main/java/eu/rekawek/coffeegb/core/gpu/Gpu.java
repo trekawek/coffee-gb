@@ -152,6 +152,13 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // It can rise while an object at X=167 is still extending the physical transfer.
     private int mode0IntFrom = Integer.MAX_VALUE;
 
+    // Native-CGB scalar ticks use this compact read-phase word instead of materializing the
+    // general STAT timing snapshot. The low byte is the current line; the two high bits are the
+    // only native double-speed mode-0 lookahead facts consumed by StatRegister.
+    static final int NATIVE_CGB_PHASE_LINE_MASK = 0xff;
+    static final int NATIVE_CGB_PHASE_MODE0_EDGE_NEXT = 1 << 8;
+    static final int NATIVE_CGB_PHASE_MODE0_READ_PREVIEW = 1 << 9;
+
     // Switching the CGB CPU clock remaps the PPU timestamp and rephases the CPU-side
     // STAT mode latch. Until that happens, the boot-time latch has its five-dot tail.
     private boolean statModeLatchRephasedBySpeedSwitch;
@@ -1065,6 +1072,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || !pendingPpuWrites.isEmpty()
                 || r.hasPendingConflictLatches()
                 || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
                 || dma == null
                 || dma.isTransferInProgress()
                 || dma.ownsOamForPpu()
@@ -1099,11 +1107,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || !pendingPpuWrites.isEmpty()
                 || r.hasPendingConflictLatches()
                 || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
                 || mode != Mode.HBlank && mode != Mode.VBlank
                 // A scalar/steady PixelTransfer line can still have delayed output pixels in
                 // its HBlank tail. Only a line rendered by the direct compositor has proven
                 // that both machines were abandoned with an empty output tail.
                 || mode == Mode.HBlank && !performanceScanlineLine
+                || !gbc && !isPerformanceDmgIdleOutput()
+                || gbc && !isPerformanceNativeCgbIdleOutput()
                 || !lcdEnabled
                 || !bootCompatibilityResolved
                 || dma == null
@@ -1114,7 +1125,173 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return 0;
         }
         int lineLength = firstLine ? 455 : 456;
-        return Math.max(0, lineLength - ticksInLine - 1);
+        int limit = Math.max(0, lineLength - ticksInLine - 1);
+        if (mode == Mode.VBlank && line == 153 && (!gbc || speedModeValue == 1)) {
+            // Scalar tick() samples the frame-window checkpoint on old dot 454 before
+            // publishing the line edge. Leave that dot to the exact path.
+            limit = Math.min(limit, 454 - ticksInLine);
+        }
+        return Math.max(0, limit);
+    }
+
+    /** Native-CGB coarse epoch horizon; HDMA is unconditionally part of this contract. */
+    public int performanceEpochSpanLimit(int requested) {
+        if (requested <= 0 || !lcdEnabled || dma == null || dma.isTransferInProgress()
+                || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()
+                || hdma == null || hdma.hasActiveOrPendingTransfer()) {
+            return 0;
+        }
+        if (!performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
+                || !bootCompatibilityResolved) {
+            return 0;
+        }
+        int limit;
+        if (mode == Mode.PixelTransfer) {
+            // Direct rendered mode 3 is the only mode-3 cursor admitted here.  Unlike the
+            // older scheduler horizon, this coarse transaction cannot yet advance HDMA's
+            // HBlank-request synchronizer, so even an armed transfer remains fail-closed.
+            if (!performanceScanlineCursor
+                    || ticksInLine + 1 >= performanceScanlineEndTick) {
+                return 0;
+            }
+            limit = performanceScanlineEndTick - ticksInLine - 1;
+        } else if (mode == Mode.HBlank || mode == Mode.VBlank) {
+            if (mode == Mode.HBlank && !performanceScanlineLine
+                    || !isPerformanceNativeCgbIdleOutput()) {
+                return 0;
+            }
+            int lineLength = firstLine ? 455 : 456;
+            limit = Math.max(0, lineLength - ticksInLine - 1);
+            if (mode == Mode.VBlank && line == 153 && (!gbc || speedModeValue == 1)) {
+                limit = Math.min(limit, 454 - ticksInLine);
+            }
+        } else {
+            return 0;
+        }
+        return Math.min(requested, Math.max(0, limit));
+    }
+
+    /**
+     * Physical-DMG counterpart of {@link #performanceEpochSpanLimit(int)}. The empty output
+     * clocks are part of the proof in HBlank/VBlank; IR, HDMA, mode 2 and scalar mode 3 are not.
+     */
+    public int performancePhysicalDmgEpochSpanLimit(int requested) {
+        if (requested <= 0 || !lcdEnabled || dma == null || dma.isTransferInProgress()
+                || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()) {
+            return 0;
+        }
+        if (!performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
+                || !bootCompatibilityResolved) {
+            return 0;
+        }
+        int limit;
+        if (mode == Mode.PixelTransfer) {
+            if (!performanceScanlineCursor
+                    || ticksInLine + 1 >= performanceScanlineEndTick) {
+                return 0;
+            }
+            limit = performanceScanlineEndTick - ticksInLine - 1;
+        } else if (mode == Mode.HBlank || mode == Mode.VBlank) {
+            if (mode == Mode.HBlank && !performanceScanlineLine
+                    || !isPerformanceDmgIdleOutput()) {
+                return 0;
+            }
+            int lineLength = firstLine ? 455 : 456;
+            limit = Math.max(0, lineLength - ticksInLine - 1);
+            if (mode == Mode.VBlank && line == 153) {
+                limit = Math.min(limit, 454 - ticksInLine);
+            }
+        } else {
+            return 0;
+        }
+        return Math.min(requested, Math.max(0, limit));
+    }
+
+    /**
+     * Horizon for exact per-dot OAM-search replay inside a native-CGB coarse CPU epoch.
+     * The caller must additionally intersect this with STAT's checkpoint horizon. The last
+     * mode-2 dot remains scalar because its OAM-search tick performs the mode-3 hand-off and
+     * can arm the direct scanline compositor.
+     */
+    public int performanceEpochMode2ReplaySpanLimit(int requested) {
+        if (requested <= 0 || !gbc || dmgCompatValue || speedModeValue != 2
+                || !lcdEnabled || firstLine || line >= 144 || mode != Mode.OamSearch
+                || phase != oamSearchPhase || performanceScanlineCursor
+                || performanceScanlineLine || dma == null || dma.isTransferInProgress()
+                || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()
+                || hdma == null || hdma.hasActiveOrPendingTransfer()) {
+            return 0;
+        }
+        if (!performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !bootCompatibilityResolved) {
+            return 0;
+        }
+        return Math.min(requested, Math.max(0, 79 - ticksInLine));
+    }
+
+    /**
+     * Horizon for the allocation-free native-CGB OAM-search transaction.
+     *
+     * <p>The broad mode-2 proof above remains the authoritative DMA/HDMA, write, observation,
+     * and dot-79 cap.  This narrower proof additionally requires every otherwise per-dot PPU
+     * component to be at a fixed point.  A recent LCDC/window write or a non-canonical restored
+     * reader state therefore retains the exact {@link #tick()} replay.</p>
+     */
+    public int performanceEpochMode2BulkSpanLimit(int requested) {
+        int limit = performanceEpochMode2ReplaySpanLimit(requested);
+        if (limit > 0 && line == 0 && ticksInLine <= 1) {
+            // The scalar mode-2 tick samples the frame-window checkpoint at old dot 1.
+            // Keep the exact replay lane through that edge before admitting bulk mode 2.
+            return 0;
+        }
+        if (limit <= 0 || displayEnabledDelay != 0 || steadyTimingCursor
+                || !lcdc.isPerformanceMode2FixedPoint()
+                || !pixelTransferPhase.isPerformanceNativeCgbMode2IdleOutput()
+                || !pixelMachine.isPerformanceNativeCgbMode2IdleOutput()
+                || !oamSearchPhase.isPerformanceNoDmaStableSpanEligible(
+                ticksInLine, lcdc.getSpriteHeight())) {
+            return 0;
+        }
+        return limit;
+    }
+
+    /**
+     * Advances a preflighted mode-2 prefix without entering the general GPU or STAT dot loops.
+     * The caller retains the scalar dot-80 handoff, where the last sprite is committed and the
+     * direct scanline renderer may arm.
+     */
+    public void advancePerformanceMode2QuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        int startTick = ticksInLine;
+        if (startTick + ticks > 79) {
+            throw new IllegalStateException("GPU is not eligible for a PERFORMANCE mode-2 span");
+        }
+        assert performanceEpochMode2BulkSpanLimit(ticks) >= ticks
+                : "trusted PERFORMANCE mode-2 proof changed before commit";
+
+        lcdc.advancePerformanceMode2FixedPointSpanTrusted(ticks);
+        pixelTransferPhase.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
+        pixelMachine.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
+        oamSearchPhase.advancePerformanceNoDmaStableSpanTrusted(
+                startTick, ticks, lcdc.getSpriteHeight());
+
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        cpuLyReadAcrossLineEdge = false;
+        synchronizePerformanceWindowLineCounter();
     }
 
     /** Advances a preflighted raster span without entering either PixelTransfer machine. */
@@ -1153,6 +1330,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         int limit = performanceQuietSpanLimit();
         if (limit <= 0 || ticks > limit) {
             return false;
+        }
+        if (!gbc) {
+            advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+        } else {
+            advancePerformanceNativeCgbIdleOutputSpanTrusted(ticks);
+        }
+        if (mode == Mode.VBlank && ticksInLine < 79) {
+            replayPerformanceOamReaderPrefix(ticks);
         }
         ticksInLine += ticks;
         timingGeneration += ticks;
@@ -1198,6 +1383,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             timingGeneration += ticks;
             performanceSteadyFastTicks += ticks;
         } else {
+            if (!gbc) {
+                advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+            } else {
+                advancePerformanceNativeCgbIdleOutputSpanTrusted(ticks);
+            }
+            if (mode == Mode.VBlank && ticksInLine < 79) {
+                replayPerformanceOamReaderPrefix(ticks);
+            }
             ticksInLine += ticks;
             timingGeneration += ticks;
             performanceScanlineFastTicks += ticks;
@@ -1210,9 +1403,115 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
     }
 
+    /** Native-CGB trusted epoch commit with no physical-DMG output/OAM branches. */
+    public void advancePerformanceEpochQuietSpanTrusted(
+            int ticks, boolean directRaster, boolean steadyRaster) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (directRaster && steadyRaster) {
+            throw new IllegalStateException("conflicting PERFORMANCE raster cursor kinds");
+        }
+        if (directRaster) {
+            if (!performanceScanlineCursor) {
+                throw new IllegalStateException("direct PERFORMANCE cursor changed in epoch");
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        } else if (steadyRaster) {
+            if (!steadyTimingCursor) {
+                throw new IllegalStateException("steady PERFORMANCE cursor changed in epoch");
+            }
+            steadyTimingTicks += ticks;
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceSteadyFastTicks += ticks;
+        } else {
+            advancePerformanceNativeCgbIdleOutputSpanTrusted(ticks);
+            if (mode == Mode.VBlank && ticksInLine < 79) {
+                replayPerformanceOamReaderPrefix(ticks);
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        }
+    }
+
+    /** Physical-DMG trusted epoch commit with canonical empty output-clock advancement. */
+    public void advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
+            int ticks, boolean directRaster, boolean steadyRaster) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (directRaster && steadyRaster) {
+            throw new IllegalStateException("conflicting physical-DMG raster cursor kinds");
+        }
+        if (directRaster) {
+            if (!performanceScanlineCursor) {
+                throw new IllegalStateException("direct physical-DMG cursor changed in epoch");
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        } else if (steadyRaster) {
+            if (!steadyTimingCursor) {
+                throw new IllegalStateException("steady physical-DMG cursor changed in epoch");
+            }
+            steadyTimingTicks += ticks;
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceSteadyFastTicks += ticks;
+        } else {
+            advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+            if (mode == Mode.VBlank && ticksInLine < 79) {
+                replayPerformanceOamReaderPrefix(ticks);
+            }
+            ticksInLine += ticks;
+            timingGeneration += ticks;
+            performanceScanlineFastTicks += ticks;
+        }
+        directOamReadCorruptionThisTick = false;
+        suppressNextDirectOamReadCorruption = false;
+        directOamWriteCorruptionThisTick = false;
+        suppressNextDirectOamWriteCorruption = false;
+    }
+
     /** Whether the broad line-at-a-time cursor is active. */
     public boolean isPerformanceScanlineCursorActive() {
         return performanceScanlineCursor;
+    }
+
+    private boolean isPerformanceDmgIdleOutput() {
+        return pixelTransferPhase.isPerformanceDmgIdleOutput()
+                && pixelMachine.isPerformanceDmgIdleOutput();
+    }
+
+    private boolean isPerformanceNativeCgbIdleOutput() {
+        return gbc
+                && pixelTransferPhase.isPerformanceNativeCgbMode2IdleOutput()
+                && pixelMachine.isPerformanceNativeCgbMode2IdleOutput();
+    }
+
+    /** Replays the persistent OAM reader's early-line prefix before a trusted span advances. */
+    private void replayPerformanceOamReaderPrefix(int ticks) {
+        if (ticks <= 0 || mode != Mode.VBlank || ticksInLine >= 79) {
+            return;
+        }
+        int end = Math.min(80, ticksInLine + ticks + 1);
+        for (int position = ticksInLine + 1; position < end; position++) {
+            oamSearchPhase.trackDmaSource(position);
+        }
+    }
+
+    private void advancePerformanceDmgIdleOutputSpanTrusted(int ticks) {
+        pixelTransferPhase.advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+        pixelMachine.advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+    }
+
+    private void advancePerformanceNativeCgbIdleOutputSpanTrusted(int ticks) {
+        pixelTransferPhase.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
+        pixelMachine.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
     }
 
     /**
@@ -1292,7 +1591,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && debugHooks == null
                 && pendingPpuWrites.isEmpty()
                 && !r.hasPendingConflictLatches()
-                && !lcdc.hasPendingConflictLatches();
+                && !lcdc.hasPendingConflictLatches()
+                && lcdc.isPerformanceQuietSpanFixedPoint();
     }
 
     /** Number of following dots that remain strictly inside the deferred steady span. */
@@ -1700,6 +2000,25 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || (gbc && !target.dmgCompat && line == 153 && ticksInLine >= 454)
                 || ((!gbc || target.dmgCompat) && !firstLine && line == 0
                 && ticksInLine < 4));
+    }
+
+    /**
+     * Returns the allocation-free native-CGB CPU/STAT phase facts needed before this dot's CPU
+     * bus callback. Native PERFORMANCE scalar misses are already topology-checked by Gameboy;
+     * keeping this word local to the GPU avoids taking the general timing snapshot on that path.
+     */
+    public int getNativeCgbPerformancePhaseWord() {
+        // Native double-speed scalar CPU callbacks never take the normal-speed line-edge
+        // handoff. Capture the same settled value as captureCpuLyReadPhase() would.
+        cpuLyReadAcrossLineEdge = false;
+        int phaseWord = line & NATIVE_CGB_PHASE_LINE_MASK;
+        if (line < 144 && ticksInLine + 1 == mode0IntFrom) {
+            phaseWord |= NATIVE_CGB_PHASE_MODE0_EDGE_NEXT;
+        }
+        if (line < 144 && ticksInLine + 2 == mode0IntFrom) {
+            phaseWord |= NATIVE_CGB_PHASE_MODE0_READ_PREVIEW;
+        }
+        return phaseWord;
     }
 
     /**

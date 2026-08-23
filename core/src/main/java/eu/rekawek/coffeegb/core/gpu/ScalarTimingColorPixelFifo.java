@@ -58,6 +58,19 @@ public final class ScalarTimingColorPixelFifo implements PixelFifo {
     }
 
     @Override
+    public boolean isPerformanceOutputIdle() {
+        return delaySize == 0;
+    }
+
+    @Override
+    public void advancePerformanceOutputIdleSpanTrusted(int ticks) {
+        if (ticks < 0 || delaySize != 0) {
+            throw new IllegalStateException("CGB timing output delay is not idle");
+        }
+        outputTicks += ticks;
+    }
+
+    @Override
     public void rewindOnePixel() {
         if (linePixels == 0) {
             return;

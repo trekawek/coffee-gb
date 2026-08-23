@@ -11,6 +11,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertTrue;
 
 public class LcdcHistoryTest {
 
@@ -115,6 +116,51 @@ public class LcdcHistoryTest {
                         oamSizeHistory(state).clone()));
         assertArrayEquals(reference.tileSelectGlitchHistory, pooled.tileSelectGlitchHistory);
         assertArrayEquals(reference.oamSizeHistory, pooled.oamSizeHistory);
+    }
+
+    @Test
+    public void performanceMode2FixedPointRejectsRecentSizeAndTileHistory() {
+        Lcdc lcdc = new Lcdc();
+        lcdc.setGbc(true);
+        for (int i = 0; i < HISTORY_LENGTH + 1; i++) {
+            lcdc.tickConflicts();
+        }
+        assertTrue(lcdc.isPerformanceMode2FixedPoint());
+
+        lcdc.set(0x95);
+        for (int i = 0; i < HISTORY_LENGTH - 1; i++) {
+            lcdc.tickConflicts();
+        }
+        assertFalse(lcdc.isPerformanceMode2FixedPoint());
+        lcdc.tickConflicts();
+        assertFalse(lcdc.isPerformanceMode2FixedPoint());
+        lcdc.tickConflicts();
+        assertTrue(lcdc.isPerformanceMode2FixedPoint());
+
+        lcdc.triggerTileSelectGlitch();
+        lcdc.tickConflicts();
+        for (int i = 0; i < HISTORY_LENGTH - 1; i++) {
+            lcdc.tickConflicts();
+        }
+        assertFalse(lcdc.isPerformanceMode2FixedPoint());
+        lcdc.tickConflicts();
+        assertTrue(lcdc.isPerformanceMode2FixedPoint());
+    }
+
+    @Test
+    public void performanceMode2FixedPointSpanPreservesLogicalHistory() {
+        Lcdc lcdc = new Lcdc();
+        lcdc.setGbc(true);
+        for (int i = 0; i < HISTORY_LENGTH + 1; i++) {
+            lcdc.tickConflicts();
+        }
+        ComponentState<Lcdc> before = lcdc.captureState();
+
+        lcdc.advancePerformanceMode2FixedPointSpanTrusted(54);
+
+        ComponentState<Lcdc> after = lcdc.captureState();
+        assertArrayEquals(tileSelectGlitchHistory(before), tileSelectGlitchHistory(after));
+        assertArrayEquals(oamSizeHistory(before), oamSizeHistory(after));
     }
 
     private static void tick(Lcdc lcdc, HistoryReference reference, int dot) {

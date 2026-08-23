@@ -11,11 +11,13 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 
 import java.util.Arrays;
 
-public class Mbc5 implements MemoryController {
+public class Mbc5 implements MemoryController, PerformanceRomAccessProvider {
 
     private final int romBanks;
 
@@ -51,6 +53,10 @@ public class Mbc5 implements MemoryController {
     private final boolean gateRamWrites;
 
     private transient DebugHooks debugHooks;
+
+    /** Reused snapshot; a caller borrows it only until its bounded transaction completes. */
+    private final Mbc5PerformanceRomAccess performanceRomAccess =
+            new Mbc5PerformanceRomAccess();
 
     public Mbc5(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
@@ -155,6 +161,18 @@ public class Mbc5 implements MemoryController {
     }
 
     @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        // LoaderMbc5 and any future subclasses may add mapping semantics outside this base
+        // controller. Direct PERFORMANCE access opts in only the plain, immutable MBC5 view.
+        if (getClass() != Mbc5.class || debugHooks != null) {
+            return null;
+        }
+        performanceRomAccess.lowerWindowBase = getRomBankFor0x0000() * 0x4000;
+        performanceRomAccess.upperWindowBase = getRomBankFor0x4000() * 0x4000;
+        return performanceRomAccess;
+    }
+
+    @Override
     public void flushRam() {
         if (ramUpdated) {
             battery.saveRam(ram);
@@ -190,6 +208,41 @@ public class Mbc5 implements MemoryController {
             return cartridge[cartOffset];
         } else {
             return 0xff;
+        }
+    }
+
+    private final class Mbc5PerformanceRomAccess implements PerformanceRomAccess {
+
+        private int lowerWindowBase;
+
+        private int upperWindowBase;
+
+        @Override
+        public int physicalOffset(int cpuAddress) {
+            if (cpuAddress < 0 || cpuAddress >= 0x8000) {
+                return -1;
+            }
+            return cpuAddress < 0x4000
+                    ? lowerWindowBase + cpuAddress
+                    : upperWindowBase + cpuAddress - 0x4000;
+        }
+
+        @Override
+        public int readPhysicalByte(int physicalOffset) {
+            return physicalOffset >= 0 && physicalOffset < cartridge.length
+                    ? cartridge[physicalOffset]
+                    : 0xff;
+        }
+
+        @Override
+        public int readCpuByte(int cpuAddress) {
+            if (cpuAddress < 0 || cpuAddress >= 0x8000) {
+                return -1;
+            }
+            int physicalOffset = cpuAddress < 0x4000
+                    ? lowerWindowBase + cpuAddress
+                    : upperWindowBase + cpuAddress - 0x4000;
+            return physicalOffset < cartridge.length ? cartridge[physicalOffset] : 0xff;
         }
     }
 

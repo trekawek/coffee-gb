@@ -243,7 +243,11 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             }
             return;
         }
-        pendingPerformanceTicks = Math.addExact(pendingPerformanceTicks, ticks);
+        // The PERFORMANCE horizon stops before the next decimated sample, where the
+        // pending span is materialized.  Consequently this accumulator is bounded by
+        // performanceAudioDecimation - 1 (54 today), so an overflow-checked add in the
+        // 1.7M-packets-per-sample hot path cannot provide any additional protection.
+        pendingPerformanceTicks += ticks;
         performanceSamplePhase += ticks;
     }
 
@@ -397,6 +401,24 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     /**
+     * Horizon used by the native-CGB coarse epoch.  With lazy PERFORMANCE audio enabled,
+     * stop immediately before the next compact sample; with audio disabled there is no host
+     * sample boundary to cross and the regular per-tick state update remains exact.
+     */
+    public int performanceEpochSpanLimit(int requested) {
+        if (requested <= 0 || debugHooks != null || outputObserver != null
+                || pendingFrameSequencerStep >= 0) {
+            return 0;
+        }
+        if (!performanceAudio) {
+            return requested;
+        }
+        return Math.min(requested,
+                performanceAudioDecimation - performanceSamplePhase - 1);
+    }
+
+
+    /**
      * Defers the Sound clock belonging to a scalar PERFORMANCE scheduler boundary. CPU-visible
      * work in that tick has already had a chance to materialize pending clocks through get/set
      * accessors; only the next compact-output boundary needs to run this tick immediately.
@@ -407,7 +429,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             tick(divReset);
             return;
         }
-        pendingPerformanceTicks = Math.addExact(pendingPerformanceTicks, 1);
+        // The branch above materializes on the sample boundary, bounding the pending
+        // count to the same sub-decimation interval as tickPerformanceQuietSpan().
+        pendingPerformanceTicks++;
         performanceSamplePhase++;
     }
 

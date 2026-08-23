@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.gpu;
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
 
+import java.util.Arrays;
 import java.util.Objects;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.BGP;
@@ -64,15 +65,9 @@ public final class PerformanceScanlineRenderer {
 
     private final int[] spriteOrder;
 
+    private final int[] spriteOverlay = new int[SCREEN_WIDTH];
+
     private int spriteCount;
-
-    // The renderer is owner-threaded by the emulator. Keep the current background sample in
-    // primitive fields instead of returning a temporary record for every visible pixel.
-    private int currentBackgroundRaw;
-
-    private int currentBackgroundPalette;
-
-    private boolean currentBackgroundPriority;
 
     /**
      * Creates a line renderer over the live PPU memory/register objects.
@@ -156,6 +151,8 @@ public final class PerformanceScanlineRenderer {
             throw new IllegalArgumentException("Scanline output must contain 160 pixels");
         }
         prepareSprites(ly);
+        boolean objEnabled = lcdc.isObjDisplay();
+        prepareSpriteOverlay(objEnabled);
 
         int scx = registers.get(SCX) & 0xff;
         int scy = registers.get(SCY) & 0xff;
@@ -170,6 +167,20 @@ public final class PerformanceScanlineRenderer {
         int windowY = windowLine >= 0 ? windowLine : Math.max(0, ly - wy);
         int bgMap = lcdc.getBgTileMapDisplay();
         int windowMap = lcdc.getWindowTileMapDisplay();
+        boolean signedTileIds = lcdc.isBgWindowTileDataSigned();
+        boolean dmgPaletteMapping = !gbc || dmgCompat;
+        int bgp = dmgPaletteMapping ? registers.get(BGP) : 0;
+        int obp0 = dmgPaletteMapping && objEnabled ? registers.get(OBP0) : 0;
+        int obp1 = dmgPaletteMapping && objEnabled ? registers.get(OBP1) : 0;
+        boolean cached = false;
+        boolean cachedWindow = false;
+        int cachedMapAddress = -1;
+        int cachedSourceRow = -1;
+        int cachedLow = 0;
+        int cachedHigh = 0;
+        int cachedPalette = 0;
+        boolean cachedPriority = false;
+        boolean cachedXFlip = false;
 
         for (int screenX = 0; screenX < SCREEN_WIDTH; screenX++) {
             boolean useWindow = windowEnabled && screenX >= windowLeft;
@@ -185,16 +196,53 @@ public final class PerformanceScanlineRenderer {
                 mapY = (scy + ly) & 0xff;
                 mapBase = bgMap;
             }
-            sampleBackground(mapBase, mapX, mapY);
-            if (!gbc || dmgCompat) {
-                if (!bgEnabled) {
-                    currentBackgroundRaw = 0;
-                    currentBackgroundPriority = false;
+
+            int mapAddress = mapBase + (((mapY >> 3) & 0x1f) << 5)
+                    + ((mapX >> 3) & 0x1f);
+            int sourceRow = mapY & 7;
+            if (!cached
+                    || cachedWindow != useWindow
+                    || cachedMapAddress != mapAddress
+                    || cachedSourceRow != sourceRow) {
+                int tileId = videoRam0.getByte(mapAddress) & 0xff;
+                int attributes = 0;
+                if (gbc && videoRam1 != null) {
+                    attributes = videoRam1.getByte(mapAddress) & 0xff;
                 }
+                int tileRow = (attributes & 0x40) == 0 ? sourceRow : 7 - sourceRow;
+                int bank = gbc ? (attributes >> 3) & 1 : 0;
+                int tileAddress = tileAddress(tileId, tileRow, signedTileIds);
+                cachedLow = readVideo(bank, tileAddress);
+                cachedHigh = readVideo(bank, tileAddress + 1);
+                cachedPalette = attributes & 7;
+                cachedPriority = (attributes & 0x80) != 0;
+                cachedXFlip = (attributes & 0x20) != 0;
+                cachedWindow = useWindow;
+                cachedMapAddress = mapAddress;
+                cachedSourceRow = sourceRow;
+                cached = true;
             }
 
-            int sprite = spriteAt(screenX);
-            output[screenX] = resolvePixel(sprite, bgEnabled);
+            int tilePixel = mapX & 7;
+            int bit = cachedXFlip ? tilePixel : 7 - tilePixel;
+            int backgroundRaw = ((cachedLow >> bit) & 1) | (((cachedHigh >> bit) & 1) << 1);
+            boolean backgroundPriority = cachedPriority;
+            if ((!gbc || dmgCompat) && !bgEnabled) {
+                backgroundRaw = 0;
+                backgroundPriority = false;
+            }
+
+            int overlay = spriteOverlay[screenX];
+            output[screenX] = resolvePixel(
+                    (overlay >> 2) - 1,
+                    overlay & 3,
+                    backgroundRaw,
+                    cachedPalette,
+                    backgroundPriority,
+                    bgEnabled,
+                    bgp,
+                    obp0,
+                    obp1);
         }
     }
 
@@ -238,100 +286,105 @@ public final class PerformanceScanlineRenderer {
         return Math.min(455, result);
     }
 
-    private void sampleBackground(int mapBase, int x, int y) {
-        int tileX = (x >> 3) & 0x1f;
-        int tileY = (y >> 3) & 0x1f;
-        int mapAddress = mapBase + (tileY << 5) + tileX;
-        int tileId = videoRam0.getByte(mapAddress) & 0xff;
-        int attributeValue = 0;
-        if (gbc && videoRam1 != null) {
-            attributeValue = videoRam1.getByte(mapAddress) & 0xff;
-        }
-        TileAttributes attributes = TileAttributes.valueOf(attributeValue);
-        int row = y & 7;
-        if (attributes.isYflip()) {
-            row = 7 - row;
-        }
-        int bank = gbc ? attributes.getBank() : 0;
-        int address = tileAddress(tileId, row, lcdc.isBgWindowTileDataSigned());
-        int low = readVideo(bank, address);
-        int high = readVideo(bank, address + 1);
-        int bit = attributes.isXflip() ? x & 7 : 7 - (x & 7);
-        currentBackgroundRaw = ((low >> bit) & 1) | (((high >> bit) & 1) << 1);
-        currentBackgroundPalette = attributes.getColorPaletteIndex();
-        currentBackgroundPriority = attributes.isPriority();
-    }
-
-    private int spriteAt(int x) {
-        if (!lcdc.isObjDisplay()) {
-            return -1;
-        }
-        for (int order = 0; order < spriteCount; order++) {
-            SpriteLine sprite = spriteLines[spriteOrder[order]];
-            int pixelX = x - sprite.left;
-            if (pixelX < 0 || pixelX >= 8) {
-                continue;
-            }
-            int bit = sprite.xFlip ? pixelX : 7 - pixelX;
-            int raw = ((sprite.low >> bit) & 1) | (((sprite.high >> bit) & 1) << 1);
-            if (raw != 0) {
-                sprite.pixel = raw;
-                return spriteOrder[order];
-            }
-        }
-        return -1;
-    }
-
-    private int resolvePixel(int spriteIndex, boolean bgEnabled) {
+    private int resolvePixel(
+            int spriteIndex,
+            int spritePixel,
+            int backgroundRaw,
+            int backgroundPalette,
+            boolean backgroundPriority,
+            boolean bgEnabled,
+            int bgp,
+            int obp0,
+            int obp1) {
         if (!gbc) {
             if (spriteIndex >= 0) {
                 SpriteLine sprite = spriteLines[spriteIndex];
-                if (!(sprite.priority && currentBackgroundRaw != 0)) {
-                    int palette = sprite.palette == 0 ? registers.get(OBP0) : registers.get(OBP1);
-                    return (palette >> (sprite.pixel * 2)) & 0x03;
+                if (!sprite.priority || backgroundRaw == 0) {
+                    int palette = sprite.palette == 0 ? obp0 : obp1;
+                    return (palette >> (spritePixel * 2)) & 0x03;
                 }
             }
-            return resolveDmgBackground();
+            return (bgp >> (backgroundRaw * 2)) & 0x03;
         }
-        return resolveCgb(spriteIndex, bgEnabled);
+        return resolveCgb(
+                spriteIndex,
+                spritePixel,
+                backgroundRaw,
+                backgroundPalette,
+                backgroundPriority,
+                bgEnabled,
+                bgp,
+                obp0,
+                obp1);
     }
 
-    private int resolveDmgBackground() {
-        return (registers.get(BGP) >> (currentBackgroundRaw * 2)) & 0x03;
-    }
-
-    private int resolveCgb(int spriteIndex, boolean bgEnabled) {
+    private int resolveCgb(
+            int spriteIndex,
+            int spritePixel,
+            int backgroundRaw,
+            int backgroundPalette,
+            boolean backgroundPriority,
+            boolean bgEnabled,
+            int bgp,
+            int obp0,
+            int obp1) {
         if (spriteIndex >= 0) {
             SpriteLine sprite = spriteLines[spriteIndex];
-            if (sprite.pixel != 0 && cgbSpriteIsVisible(sprite, bgEnabled)) {
-                int pixel = sprite.pixel;
+            if (spritePixel != 0
+                    && cgbSpriteIsVisible(sprite, backgroundRaw, backgroundPriority, bgEnabled)) {
+                int pixel = spritePixel;
                 if (dmgCompat) {
-                    int obp = registers.get(sprite.palette == 0 ? OBP0 : OBP1);
+                    int obp = sprite.palette == 0 ? obp0 : obp1;
                     pixel = (obp >> (pixel * 2)) & 0x03;
                     return oamPalette.getPalette(sprite.palette)[pixel];
                 }
                 return oamPalette.getPalette(sprite.palette)[pixel];
             }
         }
-        int pixel = currentBackgroundRaw;
+        int pixel = backgroundRaw;
         if (dmgCompat) {
             if (!bgEnabled) {
                 pixel = 0;
             } else {
-                pixel = (registers.get(BGP) >> (pixel * 2)) & 0x03;
+                pixel = (bgp >> (pixel * 2)) & 0x03;
             }
         }
-        return bgPalette.getPalette(currentBackgroundPalette)[pixel];
+        return bgPalette.getPalette(backgroundPalette)[pixel];
     }
 
-    private boolean cgbSpriteIsVisible(SpriteLine sprite, boolean bgEnabled) {
+    private boolean cgbSpriteIsVisible(
+            SpriteLine sprite,
+            int backgroundRaw,
+            boolean backgroundPriority,
+            boolean bgEnabled) {
         if (!bgEnabled && !dmgCompat) {
             return true;
         }
-        if (currentBackgroundPriority || sprite.priority) {
-            return currentBackgroundRaw == 0;
+        if (backgroundPriority || sprite.priority) {
+            return backgroundRaw == 0;
         }
         return true;
+    }
+
+    private void prepareSpriteOverlay(boolean objEnabled) {
+        Arrays.fill(spriteOverlay, 0);
+        if (!objEnabled) {
+            return;
+        }
+        for (int order = spriteCount - 1; order >= 0; order--) {
+            int spriteIndex = spriteOrder[order];
+            SpriteLine sprite = spriteLines[spriteIndex];
+            int start = Math.max(0, sprite.left);
+            int end = Math.min(SCREEN_WIDTH, sprite.left + 8);
+            for (int x = start; x < end; x++) {
+                int pixelX = x - sprite.left;
+                int bit = sprite.xFlip ? pixelX : 7 - pixelX;
+                int raw = ((sprite.low >> bit) & 1) | (((sprite.high >> bit) & 1) << 1);
+                if (raw != 0) {
+                    spriteOverlay[x] = ((spriteIndex + 1) << 2) | raw;
+                }
+            }
+        }
     }
 
     private void prepareSprites(int ly) {
@@ -370,9 +423,6 @@ public final class PerformanceScanlineRenderer {
             int address = tileAddress(tileId, row, false);
             line.low = readVideo(bank, address);
             line.high = readVideo(bank, address + 1);
-            line.pixel = 0;
-            // Find a non-transparent pixel only to keep the candidate's palette and priority
-            // available to the composition loop. The exact pixel is refreshed in spriteAt.
             spriteOrder[spriteCount] = spriteCount;
             spriteCount++;
         }
@@ -422,6 +472,5 @@ public final class PerformanceScanlineRenderer {
         private int palette;
         private boolean priority;
         private boolean xFlip;
-        private int pixel;
     }
 }

@@ -14,6 +14,23 @@ public interface PixelFifo {
     }
 
     /**
+     * Whether the LCD output delay line is empty and its absolute clock can therefore be
+     * advanced without resolving or publishing a pixel.
+     *
+     * <p>This is deliberately fail-closed by default.  Native-CGB PERFORMANCE mode 2 uses
+     * the specialized implementations below only after the owning pixel machine has stopped;
+     * every other FIFO family keeps its calibrated scalar output path.</p>
+     */
+    default boolean isPerformanceOutputIdle() {
+        return false;
+    }
+
+    /** Advances only the absolute LCD output clock after {@link #isPerformanceOutputIdle()}. */
+    default void advancePerformanceOutputIdleSpanTrusted(int ticks) {
+        throw new IllegalStateException("FIFO has no PERFORMANCE idle-output span");
+    }
+
+    /**
      * Steps the LCD x pointer back one pixel (the DMG WX==position+6 window activation
      * desync): the next emitted pixel overwrites the previous output slot.
      */

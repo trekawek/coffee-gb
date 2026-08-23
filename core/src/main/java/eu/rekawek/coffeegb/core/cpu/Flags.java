@@ -55,6 +55,11 @@ public class Flags  {
         this.flags = flags & 0xf0;
     }
 
+    /** Trusted counterpart for the package-local PERFORMANCE CPU executor. */
+    void setFlagsByteTrusted(int value) {
+        flags = value & 0xf0;
+    }
+
     @Override
     public String toString() {
         return String.valueOf(isZ() ? 'Z' : '-')

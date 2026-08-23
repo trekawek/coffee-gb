@@ -141,6 +141,46 @@ public class Registers implements StatefulComponent<Registers> {
         this.pc = pc;
     }
 
+    /*
+     * Trusted setters used by the native-CGB PERFORMANCE instruction executor.
+     * The executor masks every ALU/address result before publication and is covered
+     * by scalar state differentials.  Keeping these package-private preserves the
+     * validation contract of the public/debug API without paying a Guava precondition
+     * on every hot register write.
+     */
+    void setATrusted(int value) { a = value & 0xff; }
+
+    void setBTrusted(int value) { b = value & 0xff; }
+
+    void setCTrusted(int value) { c = value & 0xff; }
+
+    void setDTrusted(int value) { d = value & 0xff; }
+
+    void setETrusted(int value) { e = value & 0xff; }
+
+    void setHTrusted(int value) { h = value & 0xff; }
+
+    void setLTrusted(int value) { l = value & 0xff; }
+
+    void setBCTrusted(int value) {
+        b = (value >>> 8) & 0xff;
+        c = value & 0xff;
+    }
+
+    void setDETrusted(int value) {
+        d = (value >>> 8) & 0xff;
+        e = value & 0xff;
+    }
+
+    void setHLTrusted(int value) {
+        h = (value >>> 8) & 0xff;
+        l = value & 0xff;
+    }
+
+    void setSPTrusted(int value) { sp = value & 0xffff; }
+
+    void setPCTrusted(int value) { pc = value & 0xffff; }
+
     public void incrementPC() {
         pc = (pc + 1) & 0xffff;
     }

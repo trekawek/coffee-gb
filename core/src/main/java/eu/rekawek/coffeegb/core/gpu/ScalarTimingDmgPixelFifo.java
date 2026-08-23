@@ -149,6 +149,19 @@ public final class ScalarTimingDmgPixelFifo implements PixelFifo {
     }
 
     @Override
+    public boolean isPerformanceOutputIdle() {
+        return delaySize == 0 && !firstEntryPresent;
+    }
+
+    @Override
+    public void advancePerformanceOutputIdleSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceOutputIdle()) {
+            throw new IllegalStateException("DMG timing output delay is not idle");
+        }
+        outputTicks += ticks;
+    }
+
+    @Override
     public void resetForMissingState() {
         clear();
         java.util.Arrays.fill(delayStamp, 0L);

@@ -329,6 +329,19 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
     }
 
     @Override
+    public boolean isPerformanceOutputIdle() {
+        return delaySize == 0 && firstEntry < 0;
+    }
+
+    @Override
+    public void advancePerformanceOutputIdleSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceOutputIdle()) {
+            throw new IllegalStateException("DMG output delay is not idle");
+        }
+        outputTicks += ticks;
+    }
+
+    @Override
     public void resetForMissingState() {
         pixels.clear();
         spriteFifo.clear();

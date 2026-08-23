@@ -173,6 +173,19 @@ public class ColorPixelFifo implements PixelFifo, StatefulComponent<ColorPixelFi
         }
     }
 
+    @Override
+    public boolean isPerformanceOutputIdle() {
+        return delaySize == 0;
+    }
+
+    @Override
+    public void advancePerformanceOutputIdleSpanTrusted(int ticks) {
+        if (ticks < 0 || delaySize != 0) {
+            throw new IllegalStateException("CGB output delay is not idle");
+        }
+        outputTicks += ticks;
+    }
+
     private int resolvePixel(int entry) {
         int bgPixel = entry & 0b11;
         int bgPaletteIndex = (entry >> 2) & 0b111;

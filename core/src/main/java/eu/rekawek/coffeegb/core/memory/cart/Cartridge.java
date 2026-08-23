@@ -16,11 +16,14 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.RealTimeClock;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.SystemTimeSource;
 import eu.rekawek.coffeegb.core.memory.cart.rtc.TimeSource;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.memory.cart.type.*;
 import java.io.File;
 import java.nio.file.Path;
 
-public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
+public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
+        PerformanceRomAccessProvider {
 
     private final MemoryController addressSpace;
 
@@ -177,6 +180,14 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge> {
     @Override
     public int getByte(int address) {
         return addressSpace.getByte(address);
+    }
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceRomAccess();
     }
 
     /**

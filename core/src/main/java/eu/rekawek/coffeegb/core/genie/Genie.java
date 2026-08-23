@@ -4,6 +4,8 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
@@ -12,11 +14,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class Genie implements AddressSpace, StatefulComponent<Genie> {
+public class Genie implements AddressSpace, StatefulComponent<Genie>, PerformanceRomAccessProvider {
 
     private final AddressSpace delegate;
 
     private final Map<Integer, List<CheatPatch>> patches = new HashMap<>();
+
+    /**
+     * Fail-closed publication fence for a bounded ROM lease acquisition. Event delivery normally
+     * mutates cheats on the emulation owner, but publish this bit before touching the map so an
+     * acquisition racing that boundary cannot bypass a newly active patch.
+     */
+    private volatile boolean patchesPresent;
 
     private final boolean gbc;
 
@@ -32,6 +41,7 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
     }
 
     private void addPatch(CheatPatch patch) {
+        patchesPresent = true;
         patches.computeIfAbsent(patch.getAddress(), k -> new ArrayList<>()).add(patch);
     }
 
@@ -67,6 +77,15 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
         return applyPatches(address, value);
     }
 
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        if (patchesPresent
+                || !(delegate instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceRomAccess();
+    }
+
     private int applyPatches(int address, int value) {
         List<CheatPatch> addressPatches = patches.get(address);
         if (addressPatches == null) {
@@ -92,9 +111,14 @@ public class Genie implements AddressSpace, StatefulComponent<Genie> {
         if (!(state instanceof GenieState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
+        boolean restoredPatchesPresent = !mem.patches.isEmpty();
+        if (restoredPatchesPresent) {
+            patchesPresent = true;
+        }
         patches.clear();
         mem.patches.forEach((k, v) ->
                 patches.put(k, new ArrayList<>(v.stream().map(Genie::restorePatch).toList())));
+        patchesPresent = restoredPatchesPresent;
     }
 
     private static PatchState capturePatch(CheatPatch patch) {
