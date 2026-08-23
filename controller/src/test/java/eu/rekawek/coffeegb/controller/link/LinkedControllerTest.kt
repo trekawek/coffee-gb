@@ -3940,7 +3940,7 @@ class LinkedControllerTest {
   }
 
   @Test
-  fun existingFourPlayerPeerReloadUsesCurrentFrameWhileNewSlotUsesZeroFrame() {
+  fun existingFourPlayerPeerReloadUsesCurrentFrameWhileNewSlotRebasesItsLateBootFrame() {
     val eventBus = EventBusImpl()
     val sut =
         LinkedController(
@@ -3987,7 +3987,7 @@ class LinkedControllerTest {
             null,
             GAMEBOY_TYPE,
             BOOTSTRAP_MODE,
-            0,
+            StateLimits.NETPLAY_FUTURE_FRAMES + 11,
             player = 2,
             source = joining,
         ))
