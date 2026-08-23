@@ -189,7 +189,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         // Release/non-diagnostic callers retain the ordinary settings path unchanged.
         BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
         return new ApplicationSettingsOverrides(profile, bootstrapMode,
-                checked.enabled ? false : null, false,
+                checked.enabled ? false : null, false, false, false,
                 checked.enabled && checked.runtimeWarmup, checked.enabled,
                 checked.enabled ? checked.executionMode : null);
     }
