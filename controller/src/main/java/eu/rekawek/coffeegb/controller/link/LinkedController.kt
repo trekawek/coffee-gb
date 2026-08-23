@@ -2412,7 +2412,7 @@ class LinkedController(
               event.mealybugDmgBlob,
               event.codeBreakerRumble,
               event.displaySgbBorder,
-              event.portableState != null,
+              event.portableState?.let(Connection::portableStateHasBattery) == true,
           )
           .setPlayerInputSource(PlayerInputSource.RELEASED)
 

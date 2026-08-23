@@ -66,11 +66,13 @@ class MainTest {
     assertEquals("play.local:7000", spaced.joinNetplayHost)
     assertTrue(spaced.suppressInitialAutosaveResume)
     assertTrue(spaced.settingsOverrides.forceInMemoryBattery)
+    assertTrue(spaced.settingsOverrides.suppressCloseAutosave)
 
     val equals = execute("--join-netplay=localhost", "game.gb").singleLaunch()
     assertEquals("localhost", equals.joinNetplayHost)
     assertTrue(equals.suppressInitialAutosaveResume)
     assertTrue(equals.settingsOverrides.forceInMemoryBattery)
+    assertTrue(equals.settingsOverrides.suppressCloseAutosave)
 
     assertUsageFailure(
         execute("--join-netplay"),

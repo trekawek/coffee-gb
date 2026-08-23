@@ -4782,7 +4782,8 @@ class BasicController private constructor(
   }
 
   private fun shouldPersistCloseAutosave(): Boolean =
-      session?.config?.rom?.file != null &&
+      !properties.overrides.suppressCloseAutosave &&
+          session?.config?.rom?.file != null &&
           closeAutosaveCompletedSessionId != stateSessionId &&
           closeAutosaveSkippedSessionId != stateSessionId
 

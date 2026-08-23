@@ -899,6 +899,60 @@ class TcpConnectionTest {
   }
 
   @Test
+  fun peerTargetPreservesABatterylessCheckpointGraph() {
+    val rom =
+        StateCodecTestSupport.rom().also {
+          it[0x147] = 0x1b // MBC5 + RAM + battery
+          it[0x149] = 0x03 // 32 KiB RAM
+        }
+    val configuration =
+        Gameboy.GameboyConfiguration(Rom(rom))
+            .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+            .setGameboyType(GameboyType.DMG)
+            .setSupportBatterySave(false)
+    val sourceBus = EventBusImpl()
+    val source = configuration.build()
+    source.init(sourceBus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    val file =
+        try {
+          StateCodec.capture(configuration, source)
+        } finally {
+          source.stop()
+          source.close()
+          sourceBus.close()
+        }
+
+    assertFalse(Connection.portableStateHasBattery(file))
+    val target =
+        Connection.peerConfiguration(
+            rom,
+            null,
+            null,
+            GameboyType.DMG,
+            Gameboy.BootstrapMode.SKIP,
+            false,
+            false,
+            false,
+            false,
+            Connection.portableStateHasBattery(file),
+        )
+    val bus = EventBusImpl()
+    val probe = target.build()
+    probe.init(bus, SerialEndpoint.NULL_ENDPOINT, InfraredEndpoint.NULL_ENDPOINT, null)
+    try {
+      assertEquals(
+          0,
+          DetachedStateAdapter.capture(probe).recordCount(MEMORY_BATTERY_STATE),
+      )
+      DetachedStateAdapter.validateTarget(probe, (file.root as MachineStateRoot).machine)
+    } finally {
+      probe.stop()
+      probe.close()
+      bus.close()
+    }
+  }
+
+  @Test
   fun linkedFourPlayerClientStartsFromPortableCheckpointOverTcp() {
     val port = ServerSocket(0).use { it.localPort }
     val serverStarted = LinkedBlockingQueue<ConnectionController.ServerStartedEvent>()
@@ -1203,7 +1257,7 @@ class TcpConnectionTest {
             false,
             false,
             false,
-            true,
+            Connection.portableStateHasBattery(file),
         )
     assertEquals(sourceIdentity, StateIdentity.from(target))
     StateCodec.validateForTarget(

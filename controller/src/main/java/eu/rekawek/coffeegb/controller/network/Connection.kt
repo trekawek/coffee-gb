@@ -589,7 +589,12 @@ class Connection(
     val slotRomDeclaration =
         validateDeclaration(slotRomSize, slotRomCompressed, StateLimits.ROM)
     val batteryDeclaration =
-        validateDeclaration(batterySize, batteryCompressed, StateLimits.BATTERY)
+        validateDeclaration(
+            batterySize,
+            batteryCompressed,
+            StateLimits.BATTERY,
+            allowEmptyPayload = true,
+        )
     val stateDeclaration = validateStateFileDeclaration(stateSize)
     val checkpointRecord = !server && mode == LinkMode.FOUR_PLAYER_ADAPTER
     val expectedStateRoot =
@@ -648,7 +653,7 @@ class Connection(
             gameboyType,
             bootstrapMode,
             profileFlags,
-            decodedState != null,
+            decodedState?.file?.let(::portableStateHasBattery) == true,
         )
     decodedState?.let {
       validatePeerState(configuration, it.file, expectedStateRoot, eventPlayer)
@@ -828,7 +833,7 @@ class Connection(
       gameboyType: GameboyType,
       bootstrapMode: BootstrapMode,
       profileFlags: Int,
-      portableStatePresent: Boolean,
+      portableStateHasBattery: Boolean,
   ): Gameboy.GameboyConfiguration =
       try {
         peerConfiguration(
@@ -841,7 +846,7 @@ class Connection(
             profileFlags and PROFILE_MEALYBUG_DMG_BLOB != 0,
             profileFlags and PROFILE_CODEBREAKER_RUMBLE != 0,
             profileFlags and PROFILE_SGB_BORDER != 0,
-            portableStatePresent,
+            portableStateHasBattery,
         )
       } catch (e: Exception) {
         failProtocol(
@@ -1520,6 +1525,10 @@ class Connection(
             PROFILE_MEALYBUG_DMG_BLOB or
             PROFILE_CODEBREAKER_RUMBLE or
             PROFILE_SGB_BORDER
+    private const val MEMORY_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.MemoryBattery\$MemoryBatteryState"
+    private const val FILE_BATTERY_STATE =
+        "eu.rekawek.coffeegb.core.memory.cart.battery.FileBattery\$FileBatteryState"
 
     internal fun reject(outputStream: OutputStream, reason: RejectionReason) {
       val output = DataOutputStream(BufferedOutputStream(outputStream))
@@ -1567,7 +1576,7 @@ class Connection(
         mealybugDmgBlob: Boolean,
         codeBreakerRumble: Boolean,
         displaySgbBorder: Boolean,
-        portableStatePresent: Boolean = false,
+        portableStateHasBattery: Boolean = false,
     ): Gameboy.GameboyConfiguration {
       val primary = Rom(rom)
       if (slotRom != null &&
@@ -1587,15 +1596,25 @@ class Connection(
           .setExecutionMode(ExecutionMode.ACCURACY)
           .setSlotRom(slotRom?.let(::Rom))
           .setSupportBatterySave(false)
-      // A portable checkpoint already owns the mapper RAM and RTC data, but its detached graph
-      // also retains the sender's file-backed battery bookkeeping. Give a battery cartridge a
-      // service-free in-memory target even when no save file was transferred so the audited
-      // FileBattery -> MemoryBattery adapter can preflight that graph. A state-less ROM load keeps
-      // the old absent-save behavior (default cartridge RAM, no synthetic save contents).
-      if (battery != null || portableStatePresent && primary.type.isBattery) {
+      // A portable checkpoint can retain the sender's battery owner even when no sidecar payload
+      // was transferred. Mirror that owner with a service-free MemoryBattery only when the
+      // detached graph actually contains one; a battery-less checkpoint must retain its absence.
+      if (battery != null || portableStateHasBattery) {
         configuration.setBatteryData(battery?.clone() ?: byteArrayOf())
       }
       return configuration
+    }
+
+    /** Whether restoring this network state requires a battery-backed cartridge target. */
+    internal fun portableStateHasBattery(file: StateFile): Boolean {
+      val machine =
+          when (val root = file.root) {
+            is MachineStateRoot -> root.machine
+            is SessionStateRoot -> root.session.machine
+            else -> return false
+          }
+      return machine.recordCount(FILE_BATTERY_STATE) > 0 ||
+          machine.recordCount(MEMORY_BATTERY_STATE) > 0
     }
 
     internal fun validateStateFileDeclaration(size: Int): StateFileDeclaration? {
@@ -1694,6 +1713,16 @@ class Connection(
         throw IOException(
             "Compressed ${limit.description} length changed while it was being read")
       }
+      if (declaration.decodedBytes == 0 && declaration.encodedBytes > 0) {
+        // Inflater cannot make observable progress for a zero-byte result on every supported JDK.
+        // Accept only the exact zlib representation our Deflater emits, so an explicitly present
+        // empty battery remains distinguishable from an omitted battery without broadening the
+        // compressed-input trust boundary.
+        if (!data.contentEquals(deflate(byteArrayOf(), limit))) {
+          throw IOException("Corrupted compressed empty ${limit.description}")
+        }
+        return byteArrayOf()
+      }
       val inflater = Inflater()
       try {
         inflater.setInput(data)
@@ -1745,9 +1774,17 @@ class Connection(
         encodedBytes: Int,
         limit: StateLimits.Payload,
         required: Boolean = false,
+        allowEmptyPayload: Boolean = false,
     ): PayloadDeclaration {
       if (decodedBytes == 0 && encodedBytes == 0 && !required) {
         return PayloadDeclaration(0, 0)
+      }
+      if (decodedBytes == 0 && encodedBytes > 0 && !required && allowEmptyPayload) {
+        if (encodedBytes > limit.encodedBytes) {
+          throw IOException(
+              "Compressed ${limit.description} exceeds ${limit.encodedBytes} bytes: $encodedBytes")
+        }
+        return PayloadDeclaration(0, encodedBytes)
       }
       if (decodedBytes <= 0 || encodedBytes <= 0) {
         throw IOException(
