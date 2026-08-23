@@ -2463,7 +2463,11 @@ class LinkedController(
         event.player in configs.indices &&
         configs[event.player] == null) {
       return if (validatePeer(event.source) {
-            PeerFrameWindow.validateRuntimeFrame(event.frame, 0)
+            // A newly-launched local client can run hundreds of frames while it loads and boots
+            // before its first ROM record reaches the host. That private pre-link frame is never
+            // replayed: hot-plugging below rebases it to the host's current adapter phase. It
+            // therefore needs only the absolute protocol bound, not the runtime rollback window.
+            PeerFrameWindow.validateAbsolute(event.frame)
           }) {
         event.copy(frame = frame)
       } else {
