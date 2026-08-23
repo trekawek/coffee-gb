@@ -7,7 +7,8 @@ import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 
-public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
+public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow>,
+        PerformanceRomAccessProvider {
 
     private final Bios bios;
 
@@ -60,6 +61,11 @@ public class BiosShadow implements AddressSpace, StatefulComponent<BiosShadow> {
         } else {
             return cartridge.getByte(address);
         }
+    }
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        return isEnabled ? null : cartridge.acquirePerformanceRomAccess();
     }
 
     @Override

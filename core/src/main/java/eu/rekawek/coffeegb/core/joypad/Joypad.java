@@ -84,6 +84,15 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      */
     private transient volatile boolean playerInputHubFastPathEligible;
 
+    /**
+     * Complete cached eligibility for a PERFORMANCE span. The ordinary input shortcuts above
+     * intentionally cover a few states (for example a settled legacy button) which still need
+     * scalar packet observation. Keeping that distinction here lets the hot scheduler perform
+     * one volatile read instead of walking the {@link CopyOnWriteArraySet} and observer guards
+     * for every epoch.
+     */
+    private transient volatile boolean performanceSpanFastPathEligible;
+
     /** Owner-thread observation only; deliberately absent from portable machine state. */
     private transient DebugHooks debugHooks;
 
@@ -285,13 +294,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      * path.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
-        if (requested <= 0
-                || inputChangedSinceLastTick
-                || !buttons.isEmpty()
-                || players != 0
-                || inputTimelineObserver != null
-                || debugHooks != null
-                || isSgb) {
+        if (requested <= 0 || inputChangedSinceLastTick
+                || !performanceSpanFastPathEligible) {
             return 0;
         }
         if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
@@ -318,13 +322,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      * only by that poll, preserving the scalar visibility contract.
      */
     public int performanceSettledHaltSpanLimit(int requested) {
-        if (requested <= 0
-                || inputChangedSinceLastTick
-                || !buttons.isEmpty()
-                || players != 0
-                || inputTimelineObserver != null
-                || debugHooks != null
-                || isSgb) {
+        if (requested <= 0 || inputChangedSinceLastTick
+                || !performanceSpanFastPathEligible) {
             return 0;
         }
         if (releasedInputFastPathEligible && playerInputSource == PlayerInputSource.RELEASED) {
@@ -377,7 +376,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
 
     /** One cheap owner-thread commit guard for the packet scheduler. */
     public boolean isPerformanceQuietSpanStillEligible() {
-        return releasedInputFastPathEligible || playerInputHubFastPathEligible;
+        return !inputChangedSinceLastTick && performanceSpanFastPathEligible;
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */
@@ -518,6 +517,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     private void invalidateInputFastPaths() {
         releasedInputFastPathEligible = false;
         playerInputHubFastPathEligible = false;
+        performanceSpanFastPathEligible = false;
     }
 
     private void refreshReleasedInputFastPathEligibility() {
@@ -528,6 +528,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && buttons.isEmpty()
                 && inputHistory == SETTLED_HISTORY[0x0f]
                 && filteredInputLines == 0x0f;
+        performanceSpanFastPathEligible = releasedInputFastPathEligible
+                && inputTimelineObserver == null
+                && debugHooks == null
+                && !isSgb;
         // Hub eligibility additionally depends on the current selector and filtered electrical
         // lines. It is recomputed only after this tick has calculated those values.
         playerInputHubFastPathEligible = false;
@@ -538,6 +542,13 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && !inputChangedSinceLastTick
                 && inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines;
+        performanceSpanFastPathEligible = performanceSpanFastPathEligible
+                || playerInputHubFastPathEligible
+                && players == 0
+                && buttons.isEmpty()
+                && inputTimelineObserver == null
+                && debugHooks == null
+                && !isSgb;
     }
 
     private static int[] createSettledHistory() {

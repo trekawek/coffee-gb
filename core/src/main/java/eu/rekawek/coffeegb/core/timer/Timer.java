@@ -19,6 +19,9 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
      */
     private static final int PERFORMANCE_MAX_QUIET_SPAN = 3;
 
+    /** Maximum bounded CPU epoch in master ticks. */
+    private static final int PERFORMANCE_EPOCH_MAX_TICKS = 54;
+
     private static final int FRAME_SEQUENCER_DIV_BIT = 12;
 
     private final SpeedMode speedMode;
@@ -105,6 +108,104 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         for (int i = 0; i < speed; i++) {
             tickCpuClock();
         }
+    }
+
+    /**
+     * Returns the largest exact native-CGB double-speed CPU epoch. The request is measured in
+     * master ticks, each of which advances two CPU clocks. The result stops before an
+     * overflow/reload, divider ripple, APU frame-sequencer tap, or any transient/debug state
+     * which still needs the scalar clock ordering.
+     */
+    public int performanceEpochSpanLimit(int requested) {
+        if (requested <= 0 || speedMode.getSpeedMode() != 2 || debugHooks != null
+                || divReset || overflow || haltWakeDelay != 0
+                || haltBugDivRippleVisible || suppressNextInterruptRequest
+                || previousBit != timerInput(div, tac)) {
+            return 0;
+        }
+        int span = Math.min(requested, PERFORMANCE_EPOCH_MAX_TICKS);
+        span = capBeforeMasterTicks(span, clocksToOverflowFallingEdge(), 2);
+        span = capBeforeMasterTicks(span, clocksToPendingDividerRipple(), 2);
+        span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(0), 2);
+        span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(2), 2);
+        return Math.max(0, span);
+    }
+
+    /** Applies a preflighted CPU epoch without visiting each CPU clock. */
+    public boolean tickPerformanceEpoch(int ticks) {
+        if (ticks <= 0 || performanceEpochSpanLimit(ticks) < ticks) {
+            return false;
+        }
+        tickPerformanceEpochTrusted(ticks);
+        return true;
+    }
+
+    /** Applies an epoch after the caller has passed {@link #performanceEpochSpanLimit(int)}. */
+    public void tickPerformanceEpochTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        // The acknowledge edge is still at the beginning of the first master tick, matching
+        // tick(); the preflight excludes every interior interrupt-producing edge.
+        acknowledgeInterruptIfNeeded();
+        divReset = false;
+        long cpuClocks = (long) ticks * 2;
+        int fallingEdges = nativeCgbEpochTimerFallingEdges(ticks);
+        tima = (int) ((tima + fallingEdges) & 0xff);
+        div = (int) ((div + cpuClocks) & 0xffff);
+        previousBit = timerInput(div, tac);
+        if (ticksSinceDivReset != Integer.MAX_VALUE) {
+            ticksSinceDivReset = (int) Math.min(Integer.MAX_VALUE,
+                    ticksSinceDivReset + cpuClocks);
+        }
+        // A one-tick visible ripple is cleared at the beginning of every scalar clock.  The
+        // preflight prevents the pending carry itself from being crossed, so its pending latch
+        // remains intact for the next scalar boundary.
+        haltBugDivRippleVisible = false;
+    }
+
+
+    /** Physical-DMG normal-speed counterpart of {@link #performanceEpochSpanLimit(int)}. */
+    public int performancePhysicalDmgEpochSpanLimit(int requested) {
+        if (requested <= 0 || speedMode.getSpeedMode() != 1 || speedMode.isGbc()
+                || debugHooks != null || divReset || overflow || haltWakeDelay != 0
+                || haltBugDivRippleVisible || suppressNextInterruptRequest
+                || previousBit != timerInput(div, tac)) {
+            return 0;
+        }
+        int span = Math.min(requested, PERFORMANCE_EPOCH_MAX_TICKS);
+        span = capBeforeMasterTicks(span, clocksToOverflowFallingEdge(), 1);
+        span = capBeforeMasterTicks(span, clocksToPendingDividerRipple(), 1);
+        span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(0), 1);
+        return Math.max(0, span);
+    }
+
+    /** Applies a checked physical-DMG CPU epoch without visiting each CPU clock. */
+    public boolean tickPerformancePhysicalDmgEpoch(int ticks) {
+        if (ticks <= 0 || performancePhysicalDmgEpochSpanLimit(ticks) < ticks) {
+            return false;
+        }
+        tickPerformancePhysicalDmgEpochTrusted(ticks);
+        return true;
+    }
+
+    /** Applies a preflighted physical-DMG epoch at one CPU clock per master tick. */
+    public void tickPerformancePhysicalDmgEpochTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        acknowledgeInterruptIfNeeded();
+        divReset = false;
+        long cpuClocks = ticks;
+        int fallingEdges = physicalDmgEpochTimerFallingEdges(ticks);
+        tima = (int) ((tima + fallingEdges) & 0xff);
+        div = (int) ((div + cpuClocks) & 0xffff);
+        previousBit = timerInput(div, tac);
+        if (ticksSinceDivReset != Integer.MAX_VALUE) {
+            ticksSinceDivReset = (int) Math.min(Integer.MAX_VALUE,
+                    ticksSinceDivReset + cpuClocks);
+        }
+        haltBugDivRippleVisible = false;
     }
 
     /**
@@ -241,6 +342,17 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return Math.min(currentLimit, (int) Math.max(0, eventDistance - 1));
     }
 
+    private static int capBeforeMasterTicks(
+            int currentLimit, long cpuClockDistance, int cpuClocksPerMaster) {
+        if (cpuClockDistance == Long.MAX_VALUE) {
+            return currentLimit;
+        }
+        // Exclude the master tick which reaches the event. Dividing distance-1 by the active
+        // CPU clocks per master tick yields the largest safe frozen-peripheral prefix.
+        return Math.min(currentLimit, (int) Math.max(
+                0, (cpuClockDistance - 1) / cpuClocksPerMaster));
+    }
+
     /** Distance to the next falling edge of the selected TIMA input. */
     private long clocksToTimerFallingEdge() {
         boolean enabled = (tac & 0x04) != 0;
@@ -262,6 +374,43 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         // With a low previous latch, the next falling edge is the next low-boundary after a full
         // period.  This remains correct whether the current sampled input is low or high.
         return period - phase;
+    }
+
+    /** Distance in CPU clocks to the falling edge which would overflow TIMA. */
+    private long clocksToOverflowFallingEdge() {
+        if ((tac & 0x04) == 0) {
+            return Long.MAX_VALUE;
+        }
+        long first = clocksToTimerFallingEdge();
+        int period = 1 << (FREQ_TO_BIT[tac & 0x03] + 1);
+        return first + (long) (0x100 - tima - 1) * period;
+    }
+
+    /** Fixed-x2 native-CGB falling-edge count; single-caller so R8 can inline it. */
+    private int nativeCgbEpochTimerFallingEdges(int masterTicks) {
+        int cpuClocks = masterTicks * 2;
+        if ((tac & 0x04) == 0) {
+            return 0;
+        }
+        long first = clocksToTimerFallingEdge();
+        if (first > cpuClocks) {
+            return 0;
+        }
+        int period = 1 << (FREQ_TO_BIT[tac & 0x03] + 1);
+        return 1 + (int) ((cpuClocks - first) / period);
+    }
+
+    /** Fixed-x1 physical-DMG falling-edge count, kept separate from the native hot path. */
+    private int physicalDmgEpochTimerFallingEdges(int masterTicks) {
+        if ((tac & 0x04) == 0) {
+            return 0;
+        }
+        long first = clocksToTimerFallingEdge();
+        if (first > masterTicks) {
+            return 0;
+        }
+        int period = 1 << (FREQ_TO_BIT[tac & 0x03] + 1);
+        return 1 + (int) ((masterTicks - first) / period);
     }
 
     /** Distance to a potential low transition of the selected DIV/APU tap. */

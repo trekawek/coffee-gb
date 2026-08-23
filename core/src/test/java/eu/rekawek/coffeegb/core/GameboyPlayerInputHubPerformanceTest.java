@@ -61,9 +61,10 @@ public final class GameboyPlayerInputHubPerformanceTest {
                         assertRasterEquivalent(scalar, performance,
                                 "cgb=" + cgb + ", held=" + held + ", chunk=" + chunkIndex);
                     }
-                    assertTrue("hub performance path had no bulk coverage cgb=" + cgb
+                    assertTrue("hub performance path had no fast coverage cgb=" + cgb
                                     + ", held=" + held,
-                            performance.getPerformanceBulkTicks() > 0);
+                            performance.getPerformanceBulkTicks()
+                                    + performance.getPerformanceEpochTicks() > 0);
 
                     ComponentState<Gameboy> saved = performance.captureState();
                     int savedHash = stateHash(saved);

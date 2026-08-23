@@ -2,8 +2,19 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.Gameboy;
+import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import org.junit.Test;
+
+import java.lang.reflect.Array;
+import java.lang.reflect.Field;
+import java.lang.reflect.RecordComponent;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.WX;
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.WY;
@@ -73,6 +84,38 @@ public final class PerformanceScanlineIntegrationTest {
                 assertEquals("frame tail " + i, scalarFrame, batched.runTicks(1) != 0);
                 assertEquivalent(scalar, batched, "frame tail " + i);
             }
+        }
+    }
+
+    @Test
+    public void stopAwarePerformanceRunExecutesNoTickAfterNativeFrameCallback() throws Exception {
+        try (EventBus eventBus = new EventBusImpl(); Gameboy gameboy = session(false)) {
+            AtomicBoolean stop = new AtomicBoolean();
+            AtomicInteger callbacks = new AtomicInteger();
+            AtomicInteger endpointLine = new AtomicInteger();
+            AtomicInteger endpointDot = new AtomicInteger();
+            AtomicLong endpointGpuGeneration = new AtomicLong();
+            eventBus.register(event -> {
+                callbacks.incrementAndGet();
+                endpointLine.set(gameboy.getGpu().getLine());
+                endpointDot.set(gameboy.getGpu().getTicksInLine());
+                endpointGpuGeneration.set(gameboy.getGpu().getTimingGeneration());
+                stop.set(true);
+            }, Display.DmgFrameReadyEvent.class);
+            gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+
+            int executed = gameboy.runTicksUntilStop(2 * 456 * 154, stop::get);
+
+            assertTrue("native endpoint was not reached", stop.get());
+            assertEquals("endpoint callback repeated", 1, callbacks.get());
+            assertTrue("stop-aware run consumed the full two-frame budget",
+                    executed > 0 && executed < 2 * 456 * 154);
+            assertEquals("a post-endpoint tick changed LY",
+                    endpointLine.get(), gameboy.getGpu().getLine());
+            assertEquals("a post-endpoint tick changed the line dot",
+                    endpointDot.get(), gameboy.getGpu().getTicksInLine());
+            assertEquals("a post-endpoint tick changed GPU generation",
+                    endpointGpuGeneration.get(), gameboy.getGpu().getTimingGeneration());
         }
     }
 
@@ -226,6 +269,288 @@ public final class PerformanceScanlineIntegrationTest {
         }
     }
 
+    @Test
+    public void nativeCgbVblankHorizonAdmitsOamReaderPrefixAfterTrustedReplay() throws Exception {
+        try (Gameboy gameboy = nativeCgbSession()) {
+            settleNativeDoubleSpeed(gameboy);
+            gameboy.getGpu().setPerformanceScanlineEnabled(true);
+            int guard = 0;
+            while (gameboy.getGpu().getMode() != Mode.VBlank && guard++ < 456 * 155) {
+                gameboy.tick();
+            }
+            assertTrue("native CGB setup did not reach VBlank", guard < 456 * 155);
+            assertEquals(0, gameboy.getGpu().getTicksInLine());
+            for (int dot = 0; dot < 79; dot++) {
+                assertTrue("native epoch VBlank dot " + dot,
+                        gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
+                assertTrue("generic VBlank dot " + dot,
+                        gameboy.getGpu().performanceQuietSpanLimit() > 0);
+                gameboy.tick();
+            }
+            assertEquals(79, gameboy.getGpu().getTicksInLine());
+            assertTrue("native epoch VBlank dot 79->80 was not admitted",
+                    gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
+            assertTrue("generic VBlank dot 79->80 was not admitted",
+                    gameboy.getGpu().performanceQuietSpanLimit() > 0);
+        }
+    }
+
+    @Test
+    public void physicalDmgVblankHorizonAdmitsOamReaderPrefixAfterTrustedReplay() throws Exception {
+        try (Gameboy gameboy = session(false)) {
+            gameboy.getGpu().setPerformanceScanlineEnabled(true);
+            int guard = 0;
+            while (gameboy.getGpu().getMode() != Mode.VBlank && guard++ < 456 * 155) {
+                gameboy.tick();
+            }
+            assertTrue("DMG setup did not reach VBlank", guard < 456 * 155);
+            assertEquals(0, gameboy.getGpu().getTicksInLine());
+            for (int dot = 0; dot < 79; dot++) {
+                assertTrue("physical-DMG VBlank dot " + dot,
+                        gameboy.getGpu().performancePhysicalDmgEpochSpanLimit(1) > 0);
+                assertTrue("generic VBlank dot " + dot,
+                        gameboy.getGpu().performanceQuietSpanLimit() > 0);
+                gameboy.tick();
+            }
+            assertEquals(79, gameboy.getGpu().getTicksInLine());
+            assertTrue("physical-DMG VBlank dot 79->80 was not admitted",
+                    gameboy.getGpu().performancePhysicalDmgEpochSpanLimit(1) > 0);
+            assertTrue("generic VBlank dot 79->80 was not admitted",
+                    gameboy.getGpu().performanceQuietSpanLimit() > 0);
+        }
+    }
+
+    @Test
+    public void cgbLcdcSizeAndTileHistoryFailClosedUntilNineDotsDrain() throws Exception {
+        try (Gameboy gameboy = nativeCgbSession()) {
+            settleNativeDoubleSpeed(gameboy);
+            gameboy.getGpu().setPerformanceScanlineEnabled(true);
+            int guard = 0;
+            while (gameboy.getGpu().getMode() != Mode.VBlank && guard++ < 456 * 155) {
+                gameboy.tick();
+            }
+            assertTrue("native CGB setup did not reach VBlank", guard < 456 * 155);
+            for (int i = 0; i < 79; i++) {
+                gameboy.tick();
+            }
+            assertTrue(gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
+            int lcdc = gameboy.getGpu().getByte(0xff40);
+            gameboy.getGpu().setByte(0xff40, lcdc ^ 0x14);
+            assertEquals("recent LCDC.2/.4 history was admitted",
+                    0, gameboy.getGpu().performanceEpochSpanLimit(1));
+            var checkpoint = gameboy.captureState();
+            gameboy.restoreState(checkpoint);
+            assertEquals("restored LCDC history was admitted",
+                    0, gameboy.getGpu().performanceEpochSpanLimit(1));
+            for (int i = 0; i < 9; i++) {
+                gameboy.tick();
+            }
+            assertTrue("LCDC history did not re-admit after its drain",
+                    gameboy.getGpu().performanceEpochSpanLimit(1) > 0);
+        }
+    }
+
+    @Test
+    public void trustedVblankReplayPreservesResidualOamSourceChangeAge() throws Exception {
+        try (Gameboy scalar = session(false); Gameboy candidate = session(false)) {
+            reachVblankDot(scalar, 0, false);
+            reachVblankDot(candidate, 0, false);
+            setOamReaderSourceChangeTicks(scalar, 3);
+            setOamReaderSourceChangeTicks(candidate, 3);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            for (int i = 0; i < 3; i++) {
+                scalar.getGpu().tick();
+            }
+            candidate.getGpu().advancePerformanceQuietSpanTrusted(3, false, false);
+            assertDeepStateEquals("residual OAM source age",
+                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+        }
+    }
+
+    @Test
+    public void line153WindowCheckpointRemainsScalarAndRestorable() throws Exception {
+        for (boolean cgb : new boolean[] {false, true}) {
+            try (Gameboy scalar = session(cgb); Gameboy candidate = session(cgb)) {
+                int guard = 0;
+                while ((scalar.getGpu().getLine() != 153
+                        || scalar.getGpu().getTicksInLine() != 453)
+                        && guard++ < 456 * 154) {
+                    scalar.tick();
+                    candidate.tick();
+                }
+                assertTrue("line-153 setup did not reach old dot 453", guard < 456 * 154);
+                candidate.getGpu().setPerformanceScanlineEnabled(true);
+                assertEquals(1, candidate.getGpu().performanceQuietSpanLimit());
+                if (cgb) {
+                    assertEquals(1, candidate.getGpu().performanceEpochSpanLimit(2));
+                } else {
+                    assertEquals(1, candidate.getGpu().performancePhysicalDmgEpochSpanLimit(2));
+                }
+
+                var checkpoint = candidate.captureState();
+                scalar.tick();
+                candidate.restoreState(checkpoint);
+                candidate.tick();
+                assertDeepStateEquals("line153 dot454 restore",
+                        scalar.captureState(), candidate.captureState());
+                assertEquals(0, candidate.getGpu().performanceQuietSpanLimit());
+                scalar.tick();
+                candidate.tick();
+                assertDeepStateEquals("line153 dot455 scalar handoff",
+                        scalar.captureState(), candidate.captureState());
+            }
+        }
+    }
+
+    private static void setOamReaderSourceChangeTicks(Gameboy gameboy, int ticks)
+            throws ReflectiveOperationException {
+        Field phaseField = Gpu.class.getDeclaredField("oamSearchPhase");
+        phaseField.setAccessible(true);
+        Object phase = phaseField.get(gameboy.getGpu());
+        Field ageField = phase.getClass().getDeclaredField("oamReaderSourceChangeTicks");
+        ageField.setAccessible(true);
+        ageField.setInt(phase, ticks);
+    }
+
+    @Test
+    public void trustedVblankSpansMatchScalarGpuStateAndCheckpointRestore() throws Exception {
+        int[] starts = {0, 1, 3, 78, 79, 80};
+        int[] spans = {1, 3, 54};
+        for (boolean cgb : new boolean[] {false, true}) {
+            for (boolean epochPath : new boolean[] {false, true}) {
+                if (epochPath && !cgb) {
+                    // The physical-DMG epoch is covered by the explicit physical path below;
+                    // native epochs are only available on CGB hardware.
+                    continue;
+                }
+                for (int start : starts) {
+                    for (int requested : spans) {
+                        int ticks = Math.min(requested, 456 - start - 1);
+                        if (ticks <= 0) {
+                            continue;
+                        }
+                        try (Gameboy scalar = cgb ? nativeCgbSession() : session(false);
+                                Gameboy candidate = cgb ? nativeCgbSession() : session(false)) {
+                            reachVblankDot(scalar, start, cgb);
+                            reachVblankDot(candidate, start, cgb);
+                            candidate.getGpu().setPerformanceScanlineEnabled(true);
+                            var checkpoint = candidate.captureState();
+                            for (int i = 0; i < ticks; i++) {
+                                scalar.getGpu().tick();
+                            }
+                            advanceTrustedVblankSpan(candidate, ticks, cgb, epochPath);
+                            assertDeepStateEquals("VBlank " + cgb + " path " + epochPath
+                                            + " dot " + start + " span " + ticks,
+                                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+
+                            candidate.restoreState(checkpoint);
+                            advanceTrustedVblankSpan(candidate, ticks, cgb, epochPath);
+                            assertDeepStateEquals("VBlank restore " + cgb + " path " + epochPath
+                                            + " dot " + start + " span " + ticks,
+                                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+                        }
+                    }
+                }
+            }
+            if (!cgb) {
+                for (int start : starts) {
+                    for (int requested : spans) {
+                        int ticks = Math.min(requested, 456 - start - 1);
+                        if (ticks <= 0) {
+                            continue;
+                        }
+                        try (Gameboy scalar = session(false); Gameboy candidate = session(false)) {
+                            reachVblankDot(scalar, start, false);
+                            reachVblankDot(candidate, start, false);
+                            candidate.getGpu().setPerformanceScanlineEnabled(true);
+                            var checkpoint = candidate.captureState();
+                            for (int i = 0; i < ticks; i++) {
+                                scalar.getGpu().tick();
+                            }
+                            advanceTrustedVblankSpan(candidate, ticks, false, true);
+                            assertDeepStateEquals("VBlank physical dot " + start
+                                            + " span " + ticks,
+                                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+                            candidate.restoreState(checkpoint);
+                            advanceTrustedVblankSpan(candidate, ticks, false, true);
+                            assertDeepStateEquals("VBlank physical restore dot " + start
+                                            + " span " + ticks,
+                                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void advanceTrustedVblankSpan(
+            Gameboy gameboy, int ticks, boolean cgb, boolean epochPath) {
+        if (cgb && epochPath) {
+            gameboy.getGpu().advancePerformanceEpochQuietSpanTrusted(ticks, false, false);
+        } else if (!cgb && epochPath) {
+            gameboy.getGpu().advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
+                    ticks, false, false);
+        } else {
+            gameboy.getGpu().advancePerformanceQuietSpanTrusted(ticks, false, false);
+        }
+    }
+
+    private static void reachVblankDot(Gameboy gameboy, int dot, boolean nativeCgb) {
+        if (nativeCgb) {
+            settleNativeDoubleSpeed(gameboy);
+        }
+        int guard = 0;
+        while (gameboy.getGpu().getMode() != Mode.VBlank && guard++ < 456 * 155) {
+            gameboy.tick();
+        }
+        assertTrue("VBlank setup did not reach VBlank", guard < 456 * 155);
+        for (int i = 0; i < dot; i++) {
+            gameboy.getGpu().tick();
+        }
+        assertEquals(dot, gameboy.getGpu().getTicksInLine());
+    }
+
+    private static void assertDeepStateEquals(String path, Object expected, Object actual) {
+        if (expected == null || actual == null) {
+            assertEquals(path, expected, actual);
+            return;
+        }
+        assertEquals(path + " type", expected.getClass(), actual.getClass());
+        Class<?> type = expected.getClass();
+        if (type.isArray()) {
+            int length = Array.getLength(expected);
+            assertEquals(path + " length", length, Array.getLength(actual));
+            for (int i = 0; i < length; i++) {
+                assertDeepStateEquals(path + '[' + i + ']', Array.get(expected, i),
+                        Array.get(actual, i));
+            }
+            return;
+        }
+        if (expected instanceof List<?> expectedList) {
+            List<?> actualList = (List<?>) actual;
+            assertEquals(path + " size", expectedList.size(), actualList.size());
+            for (int i = 0; i < expectedList.size(); i++) {
+                assertDeepStateEquals(path + '[' + i + ']', expectedList.get(i),
+                        actualList.get(i));
+            }
+            return;
+        }
+        if (!type.isRecord()) {
+            assertEquals(path, expected, actual);
+            return;
+        }
+        try {
+            for (RecordComponent component : type.getRecordComponents()) {
+                var accessor = component.getAccessor();
+                accessor.setAccessible(true);
+                assertDeepStateEquals(path + '.' + component.getName(),
+                        accessor.invoke(expected), accessor.invoke(actual));
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Cannot compare " + path, e);
+        }
+    }
+
     private static void assertEquivalent(Gameboy expected, Gameboy actual, String context) {
         assertEquals(context + " LY", expected.getGpu().getLine(), actual.getGpu().getLine());
         assertEquals(context + " line ticks", expected.getGpu().getTicksInLine(), actual.getGpu().getTicksInLine());
@@ -251,5 +576,43 @@ public final class PerformanceScanlineIntegrationTest {
                 .setExecutionMode(ExecutionMode.PERFORMANCE)
                 .setSupportBatterySave(false)
                 .build();
+    }
+
+    private static Gameboy nativeCgbSession() throws Exception {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x3e; // LD A,1
+        image[0x101] = 0x01;
+        image[0x102] = (byte) 0xe0; // LDH (FF4D),A
+        image[0x103] = 0x4d;
+        image[0x104] = 0x10; // STOP + padding
+        image[0x105] = 0;
+        image[0x106] = (byte) 0xc3; // JP 0106
+        image[0x107] = 0x06;
+        image[0x108] = 0x01;
+        image[0x143] = (byte) 0x80;
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static void settleNativeDoubleSpeed(Gameboy gameboy) {
+        int guard = 0;
+        int stable = 0;
+        while (!(stable >= 1_000
+                && gameboy.getGpu().getMode() == Mode.OamSearch
+                && gameboy.getGpu().getLine() < 144
+                && gameboy.getGpu().getTicksInLine() == 13)
+                && guard++ < 400_000) {
+            gameboy.tick();
+            if (gameboy.getSpeedMode().getSpeedMode() == 2
+                    && gameboy.getCpu().getState() != eu.rekawek.coffeegb.core.cpu.Cpu.State.SPEED_SWITCH) {
+                stable++;
+            } else {
+                stable = 0;
+            }
+        }
+        assertTrue("native CGB setup did not settle", guard < 400_000);
     }
 }

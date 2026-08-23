@@ -64,13 +64,18 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
     public void tick() {
         // Link-port peripherals such as GPS receivers have their own wall clock and keep
-        // driving the input pin even when no hardware serial transfer is armed.
-        if (serialEndpoint != SerialEndpoint.NULL_ENDPOINT) {
-            serialEndpoint.tick();
+        // driving the input pin even when no hardware serial transfer is armed. A built-in
+        // endpoint which advertises a quiet span has explicitly guaranteed that tick(), the
+        // inactive external-transfer callback, and the input pin are inert; use that same
+        // capability on scalar event ticks instead of identity-checking only NULL_ENDPOINT.
+        SerialEndpoint endpoint = serialEndpoint;
+        boolean quietEndpoint = endpoint.canTickPerformanceQuietSpan(1);
+        if (!quietEndpoint && endpoint != SerialEndpoint.NULL_ENDPOINT) {
+            endpoint.tick();
         }
         acknowledgeInterruptIfNeeded();
         int speed = speedMode.getSpeedMode();
-        if (serialEndpoint == SerialEndpoint.NULL_ENDPOINT
+        if (quietEndpoint
                 && (sc & 0x80) == 0
                 && haltWakeDelay == 0) {
             serialClocks = (serialClocks + speed) & 0xff;
@@ -148,6 +153,46 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         }
         // The packet preflight has already established an idle quiet endpoint and no pending
         // acknowledge/transfer edge.  Do not repeat that walk on the hot commit path.
+        acknowledgeInterruptIfNeeded();
+        serialClocks = (serialClocks + ticks) & 0xff;
+    }
+
+    /** Native-CGB double-speed epoch guard; transfers and callbacks remain scalar. */
+    public boolean performanceEpochIdle(int requested) {
+        return requested > 0
+                && speedMode.getSpeedMode() == 2
+                && serialEndpoint.canTickPerformanceQuietSpan(requested)
+                && (sc & 0x80) == 0
+                && haltWakeDelay == 0
+                && debugHooks == null;
+    }
+
+    /** Applies the preflighted idle serial phase without a per-dot loop. */
+    public void tickPerformanceEpochIdle(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        acknowledgeInterruptIfNeeded();
+        serialClocks = (serialClocks + ticks * 2) & 0xff;
+    }
+
+
+    /** Physical-DMG normal-speed epoch guard; transfers and callbacks remain scalar. */
+    public boolean performancePhysicalDmgEpochIdle(int requested) {
+        return requested > 0
+                && speedMode.getSpeedMode() == 1
+                && !speedMode.isGbc()
+                && serialEndpoint.canTickPerformanceQuietSpan(requested)
+                && (sc & 0x80) == 0
+                && haltWakeDelay == 0
+                && debugHooks == null;
+    }
+
+    /** Applies a preflighted physical-DMG idle serial phase at one clock per master tick. */
+    public void tickPerformancePhysicalDmgEpochIdle(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
     }

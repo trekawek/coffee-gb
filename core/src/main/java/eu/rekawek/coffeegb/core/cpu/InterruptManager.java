@@ -401,6 +401,16 @@ public class InterruptManager implements AddressSpace, StatefulComponent<Interru
                 & ~cpuInstructionBlockedInterrupts & 0x1f) != 0;
     }
 
+    /**
+     * Returns whether any enabled source is stored in IF, before the CPU acceptance
+     * synchronizers are applied.  A PERFORMANCE epoch must stop even when a source is
+     * currently instruction-blocked, because that block can clear at an instruction
+     * retirement inside the epoch.
+     */
+    public boolean hasRawPendingEnabledInterrupt() {
+        return (interruptFlag & interruptEnabled & 0x1f) != 0;
+    }
+
     public boolean isInterruptRequestedForHalt() {
         return (interruptFlag & interruptEnabled & ~cpuBlockedInterrupts
                 & ~cpuInstructionBlockedInterrupts

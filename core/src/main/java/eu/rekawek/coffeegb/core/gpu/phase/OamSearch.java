@@ -10,6 +10,7 @@ import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
 import eu.rekawek.coffeegb.core.memory.Dma;
+import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.util.Arrays;
 
@@ -261,6 +262,110 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
     /** Whether the persistent OAM reader has captured its initial OAM contents. */
     public boolean isOamReaderInitialized() {
         return oamReaderInitialized;
+    }
+
+    /**
+     * Whether a bounded native-CGB mode-2 span can use the allocation-free OAM scanner.
+     *
+     * <p>The GPU owns the broader DMA/HDMA and observation proof.  This local predicate pins
+     * the persistent reader and half-slot state to the current raster position, so a restored
+     * or externally observed non-canonical phase stays on the exact dot path.</p>
+     */
+    public boolean isPerformanceNoDmaStableSpanEligible(int readerPosition, int spriteHeight) {
+        if (!registers.isGbc() || registers.getSpeedMode() != 2
+                || readerPosition < 0 || readerPosition >= 79
+                || !selectSprites || !oamReaderInitialized || oamReaderDmaSource
+                || !(oemRam instanceof Ram)
+                || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || previousOamSpriteHeight != spriteHeight) {
+            return false;
+        }
+        int expectedIndex = readerPosition / 2;
+        State expectedState = (readerPosition & 1) == 0
+                ? State.READING_Y : State.READING_X;
+        return i == expectedIndex
+                && state == expectedState
+                && (state != State.READING_X || this.spriteHeight == spriteHeight);
+    }
+
+    /**
+     * Advances an already-preflighted, constant-height, no-DMA OAM-search prefix.
+     *
+     * <p>A mode-2 slot consists of an odd Y half followed by an even X half.  The even reader
+     * position samples the next OAM word before the current candidate is committed.  Handling
+     * a possible leading/trailing half-slot around a two-dot loop preserves that ordering while
+     * removing the general phase, DMA-source, and delayed-LCDC checks from every dot.</p>
+     */
+    public void advancePerformanceNoDmaStableSpanTrusted(
+            int readerPosition, int ticks, int currentSpriteHeight) {
+        if (ticks < 0 || readerPosition + ticks > 79
+                || !isPerformanceNoDmaStableSpanEligible(
+                readerPosition, currentSpriteHeight)) {
+            throw new IllegalStateException("OAM reader is not eligible for a PERFORMANCE span");
+        }
+        if (ticks == 0) {
+            return;
+        }
+
+        int[] oam = ((Ram) oemRam).getSpace();
+        int position = readerPosition;
+        int remaining = ticks;
+
+        // An odd stored position has already latched Y.  The next even position samples the
+        // following reader word and then commits the current X half.
+        if ((position & 1) != 0) {
+            position++;
+            samplePerformanceOamWord(oam, position / 2);
+            commitPerformanceXHalf(currentSpriteHeight);
+            remaining--;
+        }
+
+        // At an even stored position the search is aligned to a complete two-dot slot.
+        while (remaining >= 2) {
+            position++;
+            latchPerformanceYHalf(currentSpriteHeight);
+            position++;
+            samplePerformanceOamWord(oam, position / 2);
+            commitPerformanceXHalf(currentSpriteHeight);
+            remaining -= 2;
+        }
+
+        if (remaining != 0) {
+            // The cap at stored dot 79 deliberately leaves entry 39's X half for the scalar
+            // dot-80 mode-3 handoff.
+            latchPerformanceYHalf(currentSpriteHeight);
+        }
+
+        previousOamSpriteHeight = currentSpriteHeight;
+        oamReaderSourceChangeTicks = Math.max(0, oamReaderSourceChangeTicks - ticks);
+    }
+
+    private void samplePerformanceOamWord(int[] oam, int entry) {
+        int address = 4 * entry;
+        oamReaderBusY = oam[address];
+        oamReaderBusX = oam[address + 1];
+        oamReaderY[entry] = oamReaderBusY;
+        oamReaderX[entry] = oamReaderBusX;
+    }
+
+    private void latchPerformanceYHalf(int currentSpriteHeight) {
+        spriteY = oamReaderY[i];
+        spriteX = oamReaderX[i];
+        spriteHeight = currentSpriteHeight;
+        state = State.READING_X;
+    }
+
+    private void commitPerformanceXHalf(int currentSpriteHeight) {
+        spriteHeight = Math.max(spriteHeight, currentSpriteHeight);
+        boolean candidate = between(spriteY, registers.get(GpuRegister.LY) + 16,
+                spriteY + spriteHeight);
+        spriteCandidateSeen |= candidate;
+        if (candidate && spritePosIndex < sprites.length) {
+            sprites[spritePosIndex++].enable(spriteX, spriteY, 0xfe00 + 4 * i);
+        }
+        i++;
+        state = State.READING_Y;
     }
 
     /** Reconnects the persistent reader after its clock was stopped with the LCD. */

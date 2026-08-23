@@ -3,7 +3,7 @@ package eu.rekawek.coffeegb.core.memory;
 import eu.rekawek.coffeegb.core.AddressSpace;
 
 /** Applies OAM DMA bus conflicts to memory accesses made by the CPU. */
-public class DmaCpuAddressSpace implements AddressSpace {
+public class DmaCpuAddressSpace implements AddressSpace, PerformanceRomAccessProvider {
 
     private final AddressSpace addressSpace;
 
@@ -65,5 +65,14 @@ public class DmaCpuAddressSpace implements AddressSpace {
             return highBusValue;
         }
         return addressSpace.getByte(dma.mapUnblockedCpuAddress(address));
+    }
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        if (dma.hasCpuBusSpecialState()
+                || !(addressSpace instanceof PerformanceRomAccessProvider provider)) {
+            return null;
+        }
+        return provider.acquirePerformanceRomAccess();
     }
 }

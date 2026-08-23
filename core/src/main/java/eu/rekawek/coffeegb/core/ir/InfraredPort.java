@@ -129,6 +129,22 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         // input. There is no arithmetic state to advance, so the trusted commit is a no-op.
     }
 
+    /** True when the native-CGB epoch may treat IR as an idle no-op. */
+    public boolean performanceEpochIdle(int requested) {
+        return gbc
+                && speedMode.getSpeedMode() == 2
+                && requested > 0
+                && !fullChangerActive
+                && endpoint == InfraredEndpoint.NULL_ENDPOINT
+                && serialEndpoint.canTickPerformanceQuietSpan(requested)
+                && debugHooks == null;
+    }
+
+    /** The idle epoch has no IR state to advance. */
+    public void tickPerformanceEpochIdle(int ticks) {
+        // Intentionally empty: the null endpoint and inactive FullChanger were preflighted.
+    }
+
     @Override
     public boolean accepts(int address) {
         return address == 0xff56;

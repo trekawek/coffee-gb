@@ -790,6 +790,41 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         return isMode0InterruptEdgeNextTickPrepared();
     }
 
+    /**
+     * Native-CGB PERFORMANCE equivalent of {@link #beginCpuReadPhase(int)}. The native owner
+     * supplies the current line and the two double-speed mode-0 lookahead bits directly, so the
+     * common scalar miss does not construct or refresh the general GPU timing snapshot.
+     */
+    public boolean beginNativeCgbPerformanceReadPhase(int statReadPhaseFlags, int phaseWord) {
+        captureNativeCgbPerformanceReadPhasePrepared(statReadPhaseFlags);
+        if (!canPublishMode0InterruptEdge()
+                || (phaseWord & Gpu.NATIVE_CGB_PHASE_MODE0_EDGE_NEXT) == 0) {
+            return false;
+        }
+        return !((mode0IrqStatLatch & 0x40) != 0
+                && (phaseWord & Gpu.NATIVE_CGB_PHASE_LINE_MASK) == mode0IrqLycLatch);
+    }
+
+    /** Native owner-side copy of the packed CPU phase bookkeeping. */
+    private void captureNativeCgbPerformanceReadPhasePrepared(int statReadPhaseFlags) {
+        boolean ordinaryHaltWakePhase = (statReadPhaseFlags
+                & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0;
+        if (ordinaryHaltWakePhase && !previousOrdinaryHaltWakePhase) {
+            ordinaryHaltWakeStatClock = lycIrqClock;
+        }
+        previousOrdinaryHaltWakePhase = ordinaryHaltWakePhase;
+        boolean recentOrdinaryHaltWakePhase = ordinaryHaltWakePhase
+                && ordinaryHaltWakeStatClock != NO_LYC_IRQ_EVENT
+                && lycIrqClock - ordinaryHaltWakeStatClock
+                <= ORDINARY_HALT_WAKE_STAT_HOLD_TICKS;
+        statReadPhaseFlags &= ~STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
+        if (recentOrdinaryHaltWakePhase) {
+            statReadPhaseFlags |= STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
+        }
+        cpuStatReadPhaseFlags = statReadPhaseFlags;
+        cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
+    }
+
     /** Completes the production pre-CPU STAT phase after refreshing only if it needs timing. */
     public void finishCpuReadPhase(int interruptFlagReadMaskTicks,
                                    boolean mode0InterruptDispatchPhased,
@@ -806,6 +841,25 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         captureCpuInterruptReadPhasePrepared(interruptFlagReadMaskTicks,
                 mode0InterruptDispatchPhased, mode0InstructionWinsAcceptance);
         publishFrameLyc0Mode2HandoffBeforeCpuPrepared();
+    }
+
+    /** Completes the native-CGB PERFORMANCE CPU/STAT phase without a timing snapshot. */
+    public void finishNativeCgbPerformanceReadPhase(int interruptFlagReadMaskTicks,
+                                                    int phaseWord) {
+        cpuInterruptFlagReadMaskTicks = interruptFlagReadMaskTicks;
+        cpuMode0InterruptDispatchPhased = false;
+        cpuMode0InstructionWinsAcceptance = false;
+        boolean mode0Enabled = isMode0InterruptPreviewEnabled();
+        if (!mode0Enabled && !pendingCgbMode2Interrupt && enableBits != 0x20) {
+            return;
+        }
+        int line = phaseWord & Gpu.NATIVE_CGB_PHASE_LINE_MASK;
+        boolean mode0SourceEnabled = mode0Enabled
+                && !((mode0IrqStatLatch & 0x40) != 0 && line == mode0IrqLycLatch);
+        boolean doubleSpeedMode0 = mode0SourceEnabled
+                && enableBits == 0x48
+                && (phaseWord & Gpu.NATIVE_CGB_PHASE_MODE0_READ_PREVIEW) != 0;
+        interruptManager.setCpuReadPpuInterruptPreview(doubleSpeedMode0, false);
     }
 
     /** Captures the PPU mux phase before this tick's CPU memory callback. */

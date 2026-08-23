@@ -17,7 +17,7 @@ import java.util.List;
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.checkByteArgument;
 import static eu.rekawek.coffeegb.core.cpu.BitUtils.checkWordArgument;
 
-public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
+public class Mmu implements AddressSpace, StatefulComponent<Mmu>, PerformanceRomAccessProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(Mmu.class);
 
@@ -49,6 +49,9 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
     private final UndocumentedGbcRegisters undocumentedGbcRegisters = new UndocumentedGbcRegisters();
 
     private AddressSpace[] addressToSpace;
+
+    /** Derived once with the address-space index; null unless one provider owns all CPU ROM. */
+    private PerformanceRomAccessProvider performanceRomAccessProvider;
 
     // the Sachen MMC2 cart watches pre-header WRAM writes to tell a CGB boot from a DMG
     // one; null for every other cartridge (see SachenMmc)
@@ -142,6 +145,15 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
                 }
             }
         }
+        AddressSpace romWindow = addressToSpace[0x0000];
+        for (int address = 0x0001; address < 0x8000; address++) {
+            if (addressToSpace[address] != romWindow) {
+                performanceRomAccessProvider = null;
+                return;
+            }
+        }
+        performanceRomAccessProvider = romWindow instanceof PerformanceRomAccessProvider provider
+                ? provider : null;
     }
 
     @Override
@@ -180,6 +192,12 @@ public class Mmu implements AddressSpace, StatefulComponent<Mmu> {
     public int getByte(int address) {
         checkWordArgument("address", address);
         return getSpace(address).getByte(address);
+    }
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        return performanceRomAccessProvider == null
+                ? null : performanceRomAccessProvider.acquirePerformanceRomAccess();
     }
 
     /** Returns the owner-held SVBK value without routing a read through the MMU bus. */

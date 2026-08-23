@@ -660,6 +660,55 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
         fifo.clearOutput();
     }
 
+    /**
+     * Native-CGB mode-2 fixed point used by the coarse CPU epoch.  The pixel machine is
+     * stopped between scanlines, so only its absolute LCD output clock normally changes.
+     * Recent window writes and a non-empty delay line deliberately keep the exact dot path.
+     */
+    public boolean isPerformanceNativeCgbMode2IdleOutput() {
+        // Gpu's native mode-2 preflight already proves CGB, non-compat, double-speed
+        // topology. Keeping that proof out of both pixel-machine predicates avoids paying
+        // the same immutable topology branch twice on every native epoch.
+        return isPerformanceIdleOutput();
+    }
+
+    /** Empty physical-DMG LCD output stage used by trusted direct-line HBlank/VBlank spans. */
+    public boolean isPerformanceDmgIdleOutput() {
+        return !gbc && isPerformanceIdleOutput();
+    }
+
+    private boolean isPerformanceIdleOutput() {
+        return
+                // The timing skeleton is driven directly through Gpu.phase.tick(); its
+                // historical machineActive marker remains set after a scalar mode-3 end, but
+                // mode 2 calls only outputTick() and the next start() rebuilds the machine.
+                (timingSkeleton || !machineActive)
+                && fifo.isPerformanceOutputIdle()
+                && pendingWindowDisplayWrites.isEmpty()
+                && pendingWindowXWrites.isEmpty()
+                && windowWyDelay < 0
+                && windowWyOldOnWriteTick < 0;
+    }
+
+    /**
+     * Advances the empty LCD output clock after
+     * {@link #isPerformanceNativeCgbMode2IdleOutput()} under the caller's native-CGB proof.
+     */
+    public void advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceNativeCgbMode2IdleOutput()) {
+            throw new IllegalStateException("Pixel machine is not idle in PERFORMANCE mode 2");
+        }
+        fifo.advancePerformanceOutputIdleSpanTrusted(ticks);
+    }
+
+    /** Advances the empty physical-DMG LCD clock without entering either FIFO dot path. */
+    public void advancePerformanceDmgIdleOutputSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceDmgIdleOutput()) {
+            throw new IllegalStateException("DMG pixel output is not idle in PERFORMANCE span");
+        }
+        fifo.advancePerformanceOutputIdleSpanTrusted(ticks);
+    }
+
     public int getPosition() {
         return position;
     }

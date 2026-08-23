@@ -544,6 +544,184 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void nativeCgbPackedReadPhaseMatchesGenericPhaseAcrossEdgesAndInputs()
+            throws Exception {
+        Fixture probe = new Fixture(true, true);
+        probe.gpu.onSpeedSwitch();
+        probe.advanceTo(1, 100);
+        int mode0 = probe.gpu.getMode0InterruptTick();
+        int mode0Target = mode0 == Integer.MAX_VALUE ? 250 : mode0;
+        int[] targets = {100, Math.max(13, mode0Target - 2), Math.max(13, mode0Target - 1),
+                mode0Target, Math.min(447, mode0Target + 2)};
+        int[] enables = {0x00, 0x08, 0x20, 0x48};
+
+        for (int target : targets) {
+            for (int enable : enables) {
+                for (int flags = 0; flags < 16; flags++) {
+                    Fixture generic = new Fixture(true, true);
+                    Fixture nativeCgb = new Fixture(true, true);
+                    generic.gpu.onSpeedSwitch();
+                    nativeCgb.gpu.onSpeedSwitch();
+                    generic.stat.setByte(StatRegister.ADDRESS, enable);
+                    nativeCgb.stat.setByte(StatRegister.ADDRESS, enable);
+                    generic.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+                    nativeCgb.gpu.setByte(GpuRegister.LYC.getAddress(), 1);
+                    generic.advanceTo(1, target);
+                    nativeCgb.advanceTo(1, target);
+
+                    boolean genericEdge = generic.stat.beginCpuReadPhase(flags);
+                    generic.stat.finishCpuReadPhase(0, false, false);
+                    int phaseWord = nativeCgb.gpu.getNativeCgbPerformancePhaseWord();
+                    long nativeTimingGeneration = statTimingGeneration(nativeCgb.stat);
+                    boolean nativeEdge = nativeCgb.stat.beginNativeCgbPerformanceReadPhase(
+                            flags, phaseWord);
+                    nativeCgb.stat.finishNativeCgbPerformanceReadPhase(0, phaseWord);
+                    assertEquals(nativeTimingGeneration, statTimingGeneration(nativeCgb.stat));
+
+                    assertEquals("mode-0 edge target=" + target + " enable=" + enable
+                                    + " flags=" + flags,
+                            genericEdge, nativeEdge);
+                    assertEquals("STAT state target=" + target + " enable=" + enable
+                                    + " flags=" + flags,
+                            generic.stat.captureState(), nativeCgb.stat.captureState());
+                    assertEquals("IF state target=" + target + " enable=" + enable
+                                    + " flags=" + flags,
+                            generic.interrupts.captureState(), nativeCgb.interrupts.captureState());
+                    assertEquals("STAT read target=" + target + " enable=" + enable
+                                    + " flags=" + flags,
+                            generic.stat.getByte(StatRegister.ADDRESS),
+                            nativeCgb.stat.getByte(StatRegister.ADDRESS));
+                }
+            }
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void nativeCgbUnblockedMode0PreviewMatchesGenericAtMinusTwo() {
+        Fixture generic = new Fixture(true, true);
+        Fixture nativeCgb = new Fixture(true, true);
+        generic.gpu.onSpeedSwitch();
+        nativeCgb.gpu.onSpeedSwitch();
+        generic.stat.setByte(StatRegister.ADDRESS, 0x48);
+        nativeCgb.stat.setByte(StatRegister.ADDRESS, 0x48);
+        // Keep the LYC source enabled but unblocked at the mode-0 preview dot.
+        generic.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        nativeCgb.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+
+        int phaseWord = nativeCgb.gpu.getNativeCgbPerformancePhaseWord();
+        int remaining = 2 * 456;
+        while ((phaseWord & Gpu.NATIVE_CGB_PHASE_MODE0_READ_PREVIEW) == 0
+                && remaining-- > 0) {
+            generic.tick();
+            nativeCgb.tick();
+            phaseWord = nativeCgb.gpu.getNativeCgbPerformancePhaseWord();
+        }
+        assertTrue("native mode-0 preview was not reached", remaining >= 0);
+
+        boolean genericEdge = generic.stat.beginCpuReadPhase(0);
+        generic.stat.finishCpuReadPhase(0, false, false);
+        boolean nativeEdge = nativeCgb.stat.beginNativeCgbPerformanceReadPhase(0, phaseWord);
+        nativeCgb.stat.finishNativeCgbPerformanceReadPhase(0, phaseWord);
+
+        assertFalse(genericEdge);
+        assertEquals(genericEdge, nativeEdge);
+        assertEquals(generic.interrupts.captureState(), nativeCgb.interrupts.captureState());
+        assertEquals(generic.interrupts.getByte(0xff0f), nativeCgb.interrupts.getByte(0xff0f));
+    }
+
+    @Test(timeout = 5_000)
+    public void nativeCgbMode0IfReadMaskMatchesGenericBusOrdering() {
+        Fixture generic = new Fixture(true, true);
+        Fixture nativeCgb = new Fixture(true, true);
+        generic.gpu.onSpeedSwitch();
+        nativeCgb.gpu.onSpeedSwitch();
+        generic.stat.setByte(StatRegister.ADDRESS, 0x48);
+        nativeCgb.stat.setByte(StatRegister.ADDRESS, 0x48);
+        generic.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        nativeCgb.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        generic.advanceTo(1, 100);
+        nativeCgb.advanceTo(1, 100);
+        int mode0Tick = nativeCgb.gpu.getMode0InterruptTick();
+        int previewTick = (mode0Tick == Integer.MAX_VALUE ? 250 : mode0Tick) - 2;
+        generic.advanceTo(1, previewTick - 4);
+        nativeCgb.advanceTo(1, previewTick - 4);
+        generic.interrupts.requestInterrupt(LCDC);
+        nativeCgb.interrupts.requestInterrupt(LCDC);
+        generic.interrupts.clearInterrupt(LCDC);
+        nativeCgb.interrupts.clearInterrupt(LCDC);
+        generic.tick();
+        nativeCgb.tick();
+        generic.advanceTo(1, previewTick);
+        nativeCgb.advanceTo(1, previewTick);
+        int phaseWord = nativeCgb.gpu.getNativeCgbPerformancePhaseWord();
+        assertTrue((phaseWord & Gpu.NATIVE_CGB_PHASE_MODE0_READ_PREVIEW) != 0);
+
+        generic.stat.beginCpuReadPhase(0);
+        generic.stat.finishCpuReadPhase(2, false, false);
+        nativeCgb.stat.beginNativeCgbPerformanceReadPhase(0, phaseWord);
+        nativeCgb.stat.finishNativeCgbPerformanceReadPhase(2, phaseWord);
+        generic.tick();
+        nativeCgb.tick();
+        generic.tick();
+        nativeCgb.tick();
+
+        assertEquals(generic.stat.captureState(), nativeCgb.stat.captureState());
+        assertEquals(generic.interrupts.captureState(), nativeCgb.interrupts.captureState());
+        assertTrue(generic.interrupts.isInterruptFlagSet(LCDC));
+        assertTrue(nativeCgb.interrupts.isInterruptFlagSet(LCDC));
+        assertEquals(0, generic.lcdInterruptFlag());
+        assertEquals(0, nativeCgb.lcdInterruptFlag());
+        assertEquals(1 << LCDC.ordinal(), generic.lcdInterruptFlag());
+        assertEquals(1 << LCDC.ordinal(), nativeCgb.lcdInterruptFlag());
+    }
+
+    @Test
+    public void nativeCgbSpecializedReadResolvesAfterRestoreLikeGeneric() throws Exception {
+        Fixture generic = new Fixture(true, true);
+        Fixture nativeCgb = new Fixture(true, true);
+        generic.gpu.onSpeedSwitch();
+        nativeCgb.gpu.onSpeedSwitch();
+        generic.stat.setByte(StatRegister.ADDRESS, 0x48);
+        nativeCgb.stat.setByte(StatRegister.ADDRESS, 0x48);
+        generic.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        nativeCgb.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        generic.advanceTo(1, 100);
+        nativeCgb.advanceTo(1, 100);
+
+        var genericGpuState = generic.gpu.captureState();
+        var genericStatState = generic.stat.captureState();
+        var genericInterruptState = generic.interrupts.captureState();
+        var nativeGpuState = nativeCgb.gpu.captureState();
+        var nativeStatState = nativeCgb.stat.captureState();
+        var nativeInterruptState = nativeCgb.interrupts.captureState();
+
+        for (int flags = 0; flags < 16; flags++) {
+            generic.gpu.restoreState(genericGpuState);
+            generic.stat.restoreState(genericStatState);
+            generic.interrupts.restoreState(genericInterruptState);
+            nativeCgb.gpu.restoreState(nativeGpuState);
+            nativeCgb.stat.restoreState(nativeStatState);
+            nativeCgb.interrupts.restoreState(nativeInterruptState);
+
+            boolean genericEdge = generic.stat.beginCpuReadPhase(flags);
+            generic.stat.finishCpuReadPhase(0, false, false);
+            int phaseWord = nativeCgb.gpu.getNativeCgbPerformancePhaseWord();
+            boolean nativeEdge = nativeCgb.stat.beginNativeCgbPerformanceReadPhase(
+                    flags, phaseWord);
+            nativeCgb.stat.finishNativeCgbPerformanceReadPhase(0, phaseWord);
+
+            assertEquals("edge flags=" + flags, genericEdge, nativeEdge);
+            assertEquals("FF41 flags=" + flags,
+                    generic.stat.getByte(StatRegister.ADDRESS),
+                    nativeCgb.stat.getByte(StatRegister.ADDRESS));
+            assertEquals("STAT flags=" + flags,
+                    generic.stat.captureState(), nativeCgb.stat.captureState());
+            assertEquals("IF flags=" + flags,
+                    generic.interrupts.captureState(), nativeCgb.interrupts.captureState());
+        }
+    }
+
+    @Test
     public void stalePackedCpuStatReadPhaseIsHiddenUntilTheNextCapture() throws Exception {
         Fixture fixture = new Fixture(true);
         fixture.advanceTo(1, 78);

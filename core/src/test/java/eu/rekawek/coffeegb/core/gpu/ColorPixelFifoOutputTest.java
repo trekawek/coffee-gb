@@ -8,6 +8,8 @@ import java.lang.reflect.Field;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class ColorPixelFifoOutputTest {
 
@@ -125,6 +127,48 @@ public class ColorPixelFifoOutputTest {
         assertEquals(intField(general.fifo, "delaySize"), intField(fast.fifo, "delaySize"));
         assertArrayEquals(arrayField(general.fifo, "delayEntry"), arrayField(fast.fifo, "delayEntry"));
         assertArrayEquals(longArrayField(general.fifo, "delayStamp"), longArrayField(fast.fifo, "delayStamp"));
+    }
+
+    @Test
+    public void emptyPerformanceSpanMatchesRepeatedColorOutputTicks() {
+        Fixture scalar = new Fixture();
+        Fixture bulk = new Fixture();
+        for (int i = 0; i < 54; i++) {
+            scalar.fifo.outputTick();
+        }
+
+        assertTrue(bulk.fifo.isPerformanceOutputIdle());
+        bulk.fifo.advancePerformanceOutputIdleSpanTrusted(54);
+
+        assertEquals(longField(scalar.fifo, "outputTicks"),
+                longField(bulk.fifo, "outputTicks"));
+        assertEquals(intField(scalar.fifo, "delayHead"), intField(bulk.fifo, "delayHead"));
+        assertEquals(intField(scalar.fifo, "delaySize"), intField(bulk.fifo, "delaySize"));
+    }
+
+    @Test
+    public void pendingColorOutputRejectsPerformanceSpan() {
+        Fixture fixture = new Fixture();
+        fixture.enqueuePixels();
+        fixture.putPixels(1);
+
+        assertFalse(fixture.fifo.isPerformanceOutputIdle());
+    }
+
+    @Test
+    public void emptyPerformanceSpanMatchesRepeatedScalarTimingOutputTicks() {
+        ScalarTimingColorPixelFifo scalar = new ScalarTimingColorPixelFifo();
+        ScalarTimingColorPixelFifo bulk = new ScalarTimingColorPixelFifo();
+        for (int i = 0; i < 54; i++) {
+            scalar.outputTick();
+        }
+
+        assertTrue(bulk.isPerformanceOutputIdle());
+        bulk.advancePerformanceOutputIdleSpanTrusted(54);
+
+        assertEquals(longField(scalar, "outputTicks"), longField(bulk, "outputTicks"));
+        assertEquals(intField(scalar, "delayHead"), intField(bulk, "delayHead"));
+        assertEquals(intField(scalar, "delaySize"), intField(bulk, "delaySize"));
     }
 
     @Test

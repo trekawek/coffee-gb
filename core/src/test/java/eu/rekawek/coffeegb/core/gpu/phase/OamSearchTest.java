@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.core.gpu.Lcdc;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.Dma;
 import eu.rekawek.coffeegb.core.memory.Ram;
+import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
@@ -404,6 +405,91 @@ public class OamSearchTest {
         assertFalse(restored.search.hadSpriteHeightTransition());
     }
 
+    @Test
+    public void performanceNoDmaSpanMatchesScalarAcrossHalfSlotBoundaries() {
+        int[] starts = {13, 14, 27, 38, 77, 78};
+        int[] requestedLengths = {1, 2, 3, 7, 19, 54};
+        for (int start : starts) {
+            for (int requested : requestedLengths) {
+                int ticks = Math.min(requested, 79 - start);
+                if (ticks <= 0) {
+                    continue;
+                }
+                Fixture scalar = performanceFixture();
+                Fixture bulk = performanceFixture();
+                for (int i = 0; i < start; i++) {
+                    scalar.tickSearch();
+                    bulk.tickSearch();
+                }
+                assertTrue("bulk preflight rejected dot " + start,
+                        bulk.search.isPerformanceNoDmaStableSpanEligible(
+                                start, bulk.lcdc.getSpriteHeight()));
+
+                for (int i = 0; i < ticks; i++) {
+                    scalar.tickSearch();
+                }
+                bulk.search.advancePerformanceNoDmaStableSpanTrusted(
+                        start, ticks, bulk.lcdc.getSpriteHeight());
+
+                assertSearchStateEquals("dot " + start + " + " + ticks,
+                        scalar.search, bulk.search);
+            }
+        }
+    }
+
+    private static Fixture performanceFixture() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.registers.put(GpuRegister.LY, 24);
+        fixture.lcdc.set(0x97);
+        fixture.settleLcdc();
+        for (int entry = 0; entry < 40; entry++) {
+            int y = entry % 3 == 0 ? 32 : entry % 3 == 1 ? 40 : 8;
+            fixture.oam.setByte(0xfe00 + 4 * entry, y);
+            fixture.oam.setByte(0xfe01 + 4 * entry, 8 + entry);
+        }
+        fixture.beginSearchLine();
+        return fixture;
+    }
+
+    private static void assertSearchStateEquals(
+            String message, OamSearch expected, OamSearch actual) {
+        assertArrayEquals(message + " reader Y",
+                intArrayField(expected, "oamReaderY"), intArrayField(actual, "oamReaderY"));
+        assertArrayEquals(message + " reader X",
+                intArrayField(expected, "oamReaderX"), intArrayField(actual, "oamReaderX"));
+        String[] intFields = {
+                "spritePosIndex", "spriteY", "spriteHeight", "previousOamSpriteHeight",
+                "spriteX", "oamReaderBusY", "oamReaderBusX",
+                "oamReaderSourceChangeTicks", "i"
+        };
+        for (String name : intFields) {
+            assertEquals(message + ' ' + name, intField(expected, name), intField(actual, name));
+        }
+        String[] booleanFields = {
+                "oamReaderInitialized", "oamReaderDmaSource",
+                "spriteHeightTransitionThisLine", "dmaBlockedThisLine",
+                "selectSprites", "spriteCandidateSeen"
+        };
+        for (String name : booleanFields) {
+            assertEquals(message + ' ' + name,
+                    booleanField(expected, name), booleanField(actual, name));
+        }
+        assertEquals(message + " half-slot state",
+                objectField(expected, "state"), objectField(actual, "state"));
+        for (int i = 0; i < expected.getSprites().length; i++) {
+            SpritePosition expectedSprite = expected.getSprites()[i];
+            SpritePosition actualSprite = actual.getSprites()[i];
+            assertEquals(message + " sprite " + i + " enabled",
+                    expectedSprite.isEnabled(), actualSprite.isEnabled());
+            assertEquals(message + " sprite " + i + " x",
+                    expectedSprite.getX(), actualSprite.getX());
+            assertEquals(message + " sprite " + i + " y",
+                    expectedSprite.getY(), actualSprite.getY());
+            assertEquals(message + " sprite " + i + " address",
+                    expectedSprite.getAddress(), actualSprite.getAddress());
+        }
+    }
+
     private static Field field(OamSearch search, String name) {
         try {
             Field field = OamSearch.class.getDeclaredField(name);
@@ -433,6 +519,14 @@ public class OamSearchTest {
     private static boolean booleanField(OamSearch search, String name) {
         try {
             return field(search, name).getBoolean(search);
+        } catch (IllegalAccessException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private static Object objectField(OamSearch search, String name) {
+        try {
+            return field(search, name).get(search);
         } catch (IllegalAccessException e) {
             throw new AssertionError(e);
         }
@@ -472,7 +566,16 @@ public class OamSearchTest {
         }
 
         private Fixture(boolean gbc) {
-            speedMode = new SpeedMode(gbc);
+            this(gbc, false);
+        }
+
+        private Fixture(boolean gbc, boolean doubleSpeed) {
+            speedMode = doubleSpeed ? new SpeedMode(gbc) {
+                @Override
+                public int getSpeedMode() {
+                    return 2;
+                }
+            } : new SpeedMode(gbc);
             dma = new Dma(memory, oam, speedMode);
             registers.setGbc(gbc);
             registers.setSpeedMode(speedMode);
