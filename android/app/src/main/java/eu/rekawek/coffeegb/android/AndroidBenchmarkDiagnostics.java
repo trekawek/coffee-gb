@@ -24,6 +24,7 @@ import java.io.BufferedReader;
 import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -50,9 +51,12 @@ final class AndroidBenchmarkDiagnostics {
     private static final int INTERVAL_FRAMES = 60;
     private static final int FINAL_FRAME = 600;
     private static final int UNKNOWN = -1;
+    /** Leaves explicit headroom below Android's approximately 4 KiB per-record payload cliff. */
+    static final int MAX_LOG_RECORD_BYTES = 3_750;
 
     private enum Phase {
         IDLE,
+        SCENARIO_RUNNING,
         WARMING,
         ANCHOR_READY,
         ARMED,
@@ -103,6 +107,17 @@ final class AndroidBenchmarkDiagnostics {
     private boolean measurementArmed;
     private Phase phase = Phase.IDLE;
     private long benchmarkGeneration;
+    private long activeSessionGeneration;
+    private long scenarioSessionGeneration;
+    private int scenarioExpectedFrames;
+    private int scenarioCompletedFrames;
+    private boolean scenarioCompleted;
+    private boolean scenarioSourceClosed;
+    private boolean scenarioAudioDrained;
+    /** Terminal for one active session: visibility cannot be reconstructed before ARM. */
+    private boolean preArmVisibilityLost;
+    /** Sticky visibility poison inherited by every session generation in this runtime. */
+    private boolean nextSessionVisibilityLost;
     private boolean speedFinalSample;
     private int speedModeFinal = UNKNOWN;
     /** Audio counters sampled at the physical ready-600 boundary, before compositor drain delay. */
@@ -154,15 +169,32 @@ final class AndroidBenchmarkDiagnostics {
 
     AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options, RecordSink recordSink,
             LongSupplier monotonicNanos) {
+        this(context, options, recordSink, monotonicNanos, null, null);
+    }
+
+    /** Test seam for production-length redacted identities without depending on an Android APK. */
+    AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options, RecordSink recordSink,
+            LongSupplier monotonicNanos, String artifactIdOverride, String deviceIdOverride) {
         this.context = context == null ? null : context.getApplicationContext();
         this.options = options == null ? DiagnosticsOptions.disabled() : options;
         this.recordSink = recordSink == null ? AndroidBenchmarkDiagnostics::logRecord : recordSink;
         this.monotonicNanos = monotonicNanos == null
                 ? AndroidBenchmarkDiagnostics::systemNow : monotonicNanos;
         enabled = BuildConfig.DIAGNOSTICS_ENABLED && this.options.enabled;
-        artifactId = enabled ? sha256File(this.context == null ? null
-                : this.context.getPackageCodePath()) : "unavailable";
-        deviceId = enabled ? deviceIdentity(this.context) : "unavailable";
+        artifactId = enabled && artifactIdOverride != null
+                ? boundedDigestOverride(artifactIdOverride)
+                : enabled ? sha256File(this.context == null ? null
+                        : this.context.getPackageCodePath()) : "unavailable";
+        deviceId = enabled && deviceIdOverride != null
+                ? boundedDigestOverride(deviceIdOverride)
+                : enabled ? deviceIdentity(this.context) : "unavailable";
+    }
+
+    private static String boundedDigestOverride(String value) {
+        if (!value.matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("Benchmark identity override must be SHA-256 hex");
+        }
+        return value;
     }
 
     boolean enabled() {
@@ -182,12 +214,28 @@ final class AndroidBenchmarkDiagnostics {
     }
 
     /** Returns whether the host may issue the one-shot compositor-baseline arm action. */
-    synchronized boolean benchmarkAnchorReady() {
-        return enabled && phase == Phase.ANCHOR_READY && !measurementArmed;
+    synchronized boolean benchmarkAnchorReady(long sessionGeneration) {
+        return enabled && sessionGeneration > 0L
+                && sessionGeneration == activeSessionGeneration
+                && !preArmVisibilityLost
+                && phase == Phase.ANCHOR_READY && !measurementArmed
+                && scenarioCompleted && scenarioSourceClosed && scenarioAudioDrained;
     }
 
     /** Completes the host anchor only after the renderer has returned from unlockCanvasAndPost. */
-    synchronized void benchmarkAnchorPosted(boolean success) {
+    synchronized void benchmarkAnchorPosted(long sessionGeneration, boolean success) {
+        if (sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration) {
+            if (enabled) {
+                record("event=benchmark_anchor success=false phase="
+                        + phase.name().toLowerCase() + " reason=stale_session");
+            }
+            return;
+        }
+        if (preArmVisibilityLost) {
+            record("event=benchmark_anchor success=false phase="
+                    + phase.name().toLowerCase() + " reason=visibility_lost");
+            return;
+        }
         if (!enabled || phase != Phase.WARMING || !warmupComplete) {
             if (enabled) {
                 record("event=benchmark_anchor success=false phase="
@@ -216,16 +264,27 @@ final class AndroidBenchmarkDiagnostics {
      * The controller receives the matching [Controller.BenchmarkArmEvent] before its Resume event,
      * so timing debt and frame counters reset while the core is still paused.
      */
-    synchronized boolean armBenchmark(long generation, String token,
+    synchronized boolean armBenchmark(long sessionGeneration, long generation, String token,
             AndroidAudioSink.AudioBaseline baseline) {
+        boolean audioPending = options.audioOutput && baseline != null
+                && (baseline.pendingBytes() != 0L || baseline.queuedBytes() != 0L);
+        boolean audioNotPlaying = options.audioOutput && baseline != null
+                && !baseline.outputPlaying();
         if (!enabled || phase != Phase.ANCHOR_READY || !warmupComplete
+                || sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration
+                || preArmVisibilityLost
+                || !scenarioCompleted || !scenarioSourceClosed || !scenarioAudioDrained
                 || generation <= 0L || token == null
                 || !token.matches("[a-z0-9][a-z0-9._-]{15,63}") || baseline == null
+                || audioPending || audioNotPlaying
                 || (options.audioOutput && !audioFocusGranted)) {
             if (enabled) {
                 record("event=benchmark_arm_rejected phase=" + phase.name().toLowerCase()
-                        + " reason=" + (options.audioOutput && !audioFocusGranted
-                        ? "audio_focus" : "not_anchor_ready"));
+                        + " reason=" + (preArmVisibilityLost ? "visibility_lost"
+                        : audioPending ? "audio_pending"
+                        : audioNotPlaying ? "audio_not_playing"
+                        : options.audioOutput && !audioFocusGranted
+                                ? "audio_focus" : "not_anchor_ready"));
             }
             return false;
         }
@@ -341,7 +400,16 @@ final class AndroidBenchmarkDiagnostics {
                 + " effective_dmg_compat=" + event.getEffectiveDmgCompat()
                 + " speed_mode_final=" + speedModeFinal + " speed_mode_sample=frame_600"
                 + " performance_bulk_spans=" + event.getPerformanceBulkSpans()
-                + " performance_bulk_ticks=" + event.getPerformanceBulkTicks());
+                + " performance_bulk_ticks=" + event.getPerformanceBulkTicks()
+                + " performance_epoch_count=" + event.getPerformanceEpochCount()
+                + " performance_epoch_ticks=" + event.getPerformanceEpochTicks()
+                + " performance_epoch_max_ticks=" + event.getPerformanceEpochMaxTicks()
+                + " performance_epoch_raster_fast_ticks="
+                + event.getPerformanceEpochRasterFastTicks()
+                + " performance_epoch_mode2_replay_ticks="
+                + event.getPerformanceEpochMode2ReplayTicks()
+                + " performance_epoch_mode2_bulk_ticks="
+                + event.getPerformanceEpochMode2BulkTicks());
         if (phase == Phase.ARMED) {
             phase = Phase.CORE_FROZEN;
         }
@@ -414,6 +482,7 @@ final class AndroidBenchmarkDiagnostics {
         audioFocusGranted = false;
         audioFocusLossCount = 0L;
         audioFocusStartLossCount = 0L;
+        nextSessionVisibilityLost = false;
         record("event=session_launch launch_ns=" + launchNanos
                 + " hardware=" + options.hardware.name().toLowerCase()
                 + " requested_hardware=" + options.hardware.externalValue()
@@ -466,8 +535,109 @@ final class AndroidBenchmarkDiagnostics {
      * controller benchmark policy has already paused the core; this method only establishes the
      * host-visible anchor-ready state.  Counters and environment baselines wait for ARM.
      */
-    synchronized void emulationStarted() {
+    synchronized void beginSession(long sessionGeneration) {
+        if (!enabled || sessionGeneration <= 0L) {
+            return;
+        }
+        activeSessionGeneration = sessionGeneration;
+        benchmarkGeneration = 0L;
+        measurementArmed = false;
+        scenarioExpectedFrames = options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE
+                ? 0 : -1;
+        scenarioSessionGeneration = 0L;
+        scenarioCompletedFrames = 0;
+        scenarioCompleted = options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE;
+        scenarioSourceClosed = scenarioCompleted;
+        scenarioAudioDrained = scenarioCompleted;
+        // A benchmark runtime is one visibility-continuous attempt. Once the host disappears,
+        // every replacement generation in that runtime remains poisoned; only sessionLaunch on
+        // a fresh runtime clears nextSessionVisibilityLost.
+        preArmVisibilityLost = nextSessionVisibilityLost;
+        phase = scenarioCompleted ? Phase.IDLE : Phase.SCENARIO_RUNNING;
+        if (preArmVisibilityLost) {
+            recordBenchmarkInvalidated(sessionGeneration);
+        }
+    }
+
+    synchronized void invalidateSession() {
+        activeSessionGeneration = 0L;
+        benchmarkGeneration = 0L;
+        measurementArmed = false;
+        scenarioCompleted = false;
+        scenarioSessionGeneration = 0L;
+        scenarioSourceClosed = false;
+        scenarioAudioDrained = false;
+        preArmVisibilityLost = false;
+        phase = Phase.IDLE;
+    }
+
+    /** Latches a visibility discontinuity against the current and every replacement session. */
+    synchronized void benchmarkVisibilityLost() {
         if (!enabled) {
+            return;
+        }
+        nextSessionVisibilityLost = true;
+        if (measurementArmed) {
+            liveInputMutations++;
+        }
+        if (activeSessionGeneration <= 0L || preArmVisibilityLost) {
+            return;
+        }
+        preArmVisibilityLost = true;
+        recordBenchmarkInvalidated(activeSessionGeneration);
+    }
+
+    /** Run-bound evidence retained even when visibility is lost after final_result was emitted. */
+    private void recordBenchmarkInvalidated(long sessionGeneration) {
+        record("event=benchmark_invalidated artifact_id=" + artifactId
+                + " pair_id=" + options.pairId
+                + " matrix_block=" + options.matrixBlock
+                + " row_order=" + options.rowOrder
+                + " run_side=" + options.runSide.externalValue()
+                + " session_generation=" + sessionGeneration
+                + " phase=" + phase.name().toLowerCase()
+                + " reason=visibility_lost");
+    }
+
+    synchronized boolean benchmarkPreArmValid(long sessionGeneration) {
+        return enabled && sessionGeneration > 0L
+                && sessionGeneration == activeSessionGeneration && !preArmVisibilityLost;
+    }
+
+    synchronized void benchmarkScenarioCompleted(long sessionGeneration, int completedFrames,
+            int expectedFrames, boolean completed, boolean sourceClosed, boolean audioDrained) {
+        if (!enabled || sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration
+                || options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE) {
+            return;
+        }
+        scenarioExpectedFrames = expectedFrames;
+        scenarioCompletedFrames = completedFrames;
+        scenarioSessionGeneration = sessionGeneration;
+        scenarioCompleted = completed && completedFrames == expectedFrames
+                && !preArmVisibilityLost;
+        scenarioSourceClosed = sourceClosed;
+        scenarioAudioDrained = audioDrained;
+        record("event=scenario_complete artifact_id=" + artifactId
+                + " pair_id=" + options.pairId
+                + " matrix_block=" + options.matrixBlock
+                + " row_order=" + options.rowOrder
+                + " run_side=" + options.runSide.externalValue()
+                + " session_generation=" + sessionGeneration
+                + " input_contract=" + options.benchmarkScenario.externalValue()
+                + " completed=" + scenarioCompleted
+                + " completed_frames=" + completedFrames
+                + " expected_frames=" + expectedFrames
+                + " source_closed=" + sourceClosed
+                + " audio_drained=" + audioDrained);
+    }
+
+    synchronized void emulationStarted(long sessionGeneration) {
+        if (!enabled) {
+            return;
+        }
+        if (sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration
+                || preArmVisibilityLost
+                || !scenarioCompleted || !scenarioSourceClosed || !scenarioAudioDrained) {
             return;
         }
         long preparationOrigin = openNanos == 0L ? launchNanos : openNanos;
@@ -504,6 +674,7 @@ final class AndroidBenchmarkDiagnostics {
         // post one real out-of-epoch buffer on this SurfaceView before taking SF's baseline.
         phase = Phase.WARMING;
         record("event=emulation_started wall_ns=" + preparationNanos
+                + " session_generation=" + activeSessionGeneration
                 + " prep_ms=" + elapsedMillis(preparationNanos, preparationOrigin)
                 + " requested_hardware=" + options.hardware.externalValue()
                 + " profile=" + (profile == null ? "unknown" : profile.id())
@@ -558,10 +729,17 @@ final class AndroidBenchmarkDiagnostics {
                 + " row_order=" + options.rowOrder
                 + " run_side=" + options.runSide.externalValue()
                 + " first_side=" + options.firstSide.externalValue()
+                + " session_generation=" + activeSessionGeneration
                 + " benchmark_generation=" + benchmarkGeneration
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
-                + " input_contract=none"
+                + " input_contract=" + options.benchmarkScenario.externalValue()
+                + " scenario_session_generation=" + scenarioSessionGeneration
+                + " scenario_completed=" + scenarioCompleted
+                + " scenario_completed_frames=" + scenarioCompletedFrames
+                + " scenario_expected_frames=" + scenarioExpectedFrames
+                + " scenario_source_closed=" + scenarioSourceClosed
+                + " scenario_audio_drained=" + scenarioAudioDrained
                 + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode)
                 + " thermal_window=" + options.thermalWindow
                 + " audio=" + (options.audioOutput ? "on" : "off")
@@ -790,7 +968,6 @@ final class AndroidBenchmarkDiagnostics {
                 + " wall_ms=" + elapsedMillis(current, firstFrameNanos)
                 + " fps=" + format(submissionFps)
                 + " " + finalHardwareEvidenceFields()
-                + " " + environmentStartFields()
                 + " " + environmentEndFields(environmentEnd)
                 + " environment_sample_count=" + environmentSampleCount
                 + " thermal_worst=" + thermalWorst
@@ -831,10 +1008,17 @@ final class AndroidBenchmarkDiagnostics {
                 + " artifact_id=" + artifactId + " pair_id=" + options.pairId
                 + " matrix_block=" + options.matrixBlock + " row_order=" + options.rowOrder
                 + " run_side=" + options.runSide.externalValue()
+                + " session_generation=" + activeSessionGeneration
                 + " benchmark_generation=" + benchmarkGeneration
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
-                + " input_contract=none"
+                + " input_contract=" + options.benchmarkScenario.externalValue()
+                + " scenario_session_generation=" + scenarioSessionGeneration
+                + " scenario_completed=" + scenarioCompleted
+                + " scenario_completed_frames=" + scenarioCompletedFrames
+                + " scenario_expected_frames=" + scenarioExpectedFrames
+                + " scenario_source_closed=" + scenarioSourceClosed
+                + " scenario_audio_drained=" + scenarioAudioDrained
                 + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode);
     }
 
@@ -915,7 +1099,7 @@ final class AndroidBenchmarkDiagnostics {
                     + " audio_volume=0 audio_route_failures=-1 audio_playback_position_frames=-1"
                     + " audio_system_volume=-1 audio_system_volume_max=-1"
                     + " audio_system_music_muted=true audio_queue_capacity_frames=0"
-                    + " audio_max_frame_bytes=0 " + audioBaselineFields();
+                    + " audio_max_frame_bytes=0";
         }
         return "audio_active=" + stats.active()
                 + " audio_sample_rate=" + stats.sampleRate()
@@ -948,8 +1132,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " audio_system_volume_max=" + stats.systemVolumeMax()
                 + " audio_system_music_muted=" + stats.systemMusicMuted()
                 + " audio_queue_capacity_frames=" + stats.queueCapacityFrames()
-                + " audio_max_frame_bytes=" + stats.maximumFrameBytes()
-                + " " + audioBaselineFields();
+                + " audio_max_frame_bytes=" + stats.maximumFrameBytes();
     }
 
     private String audioBaselineFields() {
@@ -1273,6 +1456,12 @@ final class AndroidBenchmarkDiagnostics {
     }
 
     private void record(String message) {
+        int encodedBytes = message.getBytes(StandardCharsets.UTF_8).length;
+        if (encodedBytes > MAX_LOG_RECORD_BYTES) {
+            throw new IllegalStateException(
+                    "Benchmark telemetry record exceeds bounded Android payload: "
+                            + encodedBytes + " bytes");
+        }
         recordSink.write(message);
     }
 

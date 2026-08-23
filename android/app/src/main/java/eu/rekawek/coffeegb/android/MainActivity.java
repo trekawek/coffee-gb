@@ -166,7 +166,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private DiagnosticsOptions diagnosticsOptions = DiagnosticsOptions.disabled();
     private boolean benchmarkRecentLaunchRequested;
     private boolean benchmarkAnchorRequested;
-    private String pendingBenchmarkArmToken;
+    private long benchmarkAnchorSessionGeneration;
+    private final BenchmarkArmTokenLatch pendingBenchmarkArm = new BenchmarkArmTokenLatch();
     // Android 6-8 can return from a cancelled permission Activity without delivering its result.
     private MenuExternalSurfaceState legacyCameraPermissionFallbackSurface;
     private boolean legacyCameraPermissionFallbackPosted;
@@ -214,6 +215,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 observedRuntime = connected;
                 observedGeneration = -1L;
                 benchmarkAnchorRequested = false;
+                benchmarkAnchorSessionGeneration = 0L;
+                pendingBenchmarkArm.clear();
             }
             runtime = connected;
             bound = true;
@@ -282,6 +285,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             observedRuntime = null;
             observedGeneration = -1L;
             benchmarkAnchorRequested = false;
+            benchmarkAnchorSessionGeneration = 0L;
+            pendingBenchmarkArm.clear();
             bound = false;
             observedState = RuntimeState.stopped();
             stateCatalogGeneration++;
@@ -308,10 +313,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         AndroidEmulationRuntime active = runtime;
-        if (active == null || !bound) {
-            pendingBenchmarkArmToken = token;
-        } else {
-            pendingBenchmarkArmToken = token;
+        pendingBenchmarkArm.put(token, observedState.sessionGeneration());
+        if (active != null && bound) {
             armPendingBenchmarkIfReady(active);
         }
     }
@@ -2549,6 +2552,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (state.generation() < observedGeneration) {
             return;
         }
+        long previousSessionGeneration = observedState.sessionGeneration();
+        if (diagnosticsOptions.enabled
+                && pendingBenchmarkArm.onStateTransition(previousSessionGeneration, state)) {
+            benchmarkAnchorRequested = false;
+            benchmarkAnchorSessionGeneration = 0L;
+        }
         observedGeneration = state.generation();
         if (state.flushPending() && !observedState.flushPending()
                 && menuController != null && menuController.visible()
@@ -2557,14 +2566,24 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         observedState = state;
         if (diagnosticsOptions.enabled && state.phase() == RuntimeState.Phase.PAUSED
-                && !benchmarkAnchorRequested && runtime != null && video != null) {
+                && !benchmarkAnchorRequested && runtime != null && video != null
+                && state.sessionGeneration() > 0L
+                && runtime.benchmarkPreconditionReady()) {
             benchmarkAnchorRequested = true;
+            benchmarkAnchorSessionGeneration = state.sessionGeneration();
             AndroidEmulationRuntime active = runtime;
+            long anchorSessionGeneration = benchmarkAnchorSessionGeneration;
             video.requestBenchmarkAnchor(success -> {
-                active.benchmarkAnchorPosted(success);
-                if (success) {
-                    armPendingBenchmarkIfReady(active);
-                }
+                active.benchmarkAnchorPosted(anchorSessionGeneration, success,
+                        () -> runOnUiThread(() -> {
+                            if (success && runtime == active
+                                    && observedState.phase() == RuntimeState.Phase.PAUSED
+                                    && observedState.sessionGeneration() == anchorSessionGeneration
+                                    && benchmarkAnchorSessionGeneration
+                                            == anchorSessionGeneration) {
+                                armPendingBenchmarkIfReady(active, anchorSessionGeneration);
+                            }
+                        }));
             });
         }
         refreshMenuPages();
@@ -2584,13 +2603,63 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     /** Defers a singleTop arm token until the real anchor has completed on the renderer. */
     private void armPendingBenchmarkIfReady(AndroidEmulationRuntime active) {
-        if (!diagnosticsOptions.enabled || active == null || pendingBenchmarkArmToken == null
-                || !active.benchmarkAnchorReady()) {
+        armPendingBenchmarkIfReady(active, observedState.sessionGeneration());
+    }
+
+    private void armPendingBenchmarkIfReady(
+            AndroidEmulationRuntime active, long sessionGeneration) {
+        if (!diagnosticsOptions.enabled || active == null
+                || !pendingBenchmarkArm.pendingFor(sessionGeneration)
+                || sessionGeneration <= 0L
+                || observedState.phase() != RuntimeState.Phase.PAUSED
+                || observedState.sessionGeneration() != sessionGeneration
+                || !active.benchmarkAnchorReady(sessionGeneration)) {
             return;
         }
-        String token = pendingBenchmarkArmToken;
-        pendingBenchmarkArmToken = null;
-        active.armBenchmark(token);
+        String token = pendingBenchmarkArm.take(sessionGeneration);
+        if (token != null) {
+            active.armBenchmark(token, sessionGeneration);
+        }
+    }
+
+    /** Generation-bound singleTop token latch; renderer completion may race a later intent. */
+    static final class BenchmarkArmTokenLatch {
+        private String token;
+        private long sessionGeneration;
+
+        synchronized void put(String token, long sessionGeneration) {
+            this.token = token;
+            this.sessionGeneration = sessionGeneration;
+        }
+
+        synchronized boolean pendingFor(long sessionGeneration) {
+            return token != null && sessionGeneration > 0L
+                    && this.sessionGeneration == sessionGeneration;
+        }
+
+        synchronized String take(long sessionGeneration) {
+            if (!pendingFor(sessionGeneration)) {
+                return null;
+            }
+            String result = token;
+            clear();
+            return result;
+        }
+
+        synchronized boolean onStateTransition(
+                long previousSessionGeneration, RuntimeState state) {
+            boolean invalidate = state.phase() == RuntimeState.Phase.LOADING
+                    || state.sessionGeneration() != previousSessionGeneration;
+            if (invalidate) {
+                clear();
+            }
+            return invalidate;
+        }
+
+        synchronized void clear() {
+            token = null;
+            sessionGeneration = 0L;
+        }
     }
 
 

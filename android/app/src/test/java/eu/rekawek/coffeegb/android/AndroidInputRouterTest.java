@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class AndroidInputRouterTest {
@@ -65,6 +66,126 @@ public class AndroidInputRouterTest {
         } finally {
             router.close();
         }
+    }
+
+    @Test
+    public void scenarioSourceIsIsolatedAndClearedByMeasurementLock() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            assertTrue(router.beginBenchmarkScenario());
+            router.updateTouchPointer(1, List.of(Button.A));
+            assertTrue(hub.sample().buttons(0).isEmpty());
+
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.RIGHT_MASK);
+            assertEquals(java.util.Set.of(Button.RIGHT), hub.sample().buttons(0));
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.RIGHT_MASK);
+            assertTrue(router.benchmarkScenarioActiveForTesting());
+
+            router.lockBenchmarkWindow();
+            assertTrue(hub.sample().buttons(0).isEmpty());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.START_MASK);
+            assertTrue(hub.sample().buttons(0).isEmpty());
+            router.endBenchmarkScenario();
+            assertTrue(hub.sample().buttons(0).isEmpty());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void focusLossReleasePreservesActiveScenarioHold() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            assertTrue(router.beginBenchmarkScenario());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.RIGHT_MASK);
+
+            // MainActivity.onWindowFocusChanged(false) delegates to this cleanup.
+            router.releaseAll();
+
+            assertEquals(java.util.Set.of(Button.RIGHT), hub.sample().buttons(0));
+            assertTrue(router.benchmarkScenarioActiveForTesting());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void lifecycleReleasePreservesHoldUntilScenarioTransition() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            assertTrue(router.beginBenchmarkScenario());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.B_MASK);
+
+            // MainActivity.onStop() may repeat focus cleanup before the next native-frame edge.
+            router.releaseAll();
+            router.releaseAll();
+            assertEquals(java.util.Set.of(Button.B), hub.sample().buttons(0));
+
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.NONE_MASK);
+            assertTrue(hub.sample().buttons(0).isEmpty());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void replacementResetsMeasuredLockAndAdmitsANewScenarioSource() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            assertTrue(router.beginBenchmarkScenario());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.B_MASK);
+            router.endBenchmarkScenario();
+            assertTrue(router.benchmarkScenarioSourceClosed());
+            assertTrue(router.benchmarkLockedForTesting());
+            assertFalse(router.beginBenchmarkScenario());
+
+            router.resetBenchmarkSession();
+            assertFalse(router.benchmarkScenarioSourceClosed());
+            assertFalse(router.benchmarkLockedForTesting());
+            assertTrue(router.beginBenchmarkScenario());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.START_MASK);
+
+            assertEquals(java.util.Set.of(Button.START), hub.sample().buttons(0));
+            assertFalse(router.benchmarkScenarioSourceClosed());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void sourceClosureAtomicallyLocksPhysicalInputBeforeArm() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        try {
+            assertFalse(router.benchmarkScenarioSourceClosed());
+            assertTrue(router.beginBenchmarkScenario());
+            router.setBenchmarkScenarioMask(BenchmarkGameplayScenario.RIGHT_MASK);
+
+            router.endBenchmarkScenario();
+            assertTrue(router.benchmarkScenarioSourceClosed());
+            assertTrue(router.benchmarkLockedForTesting());
+            assertTrue(hub.sample().buttons(0).isEmpty());
+
+            // Audio drain and compositor anchoring happen after source closure but before ARM.
+            router.updateTouchPointer(9, List.of(Button.A));
+            assertTrue(hub.sample().buttons(0).isEmpty());
+        } finally {
+            router.close();
+        }
+    }
+
+    @Test
+    public void failedScenarioAdmissionCannotManufactureSourceClosedProof() {
+        PlayerInputHub hub = new PlayerInputHub();
+        AndroidInputRouter router = new AndroidInputRouter(hub);
+        router.close();
+
+        assertFalse(router.beginBenchmarkScenario());
+        assertFalse(router.benchmarkScenarioSourceClosed());
     }
 
     @Test

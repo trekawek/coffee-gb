@@ -81,7 +81,24 @@ if [ "$command" = install ]; then echo Success; exit 0; fi
 if [ "$command" = logcat ]; then
   if [ "${2:-}" = -c ]; then
     : >"$log"
+    rm -f "$records.postfinal-seen" "$records.postfinal-emitted"
   else
+    if [ "$mode" = post_final_invalidation ] \
+        && grep -q 'event=final_result ' "$log"; then
+      if [ -f "$records.postfinal-seen" ] && [ ! -f "$records.postfinal-emitted" ]; then
+        artifact=$(awk -F= '$1 == "artifact" { print $2 }' "$context")
+        pair=$(awk -F= '$1 == "pair" { print $2 }' "$context")
+        block=$(awk -F= '$1 == "block" { print $2 }' "$context")
+        order=$(awk -F= '$1 == "order" { print $2 }' "$context")
+        side=$(awk -F= '$1 == "side" { print $2 }' "$context")
+        session_generation=$(awk -F= '$1 == "session_generation" { print $2 }' "$context")
+        printf 'I/CoffeeGbBench: event=benchmark_invalidated artifact_id=%s pair_id=%s matrix_block=%s row_order=%s run_side=%s session_generation=%s phase=done reason=visibility_lost\n' \
+          "$artifact" "$pair" "$block" "$order" "$side" "$session_generation" >>"$log"
+        : >"$records.postfinal-emitted"
+      else
+        : >"$records.postfinal-seen"
+      fi
+    fi
     cat "$log"
   fi
   exit 0
@@ -159,7 +176,7 @@ if [ "$sub" = am ]; then
     exit 0
   fi
   [ "$action" = start ] || exit 1
-  profile=; pair=; block=; order=; side=; first=; slot=; launch_rate=; artifact=; execution=accuracy; arm=
+  profile=; pair=; block=; order=; side=; first=; slot=; launch_rate=; artifact=; execution=accuracy; scenario=none; session_generation=; arm=
   shift 2
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -176,6 +193,7 @@ if [ "$sub" = am ]; then
           coffee_gb_recent_slot) slot=$value ;;
           coffee_gb_surface_rate_hz) launch_rate=$value ;;
           coffee_gb_execution_mode) execution=$value ;;
+          coffee_gb_benchmark_scenario) scenario=$value ;;
           coffee_gb_benchmark_arm_token) arm=$value ;;
         esac
         shift 3
@@ -196,6 +214,8 @@ if [ "$sub" = am ]; then
       launch_rate=$(awk -F= '$1 == "rate" { print $2 }' "$context")
       artifact=$(awk -F= '$1 == "artifact" { print $2 }' "$context")
       execution=$(awk -F= '$1 == "execution" { print $2 }' "$context")
+      scenario=$(awk -F= '$1 == "scenario" { print $2 }' "$context")
+      session_generation=$(awk -F= '$1 == "session_generation" { print $2 }' "$context")
     fi
     generation=$(($(cat "$gen_file") + 1))
     printf '%s\n' "$generation" >"$gen_file"
@@ -215,20 +235,64 @@ if [ "$sub" = am ]; then
       content_rate=59728
       ready_fps=59.7275
       [ "$effective" = sgb ] && { content_rate=61168; ready_fps=61.1679; }
-      matrix_record="I/CoffeeGbBench: event=matrix_run build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side first_side=$first benchmark_generation=$generation workload_nonce=app-owned-test-nonce-0001 warmup=true input_contract=none execution_mode=$execution thermal_window=m2 audio=on render=presentation availability=available requested_hardware=$profile surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective device_id=3333333333333333333333333333333333333333333333333333333333333333"
+      case "$scenario" in
+        dmg-action-v1) scenario_frames=313; scenario_generation=$session_generation ;;
+        cgb-action-v1) scenario_frames=923; scenario_generation=$session_generation ;;
+        *) scenario_frames=0; scenario_generation=0 ;;
+      esac
+      if [ "$mode" = scenario_generation ] && [ "$scenario_generation" -gt 0 ]; then
+        scenario_generation=$((scenario_generation + 1))
+      fi
+      [ "$mode" = scenario_frames ] && scenario_frames=$((scenario_frames + 1))
+      scenario_completed=true
+      scenario_source_closed=true
+      scenario_audio_drained=true
+      [ "$mode" = scenario_incomplete ] && scenario_completed=false
+      [ "$mode" = scenario_cleanup ] && { scenario_source_closed=false; scenario_audio_drained=false; }
+      audio_start_pending=0
+      audio_start_queued=0
+      audio_start_playing=true
+      [ "$mode" = baseline_pending ] && audio_start_pending=4
+      [ "$mode" = baseline_queued ] && audio_start_queued=4
+      [ "$mode" = baseline_stopped ] && audio_start_playing=false
+      matrix_record="I/CoffeeGbBench: event=matrix_run build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side first_side=$first session_generation=$session_generation benchmark_generation=$generation workload_nonce=app-owned-test-nonce-0001 warmup=true input_contract=$scenario scenario_session_generation=$scenario_generation scenario_completed=$scenario_completed scenario_completed_frames=$scenario_frames scenario_expected_frames=$scenario_frames scenario_source_closed=$scenario_source_closed scenario_audio_drained=$scenario_audio_drained execution_mode=$execution thermal_window=m2 audio=on render=presentation availability=available requested_hardware=$profile surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective device_id=3333333333333333333333333333333333333333333333333333333333333333 audio_start_pending_bytes=$audio_start_pending audio_start_queued_bytes=$audio_start_queued audio_start_output_playing=$audio_start_playing"
       printf '%s\n' "$matrix_record" >>"$log"
-      final_record="I/CoffeeGbBench: event=final_result build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side benchmark_generation=$generation frame=600 ready_count=600 ready_interval_fps=$ready_fps submission_interval_fps=$ready_fps submitted_count=600 dropped_count=0 duplicate_count=0 late_count=0 corrupt_count=0 requested_profile=$profile profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective execution_mode=$execution surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate warmup=true input_contract=none drain_success=true audio_active=true audio_muted=false audio_system_music_muted=false audio_track_underruns=0 audio_start_track_underruns=0 audio_focus_granted=true audio_focus_start_loss_count=0 audio_focus_loss_count=0 live_input_mutations=0 thermal_worst=0 display_bad_count=0 interactive_bad_count=0 plugged_bad_count=0 power_save_bad_count=0 stay_awake_bad_count=0 workload_nonce=app-owned-test-nonce-0001 device_id=3333333333333333333333333333333333333333333333333333333333333333"
+      final_record="I/CoffeeGbBench: event=final_result build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side session_generation=$session_generation benchmark_generation=$generation frame=600 ready_count=600 ready_interval_fps=$ready_fps submission_interval_fps=$ready_fps submitted_count=600 dropped_count=0 duplicate_count=0 late_count=0 corrupt_count=0 requested_profile=$profile profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective execution_mode=$execution surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate warmup=true input_contract=$scenario scenario_session_generation=$scenario_generation scenario_completed=$scenario_completed scenario_completed_frames=$scenario_frames scenario_expected_frames=$scenario_frames scenario_source_closed=$scenario_source_closed scenario_audio_drained=$scenario_audio_drained drain_success=true audio_active=true audio_output_playing=true audio_muted=false audio_system_music_muted=false audio_track_underruns=0 audio_focus_granted=true audio_focus_start_loss_count=0 audio_focus_loss_count=0 live_input_mutations=0 thermal_worst=0 display_bad_count=0 interactive_bad_count=0 plugged_bad_count=0 power_save_bad_count=0 stay_awake_bad_count=0 workload_nonce=app-owned-test-nonce-0001 device_id=3333333333333333333333333333333333333333333333333333333333333333"
       printf '%s\n' "$final_record" >>"$log"
     fi
   elif [ "$mode" != timeout ]; then
+    session_generation=$(($(cat "$gen_file") + 1))
+    case "$scenario" in
+      dmg-action-v1) scenario_frames=313 ;;
+      cgb-action-v1) scenario_frames=923 ;;
+      *) scenario_frames=0 ;;
+    esac
+    if [ "$scenario" != none ] && [ "$mode" != scenario_missing ]; then
+      emitted_frames=$scenario_frames
+      [ "$mode" = scenario_frames ] && emitted_frames=$((emitted_frames + 1))
+      scenario_pair=$pair
+      [ "$mode" = scenario_identity ] && scenario_pair=stale-pair
+      completed=true
+      source_closed=true
+      audio_drained=true
+      [ "$mode" = scenario_incomplete ] && completed=false
+      [ "$mode" = scenario_cleanup ] && { source_closed=false; audio_drained=false; }
+      printf 'I/CoffeeGbBench: event=scenario_complete artifact_id=%s pair_id=%s matrix_block=%s row_order=%s run_side=%s session_generation=%s input_contract=%s completed=%s completed_frames=%s expected_frames=%s source_closed=%s audio_drained=%s\n' \
+        "$artifact" "$scenario_pair" "$block" "$order" "$side" "$session_generation" \
+        "$scenario" "$completed" "$emitted_frames" "$scenario_frames" "$source_closed" \
+        "$audio_drained" >>"$log"
+    elif [ "$scenario" = none ] && [ "$mode" = scenario_missing ]; then
+      printf 'I/CoffeeGbBench: event=scenario_complete artifact_id=%s pair_id=%s matrix_block=%s row_order=%s run_side=%s session_generation=%s input_contract=dmg-action-v1 completed=true completed_frames=313 expected_frames=313 source_closed=true audio_drained=true\n' \
+        "$artifact" "$pair" "$block" "$order" "$side" "$session_generation" >>"$log"
+    fi
     printf 'I/CoffeeGbBench: event=warmup_complete completed=true phase=warming\n' >>"$log"
     printf 'I/CoffeeGbBench: event=benchmark_anchor success=true phase=anchor_ready\n' >>"$log"
   fi
   if [ -z "$arm" ]; then
-    printf 'profile=%s\npair=%s\nblock=%s\norder=%s\nside=%s\nfirst=%s\nslot=%s\nrate=%s\nartifact=%s\nexecution=%s\n' \
-      "$profile" "$pair" "$block" "$order" "$side" "$first" "$slot" "$launch_rate" "$artifact" "$execution" >"$context"
-    printf 'launch profile=%s slot=%s rate=%s mode=%s pair=%s order=%s side=%s first=%s\n' \
-      "$profile" "$slot" "$launch_rate" "$execution" "$pair" "$order" "$side" "$first" >>"$records"
+    printf 'profile=%s\npair=%s\nblock=%s\norder=%s\nside=%s\nfirst=%s\nslot=%s\nrate=%s\nartifact=%s\nexecution=%s\nscenario=%s\nsession_generation=%s\n' \
+      "$profile" "$pair" "$block" "$order" "$side" "$first" "$slot" "$launch_rate" "$artifact" "$execution" "$scenario" "$session_generation" >"$context"
+    printf 'launch profile=%s slot=%s rate=%s mode=%s scenario=%s pair=%s order=%s side=%s first=%s\n' \
+      "$profile" "$slot" "$launch_rate" "$execution" "$scenario" "$pair" "$order" "$side" "$first" >>"$records"
   fi
   printf 'Status: ok\n'
   exit 0
@@ -363,6 +427,7 @@ awk '
     rate=$0; sub(/^.*rate=/, "", rate); sub(/[[:space:]].*$/, "", rate)
     mode=$0; sub(/^.*mode=/, "", mode); sub(/[[:space:]].*$/, "", mode)
     profile=$0; sub(/^.*profile=/, "", profile); sub(/[[:space:]].*$/, "", profile)
+    scenario=$0; sub(/^.*scenario=/, "", scenario); sub(/[[:space:]].*$/, "", scenario)
     slot=$0; sub(/^.*slot=/, "", slot); sub(/[[:space:]].*$/, "", slot)
     if ((launch_no - 1) % 14 == 0) { block_no++; expected_first=(block_no % 2 == 1 ? "parent" : "candidate") }
     if (first != expected_first) exit 2
@@ -375,6 +440,9 @@ awk '
     if ((row == "cgb-native" || row == "cgb-dmg-compat") && profile != "cgb") exit 6
     if (row == "cgb0-native" && profile != "cgb0") exit 7
     if ((row == "dmg" || row == "mgb" || row == "sgb" || row == "sgb2") && profile != row) exit 8
+    if (((row == "dmg" || row == "mgb" || row == "cgb-dmg-compat") && scenario != "dmg-action-v1") || \
+        ((row == "cgb-native" || row == "cgb0-native") && scenario != "cgb-action-v1") || \
+        ((row == "sgb" || row == "sgb2") && scenario != "none")) exit 13
     if ((launch_no % 2) == 1) {
       if (seen[block_no SUBSEP row]++) exit 9
       rows_in_block[block_no]++
@@ -389,6 +457,9 @@ awk '
 grep -q -- '--es coffee_gb_hardware cgb' "$calls" || { echo 'profile was not passed' >&2; exit 1; }
 grep -q -- '--ei coffee_gb_recent_slot 2' "$calls" || { echo 'color slot was not passed' >&2; exit 1; }
 grep -q -- '--ei coffee_gb_recent_slot 3' "$calls" || { echo 'non-color slot was not passed' >&2; exit 1; }
+grep -q -- '--es coffee_gb_benchmark_scenario dmg-action-v1' "$calls" || { echo 'DMG input contract was not passed' >&2; exit 1; }
+grep -q -- '--es coffee_gb_benchmark_scenario cgb-action-v1' "$calls" || { echo 'CGB input contract was not passed' >&2; exit 1; }
+grep -q -- '--es coffee_gb_benchmark_scenario none' "$calls" || { echo 'SGB input contract was not passed' >&2; exit 1; }
 if grep -q -- 'coffee_gb_workload_nonce' "$calls"; then
   echo 'host workload nonce was passed' >&2
   exit 1
@@ -452,5 +523,15 @@ expect_failure unsigned
 expect_failure layer
 expect_failure timeout
 expect_failure privacy
+expect_failure scenario_missing
+expect_failure scenario_frames
+expect_failure scenario_generation
+expect_failure scenario_identity
+expect_failure scenario_incomplete
+expect_failure scenario_cleanup
+expect_failure baseline_pending
+expect_failure baseline_queued
+expect_failure baseline_stopped
+expect_failure post_final_invalidation
 
 echo 'benchmark device matrix hermetic fixture: PASS'

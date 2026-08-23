@@ -5,6 +5,7 @@ set -eu
 #
 # The benchmark wire is intentionally kept here as one small list of constants.  The Android
 # diagnostics side owns the event names; this host runner assumes the current contract is:
+#   event=scenario_complete ... completed_frames=<exact> source_closed=true audio_drained=true
 #   event=warmup_complete completed=true phase=warming
 #   event=benchmark_anchor success=true phase=anchor_ready
 #   event=final_result ... frame=600 ...
@@ -29,7 +30,9 @@ EXPECTED_API=35
 
 EVENT_WARMUP=warmup_complete
 EVENT_ANCHOR=benchmark_anchor
+EVENT_SCENARIO=scenario_complete
 EVENT_FINAL=final_result
+EVENT_INVALIDATED=benchmark_invalidated
 
 RUN_BLOCKS=12
 RUN_ROWS=7
@@ -809,6 +812,25 @@ row_effective_dmg_compat() {
   esac
 }
 
+row_input_contract() {
+  case "$1" in
+    dmg|mgb) printf '%s\n' dmg-action-v1 ;;
+    cgb-native|cgb0-native) printf '%s\n' cgb-action-v1 ;;
+    cgb-dmg-compat) printf '%s\n' dmg-action-v1 ;;
+    sgb|sgb2) printf '%s\n' none ;;
+    *) return 1 ;;
+  esac
+}
+
+row_scenario_frames() {
+  case "$1" in
+    dmg|mgb|cgb-dmg-compat) printf '%s\n' 313 ;;
+    cgb-native|cgb0-native) printf '%s\n' 923 ;;
+    sgb|sgb2) printf '%s\n' 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 run_one() {
   block=$1
   row_order=$2
@@ -824,6 +846,8 @@ run_one() {
   nominal_fps=$(row_nominal_fps "$row") || fatal "unknown scheduled nominal FPS"
   expected_gbc=$(row_effective_gbc "$row") || fatal "unknown scheduled CGB mode"
   expected_compat=$(row_effective_dmg_compat "$row") || fatal "unknown scheduled compatibility mode"
+  input_contract=$(row_input_contract "$row") || fatal "unknown scheduled input contract"
+  scenario_frames=$(row_scenario_frames "$row") || fatal "unknown scheduled scenario length"
   pair_id=p${block}-${row}
   matrix_block=mb${block}
   arm_token=$(make_token a)
@@ -872,6 +896,7 @@ run_one() {
     --ez coffee_gb_thermal_valid true \
     --ei coffee_gb_surface_rate_hz "$rate" \
     --es coffee_gb_execution_mode "$execution_mode" \
+    --es coffee_gb_benchmark_scenario "$input_contract" \
     --ei coffee_gb_recent_slot "$slot" \
     || fatal "visible benchmark Activity launch failed"
   if ! awk 'tolower($0) ~ /status:[[:space:]]*ok/ { ok=1 } END { exit(ok ? 0 : 1) }' "$tmp_dir/launch"; then
@@ -903,6 +928,32 @@ run_one() {
 
   # Matrix identity is app evidence, not a host relabel.  Pin every field which can otherwise
   # turn a stale lifecycle/log record into an accepted row.
+  scenario_count=$(event_count "$tmp_dir/logcat" "$EVENT_SCENARIO")
+  scenario_generation=0
+  if [ "$input_contract" = none ]; then
+    [ "$scenario_count" -eq 0 ] \
+      || fatal "no-input row emitted unexpected scenario_complete evidence"
+  else
+    [ "$scenario_count" -eq 1 ] \
+      || fatal "scripted row scenario_complete evidence was absent or ambiguous"
+    scenario_line=$(event_line "$tmp_dir/logcat" "$EVENT_SCENARIO")
+    require_line_field "$scenario_line" artifact_id "$artifact_id"
+    require_line_field "$scenario_line" pair_id "$pair_id"
+    require_line_field "$scenario_line" matrix_block "$matrix_block"
+    require_line_field "$scenario_line" row_order "$row_order"
+    require_line_field "$scenario_line" run_side "$run_side"
+    require_line_field "$scenario_line" input_contract "$input_contract"
+    require_line_field "$scenario_line" completed true
+    require_line_field "$scenario_line" completed_frames "$scenario_frames"
+    require_line_field "$scenario_line" expected_frames "$scenario_frames"
+    require_line_field "$scenario_line" source_closed true
+    require_line_field "$scenario_line" audio_drained true
+    scenario_generation=$(line_field session_generation "$scenario_line")
+    case "$scenario_generation" in
+      ''|*[!0-9]*) fatal "scenario session generation is malformed" ;;
+    esac
+    [ "$scenario_generation" -gt 0 ] || fatal "scenario session generation is invalid"
+  fi
   matrix_run_count=$(event_count "$tmp_dir/logcat" matrix_run)
   [ "$matrix_run_count" -eq 1 ] || fatal "matrix_run evidence was absent or ambiguous"
   matrix_run_line=$(event_line "$tmp_dir/logcat" matrix_run)
@@ -921,11 +972,29 @@ run_one() {
   require_line_field "$matrix_run_line" row_order "$row_order"
   require_line_field "$matrix_run_line" run_side "$run_side"
   require_line_field "$matrix_run_line" first_side "$first_side"
+  matrix_session_generation=$(line_field session_generation "$matrix_run_line")
+  case "$matrix_session_generation" in
+    ''|*[!0-9]*) fatal "matrix_run session generation is malformed" ;;
+  esac
+  [ "$matrix_session_generation" -gt 0 ] || fatal "matrix_run session generation is invalid"
+  if [ "$input_contract" != none ]; then
+    [ "$matrix_session_generation" = "$scenario_generation" ] \
+      || fatal "scenario_complete and matrix_run session generations differ"
+  fi
   require_line_field "$matrix_run_line" benchmark_generation "$benchmark_generation"
   require_line_field "$matrix_run_line" execution_mode "$execution_mode"
   require_line_field "$matrix_run_line" requested_hardware "$profile"
   require_line_field "$matrix_run_line" warmup true
-  require_line_field "$matrix_run_line" input_contract none
+  require_line_field "$matrix_run_line" input_contract "$input_contract"
+  require_line_field "$matrix_run_line" scenario_session_generation "$scenario_generation"
+  require_line_field "$matrix_run_line" scenario_completed true
+  require_line_field "$matrix_run_line" scenario_completed_frames "$scenario_frames"
+  require_line_field "$matrix_run_line" scenario_expected_frames "$scenario_frames"
+  require_line_field "$matrix_run_line" scenario_source_closed true
+  require_line_field "$matrix_run_line" scenario_audio_drained true
+  require_line_field "$matrix_run_line" audio_start_pending_bytes 0
+  require_line_field "$matrix_run_line" audio_start_queued_bytes 0
+  require_line_field "$matrix_run_line" audio_start_output_playing true
   require_line_field "$matrix_run_line" thermal_window m2
   require_line_field "$matrix_run_line" audio on
   require_line_field "$matrix_run_line" render presentation
@@ -949,6 +1018,7 @@ run_one() {
   require_line_field "$final_line" matrix_block "$matrix_block"
   require_line_field "$final_line" row_order "$row_order"
   require_line_field "$final_line" run_side "$run_side"
+  require_line_field "$final_line" session_generation "$matrix_session_generation"
   require_line_field "$final_line" execution_mode "$execution_mode"
   require_line_field "$final_line" frame 600
   require_line_field "$final_line" ready_count 600
@@ -967,8 +1037,17 @@ run_one() {
   require_line_field "$final_line" display_target_hz "$rate"
   require_line_field "$final_line" surface_content_rate_millihz "$content_rate"
   require_line_field "$final_line" warmup true
-  require_line_field "$final_line" input_contract none
+  require_line_field "$final_line" input_contract "$input_contract"
+  require_line_field "$final_line" scenario_session_generation "$scenario_generation"
+  require_line_field "$final_line" scenario_completed true
+  require_line_field "$final_line" scenario_completed_frames "$scenario_frames"
+  require_line_field "$final_line" scenario_expected_frames "$scenario_frames"
+  require_line_field "$final_line" scenario_source_closed true
+  require_line_field "$final_line" scenario_audio_drained true
+  # The ARM baseline is bound once in matrix_run. final_result intentionally omits its duplicated
+  # 21-field copy to retain Android log-payload headroom.
   require_line_field "$final_line" audio_active true
+  require_line_field "$final_line" audio_output_playing true
   require_line_field "$final_line" audio_muted false
   require_line_field "$final_line" audio_system_music_muted false
   require_line_field "$final_line" live_input_mutations 0
@@ -1053,7 +1132,33 @@ run_one() {
   require_line_field "$gate_line" late_acquire_frames 0
   require_line_field "$gate_line" bad_desired_present_frames 0
   require_line_field "$gate_line" measurement surfaceflinger_timestats
+
+  # The first final_result capture precedes SurfaceFlinger collection. Re-read the app evidence
+  # after that gate so a visibility/focus loss during the compositor tail cannot be hidden behind
+  # the stale capture. An invalidation is terminal even if final_result was already emitted.
+  capture_benchmark_log "$tmp_dir/logcat"
   check_redacted_lines "$tmp_dir/logcat"
+  [ "$(event_count "$tmp_dir/logcat" "$EVENT_INVALIDATED")" -eq 0 ] \
+    || fatal "benchmark session was invalidated before evidence collection completed"
+  [ "$(event_count "$tmp_dir/logcat" "$EVENT_FINAL")" -eq 1 ] \
+    || fatal "fresh final_result evidence was absent or ambiguous"
+  fresh_final_line=$(event_line "$tmp_dir/logcat" "$EVENT_FINAL")
+  require_line_field "$fresh_final_line" artifact_id "$artifact_id"
+  require_line_field "$fresh_final_line" pair_id "$pair_id"
+  require_line_field "$fresh_final_line" matrix_block "$matrix_block"
+  require_line_field "$fresh_final_line" row_order "$row_order"
+  require_line_field "$fresh_final_line" run_side "$run_side"
+  require_line_field "$fresh_final_line" session_generation "$matrix_session_generation"
+  require_line_field "$fresh_final_line" benchmark_generation "$benchmark_generation"
+  [ "$(event_count "$tmp_dir/logcat" matrix_run)" -eq 1 ] \
+    || fatal "fresh matrix_run evidence was absent or ambiguous"
+  if [ "$input_contract" = none ]; then
+    [ "$(event_count "$tmp_dir/logcat" "$EVENT_SCENARIO")" -eq 0 ] \
+      || fatal "fresh no-input row emitted unexpected scenario evidence"
+  else
+    [ "$(event_count "$tmp_dir/logcat" "$EVENT_SCENARIO")" -eq 1 ] \
+      || fatal "fresh scenario_complete evidence was absent or ambiguous"
+  fi
   # Only event records and the numeric compositor record become durable evidence.
   awk 'index($0, "CoffeeGbBench") > 0 && index($0, "event=") > 0 { print }' \
     "$tmp_dir/logcat" >>"$aggregate"

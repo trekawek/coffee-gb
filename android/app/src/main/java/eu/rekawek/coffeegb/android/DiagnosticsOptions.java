@@ -47,6 +47,8 @@ final class DiagnosticsOptions {
     static final String EXTRA_BENCHMARK_ARM_TOKEN = "coffee_gb_benchmark_arm_token";
     /** Session execution strategy; Accuracy is the compatibility-safe default. */
     static final String EXTRA_EXECUTION_MODE = "coffee_gb_execution_mode";
+    /** Benchmark-only deterministic gameplay preconditioning contract. */
+    static final String EXTRA_BENCHMARK_SCENARIO = "coffee_gb_benchmark_scenario";
 
     private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final String UNKNOWN_TOKEN = "unknown";
@@ -145,6 +147,41 @@ final class DiagnosticsOptions {
         FRAME_SINK
     }
 
+    enum BenchmarkScenario {
+        NONE("none"),
+        DMG_ACTION_V1("dmg-action-v1"),
+        CGB_ACTION_V1("cgb-action-v1");
+
+        private final String externalValue;
+
+        BenchmarkScenario(String externalValue) {
+            this.externalValue = externalValue;
+        }
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        static BenchmarkScenario fromExternalValue(String value) {
+            if (value == null || value.isBlank()) {
+                return NONE;
+            }
+            String normalized = value.trim().toLowerCase(Locale.ROOT);
+            for (BenchmarkScenario scenario : values()) {
+                if (scenario.externalValue.equals(normalized)) {
+                    return scenario;
+                }
+            }
+            return NONE;
+        }
+    }
+
+    BenchmarkGameplayScenario.NativeFrameKind benchmarkNativeFrameKind() {
+        return hardware == Hardware.CGB || hardware == Hardware.CGB0
+                ? BenchmarkGameplayScenario.NativeFrameKind.GBC
+                : BenchmarkGameplayScenario.NativeFrameKind.DMG;
+    }
+
     enum RunSide {
         UNKNOWN("unknown"),
         PARENT("parent"),
@@ -178,7 +215,7 @@ final class DiagnosticsOptions {
             false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
             "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
             UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-            ExecutionMode.ACCURACY);
+            ExecutionMode.ACCURACY, BenchmarkScenario.NONE);
 
     final boolean enabled;
     final Hardware hardware;
@@ -204,12 +241,15 @@ final class DiagnosticsOptions {
     final int recentSlot;
     /** Core-owned session strategy. This is not persisted in a save state. */
     final ExecutionMode executionMode;
+    /** Deterministic benchmark-only input contract; never persisted or exposed to release UI. */
+    final BenchmarkScenario benchmarkScenario;
 
     private DiagnosticsOptions(boolean enabled, Hardware hardware, boolean audioOutput,
             Render render, boolean runtimeWarmup, boolean launchRecent, String buildId,
             String pairId, String matrixBlock, int rowOrder, RunSide runSide,
             RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
-            String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode) {
+            String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode,
+            BenchmarkScenario benchmarkScenario) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
@@ -230,6 +270,8 @@ final class DiagnosticsOptions {
         this.surfaceContentRateMillihz = contentRateMillihz(hardware);
         this.recentSlot = recentSlot >= 0 && recentSlot < 10 ? recentSlot : -1;
         this.executionMode = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
+        this.benchmarkScenario = enabled && benchmarkScenario != null
+                ? benchmarkScenario : BenchmarkScenario.NONE;
     }
 
     static DiagnosticsOptions disabled() {
@@ -244,7 +286,7 @@ final class DiagnosticsOptions {
         return new DiagnosticsOptions(false, Hardware.AUTO, true, Render.PRESENTATION, false,
                 false, "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN,
                 RunSide.UNKNOWN, UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-                selected);
+                selected, BenchmarkScenario.NONE);
     }
 
     static ExecutionMode parseExecutionMode(String value) {
@@ -308,7 +350,8 @@ final class DiagnosticsOptions {
                 stringExtra(intent, EXTRA_WORKLOAD_NONCE),
                 intExtra(intent, EXTRA_SURFACE_RATE_HZ, -1),
                 intExtra(intent, EXTRA_RECENT_SLOT, -1),
-                stringExtra(intent, EXTRA_EXECUTION_MODE));
+                stringExtra(intent, EXTRA_EXECUTION_MODE),
+                stringExtra(intent, EXTRA_BENCHMARK_SCENARIO));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
@@ -366,6 +409,18 @@ final class DiagnosticsOptions {
             String runSide, String firstSide, String deviceBuild, String thermalWindow,
             boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
             String executionModeValue) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, executionModeValue, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue, String benchmarkScenarioValue) {
         if (!diagnosticsEnabled) {
             return disabled(parseExecutionMode(executionModeValue));
         }
@@ -383,7 +438,8 @@ final class DiagnosticsOptions {
                 RunSide.fromExternalValue(runSide), RunSide.fromExternalValue(firstSide),
                 safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
                 thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot,
-                parseExecutionMode(executionModeValue));
+                parseExecutionMode(executionModeValue),
+                BenchmarkScenario.fromExternalValue(benchmarkScenarioValue));
     }
 
     private static Hardware parseHardware(String value) {

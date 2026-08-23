@@ -384,6 +384,13 @@ class BasicController private constructor(
   private var benchmarkCoreFrozen = false
   private var benchmarkGeneration = 0L
 
+  /** Exact native-frame endpoint gate used only by Android benchmark preconditioning. */
+  private var benchmarkGameplayScenarioActive = false
+  private var benchmarkGameplayScenarioExpectedFrames = 0
+  private var benchmarkGameplayScenarioReady = true
+  private var benchmarkGameplayScenarioStopRequested = false
+  private var benchmarkGameplayScenarioCompletedFrames = 0
+
   private var debugTrackingEnabled = false
 
   private var pendingDebugAction: PendingDebugAction? = null
@@ -551,9 +558,37 @@ class BasicController private constructor(
       }
       setPaused(true)
     }
+    eventQueue.register<Controller.BenchmarkGameplayScenarioStartEvent> {
+      val currentGeneration = playbackSessionGeneration
+      if (properties.overrides.benchmarkPolicyEnabled && session != null
+          && isEffectivelyPaused() && currentGeneration == it.sessionGeneration) {
+        benchmarkGameplayScenarioActive = true
+        benchmarkGameplayScenarioExpectedFrames = it.expectedFrames
+        benchmarkGameplayScenarioReady = false
+        benchmarkGameplayScenarioStopRequested = false
+        benchmarkGameplayScenarioCompletedFrames = 0
+      }
+    }
+    // This event is deliberately synchronous rather than routed through EventQueue. It is posted
+    // by Android from inside Display.frameIsReady() on this owner thread; setting the pause here
+    // lets the stop-aware benchmark scenario loop stop before one more guest tick is executed.
+    eventBus.register<Controller.BenchmarkGameplayScenarioEndpointEvent> {
+      val currentGeneration = playbackSessionGeneration
+      if (!properties.overrides.benchmarkPolicyEnabled
+          || Thread.currentThread() !== thread
+          || !benchmarkGameplayScenarioActive
+          || currentGeneration != it.sessionGeneration) {
+        return@register
+      }
+      benchmarkGameplayScenarioCompletedFrames = it.completedFrames
+      benchmarkGameplayScenarioStopRequested = true
+    }
     eventQueue.register<Controller.BenchmarkArmEvent> {
       val currentSession = session
-      if (properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed && currentSession != null) {
+      if (properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed
+          && currentSession != null && isEffectivelyPaused()
+          && benchmarkGameplayScenarioReady
+          && playbackSessionGeneration == it.sessionGeneration) {
         benchmarkGeneration = it.generation
         benchmarkArmed = true
         benchmarkCoreFrozen = false
@@ -564,7 +599,11 @@ class BasicController private constructor(
         timingTicker.resetForBenchmark()
         postSessionEventSafely(
             currentSession,
-            Controller.BenchmarkArmAcknowledgedEvent(it.generation, it.token),
+            Controller.BenchmarkArmAcknowledgedEvent(
+                it.generation,
+                it.token,
+                it.sessionGeneration,
+            ),
         )
       }
     }
@@ -584,6 +623,12 @@ class BasicController private constructor(
                 speedMode.getSpeedMode(),
                 currentSession.gameboy.getPerformanceBulkSpanCount(),
                 currentSession.gameboy.getPerformanceBulkTicks(),
+                currentSession.gameboy.getPerformanceEpochCount(),
+                currentSession.gameboy.getPerformanceEpochTicks(),
+                currentSession.gameboy.getPerformanceEpochMaxTicks(),
+                currentSession.gameboy.getPerformanceEpochRasterFastTicks(),
+                currentSession.gameboy.getPerformanceEpochMode2ReplayTicks(),
+                currentSession.gameboy.getPerformanceEpochMode2BulkTicks(),
             ),
         )
         benchmarkCoreFrozen = true
@@ -778,13 +823,23 @@ class BasicController private constructor(
             timingTicker.hasPacingDebt,
     )
     val gameboy = session?.gameboy
+    var emulatedTicks = 0
     if (gameboy != null && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
       relinquishDebugBreakpointPauseOwnership()
-      if (!trackDebugHistory && !rewound && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
+      val exactBenchmarkScenarioFrame = benchmarkGameplayScenarioActive
+      if (exactBenchmarkScenarioFrame) {
+        // Native Display events are emitted synchronously from Gameboy.tick(). The endpoint event
+        // above sets the pause before that call returns, so this loop executes no post-endpoint
+        // tail even when the ordinary PERFORMANCE path would own a frame-sized runTicks batch.
+        emulatedTicks =
+            gameboy.runTicksUntilStop(frameTicks) { benchmarkGameplayScenarioStopRequested }
+      } else if (!trackDebugHistory && !rewound
+          && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
         // The core owns the frame-sized loop in ordinary PERFORMANCE mode. Debug/history
         // paths remain on their per-tick hooks so every observation and checkpoint boundary is
         // still materialized before the next callback.
         gameboy.runTicks(frameTicks)
+        emulatedTicks = frameTicks
       } else {
         repeat(frameTicks) {
           if (trackDebugHistory) {
@@ -792,13 +847,19 @@ class BasicController private constructor(
           } else {
             gameboy.tick()
           }
+          emulatedTicks++
         }
       }
-      emulated = true
+      emulated = emulatedTicks == frameTicks
+    }
+    if (benchmarkGameplayScenarioStopRequested) {
+      finishBenchmarkGameplayScenarioEndpoint()
     }
     timingTicker.runFrame(clockSpec)
+    if (emulatedTicks > 0) {
+      debugMasterTick = Math.addExact(debugMasterTick, emulatedTicks.toLong())
+    }
     if (emulated) {
-      debugMasterTick = Math.addExact(debugMasterTick, frameTicks.toLong())
       debugFrame = Math.addExact(debugFrame, 1L)
       debugFramePosition = 0
     }
@@ -980,6 +1041,25 @@ class BasicController private constructor(
         debugCheckpointHistory.disable(DebugHistoryTruncationReason.SESSION_BOUNDARY)
       }
     }
+  }
+
+  /** Completes the exact native-frame pause only after the stop-aware core call has unwound. */
+  private fun finishBenchmarkGameplayScenarioEndpoint() {
+    val generation = playbackSessionGeneration ?: return
+    val expectedFrames = benchmarkGameplayScenarioExpectedFrames
+    val completedFrames = benchmarkGameplayScenarioCompletedFrames
+    val completed = completedFrames == expectedFrames
+    benchmarkGameplayScenarioStopRequested = false
+    benchmarkGameplayScenarioActive = false
+    benchmarkGameplayScenarioReady = completed
+    setPaused(true)
+    eventBus.post(
+        Controller.BenchmarkGameplayScenarioCompletedEvent(
+            generation,
+            completedFrames,
+            expectedFrames,
+            completed,
+        ))
   }
 
   private fun releaseClosedDebugPortIfNeeded(notifyLifecycle: Boolean = true) {
@@ -3293,7 +3373,11 @@ class BasicController private constructor(
 
     val previousSession = session
     val committedSession = checkNotNull(nextSession)
-    val pauseNewSession = pauseStateBeforeLoading == true
+    // Benchmark activation owns an explicit preconditioning pause independently of the user's
+    // pre-load playback state. Do not let the loading workflow's `false` restore overwrite the
+    // pause established by start(), or the generation-bound scenario start will be rejected.
+    val pauseNewSession =
+        properties.overrides.benchmarkPolicyEnabled || pauseStateBeforeLoading == true
 
     // This assignment is the ownership commit. From here on the old session is never resumed:
     // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
@@ -4104,6 +4188,11 @@ class BasicController private constructor(
     benchmarkArmed = false
     benchmarkCoreFrozen = false
     benchmarkGeneration = 0L
+    benchmarkGameplayScenarioActive = false
+    benchmarkGameplayScenarioExpectedFrames = 0
+    benchmarkGameplayScenarioReady = true
+    benchmarkGameplayScenarioStopRequested = false
+    benchmarkGameplayScenarioCompletedFrames = 0
     debugPaused = false
     playbackSessionGeneration = SessionPresentationGeneration.next()
     pauseStateBeforeResume = null

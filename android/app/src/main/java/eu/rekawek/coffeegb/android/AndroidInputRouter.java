@@ -28,6 +28,10 @@ import java.security.NoSuchAlgorithmException;
 final class AndroidInputRouter implements AutoCloseable {
 
     private static final float DEAD_ZONE = 0.45f;
+    private static final EnumSet<Button> NO_BUTTONS = EnumSet.noneOf(Button.class);
+    private static final EnumSet<Button> RIGHT_BUTTON = EnumSet.of(Button.RIGHT);
+    private static final EnumSet<Button> B_BUTTON = EnumSet.of(Button.B);
+    private static final EnumSet<Button> START_BUTTON = EnumSet.of(Button.START);
 
     private static final Map<Integer, Button> DEFAULT_KEYS = Map.ofEntries(
             Map.entry(KeyEvent.KEYCODE_DPAD_LEFT, Button.LEFT),
@@ -50,6 +54,8 @@ final class AndroidInputRouter implements AutoCloseable {
     private final Map<Integer, String> deviceIds = new HashMap<>();
     private final Map<String, InputDevice> connectedDevices = new HashMap<>();
     private final PlayerInputHub.SourceHandle keyboard;
+    /** Dedicated benchmark preconditioning source; it is never exposed to ordinary input APIs. */
+    private PlayerInputHub.SourceHandle benchmarkScenarioSource;
     private final EnumSet<Button> keyboardButtons = EnumSet.noneOf(Button.class);
     private final ControllerKeyCapture capture;
     private final Runnable benchmarkMutationRecorder;
@@ -59,6 +65,11 @@ final class AndroidInputRouter implements AutoCloseable {
     private String gamepadSelection = "auto";
     private boolean closed;
     private boolean benchmarkLocked;
+    private boolean benchmarkScenarioActive;
+    /** True only after this benchmark session admitted and then closed its private source. */
+    private boolean benchmarkScenarioSourceClosureProven;
+    /** Last mask accepted from the frame-driven scenario while its private source is admitted. */
+    private int benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
 
     AndroidInputRouter(PlayerInputHub hub) {
         this(hub, null);
@@ -86,7 +97,7 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed) {
             return;
         }
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return;
         }
@@ -111,7 +122,7 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || event.getAction() == KeyEvent.ACTION_MULTIPLE) {
             return false;
         }
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return true;
         }
@@ -169,7 +180,7 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || !isGameController(event.getSource()) || event.getAction() != MotionEvent.ACTION_MOVE) {
             return false;
         }
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return true;
         }
@@ -207,7 +218,7 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     synchronized void disconnect(int deviceId) {
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return;
         }
@@ -231,7 +242,7 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || configurationDevice() == null) {
             return false;
         }
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return false;
         }
@@ -241,7 +252,7 @@ final class AndroidInputRouter implements AutoCloseable {
 
     /** Selects which physical gamepad is allowed to feed player one. */
     synchronized void setGamepadSelection(String selection) {
-        if (benchmarkLocked) {
+        if (benchmarkInputBlocked()) {
             recordBenchmarkMutation();
             return;
         }
@@ -272,12 +283,13 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     synchronized boolean acceptsController(InputDevice device) {
-        return isAllowed(device);
+        return !benchmarkInputBlocked() && isAllowed(device);
     }
 
     /** Menu navigation remains available from a physical controller even when gameplay is OFF. */
     synchronized boolean acceptsMenuController(InputDevice device) {
-        return device != null && acceptsMenuControllerSources(device.getSources(), device.isVirtual());
+        return !benchmarkInputBlocked() && device != null
+                && acceptsMenuControllerSources(device.getSources(), device.isVirtual());
     }
 
     static boolean acceptsMenuControllerSources(int sources, boolean virtual) {
@@ -301,7 +313,7 @@ final class AndroidInputRouter implements AutoCloseable {
     }
 
     synchronized CaptureResult captureKeyEvent(KeyEvent event) {
-        if (closed || benchmarkLocked || !capture.active() || event == null
+        if (closed || benchmarkInputBlocked() || !capture.active() || event == null
                 || !isConfigurableController(event.getDevice())
                 || !isAllowed(event.getDevice())) {
             return CaptureResult.NONE;
@@ -401,7 +413,104 @@ final class AndroidInputRouter implements AutoCloseable {
         keyboardButtons.clear();
         keyboard.update(keyboardButtons);
         devices.values().forEach(DeviceSource::clear);
+        if (benchmarkScenarioSource != null) {
+            // Activity focus/lifecycle cleanup must not silently release a scripted hold. The
+            // scenario advances only on native frame boundaries and will not republish an
+            // unchanged mask, so preserve its private source while clearing every physical one.
+            benchmarkScenarioSource.update(benchmarkScenarioActive
+                    ? scenarioButtons(benchmarkScenarioMask) : NO_BUTTONS);
+        }
         cancelCapture();
+    }
+
+    /**
+     * Admits the private benchmark scenario source while rejecting all physical input sources.
+     * The source remains admitted-but-empty after the preconditioning pause until benchmark arm,
+     * so physical input cannot race the anchor.
+     */
+    synchronized boolean beginBenchmarkScenario() {
+        if (closed || benchmarkLocked) {
+            return false;
+        }
+        if (benchmarkScenarioSource == null) {
+            benchmarkScenarioSource = hub.openSource(0);
+        }
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
+        benchmarkScenarioSourceClosureProven = false;
+        releaseAll();
+        benchmarkScenarioActive = true;
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.update(NO_BUTTONS);
+        }
+        return true;
+    }
+
+    /** Applies a prebuilt scenario mask; calls between transitions do not touch the hub. */
+    synchronized void setBenchmarkScenarioMask(int mask) {
+        if (closed || benchmarkLocked || !benchmarkScenarioActive) {
+            return;
+        }
+        benchmarkScenarioMask = mask;
+        benchmarkScenarioSource.update(scenarioButtons(benchmarkScenarioMask));
+    }
+
+    synchronized void clearBenchmarkScenario() {
+        if (closed) {
+            return;
+        }
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.update(NO_BUTTONS);
+        }
+    }
+
+    /** Closes the private source and returns input ownership to the normal router. */
+    synchronized void endBenchmarkScenario() {
+        if (closed) {
+            return;
+        }
+        boolean admittedSource = benchmarkScenarioSource != null;
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.close();
+            benchmarkScenarioSource = null;
+        }
+        benchmarkScenarioActive = false;
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
+        if (admittedSource) {
+            benchmarkScenarioSourceClosureProven = true;
+            // Source closure is also the pre-ARM physical-input boundary. Keep it atomic with
+            // closing the scripted source so audio drain/anchor can never expose an input gap.
+            benchmarkLocked = true;
+        }
+    }
+
+    /**
+     * Opens a fresh benchmark-session input epoch. The measured-window lock belongs only to the
+     * session that set it; a replacement/reset must explicitly rotate this epoch before it can
+     * admit another scripted source.
+     */
+    synchronized void resetBenchmarkSession() {
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.close();
+            benchmarkScenarioSource = null;
+        }
+        benchmarkScenarioActive = false;
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
+        benchmarkScenarioSourceClosureProven = false;
+        benchmarkLocked = false;
+    }
+
+    synchronized boolean benchmarkScenarioActiveForTesting() {
+        return benchmarkScenarioActive;
+    }
+
+    synchronized boolean benchmarkScenarioSourceClosed() {
+        return benchmarkScenarioSourceClosureProven
+                && !benchmarkScenarioActive && benchmarkScenarioSource == null;
+    }
+
+    synchronized boolean benchmarkLockedForTesting() {
+        return benchmarkLocked;
     }
 
     /** Freezes all live controller/touch sources for the measured benchmark window. */
@@ -409,7 +518,14 @@ final class AndroidInputRouter implements AutoCloseable {
         if (closed || benchmarkLocked) {
             return;
         }
+        benchmarkScenarioActive = false;
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
         releaseAll();
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.close();
+            benchmarkScenarioSource = null;
+            benchmarkScenarioSourceClosureProven = true;
+        }
         benchmarkLocked = true;
     }
 
@@ -426,13 +542,33 @@ final class AndroidInputRouter implements AutoCloseable {
         }
         releaseAllTouch();
         keyboard.close();
+        if (benchmarkScenarioSource != null) {
+            benchmarkScenarioSource.close();
+            benchmarkScenarioSource = null;
+        }
         devices.values().forEach(DeviceSource::close);
         devices.clear();
         deviceIds.clear();
         connectedDevices.clear();
         activeController = null;
+        benchmarkScenarioActive = false;
+        benchmarkScenarioMask = BenchmarkGameplayScenario.NONE_MASK;
+        benchmarkScenarioSourceClosureProven = false;
         cancelCapture();
         closed = true;
+    }
+
+    private boolean benchmarkInputBlocked() {
+        return benchmarkLocked || benchmarkScenarioActive;
+    }
+
+    private static EnumSet<Button> scenarioButtons(int mask) {
+        return switch (mask) {
+            case BenchmarkGameplayScenario.RIGHT_MASK -> RIGHT_BUTTON;
+            case BenchmarkGameplayScenario.B_MASK -> B_BUTTON;
+            case BenchmarkGameplayScenario.START_MASK -> START_BUTTON;
+            default -> NO_BUTTONS;
+        };
     }
 
     private DeviceSource device(InputDevice device) {

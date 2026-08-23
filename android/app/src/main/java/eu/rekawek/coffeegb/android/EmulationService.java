@@ -41,10 +41,29 @@ public final class EmulationService extends Service implements AudioManager.OnAu
     }
 
     static void start(Context context, DiagnosticsOptions options) {
-        Intent intent = new Intent(context, EmulationService.class);
         DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        context.startService(startIntent(context, checked));
+    }
+
+    /** Builds the service wire separately so its typed diagnostics extras can be unit-tested. */
+    static Intent startIntent(Context context, DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        return populateStartIntent(new Intent(context, EmulationService.class), checked);
+    }
+
+    static Intent startIntent(DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        return populateStartIntent(new Intent(), checked);
+    }
+
+    static String benchmarkScenarioExtraValue(DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        return checked.benchmarkScenario.externalValue();
+    }
+
+    private static Intent populateStartIntent(Intent intent, DiagnosticsOptions checked) {
         nextStartOptions = checked;
-        intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
+        return intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
                 .putExtra(DiagnosticsOptions.EXTRA_HARDWARE,
                         checked.hardware.externalValue())
                 .putExtra(DiagnosticsOptions.EXTRA_AUDIO, checked.audioOutput)
@@ -65,8 +84,9 @@ public final class EmulationService extends Service implements AudioManager.OnAu
                 .putExtra(DiagnosticsOptions.EXTRA_SURFACE_RATE_HZ, checked.displayTargetHz)
                 .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot)
                 .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
-                        DiagnosticsOptions.executionModeValue(checked.executionMode));
-        context.startService(intent);
+                        DiagnosticsOptions.executionModeValue(checked.executionMode))
+                .putExtra(DiagnosticsOptions.EXTRA_BENCHMARK_SCENARIO,
+                        benchmarkScenarioExtraValue(checked));
     }
 
     @Override

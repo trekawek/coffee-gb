@@ -8,6 +8,12 @@ import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot;
 import org.junit.Test;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -41,6 +47,111 @@ public class AndroidEmulationRuntimeTest {
         assertFalse(AndroidEmulationRuntime.isResetReload(null, true, 11L, 11L));
         assertFalse(AndroidEmulationRuntime.isResetReload(7L, true, 12L, 11L));
         assertFalse(AndroidEmulationRuntime.isResetReload(null, false, 12L, 11L));
+    }
+
+    @Test
+    public void benchmarkEndpointAndAckMustBelongToOneCurrentPresentedSession() {
+        assertTrue(AndroidEmulationRuntime.benchmarkSessionMatches(12L, 12L, 12L, 12L));
+        assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(11L, 12L, 12L, 12L));
+        assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(12L, 11L, 12L, 12L));
+        assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(12L, 12L, 11L, 12L));
+        assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(12L, 12L, 12L, 13L));
+        assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(0L, 0L, 0L, 0L));
+    }
+
+    @Test
+    public void replacementRotatesTheLockedScenarioInputEpoch() {
+        eu.rekawek.coffeegb.core.joypad.PlayerInputHub hub =
+                new eu.rekawek.coffeegb.core.joypad.PlayerInputHub();
+        AndroidInputRouter input = new AndroidInputRouter(hub);
+        try {
+            assertTrue(AndroidEmulationRuntime.resetBenchmarkScenarioInput(input, true));
+            input.setBenchmarkScenarioMask(BenchmarkGameplayScenario.RIGHT_MASK);
+            input.endBenchmarkScenario();
+            assertTrue(input.benchmarkScenarioSourceClosed());
+
+            assertTrue(AndroidEmulationRuntime.resetBenchmarkScenarioInput(input, true));
+            assertFalse(input.benchmarkScenarioSourceClosed());
+            input.setBenchmarkScenarioMask(BenchmarkGameplayScenario.B_MASK);
+            assertEquals(java.util.Set.of(eu.rekawek.coffeegb.core.joypad.Button.B),
+                    hub.sample().buttons(0));
+        } finally {
+            input.close();
+        }
+    }
+
+    @Test
+    public void replacementRejectsAClosedRouterAndCannotClaimSourceClosure() {
+        AndroidInputRouter input = new AndroidInputRouter(
+                new eu.rekawek.coffeegb.core.joypad.PlayerInputHub());
+        input.close();
+
+        assertFalse(AndroidEmulationRuntime.resetBenchmarkScenarioInput(input, true));
+        assertFalse(input.benchmarkScenarioSourceClosed());
+    }
+
+    @Test
+    public void replacementInvalidatesEveryScheduledScenarioCompletionPoll() {
+        assertTrue(AndroidEmulationRuntime.benchmarkCompletionPollMatches(
+                4L, 4L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMatches(
+                4L, 5L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMatches(
+                5L, 5L, 21L, 22L, 22L, 22L));
+    }
+
+    @Test
+    public void visibilityLossStopsAScheduledCompletionPollBeforeItCanResumeAudio() {
+        assertTrue(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                true, 4L, 4L, 21L, 21L, 21L, 21L));
+        // All epoch and generation identities still match, but visibility loss has made the
+        // diagnostic session terminal. The real poll returns at this guard before reading or
+        // resuming AndroidAudioSink.
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, 4L, 4L, 21L, 21L, 21L, 21L));
+    }
+
+    @Test
+    public void visibilityPauseWinsWhenItRacesAnInFlightAudioResumePoll() throws Exception {
+        AndroidEmulationRuntime.BenchmarkAudioLifecycleGate gate =
+                new AndroidEmulationRuntime.BenchmarkAudioLifecycleGate();
+        AtomicBoolean outputPlaying = new AtomicBoolean(false);
+        CountDownLatch pollEntered = new CountDownLatch(1);
+        CountDownLatch releasePoll = new CountDownLatch(1);
+        CountDownLatch lossAttempted = new CountDownLatch(1);
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> poll = threads.submit(() -> gate.run(() -> {
+                pollEntered.countDown();
+                await(releasePoll);
+                outputPlaying.set(true);
+            }));
+            assertTrue(pollEntered.await(1, TimeUnit.SECONDS));
+            Future<?> visibilityLoss = threads.submit(() -> {
+                lossAttempted.countDown();
+                gate.run(() -> outputPlaying.set(false));
+            });
+            assertTrue(lossAttempted.await(1, TimeUnit.SECONDS));
+            releasePoll.countDown();
+            poll.get(1, TimeUnit.SECONDS);
+            visibilityLoss.get(1, TimeUnit.SECONDS);
+            assertFalse(outputPlaying.get());
+        } finally {
+            releasePoll.countDown();
+            threads.shutdownNow();
+        }
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(1, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting for benchmark audio gate test");
+            }
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting for benchmark audio gate test",
+                    failure);
+        }
     }
 
     @Test
