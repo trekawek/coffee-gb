@@ -34,6 +34,57 @@ public class DiagnosticsOptionsTest {
         assertTrue(options.runtimeWarmup);
         assertFalse(options.launchRecent);
         assertEquals(ExecutionMode.ACCURACY, options.executionMode);
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.NONE, options.benchmarkScenario);
+    }
+
+    @Test
+    public void benchmarkScenarioUsesOnlySafeExternalContracts() {
+        DiagnosticsOptions dmg = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "DMG-ACTION-V1");
+        DiagnosticsOptions cgb = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "cgb-action-v1");
+        DiagnosticsOptions malformed = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "../private");
+
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.DMG_ACTION_V1, dmg.benchmarkScenario);
+        assertEquals("dmg-action-v1", dmg.benchmarkScenario.externalValue());
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.CGB_ACTION_V1, cgb.benchmarkScenario);
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.NONE, malformed.benchmarkScenario);
+        assertEquals(BenchmarkGameplayScenario.NativeFrameKind.DMG,
+                dmg.benchmarkNativeFrameKind());
+        assertEquals(BenchmarkGameplayScenario.NativeFrameKind.GBC,
+                cgb.benchmarkNativeFrameKind());
+    }
+
+    @Test
+    public void cgbDmgCompatKeepsDmgTimelineOnGbcNativeFrames() {
+        DiagnosticsOptions compat = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "dmg-action-v1");
+        DiagnosticsOptions cgb0 = DiagnosticsOptions.parseValues(
+                true, "cgb0", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "cgb-action-v1");
+        DiagnosticsOptions mgb = DiagnosticsOptions.parseValues(
+                true, "mgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "dmg-action-v1");
+
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.DMG_ACTION_V1,
+                compat.benchmarkScenario);
+        assertEquals(BenchmarkGameplayScenario.NativeFrameKind.GBC,
+                compat.benchmarkNativeFrameKind());
+        assertEquals(BenchmarkGameplayScenario.NativeFrameKind.GBC,
+                cgb0.benchmarkNativeFrameKind());
+        assertEquals(BenchmarkGameplayScenario.NativeFrameKind.DMG,
+                mgb.benchmarkNativeFrameKind());
     }
 
     @Test

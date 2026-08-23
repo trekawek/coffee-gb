@@ -166,6 +166,52 @@ interface Controller : AutoCloseable {
   class ResumeEmulationEvent : Event
 
   /**
+   * Arms benchmark-only stop-aware execution until a native display endpoint requests an exact
+   * pause. PERFORMANCE keeps its scheduler semantics; the session generation prevents a delayed
+   * Android owner callback from controlling a replacement session.
+   */
+  data class BenchmarkGameplayScenarioStartEvent(
+      val sessionGeneration: Long,
+      val expectedFrames: Int,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Session generation must be positive" }
+      require(expectedFrames > 0) { "Benchmark scenario frame count must be positive" }
+    }
+  }
+
+  /**
+   * Synchronous endpoint raised from a native Display callback on the controller owner thread.
+   * Unlike [PauseEmulationEvent], this is not queued until the current runTicks tail completes.
+   */
+  data class BenchmarkGameplayScenarioEndpointEvent(
+      val sessionGeneration: Long,
+      val completedFrames: Int,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Session generation must be positive" }
+      require(completedFrames > 0) { "Benchmark scenario frame count must be positive" }
+    }
+  }
+
+  /** Exact controller-owned completion evidence for one benchmark preconditioning scenario. */
+  data class BenchmarkGameplayScenarioCompletedEvent(
+      val sessionGeneration: Long,
+      val completedFrames: Int,
+      val expectedFrames: Int,
+      val completed: Boolean,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Session generation must be positive" }
+      require(completedFrames > 0) { "Completed frame count must be positive" }
+      require(expectedFrames > 0) { "Expected frame count must be positive" }
+      require(!completed || completedFrames == expectedFrames) {
+        "Successful benchmark scenario evidence must have an exact frame count"
+      }
+    }
+  }
+
+  /**
    * Captures the active cartridge at the controller's frame-safe point and persists it on the
    * controller-owned worker. Hosts can request a bounded background flush without observing a
    * live machine or blocking their UI thread.
@@ -258,6 +304,12 @@ interface Controller : AutoCloseable {
       val speedMode: Int,
       val performanceBulkSpans: Long = 0L,
       val performanceBulkTicks: Long = 0L,
+      val performanceEpochCount: Long = 0L,
+      val performanceEpochTicks: Long = 0L,
+      val performanceEpochMaxTicks: Int = 0,
+      val performanceEpochRasterFastTicks: Long = 0L,
+      val performanceEpochMode2ReplayTicks: Long = 0L,
+      val performanceEpochMode2BulkTicks: Long = 0L,
   ) : Event {
     /** Java/source compatibility for callers that predate bulk telemetry. */
     constructor(
@@ -267,11 +319,74 @@ interface Controller : AutoCloseable {
         speedMode: Int,
     ) : this(frame, effectiveGbc, effectiveDmgCompat, speedMode, 0L, 0L)
 
+    /** Java/source compatibility for callers that supply the original bulk telemetry pair. */
+    constructor(
+        frame: Long,
+        effectiveGbc: Boolean,
+        effectiveDmgCompat: Boolean,
+        speedMode: Int,
+        performanceBulkSpans: Long,
+        performanceBulkTicks: Long,
+    ) : this(
+        frame,
+        effectiveGbc,
+        effectiveDmgCompat,
+        speedMode,
+        performanceBulkSpans,
+        performanceBulkTicks,
+        0L,
+        0L,
+        0,
+        0L,
+        0L,
+        0L,
+    )
+
+    /** Java/source compatibility for callers that predate the mode-2 bulk subset metric. */
+    constructor(
+        frame: Long,
+        effectiveGbc: Boolean,
+        effectiveDmgCompat: Boolean,
+        speedMode: Int,
+        performanceBulkSpans: Long,
+        performanceBulkTicks: Long,
+        performanceEpochCount: Long,
+        performanceEpochTicks: Long,
+        performanceEpochMaxTicks: Int,
+        performanceEpochRasterFastTicks: Long,
+        performanceEpochMode2ReplayTicks: Long,
+    ) : this(
+        frame,
+        effectiveGbc,
+        effectiveDmgCompat,
+        speedMode,
+        performanceBulkSpans,
+        performanceBulkTicks,
+        performanceEpochCount,
+        performanceEpochTicks,
+        performanceEpochMaxTicks,
+        performanceEpochRasterFastTicks,
+        performanceEpochMode2ReplayTicks,
+        0L,
+    )
+
     init {
       require(frame > 0) { "Benchmark frame must be positive" }
       require(speedMode == 1 || speedMode == 2) { "Benchmark speed mode must be 1 or 2" }
       require(performanceBulkSpans >= 0L) { "Benchmark bulk span count must be non-negative" }
       require(performanceBulkTicks >= 0L) { "Benchmark bulk tick count must be non-negative" }
+      require(performanceEpochCount >= 0L) { "Benchmark epoch count must be non-negative" }
+      require(performanceEpochTicks >= 0L) { "Benchmark epoch tick count must be non-negative" }
+      require(performanceEpochMaxTicks >= 0) { "Benchmark epoch maximum must be non-negative" }
+      require(performanceEpochRasterFastTicks >= 0L) {
+        "Benchmark epoch raster fast tick count must be non-negative"
+      }
+      require(performanceEpochMode2ReplayTicks >= 0L) {
+        "Benchmark epoch mode-2 replay tick count must be non-negative"
+      }
+      require(performanceEpochMode2BulkTicks >= 0L) {
+        "Benchmark epoch mode-2 bulk tick count must be non-negative"
+      }
     }
   }
 
@@ -283,12 +398,14 @@ interface Controller : AutoCloseable {
   data class BenchmarkArmEvent(
       val generation: Long,
       val token: String,
+      val sessionGeneration: Long,
   ) : Event {
     init {
       require(generation > 0L) { "Benchmark generation must be positive" }
       require(token.matches(Regex("[a-z0-9][a-z0-9._-]{15,63}"))) {
         "Benchmark arm token must be opaque and parser-safe"
       }
+      require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
     }
   }
 
@@ -297,12 +414,17 @@ interface Controller : AutoCloseable {
    * Android uses this boundary to sample controller CPU/priority/environment state and to start
    * the measured frame epoch before posting Resume.
    */
-  data class BenchmarkArmAcknowledgedEvent(val generation: Long, val token: String) : Event {
+  data class BenchmarkArmAcknowledgedEvent(
+      val generation: Long,
+      val token: String,
+      val sessionGeneration: Long,
+  ) : Event {
     init {
       require(generation > 0L) { "Benchmark generation must be positive" }
       require(token.matches(Regex("[a-z0-9][a-z0-9._-]{15,63}"))) {
         "Benchmark arm token must be opaque and parser-safe"
       }
+      require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
     }
   }
 

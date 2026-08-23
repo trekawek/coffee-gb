@@ -70,6 +70,8 @@ import java.util.stream.Collectors;
 public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private static final long BACKGROUND_FLUSH_TIMEOUT_MILLIS = 5_000L;
+    private static final int BENCHMARK_AUDIO_DRAIN_MAX_POLLS = 50;
+    private static final long BENCHMARK_AUDIO_DRAIN_POLL_MILLIS = 20L;
 
     private final Context context;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -95,6 +97,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final RuntimeLifecycleGate lifecycle = new RuntimeLifecycleGate();
     private final DiagnosticsOptions diagnosticsOptions;
     private final AndroidBenchmarkDiagnostics diagnostics;
+    private final BenchmarkGameplayScenario benchmarkScenario;
     private final NativeFrameStore frames;
     /** Session timing belongs to the service, not to a short-lived Activity attachment. */
     private final PlayTimeTracker playTime = new PlayTimeTracker();
@@ -110,7 +113,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private BasicController controller;
     private volatile AndroidAudioSink audio;
     /** Published before the controller-thread arm acknowledgement; never retained after ACK. */
-    private volatile AndroidAudioSink.AudioBaseline pendingBenchmarkAudioBaseline;
+    private volatile PendingBenchmarkArm pendingBenchmarkArm;
+    /** Serializes hidden-session pause against scenario-drain inspection and audio resume. */
+    private final BenchmarkAudioLifecycleGate benchmarkAudioLifecycle =
+            new BenchmarkAudioLifecycleGate();
+    /** Owner-thread fence invalidating every scheduled scenario/audio poll on replacement. */
+    private long benchmarkScenarioCompletionEpoch;
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
     private volatile AndroidCameraSource camera;
@@ -148,7 +156,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Mapper-derived metadata for the active controller session; never inferred from files. */
     private String activeRomTitle = "";
     private boolean activeBatterySave;
-    private long activeSessionGeneration;
+    private volatile long activeSessionGeneration;
     private boolean playbackTimerSessionActive;
     private long playbackTimerSessionGeneration;
     private boolean restartPlaybackTimerOnNextPublish;
@@ -164,6 +172,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     AndroidEmulationRuntime(Context context, DiagnosticsOptions options) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
         diagnosticsOptions = options == null ? DiagnosticsOptions.disabled() : options;
+        benchmarkScenario = new BenchmarkGameplayScenario(
+                diagnosticsOptions.benchmarkScenario,
+                diagnosticsOptions.benchmarkNativeFrameKind());
         diagnostics = new AndroidBenchmarkDiagnostics(this.context, diagnosticsOptions);
         // Release/non-diagnostic sessions use a null sink so the native frame hot path does not
         // enter synchronized benchmark methods on every frame.
@@ -204,6 +215,29 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
+    }
+
+    /** Advances the configured timeline on the controller's physical native-frame callback. */
+    private void benchmarkScenarioFrameReady(BenchmarkGameplayScenario.NativeFrameKind frameKind) {
+        if (!diagnostics.enabled() || !benchmarkScenario.enabled()) {
+            return;
+        }
+        long sessionGeneration = benchmarkScenario.sessionGeneration();
+        if (!benchmarkScenario.acceptsNativeFrame(frameKind, sessionGeneration)) {
+            return;
+        }
+        int nextMask = benchmarkScenario.onFrameReady(frameKind, sessionGeneration);
+        if (nextMask != BenchmarkGameplayScenario.UNCHANGED) {
+            input.setBenchmarkScenarioMask(nextMask);
+        }
+        if (!benchmarkScenario.consumePauseRequest()) {
+            return;
+        }
+        // The endpoint is a released frame. Explicitly clear the private source before asking the
+        // controller for its safe pause; no scenario input survives into the measured epoch.
+        input.clearBenchmarkScenario();
+        eventBus.post(new Controller.BenchmarkGameplayScenarioEndpointEvent(
+                sessionGeneration, benchmarkScenario.frameForTesting()));
     }
 
     private ExecutionMode executionModeForSession() {
@@ -769,11 +803,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             diagnostics.openStart();
             diagnostics.setWorkloadNonce(new RecentSafDocuments(context)
                     .ensureBenchmarkNonce(recent));
-            // Freeze gameplay input before materialization. The benchmark session is paused until
-            // the host arms it, but a touch/key/controller event could otherwise mutate the
-            // initial Joypad state during ROM preparation and before the controller ACKs ARM.
-            // The ACK handler repeats this idempotently as an epoch guard.
-            input.lockBenchmarkWindow();
+            // Freeze gameplay input before materialization. A configured scenario keeps only its
+            // private frame-driven source admitted until the preconditioning pause; the ordinary
+            // benchmark path locks all sources immediately. The ACK handler repeats this
+            // idempotently as the measured-epoch guard.
+            if (!invalidateBenchmarkSession(true)) {
+                publishBenchmarkScenarioInputFailure();
+                return;
+            }
             openRecentGame(recent);
         });
     }
@@ -814,13 +851,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (diagnostics.enabled()) {
             // Benchmark visibility is a scheduler precondition.  Do not flush/reopen audio or
             // enter the ordinary battery/autosave lifecycle barrier; a hidden run is discarded.
-            diagnostics.inputMutation();
-            AndroidAudioSink activeAudio = audio;
-            if (activeAudio != null) {
-                // Stop output immediately, but keep the measured counters/baseline intact so the
-                // eventual record is rejected rather than presenting a false continuous stream.
-                activeAudio.pause();
-            }
+            benchmarkAudioLifecycle.run(() -> {
+                // Diagnostics owns the atomic current-or-next generation decision. This closes
+                // both the pre-OPENING queue race and the LOADING-to-STARTED handoff.
+                diagnostics.benchmarkVisibilityLost();
+                AndroidAudioSink activeAudio = audio;
+                if (activeAudio != null) {
+                    // The same gate surrounds the only pre-ARM resume path. If a poll wins first,
+                    // this pause wins last; if visibility loss wins first, the poll fails closed.
+                    activeAudio.pause();
+                }
+            });
             return;
         }
         input.releaseAll();
@@ -904,44 +945,142 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
      * Arms one benchmark generation after the host has captured the warm-up compositor baseline.
      * This path is benchmark-only; ordinary resume remains a separate user operation.
      */
-    void armBenchmark(String token) {
+    void armBenchmark(String token, long requestedSessionGeneration) {
         if (!diagnostics.enabled()) {
             return;
         }
         submit(() -> {
             long generation = System.nanoTime();
+            long sessionGeneration = activeSessionGeneration;
             if (generation <= 0L || token == null
                     || !token.matches("[a-z0-9][a-z0-9._-]{15,63}")
-                    || !diagnostics.benchmarkAnchorReady()) {
+                    || requestedSessionGeneration != sessionGeneration
+                    || sessionGeneration <= 0L || state.phase() != RuntimeState.Phase.PAUSED
+                    || state.sessionGeneration() != sessionGeneration
+                    || !diagnostics.benchmarkAnchorReady(sessionGeneration)) {
                 return;
             }
             AndroidAudioSink activeAudio = audio;
             AndroidAudioSink.AudioBaseline audioBaseline = activeAudio == null
                     ? AndroidAudioSink.AudioBaseline.unavailable() : activeAudio.benchmarkBaseline();
-            pendingBenchmarkAudioBaseline = audioBaseline;
+            pendingBenchmarkArm = new PendingBenchmarkArm(
+                    sessionGeneration, generation, token, audioBaseline);
             // BasicController performs the ticker/deadline reset and synchronously emits the
             // acknowledgement on its owner thread. CPU/priority/environment baselines and the
             // matrix_run record are taken only from that acknowledgement callback.
-            eventBus.post(new Controller.BenchmarkArmEvent(generation, token));
+            eventBus.post(new Controller.BenchmarkArmEvent(
+                    generation, token, sessionGeneration));
         });
     }
 
-    boolean benchmarkAnchorReady() {
-        return diagnostics.enabled() && diagnostics.benchmarkAnchorReady();
+    boolean benchmarkAnchorReady(long sessionGeneration) {
+        return diagnostics.enabled() && sessionGeneration > 0L
+                && sessionGeneration == activeSessionGeneration
+                && state.phase() == RuntimeState.Phase.PAUSED
+                && state.sessionGeneration() == sessionGeneration
+                && diagnostics.benchmarkAnchorReady(sessionGeneration);
+    }
+
+    /** The host may request its compositor anchor only after optional input preconditioning. */
+    boolean benchmarkPreconditionReady() {
+        return !diagnostics.enabled()
+                || diagnostics.benchmarkPreArmValid(activeSessionGeneration)
+                && (!benchmarkScenario.enabled() || benchmarkScenario.preconditionReady());
     }
 
     /** Receives the renderer-thread result of the one-time pre-measurement Surface anchor post. */
-    void benchmarkAnchorPosted(boolean success) {
+    void benchmarkAnchorPosted(long sessionGeneration, boolean success, Runnable completed) {
         if (!diagnostics.enabled()) {
             return;
         }
-        submit(() -> diagnostics.benchmarkAnchorPosted(success));
+        submit(() -> {
+            diagnostics.benchmarkAnchorPosted(sessionGeneration, success);
+            if (completed != null) {
+                completed.run();
+            }
+        });
+    }
+
+    /**
+     * Waits outside the controller thread for a two-phase audio barrier. First the paused sink
+     * must report an empty queue and a stopped output, proving the scenario PCM was flushed. Then
+     * the output is resumed while the guest remains paused, and readiness requires the clean,
+     * playing baseline that the benchmark matrix records at ARM.
+     */
+    private void finishBenchmarkScenarioCompletion(
+            Controller.BenchmarkGameplayScenarioCompletedEvent event, long completionEpoch,
+            int attempt,
+            boolean audioResumeRequested) {
+        benchmarkAudioLifecycle.run(() -> finishBenchmarkScenarioCompletionLocked(
+                event, completionEpoch, attempt, audioResumeRequested));
+    }
+
+    /** Runs under {@link #benchmarkAudioLifecycle}; never call this method directly. */
+    private void finishBenchmarkScenarioCompletionLocked(
+            Controller.BenchmarkGameplayScenarioCompletedEvent event, long completionEpoch,
+            int attempt,
+            boolean audioResumeRequested) {
+        if (closed.get() || !benchmarkCompletionPollMayTouchAudio(
+                diagnostics.benchmarkPreArmValid(event.getSessionGeneration()),
+                completionEpoch, benchmarkScenarioCompletionEpoch,
+                event.getSessionGeneration(), activeSessionGeneration,
+                benchmarkScenario.sessionGeneration(), state.sessionGeneration())) {
+            return;
+        }
+        AndroidAudioSink activeAudio = audio;
+        AndroidAudioSink.AudioBaseline baseline = activeAudio == null
+                ? AndroidAudioSink.AudioBaseline.unavailable() : activeAudio.benchmarkBaseline();
+        boolean sourceClosed = input.benchmarkScenarioSourceClosed();
+        boolean emptyAudio = !diagnosticsOptions.audioOutput
+                || baseline.pendingBytes() == 0L && baseline.queuedBytes() == 0L;
+        boolean audioReady;
+        if (!diagnosticsOptions.audioOutput) {
+            audioReady = true;
+        } else if (!audioResumeRequested) {
+            audioReady = false;
+            boolean flushObserved = activeAudio != null && emptyAudio && !baseline.outputPlaying();
+            if (flushObserved) {
+                activeAudio.resume();
+                deadlines.schedule(
+                        () -> submit(() -> finishBenchmarkScenarioCompletion(
+                                event, completionEpoch, 0, true)),
+                        BENCHMARK_AUDIO_DRAIN_POLL_MILLIS,
+                        TimeUnit.MILLISECONDS);
+                return;
+            }
+        } else {
+            audioReady = activeAudio != null && emptyAudio && baseline.outputPlaying();
+        }
+        if ((!audioReady || !sourceClosed) && attempt < BENCHMARK_AUDIO_DRAIN_MAX_POLLS) {
+            deadlines.schedule(
+                    () -> submit(() -> finishBenchmarkScenarioCompletion(
+                            event, completionEpoch, attempt + 1, audioResumeRequested)),
+                    BENCHMARK_AUDIO_DRAIN_POLL_MILLIS,
+                    TimeUnit.MILLISECONDS);
+            return;
+        }
+        boolean completed = event.getCompleted() && audioReady && sourceClosed
+                && event.getCompletedFrames() == event.getExpectedFrames();
+        diagnostics.benchmarkScenarioCompleted(
+                event.getSessionGeneration(), event.getCompletedFrames(), event.getExpectedFrames(),
+                completed, sourceClosed, audioReady);
+        if (!completed) {
+            return;
+        }
+        benchmarkScenario.markPreconditionReady();
+        diagnostics.emulationStarted(event.getSessionGeneration());
+        RuntimeState current = state;
+        if (current.sessionGeneration() == event.getSessionGeneration()) {
+            publish(RuntimeState.Phase.PAUSED, "Benchmark preconditioning complete.", List.of(),
+                    true, true, current.flushPending());
+        }
     }
 
     /** Stops one session and recreates its controller shell for a later load without leaks. */
     public void stop() {
         input.releaseAll();
         submit(() -> {
+            invalidateBenchmarkSession(false);
             persistCurrentRecentGame();
             clearPendingSource();
             if (!closeController()) {
@@ -1205,9 +1344,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     if (!diagnostics.enabled()) {
                         return;
                     }
-                    AndroidAudioSink.AudioBaseline baseline = pendingBenchmarkAudioBaseline;
-                    pendingBenchmarkAudioBaseline = null;
-                    if (!diagnostics.armBenchmark(event.getGeneration(), event.getToken(), baseline)) {
+                    PendingBenchmarkArm pending = pendingBenchmarkArm;
+                    if (pending == null || !pending.matches(event)
+                            || !benchmarkSessionMatches(
+                                    event.getSessionGeneration(), activeSessionGeneration,
+                                    benchmarkScenario.enabled()
+                                            ? benchmarkScenario.sessionGeneration()
+                                            : event.getSessionGeneration(),
+                                    state.sessionGeneration())
+                            || state.phase() != RuntimeState.Phase.PAUSED) {
+                        return;
+                    }
+                    pendingBenchmarkArm = null;
+                    if (!diagnostics.armBenchmark(
+                            event.getSessionGeneration(), event.getGeneration(), event.getToken(),
+                            pending.baseline())) {
                         return;
                     }
                     frames.beginBenchmarkEpoch(event.getGeneration());
@@ -1217,10 +1368,43 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.BenchmarkArmAcknowledgedEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
-        eventBus.register(frames::publish, Display.DmgFrameReadyEvent.class);
-        eventBus.register(frames::publish, Display.GbcFrameReadyEvent.class);
+        // A configured scenario observes only its matching native event, so an SGB transfer DMG
+        // event cannot advance the timeline twice for one displayed frame.
+        eventBus.register(
+                (Display.DmgFrameReadyEvent event) -> {
+                    frames.publish(event);
+                    benchmarkScenarioFrameReady(BenchmarkGameplayScenario.NativeFrameKind.DMG);
+                },
+                Display.DmgFrameReadyEvent.class);
+        eventBus.register(
+                (Display.GbcFrameReadyEvent event) -> {
+                    frames.publish(event);
+                    benchmarkScenarioFrameReady(BenchmarkGameplayScenario.NativeFrameKind.GBC);
+                },
+                Display.GbcFrameReadyEvent.class);
         eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
         eventBus.register(printer::append, Controller.PrinterPrintEvent.class);
+        eventBus.register(
+                (Controller.BenchmarkGameplayScenarioCompletedEvent event) -> {
+                    if (!diagnostics.enabled() || !benchmarkScenario.enabled()
+                            || !benchmarkSessionMatches(
+                                    event.getSessionGeneration(), activeSessionGeneration,
+                                    benchmarkScenario.sessionGeneration(), state.sessionGeneration())) {
+                        return;
+                    }
+                    // Stop accepting PCM and clear the bounded queue before any host anchor can
+                    // be requested. The owner waits for an in-flight write to leave accounting.
+                    AndroidAudioSink activeAudio = audio;
+                    if (activeAudio != null) {
+                        activeAudio.pause();
+                    }
+                    input.endBenchmarkScenario();
+                    submit(() -> {
+                        long completionEpoch = ++benchmarkScenarioCompletionEpoch;
+                        finishBenchmarkScenarioCompletion(event, completionEpoch, 0, false);
+                    });
+                },
+                Controller.BenchmarkGameplayScenarioCompletedEvent.class);
         eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
@@ -1235,13 +1419,6 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     // This callback runs synchronously on the controller thread. Keep the CPU
                     // sample on that thread instead of the runtime owner executor.
                     AndroidPerformanceBoost.apply(executionModeForSession());
-                    if (diagnostics.enabled()) {
-                        // BasicController materializes benchmark sessions paused.  Diagnostics
-                        // now reports ANCHOR_READY; the host must arm a generation explicitly.
-                        diagnostics.emulationStarted();
-                    } else {
-                        diagnostics.emulationStarted();
-                    }
                     submit(() -> {
                     boolean requestedOpen = event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId;
@@ -1255,6 +1432,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         activeBatterySave = false;
                         activeSessionGeneration = event.getSessionGeneration() == null ? 0L
                                 : event.getSessionGeneration();
+                        diagnostics.beginSession(activeSessionGeneration);
                         restartPlaybackTimerOnNextPublish = true;
                         clearPauseMenuSnapshotInternal();
                         AndroidTiltSink activeTilt = tilt;
@@ -1281,10 +1459,28 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         if (gpsEnabled) {
                             eventBus.post(new Controller.SetGpsReceiverEvent(true));
                         }
-                        publish(diagnostics.enabled() ? RuntimeState.Phase.PAUSED
+                        boolean configuredScenario = diagnostics.enabled()
+                                && benchmarkScenario.enabled();
+                        if (configuredScenario) {
+                            benchmarkScenario.beginSession(activeSessionGeneration);
+                            if (!input.beginBenchmarkScenario()) {
+                                benchmarkScenario.resetSession();
+                                diagnostics.invalidateSession();
+                                publishBenchmarkScenarioInputFailure();
+                                return;
+                            }
+                            eventBus.post(new Controller.BenchmarkGameplayScenarioStartEvent(
+                                    activeSessionGeneration,
+                                    benchmarkScenario.endpointFrameForTesting()));
+                            eventBus.post(new Controller.ResumeEmulationEvent());
+                        } else {
+                            diagnostics.emulationStarted(activeSessionGeneration);
+                        }
+                        boolean benchmarkPaused = diagnostics.enabled() && !configuredScenario;
+                        publish(benchmarkPaused ? RuntimeState.Phase.PAUSED
                                         : RuntimeState.Phase.RUNNING,
                                 "Loaded " + event.getRomName() + ". App-private saves are ready.",
-                                List.of(), true, diagnostics.enabled(), false);
+                                List.of(), true, benchmarkPaused, false);
                     }
                     });
                 },
@@ -1315,6 +1511,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     AndroidPerformanceBoost.apply(ExecutionMode.ACCURACY);
                     submit(() -> {
                         if (!closed.get()) {
+                            invalidateBenchmarkSession(false);
                             if (!diagnostics.enabled()) {
                                 persistActiveRecentGame(frames.snapshot());
                             }
@@ -1329,6 +1526,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.LoadRomFailedEvent event) -> submit(() -> {
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
+                        invalidateBenchmarkSession(false);
                         if (!diagnostics.enabled()) {
                             new RecentSafDocuments(context).removeGame(currentSource,
                                     activeCandidateToken, activeArchiveEntryName,
@@ -1343,6 +1541,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 (Controller.SessionPlaybackStateEvent event) -> submit(() -> {
                     if (activeLayout == null || state.phase() == RuntimeState.Phase.LOADING) {
+                        return;
+                    }
+                    if (event.getSessionGeneration() != activeSessionGeneration) {
                         return;
                     }
                     if (event.getPaused()) {
@@ -1527,6 +1728,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             frames.clear();
             activeRomTitle = "";
             activeBatterySave = false;
+            if (!invalidateBenchmarkSession(true)) {
+                publishBenchmarkScenarioInputFailure();
+                return;
+            }
             activeSessionGeneration = 0L;
             clearPauseMenuSnapshotInternal();
             activeLayout = layout;
@@ -1756,6 +1961,60 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             throw new IllegalStateException("Android emulator runtime is not available");
         }
         return eventBus;
+    }
+
+    /** Drops every generation-bound benchmark latch before a session is replaced or removed. */
+    private boolean invalidateBenchmarkSession(boolean prepareScenarioSource) {
+        if (!diagnostics.enabled()) {
+            return true;
+        }
+        pendingBenchmarkArm = null;
+        benchmarkScenarioCompletionEpoch++;
+        benchmarkScenario.resetSession();
+        diagnostics.invalidateSession();
+        input.resetBenchmarkSession();
+        if (!prepareScenarioSource) {
+            return true;
+        }
+        if (benchmarkScenario.enabled()) {
+            return input.beginBenchmarkScenario();
+        }
+        input.lockBenchmarkWindow();
+        return true;
+    }
+
+    /** Package-visible replacement seam used by the deterministic router/runtime unit test. */
+    static boolean resetBenchmarkScenarioInput(
+            AndroidInputRouter input, boolean prepareScenarioSource) {
+        input.resetBenchmarkSession();
+        return !prepareScenarioSource || input.beginBenchmarkScenario();
+    }
+
+    static boolean benchmarkCompletionPollMatches(
+            long completionEpoch, long activeCompletionEpoch,
+            long eventSessionGeneration, long activeSessionGeneration,
+            long scenarioSessionGeneration, long presentedSessionGeneration) {
+        return completionEpoch > 0L && completionEpoch == activeCompletionEpoch
+                && benchmarkSessionMatches(eventSessionGeneration, activeSessionGeneration,
+                        scenarioSessionGeneration, presentedSessionGeneration);
+    }
+
+    /** A stale or hidden pre-ARM session must not let a scheduled poll resume audio. */
+    static boolean benchmarkCompletionPollMayTouchAudio(
+            boolean preArmValid,
+            long completionEpoch, long activeCompletionEpoch,
+            long eventSessionGeneration, long activeSessionGeneration,
+            long scenarioSessionGeneration, long presentedSessionGeneration) {
+        return preArmValid && benchmarkCompletionPollMatches(
+                completionEpoch, activeCompletionEpoch,
+                eventSessionGeneration, activeSessionGeneration,
+                scenarioSessionGeneration, presentedSessionGeneration);
+    }
+
+    private void publishBenchmarkScenarioInputFailure() {
+        publish(RuntimeState.Phase.FAILED,
+                "Benchmark scenario input could not be isolated for this session.",
+                List.of(), activeLayout != null, true, false);
     }
 
     private boolean closeController() {
@@ -2098,6 +2357,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 && eventSessionGeneration > activeSessionGeneration;
     }
 
+    /** Shared fail-closed generation gate for synchronous and owner-queued benchmark events. */
+    static boolean benchmarkSessionMatches(long eventGeneration, long activeGeneration,
+            long scenarioGeneration, long presentedGeneration) {
+        return eventGeneration > 0L
+                && eventGeneration == activeGeneration
+                && eventGeneration == scenarioGeneration
+                && eventGeneration == presentedGeneration;
+    }
+
     private static boolean hasActiveSession(RuntimeState state) {
         return state.phase() == RuntimeState.Phase.RUNNING
                 || state.phase() == RuntimeState.Phase.PAUSED;
@@ -2168,6 +2436,27 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private record ObserverRegistration(RuntimeObserver observer, Long registrationId) {
+    }
+
+    private record PendingBenchmarkArm(
+            long sessionGeneration,
+            long generation,
+            String token,
+            AndroidAudioSink.AudioBaseline baseline) {
+
+        private boolean matches(Controller.BenchmarkArmAcknowledgedEvent event) {
+            return event != null
+                    && sessionGeneration == event.getSessionGeneration()
+                    && generation == event.getGeneration()
+                    && token.equals(event.getToken());
+        }
+    }
+
+    /** Tiny testable monitor shared by the main-thread hide path and owner-thread audio polls. */
+    static final class BenchmarkAudioLifecycleGate {
+        synchronized void run(Runnable action) {
+            Objects.requireNonNull(action, "action").run();
+        }
     }
 
     @FunctionalInterface

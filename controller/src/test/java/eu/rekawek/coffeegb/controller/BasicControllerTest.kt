@@ -9,10 +9,12 @@ import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.Controller.HardwareProfileEvent
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.debug.DebugPort
 import eu.rekawek.coffeegb.core.events.Event
@@ -41,6 +43,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.function.BooleanSupplier
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
@@ -1647,6 +1651,160 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
+    }
+  }
+
+  @Test
+  fun benchmarkBoundaryCarriesPerformanceEpochTelemetry() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
+    val boundaries = LinkedBlockingQueue<Controller.BenchmarkFrameBoundaryEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
+    eventBus.register<Controller.BenchmarkFrameBoundaryEvent>(boundaries::add)
+    val rom = namedRom("BENCHMARK_EPOCH")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.PERFORMANCE)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun getPerformanceBulkSpanCount() = 11L
+
+                override fun getPerformanceBulkTicks() = 22L
+
+                override fun getPerformanceEpochCount() = 33L
+
+                override fun getPerformanceEpochTicks() = 44L
+
+                override fun getPerformanceEpochMaxTicks() = 55
+
+                override fun getPerformanceEpochRasterFastTicks() = 66L
+
+                override fun getPerformanceEpochMode2ReplayTicks() = 77L
+
+                override fun getPerformanceEpochMode2BulkTicks() = 70L
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val sessionGeneration = assertNotNull(session.sessionGeneration)
+      val benchmarkGeneration = 83L
+      val token = "stage8-epoch-token-0001"
+      eventBus.post(
+          Controller.BenchmarkArmEvent(benchmarkGeneration, token, sessionGeneration))
+      assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, benchmarkGeneration))
+
+      val boundary = assertNotNull(boundaries.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(11L, boundary.performanceBulkSpans)
+      assertEquals(22L, boundary.performanceBulkTicks)
+      assertEquals(33L, boundary.performanceEpochCount)
+      assertEquals(44L, boundary.performanceEpochTicks)
+      assertEquals(55, boundary.performanceEpochMaxTicks)
+      assertEquals(66L, boundary.performanceEpochRasterFastTicks)
+      assertEquals(77L, boundary.performanceEpochMode2ReplayTicks)
+      assertEquals(70L, boundary.performanceEpochMode2BulkTicks)
+
+      val fourArgument = Controller.BenchmarkFrameBoundaryEvent(600L, false, false, 1)
+      val sixArgument =
+          Controller.BenchmarkFrameBoundaryEvent(600L, false, false, 1, 5L, 6L)
+      assertEquals(0L, fourArgument.performanceEpochCount)
+      assertEquals(0L, sixArgument.performanceEpochTicks)
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkScenarioEndpointStopsCurrentPerformanceBatchWithoutOneMoreTick() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val completed = LinkedBlockingQueue<Controller.BenchmarkGameplayScenarioCompletedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkGameplayScenarioCompletedEvent>(completed::add)
+    val executedTicks = AtomicInteger()
+    val endpointSession = AtomicLong()
+    val endpointPosted = AtomicInteger()
+    val rom = namedRom("BENCHMARK_ENDPOINT")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.PERFORMANCE)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun runTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int {
+                  var executed = 0
+                  while (executed < ticks && !stop.asBoolean) {
+                    executed++
+                    executedTicks.incrementAndGet()
+                    if (executed == 5 && endpointPosted.compareAndSet(0, 1)) {
+                      eventBus.post(
+                          Controller.BenchmarkGameplayScenarioEndpointEvent(
+                              endpointSession.get(),
+                              313,
+                          ))
+                    }
+                  }
+                  return executed
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val generation = assertNotNull(session.sessionGeneration)
+      endpointSession.set(generation)
+      eventBus.post(Controller.BenchmarkGameplayScenarioStartEvent(generation, 313))
+      eventBus.post(Controller.ResumeEmulationEvent())
+
+      val evidence =
+          assertNotNull(
+              completed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+              "ticks=${executedTicks.get()} endpointPosts=${endpointPosted.get()}",
+          )
+      assertEquals(generation, evidence.sessionGeneration)
+      assertEquals(313, evidence.completedFrames)
+      assertEquals(313, evidence.expectedFrames)
+      assertTrue(evidence.completed)
+      assertEquals(5, executedTicks.get())
+      Thread.sleep(100)
+      assertEquals(5, executedTicks.get(), "paused controller executed a post-endpoint tick")
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
     }
   }
 

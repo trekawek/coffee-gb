@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -70,17 +71,26 @@ public final class BenchmarkMatrix {
 
     private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final Set<String> INTERESTING_EVENTS = Set.of(
-            "matrix_run", "frame_ready", "frame_submitted", "final_result",
+            "scenario_complete", "matrix_run", "frame_ready", "frame_submitted", "final_result",
             "compositor_result");
     private static final Set<String> BENIGN_EVENTS = Set.of(
             "session_launch", "rom_open_start", "recent_missing", "hardware_profile",
             "emulation_started", "warmup_complete", "benchmark_arm",
-            "benchmark_arm_rejected", "benchmark_anchor", "speed_sample", "first_frame", "frames",
+            "benchmark_arm_rejected", "benchmark_anchor", "benchmark_invalidated",
+            "speed_sample", "first_frame", "frames",
             "audio_output");
+    private static final Set<String> INPUT_CONTRACTS = Set.of(
+            "none", "dmg-action-v1", "cgb-action-v1");
+    private static final Set<String> ENVIRONMENT_START_FIELDS = Set.of(
+            "thermal_start", "battery_temp_start", "display_refresh_start_millihz",
+            "display_state_start", "interactive_start", "plugged_start", "power_save_start",
+            "stay_awake_start", "stay_on_plugged_mask_start", "thread_priority_start",
+            "app_importance_start", "system_load_start_milli", "cpu_count_start",
+            "memory_available_start_bytes");
     private static final Set<String> MATRIX_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "first_side", "thermal_window", "audio", "render", "availability",
-            "benchmark_generation",
+            "session_generation", "benchmark_generation",
             "requested_hardware", "requested_profile", "profile", "effective_gbc",
             "effective_dmg_compat", "effective_mode", "device_id", "speed_mode_initial",
             "build_profile",
@@ -92,6 +102,9 @@ public final class BenchmarkMatrix {
             "stay_on_plugged_mask_start", "thread_priority_start", "app_importance_start",
             "system_load_start_milli", "cpu_count_start", "memory_available_start_bytes",
             "workload_nonce", "warmup", "input_contract", "surface_vote_hz",
+            "scenario_session_generation", "scenario_completed",
+            "scenario_completed_frames", "scenario_expected_frames",
+            "scenario_source_closed", "scenario_audio_drained",
             "display_target_hz", "surface_content_rate_millihz",
             "audio_start_input_events", "audio_start_enqueued_bytes",
             "audio_start_input_frames",
@@ -99,10 +112,15 @@ public final class BenchmarkMatrix {
             "audio_start_written_frames", "audio_start_write_failures",
             "audio_start_discarded_bytes", "audio_start_pending_bytes",
             "audio_start_queued_bytes", "audio_start_playback_position_frames",
-            "audio_start_overruns", "audio_start_underruns", "audio_start_restarts",
+            "audio_start_overruns", "audio_start_underruns", "audio_start_track_underruns",
+            "audio_start_restarts",
             "audio_start_route_failures",
             "audio_start_output_open", "audio_start_output_playing", "audio_start_sample_rate",
             "audio_start_queue_capacity_frames", "audio_start_max_frame_bytes");
+    private static final Set<String> SCENARIO_FIELDS = Set.of(
+            "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
+            "session_generation", "input_contract", "completed",
+            "completed_frames", "expected_frames", "source_closed", "audio_drained");
     private static final Set<String> FRAME_READY_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "benchmark_generation",
@@ -112,7 +130,7 @@ public final class BenchmarkMatrix {
             "submission_id", "submission_ns");
     private static final Set<String> FINAL_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
-            "benchmark_generation",
+            "session_generation", "benchmark_generation",
             "build_profile",
             "frame", "ready_count", "submitted_count", "dropped_count", "duplicate_count",
             "late_count", "corrupt_count", "ready_first_id", "ready_last_id",
@@ -123,7 +141,9 @@ public final class BenchmarkMatrix {
             "speed_mode_initial", "speed_mode_final", "clock_ticks_num", "clock_ticks_den",
             "execution_mode",
             "clock_frames_num", "clock_frames_den", "clock_ticks_frame",
-            "workload_nonce", "warmup", "input_contract",
+            "workload_nonce", "warmup", "input_contract", "scenario_session_generation",
+            "scenario_completed", "scenario_completed_frames", "scenario_expected_frames",
+            "scenario_source_closed", "scenario_audio_drained",
             "drain_success",
             "speed_mode_sample",
             "thermal_start", "thermal_end", "battery_temp_start", "battery_temp_end",
@@ -253,6 +273,8 @@ public final class BenchmarkMatrix {
             String expectedParentArtifact, String expectedCandidateArtifact) {
         List<String> errors = new BoundedErrors();
         LinkedHashMap<String, RunBuilder> runs = new LinkedHashMap<>();
+        List<BenchmarkInvalidation> invalidations = new ArrayList<>();
+        ScenarioCompletion pendingScenario = null;
         if (resamples < BOOTSTRAP_RESAMPLES) {
             errors.add("bootstrap resamples must be at least " + BOOTSTRAP_RESAMPLES);
         }
@@ -274,7 +296,20 @@ public final class BenchmarkMatrix {
                     continue;
                 }
                 String event = fields.get("event");
-                if ("matrix_run".equals(event)) {
+                if ("benchmark_invalidated".equals(event)) {
+                    invalidations.add(parseBenchmarkInvalidation(
+                            fields, lineNumber + 1, errors));
+                } else if ("scenario_complete".equals(event)) {
+                    ScenarioCompletion scenario = parseScenarioCompletion(
+                            fields, lineNumber + 1, errors);
+                    if (pendingScenario != null) {
+                        errors.add("line " + (lineNumber + 1)
+                                + ": scenario_complete was not consumed by a matrix_run");
+                    }
+                    pendingScenario = scenario;
+                } else if ("matrix_run".equals(event)) {
+                    pendingScenario = consumeScenarioCompletion(
+                            fields, lineNumber + 1, pendingScenario, errors);
                     addMatrixRun(fields, lineNumber + 1, runs, errors);
                 } else if ("frame_ready".equals(event)) {
                     addFrame(fields, lineNumber + 1, runs, true, errors);
@@ -287,6 +322,11 @@ public final class BenchmarkMatrix {
                 }
             }
         }
+        if (pendingScenario != null) {
+            errors.add("line " + pendingScenario.ordinal
+                    + ": scenario_complete has no following matrix_run");
+        }
+        rejectInvalidatedRuns(runs.values(), invalidations, errors);
         if (errors instanceof BoundedErrors bounded) {
             bounded.beginStructuralPhase();
         }
@@ -716,14 +756,17 @@ public final class BenchmarkMatrix {
             return;
         }
         if ("phase".equals(key)) {
-            if (!Set.of("warming", "anchor_ready", "armed", "core_frozen",
+            if (!Set.of("scenario_running", "warming", "anchor_ready", "armed", "core_frozen",
                     "submissions_complete", "done", "idle").contains(value)) {
                 errors.add("line " + lineNumber + ": invalid benchmark phase");
             }
             return;
         }
+        // Rejections are terminal for that individual attempt. They remain benign aggregate
+        // records because acceptance still requires a later valid matrix_run/final_result pair.
         if ("reason".equals(key) && !Set.of("not_anchor_ready", "not_warming",
-                "post_failed").contains(value)) {
+                "post_failed", "stale_session", "audio_pending", "audio_not_playing",
+                "audio_focus", "visibility_lost").contains(value)) {
             errors.add("line " + lineNumber + ": invalid benchmark rejection reason");
             return;
         }
@@ -775,6 +818,10 @@ public final class BenchmarkMatrix {
 
     private static boolean isBooleanField(String key) {
         return key.equals("audio") || key.equals("warmup") || key.equals("effective_gbc")
+                || key.equals("completed") || key.equals("source_closed")
+                || key.equals("audio_drained") || key.equals("scenario_completed")
+                || key.equals("scenario_source_closed")
+                || key.equals("scenario_audio_drained")
                 || key.equals("effective_dmg_compat") || key.equals("interactive_start")
                 || key.equals("interactive_end") || key.equals("power_save_start")
                 || key.equals("power_save_end") || key.equals("stay_awake_start")
@@ -795,6 +842,7 @@ public final class BenchmarkMatrix {
 
     private static boolean isNumericField(String key) {
         return key.equals("frame") || key.equals("row_order") || key.equals("benchmark_generation")
+                || key.equals("session_generation")
                 || key.endsWith("_ns")
                 || key.endsWith("_ms") || key.endsWith("_bytes") || key.endsWith("_frames")
                 || key.endsWith("_count") || key.endsWith("_events")
@@ -827,6 +875,7 @@ public final class BenchmarkMatrix {
 
     private static Set<String> allowedFields(String event) {
         return switch (event) {
+            case "scenario_complete" -> SCENARIO_FIELDS;
             case "matrix_run" -> MATRIX_FIELDS;
             case "frame_ready" -> FRAME_READY_FIELDS;
             case "frame_submitted" -> FRAME_SUBMITTED_FIELDS;
@@ -842,6 +891,7 @@ public final class BenchmarkMatrix {
                     "clock_ticks_num", "clock_ticks_den", "clock_frames_num",
                     "clock_frames_den", "clock_ticks_frame", "device_id");
             case "emulation_started" -> Set.of("event", "wall_ns", "prep_ms",
+                    "session_generation",
                     "requested_hardware", "profile", "effective_gbc", "effective_dmg_compat",
                     "effective_mode", "speed_mode_initial", "speed_mode_sample",
                     "clock_ticks_num", "clock_ticks_den", "clock_frames_num",
@@ -850,9 +900,16 @@ public final class BenchmarkMatrix {
             case "benchmark_arm" -> Set.of("event", "generation", "token", "phase");
             case "benchmark_arm_rejected" -> Set.of("event", "phase", "reason");
             case "benchmark_anchor" -> Set.of("event", "success", "phase", "reason");
+            case "benchmark_invalidated" -> Set.of(
+                    "event", "artifact_id", "pair_id", "matrix_block", "row_order",
+                    "run_side", "session_generation", "phase", "reason");
             case "speed_sample" -> Set.of("event", "frame", "effective_gbc",
                     "effective_dmg_compat", "speed_mode_final", "speed_mode_sample",
-                    "performance_bulk_spans", "performance_bulk_ticks");
+                    "performance_bulk_spans", "performance_bulk_ticks",
+                    "performance_epoch_count", "performance_epoch_ticks",
+                    "performance_epoch_max_ticks", "performance_epoch_raster_fast_ticks",
+                    "performance_epoch_mode2_replay_ticks",
+                    "performance_epoch_mode2_bulk_ticks");
             case "first_frame" -> Set.of("event", "frame", "wall_ns", "since_launch_ms",
                     "prep_to_frame_ms");
             case "frames" -> Set.of("event", "frame", "ready_count", "submitted_count",
@@ -874,6 +931,106 @@ public final class BenchmarkMatrix {
                 || key.endsWith("_payload");
     }
 
+    private static ScenarioCompletion parseScenarioCompletion(Map<String, String> fields,
+            int lineNumber, List<String> errors) {
+        String artifactId = artifactToken(fields, "artifact_id", lineNumber, errors);
+        String pairId = requiredToken(fields, "pair_id", lineNumber, errors);
+        String matrixBlock = requiredToken(fields, "matrix_block", lineNumber, errors);
+        int rowOrder = integer(fields, "row_order", lineNumber, errors);
+        Side runSide = side(fields.get("run_side"), "run_side", lineNumber, errors);
+        long sessionGeneration = longValue(fields, "session_generation", lineNumber, errors);
+        String inputContract = requiredToken(fields, "input_contract", lineNumber, errors);
+        Boolean completed = strictBoolean(fields, "completed", lineNumber, errors);
+        int completedFrames = integer(fields, "completed_frames", lineNumber, errors);
+        int expectedFrames = integer(fields, "expected_frames", lineNumber, errors);
+        Boolean sourceClosed = strictBoolean(fields, "source_closed", lineNumber, errors);
+        Boolean audioDrained = strictBoolean(fields, "audio_drained", lineNumber, errors);
+        int contractFrames = expectedScenarioFrames(inputContract);
+        if (artifactId == null || pairId == null || matrixBlock == null || rowOrder < 0
+                || runSide == null || sessionGeneration <= 0L || inputContract == null
+                || !Boolean.TRUE.equals(completed)
+                || contractFrames <= 0 || completedFrames != contractFrames
+                || expectedFrames != contractFrames
+                || !Boolean.TRUE.equals(sourceClosed) || !Boolean.TRUE.equals(audioDrained)) {
+            errors.add("line " + lineNumber
+                    + ": scenario_complete is not exact, closed, and audio-drained");
+        }
+        return new ScenarioCompletion(artifactId, pairId, matrixBlock, rowOrder, runSide,
+                sessionGeneration, inputContract, completedFrames, expectedFrames,
+                Boolean.TRUE.equals(completed), Boolean.TRUE.equals(sourceClosed),
+                Boolean.TRUE.equals(audioDrained), lineNumber);
+    }
+
+    private static BenchmarkInvalidation parseBenchmarkInvalidation(
+            Map<String, String> fields, int lineNumber, List<String> errors) {
+        String artifactId = artifactToken(fields, "artifact_id", lineNumber, errors);
+        String pairId = requiredToken(fields, "pair_id", lineNumber, errors);
+        String matrixBlock = requiredToken(fields, "matrix_block", lineNumber, errors);
+        int rowOrder = integer(fields, "row_order", lineNumber, errors);
+        Side runSide = side(fields.get("run_side"), "run_side", lineNumber, errors);
+        long sessionGeneration = longValue(
+                fields, "session_generation", lineNumber, errors);
+        if (!"visibility_lost".equals(fields.get("reason"))) {
+            errors.add("line " + lineNumber
+                    + ": benchmark_invalidated has an unsupported reason");
+        }
+        return new BenchmarkInvalidation(artifactId, pairId, matrixBlock, rowOrder,
+                runSide, sessionGeneration, lineNumber);
+    }
+
+    private static void rejectInvalidatedRuns(Iterable<RunBuilder> runs,
+            List<BenchmarkInvalidation> invalidations, List<String> errors) {
+        for (BenchmarkInvalidation invalidation : invalidations) {
+            for (RunBuilder run : runs) {
+                if (invalidation.sessionGeneration == run.sessionGeneration
+                        && invalidation.rowOrder == run.rowOrder
+                        && invalidation.runSide == run.side
+                        && Objects.equals(invalidation.artifactId, run.artifactId)
+                        && Objects.equals(invalidation.pairId, run.pairId)
+                        && Objects.equals(invalidation.matrixBlock, run.matrixBlock)) {
+                    errors.add(run.key + " was invalidated by host visibility loss at line "
+                            + invalidation.ordinal);
+                }
+            }
+        }
+    }
+
+    private static ScenarioCompletion consumeScenarioCompletion(Map<String, String> fields,
+            int lineNumber, ScenarioCompletion pending, List<String> errors) {
+        String inputContract = fields.get("input_contract");
+        String artifactId = fields.get("artifact_id");
+        String pairId = fields.get("pair_id");
+        String matrixBlock = fields.get("matrix_block");
+        int rowOrder = integer(fields, "row_order", lineNumber, errors);
+        Side runSide = Side.fromExternalValue(fields.get("run_side"));
+        long sessionGeneration = optionalLong(fields, "scenario_session_generation");
+        if ("none".equals(inputContract)) {
+            if (pending != null) {
+                errors.add("line " + lineNumber
+                        + ": no-input row has unexpected scenario_complete evidence");
+            }
+            return null;
+        }
+        if (pending == null) {
+            errors.add("line " + lineNumber
+                    + ": scripted row is missing scenario_complete evidence");
+        } else if (pending.inputContract == null
+                || !pending.inputContract.equals(inputContract)) {
+            errors.add("line " + lineNumber
+                    + ": scenario_complete input contract does not match matrix_run");
+        } else if (sessionGeneration <= 0L || pending.sessionGeneration != sessionGeneration) {
+            errors.add("line " + lineNumber
+                    + ": scenario_complete session generation does not match matrix_run");
+        } else if (!Objects.equals(pending.artifactId, artifactId)
+                || !Objects.equals(pending.pairId, pairId)
+                || !Objects.equals(pending.matrixBlock, matrixBlock)
+                || pending.rowOrder != rowOrder || pending.runSide != runSide) {
+            errors.add("line " + lineNumber
+                    + ": scenario_complete run identity does not match matrix_run");
+        }
+        return null;
+    }
+
     private static void addMatrixRun(Map<String, String> fields, int lineNumber,
             Map<String, RunBuilder> runs, List<String> errors) {
         String artifactId = artifactToken(fields, "artifact_id", lineNumber, errors);
@@ -882,6 +1039,7 @@ public final class BenchmarkMatrix {
         }
         String pairId = requiredToken(fields, "pair_id", lineNumber, errors);
         String block = requiredToken(fields, "matrix_block", lineNumber, errors);
+        long sessionGeneration = longValue(fields, "session_generation", lineNumber, errors);
         long benchmarkGeneration = longValue(fields, "benchmark_generation", lineNumber, errors);
         String device = deviceToken(fields, "device_id", lineNumber, errors);
         String thermalWindow = requiredToken(fields, "thermal_window", lineNumber, errors);
@@ -894,6 +1052,17 @@ public final class BenchmarkMatrix {
         String workloadNonce = requiredToken(fields, "workload_nonce", lineNumber, errors);
         boolean warmup = booleanValue(fields, "warmup", lineNumber, errors);
         String inputContract = requiredToken(fields, "input_contract", lineNumber, errors);
+        long scenarioSessionGeneration = longValue(
+                fields, "scenario_session_generation", lineNumber, errors);
+        Boolean scenarioCompleted = strictBoolean(fields, "scenario_completed", lineNumber, errors);
+        int scenarioCompletedFrames = integer(
+                fields, "scenario_completed_frames", lineNumber, errors);
+        int scenarioExpectedFrames = integer(
+                fields, "scenario_expected_frames", lineNumber, errors);
+        Boolean scenarioSourceClosed = strictBoolean(
+                fields, "scenario_source_closed", lineNumber, errors);
+        Boolean scenarioAudioDrained = strictBoolean(
+                fields, "scenario_audio_drained", lineNumber, errors);
         Boolean effectiveGbc = strictBoolean(fields, "effective_gbc", lineNumber, errors);
         Boolean effectiveDmgCompat = strictBoolean(fields, "effective_dmg_compat", lineNumber, errors);
         String effectiveMode = requiredToken(fields, "effective_mode", lineNumber, errors);
@@ -955,13 +1124,25 @@ public final class BenchmarkMatrix {
                 || requestedProfile == null || profile == null || effectiveMode == null
                 || effectiveGbc == null || effectiveDmgCompat == null || environment == null
                 || speedModeInitial < 1 || clock == null || workloadNonce == null
-                || benchmarkGeneration <= 0L
+                || sessionGeneration <= 0L || benchmarkGeneration <= 0L
                 || inputContract == null || surfaceVoteHz < 60 || displayTargetHz < 60
                 || surfaceContentRateMillihz <= 0) {
             return;
         }
-        if (!warmup || !"none".equals(inputContract)) {
-            errors.add("line " + lineNumber + ": run lacks required warmup/no-input contract");
+        if (!warmup || !INPUT_CONTRACTS.contains(inputContract)) {
+            errors.add("line " + lineNumber + ": run lacks a supported warmup/input contract");
+        }
+        if (!validScenarioCompletion(row, inputContract, sessionGeneration,
+                scenarioSessionGeneration,
+                scenarioCompleted,
+                scenarioCompletedFrames, scenarioExpectedFrames, scenarioSourceClosed,
+                scenarioAudioDrained)) {
+            errors.add("line " + lineNumber
+                    + ": matrix_run scenario completion does not match its hardware row");
+        }
+        if (audio && "presentation".equals(render) && !validArmAudioBaseline(audioStart)) {
+            errors.add("line " + lineNumber
+                    + ": audio arm baseline is not drained and playing");
         }
         String key = runKey(pairId, side, block, rowOrder);
         if (runs.containsKey(key)) {
@@ -977,8 +1158,9 @@ public final class BenchmarkMatrix {
                 effectiveGbc, effectiveDmgCompat, effectiveMode, executionMode,
                 speedModeInitial, clock, audio,
                 render, !unavailable, environment, workloadNonce, warmup, inputContract,
-                surfaceVoteHz, displayTargetHz, surfaceContentRateMillihz, benchmarkGeneration,
-                audioStart));
+                surfaceVoteHz, displayTargetHz, surfaceContentRateMillihz, sessionGeneration,
+                benchmarkGeneration, scenarioSessionGeneration, scenarioCompletedFrames,
+                scenarioExpectedFrames, audioStart));
     }
 
     private static void addFrame(Map<String, String> fields, int lineNumber,
@@ -1026,6 +1208,7 @@ public final class BenchmarkMatrix {
             if (!"benchmark".equals(fields.get("build_profile"))) {
                 errors.add("line " + lineNumber + ": benchmark build profile is missing or invalid");
             }
+            long sessionGeneration = longValue(fields, "session_generation", lineNumber, errors);
             long benchmarkGeneration = longValue(fields, "benchmark_generation", lineNumber, errors);
             String requestedProfile = requiredToken(fields, "requested_profile", lineNumber, errors);
             String profile = requiredToken(fields, "profile", lineNumber, errors);
@@ -1045,16 +1228,41 @@ public final class BenchmarkMatrix {
             String workloadNonce = requiredToken(fields, "workload_nonce", lineNumber, errors);
             boolean warmup = booleanValue(fields, "warmup", lineNumber, errors);
             String inputContract = requiredToken(fields, "input_contract", lineNumber, errors);
+            long scenarioSessionGeneration = longValue(
+                    fields, "scenario_session_generation", lineNumber, errors);
+            Boolean scenarioCompleted = strictBoolean(
+                    fields, "scenario_completed", lineNumber, errors);
+            int scenarioCompletedFrames = integer(
+                    fields, "scenario_completed_frames", lineNumber, errors);
+            int scenarioExpectedFrames = integer(
+                    fields, "scenario_expected_frames", lineNumber, errors);
+            Boolean scenarioSourceClosed = strictBoolean(
+                    fields, "scenario_source_closed", lineNumber, errors);
+            Boolean scenarioAudioDrained = strictBoolean(
+                    fields, "scenario_audio_drained", lineNumber, errors);
             Boolean drainSuccess = strictBoolean(fields, "drain_success", lineNumber, errors);
-            EnvironmentFields start = parseStartEnvironment(fields, lineNumber, errors);
+            // Current records inherit matrix_run's immutable sample to retain Android payload
+            // headroom. Legacy records may repeat it, but the block is all-or-none and must bind
+            // exactly instead of allowing contradictory evidence to be silently ignored.
+            EnvironmentFields legacyStart = parseOptionalStartEnvironment(
+                    fields, lineNumber, errors);
+            EnvironmentFields start = legacyStart == null ? run.environment : legacyStart;
             EnvironmentFields end = parseEndEnvironment(fields, lineNumber, errors);
-            AudioFields audio = parseAudio(fields, lineNumber, errors);
+            // matrix_run owns the ARM-time audio baseline. final_result retains terminal audio
+            // counters but may omit that duplicated 21-field block to stay below Android's log
+            // payload cliff. Older fixtures which repeat it remain accepted and are cross-bound.
+            AudioFields audio = parseAudio(fields, lineNumber, errors, run.audioStart);
             if (!requestedProfileMatches(requestedProfile, profile)) {
                 errors.add("line " + lineNumber
                         + ": final requested profile does not match actual profile");
             }
             run.finalFields = new FinalFields(
-                    artifactId, benchmarkGeneration, requestedProfile, profile, effectiveGbc, effectiveDmgCompat,
+                    artifactId, sessionGeneration, benchmarkGeneration,
+                    scenarioSessionGeneration, Boolean.TRUE.equals(scenarioCompleted),
+                    scenarioCompletedFrames, scenarioExpectedFrames,
+                    Boolean.TRUE.equals(scenarioSourceClosed),
+                    Boolean.TRUE.equals(scenarioAudioDrained),
+                    requestedProfile, profile, effectiveGbc, effectiveDmgCompat,
                     effectiveMode, executionMode, speedModeInitial, speedModeFinal, clock, deviceId, start, end,
                     audio,
                     integer(fields, "frame", lineNumber, errors),
@@ -1785,7 +1993,13 @@ public final class BenchmarkMatrix {
         }
         FinalFields result = run.finalFields;
         if (!run.artifactId.equals(result.artifactId)
+                || run.sessionGeneration != result.sessionGeneration
                 || run.benchmarkGeneration != result.benchmarkGeneration
+                || run.scenarioSessionGeneration != result.scenarioSessionGeneration
+                || run.scenarioCompletedFrames != result.scenarioCompletedFrames
+                || run.scenarioExpectedFrames != result.scenarioExpectedFrames
+                || !result.scenarioCompleted || !result.scenarioSourceClosed
+                || !result.scenarioAudioDrained
                 || !run.requestedProfile.equals(result.requestedProfile)
                 || !run.profile.equals(result.profile)
                 || run.effectiveGbc != result.effectiveGbc
@@ -1804,6 +2018,12 @@ public final class BenchmarkMatrix {
                 || !run.environment.equals(result.environmentStart)
                 || (run.audioStart != null && !run.audioStart.equals(audioStart(result.audio)))) {
             errors.add(run.key + " final evidence does not match matrix_run");
+        }
+        if (!validScenarioCompletion(run.row, result.inputContract, result.sessionGeneration,
+                result.scenarioSessionGeneration, result.scenarioCompleted,
+                result.scenarioCompletedFrames, result.scenarioExpectedFrames,
+                result.scenarioSourceClosed, result.scenarioAudioDrained)) {
+            errors.add(run.key + " final scenario completion does not match its hardware row");
         }
         Row finalRow = recomputeRow(result.profile, result.effectiveGbc,
                 result.effectiveDmgCompat);
@@ -2275,6 +2495,19 @@ public final class BenchmarkMatrix {
         return parseEnvironment(fields, "start", lineNumber, errors);
     }
 
+    private static EnvironmentFields parseOptionalStartEnvironment(Map<String, String> fields,
+            int lineNumber, List<String> errors) {
+        boolean any = ENVIRONMENT_START_FIELDS.stream().anyMatch(fields::containsKey);
+        if (!any) {
+            return null;
+        }
+        if (!fields.keySet().containsAll(ENVIRONMENT_START_FIELDS)) {
+            errors.add("line " + lineNumber
+                    + ": legacy final environment-start block must be all-or-none");
+        }
+        return parseStartEnvironment(fields, lineNumber, errors);
+    }
+
     private static ClockFields parseClock(Map<String, String> fields, int lineNumber,
             List<String> errors) {
         long ticksNumerator = longValue(fields, "clock_ticks_num", lineNumber, errors);
@@ -2316,7 +2549,9 @@ public final class BenchmarkMatrix {
     }
 
     private static AudioFields parseAudio(Map<String, String> fields, int lineNumber,
-            List<String> errors) {
+            List<String> errors, AudioStartFields inheritedStart) {
+        AudioStartFields inlineStart = parseMatrixAudioStart(fields, lineNumber, errors);
+        AudioStartFields start = inlineStart == null ? inheritedStart : inlineStart;
         return new AudioFields(
                 strictBoolean(fields, "audio_active", lineNumber, errors),
                 integer(fields, "audio_sample_rate", lineNumber, errors),
@@ -2350,27 +2585,27 @@ public final class BenchmarkMatrix {
                 strictBoolean(fields, "audio_system_music_muted", lineNumber, errors),
                 integer(fields, "audio_queue_capacity_frames", lineNumber, errors),
                 integer(fields, "audio_max_frame_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_input_events", lineNumber, errors),
-                longValue(fields, "audio_start_input_frames", lineNumber, errors),
-                longValue(fields, "audio_start_enqueued_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_enqueued_frames", lineNumber, errors),
-                longValue(fields, "audio_start_written_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_written_frames", lineNumber, errors),
-                longValue(fields, "audio_start_write_failures", lineNumber, errors),
-                longValue(fields, "audio_start_discarded_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_pending_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_queued_bytes", lineNumber, errors),
-                longValue(fields, "audio_start_playback_position_frames", lineNumber, errors),
-                longValue(fields, "audio_start_overruns", lineNumber, errors),
-                longValue(fields, "audio_start_underruns", lineNumber, errors),
-                longValue(fields, "audio_start_track_underruns", lineNumber, errors),
-                longValue(fields, "audio_start_restarts", lineNumber, errors),
-                longValue(fields, "audio_start_route_failures", lineNumber, errors),
-                strictBoolean(fields, "audio_start_output_open", lineNumber, errors),
-                strictBoolean(fields, "audio_start_output_playing", lineNumber, errors),
-                integer(fields, "audio_start_sample_rate", lineNumber, errors),
-                integer(fields, "audio_start_queue_capacity_frames", lineNumber, errors),
-                integer(fields, "audio_start_max_frame_bytes", lineNumber, errors),
+                start == null ? -1L : start.inputEvents,
+                start == null ? -1L : start.inputFrames,
+                start == null ? -1L : start.enqueuedBytes,
+                start == null ? -1L : start.enqueuedFrames,
+                start == null ? -1L : start.writtenBytes,
+                start == null ? -1L : start.writtenFrames,
+                start == null ? -1L : start.writeFailures,
+                start == null ? -1L : start.discardedBytes,
+                start == null ? -1L : start.pendingBytes,
+                start == null ? -1L : start.queuedBytes,
+                start == null ? -1L : start.playbackPositionFrames,
+                start == null ? -1L : start.overruns,
+                start == null ? -1L : start.underruns,
+                start == null ? -1L : start.outputUnderruns,
+                start == null ? -1L : start.restarts,
+                start == null ? -1L : start.routeFailures,
+                start == null ? null : start.outputOpen,
+                start == null ? null : start.outputPlaying,
+                start == null ? -1 : start.sampleRate,
+                start == null ? -1 : start.queueCapacityFrames,
+                start == null ? -1 : start.maximumFrameBytes,
                 strictBoolean(fields, "audio_focus_granted", lineNumber, errors),
                 longValue(fields, "audio_focus_start_loss_count", lineNumber, errors),
                 longValue(fields, "audio_focus_loss_count", lineNumber, errors));
@@ -2548,6 +2783,47 @@ public final class BenchmarkMatrix {
         return rateMillihz == (int) Math.round(row.nominalFps() * 1_000.0);
     }
 
+    private static String expectedInputContract(Row row) {
+        if (row == null) {
+            return null;
+        }
+        return switch (row) {
+            case DMG, MGB, CGB_DMG_COMPAT, CGB0_DMG_COMPAT -> "dmg-action-v1";
+            case CGB_NATIVE, CGB0_NATIVE -> "cgb-action-v1";
+            case SGB, SGB2 -> "none";
+        };
+    }
+
+    private static int expectedScenarioFrames(String inputContract) {
+        if (inputContract == null) {
+            return -1;
+        }
+        return switch (inputContract) {
+            case "none" -> 0;
+            case "dmg-action-v1" -> 313;
+            case "cgb-action-v1" -> 923;
+            default -> -1;
+        };
+    }
+
+    private static boolean validScenarioCompletion(Row row, String inputContract,
+            long sessionGeneration, long scenarioSessionGeneration, Boolean completed,
+            int completedFrames, int expectedFrames, Boolean sourceClosed, Boolean audioDrained) {
+        int contractFrames = expectedScenarioFrames(inputContract);
+        return row != null && expectedInputContract(row).equals(inputContract)
+                && sessionGeneration > 0L
+                && (contractFrames == 0 ? scenarioSessionGeneration == 0L
+                        : scenarioSessionGeneration == sessionGeneration)
+                && contractFrames >= 0 && completedFrames == contractFrames
+                && expectedFrames == contractFrames && Boolean.TRUE.equals(completed)
+                && Boolean.TRUE.equals(sourceClosed) && Boolean.TRUE.equals(audioDrained);
+    }
+
+    private static boolean validArmAudioBaseline(AudioStartFields audio) {
+        return audio != null && audio.pendingBytes == 0L && audio.queuedBytes == 0L
+                && Boolean.TRUE.equals(audio.outputPlaying);
+    }
+
     private static boolean validAudio(AudioFields audio, Row row, ClockFields clock, int readyCount,
             long readyFirstNanos, long readyLastNanos, double readyIntervalFps,
             boolean requireRealtime) {
@@ -2676,7 +2952,7 @@ public final class BenchmarkMatrix {
                 && audio.queueCapacityFrames == 6 && audio.startQueueCapacityFrames == 6
                 && audio.maximumFrameBytes > 0
                 && audio.startMaximumFrameBytes == audio.maximumFrameBytes
-                && startQueuedBytes >= 0L && startQueuedBytes <= startPendingBytes
+                && startPendingBytes == 0L && startQueuedBytes == 0L
                 && queuedBytes <= pendingBytes
                 && queuedBytes <= (long) audio.queueCapacityFrames * audio.maximumFrameBytes
                 && pendingBytes - queuedBytes <= audio.maximumFrameBytes
@@ -2923,7 +3199,11 @@ public final class BenchmarkMatrix {
         final int surfaceVoteHz;
         final int displayTargetHz;
         final int surfaceContentRateMillihz;
+        final long sessionGeneration;
         final long benchmarkGeneration;
+        final long scenarioSessionGeneration;
+        final int scenarioCompletedFrames;
+        final int scenarioExpectedFrames;
         final List<Long> readyIds = new ArrayList<>();
         final List<Long> readyNanos = new ArrayList<>();
         final List<Long> submissionIds = new ArrayList<>();
@@ -2941,7 +3221,9 @@ public final class BenchmarkMatrix {
                 String executionMode, int speedModeInitial, ClockFields clock, boolean audio,
                 String render, boolean available, EnvironmentFields environment,
                 String workloadNonce, boolean warmup, String inputContract, int surfaceVoteHz,
-                int displayTargetHz, int surfaceContentRateMillihz, long benchmarkGeneration,
+                int displayTargetHz, int surfaceContentRateMillihz, long sessionGeneration,
+                long benchmarkGeneration, long scenarioSessionGeneration,
+                int scenarioCompletedFrames, int scenarioExpectedFrames,
                 AudioStartFields audioStart) {
             this.key = key;
             this.ingestionOrdinal = ingestionOrdinal;
@@ -2973,11 +3255,18 @@ public final class BenchmarkMatrix {
             this.surfaceVoteHz = surfaceVoteHz;
             this.displayTargetHz = displayTargetHz;
             this.surfaceContentRateMillihz = surfaceContentRateMillihz;
+            this.sessionGeneration = sessionGeneration;
             this.benchmarkGeneration = benchmarkGeneration;
+            this.scenarioSessionGeneration = scenarioSessionGeneration;
+            this.scenarioCompletedFrames = scenarioCompletedFrames;
+            this.scenarioExpectedFrames = scenarioExpectedFrames;
         }
     }
 
-    private record FinalFields(String artifactId, long benchmarkGeneration,
+    private record FinalFields(String artifactId, long sessionGeneration, long benchmarkGeneration,
+            long scenarioSessionGeneration, boolean scenarioCompleted,
+            int scenarioCompletedFrames, int scenarioExpectedFrames,
+            boolean scenarioSourceClosed, boolean scenarioAudioDrained,
             String requestedProfile, String profile,
             Boolean effectiveGbc, Boolean effectiveDmgCompat, String effectiveMode,
             String executionMode,
@@ -3008,6 +3297,16 @@ public final class BenchmarkMatrix {
 
     private record ClockFields(long ticksNumerator, long ticksDenominator,
             long framesNumerator, long framesDenominator, long ticksPerControllerFrame) {
+    }
+
+    private record ScenarioCompletion(String artifactId, String pairId, String matrixBlock,
+            int rowOrder, Side runSide, long sessionGeneration, String inputContract,
+            int completedFrames, int expectedFrames, boolean completed, boolean sourceClosed,
+            boolean audioDrained, int ordinal) {
+    }
+
+    private record BenchmarkInvalidation(String artifactId, String pairId, String matrixBlock,
+            int rowOrder, Side runSide, long sessionGeneration, int ordinal) {
     }
 
     private record AudioFields(Boolean active, int sampleRate, long overruns, long underruns,
