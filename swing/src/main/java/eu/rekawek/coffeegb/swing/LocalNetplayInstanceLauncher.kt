@@ -46,7 +46,7 @@ internal data class LocalNetplayInstanceLaunchResult(
  */
 internal class CurrentProcessLocalNetplayInstanceLauncher(
     private val currentCommand: List<String> = currentProcessCommand(),
-    private val startProcess: (List<String>) -> Unit = { command -> ProcessBuilder(command).start() },
+    private val startProcess: (List<String>) -> Unit = ::startProcessWithInheritedError,
 ) : LocalNetplayInstanceLauncher {
 
   override fun launch(
@@ -79,6 +79,18 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
     return LocalNetplayInstanceLaunchResult(started, count, launcherAvailable = true)
   }
 }
+
+/**
+ * A child desktop process has no terminal of its own when launched from the netplay window.
+ * Keep its diagnostic stream attached to the host process so a rejected checkpoint can be
+ * diagnosed without a separate client console.
+ */
+private fun startProcessWithInheritedError(command: List<String>) {
+  localNetplayProcessBuilder(command).start()
+}
+
+internal fun localNetplayProcessBuilder(command: List<String>): ProcessBuilder =
+    ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.INHERIT)
 
 /** Builds a fresh Coffee GB command without replaying this process's app arguments. */
 internal fun localNetplayLauncherPrefix(command: List<String>): List<String>? {
