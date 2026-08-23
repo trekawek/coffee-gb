@@ -608,8 +608,10 @@ class TcpConnectionTest {
           serverBus.post(LinkedController.SessionStateReadyEvent(attempt.toLong(), listOf(state)))
         }
       }
+      // The queue needs enough compressed random ROM records to exceed its byte budget. On a
+      // contended CI worker, compression of that deliberate 320 MiB burst can exceed ten seconds.
       val dropped =
-          assertNotNull(disconnected.poll(10, TimeUnit.SECONDS), "slow peer was not isolated")
+          assertNotNull(disconnected.poll(30, TimeUnit.SECONDS), "slow peer was not isolated")
       assertEquals(1, dropped.player)
 
       val heartbeatStart = System.nanoTime()
