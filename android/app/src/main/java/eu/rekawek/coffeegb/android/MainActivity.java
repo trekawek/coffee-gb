@@ -1715,14 +1715,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static Intent openRomIntent() {
         return new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
-                // EXTRA_MIME_TYPES requires a wildcard primary type. In particular, do not add
-                // application/octet-stream here: it causes DocumentsUI to show every unknown
-                // binary file instead of just supported ROM and archive files.
+                // Redmi's ExternalStorageProvider labels valid GB, GBC, and ROM files as generic
+                // binary data. A MIME filter therefore greys them out before Coffee GB receives
+                // the URI. RomSourceSnapshot validates the selected filename and archive entries,
+                // so leave navigation unrestricted and reject unsupported selections ourselves.
                 .setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/x-gameboy-rom", "application/x-gameboy-color-rom",
-                        "application/x-rom", "application/zip", "application/x-zip-compressed",
-                        "application/x-7z-compressed"})
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     }
