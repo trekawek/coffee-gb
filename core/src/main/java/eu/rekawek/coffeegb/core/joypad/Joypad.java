@@ -289,9 +289,10 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      *
      * <p>The released default source cannot produce a poll or a physical transition, and a
      * settled four-sample receiver has no electrical edge to process.  Only the free-running
-     * BOGA clock phase changes, so it can be advanced arithmetically.  Custom sources, SGB packet
-     * receivers, debug/timeline observers, and any pending input mutation stay on the scalar
-     * path.</p>
+     * BOGA clock phase changes, so it can be advanced arithmetically.  Custom sources,
+     * debug/timeline observers, and any pending input mutation stay on the scalar path.  The
+     * SGB packet receiver is clocked by CPU writes to JOYP, not by this free-running tick, so it
+     * remains unchanged inside a preflighted no-bus span.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || inputChangedSinceLastTick
@@ -353,8 +354,8 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
     /**
      * Advances a settled released-input JOYP receiver without polling or filtering each tick.
      *
-     * @return false without mutation when a host input, observer, SGB, or debug edge could make
-     *         a scalar callback observable
+     * @return false without mutation when a host input, observer, or debug edge could make a
+     *         scalar callback observable
      */
     public boolean tickPerformanceQuietSpan(int ticks) {
         if (!canTickPerformanceQuietSpan(ticks)) {
@@ -530,8 +531,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && filteredInputLines == 0x0f;
         performanceSpanFastPathEligible = releasedInputFastPathEligible
                 && inputTimelineObserver == null
-                && debugHooks == null
-                && !isSgb;
+                && debugHooks == null;
         // Hub eligibility additionally depends on the current selector and filtered electrical
         // lines. It is recomputed only after this tick has calculated those values.
         playerInputHubFastPathEligible = false;
@@ -547,8 +547,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && players == 0
                 && buttons.isEmpty()
                 && inputTimelineObserver == null
-                && debugHooks == null
-                && !isSgb;
+                && debugHooks == null;
     }
 
     private static int[] createSettledHistory() {

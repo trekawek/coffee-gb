@@ -56,6 +56,39 @@ public final class PerformanceSystemMutedAudioCalendarTest {
     }
 
     @Test
+    public void exactSilentCalendarPreservesSgbAndSgb2Cadence() {
+        for (ClockSpec sourceClock : new ClockSpec[]{ClockSpec.SGB, ClockSpec.SGB2}) {
+            SpeedMode speedMode = new SpeedMode(false);
+            Sound sound = new Sound(new Timer(new InterruptManager(false), speedMode),
+                    speedMode, false, sourceClock, ExecutionMode.PERFORMANCE);
+            List<Sound.SoundSampleEvent> events = new ArrayList<>();
+            EventBusImpl eventBus = new EventBusImpl(null, null, false);
+            eventBus.register(events::add, Sound.SoundSampleEvent.class);
+            sound.init(eventBus);
+            sound.setPerformanceSystemMutedAudioCalendar(true);
+            sound.resetPerformanceSystemMutedAudioCalendarCounters();
+
+            sound.tickPerformanceQuietSpan(sourceClock.controllerTicksPerFrame());
+
+            assertEquals(70_224L, sound.getPerformanceSystemMutedAudioCalendarSkippedTicks());
+            assertEquals(6_384L,
+                    sound.getPerformanceSystemMutedAudioCalendarZeroSampleSlots());
+            assertEquals(1L, sound.getPerformanceSystemMutedAudioCalendarZeroSampleEvents());
+            assertEquals(0L,
+                    sound.getPerformanceSystemMutedAudioCalendarDroppedChannelTicks());
+            assertEquals(1, events.size());
+            assertEquals(6_384, events.get(0).clockSpec().controllerTicksPerFrame());
+            assertEquals(sourceClock.ticksPerSecondNumerator(),
+                    events.get(0).clockSpec().ticksPerSecondNumerator());
+            assertEquals(sourceClock.ticksPerSecondDenominator() * 11L,
+                    events.get(0).clockSpec().ticksPerSecondDenominator());
+            assertEquals(6_384 * 2, events.get(0).buffer().length);
+            assertAllZero(events.get(0).buffer());
+            eventBus.close();
+        }
+    }
+
+    @Test
     public void silentCalendarBoundaryAndFrameSequencerKeepCadenceAndBoundaries() {
         Sound sound = newSound();
         sound.setPerformanceSystemMutedAudioCalendar(true);

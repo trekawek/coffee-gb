@@ -37,6 +37,22 @@ public class DiagnosticsOptionsTest {
     }
 
     @Test
+    public void releaseGateCannotEnableSgbSilentAudioPolicy() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                false, "sgb2", true, "presentation", true, true, false,
+                "build-0001", "pair-0001", "block-0001", 0,
+                "parent", "parent", "device-0001", "thermal-0001", true,
+                "workload-0001", 120, -1, "performance", "dmg-action-v1",
+                "silent-pcm-v1");
+
+        assertFalse(options.enabled);
+        assertEquals(DiagnosticsOptions.Hardware.AUTO, options.hardware);
+        assertEquals(DiagnosticsOptions.BenchmarkScenario.NONE, options.benchmarkScenario);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, options.audioPolicy);
+        assertEquals(ExecutionMode.PERFORMANCE, options.executionMode);
+    }
+
+    @Test
     public void benchmarkOptionsAreTypedAndTransient() {
         DiagnosticsOptions options = DiagnosticsOptions.parseValues(
                 true, "dmg", false, "sink", true, false, false);
@@ -136,6 +152,14 @@ public class DiagnosticsOptionsTest {
                 true, "sgb", true, "presentation", false, true, false,
                 null, null, null, -1, null, null, null, null, false, null, -1, -1,
                 "performance", null, "silent-pcm-v1");
+        DiagnosticsOptions sgb2 = DiagnosticsOptions.parseValues(
+                true, "sgb2", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-v1");
+        DiagnosticsOptions relaxedSgb = DiagnosticsOptions.parseValues(
+                true, "sgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-relaxed-apu-v1");
         DiagnosticsOptions auto = DiagnosticsOptions.parseValues(
                 true, "auto", true, "presentation", false, true, false,
                 null, null, null, -1, null, null, null, null, false, null, -1, -1,
@@ -144,7 +168,9 @@ public class DiagnosticsOptionsTest {
         assertEquals(DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1, silent.audioPolicy);
         assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, accuracy.audioPolicy);
         assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, noAudio.audioPolicy);
-        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, sgb.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1, sgb.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1, sgb2.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, relaxedSgb.audioPolicy);
         assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, auto.audioPolicy);
     }
 

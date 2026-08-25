@@ -11,9 +11,10 @@
 -keepattributes MethodParameters,Signature
 -keep class * implements eu.rekawek.coffeegb.core.state.ComponentState { <fields>; <init>(...); }
 
-# Keep the DMG settled-HALT side entrance visible to R8's call graph without pinning its class
-# or method name; the ordinary PERFORMANCE scheduler remains free to optimize normally.
+# Keep the normal-speed monochrome/compatibility settled-HALT lane bodies visible to R8's call
+# graph without pinning their class or method names. The tiny selector remains free to inline.
 -keepclassmembers,allowobfuscation class eu.rekawek.coffeegb.core.Gameboy {
+    private int tryPerformanceSettledCgbCompatHaltSpan(long);
     private int tryPerformanceSettledDmgHaltSpan(long);
     private int tryPerformanceSettledNativeCgbHaltSpan(long);
 }

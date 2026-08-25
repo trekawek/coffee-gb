@@ -587,7 +587,7 @@ awk '
   END { if (gate_no != 168) exit 3 }
 ' "$records" || { echo 'compositor gate identity/generation linkage assertion failed' >&2; exit 1; }
 
-# The explicit silent policy is bounded to the five DMG/CGB rows; SGB/SGB2 remain canonical.
+# The explicit silent policy covers the complete seven-row matrix, including SGB/SGB2.
 : >"$records"
 : >"$fake_log"
 printf '0\n' >"$gen_file"
@@ -596,12 +596,16 @@ if ! run_case silent_ok silent-pcm-v1; then
   exit 1
 fi
 silent_launch_count=$(awk '/^launch / { count++ } END { print count + 0 }' "$records")
-[ "$silent_launch_count" -eq 120 ] || {
-  echo "expected 120 silent-policy launches, got $silent_launch_count" >&2
+[ "$silent_launch_count" -eq 168 ] || {
+  echo "expected 168 silent-policy launches, got $silent_launch_count" >&2
   exit 1
 }
-if awk '/^launch / { pair=$0; sub(/^.*pair=/, "", pair); sub(/[[:space:]].*$/, "", pair); row=pair; sub(/^p[0-9]+-/, "", row); if (row == "sgb" || row == "sgb2") bad=1 } END { exit bad ? 0 : 1 }' "$records"; then
-  echo 'silent policy scheduled an unsupported SGB row' >&2
+if ! awk '/^launch / { pair=$0; sub(/^.*pair=/, "", pair); sub(/[[:space:]].*$/, "", pair); row=pair; sub(/^p[0-9]+-/, "", row); if (row == "sgb") sgb=1; if (row == "sgb2") sgb2=1 } END { exit sgb && sgb2 ? 0 : 1 }' "$records"; then
+  echo 'silent policy did not schedule both SGB rows' >&2
+  exit 1
+fi
+if ! awk '/^launch / { pair=$0; sub(/^.*pair=/, "", pair); sub(/[[:space:]].*$/, "", pair); row=pair; sub(/^p[0-9]+-/, "", row); scenario=$0; sub(/^.*scenario=/, "", scenario); sub(/[[:space:]].*$/, "", scenario); if ((row == "sgb" || row == "sgb2") && scenario != "dmg-action-v1") bad=1 } END { exit bad ? 1 : 0 }' "$records"; then
+  echo 'exact silent SGB rows did not use the DMG gameplay precondition' >&2
   exit 1
 fi
 grep -q -- '--es coffee_gb_audio_policy silent-pcm-v1' "$calls" || {
@@ -621,6 +625,10 @@ relaxed_launch_count=$(awk '/^launch / { count++ } END { print count + 0 }' "$re
   echo "expected 120 relaxed silent-policy launches, got $relaxed_launch_count" >&2
   exit 1
 }
+if awk '/^launch / { pair=$0; sub(/^.*pair=/, "", pair); sub(/[[:space:]].*$/, "", pair); row=pair; sub(/^p[0-9]+-/, "", row); if (row == "sgb" || row == "sgb2") bad=1 } END { exit bad ? 0 : 1 }' "$records"; then
+  echo 'relaxed silent policy scheduled an unsupported SGB row' >&2
+  exit 1
+fi
 grep -q -- '--es coffee_gb_audio_policy silent-pcm-relaxed-apu-v1' "$calls" || {
   echo 'relaxed silent audio policy was not passed' >&2
   exit 1

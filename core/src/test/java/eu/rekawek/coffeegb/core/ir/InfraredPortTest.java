@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.ir;
 
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint;
@@ -45,6 +46,13 @@ public class InfraredPortTest {
 
         port.setSerialEndpoint(new LowSerialInput());
         assertEquals(0, port.performanceQuietSpanLimit(3));
+    }
+
+    @Test
+    public void settledHaltSpanRejectsAnyAttachedInfraredEndpoint() {
+        InfraredPort port = new InfraredPort(true, new SpeedMode(true));
+        port.init(EventBus.NULL_EVENT_BUS, new Peer2PeerInfraredEndpoint());
+        assertEquals(0, port.performanceSettledHaltSpanLimit(54));
     }
 
     private static class LowSerialInput implements SerialEndpoint {

@@ -297,8 +297,9 @@ public class BenchmarkMatrixTest {
 
     @Test
     public void relaxedSilentPcmPolicyRequiresDroppedTicksEqualToSkippedTicks() {
-        List<String> exact = withSilentPolicyForSilentRows(
-                omitFinalAudioStartFields(syntheticSilentSummaryLog(61.0, 62.0)));
+        List<String> exact = withSilentPolicyForRows(
+                omitFinalAudioStartFields(syntheticRelaxedSilentSummaryLog(61.0, 62.0)),
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat"));
         List<String> relaxed = exact.stream().map(line -> {
             if (silentRow(line, List.of("dmg", "mgb", "cgb-native", "cgb0-native",
                     "cgb-dmg-compat")) == null) {
@@ -321,17 +322,62 @@ public class BenchmarkMatrixTest {
 
     @Test
     public void rejectsMixedCanonicalAndSilentPolicies() {
-        List<String> mixed = withSilentPolicyForSilentRows(syntheticSummaryLog(61.0, 62.0));
+        List<String> mixed = withSilentPolicyForRows(syntheticSummaryLog(61.0, 62.0),
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat"));
         BenchmarkMatrix.Report report = parse(mixed);
         assertFalse(report.accepted());
         assertContains(report.errors(), "mixed benchmark audio policies");
     }
 
     @Test
-    public void silentPolicyRejectsSgbRows() {
-        List<String> allRows = withSilentPolicyForRows(syntheticSummaryLog(61.0, 62.0),
+    public void silentPolicyAcceptsSgbRows() {
+        List<String> allRows = withSilentPolicyForRows(
+                omitFinalAudioStartFields(syntheticSummaryLog(61.0, 62.0)),
                 List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat",
                         "sgb", "sgb2"));
+        BenchmarkMatrix.Report report = parse(allRows);
+        assertTrue(report.errors().toString(), report.accepted());
+        assertEquals(7, report.rows.size());
+    }
+
+    @Test
+    public void exactSilentPolicyRejectsCanonicalSgbScenarioContract() {
+        List<String> exact = withSilentPolicyForSilentRows(
+                omitFinalAudioStartFields(syntheticSummaryLog(61.0, 62.0)));
+        ArrayList<String> canonicalSgb = new ArrayList<>();
+        for (String original : exact) {
+            String row = silentRow(original, List.of("sgb", "sgb2"));
+            if (row == null) {
+                canonicalSgb.add(original);
+                continue;
+            }
+            if (original.startsWith("event=scenario_complete")) {
+                continue;
+            }
+            canonicalSgb.add(original
+                    .replace("input_contract=dmg-action-v1", "input_contract=none")
+                    .replaceAll(" scenario_session_generation=[^ ]*",
+                            " scenario_session_generation=0")
+                    .replaceAll(" scenario_completed_frames=[^ ]*",
+                            " scenario_completed_frames=0")
+                    .replaceAll(" scenario_expected_frames=[^ ]*",
+                            " scenario_expected_frames=0"));
+        }
+        BenchmarkMatrix.Report report = parse(canonicalSgb);
+        assertFalse(report.accepted());
+        assertContains(report.errors(), "matrix_run scenario completion does not match");
+
+        BenchmarkMatrix.Report canonicalReport = parse(syntheticSummaryLog(61.0, 62.0));
+        assertTrue(canonicalReport.errors().toString(), canonicalReport.accepted());
+    }
+
+    @Test
+    public void relaxedSilentPolicyKeepsSgbRowsOutOfItsFiveRowContract() {
+        List<String> allRows = withSilentPolicyForRows(syntheticSummaryLog(61.0, 62.0),
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat",
+                        "sgb", "sgb2")).stream()
+                .map(line -> line.replace("silent-pcm-v1", "silent-pcm-relaxed-apu-v1"))
+                .collect(java.util.stream.Collectors.toList());
         BenchmarkMatrix.Report report = parse(allRows);
         assertFalse(report.accepted());
         assertContains(report.errors(), "row_order is outside selected matrix");
@@ -1041,9 +1087,20 @@ public class BenchmarkMatrixTest {
     }
 
     private static List<String> syntheticSilentSummaryLog(double parentFps, double candidateFps) {
+        return syntheticSilentSummaryLog(parentFps, candidateFps,
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat",
+                        "sgb", "sgb2"));
+    }
+
+    private static List<String> syntheticRelaxedSilentSummaryLog(
+            double parentFps, double candidateFps) {
+        return syntheticSilentSummaryLog(parentFps, candidateFps,
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat"));
+    }
+
+    private static List<String> syntheticSilentSummaryLog(double parentFps, double candidateFps,
+            List<String> silentRows) {
         List<String> source = syntheticSummaryLog(parentFps, candidateFps);
-        List<String> silentRows = List.of("dmg", "mgb", "cgb-native", "cgb0-native",
-                "cgb-dmg-compat");
         Map<String, Map<String, Integer>> orders = new java.util.LinkedHashMap<>();
         List<String> selected = new ArrayList<>();
         for (String line : source) {
@@ -1444,7 +1501,7 @@ public class BenchmarkMatrixTest {
                 : 4_194_304.0 / 69_905.0;
         // Audio blocks follow emulated physical frames, not elapsed wall time.  Use the exact
         // 70,224-tick LCD cadence so slow Accuracy fixtures remain structurally comparable.
-        long inputEvents = "sgb".equals(row)
+        long inputEvents = ("sgb".equals(row) || "sgb2".equals(row))
                 ? BenchmarkMatrix.REQUIRED_FRAME_COUNT
                 : Math.round(BenchmarkMatrix.REQUIRED_FRAME_COUNT * 70_224.0 / 69_905.0);
         long enqueuedFrames = Math.round(48_000.0 * BenchmarkMatrix.REQUIRED_FRAME_COUNT / fps);
@@ -1475,7 +1532,8 @@ public class BenchmarkMatrixTest {
 
     private static List<String> withSilentPolicyForSilentRows(List<String> source) {
         return withSilentPolicyForRows(source,
-                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat"));
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat",
+                        "sgb", "sgb2"));
     }
 
     private static List<String> withSilentPolicyForRows(List<String> source,
@@ -1483,11 +1541,34 @@ public class BenchmarkMatrixTest {
         String token = "silent-token-001";
         ArrayList<String> result = new ArrayList<>(source.size());
         for (String original : source) {
-            if (silentRow(original, selectedRows) == null) {
+            String row = silentRow(original, selectedRows);
+            if (row == null) {
                 result.add(original);
                 continue;
             }
             String line = original;
+            boolean sgbExactScenario = ("sgb".equals(row) || "sgb2".equals(row));
+            if (sgbExactScenario && line.startsWith("event=matrix_run")) {
+                result.add("event=scenario_complete artifact_id=" + field(line, "artifact_id")
+                        + " pair_id=" + field(line, "pair_id")
+                        + " matrix_block=" + field(line, "matrix_block")
+                        + " row_order=" + field(line, "row_order")
+                        + " run_side=" + field(line, "run_side")
+                        + " session_generation=" + field(line, "session_generation")
+                        + " input_contract=dmg-action-v1 completed=true completed_frames=313"
+                        + " expected_frames=313 source_closed=true audio_drained=true");
+                line = line.replace("input_contract=none", "input_contract=dmg-action-v1")
+                        .replace("scenario_session_generation=0",
+                                "scenario_session_generation=" + field(line, "session_generation"))
+                        .replace("scenario_completed_frames=0", "scenario_completed_frames=313")
+                        .replace("scenario_expected_frames=0", "scenario_expected_frames=313");
+            } else if (sgbExactScenario && line.startsWith("event=final_result")) {
+                line = line.replace("input_contract=none", "input_contract=dmg-action-v1")
+                        .replace("scenario_session_generation=0",
+                                "scenario_session_generation=" + field(line, "session_generation"))
+                        .replace("scenario_completed_frames=0", "scenario_completed_frames=313")
+                        .replace("scenario_expected_frames=0", "scenario_expected_frames=313");
+            }
             if (line.startsWith("event=matrix_run")) {
                 line += " benchmark_token=" + token + " benchmark_audio_policy=silent-pcm-v1"
                         + " audio_start_active=true audio_start_paused=false"

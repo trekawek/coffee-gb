@@ -167,11 +167,17 @@ esac
 
 case "$audio_policy" in
   canonical) : ;;
-  silent-pcm-v1|silent-pcm-relaxed-apu-v1)
+  silent-pcm-v1)
     [ "$execution_mode" = performance ] \
       || fatal "silent-pcm-v1 requires PERFORMANCE execution mode"
-    # The silent calendar is a DMG/CGB proof only. SGB/SGB2 have a distinct source clock and
-    # are intentionally retained in the canonical seven-row matrix.
+    # The silent calendar covers the complete seven-row matrix, including the distinct SGB and
+    # SGB2 source clocks. The app and parser retain the same exact/muted proof for every row.
+    ;;
+  silent-pcm-relaxed-apu-v1)
+    [ "$execution_mode" = performance ] \
+      || fatal "silent-pcm-relaxed-apu-v1 requires PERFORMANCE execution mode"
+    # The relaxed calendar remains the five-row DMG/CGB proof until its SGB clock semantics have
+    # equivalent coverage. SGB/SGB2 are excluded from this policy's dataset.
     RUN_ROWS=5
     RUNS_PER_BLOCK=$((RUN_ROWS * 2))
     TOTAL_RUNS=$((RUN_BLOCKS * RUNS_PER_BLOCK))
@@ -970,7 +976,9 @@ row_input_contract() {
     dmg|mgb) printf '%s\n' dmg-action-v1 ;;
     cgb-native|cgb0-native) printf '%s\n' cgb-action-v1 ;;
     cgb-dmg-compat) printf '%s\n' dmg-action-v1 ;;
-    sgb|sgb2) printf '%s\n' none ;;
+    sgb|sgb2)
+      [ "$audio_policy" = silent-pcm-v1 ] && printf '%s\n' dmg-action-v1 || printf '%s\n' none
+      ;;
     *) return 1 ;;
   esac
 }
@@ -979,7 +987,9 @@ row_scenario_frames() {
   case "$1" in
     dmg|mgb|cgb-dmg-compat) printf '%s\n' 313 ;;
     cgb-native|cgb0-native) printf '%s\n' 923 ;;
-    sgb|sgb2) printf '%s\n' 0 ;;
+    sgb|sgb2)
+      [ "$audio_policy" = silent-pcm-v1 ] && printf '%s\n' 313 || printf '%s\n' 0
+      ;;
     *) return 1 ;;
   esac
 }
