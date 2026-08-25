@@ -124,6 +124,25 @@ public class AndroidRuntimeEndToEndSmokeTest {
         }
     }
 
+    @Test
+    public void openingASelectedRomReplacesAPausedGameAndStartsImmediately() throws Exception {
+        try (AndroidEmulationRuntime runtime = new AndroidEmulationRuntime(
+                InstrumentationRegistry.getInstrumentation().getTargetContext())) {
+            await("runtime initialization", () -> runtime.state().phase() == RuntimeState.Phase.STOPPED);
+
+            runtime.openRom(FixtureRomProvider.URI, 0);
+            awaitFixtureStart(runtime, new AtomicReference<>());
+
+            runtime.pause();
+            await("first game pause", () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
+
+            // This mirrors opening a document from the pause menu: the outgoing game is paused,
+            // but that presentation pause must not prevent the replacement from playing.
+            runtime.openRom(FixtureRomProvider.URI, 0);
+            awaitFixtureStart(runtime, new AtomicReference<>());
+        }
+    }
+
     private static void assertFixtureReadable() throws Exception {
         try (InputStream input = InstrumentationRegistry.getInstrumentation().getTargetContext()
                 .getContentResolver().openInputStream(FixtureRomProvider.URI)) {

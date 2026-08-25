@@ -2331,7 +2331,7 @@ class BasicController private constructor(
     cancelLoadJob()
     discardReplacement(restorePause = true)
     discardStop(restorePause = true)
-    acquireLoadingPause()
+    acquireLoadingPause(event.preservePauseOnReplacement)
 
     val requestId = nextPersistenceRequestId++
     if (context == null) {
@@ -3023,8 +3023,12 @@ class BasicController private constructor(
     session?.gameboy?.setCartridgeClockPaused(isEffectivelyPaused())
   }
 
-  private fun acquireLoadingPause() {
-    if (pauseStateBeforeLoading == null) {
+  private fun acquireLoadingPause(preservePreviousPause: Boolean = true) {
+    if (!preservePreviousPause) {
+      // A host may pause only to show a transient ROM picker. Its selected replacement must not
+      // inherit that presentation pause, and we must keep the old session frozen until commit.
+      pauseStateBeforeLoading = false
+    } else if (pauseStateBeforeLoading == null) {
       // A resume scan owns a forced pause, so isPaused itself is not the user's desired state.
       pauseStateBeforeLoading = pauseStateBeforeResume ?: isPaused
     }
@@ -3120,7 +3124,7 @@ class BasicController private constructor(
 
     cancelPendingRomSwitch()
     discardStop(restorePause = true)
-    acquireLoadingPause()
+    acquireLoadingPause(event.preservePauseOnReplacement)
     cancelLoadJob()
     discardReplacement(restorePause = false)
 

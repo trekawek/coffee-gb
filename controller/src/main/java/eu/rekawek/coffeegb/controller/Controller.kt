@@ -73,6 +73,12 @@ interface Controller : AutoCloseable {
        * progress.
        */
       val allowAutosaveResume: Boolean = true,
+      /**
+       * Whether an already-paused session transfers that pause to its replacement. Hosts that
+       * pause only to present a ROM picker can set this false so the selected game starts
+       * immediately without briefly resuming the old game.
+       */
+      val preservePauseOnReplacement: Boolean = true,
   ) : Event {
     constructor(
         image: RomImage,
@@ -80,6 +86,7 @@ interface Controller : AutoCloseable {
         persistenceStore: RomPersistenceStore? = null,
         openRequestId: Long? = null,
         allowAutosaveResume: Boolean = true,
+        preservePauseOnReplacement: Boolean = true,
     ) : this(
         image.origin().containerPath().map { it.toFile() }.orElse(File(image.origin().displayName())),
         state,
@@ -87,6 +94,7 @@ interface Controller : AutoCloseable {
         persistenceStore,
         openRequestId,
         allowAutosaveResume,
+        preservePauseOnReplacement,
     )
   }
 

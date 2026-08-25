@@ -1594,6 +1594,56 @@ class BasicControllerTest {
   }
 
   @Test
+  fun replacementCanDiscardAHostOnlyPickerPause() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    eventBus.register<GbcFrameReadyEvent>(frames::add)
+    val nextRom = namedRom("PICKER_NEXT")
+    val controller = BasicController(eventBus, EmulatorProperties(), null)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(ROM, allowAutosaveResume = false))
+      assertEquals("CPU_INSTRS", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
+      playback.clear()
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(
+          assertNotNull(
+                  generateSequence { playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS) }
+                      .firstOrNull { it.paused })
+              .paused,
+          "the outgoing session must be paused before opening the picker",
+      )
+      frames.clear()
+
+      eventBus.post(
+          LoadRomEvent(
+              nextRom,
+              allowAutosaveResume = false,
+              preservePauseOnReplacement = false,
+          ))
+
+      assertEquals(
+          "PICKER_NEXT",
+          started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName,
+      )
+      assertNotNull(
+          frames.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "a picker pause must not leave the replacement session stopped",
+      )
+    } finally {
+      controller.close()
+      eventBus.close()
+      nextRom.delete()
+    }
+  }
+
+  @Test
   fun rapidLoadBurstStartsOnlyTheLatestRom() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()

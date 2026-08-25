@@ -1888,8 +1888,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA);
             publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
                     false, true, false);
+            // Opening from the in-screen menu pauses only to keep gameplay from leaking into the
+            // document picker. Do not transfer that UI pause to the selected game. Android also
+            // has no autosave-resume decision surface, so a persisted ASK-policy autosave must
+            // never leave this request permanently paused behind an invisible prompt.
             controllerEventBus().post(new Controller.LoadRomEvent(
-                    image, null, persistenceStore, activeOpenRequestId, !diagnostics.enabled()));
+                    image, null, persistenceStore, activeOpenRequestId, false, false));
         } catch (Exception failure) {
             if (recent == null) {
                 if (!diagnostics.enabled()) {

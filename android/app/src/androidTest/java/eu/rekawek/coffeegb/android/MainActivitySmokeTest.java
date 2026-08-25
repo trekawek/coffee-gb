@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.app.Instrumentation;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -37,6 +39,21 @@ import static org.junit.Assert.assertTrue;
 /** Exercises the bound runtime through Activity recreation and a visibility transition. */
 @RunWith(AndroidJUnit4.class)
 public class MainActivitySmokeTest {
+
+    @Test
+    public void romPickerRequestsOnlySupportedRomAndArchiveTypes() throws Exception {
+        java.lang.reflect.Method openRomIntent = MainActivity.class.getDeclaredMethod("openRomIntent");
+        openRomIntent.setAccessible(true);
+        Intent intent = (Intent) openRomIntent.invoke(null);
+
+        assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.getAction());
+        assertEquals("*/*", intent.getType());
+        assertArrayEquals(new String[]{
+                        "application/x-gameboy-rom", "application/x-gameboy-color-rom",
+                        "application/x-rom", "application/zip", "application/x-zip-compressed",
+                        "application/x-7z-compressed"},
+                intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES));
+    }
 
     @Test
     public void launchesRecreatesAndBackgroundsWithoutStartingACameraOrGame() {

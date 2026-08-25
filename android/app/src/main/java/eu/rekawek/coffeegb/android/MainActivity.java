@@ -1715,10 +1715,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static Intent openRomIntent() {
         return new Intent(Intent.ACTION_OPEN_DOCUMENT)
                 .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/octet-stream")
+                // EXTRA_MIME_TYPES requires a wildcard primary type. In particular, do not add
+                // application/octet-stream here: it causes DocumentsUI to show every unknown
+                // binary file instead of just supported ROM and archive files.
+                .setType("*/*")
                 .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/octet-stream", "application/x-gameboy-rom",
-                        "application/zip", "application/x-zip-compressed"})
+                        "application/x-gameboy-rom", "application/x-gameboy-color-rom",
+                        "application/x-rom", "application/zip", "application/x-zip-compressed",
+                        "application/x-7z-compressed"})
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
     }
