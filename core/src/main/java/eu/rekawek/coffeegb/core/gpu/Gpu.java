@@ -95,6 +95,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // direct Gpu.tick() probes and ACCURACY remain on their calibrated dot pipelines.
     private final boolean performanceScanlineCapable;
 
+    // Exact construction-time permission for the short mode-2 phase packet. Keep this narrower
+    // than the monochrome pixel/timing cursors: the public Gpu horizon must fail closed for SGB,
+    // SGB2, and every compatibility profile even when their clock happens to be normal speed.
+    private final boolean performancePhysicalDmgMode2;
+
     private final ColorPalette bgPalette;
 
     private final ColorPalette oamPalette;
@@ -158,6 +163,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     static final int NATIVE_CGB_PHASE_LINE_MASK = 0xff;
     static final int NATIVE_CGB_PHASE_MODE0_EDGE_NEXT = 1 << 8;
     static final int NATIVE_CGB_PHASE_MODE0_READ_PREVIEW = 1 << 9;
+
+    // Packed post-GPU STAT facts. The validity bit is deliberately derived from the committed
+    // PPU state, so a CPU speed/compatibility transition during the owner tick fails closed.
+    static final int NATIVE_CGB_POST_STAT_FACTS_VALID = 1 << 31;
+    static final int NATIVE_CGB_POST_STAT_CHECKPOINT = 1 << 30;
 
     // Switching the CGB CPU clock remaps the PPU timestamp and rephases the CPU-side
     // STAT mode latch. Until that happens, the boot-time latch has its five-dot tail.
@@ -337,6 +347,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || hardwareProfile == HardwareProfileRegistry.MGB
                 || hardwareProfile == HardwareProfileRegistry.CGB
                 || hardwareProfile == HardwareProfileRegistry.CGB0);
+        this.performancePhysicalDmgMode2 = executionMode == ExecutionMode.PERFORMANCE
+                && !debugHistoryReplay
+                && (hardwareProfile == HardwareProfileRegistry.DMG
+                || hardwareProfile == HardwareProfileRegistry.MGB);
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -990,7 +1004,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             pixelMachine.setWindowLineCounterForPerformance(performanceWindowLineCounter);
         }
         if (performanceRenderOutput) {
-            performanceScanlineRenderer.renderLine(display, line, windowLine);
+            performanceScanlineRenderer.renderLinePerformanceBoundary(display, line, windowLine);
         }
         // The ordinary mode-3 starts above have initialized both machines for their state
         // shape. They must not remain active after the direct composition or their delayed
@@ -1291,6 +1305,64 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         ticksInLine += ticks;
         timingGeneration += ticks;
         cpuLyReadAcrossLineEdge = false;
+        synchronizePerformanceWindowLineCounter();
+    }
+
+    /**
+     * Horizon for a short physical-DMG mode-2 phase packet.  Only the non-CPU dots before the
+     * next normal-speed machine-cycle boundary use this lane; the dot-79-to-80 handoff remains
+     * scalar so the existing OAM/PixelTransfer transition and renderer arm stay authoritative.
+     */
+    public int performancePhysicalDmgMode2PhaseSpanLimit(int requested) {
+        if (!performancePhysicalDmgMode2 || requested <= 0 || gbc || speedModeValue != 1
+                || !lcdEnabled || firstLine
+                || line >= 144 || mode != Mode.OamSearch || phase != oamSearchPhase
+                || performanceScanlineCursor || performanceScanlineLine || dma == null
+                || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()) {
+            return 0;
+        }
+        if (!performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !bootCompatibilityResolved || displayEnabledDelay != 0 || steadyTimingCursor
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
+                || !pixelTransferPhase.isPerformanceDmgIdleOutput()
+                || !pixelMachine.isPerformanceDmgIdleOutput()
+                || !oamSearchPhase.isPerformancePhysicalDmgMode2SpanEligible(
+                ticksInLine, lcdc.getSpriteHeight())) {
+            return 0;
+        }
+        return Math.min(requested, Math.max(0, 79 - ticksInLine));
+    }
+
+    /** Advances a preflighted physical-DMG mode-2 prefix without entering the dot loops. */
+    public void advancePerformancePhysicalDmgMode2PhaseSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        int startTick = ticksInLine;
+        if (startTick + ticks > 79) {
+            throw new IllegalStateException(
+                    "GPU is not eligible for a physical-DMG PERFORMANCE mode-2 span");
+        }
+        assert performancePhysicalDmgMode2PhaseSpanLimit(ticks) >= ticks
+                : "trusted physical-DMG mode-2 proof changed before commit";
+
+        lcdc.advancePerformancePhysicalDmgMode2FixedPointSpanTrusted(ticks);
+        pixelTransferPhase.advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+        pixelMachine.advancePerformanceDmgIdleOutputSpanTrusted(ticks);
+        oamSearchPhase.advancePerformancePhysicalDmgMode2SpanTrusted(
+                startTick, ticks, lcdc.getSpriteHeight());
+
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        cpuLyReadAcrossLineEdge = false;
+        directOamReadCorruptionThisTick = false;
+        suppressNextDirectOamReadCorruption = false;
+        directOamWriteCorruptionThisTick = false;
+        suppressNextDirectOamWriteCorruption = false;
         synchronizePerformanceWindowLineCounter();
     }
 
@@ -2000,6 +2072,76 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || (gbc && !target.dmgCompat && line == 153 && ticksInLine >= 454)
                 || ((!gbc || target.dmgCompat) && !firstLine && line == 0
                 && ticksInLine < 4));
+    }
+
+    /**
+     * Captures the post-GPU STAT facts for the native-CGB PERFORMANCE scalar owner.
+     *
+     * <p>This is intentionally the same formula used by the ordinary scheduler snapshot. The
+     * native owner calls it after the PPU dot has committed, so StatRegister can avoid the
+     * timing-generation probe and the generic cross-object capture dispatch while retaining
+     * exactly the same values at every raster position (including LCD-off and first-line
+     * states).</p>
+     */
+    long captureNativeCgbPerformancePostStatTiming(GpuTimingSnapshot target) {
+        int currentLine = line;
+        int currentTicksInLine = ticksInLine;
+        boolean currentLcdEnabled = lcdEnabled;
+        boolean currentFirstLine = firstLine;
+        int earlyLineEdgeTick = currentFirstLine ? 451 : 448;
+        boolean visibleVblankTail = currentLine == 153;
+        boolean visibleLine = currentLine < 144;
+
+        target.line = currentLine;
+        target.ticksInLine = currentTicksInLine;
+        target.lcdEnabled = currentLcdEnabled;
+        target.firstLine = currentFirstLine;
+        target.statModeLatchRephasedBySpeedSwitch = statModeLatchRephasedBySpeedSwitch;
+        target.earlyLineEdgeTick = earlyLineEdgeTick;
+        target.setNativeCgbDoubleSpeed();
+
+        int visibleLyLineEdgeTick = currentFirstLine ? 451 : 454;
+        if (!currentLcdEnabled) {
+            target.visibleLy = 0;
+        } else if (visibleVblankTail) {
+            target.visibleLy = currentTicksInLine < 2 ? 153 : 0;
+        } else {
+            target.visibleLy = currentTicksInLine >= visibleLyLineEdgeTick
+                    ? currentLine + 1 : currentLine;
+        }
+
+        target.mode0InterruptTick = mode0IntFrom;
+        target.mode0HaltWakeTick = currentLcdEnabled && visibleLine
+                && currentTicksInLine == target.mode0InterruptTick + 2;
+        target.mode0IntWindow = currentLcdEnabled && visibleLine
+                && currentTicksInLine >= target.mode0InterruptTick;
+        target.mode1IntWindow = currentLcdEnabled
+                && (mode == Mode.VBlank || currentLine == 143 && currentTicksInLine >= 448);
+        target.mode2IntWindow = currentLcdEnabled
+                && ((visibleLine && currentTicksInLine >= earlyLineEdgeTick)
+                || (visibleVblankTail && currentTicksInLine >= 454));
+        return timingGeneration;
+    }
+
+    /**
+     * Packs the native post-GPU facts directly from the committed PPU state. The VALID bit
+     * fails closed if a CPU instruction changed speed/compatibility during this scalar dot.
+     */
+    int getNativeCgbPerformancePostStatFacts() {
+        if (!gbc || dmgCompatValue || speedModeValue != 2) {
+            return 0;
+        }
+        int mode0InterruptTick = mode0IntFrom;
+        int facts = NATIVE_CGB_POST_STAT_FACTS_VALID;
+        boolean checkpoint = lcdEnabled
+                && (ticksInLine < 13 || ticksInLine >= 448
+                || ticksInLine == mode0InterruptTick
+                || (line < 144 && mode0InterruptTick != Integer.MAX_VALUE
+                && ticksInLine == mode0InterruptTick + 2));
+        if (checkpoint) {
+            facts |= NATIVE_CGB_POST_STAT_CHECKPOINT;
+        }
+        return facts;
     }
 
     /**

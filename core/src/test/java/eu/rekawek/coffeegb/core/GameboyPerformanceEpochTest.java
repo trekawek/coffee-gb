@@ -62,6 +62,23 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void stopAwareMeasuredWindowRetainsPerformanceEpochLane() throws Exception {
+        try (Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(doubleSpeedLoop()))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setSupportBatterySave(false)
+                .build()) {
+            gameboy.runTicks(160_000);
+            assertEquals(2, gameboy.getSpeedMode().getSpeedMode());
+            gameboy.resetPerformanceBulkCounters();
+
+            assertEquals(4_096, gameboy.runMeasuredTicksUntilStop(4_096, () -> false));
+            assertTrue("measured stop-aware PERFORMANCE path lost native epoch coverage",
+                    gameboy.getPerformanceEpochTicks() > 0L);
+        }
+    }
+
+    @Test
     public void physicalDmgEntersEpochWhileCgbCompatibilityStaysLegacy() throws Exception {
         byte[] loop = new byte[0x8000];
         loop[0x100] = (byte) 0xc3;

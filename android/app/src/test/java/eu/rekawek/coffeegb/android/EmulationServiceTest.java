@@ -15,4 +15,14 @@ public class EmulationServiceTest {
 
         assertEquals("cgb-action-v1", EmulationService.benchmarkScenarioExtraValue(options));
     }
+
+    @Test
+    public void startWireForwardsSilentPcmPolicyToken() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "cgb-action-v1", "silent-pcm-v1");
+
+        assertEquals("silent-pcm-v1", EmulationService.audioPolicyExtraValue(options));
+    }
 }

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
+import eu.rekawek.coffeegb.controller.properties.RuntimeWarmupFlavor;
 import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
@@ -232,6 +233,42 @@ public class AndroidEmulationRuntimeTest {
                 AndroidEmulationRuntime.androidSettingsOverrides(options))) {
             assertEquals(ExecutionMode.PERFORMANCE,
                     properties.getOverrides().getExecutionMode());
+        }
+    }
+
+    @Test
+    public void shadowMeasuredWarmupSelectorIsOnlyNativeCgbPerformanceSilentScenario() {
+        DiagnosticsOptions eligible = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", "cgb-action-v1", "silent-pcm-v1");
+        try (EmulatorProperties properties = new EmulatorProperties(
+                AndroidEmulationRuntime.androidSettingsOverrides(eligible))) {
+            assertEquals(RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+                    properties.getOverrides().getRuntimeWarmupFlavor());
+        }
+
+        String[] rejectedHardware = {"dmg", "cgb0"};
+        for (String hardware : rejectedHardware) {
+            DiagnosticsOptions rejected = DiagnosticsOptions.parseValues(
+                    true, hardware, true, "presentation", true, true, false,
+                    null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                    "performance", "cgb-action-v1", "silent-pcm-v1");
+            try (EmulatorProperties properties = new EmulatorProperties(
+                    AndroidEmulationRuntime.androidSettingsOverrides(rejected))) {
+                assertEquals(RuntimeWarmupFlavor.SCALAR,
+                        properties.getOverrides().getRuntimeWarmupFlavor());
+            }
+        }
+
+        DiagnosticsOptions accuracy = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "accuracy", "cgb-action-v1", "silent-pcm-v1");
+        try (EmulatorProperties properties = new EmulatorProperties(
+                AndroidEmulationRuntime.androidSettingsOverrides(accuracy))) {
+            assertEquals(RuntimeWarmupFlavor.SCALAR,
+                    properties.getOverrides().getRuntimeWarmupFlavor());
         }
     }
 

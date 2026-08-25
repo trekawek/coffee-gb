@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.memory.Ram;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
+import java.util.HashSet;
+import java.util.Set;
 
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.LCDC;
 import static eu.rekawek.coffeegb.core.cpu.InterruptManager.InterruptType.VBlank;
@@ -61,6 +63,139 @@ public class StatRegisterTest {
             scheduled.tick();
         }
         assertStatTimingMatchesGpu(scheduled);
+    }
+
+    @Test(timeout = 10_000)
+    public void nativePostGpuFactsAndTimingMatchGenericAtEveryNativeFrameDot() throws Exception {
+        Fixture generic = nativeStressFixture();
+        Fixture specialized = nativeStressFixture();
+        Set<Integer> mode0Endpoints = new HashSet<>();
+        int frameTicks = 154 * 456;
+
+        for (int dot = 0; dot < frameTicks; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            assertNativeGpuDot(generic, specialized, dot);
+            if (generic.gpu.getMode0InterruptTick() != Integer.MAX_VALUE) {
+                mode0Endpoints.add(generic.gpu.getMode0InterruptTick());
+            }
+        }
+
+        assertEquals("one complete native frame", 0, generic.gpu.getLine());
+        assertEquals("one complete native frame dot", 1, generic.gpu.getTicksInLine());
+        assertTrue("stress OAM must exercise variable mode-0 endpoints",
+                mode0Endpoints.size() > 1);
+    }
+
+    @Test(timeout = 10_000)
+    public void nativePostGpuStatTickMatchesGenericAtEveryDotForNativeFrame() {
+        Fixture generic = nativeStressFixture();
+        Fixture specialized = nativeStressFixture();
+        int frameTicks = 154 * 456;
+
+        for (int dot = 0; dot < frameTicks; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals("STAT memento at dot " + dot,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals("interrupt memento at dot " + dot,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void nativePostGpuFirstLineAfterLcdEnableMatchesGeneric() throws Exception {
+        Fixture generic = nativeStressFixture();
+        Fixture specialized = nativeStressFixture();
+        generic.gpu.setByte(0xff40, 0x00);
+        specialized.gpu.setByte(0xff40, 0x00);
+        generic.gpu.setByte(0xff40, 0x91);
+        specialized.gpu.setByte(0xff40, 0x91);
+
+        for (int dot = 0; dot < 455 + 8; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            assertNativeGpuDot(generic, specialized, dot);
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals("first-line STAT at dot " + dot,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals("first-line IF at dot " + dot,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void nativePostGpuLcdOffOnRestartMatchesGeneric() throws Exception {
+        Fixture generic = nativeStressFixture();
+        Fixture specialized = nativeStressFixture();
+        advanceGpuPair(generic, specialized, 3 * 456 + 200);
+        generic.gpu.setByte(0xff40, 0x00);
+        specialized.gpu.setByte(0xff40, 0x00);
+        for (int dot = 0; dot < 12; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            assertNativeGpuDot(generic, specialized, dot);
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals("LCD-off STAT at dot " + dot,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals("LCD-off IF at dot " + dot,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
+        generic.gpu.setByte(0xff40, 0x91);
+        specialized.gpu.setByte(0xff40, 0x91);
+
+        for (int dot = 0; dot < 455 + 16; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            assertNativeGpuDot(generic, specialized, dot);
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals("LCD restart STAT at dot " + dot,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals("LCD restart IF at dot " + dot,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void nativePostGpuFallbackIsGenericAfterNormalSpeedOrCompatibility() {
+        Fixture normalGeneric = new Fixture(true, false);
+        Fixture normalSpecialized = new Fixture(true, false);
+        assertNativePostGpuFallback(normalGeneric, normalSpecialized, "normal speed");
+
+        Fixture compatGeneric = new Fixture(true, true);
+        Fixture compatSpecialized = new Fixture(true, true);
+        compatGeneric.speedMode.setDmgCompat(true);
+        compatSpecialized.speedMode.setDmgCompat(true);
+        assertNativePostGpuFallback(compatGeneric, compatSpecialized, "compatibility");
+    }
+
+    @Test(timeout = 5_000)
+    public void nativePostGpuContinuationMatchesAfterCaptureRestore() {
+        Fixture generic = nativeStressFixture();
+        Fixture specialized = nativeStressFixture();
+        advanceNativePair(generic, specialized, 8_192, "warmup");
+
+        var genericGpuState = generic.gpu.captureState();
+        var genericStatState = generic.stat.captureState();
+        var genericInterruptState = generic.interrupts.captureState();
+        var specializedGpuState = specialized.gpu.captureState();
+        var specializedStatState = specialized.stat.captureState();
+        var specializedInterruptState = specialized.interrupts.captureState();
+
+        advanceNativePair(generic, specialized, 2_048, "uninterrupted continuation");
+
+        generic.gpu.restoreState(genericGpuState);
+        generic.stat.restoreState(genericStatState);
+        generic.interrupts.restoreState(genericInterruptState);
+        specialized.gpu.restoreState(specializedGpuState);
+        specialized.stat.restoreState(specializedStatState);
+        specialized.interrupts.restoreState(specializedInterruptState);
+        advanceNativePair(generic, specialized, 2_048, "restored continuation");
     }
 
     @Test
@@ -673,6 +808,47 @@ public class StatRegisterTest {
         assertEquals(0, nativeCgb.lcdInterruptFlag());
         assertEquals(1 << LCDC.ordinal(), generic.lcdInterruptFlag());
         assertEquals(1 << LCDC.ordinal(), nativeCgb.lcdInterruptFlag());
+    }
+
+    @Test(timeout = 5_000)
+    public void nativePostGpuConsumesMode0ReadMaskAndPpuSignalLikeGeneric() {
+        Fixture generic = new Fixture(true, true);
+        Fixture specialized = new Fixture(true, true);
+        generic.gpu.onSpeedSwitch();
+        specialized.gpu.onSpeedSwitch();
+        generic.stat.setByte(StatRegister.ADDRESS, 0x48);
+        specialized.stat.setByte(StatRegister.ADDRESS, 0x48);
+        generic.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        specialized.gpu.setByte(GpuRegister.LYC.getAddress(), 0x22);
+        generic.advanceTo(1, 100);
+        specialized.advanceTo(1, 100);
+
+        int mode0Tick = specialized.gpu.getMode0InterruptTick();
+        int target = mode0Tick == Integer.MAX_VALUE ? 250 : Math.max(100, mode0Tick - 1);
+        generic.advanceTo(1, target);
+        specialized.advanceTo(1, target);
+
+        generic.interrupts.requestInterrupt(LCDC);
+        specialized.interrupts.requestInterrupt(LCDC);
+        generic.interrupts.clearInterrupt(LCDC);
+        specialized.interrupts.clearInterrupt(LCDC);
+        generic.interrupts.maskMode0LcdcReadForTicks(2);
+        specialized.interrupts.maskMode0LcdcReadForTicks(2);
+        assertTrue(generic.interrupts.hasPendingCpuReadPhase());
+        assertTrue(specialized.interrupts.hasPendingCpuReadPhase());
+
+        for (int dot = 0; dot < 5; dot++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals("PPU-signal STAT at dot " + dot,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals("PPU-signal IF at dot " + dot,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+            assertEquals("PPU-signal FF0F at dot " + dot,
+                    generic.interrupts.getByte(0xff0f), specialized.interrupts.getByte(0xff0f));
+        }
     }
 
     @Test
@@ -2623,6 +2799,106 @@ public class StatRegisterTest {
 
     private static int cpuStatModeOverride(StatRegister stat) {
         return intField(stat, "cpuStatModeOverride");
+    }
+
+    private static Fixture nativeStressFixture() {
+        Fixture fixture = new Fixture(true, true);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x78);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), 0x47);
+        fixture.interrupts.setByte(0xffff, 0x1f);
+        for (int i = 0; i < 40; i++) {
+            int address = 0xfe00 + i * 4;
+            fixture.oam.setByte(address, 16 + (i * 11) % 128);
+            fixture.oam.setByte(address + 1, 8 + (i * 17) % 168);
+            fixture.oam.setByte(address + 2, i * 3);
+            fixture.oam.setByte(address + 3, i & 0x0f);
+        }
+        return fixture;
+    }
+
+    private static void assertNativeGpuDot(Fixture generic, Fixture specialized, int dot)
+            throws Exception {
+        int genericFacts = generic.gpu.getNativeCgbPerformancePostStatFacts();
+        int specializedFacts = specialized.gpu.getNativeCgbPerformancePostStatFacts();
+        assertEquals("native facts at dot " + dot, genericFacts, specializedFacts);
+        assertEquals("native facts validity at dot " + dot,
+                (genericFacts & Gpu.NATIVE_CGB_POST_STAT_FACTS_VALID) != 0,
+                (specializedFacts & Gpu.NATIVE_CGB_POST_STAT_FACTS_VALID) != 0);
+        assertEquals("native facts checkpoint at dot " + dot,
+                generic.gpu.isStatEventCheckpointForTick(),
+                (specializedFacts & Gpu.NATIVE_CGB_POST_STAT_CHECKPOINT) != 0);
+        GpuTimingSnapshot expected = new GpuTimingSnapshot();
+        GpuTimingSnapshot actual = new GpuTimingSnapshot();
+        generic.gpu.captureStatTimingForTick(expected);
+        specialized.gpu.captureNativeCgbPerformancePostStatTiming(actual);
+        assertEquals("generic coincidence release at dot " + dot,
+                expected.firstLine ? 452 : 454, generic.gpu.getCoincidenceReleaseTick());
+        assertTimingSnapshotsEqual("GPU timing at dot " + dot, expected, actual);
+    }
+
+    private static void assertTimingSnapshotsEqual(
+            String path, GpuTimingSnapshot expected, GpuTimingSnapshot actual) {
+        assertEquals(path + ".line", expected.line, actual.line);
+        assertEquals(path + ".ticksInLine", expected.ticksInLine, actual.ticksInLine);
+        assertEquals(path + ".visibleLy", expected.visibleLy, actual.visibleLy);
+        assertEquals(path + ".earlyLineEdgeTick", expected.earlyLineEdgeTick,
+                actual.earlyLineEdgeTick);
+        assertEquals(path + ".mode0InterruptTick", expected.mode0InterruptTick,
+                actual.mode0InterruptTick);
+        assertEquals(path + ".cpuMachineCycleDots", expected.cpuMachineCycleDots,
+                actual.cpuMachineCycleDots);
+        assertEquals(path + ".dmgCompat", expected.dmgCompat, actual.dmgCompat);
+        assertEquals(path + ".lcdEnabled", expected.lcdEnabled, actual.lcdEnabled);
+        assertEquals(path + ".firstLine", expected.firstLine, actual.firstLine);
+        assertEquals(path + ".statModeLatchRephasedBySpeedSwitch",
+                expected.statModeLatchRephasedBySpeedSwitch,
+                actual.statModeLatchRephasedBySpeedSwitch);
+        assertEquals(path + ".mode0HaltWakeTick", expected.mode0HaltWakeTick,
+                actual.mode0HaltWakeTick);
+        assertEquals(path + ".mode0IntWindow", expected.mode0IntWindow, actual.mode0IntWindow);
+        assertEquals(path + ".mode1IntWindow", expected.mode1IntWindow, actual.mode1IntWindow);
+        assertEquals(path + ".mode2IntWindow", expected.mode2IntWindow, actual.mode2IntWindow);
+        assertEquals(path + ".doubleSpeed", expected.doubleSpeed, actual.doubleSpeed);
+        assertEquals(path + ".nativeDoubleSpeed", expected.nativeDoubleSpeed,
+                actual.nativeDoubleSpeed);
+    }
+
+    private static void advanceGpuPair(Fixture generic, Fixture specialized, int ticks) {
+        for (int i = 0; i < ticks; i++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+        }
+    }
+
+    private static void advanceNativePair(
+            Fixture generic, Fixture specialized, int ticks, String path) {
+        for (int i = 0; i < ticks; i++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals(path + " STAT at dot " + i,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals(path + " IF at dot " + i,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
+    }
+
+    private static void assertNativePostGpuFallback(
+            Fixture generic, Fixture specialized, String path) {
+        for (int i = 0; i < 1_024; i++) {
+            generic.gpu.tick();
+            specialized.gpu.tick();
+            int facts = specialized.gpu.getNativeCgbPerformancePostStatFacts();
+            assertEquals(path + " facts invalid at dot " + i, 0,
+                    facts & Gpu.NATIVE_CGB_POST_STAT_FACTS_VALID);
+            generic.stat.tick();
+            specialized.stat.tickNativeCgbPerformancePostGpu();
+            assertEquals(path + " STAT at dot " + i,
+                    generic.stat.captureState(), specialized.stat.captureState());
+            assertEquals(path + " IF at dot " + i,
+                    generic.interrupts.captureState(), specialized.interrupts.captureState());
+        }
     }
 
     private static int intField(StatRegister stat, String name) {

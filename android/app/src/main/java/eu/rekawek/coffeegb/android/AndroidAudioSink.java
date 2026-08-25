@@ -80,10 +80,32 @@ final class AndroidAudioSink implements AutoCloseable {
                          long playbackPositionFrames, long overruns, long underruns,
                          long outputUnderruns, long restarts,
                          long routeFailures, boolean outputOpen, boolean outputPlaying,
-                         int sampleRate, int queueCapacityFrames, int maximumFrameBytes) {
+                         int sampleRate, int queueCapacityFrames, int maximumFrameBytes,
+                         boolean active, boolean paused, boolean muted, int volume,
+                         int systemVolume, int systemVolumeMax, boolean systemMusicMuted,
+                         int queuedFrames, boolean reopenPending, long outputIdentity,
+                         long queueIdentity) {
+        /** Source-compatible constructor retained for existing benchmark fixtures. */
+        AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
+                long writtenBytes, long writtenFrames, long writeFailures,
+                long discardedBytes, long pendingBytes, long queuedBytes,
+                long playbackPositionFrames, long overruns, long underruns,
+                long outputUnderruns, long restarts, long routeFailures,
+                boolean outputOpen, boolean outputPlaying, int sampleRate,
+                int queueCapacityFrames, int maximumFrameBytes) {
+            this(inputEvents, inputFrames, enqueuedBytes, enqueuedFrames, writtenBytes,
+                    writtenFrames, writeFailures, discardedBytes, pendingBytes, queuedBytes,
+                    playbackPositionFrames, overruns, underruns, outputUnderruns, restarts,
+                    routeFailures, outputOpen, outputPlaying, sampleRate, queueCapacityFrames,
+                    maximumFrameBytes, outputOpen, false, false, 100, 1, 1, false,
+                    queuedBytes > 0L ? 1 : 0, false, outputOpen ? 1L : 0L,
+                    queueCapacityFrames > 0 ? 1L : 0L);
+        }
+
         static AudioBaseline unavailable() {
             return new AudioBaseline(-1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L, -1L,
-                    -1L, -1L, -1L, -1L, -1L, -1L, -1L, false, false, -1, -1, -1);
+                    -1L, -1L, -1L, -1L, -1L, -1L, -1L, false, false, -1, -1, -1,
+                    false, true, true, 0, -1, -1, true, -1, true, 0L, 0L);
         }
     }
 
@@ -98,6 +120,8 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AtomicBoolean reopenRequested = new AtomicBoolean();
     private final AtomicLong underruns = new AtomicLong();
     private final AtomicLong restarts = new AtomicLong();
+    /** Monotonic identity fence for observational benchmark snapshots. */
+    private final AtomicLong routeGeneration = new AtomicLong();
     /** Benchmark-only ledger.  Release R8 removes its implementation and all guarded call sites. */
     private final PcmAccounting pcmAccounting = BuildConfig.DIAGNOSTICS_ENABLED
             ? new DiagnosticPcmAccounting() : NoOpPcmAccounting.INSTANCE;
@@ -201,18 +225,46 @@ final class AndroidAudioSink implements AutoCloseable {
         if (!BuildConfig.DIAGNOSTICS_ENABLED) {
             return AudioBaseline.unavailable();
         }
-        synchronized (pcmAccounting) {
-            updatePlaybackEvidence(activeOutput);
-            BoundedPcmQueue active = queue;
-            PcmSnapshot snapshot = pcmAccounting.snapshot();
-            return new AudioBaseline(snapshot.inputEvents(), snapshot.inputFrames(),
-                    snapshot.enqueuedBytes(), snapshot.enqueuedFrames(), snapshot.writtenBytes(),
-                    snapshot.writtenFrames(), snapshot.writeFailures(), snapshot.discardedBytes(),
-                    snapshot.pendingBytes(), active == null ? 0L : active.queuedBytes(),
-                    playbackPositionFrames, active == null ? 0L : active.overruns(),
-                    underruns.get(), outputUnderruns, restarts.get(), snapshot.routeFailures(), outputOpen,
-                    outputPlaying, sampleRate, active == null ? 0 : active.capacityFrames(),
-                    active == null ? 0 : active.maximumFrameBytes());
+        try {
+            synchronized (pcmAccounting) {
+                long generation = routeGeneration.get();
+                Output output = activeOutput;
+                BoundedPcmQueue active = queue;
+                updatePlaybackEvidence(output);
+                PcmSnapshot snapshot = pcmAccounting.snapshot();
+                boolean baselineOutputOpen = outputOpen;
+                boolean baselineOutputPlaying = outputPlaying;
+                boolean baselineReopenPending = reopenRequested.get();
+                long outputIdentity = output == null ? 0L
+                        : Integer.toUnsignedLong(System.identityHashCode(output));
+                long queueIdentity = active == null ? 0L
+                        : Integer.toUnsignedLong(System.identityHashCode(active));
+                AudioBaseline baseline = new AudioBaseline(
+                        snapshot.inputEvents(), snapshot.inputFrames(),
+                        snapshot.enqueuedBytes(), snapshot.enqueuedFrames(), snapshot.writtenBytes(),
+                        snapshot.writtenFrames(), snapshot.writeFailures(), snapshot.discardedBytes(),
+                        snapshot.pendingBytes(), active == null ? 0L : active.queuedBytes(),
+                        playbackPositionFrames, active == null ? 0L : active.overruns(),
+                        underruns.get(), outputUnderruns, restarts.get(), snapshot.routeFailures(),
+                        baselineOutputOpen, baselineOutputPlaying, sampleRate,
+                        active == null ? 0 : active.capacityFrames(),
+                        active == null ? 0 : active.maximumFrameBytes(), running.get(), paused, muted,
+                        volume, systemVolume, systemVolumeMax, systemMusicMuted,
+                        active == null ? 0 : active.queuedFrames(), baselineReopenPending,
+                        outputIdentity, queueIdentity);
+                if (routeGeneration.get() != generation
+                        || activeOutput != output || queue != active
+                        || outputOpen != baselineOutputOpen
+                        || outputPlaying != baselineOutputPlaying
+                        || reopenRequested.get() != baselineReopenPending) {
+                    return AudioBaseline.unavailable();
+                }
+                return baseline;
+            }
+        } catch (RuntimeException unavailable) {
+            // The consumer may release/rebuild an AudioTrack or queue concurrently with the
+            // observational ARM read. Fail closed instead of publishing a mixed-session proof.
+            return AudioBaseline.unavailable();
         }
     }
 
@@ -355,6 +407,7 @@ final class AndroidAudioSink implements AutoCloseable {
                     release(output);
                     output = openOutput();
                     activeOutput = output;
+                    routeGeneration.incrementAndGet();
                     outputPaused = false;
                     if (output == null) {
                         if (BuildConfig.DIAGNOSTICS_ENABLED) {
@@ -385,6 +438,7 @@ final class AndroidAudioSink implements AutoCloseable {
                         }
                         activeQueue = new BoundedPcmQueue(output.sampleRate(), queueClock);
                         queue = activeQueue;
+                        routeGeneration.incrementAndGet();
                     } else {
                         if (BuildConfig.DIAGNOSTICS_ENABLED) {
                             clearAndAccount(activeQueue);
@@ -481,6 +535,7 @@ final class AndroidAudioSink implements AutoCloseable {
             }
             queue = null;
             activeOutput = null;
+            routeGeneration.incrementAndGet();
             sampleRate = 0;
             minimumBufferBytes = 0;
             configuredBufferBytes = 0;

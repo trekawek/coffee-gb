@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -214,6 +215,7 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(speedRecord.contains("performance_epoch_raster_fast_ticks=7654"));
         assertTrue(speedRecord.contains("performance_epoch_mode2_replay_ticks=4321"));
         assertTrue(speedRecord.contains("performance_epoch_mode2_bulk_ticks=4000"));
+        assertTrue(speedRecord.contains("benchmark_audio_dropped_channel_ticks=0"));
     }
 
     private static AndroidBenchmarkDiagnostics armedDiagnostics(long generation) {
@@ -267,6 +269,106 @@ public class AndroidBenchmarkDiagnosticsTest {
                 SESSION, 62L, TOKEN, audioBaseline(0L, 0L, false)));
         assertTrue(diagnostics.armBenchmark(
                 SESSION, 63L, TOKEN, readyAudioBaseline()));
+    }
+
+    @Test
+    public void silentPcmArmRequiresFreshStrictMutedHostProof() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AndroidBenchmarkDiagnostics diagnostics = newSilentDiagnostics();
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION, silentSessionStartAudioBaseline());
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+
+        assertFalse(diagnostics.armBenchmark(SESSION, 64L, TOKEN, readyAudioBaseline()));
+        assertTrue(diagnostics.systemAudioBadLatched());
+
+        // A system-audio ARM failure is terminal for its diagnostics/session generation. A
+        // later valid admission must start from a fresh diagnostics/session instance.
+        AndroidBenchmarkDiagnostics valid = newSilentDiagnostics();
+        valid.sessionLaunch();
+        valid.beginSession(SESSION + 1L, silentSessionStartAudioBaseline());
+        valid.emulationStarted(SESSION + 1L);
+        valid.benchmarkAnchorPosted(SESSION + 1L, true);
+        valid.audioFocusResult(true);
+        assertTrue(valid.armBenchmark(SESSION + 1L, 65L, TOKEN, silentAudioBaseline()));
+    }
+
+    @Test
+    public void silentPcmArmRejectsAnyPriorFocusLossEvenAfterRegain() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AndroidBenchmarkDiagnostics diagnostics = newSilentDiagnostics();
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION, silentSessionStartAudioBaseline());
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+        diagnostics.audioFocusLost();
+        diagnostics.audioFocusResult(true);
+
+        assertFalse(diagnostics.armBenchmark(SESSION, 66L, TOKEN, silentAudioBaseline()));
+    }
+
+    @Test
+    public void silentPcmArmRejectsPcmEvidenceInheritedFromAnOlderSession() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AndroidBenchmarkDiagnostics diagnostics = newSilentDiagnostics();
+        diagnostics.sessionLaunch();
+        AndroidAudioSink.AudioBaseline inherited = silentAudioBaseline();
+        diagnostics.beginSession(SESSION, inherited);
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+
+        assertFalse(diagnostics.armBenchmark(SESSION, 67L, TOKEN, inherited));
+    }
+
+    @Test
+    public void silentPcmSystemAudioAllGoodHasArmIntervalsAndTerminalProof() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AndroidBenchmarkDiagnostics diagnostics = armedSilentDiagnostics(null);
+        for (int frame = 60; frame <= 600; frame += 60) {
+            diagnostics.sampleSystemAudioForTesting(frame, silentAudioBaseline());
+        }
+        diagnostics.sampleSystemAudioForTesting(600, silentAudioBaseline());
+        assertEquals(12, diagnostics.systemAudioSampleCountForTesting());
+        assertEquals(0, diagnostics.systemAudioBadCountForTesting());
+        assertEquals(600, diagnostics.systemAudioLastFrameForTesting());
+    }
+
+    @Test
+    public void silentPcmSystemAudioFailureAtFrame60RevokesOnceAndStaysFrozen() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AtomicInteger revocations = new AtomicInteger();
+        AndroidBenchmarkDiagnostics diagnostics = armedSilentDiagnostics(revocations);
+        diagnostics.sampleSystemAudioForTesting(60, systemAudioBaseline(1, 15, false));
+        diagnostics.sampleSystemAudioForTesting(540, systemAudioBaseline(1, 15, false));
+        assertEquals(1, revocations.get());
+        assertEquals(1, diagnostics.systemAudioBadCountForTesting());
+    }
+
+    @Test
+    public void silentPcmSystemAudioFailureAtFrame540RevokesAndUnavailableFailsClosed() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        AtomicInteger revocations = new AtomicInteger();
+        AndroidBenchmarkDiagnostics diagnostics = armedSilentDiagnostics(revocations);
+        diagnostics.sampleSystemAudioForTesting(540, systemAudioBaseline(1, 15, false));
+        diagnostics.sampleSystemAudioForTesting(600, null);
+        assertEquals(1, revocations.get());
+        assertEquals(1, diagnostics.systemAudioBadCountForTesting());
     }
 
     @Test
@@ -399,12 +501,15 @@ public class AndroidBenchmarkDiagnosticsTest {
         }
         List<String> records = new ArrayList<>();
         String longToken = "a".repeat(64);
-        String workloadNonce = "b".repeat(48);
+        String workloadNonce = "b".repeat(64);
+        long sessionGeneration = 9_223_372_036_854_775_000L;
+        long benchmarkGeneration = 9_223_372_036_854_774_000L;
         DiagnosticsOptions options = DiagnosticsOptions.parseValues(
                 true, "cgb", true, "presentation", true, true, false,
                 longToken, "c".repeat(64), "d".repeat(64), 6,
                 "variant", "variant", "e".repeat(64), "f".repeat(64), true,
-                workloadNonce, 120, 9, "performance", "cgb-action-v1");
+                workloadNonce, 120, 9, "performance", "cgb-action-v1",
+                "silent-pcm-relaxed-apu-v1");
         AtomicLong now = new AtomicLong(9_000_000_000_000_000L);
         AndroidBenchmarkDiagnostics diagnostics = new AndroidBenchmarkDiagnostics(
                 null, options, records::add, () -> now.addAndGet(1_000_000L),
@@ -414,22 +519,26 @@ public class AndroidBenchmarkDiagnosticsTest {
         diagnostics.hardwareProfile(new Controller.HardwareProfileEvent(
                 HardwareProfileRegistry.CGB,
                 HardwareProfileRegistry.CGB.identity(), true, false, 2));
-        diagnostics.beginSession(9_999_999_999L);
+        diagnostics.beginSession(sessionGeneration, silentSessionStartAudioBaseline());
         diagnostics.benchmarkScenarioCompleted(
-                9_999_999_999L, 923, 923, true, true, true);
-        diagnostics.emulationStarted(9_999_999_999L);
-        diagnostics.benchmarkAnchorPosted(9_999_999_999L, true);
+                sessionGeneration, 923, 923, true, true, true);
+        diagnostics.emulationStarted(sessionGeneration);
+        diagnostics.benchmarkAnchorPosted(sessionGeneration, true);
         diagnostics.audioFocusResult(true);
         assertTrue(diagnostics.armBenchmark(
-                9_999_999_999L, 8_888_888_888L, "z".repeat(64),
+                sessionGeneration, benchmarkGeneration, "z".repeat(64),
                 productionLikeAudioBaseline()));
+        diagnostics.setSystemAudioBaselineForTesting(productionLikeAudioBaseline());
         for (int frame = 1; frame <= 600; frame++) {
             diagnostics.frameReady();
         }
         diagnostics.benchmarkFrameBoundary(new Controller.BenchmarkFrameBoundaryEvent(
                 600L, true, false, 2, 9_999_999L, 999_999_999L,
                 999_999_999L, Long.MAX_VALUE, Integer.MAX_VALUE,
-                Long.MAX_VALUE, Long.MAX_VALUE));
+                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
+                "silent-pcm-relaxed-apu-v1", true, true, true,
+                999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
+                999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L));
         for (int submission = 1; submission <= 600; submission++) {
             diagnostics.frameSubmitted(submission);
         }
@@ -450,6 +559,11 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(matrixRecord.contains("audio_start_input_events=999999999"));
         assertFalse(finalRecord.contains("audio_start_input_events="));
         assertTrue(finalRecord.contains("audio_pcm_input_events=999999999"));
+        assertTrue(finalRecord.contains("benchmark_audio_policy=silent-pcm-relaxed-apu-v1"));
+        assertTrue(finalRecord.contains("benchmark_audio_flags=111"));
+        assertTrue(finalRecord.contains("benchmark_audio_calendar=999999999,999999999,999999999,999999999,999999999,999999999,999999999,999999999"));
+        assertTrue(finalRecord.contains("system_audio_sample_count=12"));
+        assertTrue(finalRecord.contains("system_audio_bad_count=0"));
         assertTrue(finalRecord.getBytes(StandardCharsets.UTF_8).length
                 <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
         for (String record : records) {
@@ -465,10 +579,11 @@ public class AndroidBenchmarkDiagnosticsTest {
     private static AndroidAudioSink.AudioBaseline productionLikeAudioBaseline() {
         return new AndroidAudioSink.AudioBaseline(
                 999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
-                999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
+                999_999_999L, 999_999_999L, 0L, 999_999_999L,
                 0L, 0L, 999_999_999L, 999_999_999L, 999_999_999L,
-                999_999_999L, 999_999_999L, 999_999_999L,
-                true, true, 48_000, 6, 140_448);
+                999_999_999L, 999_999_999L, 0L,
+                true, true, 48_000, 6, 140_448, true, false, false, 100,
+                0, 15, true, 0, false, 999_999_999L, 999_999_999L);
     }
 
     private static AndroidAudioSink.Stats productionLikeAudioStats() {
@@ -480,7 +595,7 @@ public class AndroidBenchmarkDiagnosticsTest {
                 999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
                 999_999_999L, 999_999_999L, 6,
                 true, true, false, 100,
-                999_999_999L, 999_999_999L, 100, 100, false, 6, 999_999_999);
+                999_999_999L, 999_999_999L, 0, 15, true, 6, 999_999_999);
     }
 
     private static AndroidAudioSink.AudioBaseline audioBaseline(
@@ -513,5 +628,64 @@ public class AndroidBenchmarkDiagnosticsTest {
         AtomicLong now = new AtomicLong();
         return new AndroidBenchmarkDiagnostics(
                 null, options, records::add, () -> now.addAndGet(1_000_000L));
+    }
+
+    private static AndroidBenchmarkDiagnostics newSilentDiagnostics() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                "ignored-build", "pair-0001", "block-0001", 0,
+                "parent", "parent", "ignored-device", "thermal", true,
+                "workload-0001", 60, -1, "performance", null, "silent-pcm-v1");
+        AtomicLong now = new AtomicLong();
+        return new AndroidBenchmarkDiagnostics(null, options, message -> {
+        }, () -> now.addAndGet(1_000_000L));
+    }
+
+    private static AndroidBenchmarkDiagnostics armedSilentDiagnostics(AtomicInteger revocations) {
+        AndroidBenchmarkDiagnostics diagnostics = newSilentDiagnosticsWithRevocations(revocations);
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION, silentSessionStartAudioBaseline());
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+        assertTrue(diagnostics.armBenchmark(SESSION, 65L, TOKEN, silentAudioBaseline()));
+        return diagnostics;
+    }
+
+    private static AndroidBenchmarkDiagnostics newSilentDiagnosticsWithRevocations(
+            AtomicInteger revocations) {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                "ignored-build", "pair-0001", "block-0001", 0,
+                "parent", "parent", "ignored-device", "thermal", true,
+                "workload-0001", 60, -1, "performance", null, "silent-pcm-v1");
+        AtomicLong now = new AtomicLong();
+        return new AndroidBenchmarkDiagnostics(null, options, message -> {
+        }, () -> now.addAndGet(1_000_000L), null, null,
+                revocations == null ? (generation, session) -> {
+                } : (generation, session) -> revocations.incrementAndGet());
+    }
+
+    private static AndroidAudioSink.AudioBaseline systemAudioBaseline(
+            int systemVolume, int systemVolumeMax, boolean systemMuted) {
+        return new AndroidAudioSink.AudioBaseline(
+                1L, 1L, 4L, 1L, 4L, 1L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, true, true, 48_000, 6, 140_448,
+                true, false, false, 100, systemVolume, systemVolumeMax, systemMuted,
+                0, false, 1L, 2L);
+    }
+
+    private static AndroidAudioSink.AudioBaseline silentAudioBaseline() {
+        return new AndroidAudioSink.AudioBaseline(
+                1L, 1L, 4L, 1L, 4L, 1L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, true, true, 48_000, 6, 140_448,
+                true, false, false, 100, 0, 15, true, 0, false, 1L, 2L);
+    }
+
+    private static AndroidAudioSink.AudioBaseline silentSessionStartAudioBaseline() {
+        return new AndroidAudioSink.AudioBaseline(
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, true, true, 48_000, 6, 140_448,
+                true, false, false, 100, 0, 15, true, 0, false, 1L, 2L);
     }
 }

@@ -105,7 +105,7 @@ public class PolynomialCounter implements StatefulComponent<PolynomialCounter> {
         int steps = 0;
         alignment = (alignment + edgeCount) & 3;
         if (!backgroundActive) {
-            clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+            clock2Mhz ^= (ticks & 1) != 0;
             return 0;
         }
         // Until the next prescaler reload, the active noise state is only a countdown. Avoid
@@ -113,26 +113,32 @@ public class PolynomialCounter implements StatefulComponent<PolynomialCounter> {
         if (edgeCount > 0 && counterCountdown > edgeCount) {
             counterCountdown -= edgeCount;
             countdownReloaded = false;
-            clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+            clock2Mhz ^= (ticks & 1) != 0;
             return 0;
         }
-        for (int edge = 0; edge < edgeCount; edge++) {
-            if (--counterCountdown > 0) {
-                countdownReloaded = false;
-                continue;
-            }
-            int divisor = (nr43 & 0b111) << 2;
-            counterCountdown = divisor == 0 ? 2 : divisor;
-            int mask = 1 << (nr43 >> 4);
-            boolean oldBit = (counter & mask) != 0;
-            counter = (counter + 1) & 0x3fff;
-            boolean newBit = (counter & mask) != 0;
-            countdownReloaded = true;
-            if (!oldBit && newBit) {
-                steps++;
-            }
+        if (edgeCount == 0) {
+            clock2Mhz ^= (ticks & 1) != 0;
+            return 0;
         }
-        clock2Mhz = (ticks & 1) != 0 ? !clock2Mhz : clock2Mhz;
+
+        int reload = (nr43 & 0b111) << 2;
+        if (reload == 0) {
+            reload = 2;
+        }
+        int after = edgeCount - counterCountdown;
+        int increments = 1 + after / reload;
+        int tail = after - (increments - 1) * reload;
+        counterCountdown = tail == 0 ? reload : reload - tail;
+        countdownReloaded = tail == 0;
+
+        int shift = nr43 >>> 4;
+        if (shift < 14) {
+            int mask = 1 << shift;
+            steps = ((counter + increments + mask) >>> (shift + 1))
+                    - ((counter + mask) >>> (shift + 1));
+        }
+        counter = (counter + increments) & 0x3fff;
+        clock2Mhz ^= (ticks & 1) != 0;
         return steps;
     }
 

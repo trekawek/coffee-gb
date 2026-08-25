@@ -272,7 +272,24 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
      * or externally observed non-canonical phase stays on the exact dot path.</p>
      */
     public boolean isPerformanceNoDmaStableSpanEligible(int readerPosition, int spriteHeight) {
-        if (!registers.isGbc() || registers.getSpeedMode() != 2
+        return isPerformanceMode2SpanEligible(readerPosition, spriteHeight, true, 2);
+    }
+
+    /**
+     * Whether a bounded physical-DMG mode-2 span can use the allocation-free OAM scanner.
+     *
+     * <p>The DMG and native-CGB readers share the same two-dot Y/X slot arithmetic.  Their
+     * topology and speed are kept as explicit arguments here so the fast path cannot silently
+     * widen to CGB compatibility or another clock domain.</p>
+     */
+    public boolean isPerformancePhysicalDmgMode2SpanEligible(
+            int readerPosition, int spriteHeight) {
+        return isPerformanceMode2SpanEligible(readerPosition, spriteHeight, false, 1);
+    }
+
+    private boolean isPerformanceMode2SpanEligible(
+            int readerPosition, int spriteHeight, boolean expectedGbc, int expectedSpeedMode) {
+        if (registers.isGbc() != expectedGbc || registers.getSpeedMode() != expectedSpeedMode
                 || readerPosition < 0 || readerPosition >= 79
                 || !selectSprites || !oamReaderInitialized || oamReaderDmaSource
                 || !(oemRam instanceof Ram)
@@ -299,9 +316,21 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
      */
     public void advancePerformanceNoDmaStableSpanTrusted(
             int readerPosition, int ticks, int currentSpriteHeight) {
+        advancePerformanceMode2SpanTrusted(readerPosition, ticks, currentSpriteHeight, true, 2);
+    }
+
+    /** Advances a preflighted physical-DMG mode-2 prefix using the same exact slot arithmetic. */
+    public void advancePerformancePhysicalDmgMode2SpanTrusted(
+            int readerPosition, int ticks, int currentSpriteHeight) {
+        advancePerformanceMode2SpanTrusted(readerPosition, ticks, currentSpriteHeight, false, 1);
+    }
+
+    private void advancePerformanceMode2SpanTrusted(
+            int readerPosition, int ticks, int currentSpriteHeight,
+            boolean expectedGbc, int expectedSpeedMode) {
         if (ticks < 0 || readerPosition + ticks > 79
-                || !isPerformanceNoDmaStableSpanEligible(
-                readerPosition, currentSpriteHeight)) {
+                || !isPerformanceMode2SpanEligible(
+                readerPosition, currentSpriteHeight, expectedGbc, expectedSpeedMode)) {
             throw new IllegalStateException("OAM reader is not eligible for a PERFORMANCE span");
         }
         if (ticks == 0) {
@@ -317,24 +346,24 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         if ((position & 1) != 0) {
             position++;
             samplePerformanceOamWord(oam, position / 2);
-            commitPerformanceXHalf(currentSpriteHeight);
+            commitPerformanceXHalf(currentSpriteHeight, expectedGbc);
             remaining--;
         }
 
         // At an even stored position the search is aligned to a complete two-dot slot.
         while (remaining >= 2) {
             position++;
-            latchPerformanceYHalf(currentSpriteHeight);
+            latchPerformanceYHalf(currentSpriteHeight, expectedGbc);
             position++;
             samplePerformanceOamWord(oam, position / 2);
-            commitPerformanceXHalf(currentSpriteHeight);
+            commitPerformanceXHalf(currentSpriteHeight, expectedGbc);
             remaining -= 2;
         }
 
         if (remaining != 0) {
             // The cap at stored dot 79 deliberately leaves entry 39's X half for the scalar
             // dot-80 mode-3 handoff.
-            latchPerformanceYHalf(currentSpriteHeight);
+            latchPerformanceYHalf(currentSpriteHeight, expectedGbc);
         }
 
         previousOamSpriteHeight = currentSpriteHeight;
@@ -349,15 +378,21 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         oamReaderX[entry] = oamReaderBusX;
     }
 
-    private void latchPerformanceYHalf(int currentSpriteHeight) {
+    private void latchPerformanceYHalf(int currentSpriteHeight, boolean expectedGbc) {
         spriteY = oamReaderY[i];
         spriteX = oamReaderX[i];
-        spriteHeight = currentSpriteHeight;
+        // Native CGB latches the size source with the Y half. DMG leaves the previous
+        // spriteHeight bus value alone until the X half assigns the live height.
+        if (expectedGbc) {
+            spriteHeight = currentSpriteHeight;
+        }
         state = State.READING_X;
     }
 
-    private void commitPerformanceXHalf(int currentSpriteHeight) {
-        spriteHeight = Math.max(spriteHeight, currentSpriteHeight);
+    private void commitPerformanceXHalf(int currentSpriteHeight, boolean expectedGbc) {
+        spriteHeight = expectedGbc
+                ? Math.max(spriteHeight, currentSpriteHeight)
+                : currentSpriteHeight;
         boolean candidate = between(spriteY, registers.get(GpuRegister.LY) + 16,
                 spriteY + spriteHeight);
         spriteCandidateSeen |= candidate;

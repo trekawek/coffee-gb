@@ -569,6 +569,316 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     /**
+     * Completes a native-CGB PERFORMANCE scalar dot after the GPU owner has advanced it.
+     *
+     * <p>The CPU-side native prologue has already captured this dot's read phase. Capture the
+     * post-GPU timing directly into the reusable snapshot, then run the byte-for-byte scalar
+     * evaluator. All non-native paths continue to call {@link #tick()} unchanged.</p>
+     */
+    public void tickNativeCgbPerformancePostGpu() {
+        int nativePostGpuFacts = gpu.getNativeCgbPerformancePostStatFacts();
+        if ((nativePostGpuFacts & Gpu.NATIVE_CGB_POST_STAT_FACTS_VALID) == 0) {
+            tick();
+            return;
+        }
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview();
+        lycIrqClock++;
+        clearCpuStatReadPhase();
+        int ppuTickSignals = interruptManager.consumePpuTickSignals();
+        boolean statEventCheckpoint =
+                (nativePostGpuFacts & Gpu.NATIVE_CGB_POST_STAT_CHECKPOINT) != 0;
+        boolean scheduledEvent = nextLycIrqEvent == lycIrqClock
+                || pendingLycWriteIrq == lycIrqClock
+                || pendingLycComparatorIrq == lycIrqClock;
+        boolean hasPendingModeRegisterClock = pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT;
+        if (!statEvaluationDirty && !statEventCheckpoint && ppuTickSignals == 0
+                && !pendingCgbMode0Interrupt && !hasPendingModeRegisterClock
+                && !scheduledEvent) {
+            return;
+        }
+
+        timingGeneration = gpu.captureNativeCgbPerformancePostStatTiming(timing);
+        int currentLine = timing.line;
+        int currentTicksInLine = timing.ticksInLine;
+        boolean currentGbc = gbc;
+        boolean currentDmgCompat = timing.dmgCompat;
+        boolean currentLcdEnabled = timing.lcdEnabled;
+        boolean currentFirstLine = timing.firstLine;
+        int currentMode0InterruptTick = timing.mode0InterruptTick;
+        int currentCpuMachineCycleDots = timing.cpuMachineCycleDots;
+        boolean currentDoubleSpeed = timing.doubleSpeed;
+        boolean currentNativeDoubleSpeed = timing.nativeDoubleSpeed;
+        boolean mustEvaluateStat = statEvaluationDirty || statEventCheckpoint
+                || ppuTickSignals != 0;
+        if ((ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_ACKNOWLEDGE) != 0) {
+            lastLcdcInterruptAcknowledgeClock = lycIrqClock;
+            if (currentNativeDoubleSpeed
+                    && previousMode0Window
+                    && currentTicksInLine == currentMode0InterruptTick + 1
+                    && mode0EventArmed
+                    && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
+                    && !((mode0IrqStatLatch & 0x40) != 0
+                    && currentLine == mode0IrqLycLatch)) {
+                // In native double speed, the mode-0 set latch owns the CPU
+                // acknowledge slot immediately following its event. A later
+                // acknowledge still consumes the stored request normally.
+                interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            }
+        }
+        if ((ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_VBLANK_INTERRUPT_ACKNOWLEDGE) != 0) {
+            lastVBlankInterruptAcknowledgeClock = lycIrqClock;
+        }
+        boolean lcdcInterruptFlagWriteClear = (ppuTickSignals
+                & InterruptManager.PPU_TICK_SIGNAL_LCDC_INTERRUPT_FLAG_WRITE_CLEAR) != 0;
+        if (lcdcInterruptFlagWriteClear
+                && currentGbc && !currentDmgCompat
+                && previousMode0Window
+                && (currentTicksInLine == currentMode0InterruptTick
+                + (currentDoubleSpeed ? 2 : 1)
+                || currentDoubleSpeed && currentTicksInLine
+                == currentMode0InterruptTick + 3)
+                && mode0EventArmed
+                && ((enableBits | mode0IrqStatLatch) & 0x08) != 0
+                && !((mode0IrqStatLatch & 0x40) != 0
+                && currentLine == mode0IrqLycLatch)) {
+            // An FF0F clear and the normal-speed CGB mode-0 set share this bus
+            // slot. The captured PPU set wins; a clear in the next slot does not.
+            interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+        }
+        if (pendingCgbMode0Interrupt) {
+            interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+            pendingCgbMode0Interrupt = false;
+            mustEvaluateStat = true;
+        }
+        boolean pendingModeLatchChanged = false;
+        if (pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT) {
+            pendingModeLatchChanged = commitPendingModeIrqRegisters();
+        }
+        if (pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT) {
+            pendingModeLatchChanged |= commitPendingMode0IrqRegisters();
+        }
+        mustEvaluateStat |= pendingModeLatchChanged;
+        mustEvaluateStat |= scheduledEvent;
+        boolean suppressNaturalModeEdge = mustEvaluateStat
+                && updateModeIrqEvents(lcdcInterruptFlagWriteClear);
+        if (pendingCgbMode2Interrupt && currentTicksInLine == 452) {
+            publishPendingCgbMode2Event();
+        }
+        if (pendingCgbMode2LateReplay && currentTicksInLine == 455) {
+            publishPendingCgbMode2Replay();
+        }
+        if (pendingCgbMode2LateReplay && retractableCgbMode2Interrupt
+                && cgbMode2CapturedAtLineEdge && (modeIrqStatLatch & 0x40) == 0
+                && currentTicksInLine == 454) {
+            interruptManager.maskLcdcUntilNextPeripheralTick();
+        }
+        boolean publishCgbFrameMode2 = pendingCgbFrameMode2Interrupt && !currentDoubleSpeed
+                && ((getNormalSpeedClockPhase() == 0
+                && currentLine == 153 && currentTicksInLine == 455)
+                || (getNormalSpeedClockPhase() == 1
+                && currentLine == 0 && currentTicksInLine == 0));
+        if (publishCgbFrameMode2) {
+            // The normal-speed frame mode-2 event captures FF41/FF45 at dot 454.
+            // A speed-switch clock rephase moves publication across the rollover.
+            if (getNormalSpeedClockPhase() == 1) {
+                interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                        InterruptType.LCDC);
+            } else {
+                interruptManager.requestMode2InterruptBeforeCpuAcceptance(false);
+            }
+            pendingCgbFrameMode2Interrupt = false;
+        }
+        if (retractableCgbMode2Interrupt && currentTicksInLine > 454) {
+            retractableCgbMode2Interrupt = false;
+        }
+        if (!mustEvaluateStat) {
+            return;
+        }
+        boolean settlingLycLine = false;
+        if (currentLcdEnabled) {
+            int ticksInLine = currentTicksInLine;
+            if (suppressedLycIrqLine >= 0
+                    && registeredLy != suppressedLycIrqLine
+                    && timing.visibleLy != suppressedLycIrqLine
+                    && !(suppressedLycIrqLine == 153 && currentLine == 153)) {
+                suppressedLycIrqLine = -1;
+            }
+            if (modeBlockedLycIrqLine >= 0
+                    && registeredLy != modeBlockedLycIrqLine
+                    && timing.visibleLy != modeBlockedLycIrqLine) {
+                modeBlockedLycIrqLine = -1;
+            }
+            boolean lycComparePhase = (currentLine != 153 && ticksInLine == 454)
+                    || (currentLine == 153 && ticksInLine == 6);
+            if (lycComparePhase) {
+                int comparedLy = comparedLycIrqLine();
+                int comparedLyc = nextLycIrqEvent == lycIrqClock
+                        ? lycIrqValueLatch
+                        : lycIrqValueSource;
+                lycComparatorSignal = comparedLyc == comparedLy;
+            }
+            if (releaseTailLycCpuAcceptance && ticksInLine == 455) {
+                if (currentGbc || gpu.hasObjectsOnLine()) {
+                    interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+                } else {
+                    interruptManager.releaseHaltWake(InterruptType.LCDC);
+                }
+                releaseTailLycCpuAcceptance = false;
+            }
+            if (nextLycIrqEvent == lycIrqClock) {
+                fireLycIrqEvent();
+            }
+            if (pendingLycWriteIrq == lycIrqClock) {
+                interruptManager.requestInterrupt(InterruptType.LCDC);
+                pendingLycWriteIrq = NO_LYC_IRQ_EVENT;
+            }
+            if (pendingLycComparatorIrq == lycIrqClock) {
+                interruptManager.requestInterruptBeforeHaltWake(InterruptType.LCDC);
+                pendingLycComparatorIrq = NO_LYC_IRQ_EVENT;
+            }
+            boolean nativeDoubleTailLycLatch = currentNativeDoubleSpeed
+                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH
+                    && currentLine != 153;
+            // In double-speed mode the PPU's line-144 request is readable during
+            // the last two dots of line 143. CPU acceptance remains synchronized
+            // to the internal rollover, preserving ordinary VBlank dispatch timing.
+            if (currentNativeDoubleSpeed && currentLine == 143
+                    && ticksInLine == CGB_DOUBLE_TAIL_LATCH) {
+                if (!recentVBlankAcknowledgeWins()) {
+                    interruptManager.requestInterruptBeforeCpuAcceptanceUnphased(
+                            InterruptType.VBlank);
+                }
+            }
+            if (timing.mode0HaltWakeTick) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            if (currentGbc && ticksInLine == currentCpuMachineCycleDots) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            // The LY=0 comparison reaches IF four dots after readable LY falls
+            // (dot 8 normally, dot 6 in native double speed), then crosses the
+            // CPU/HALT input synchronizer one CPU M-cycle later.
+            if (currentLine == 153 && ticksInLine == getNewFrameLycCpuAcceptTick()) {
+                interruptManager.releaseHaltWake(InterruptType.LCDC);
+            }
+            if ((currentLine <= 144 || currentGbc) && ticksInLine == 0) {
+                // Release a request latched in the preceding line's tail before a
+                // possible new edge is registered below. Native double speed also
+                // latches LYC requests this way during VBlank (for example 151->152).
+                // PixelTransfer still describes the preceding line here. On DMG an
+                // object-stalled line holds the early mode-2 edge away from both CPU
+                // inputs until rollover; a BG-only line only holds the HALT path.
+                if (currentGbc || gpu.hasObjectsOnLine()) {
+                    interruptManager.releaseCpuAcceptance(InterruptType.LCDC);
+                } else {
+                    interruptManager.releaseHaltWake(InterruptType.LCDC);
+                }
+            }
+            if (lycWriteSuppressed
+                    && ((currentLine != 153 && ticksInLine == 0)
+                    || (currentLine == 153 && ticksInLine == getNewFrameLycEdgeTick()))) {
+                lycWriteSuppressed = false;
+            }
+            // The normal comparison uses LY registered at the line start. Native
+            // double speed has a separate tail latch at dot 454; the extra speed-scaled
+            // latch handles the LY=153 -> 0 transition during line 153.
+            if (ticksInLine == 0 || ticksInLine == getNewFrameLycEdgeTick()
+                    || nativeDoubleTailLycLatch) {
+                // On monochrome hardware LY has already returned to 0 when line 153
+                // starts, but the comparator still samples the short-lived 153 value.
+                registeredLy = currentLine == 153 && ticksInLine == 0
+                        ? 153
+                        : timing.visibleLy;
+            }
+            coincidence = registeredLy == registers.get(LYC);
+            int coincidenceReleaseTick = currentFirstLine ? 452 : 454;
+            boolean coincidenceRelease = currentGbc
+                    && !(currentFirstLine && !currentDoubleSpeed)
+                    ? ticksInLine > coincidenceReleaseTick
+                    : ticksInLine >= coincidenceReleaseTick;
+            boolean nativeDoubleTailComparison = currentNativeDoubleSpeed
+                    && ticksInLine >= CGB_DOUBLE_TAIL_LATCH
+                    && currentLine != 153;
+            if ((coincidenceRelease && !nativeDoubleTailComparison
+                    && currentLine != 153)
+                    || (!currentGbc && currentLine == 153
+                    && ticksInLine >= 4 && ticksInLine < getNewFrameLycEdgeTick())
+                    || lycWriteSuppressed) {
+                // when LY changes, the comparison result reads 0 until the new value
+                // is registered at the beginning of the next line (lcdon_timing-GS);
+                // at the end of line 153 the comparison stays valid: LY already flipped
+                // to 0 at tick 8 and keeps that value into line 0, so an LYC=0
+                // interrupt fires only once per frame there
+                coincidence = false;
+            }
+
+            intCoincidence = coincidence;
+            boolean suppressedLycComparison = registeredLy == suppressedLycIrqLine
+                    || timing.visibleLy == suppressedLycIrqLine;
+            if (suppressedLycComparison) {
+                intCoincidence = false;
+            }
+            if (ticksInLine < 4 && currentLine != 0
+                    && currentLine != 144 && currentLine != 153) {
+                intCoincidence = false;
+                settlingLycLine = coincidence
+                        && !suppressedLycComparison
+                        && (enableBits & 0b01000000) != 0;
+                boolean mode0ToLycPrecedence = intLine
+                        && (enableBits & 0x08) != 0
+                        && (enableBits & 0x20) == 0;
+                if (ticksInLine == 0 && settlingLycLine
+                        && (!intLine || mode0ToLycPrecedence)) {
+                    // The comparison edge reaches IF at the line-start latch,
+                    // before its level contribution to the STAT line settles. A mode-0
+                    // source retiring on this boundary does not mask the higher-priority
+                    // LYC edge unless mode 2 is selected too. Keep the edge detector
+                    // latched across the settling window: if IRQ dispatch clears IF
+                    // before tick 4, the comparison must not be observed twice.
+                    if (timing.nativeDoubleSpeed) {
+                        interruptManager.requestInterrupt(InterruptType.LCDC);
+                    } else if (currentGbc) {
+                        interruptManager.requestPhasedInterruptBeforeHaltWake(InterruptType.LCDC);
+                    } else {
+                        interruptManager.requestInterrupt(InterruptType.LCDC);
+                    }
+                    intLine = true;
+                }
+            }
+            if (currentLine == 144 && ticksInLine == 0) {
+                if (timing.nativeDoubleSpeed) {
+                    interruptManager.releaseCpuAcceptance(InterruptType.VBlank);
+                } else if (!recentVBlankAcknowledgeWins()) {
+                    interruptManager.requestInterrupt(InterruptType.VBlank);
+                }
+            }
+        }
+
+        boolean holdModeBlockedLycLine = modeBlockedLycIrqLine >= 0
+                && (registeredLy == modeBlockedLycIrqLine
+                || timing.visibleLy == modeBlockedLycIrqLine)
+                && !intCoincidence && intLine;
+        if (!settlingLycLine && !holdModeBlockedLycLine) {
+            boolean newLine = computeIntLine(enableBits);
+            if (suppressNaturalModeEdge) {
+                // Keep the shared level latch synchronized without recreating
+                // an edge that the captured FF41/FF45 copies masked.
+                intLine = newLine;
+            } else {
+                updateIntLine(newLine);
+            }
+        }
+        statEvaluationDirty = false;
+    }
+
+    /**
      * Performs the invariant portion of a quiet PERFORMANCE STAT tick.
      *
      * <p>During a proven sprite/window-free mode-3 span no STAT source, event checkpoint, or

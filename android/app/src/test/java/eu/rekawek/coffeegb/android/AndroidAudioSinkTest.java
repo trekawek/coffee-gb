@@ -114,6 +114,8 @@ public class AndroidAudioSinkTest {
             AndroidAudioSink.AudioBaseline baseline = sink.benchmarkBaseline();
             assertTrue(baseline.outputOpen());
             assertTrue(baseline.outputPlaying());
+            assertTrue(baseline.outputIdentity() > 0L);
+            assertTrue(baseline.queueIdentity() > 0L);
             int flushesBefore = factory.current().flushes;
 
             AtomicInteger snapshots = new AtomicInteger();

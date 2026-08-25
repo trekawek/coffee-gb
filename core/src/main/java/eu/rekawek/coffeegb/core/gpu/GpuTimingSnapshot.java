@@ -19,4 +19,12 @@ final class GpuTimingSnapshot {
     boolean mode2IntWindow;
     boolean doubleSpeed;
     boolean nativeDoubleSpeed;
+
+    /** Fixed half of a native-CGB double-speed timing capture. */
+    void setNativeCgbDoubleSpeed() {
+        dmgCompat = false;
+        cpuMachineCycleDots = 2;
+        doubleSpeed = true;
+        nativeDoubleSpeed = true;
+    }
 }

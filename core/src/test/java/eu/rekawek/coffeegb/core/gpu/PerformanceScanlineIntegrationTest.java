@@ -88,7 +88,7 @@ public final class PerformanceScanlineIntegrationTest {
     }
 
     @Test
-    public void stopAwarePerformanceRunExecutesNoTickAfterNativeFrameCallback() throws Exception {
+    public void measuredPerformanceRunExecutesNoTickAfterNativeFrameCallback() throws Exception {
         try (EventBus eventBus = new EventBusImpl(); Gameboy gameboy = session(false)) {
             AtomicBoolean stop = new AtomicBoolean();
             AtomicInteger callbacks = new AtomicInteger();
@@ -104,7 +104,7 @@ public final class PerformanceScanlineIntegrationTest {
             }, Display.DmgFrameReadyEvent.class);
             gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
 
-            int executed = gameboy.runTicksUntilStop(2 * 456 * 154, stop::get);
+            int executed = gameboy.runMeasuredTicksUntilStop(2 * 456 * 154, stop::get);
 
             assertTrue("native endpoint was not reached", stop.get());
             assertEquals("endpoint callback repeated", 1, callbacks.get());

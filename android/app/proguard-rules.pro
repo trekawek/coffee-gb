@@ -15,6 +15,7 @@
 # or method name; the ordinary PERFORMANCE scheduler remains free to optimize normally.
 -keepclassmembers,allowobfuscation class eu.rekawek.coffeegb.core.Gameboy {
     private int tryPerformanceSettledDmgHaltSpan(long);
+    private int tryPerformanceSettledNativeCgbHaltSpan(long);
 }
 
 # This native-CGB commit is deliberately kept as the coarse epoch's small call boundary. R8 may
@@ -28,4 +29,10 @@
 # its own optimization boundary.
 -keepclassmembers,allowobfuscation,allowshrinking class eu.rekawek.coffeegb.core.Gameboy {
     private void tickNativeCgbPerformanceStatPrologue(int);
+}
+
+# Keep the native-CGB scanline dispatch as a narrow renderer optimization boundary. Do not allow
+# R8 to inline it into Gpu's scheduler; its body still selects the exact or generic renderer path.
+-keepclassmembers,allowobfuscation,allowshrinking class eu.rekawek.coffeegb.core.gpu.PerformanceScanlineRenderer {
+    void renderLinePerformanceBoundary(eu.rekawek.coffeegb.core.gpu.Display,int,int);
 }

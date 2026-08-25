@@ -40,6 +40,11 @@ import java.util.function.LongSupplier;
  */
 final class AndroidBenchmarkDiagnostics {
 
+    /** Callback used by the runtime to revoke one measured generation on a bad host-audio read. */
+    interface SystemAudioViolationSink {
+        void onViolation(long generation, long sessionGeneration);
+    }
+
     /** Bounded log seam; production uses Android Log, benchmark JVM tests inject a no-op sink. */
     interface RecordSink {
         void write(String message);
@@ -107,6 +112,8 @@ final class AndroidBenchmarkDiagnostics {
     private boolean measurementArmed;
     private Phase phase = Phase.IDLE;
     private long benchmarkGeneration;
+    /** Opaque host arm token copied into every run-bound record. */
+    private String benchmarkToken = "unknown";
     private long activeSessionGeneration;
     private long scenarioSessionGeneration;
     private int scenarioExpectedFrames;
@@ -122,6 +129,9 @@ final class AndroidBenchmarkDiagnostics {
     private int speedModeFinal = UNKNOWN;
     /** Audio counters sampled at the physical ready-600 boundary, before compositor drain delay. */
     private AndroidAudioSink.Stats audioTerminalStats;
+    /** Output/queue identities sampled with the terminal PCM counters. */
+    private long audioTerminalOutputIdentity;
+    private long audioTerminalQueueIdentity;
     private String workloadNonce = "unknown";
     private long liveInputMutations;
     private HardwareProfile profile;
@@ -147,11 +157,35 @@ final class AndroidBenchmarkDiagnostics {
     private int batteryTempMin;
     private int batteryTempMax;
     private AndroidAudioSink audioSink;
+    /** JVM-only seam used by production-length diagnostics tests; real runs always read audioSink. */
+    private AndroidAudioSink.AudioBaseline systemAudioBaselineForTesting;
+    /** Absolute sink ledger captured when the current emulation session materializes. */
+    private AndroidAudioSink.AudioBaseline audioSessionBaseline =
+            AndroidAudioSink.AudioBaseline.unavailable();
     private AndroidAudioSink.AudioBaseline audioBaseline =
             AndroidAudioSink.AudioBaseline.unavailable();
     private boolean audioFocusGranted;
     private long audioFocusLossCount;
     private long audioFocusStartLossCount;
+    private DiagnosticsOptions.AudioPolicy benchmarkAudioPolicy =
+            DiagnosticsOptions.AudioPolicy.CANONICAL;
+    private boolean benchmarkAudioRequested;
+    private boolean benchmarkAudioActiveAtBoundary;
+    private boolean benchmarkAudioDisabledAfterBoundary;
+    private long benchmarkAudioSkippedTicks;
+    private long benchmarkAudioZeroSampleSlots;
+    private long benchmarkAudioZeroSampleEvents;
+    private long benchmarkAudioMaxDebt;
+    private long benchmarkAudioApuReads;
+    private long benchmarkAudioApuWrites;
+    private long benchmarkAudioFrameSequencerCommits;
+    private long benchmarkAudioDroppedChannelTicks;
+    /** Silent-PCM host proof: ARM, ten interval boundaries, and one terminal read. */
+    private int systemAudioSampleCount;
+    private int systemAudioBadCount;
+    private boolean systemAudioBadLatched;
+    private int systemAudioLastFrame;
+    private final SystemAudioViolationSink systemAudioViolationSink;
 
     AndroidBenchmarkDiagnostics(DiagnosticsOptions options) {
         this(null, options, AndroidBenchmarkDiagnostics::logRecord,
@@ -161,6 +195,12 @@ final class AndroidBenchmarkDiagnostics {
     AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options) {
         this(context, options, AndroidBenchmarkDiagnostics::logRecord,
                 AndroidBenchmarkDiagnostics::systemNow);
+    }
+
+    AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options,
+            SystemAudioViolationSink systemAudioViolationSink) {
+        this(context, options, AndroidBenchmarkDiagnostics::logRecord,
+                AndroidBenchmarkDiagnostics::systemNow, null, null, systemAudioViolationSink);
     }
 
     AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options, RecordSink recordSink) {
@@ -175,11 +215,20 @@ final class AndroidBenchmarkDiagnostics {
     /** Test seam for production-length redacted identities without depending on an Android APK. */
     AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options, RecordSink recordSink,
             LongSupplier monotonicNanos, String artifactIdOverride, String deviceIdOverride) {
+        this(context, options, recordSink, monotonicNanos, artifactIdOverride, deviceIdOverride,
+                (generation, sessionGeneration) -> { });
+    }
+
+    AndroidBenchmarkDiagnostics(Context context, DiagnosticsOptions options, RecordSink recordSink,
+            LongSupplier monotonicNanos, String artifactIdOverride, String deviceIdOverride,
+            SystemAudioViolationSink systemAudioViolationSink) {
         this.context = context == null ? null : context.getApplicationContext();
         this.options = options == null ? DiagnosticsOptions.disabled() : options;
         this.recordSink = recordSink == null ? AndroidBenchmarkDiagnostics::logRecord : recordSink;
         this.monotonicNanos = monotonicNanos == null
                 ? AndroidBenchmarkDiagnostics::systemNow : monotonicNanos;
+        this.systemAudioViolationSink = systemAudioViolationSink == null
+                ? (generation, sessionGeneration) -> { } : systemAudioViolationSink;
         enabled = BuildConfig.DIAGNOSTICS_ENABLED && this.options.enabled;
         artifactId = enabled && artifactIdOverride != null
                 ? boundedDigestOverride(artifactIdOverride)
@@ -270,6 +319,25 @@ final class AndroidBenchmarkDiagnostics {
                 && (baseline.pendingBytes() != 0L || baseline.queuedBytes() != 0L);
         boolean audioNotPlaying = options.audioOutput && baseline != null
                 && !baseline.outputPlaying();
+        boolean silentPolicyValid = !options.audioPolicy.isSilent()
+                || (validSilentPcmBaseline(baseline)
+                && validSilentPcmSessionEvidence(audioSessionBaseline, baseline));
+        boolean silentFocusHistoryValid = !options.audioPolicy.isSilent()
+                || audioFocusLossCount == 0L;
+        // A bad ARM read is itself a generation-bound policy violation. Capture it before the
+        // ordinary admission checks so unavailable output cannot be mistaken for a benign reject.
+        if (enabled && options.audioPolicy.isSilent() && generation > 0L
+                && sessionGeneration > 0L && sessionGeneration == activeSessionGeneration
+                && !validSystemAudioSample(baseline)) {
+            benchmarkGeneration = generation;
+            benchmarkToken = token == null ? "unknown" : token;
+            systemAudioSampleCount = 0;
+            systemAudioBadCount = 0;
+            systemAudioBadLatched = false;
+            systemAudioLastFrame = 0;
+            sampleSystemAudioLocked(0, baseline);
+            return false;
+        }
         if (!enabled || phase != Phase.ANCHOR_READY || !warmupComplete
                 || sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration
                 || preArmVisibilityLost
@@ -277,11 +345,14 @@ final class AndroidBenchmarkDiagnostics {
                 || generation <= 0L || token == null
                 || !token.matches("[a-z0-9][a-z0-9._-]{15,63}") || baseline == null
                 || audioPending || audioNotPlaying
-                || (options.audioOutput && !audioFocusGranted)) {
+                || (options.audioOutput && !audioFocusGranted) || !silentPolicyValid
+                || !silentFocusHistoryValid) {
             if (enabled) {
                 record("event=benchmark_arm_rejected phase=" + phase.name().toLowerCase()
                         + " reason=" + (preArmVisibilityLost ? "visibility_lost"
                         : audioPending ? "audio_pending"
+                        : !silentPolicyValid ? "silent_pcm_baseline"
+                        : !silentFocusHistoryValid ? "audio_focus_history"
                         : audioNotPlaying ? "audio_not_playing"
                         : options.audioOutput && !audioFocusGranted
                                 ? "audio_focus" : "not_anchor_ready"));
@@ -289,6 +360,25 @@ final class AndroidBenchmarkDiagnostics {
             return false;
         }
         benchmarkGeneration = generation;
+        benchmarkToken = token;
+        benchmarkAudioPolicy = options.audioPolicy;
+        benchmarkAudioRequested = options.audioPolicy.isSilent();
+        benchmarkAudioActiveAtBoundary = false;
+        benchmarkAudioDisabledAfterBoundary = false;
+        benchmarkAudioSkippedTicks = 0L;
+        benchmarkAudioZeroSampleSlots = 0L;
+        benchmarkAudioZeroSampleEvents = 0L;
+        benchmarkAudioMaxDebt = 0L;
+        benchmarkAudioApuReads = 0L;
+        benchmarkAudioApuWrites = 0L;
+        benchmarkAudioFrameSequencerCommits = 0L;
+        benchmarkAudioDroppedChannelTicks = 0L;
+        systemAudioSampleCount = 0;
+        systemAudioBadCount = 0;
+        systemAudioBadLatched = false;
+        systemAudioLastFrame = 0;
+        audioTerminalOutputIdentity = 0L;
+        audioTerminalQueueIdentity = 0L;
         audioBaseline = baseline;
         audioFocusStartLossCount = audioFocusLossCount;
         resetMeasurementWindow();
@@ -304,6 +394,10 @@ final class AndroidBenchmarkDiagnostics {
         measurementArmed = true;
         emulationStarted = true;
         phase = Phase.ARMED;
+        sampleSystemAudioLocked(0, baseline);
+        if (systemAudioBadLatched) {
+            return false;
+        }
         record("event=benchmark_arm generation=" + generation + " token=" + token
                 + " phase=armed");
         recordMatrixRun();
@@ -316,6 +410,124 @@ final class AndroidBenchmarkDiagnostics {
         }
         audioBaseline = baseline;
         return true;
+    }
+
+    /** True after the current silent-PCM generation has been irreversibly revoked. */
+    synchronized boolean systemAudioBadLatched() {
+        return systemAudioBadLatched;
+    }
+
+    /** Bounded test seam for exercising the read-only system-audio fail-closed latch. */
+    synchronized void sampleSystemAudioForTesting(int frame,
+            AndroidAudioSink.AudioBaseline baseline) {
+        sampleSystemAudioLocked(frame, baseline);
+    }
+
+    private static boolean validSilentPcmBaseline(AndroidAudioSink.AudioBaseline baseline) {
+        return baseline != null
+                && baseline.active()
+                && !baseline.paused()
+                && baseline.outputOpen()
+                && baseline.outputPlaying()
+                && !baseline.muted()
+                && baseline.volume() == 100
+                && baseline.pendingBytes() == 0L
+                && baseline.queuedBytes() == 0L
+                && baseline.queuedFrames() == 0
+                && baseline.systemVolume() == 0
+                && baseline.systemVolumeMax() > 0
+                && baseline.systemMusicMuted()
+                && baseline.sampleRate() > 0
+                && baseline.queueCapacityFrames() > 0
+                && baseline.maximumFrameBytes() > 0
+                && baseline.playbackPositionFrames() >= 0L
+                && baseline.inputEvents() > 0L
+                && baseline.inputFrames() > 0L
+                && baseline.writtenBytes() > 0L
+                && baseline.writtenFrames() > 0L
+                && baseline.writeFailures() == 0L
+                && baseline.routeFailures() == 0L
+                && !baseline.reopenPending()
+                && baseline.outputIdentity() != 0L
+                && baseline.queueIdentity() != 0L;
+    }
+
+    /**
+     * Proves that the PCM evidence belongs to this emulation session rather than an older ROM
+     * played through the runtime's lifetime-owned sink. The ARM snapshot stays absolute for the
+     * final conservation ledger; only this admission check consumes the session-start delta.
+     */
+    private static boolean validSilentPcmSessionEvidence(
+            AndroidAudioSink.AudioBaseline sessionStart,
+            AndroidAudioSink.AudioBaseline arm) {
+        if (sessionStart == null || arm == null) {
+            return false;
+        }
+        long[] startCounters = {
+                sessionStart.inputEvents(), sessionStart.inputFrames(),
+                sessionStart.writtenBytes(), sessionStart.writtenFrames(),
+                sessionStart.writeFailures(), sessionStart.routeFailures()
+        };
+        for (long counter : startCounters) {
+            if (counter < 0L) {
+                return false;
+            }
+        }
+        return arm.inputEvents() > sessionStart.inputEvents()
+                && arm.inputFrames() > sessionStart.inputFrames()
+                && arm.writtenBytes() > sessionStart.writtenBytes()
+                && arm.writtenFrames() > sessionStart.writtenFrames()
+                && arm.writeFailures() == sessionStart.writeFailures()
+                && arm.routeFailures() == sessionStart.routeFailures();
+    }
+
+    /** Returns true only for an affirmative, readable muted system-music state. */
+    private static boolean validSystemAudioSample(AndroidAudioSink.AudioBaseline baseline) {
+        return baseline != null && baseline.systemVolume() == 0
+                && baseline.systemVolumeMax() > 0 && baseline.systemMusicMuted();
+    }
+
+    /** Samples only the selected silent policy. Canonical runs intentionally retain normal audio. */
+    private void sampleSystemAudioLocked(int frame, AndroidAudioSink.AudioBaseline baseline) {
+        if (!options.audioPolicy.isSilent() || systemAudioBadLatched || phase == Phase.DONE) {
+            return;
+        }
+        systemAudioSampleCount++;
+        systemAudioLastFrame = frame;
+        if (!validSystemAudioSample(baseline)) {
+            systemAudioBadCount++;
+            if (!systemAudioBadLatched) {
+                systemAudioBadLatched = true;
+                measurementArmed = false;
+                phase = Phase.CORE_FROZEN;
+                // The owner-thread freeze and app-owned PCM pause are the safety boundary. Run
+                // that callback before telemetry; logging must not delay the transition. Keep a
+                // callback failure visible, but always emit the invalidation record in finally.
+                try {
+                    systemAudioViolationSink.onViolation(benchmarkGeneration,
+                            activeSessionGeneration);
+                } finally {
+                    recordBenchmarkInvalidated(activeSessionGeneration, "system_audio_unmuted");
+                }
+            }
+        }
+    }
+
+    /** Called by the physical frame boundary after the core has materialized frame-600 counters. */
+    private void sampleSystemAudioTerminalLocked() {
+        if (!options.audioPolicy.isSilent() || systemAudioBadLatched) {
+            return;
+        }
+        AndroidAudioSink.AudioBaseline baseline = systemAudioCheckpointBaselineLocked();
+        sampleSystemAudioLocked(FINAL_FRAME, baseline);
+    }
+
+    private AndroidAudioSink.AudioBaseline systemAudioCheckpointBaselineLocked() {
+        if (audioSink != null) {
+            return audioSink.benchmarkBaseline();
+        }
+        return systemAudioBaselineForTesting == null
+                ? AndroidAudioSink.AudioBaseline.unavailable() : systemAudioBaselineForTesting;
     }
 
     synchronized void audioFocusResult(boolean granted) {
@@ -384,8 +596,33 @@ final class AndroidBenchmarkDiagnostics {
         return finalResultEmitted;
     }
 
+    synchronized int systemAudioSampleCountForTesting() {
+        return systemAudioSampleCount;
+    }
+
+    synchronized int systemAudioBadCountForTesting() {
+        return systemAudioBadCount;
+    }
+
+    synchronized int systemAudioLastFrameForTesting() {
+        return systemAudioLastFrame;
+    }
+
     synchronized void benchmarkFrameBoundary(Controller.BenchmarkFrameBoundaryEvent event) {
-        if (!enabled || event == null || !measurementArmed || event.getFrame() != FINAL_FRAME) {
+        if (!enabled || event == null || event.getFrame() != FINAL_FRAME) {
+            return;
+        }
+        sampleSystemAudioTerminalLocked();
+        if (!measurementArmed || systemAudioBadLatched) {
+            return;
+        }
+        if (!options.audioPolicy.externalValue().equals(event.getBenchmarkAudioPolicy())
+                || event.getBenchmarkAudioRequested() != options.audioPolicy.isSilent()) {
+            // The controller's terminal evidence is generation-bound.  A policy/token drift
+            // cannot be reinterpreted as canonical output, so leave the run frozen without a
+            // final_result record.
+            measurementArmed = false;
+            phase = Phase.CORE_FROZEN;
             return;
         }
         // Rebind the final evidence to the actual core state sampled at physical Display frame
@@ -396,6 +633,19 @@ final class AndroidBenchmarkDiagnostics {
                 profile, effectiveGbc, effectiveDmgCompat);
         speedModeFinal = event.getSpeedMode();
         speedFinalSample = speedModeFinal == 1 || speedModeFinal == 2;
+        benchmarkAudioPolicy = DiagnosticsOptions.AudioPolicy.fromExternalValue(
+                event.getBenchmarkAudioPolicy());
+        benchmarkAudioRequested = event.getBenchmarkAudioRequested();
+        benchmarkAudioActiveAtBoundary = event.getBenchmarkAudioActiveAtBoundary();
+        benchmarkAudioDisabledAfterBoundary = event.getBenchmarkAudioDisabledAfterBoundary();
+        benchmarkAudioSkippedTicks = event.getBenchmarkAudioSkippedTicks();
+        benchmarkAudioZeroSampleSlots = event.getBenchmarkAudioZeroSampleSlots();
+        benchmarkAudioZeroSampleEvents = event.getBenchmarkAudioZeroSampleEvents();
+        benchmarkAudioMaxDebt = event.getBenchmarkAudioMaxDebt();
+        benchmarkAudioApuReads = event.getBenchmarkAudioApuReads();
+        benchmarkAudioApuWrites = event.getBenchmarkAudioApuWrites();
+        benchmarkAudioFrameSequencerCommits = event.getBenchmarkAudioFrameSequencerCommits();
+        benchmarkAudioDroppedChannelTicks = event.getBenchmarkAudioDroppedChannelTicks();
         record("event=speed_sample frame=600 effective_gbc=" + event.getEffectiveGbc()
                 + " effective_dmg_compat=" + event.getEffectiveDmgCompat()
                 + " speed_mode_final=" + speedModeFinal + " speed_mode_sample=frame_600"
@@ -409,7 +659,25 @@ final class AndroidBenchmarkDiagnostics {
                 + " performance_epoch_mode2_replay_ticks="
                 + event.getPerformanceEpochMode2ReplayTicks()
                 + " performance_epoch_mode2_bulk_ticks="
-                + event.getPerformanceEpochMode2BulkTicks());
+                + event.getPerformanceEpochMode2BulkTicks()
+                + " benchmark_audio_policy=" + event.getBenchmarkAudioPolicy()
+                + " benchmark_audio_requested=" + event.getBenchmarkAudioRequested()
+                + " benchmark_audio_active_at_boundary="
+                + event.getBenchmarkAudioActiveAtBoundary()
+                + " benchmark_audio_disabled_after="
+                + event.getBenchmarkAudioDisabledAfterBoundary()
+                + " benchmark_audio_skipped_ticks=" + event.getBenchmarkAudioSkippedTicks()
+                + " benchmark_audio_zero_sample_slots="
+                + event.getBenchmarkAudioZeroSampleSlots()
+                + " benchmark_audio_zero_sample_events="
+                + event.getBenchmarkAudioZeroSampleEvents()
+                + " benchmark_audio_max_debt=" + event.getBenchmarkAudioMaxDebt()
+                + " benchmark_audio_apu_reads=" + event.getBenchmarkAudioApuReads()
+                + " benchmark_audio_apu_writes=" + event.getBenchmarkAudioApuWrites()
+                + " benchmark_audio_frame_sequencer_commits="
+                + event.getBenchmarkAudioFrameSequencerCommits()
+                + " benchmark_audio_dropped_channel_ticks="
+                + event.getBenchmarkAudioDroppedChannelTicks());
         if (phase == Phase.ARMED) {
             phase = Phase.CORE_FROZEN;
         }
@@ -453,6 +721,8 @@ final class AndroidBenchmarkDiagnostics {
         speedFinalSample = false;
         speedModeFinal = UNKNOWN;
         audioTerminalStats = null;
+        audioTerminalOutputIdentity = 0L;
+        audioTerminalQueueIdentity = 0L;
         workloadNonce = "unknown";
         liveInputMutations = 0L;
         profile = null;
@@ -478,10 +748,29 @@ final class AndroidBenchmarkDiagnostics {
         batteryTempMin = UNKNOWN;
         batteryTempMax = UNKNOWN;
         audioSink = null;
+        systemAudioBaselineForTesting = null;
+        audioSessionBaseline = AndroidAudioSink.AudioBaseline.unavailable();
         audioBaseline = AndroidAudioSink.AudioBaseline.unavailable();
         audioFocusGranted = false;
         audioFocusLossCount = 0L;
         audioFocusStartLossCount = 0L;
+        benchmarkAudioPolicy = DiagnosticsOptions.AudioPolicy.CANONICAL;
+        benchmarkAudioRequested = false;
+        benchmarkAudioActiveAtBoundary = false;
+        benchmarkAudioDisabledAfterBoundary = false;
+        benchmarkAudioSkippedTicks = 0L;
+        benchmarkAudioZeroSampleSlots = 0L;
+        benchmarkAudioZeroSampleEvents = 0L;
+        benchmarkAudioMaxDebt = 0L;
+        benchmarkAudioApuReads = 0L;
+        benchmarkAudioApuWrites = 0L;
+        benchmarkAudioFrameSequencerCommits = 0L;
+        benchmarkAudioDroppedChannelTicks = 0L;
+        benchmarkToken = "unknown";
+        systemAudioSampleCount = 0;
+        systemAudioBadCount = 0;
+        systemAudioBadLatched = false;
+        systemAudioLastFrame = 0;
         nextSessionVisibilityLost = false;
         record("event=session_launch launch_ns=" + launchNanos
                 + " hardware=" + options.hardware.name().toLowerCase()
@@ -536,10 +825,20 @@ final class AndroidBenchmarkDiagnostics {
      * host-visible anchor-ready state.  Counters and environment baselines wait for ARM.
      */
     synchronized void beginSession(long sessionGeneration) {
+        AndroidAudioSink.AudioBaseline sessionBaseline = audioSink == null
+                ? AndroidAudioSink.AudioBaseline.unavailable() : audioSink.benchmarkBaseline();
+        beginSession(sessionGeneration, sessionBaseline);
+    }
+
+    /** Deterministic package-private seam for diagnostics fixtures. */
+    synchronized void beginSession(long sessionGeneration,
+            AndroidAudioSink.AudioBaseline sessionBaseline) {
         if (!enabled || sessionGeneration <= 0L) {
             return;
         }
         activeSessionGeneration = sessionGeneration;
+        audioSessionBaseline = sessionBaseline == null
+                ? AndroidAudioSink.AudioBaseline.unavailable() : sessionBaseline;
         benchmarkGeneration = 0L;
         measurementArmed = false;
         scenarioExpectedFrames = options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE
@@ -568,6 +867,7 @@ final class AndroidBenchmarkDiagnostics {
         scenarioSourceClosed = false;
         scenarioAudioDrained = false;
         preArmVisibilityLost = false;
+        audioSessionBaseline = AndroidAudioSink.AudioBaseline.unavailable();
         phase = Phase.IDLE;
     }
 
@@ -589,6 +889,10 @@ final class AndroidBenchmarkDiagnostics {
 
     /** Run-bound evidence retained even when visibility is lost after final_result was emitted. */
     private void recordBenchmarkInvalidated(long sessionGeneration) {
+        recordBenchmarkInvalidated(sessionGeneration, "visibility_lost");
+    }
+
+    private void recordBenchmarkInvalidated(long sessionGeneration, String reason) {
         record("event=benchmark_invalidated artifact_id=" + artifactId
                 + " pair_id=" + options.pairId
                 + " matrix_block=" + options.matrixBlock
@@ -596,7 +900,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " run_side=" + options.runSide.externalValue()
                 + " session_generation=" + sessionGeneration
                 + " phase=" + phase.name().toLowerCase()
-                + " reason=visibility_lost");
+                + " reason=" + reason);
     }
 
     synchronized boolean benchmarkPreArmValid(long sessionGeneration) {
@@ -718,6 +1022,8 @@ final class AndroidBenchmarkDiagnostics {
         speedFinalSample = false;
         speedModeFinal = UNKNOWN;
         audioTerminalStats = null;
+        audioTerminalOutputIdentity = 0L;
+        audioTerminalQueueIdentity = 0L;
         environmentStart = EnvironmentSample.unavailable();
         resetEnvironmentAggregate();
     }
@@ -731,6 +1037,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " first_side=" + options.firstSide.externalValue()
                 + " session_generation=" + activeSessionGeneration
                 + " benchmark_generation=" + benchmarkGeneration
+                + " benchmark_token=" + benchmarkToken
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
                 + " input_contract=" + options.benchmarkScenario.externalValue()
@@ -747,6 +1054,7 @@ final class AndroidBenchmarkDiagnostics {
                         ? "sink" : "presentation")
                 + " availability=available"
                 + " requested_hardware=" + options.hardware.externalValue()
+                + " benchmark_audio_policy=" + options.audioPolicy.externalValue()
                 + " surface_vote_hz=" + options.displayTargetHz
                 + " display_target_hz=" + options.displayTargetHz
                 + " surface_content_rate_millihz=" + options.surfaceContentRateMillihz
@@ -757,6 +1065,11 @@ final class AndroidBenchmarkDiagnostics {
 
     synchronized void setAudioSink(AndroidAudioSink audioSink) {
         this.audioSink = audioSink;
+    }
+
+    /** Test-only source for a stable read-only system-audio snapshot. */
+    synchronized void setSystemAudioBaselineForTesting(AndroidAudioSink.AudioBaseline baseline) {
+        this.systemAudioBaselineForTesting = baseline;
     }
 
     /** Counts one core frame-ready event after SGB transfer filtering. */
@@ -787,12 +1100,22 @@ final class AndroidBenchmarkDiagnostics {
                     + " prep_to_frame_ms=" + elapsedMillis(current, preparationNanos));
         }
         if (count % INTERVAL_FRAMES == 0L && count <= FINAL_FRAME) {
+            if (options.audioPolicy.isSilent()) {
+                AndroidAudioSink.AudioBaseline checkpoint = systemAudioCheckpointBaselineLocked();
+                sampleSystemAudioLocked((int) count, checkpoint);
+                if (systemAudioBadLatched) {
+                    return false;
+                }
+            }
             interval(current, count);
         }
         if (count == FINAL_FRAME) {
             // The renderer intentionally waits before posting the SF drain.  Freeze the audio
             // evidence now so that that delay (and any AudioTrack empty-poll underrun) cannot
             // contaminate the emulated 600-frame measurement window.
+            AndroidAudioSink.AudioBaseline terminalBaseline = systemAudioCheckpointBaselineLocked();
+            audioTerminalOutputIdentity = terminalBaseline.outputIdentity();
+            audioTerminalQueueIdentity = terminalBaseline.queueIdentity();
             audioTerminalStats = audioSink == null ? null : audioSink.stats();
             // Freeze diagnostics immediately. The controller boundary event freezes the core
             // before its next chunk; submissions already in flight remain countable.
@@ -917,13 +1240,8 @@ final class AndroidBenchmarkDiagnostics {
                 + " alloc_bytes_delta=" + delta(globalAllocBytes(), allocBytesStart));
         previousIntervalNanos = current;
         previousIntervalFrame = frame;
-        if (frame == FINAL_FRAME && options.render == DiagnosticsOptions.Render.FRAME_SINK) {
-            // A sink has no SurfaceFlinger drain.  Its ready-only terminal is complete at the
-            // 600th physical publication, so satisfy the same latch explicitly before the final
-            // speed-boundary callback attempts emission.
-            benchmarkDrainSuccess = true;
-            emitFinalResult();
-        }
+        // Frame-sink finalization is deferred to the physical frame-600 boundary; that callback
+        // performs the terminal system-audio sample and speed-token binding.
     }
 
     private void emitFinalResult() {
@@ -932,7 +1250,7 @@ final class AndroidBenchmarkDiagnostics {
         // Visible runs must not finalize merely because the 600th measured submission raced
         // ahead of the frame-600 speed callback.  The renderer's one delayed out-of-epoch drain
         // is the explicit latch that lets the host take a complete TimeStats after-dump.
-        if (finalResultEmitted || !terminal || !speedFinalSample
+        if (finalResultEmitted || systemAudioBadLatched || !terminal || !speedFinalSample
                 || (options.render == DiagnosticsOptions.Render.PRESENTATION
                 && !benchmarkDrainSuccess)) {
             return;
@@ -974,6 +1292,8 @@ final class AndroidBenchmarkDiagnostics {
                 + " system_load_worst_milli=" + systemLoadWorstMilli
                 + " cpu_freq_min_khz=" + cpuFreqMinKHz
                 + " " + audioEvidenceFields()
+                + " system_audio_sample_count=" + systemAudioSampleCount
+                + " system_audio_bad_count=" + systemAudioBadCount
                 + " display_refresh_min_millihz=" + displayRefreshMinMillihz
                 + " display_bad_count=" + displayBadCount
                 + " interactive_bad_count=" + interactiveBadCount
@@ -1010,6 +1330,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " run_side=" + options.runSide.externalValue()
                 + " session_generation=" + activeSessionGeneration
                 + " benchmark_generation=" + benchmarkGeneration
+                + " benchmark_token=" + benchmarkToken
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
                 + " input_contract=" + options.benchmarkScenario.externalValue()
@@ -1099,7 +1420,12 @@ final class AndroidBenchmarkDiagnostics {
                     + " audio_volume=0 audio_route_failures=-1 audio_playback_position_frames=-1"
                     + " audio_system_volume=-1 audio_system_volume_max=-1"
                     + " audio_system_music_muted=true audio_queue_capacity_frames=0"
-                    + " audio_max_frame_bytes=0";
+                    + " audio_max_frame_bytes=0"
+                    + " audio_output_identity=" + audioTerminalOutputIdentity
+                    + " audio_queue_identity=" + audioTerminalQueueIdentity
+                    + " benchmark_audio_policy=" + benchmarkAudioPolicy.externalValue()
+                    + " benchmark_audio_flags=" + compactAudioFlags()
+                    + " benchmark_audio_calendar=" + compactAudioCalendar();
         }
         return "audio_active=" + stats.active()
                 + " audio_sample_rate=" + stats.sampleRate()
@@ -1132,7 +1458,32 @@ final class AndroidBenchmarkDiagnostics {
                 + " audio_system_volume_max=" + stats.systemVolumeMax()
                 + " audio_system_music_muted=" + stats.systemMusicMuted()
                 + " audio_queue_capacity_frames=" + stats.queueCapacityFrames()
-                + " audio_max_frame_bytes=" + stats.maximumFrameBytes();
+                + " audio_max_frame_bytes=" + stats.maximumFrameBytes()
+                + " audio_output_identity=" + audioTerminalOutputIdentity
+                + " audio_queue_identity=" + audioTerminalQueueIdentity
+                + " benchmark_audio_policy=" + benchmarkAudioPolicy.externalValue()
+                + " benchmark_audio_flags=" + compactAudioFlags()
+                + " benchmark_audio_calendar=" + compactAudioCalendar();
+    }
+
+    /**
+     * Compact final-result policy flags in requested, active-at-boundary, disabled-after order.
+     * The speed_sample event intentionally keeps the expanded policy schema for host diagnostics.
+     */
+    private String compactAudioFlags() {
+        return (benchmarkAudioRequested ? "1" : "0")
+                + (benchmarkAudioActiveAtBoundary ? "1" : "0")
+                + (benchmarkAudioDisabledAfterBoundary ? "1" : "0");
+    }
+
+    /** Compact final-result calendar in skipped, zero-slots, zero-events, debt, APU reads,
+     * APU writes, frame-sequencer commits, dropped-channel-ticks order. */
+    private String compactAudioCalendar() {
+        return benchmarkAudioSkippedTicks + "," + benchmarkAudioZeroSampleSlots + ","
+                + benchmarkAudioZeroSampleEvents + "," + benchmarkAudioMaxDebt + ","
+                + benchmarkAudioApuReads + "," + benchmarkAudioApuWrites + ","
+                + benchmarkAudioFrameSequencerCommits + ","
+                + benchmarkAudioDroppedChannelTicks;
     }
 
     private String audioBaselineFields() {
@@ -1157,7 +1508,18 @@ final class AndroidBenchmarkDiagnostics {
                 + " audio_start_output_playing=" + baseline.outputPlaying()
                 + " audio_start_sample_rate=" + baseline.sampleRate()
                 + " audio_start_queue_capacity_frames=" + baseline.queueCapacityFrames()
-                + " audio_start_max_frame_bytes=" + baseline.maximumFrameBytes();
+                + " audio_start_max_frame_bytes=" + baseline.maximumFrameBytes()
+                + " audio_start_active=" + baseline.active()
+                + " audio_start_paused=" + baseline.paused()
+                + " audio_start_muted=" + baseline.muted()
+                + " audio_start_volume=" + baseline.volume()
+                + " audio_start_system_volume=" + baseline.systemVolume()
+                + " audio_start_system_volume_max=" + baseline.systemVolumeMax()
+                + " audio_start_system_music_muted=" + baseline.systemMusicMuted()
+                + " audio_start_queued_frames=" + baseline.queuedFrames()
+                + " audio_start_reopen_pending=" + baseline.reopenPending()
+                + " audio_start_output_identity=" + baseline.outputIdentity()
+                + " audio_start_queue_identity=" + baseline.queueIdentity();
     }
 
     private EnvironmentSample sampleEnvironment(int observedThreadPriority) {

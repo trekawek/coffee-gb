@@ -5,6 +5,7 @@ import android.content.Intent;
 import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.core.sound.Sound;
 
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -49,6 +50,8 @@ final class DiagnosticsOptions {
     static final String EXTRA_EXECUTION_MODE = "coffee_gb_execution_mode";
     /** Benchmark-only deterministic gameplay preconditioning contract. */
     static final String EXTRA_BENCHMARK_SCENARIO = "coffee_gb_benchmark_scenario";
+    /** Host-audio evidence policy; canonical is the compatibility-safe default. */
+    static final String EXTRA_AUDIO_POLICY = "coffee_gb_audio_policy";
 
     private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final String UNKNOWN_TOKEN = "unknown";
@@ -176,6 +179,55 @@ final class DiagnosticsOptions {
         }
     }
 
+    enum AudioPolicy {
+        CANONICAL("canonical"),
+        SILENT_PCM_V1("silent-pcm-v1"),
+        SILENT_PCM_RELAXED_APU_V1("silent-pcm-relaxed-apu-v1");
+
+        private final String externalValue;
+
+        AudioPolicy(String externalValue) {
+            this.externalValue = externalValue;
+        }
+
+        String externalValue() {
+            return externalValue;
+        }
+
+        boolean isSilent() {
+            return this != CANONICAL;
+        }
+
+        boolean isRelaxedApu() {
+            return this == SILENT_PCM_RELAXED_APU_V1;
+        }
+
+        /** Maps the diagnostics-only wire token to the transient core calendar mode. */
+        Sound.PerformanceSystemMutedAudioMode performanceSystemMutedAudioMode() {
+            switch (this) {
+                case SILENT_PCM_V1:
+                    return Sound.PerformanceSystemMutedAudioMode.EXACT;
+                case SILENT_PCM_RELAXED_APU_V1:
+                    return Sound.PerformanceSystemMutedAudioMode.RELAXED_APU;
+                default:
+                    return Sound.PerformanceSystemMutedAudioMode.OFF;
+            }
+        }
+
+        static AudioPolicy fromExternalValue(String value) {
+            if (value == null || value.isBlank()) {
+                return CANONICAL;
+            }
+            String normalized = value.trim().toLowerCase(Locale.ROOT);
+            for (AudioPolicy policy : values()) {
+                if (policy.externalValue.equals(normalized)) {
+                    return policy;
+                }
+            }
+            return CANONICAL;
+        }
+    }
+
     BenchmarkGameplayScenario.NativeFrameKind benchmarkNativeFrameKind() {
         return hardware == Hardware.CGB || hardware == Hardware.CGB0
                 ? BenchmarkGameplayScenario.NativeFrameKind.GBC
@@ -215,7 +267,7 @@ final class DiagnosticsOptions {
             false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
             "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
             UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-            ExecutionMode.ACCURACY, BenchmarkScenario.NONE);
+            ExecutionMode.ACCURACY, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
 
     final boolean enabled;
     final Hardware hardware;
@@ -243,13 +295,15 @@ final class DiagnosticsOptions {
     final ExecutionMode executionMode;
     /** Deterministic benchmark-only input contract; never persisted or exposed to release UI. */
     final BenchmarkScenario benchmarkScenario;
+    /** Explicit host-audio evidence policy; never persisted or exposed to release UI. */
+    final AudioPolicy audioPolicy;
 
     private DiagnosticsOptions(boolean enabled, Hardware hardware, boolean audioOutput,
             Render render, boolean runtimeWarmup, boolean launchRecent, String buildId,
             String pairId, String matrixBlock, int rowOrder, RunSide runSide,
             RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
             String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode,
-            BenchmarkScenario benchmarkScenario) {
+            BenchmarkScenario benchmarkScenario, AudioPolicy audioPolicy) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
@@ -272,6 +326,20 @@ final class DiagnosticsOptions {
         this.executionMode = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
         this.benchmarkScenario = enabled && benchmarkScenario != null
                 ? benchmarkScenario : BenchmarkScenario.NONE;
+        AudioPolicy requestedPolicy = audioPolicy == null ? AudioPolicy.CANONICAL : audioPolicy;
+        // The silent calendar is intentionally unavailable outside the measured PERFORMANCE
+        // topology, when host audio is disabled, or when the explicit profile could resolve to
+        // an SGB clock. The official silent runner is deliberately bounded to DMG/CGB rows;
+        // unknown/AUTO and SGB profiles fail closed to canonical evidence.
+        this.audioPolicy = enabled && this.executionMode == ExecutionMode.PERFORMANCE
+                && audioOutput && requestedPolicy.isSilent()
+                && supportsSilentPcmProfile(hardware)
+                ? requestedPolicy : AudioPolicy.CANONICAL;
+    }
+
+    private static boolean supportsSilentPcmProfile(Hardware hardware) {
+        return hardware == Hardware.DMG || hardware == Hardware.MGB
+                || hardware == Hardware.CGB || hardware == Hardware.CGB0;
     }
 
     static DiagnosticsOptions disabled() {
@@ -286,7 +354,7 @@ final class DiagnosticsOptions {
         return new DiagnosticsOptions(false, Hardware.AUTO, true, Render.PRESENTATION, false,
                 false, "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN,
                 RunSide.UNKNOWN, UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-                selected, BenchmarkScenario.NONE);
+                selected, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
     }
 
     static ExecutionMode parseExecutionMode(String value) {
@@ -351,7 +419,8 @@ final class DiagnosticsOptions {
                 intExtra(intent, EXTRA_SURFACE_RATE_HZ, -1),
                 intExtra(intent, EXTRA_RECENT_SLOT, -1),
                 stringExtra(intent, EXTRA_EXECUTION_MODE),
-                stringExtra(intent, EXTRA_BENCHMARK_SCENARIO));
+                stringExtra(intent, EXTRA_BENCHMARK_SCENARIO),
+                stringExtra(intent, EXTRA_AUDIO_POLICY));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
@@ -421,6 +490,18 @@ final class DiagnosticsOptions {
             String runSide, String firstSide, String deviceBuild, String thermalWindow,
             boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
             String executionModeValue, String benchmarkScenarioValue) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, executionModeValue, benchmarkScenarioValue, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue) {
         if (!diagnosticsEnabled) {
             return disabled(parseExecutionMode(executionModeValue));
         }
@@ -439,7 +520,8 @@ final class DiagnosticsOptions {
                 safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
                 thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot,
                 parseExecutionMode(executionModeValue),
-                BenchmarkScenario.fromExternalValue(benchmarkScenarioValue));
+                BenchmarkScenario.fromExternalValue(benchmarkScenarioValue),
+                AudioPolicy.fromExternalValue(audioPolicyValue));
     }
 
     private static Hardware parseHardware(String value) {

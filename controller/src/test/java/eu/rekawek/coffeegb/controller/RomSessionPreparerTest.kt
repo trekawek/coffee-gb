@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.properties.RuntimeWarmupFlavor
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.BatteryStore
 import eu.rekawek.coffeegb.controller.state.FileStateStore
@@ -26,6 +27,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
+import kotlin.test.assertContentEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
@@ -246,6 +248,74 @@ class RomSessionPreparerTest {
   }
 
   @Test
+  fun shadowMeasuredWarmupIsCgbPerformanceOnlyAndHasAnIsolatedCacheKey() {
+    val executor = RecordingWarmupExecutor()
+    val cache = RuntimeWarmupCache(8, executor)
+    val cgbPerformance =
+        skipConfig(cgbNativeImage())
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+            .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)
+
+    assertFalse(cache.warm(skipConfig(), RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1) {})
+    assertFalse(
+        cache.warm(
+            skipConfig().setHardwareProfile(HardwareProfileRegistry.DMG),
+            RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+        ) {})
+    assertFalse(
+        cache.warm(
+            skipConfig(cgbNativeImage())
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.ACCURACY),
+            RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+        ) {})
+    assertFalse(
+        cache.warm(
+            skipConfig(cgbNativeImage())
+                .setHardwareProfile(HardwareProfileRegistry.CGB0)
+                .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE),
+            RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+        ) {})
+    assertFalse(
+        cache.warm(
+            skipConfig(cgbNativeImage())
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)
+                .setBootstrapMode(BootstrapMode.FAST_FORWARD),
+            RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+        ) {})
+    assertTrue(cache.warm(cgbPerformance, RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1) {})
+    assertTrue(cache.warm(cgbPerformance, RuntimeWarmupFlavor.SCALAR) {})
+    assertEquals(2, executor.calls.size)
+    assertEquals(2, cache.size)
+  }
+
+  @Test
+  fun benchmarkCoreFrozenGateHasOwnerThreadLifecycleSemantics() {
+    val gate = BenchmarkCoreFrozenGate()
+    assertFalse(gate.asBoolean)
+    gate.setFrozen(true)
+    assertTrue(gate.asBoolean)
+    gate.setFrozen(false)
+    assertFalse(gate.asBoolean)
+  }
+
+  @Test
+  fun productionShadowMeasuredExecutorRunsItsValidatedFrameAndCleanupPath() {
+    val config =
+        skipConfig(cgbNativeImage())
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+            .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)
+    val originalConfigRom = config.rom.rom.copyOf()
+    RuntimeWarmupCache.GameboyRuntimeWarmupExecutor.warm(
+        config.forRuntimeWarmup(),
+        120 * config.clockSpec.controllerTicksPerFrame(),
+        RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+    ) {}
+    assertContentEquals(originalConfigRom, config.rom.rom)
+  }
+
+  @Test
   fun runtimeWarmupUsesAccessOrderedBoundedCache() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(2, executor)
@@ -382,6 +452,25 @@ class RomSessionPreparerTest {
 
   private fun exoticRtcImage(): RomImage =
       RomImage.memory(ROM.readBytes().also { it[0x147] = 0x0f }, "rtc.gb")
+
+  private fun cgbNativeImage(): RomImage =
+      RomImage.memory(
+          ByteArray(0x8000).also {
+            // CGB double-speed loop: request KEY1, switch on STOP, then keep a stable
+            // instruction stream for the native PERFORMANCE epoch lane.
+            it[0x100] = 0x3e
+            it[0x101] = 0x01
+            it[0x102] = 0xe0.toByte()
+            it[0x103] = 0x4d
+            it[0x104] = 0x10
+            it[0x105] = 0x00
+            it[0x106] = 0xc3.toByte()
+            it[0x107] = 0x06
+            it[0x108] = 0x01
+            it[0x143] = 0x80.toByte()
+          },
+          "cgb-native.gb",
+      )
 
   private fun mbc5Image(): RomImage = RomImage.memory(mbc5Bytes(), "mbc5.gb")
 

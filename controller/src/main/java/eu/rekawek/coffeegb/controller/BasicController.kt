@@ -72,6 +72,7 @@ import eu.rekawek.coffeegb.controller.state.StateWorkspace
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.ExecutionMode
+import eu.rekawek.coffeegb.core.sound.Sound
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.debug.DebugButton
@@ -381,8 +382,16 @@ class BasicController private constructor(
 
   /** Benchmark-only epoch state; ordinary sessions never consult these fields in the hot loop. */
   private var benchmarkArmed = false
-  private var benchmarkCoreFrozen = false
+  private val benchmarkCoreFrozenGate = BenchmarkCoreFrozenGate()
   private var benchmarkGeneration = 0L
+  /** FIFO policy decision required before a benchmark Resume can release the core. */
+  private var benchmarkAudioPolicyProcessed = false
+  private var benchmarkAudioPolicyAccepted = false
+  private var benchmarkAudioPolicyRequested = false
+  /** Selected host token; retained separately from the boolean for EXACT vs RELAXED_APU. */
+  private var benchmarkAudioPolicyToken = "canonical"
+  private var benchmarkAudioPolicyGeneration = 0L
+  private var benchmarkAudioPolicySessionGeneration = 0L
 
   /** Exact native-frame endpoint gate used only by Android benchmark preconditioning. */
   private var benchmarkGameplayScenarioActive = false
@@ -585,14 +594,36 @@ class BasicController private constructor(
     }
     eventQueue.register<Controller.BenchmarkArmEvent> {
       val currentSession = session
-      if (properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed
+      val accepted = properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed
           && currentSession != null && isEffectivelyPaused()
           && benchmarkGameplayScenarioReady
-          && playbackSessionGeneration == it.sessionGeneration) {
+          && playbackSessionGeneration == it.sessionGeneration
+      if (!accepted) {
+        // A rejected arm must terminate the host's pending policy decision. It is deliberately
+        // posted as a false decision and never followed by Resume.
+        if (properties.overrides.benchmarkPolicyEnabled) {
+          eventBus.post(
+              Controller.BenchmarkSilentPcmPolicyEvent(
+                  false, it.generation, it.sessionGeneration, accepted = false, policy = it.policy))
+        }
+        return@register
+      }
+      if (accepted) {
+        val checkedSession = checkNotNull(currentSession)
+        // A replacement/reset may leave a transient calendar armed on the old machine. Clear and
+        // materialize it before any new generation counters or acknowledgement become visible.
+        checkedSession.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
         benchmarkGeneration = it.generation
         benchmarkArmed = true
-        benchmarkCoreFrozen = false
-        currentSession.gameboy.resetPerformanceBulkCounters()
+        benchmarkCoreFrozenGate.setFrozen(false)
+        benchmarkAudioPolicyProcessed = false
+        benchmarkAudioPolicyAccepted = false
+        benchmarkAudioPolicyRequested = false
+        benchmarkAudioPolicyToken = it.policy
+        benchmarkAudioPolicyGeneration = it.generation
+        benchmarkAudioPolicySessionGeneration = it.sessionGeneration
+        checkedSession.gameboy.resetPerformanceBulkCounters()
+        checkedSession.gameboy.sound.resetPerformanceSystemMutedAudioCalendarCounters()
         debugFrame = 0L
         debugMasterTick = 0L
         debugFramePosition = 0
@@ -607,38 +638,128 @@ class BasicController private constructor(
         )
       }
     }
-    eventQueue.register<Controller.BenchmarkPhysicalFrameBoundaryEvent> {
-      if (properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
-          && !benchmarkCoreFrozen && it.frame == 600L
-          && it.generation == benchmarkGeneration) {
-        val currentSession = session ?: return@register
-        val speedMode = currentSession.gameboy.getSpeedMode()
-        val gpu = currentSession.gameboy.getGpu()
-        postSessionEventSafely(
-            currentSession,
-            Controller.BenchmarkFrameBoundaryEvent(
-                it.frame,
-                gpu.isGbc(),
-                gpu.isDmgCompatMode(),
-                speedMode.getSpeedMode(),
-                currentSession.gameboy.getPerformanceBulkSpanCount(),
-                currentSession.gameboy.getPerformanceBulkTicks(),
-                currentSession.gameboy.getPerformanceEpochCount(),
-                currentSession.gameboy.getPerformanceEpochTicks(),
-                currentSession.gameboy.getPerformanceEpochMaxTicks(),
-                currentSession.gameboy.getPerformanceEpochRasterFastTicks(),
-                currentSession.gameboy.getPerformanceEpochMode2ReplayTicks(),
-                currentSession.gameboy.getPerformanceEpochMode2BulkTicks(),
-            ),
-        )
-        benchmarkCoreFrozen = true
-        setPaused(true)
+    // Physical frame publication is synchronous on the controller owner. Handle that path
+    // directly so no late queued work can execute another measured tick before the freeze.
+    eventBus.register<Controller.BenchmarkPhysicalFrameBoundaryEvent> {
+      if (Thread.currentThread() !== thread) {
+        return@register
       }
+      handleBenchmarkPhysicalFrameBoundary(it)
+    }
+    // Test/headless producers may publish the same event from another thread. Queue that case
+    // onto the owner; the owner-thread listener above remains the synchronous Android path.
+    eventQueue.register<Controller.BenchmarkPhysicalFrameBoundaryEvent> {
+      handleBenchmarkPhysicalFrameBoundary(it)
+    }
+    // A system-audio checkpoint runs on the same owner callback as Display.frameIsReady().
+    // Freeze synchronously before the current measured tick batch can continue; the companion
+    // accepted=false policy event remains the generation-bound telemetry record.
+    eventBus.register<Controller.BenchmarkSystemAudioViolationEvent> {
+      val currentSession = session
+      if (Thread.currentThread() !== thread
+          || !properties.overrides.benchmarkPolicyEnabled
+          || !benchmarkArmed
+          || currentSession == null
+          || it.generation != benchmarkAudioPolicyGeneration
+          || it.sessionGeneration != benchmarkAudioPolicySessionGeneration
+          || it.policy != benchmarkAudioPolicyToken
+          || playbackSessionGeneration != it.sessionGeneration) {
+        return@register
+      }
+      val sound = currentSession.gameboy.sound
+      sound.setPerformanceSystemMutedAudioCalendar(false)
+      benchmarkAudioPolicyToken = it.policy
+      benchmarkAudioPolicyRequested = false
+      benchmarkAudioPolicyAccepted = false
+      benchmarkAudioPolicyProcessed = true
+      benchmarkCoreFrozenGate.setFrozen(true)
+      setPaused(true)
+    }
+    eventQueue.register<Controller.BenchmarkSilentPcmPolicyEvent> {
+      val currentSession = session
+      val matching = properties.overrides.benchmarkPolicyEnabled
+          && benchmarkArmed && currentSession != null
+          && it.generation == benchmarkAudioPolicyGeneration
+          && it.sessionGeneration == benchmarkAudioPolicySessionGeneration
+          && it.policy == benchmarkAudioPolicyToken
+          && playbackSessionGeneration == it.sessionGeneration
+      if (!matching) {
+        return@register
+      }
+      val sound = checkNotNull(currentSession).gameboy.sound
+      if (!it.accepted) {
+        sound.setPerformanceSystemMutedAudioCalendar(false)
+        benchmarkAudioPolicyToken = it.policy
+        benchmarkAudioPolicyRequested = false
+        benchmarkAudioPolicyAccepted = false
+        benchmarkAudioPolicyProcessed = true
+        benchmarkCoreFrozenGate.setFrozen(true)
+        // Revocation is an owner-thread terminal decision for this generation.  Pause here as
+        // well as rejecting future Resume events; Android's separately queued Pause must not
+        // leave a one-frame window in which ordinary emulation can run.
+        setPaused(true)
+        return@register
+      }
+      // The arm selected one immutable token.  Accepted policy decisions are one-shot; allowing
+      // a later exact/relaxed event to replace it would make the final counters ambiguous.
+      if (it.policy != benchmarkAudioPolicyToken || benchmarkAudioPolicyProcessed) {
+        return@register
+      }
+      if (!it.requested) {
+        sound.setPerformanceSystemMutedAudioCalendar(false)
+        benchmarkAudioPolicyToken = it.policy
+        benchmarkAudioPolicyRequested = false
+        benchmarkAudioPolicyAccepted = true
+        benchmarkAudioPolicyProcessed = true
+        return@register
+      }
+      if (benchmarkCoreFrozenGate.getAsBoolean() || !isEffectivelyPaused()
+          || checkNotNull(currentSession).gameboy.executionMode != ExecutionMode.PERFORMANCE) {
+        return@register
+      }
+      val selectedMode = when (it.policy) {
+        Controller.BenchmarkSilentPcmPolicyEvent.POLICY ->
+          Sound.PerformanceSystemMutedAudioMode.EXACT
+        Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY ->
+          Sound.PerformanceSystemMutedAudioMode.RELAXED_APU
+        else -> return@register
+      }
+      sound.setPerformanceSystemMutedAudioMode(selectedMode)
+      if (!sound.isPerformanceSystemMutedAudioCalendarEnabled()) {
+        return@register
+      }
+      benchmarkAudioPolicyToken = it.policy
+      benchmarkAudioPolicyRequested = true
+      benchmarkAudioPolicyAccepted = true
+      benchmarkAudioPolicyProcessed = true
     }
     eventQueue.register<Controller.ResumeEmulationEvent> {
-      if (properties.overrides.benchmarkPolicyEnabled && benchmarkCoreFrozen) {
+      if (properties.overrides.benchmarkPolicyEnabled && benchmarkCoreFrozenGate.getAsBoolean()) {
         // The 600th measured core boundary owns the terminal freeze.  A lifecycle/audio resume
         // cannot accidentally create an unmeasured 601st frame before the host collects SF data.
+        return@register
+      }
+      if (!Controller.benchmarkResumePolicyAllows(
+              properties.overrides.benchmarkPolicyEnabled,
+              benchmarkArmed,
+              benchmarkCoreFrozenGate.getAsBoolean(),
+              benchmarkAudioPolicyProcessed,
+              benchmarkAudioPolicyAccepted,
+              benchmarkAudioPolicyGeneration == benchmarkGeneration
+                  && benchmarkAudioPolicySessionGeneration == playbackSessionGeneration,
+              benchmarkAudioPolicyRequested,
+              session?.gameboy?.sound?.let { sound ->
+                when (benchmarkAudioPolicyToken) {
+                  Controller.BenchmarkSilentPcmPolicyEvent.POLICY ->
+                    sound.getPerformanceSystemMutedAudioMode() ==
+                        Sound.PerformanceSystemMutedAudioMode.EXACT
+                  Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY ->
+                    sound.getPerformanceSystemMutedAudioMode() ==
+                        Sound.PerformanceSystemMutedAudioMode.RELAXED_APU
+                  else -> !benchmarkAudioPolicyRequested
+                }
+              } ?: !benchmarkAudioPolicyRequested,
+          )) {
         return@register
       }
       if (pauseStateBeforeLoading != null) {
@@ -751,7 +872,9 @@ class BasicController private constructor(
     // An instruction-safe pause may stop between controller frame boundaries. Keep ordinary
     // application/state events at their established frame safe point while the private debug lane
     // remains responsive and can resume or advance the machine to the next lattice boundary.
-    if (debugFramePosition != 0 || pendingDebugAction != null) {
+    if (!(properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
+        && benchmarkCoreFrozenGate.getAsBoolean())
+        && (debugFramePosition != 0 || pendingDebugAction != null)) {
       runDebugContinuation()
       return
     }
@@ -772,10 +895,15 @@ class BasicController private constructor(
     finishStop()
     finishBatteryFlush()
 
+    val benchmarkExecutionFrozen =
+        properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
+            && benchmarkCoreFrozenGate.getAsBoolean()
+
     // rewinding restores one recorded state and then emulates a single frame from it,
     // so the display and audio play backwards at RewindManager.RECORD_INTERVAL speed
     val rewound =
-        loadJob == null &&
+        !benchmarkExecutionFrozen &&
+            loadJob == null &&
             replacementJob == null &&
             stopJob == null &&
             isRewinding &&
@@ -790,13 +918,14 @@ class BasicController private constructor(
     var emulated = false
     val clockSpec = session?.gameboy?.clockSpec ?: ClockSpec.LEGACY
     val frameTicks = clockSpec.controllerTicksPerFrame()
-    if (!rewound && (debugPaused || pendingDebugAction != null)) {
+    if (!benchmarkExecutionFrozen && !rewound && (debugPaused || pendingDebugAction != null)) {
       session?.gameboy?.requestFrameRenderSuppression(false)
       runDebugTickWindow(clockSpec, stopAtNextBoundary = false)
       return
     }
 
-    if (!rewound &&
+    if (!benchmarkExecutionFrozen &&
+        !rewound &&
         !isEffectivelyPaused() &&
         !isRewinding &&
         debugInstrumentation?.hasEnabledBreakpoints() == true) {
@@ -824,7 +953,8 @@ class BasicController private constructor(
     )
     val gameboy = session?.gameboy
     var emulatedTicks = 0
-    if (gameboy != null && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
+    if (gameboy != null && !benchmarkExecutionFrozen
+        && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
       relinquishDebugBreakpointPauseOwnership()
       val exactBenchmarkScenarioFrame = benchmarkGameplayScenarioActive
       if (exactBenchmarkScenarioFrame) {
@@ -833,6 +963,12 @@ class BasicController private constructor(
         // tail even when the ordinary PERFORMANCE path would own a frame-sized runTicks batch.
         emulatedTicks =
             gameboy.runTicksUntilStop(frameTicks) { benchmarkGameplayScenarioStopRequested }
+      } else if (properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
+          && !benchmarkCoreFrozenGate.getAsBoolean() && !trackDebugHistory && !rewound) {
+        // The physical frame-600 callback is synchronous on this owner thread. Keep the normal
+        // PERFORMANCE epoch/scanline scheduler for the measured window, but stop at the callback
+        // before another scalar hand-off or bulk packet can advance the frozen core.
+        emulatedTicks = gameboy.runMeasuredTicksUntilStop(frameTicks, benchmarkCoreFrozenGate)
       } else if (!trackDebugHistory && !rewound
           && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
         // The core owns the frame-sized loop in ordinary PERFORMANCE mode. Debug/history
@@ -869,6 +1005,91 @@ class BasicController private constructor(
     if (emulated && !rewound) {
       recordCompletedFrame()
     }
+  }
+
+  /** Applies one accepted physical frame boundary on the emulation owner. */
+  private fun handleBenchmarkPhysicalFrameBoundary(
+      event: Controller.BenchmarkPhysicalFrameBoundaryEvent,
+  ) {
+    if (!properties.overrides.benchmarkPolicyEnabled || !benchmarkArmed
+        || benchmarkCoreFrozenGate.getAsBoolean()
+        || event.frame != 600L || event.generation != benchmarkGeneration) {
+      return
+    }
+    val currentSession = session ?: return
+    val speedMode = currentSession.gameboy.getSpeedMode()
+    val gpu = currentSession.gameboy.getGpu()
+    val sound = currentSession.gameboy.sound
+    val audioRequestedAtBoundary = benchmarkAudioPolicyRequested
+    val policy = if (audioRequestedAtBoundary) benchmarkAudioPolicyToken else "canonical"
+    val selectedModeMatches = when (policy) {
+      Controller.BenchmarkSilentPcmPolicyEvent.POLICY ->
+        sound.getPerformanceSystemMutedAudioMode() == Sound.PerformanceSystemMutedAudioMode.EXACT
+      Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY ->
+        sound.getPerformanceSystemMutedAudioMode() == Sound.PerformanceSystemMutedAudioMode.RELAXED_APU
+      else -> !audioRequestedAtBoundary
+    }
+    val activeAtBoundary = sound.isPerformanceSystemMutedAudioCalendarEnabled()
+        && selectedModeMatches
+    if (audioRequestedAtBoundary && !selectedModeMatches) {
+      sound.setPerformanceSystemMutedAudioCalendar(false)
+      benchmarkAudioPolicyProcessed = true
+      benchmarkAudioPolicyAccepted = false
+      benchmarkAudioPolicyRequested = false
+      benchmarkCoreFrozenGate.setFrozen(true)
+      setPaused(true)
+      return
+    }
+    // Turning the calendar OFF materializes the final pending span. Read all counters only after
+    // that transition so RELAXED_APU's dropped-channel debt is included in the terminal record.
+    sound.setPerformanceSystemMutedAudioCalendar(false)
+    val disabledAfterBoundary = !sound.isPerformanceSystemMutedAudioCalendarEnabled()
+    val skippedTicks = sound.getPerformanceSystemMutedAudioCalendarSkippedTicks()
+    val zeroSlots = sound.getPerformanceSystemMutedAudioCalendarZeroSampleSlots()
+    val zeroEvents = sound.getPerformanceSystemMutedAudioCalendarZeroSampleEvents()
+    val maxDebt = sound.getPerformanceSystemMutedAudioCalendarMaxPendingTicks()
+    val apuReads = sound.getPerformanceSystemMutedAudioCalendarApuReads()
+    val apuWrites = sound.getPerformanceSystemMutedAudioCalendarApuWrites()
+    val frameSequencerCommits =
+        sound.getPerformanceSystemMutedAudioCalendarFrameSequencerCommits()
+    val droppedChannelTicks = sound.getPerformanceSystemMutedAudioCalendarDroppedChannelTicks()
+    // Publish the terminal ownership decision before notifying host consumers. A synchronous
+    // subscriber must observe the frozen core, and cannot re-enter a measured tick while the
+    // boundary event is being delivered.
+    benchmarkAudioPolicyProcessed = true
+    benchmarkAudioPolicyAccepted = false
+    benchmarkAudioPolicyRequested = false
+    benchmarkCoreFrozenGate.setFrozen(true)
+    postSessionEventSafely(
+        currentSession,
+        Controller.BenchmarkFrameBoundaryEvent(
+            event.frame,
+            gpu.isGbc(),
+            gpu.isDmgCompatMode(),
+            speedMode.getSpeedMode(),
+            currentSession.gameboy.getPerformanceBulkSpanCount(),
+            currentSession.gameboy.getPerformanceBulkTicks(),
+            currentSession.gameboy.getPerformanceEpochCount(),
+            currentSession.gameboy.getPerformanceEpochTicks(),
+            currentSession.gameboy.getPerformanceEpochMaxTicks(),
+            currentSession.gameboy.getPerformanceEpochRasterFastTicks(),
+            currentSession.gameboy.getPerformanceEpochMode2ReplayTicks(),
+            currentSession.gameboy.getPerformanceEpochMode2BulkTicks(),
+            policy,
+            audioRequestedAtBoundary,
+            activeAtBoundary,
+            disabledAfterBoundary,
+            skippedTicks,
+            zeroSlots,
+            zeroEvents,
+            maxDebt,
+            apuReads,
+            apuWrites,
+            frameSequencerCommits,
+            droppedChannelTicks,
+        ),
+    )
+    setPaused(true)
   }
 
   private fun runDebugContinuation() {
@@ -1414,6 +1635,9 @@ class BasicController private constructor(
     detachAndClearDebugTimelineObservation(gameboy)
     val status =
         try {
+          // The host calendar is transient and must not survive a restore boundary, even though
+          // Sound's memento also fail-closes it. Materialize the live prefix before replacement.
+          gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
           result.snapshot.restore(currentSession, effectiveCartridgePause = true)
           gameboy.seedDeterministicReplayInput(
               JoypadButtonMask.toButtons(result.input.legacyMask),
@@ -2551,6 +2775,9 @@ class BasicController private constructor(
     val mobileExternalIo = hasMobileAdapterExternalIo()
     val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
+      // State application is a lifecycle boundary for the host-only calendar. Do not let a
+      // restored machine inherit deferred silent PCM debt from the pre-load timeline.
+      currentSession.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
       when (read.state.root) {
         is SessionStateRoot ->
             StateCodec.applyDecoded(read.state, currentSession, context.identity)
@@ -2653,6 +2880,9 @@ class BasicController private constructor(
     val mobileExternalIo = hasMobileAdapterExternalIo()
     val mobileBackendOwnership = mobileAdapterBackendOwnershipVersion()
     try {
+      // The compatibility loader mutates the live machine in place; clear the transient calendar
+      // before applying it so deferred APU debt is committed on the old timeline first.
+      currentSession.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
       manager.applySnapshotReadOnly(snapshot, currentSession)
       relinquishDebugBreakpointPauseOwnership()
       // Match managed-load ownership: a saved cartridge clock pause bit must not override the
@@ -3496,6 +3726,9 @@ class BasicController private constructor(
   }
 
   private fun setPaused(paused: Boolean) {
+    if (paused) {
+      disableBenchmarkAudioCalendar()
+    }
     if (isPaused == paused) {
       return
     }
@@ -3506,6 +3739,9 @@ class BasicController private constructor(
   }
 
   private fun setDebugPaused(paused: Boolean) {
+    if (paused) {
+      disableBenchmarkAudioCalendar()
+    }
     if (!paused) {
       relinquishDebugBreakpointPauseOwnership()
     }
@@ -3552,6 +3788,10 @@ class BasicController private constructor(
   private fun relinquishDebugBreakpointPauseOwnership() {
     debugBreakpointPauseActive = false
     lastDebugBreakpointHit = lastDebugBreakpointHit?.withActivePause(false)
+  }
+
+  private fun disableBenchmarkAudioCalendar() {
+    session?.gameboy?.sound?.setPerformanceSystemMutedAudioCalendar(false)
   }
 
   private fun updateCartridgePause(wasEffectivelyPaused: Boolean) {
@@ -4182,12 +4422,21 @@ class BasicController private constructor(
   ) {
     val session = session ?: return
 
+    // A newly committed session never inherits the transient host calendar from a replaced
+    // machine, even when the controller was already paused and no pause transition is emitted.
+    session.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
     // Benchmark sessions materialize into an explicit anchor-ready pause.  The host arms one
     // generation after capturing its compositor baseline; normal sessions retain auto-resume.
     isPaused = properties.overrides.benchmarkPolicyEnabled
     benchmarkArmed = false
-    benchmarkCoreFrozen = false
+    benchmarkCoreFrozenGate.setFrozen(false)
     benchmarkGeneration = 0L
+    benchmarkAudioPolicyProcessed = false
+    benchmarkAudioPolicyAccepted = false
+    benchmarkAudioPolicyRequested = false
+    benchmarkAudioPolicyToken = "canonical"
+    benchmarkAudioPolicyGeneration = 0L
+    benchmarkAudioPolicySessionGeneration = 0L
     benchmarkGameplayScenarioActive = false
     benchmarkGameplayScenarioExpectedFrames = 0
     benchmarkGameplayScenarioReady = true
@@ -4485,6 +4734,9 @@ class BasicController private constructor(
       closeDeadlineNanos: Long? = null,
   ) {
     val session = session ?: return
+    // Stop is also used by terminal close paths that may bypass a visible pause transition.
+    // Clear the transient calendar before releasing the machine or its event bus.
+    session.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
     revokeDebugPort(session, replaced = false)
     postSerialPeripheralStatus(
         serialPeripheralSelection,

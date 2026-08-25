@@ -23,6 +23,20 @@ public class DiagnosticsOptionsTest {
     }
 
     @Test
+    public void releaseGateCannotEnableRelaxedAudioPolicy() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                false, "cgb", true, "presentation", true, true, false,
+                "build-0001", "pair-0001", "block-0001", 0,
+                "parent", "parent", "device-0001", "thermal-0001", true,
+                "workload-0001", 60, -1, "performance", null,
+                "silent-pcm-relaxed-apu-v1");
+
+        assertFalse(options.enabled);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, options.audioPolicy);
+        assertEquals(ExecutionMode.PERFORMANCE, options.executionMode);
+    }
+
+    @Test
     public void benchmarkOptionsAreTypedAndTransient() {
         DiagnosticsOptions options = DiagnosticsOptions.parseValues(
                 true, "dmg", false, "sink", true, false, false);
@@ -102,6 +116,51 @@ public class DiagnosticsOptionsTest {
         assertEquals("performance", DiagnosticsOptions.executionModeValue(performance.executionMode));
         assertEquals(ExecutionMode.ACCURACY, malformed.executionMode);
         assertEquals("accuracy", DiagnosticsOptions.executionModeValue(malformed.executionMode));
+    }
+
+    @Test
+    public void silentPcmPolicyIsPerformanceOnlyAndDefaultsToCanonical() {
+        DiagnosticsOptions silent = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-v1");
+        DiagnosticsOptions accuracy = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "accuracy", null, "silent-pcm-v1");
+        DiagnosticsOptions noAudio = DiagnosticsOptions.parseValues(
+                true, "cgb", false, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-v1");
+        DiagnosticsOptions sgb = DiagnosticsOptions.parseValues(
+                true, "sgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-v1");
+        DiagnosticsOptions auto = DiagnosticsOptions.parseValues(
+                true, "auto", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-v1");
+
+        assertEquals(DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1, silent.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, accuracy.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, noAudio.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, sgb.audioPolicy);
+        assertEquals(DiagnosticsOptions.AudioPolicy.CANONICAL, auto.audioPolicy);
+    }
+
+    @Test
+    public void relaxedSilentPcmPolicyUsesItsOwnCoreCalendarMode() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, "silent-pcm-relaxed-apu-v1");
+
+        assertEquals(DiagnosticsOptions.AudioPolicy.SILENT_PCM_RELAXED_APU_V1,
+                options.audioPolicy);
+        assertTrue(options.audioPolicy.isSilent());
+        assertTrue(options.audioPolicy.isRelaxedApu());
+        assertEquals(eu.rekawek.coffeegb.core.sound.Sound.PerformanceSystemMutedAudioMode.RELAXED_APU,
+                options.audioPolicy.performanceSystemMutedAudioMode());
     }
 
     @Test
