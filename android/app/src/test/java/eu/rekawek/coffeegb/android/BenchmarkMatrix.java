@@ -228,8 +228,12 @@ public final class BenchmarkMatrix {
     private static final List<Row> REQUIRED_ROWS = List.of(
             Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE,
             Row.CGB_DMG_COMPAT, Row.SGB, Row.SGB2);
-    /** Silent PCM calendars have only the five DMG/CGB performance rows. */
+    /** Exact silent PCM uses the complete seven-row matrix, including SGB and SGB2. */
     private static final List<Row> SILENT_REQUIRED_ROWS = List.of(
+            Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE, Row.CGB_DMG_COMPAT,
+            Row.SGB, Row.SGB2);
+    /** The intentionally approximate APU calendar remains bounded to the original five rows. */
+    private static final List<Row> RELAXED_SILENT_REQUIRED_ROWS = List.of(
             Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE, Row.CGB_DMG_COMPAT);
 
     private BenchmarkMatrix() {
@@ -1261,8 +1265,7 @@ public final class BenchmarkMatrix {
             errors.add("line " + lineNumber + ": missing render");
             render = "unknown";
         }
-        int requiredRowCount = "canonical".equals(benchmarkAudioPolicy)
-                ? REQUIRED_ROWS.size() : SILENT_REQUIRED_ROWS.size();
+        int requiredRowCount = requiredRowsForAudioPolicy(benchmarkAudioPolicy).size();
         if (rowOrder < 0 || rowOrder >= requiredRowCount) {
             errors.add("line " + lineNumber + ": row_order is outside selected matrix");
         }
@@ -1281,7 +1284,7 @@ public final class BenchmarkMatrix {
         if (!warmup || !INPUT_CONTRACTS.contains(inputContract)) {
             errors.add("line " + lineNumber + ": run lacks a supported warmup/input contract");
         }
-        if (!validScenarioCompletion(row, inputContract, sessionGeneration,
+        if (!validScenarioCompletion(row, benchmarkAudioPolicy, inputContract, sessionGeneration,
                 scenarioSessionGeneration,
                 scenarioCompleted,
                 scenarioCompletedFrames, scenarioExpectedFrames, scenarioSourceClosed,
@@ -1557,8 +1560,7 @@ public final class BenchmarkMatrix {
         }
         String selectedAudioPolicy = benchmarkAudioPolicies.isEmpty()
                 ? "canonical" : benchmarkAudioPolicies.iterator().next();
-        List<Row> requiredRows = "canonical".equals(selectedAudioPolicy)
-                ? REQUIRED_ROWS : SILENT_REQUIRED_ROWS;
+        List<Row> requiredRows = requiredRowsForAudioPolicy(selectedAudioPolicy);
         LinkedHashMap<Row, List<RunBuilder>> byRow = new LinkedHashMap<>();
         for (Row row : requiredRows) {
             byRow.put(row, new ArrayList<>());
@@ -2206,7 +2208,8 @@ public final class BenchmarkMatrix {
             errors.add(run.key + " final evidence does not match matrix_run");
         }
         validateSystemAudioProof(run, result, errors);
-        if (!validScenarioCompletion(run.row, result.inputContract, result.sessionGeneration,
+        if (!validScenarioCompletion(run.row, run.benchmarkAudioPolicy,
+                result.inputContract, result.sessionGeneration,
                 result.scenarioSessionGeneration, result.scenarioCompleted,
                 result.scenarioCompletedFrames, result.scenarioExpectedFrames,
                 result.scenarioSourceClosed, result.scenarioAudioDrained)) {
@@ -3147,11 +3150,29 @@ public final class BenchmarkMatrix {
         };
     }
 
-    private static boolean validScenarioCompletion(Row row, String inputContract,
+    private static List<Row> requiredRowsForAudioPolicy(String policy) {
+        return switch (policy) {
+            case "canonical" -> REQUIRED_ROWS;
+            case "silent-pcm-v1" -> SILENT_REQUIRED_ROWS;
+            case "silent-pcm-relaxed-apu-v1" -> RELAXED_SILENT_REQUIRED_ROWS;
+            default -> REQUIRED_ROWS;
+        };
+    }
+
+    private static String expectedInputContract(Row row, String audioPolicy) {
+        if ("silent-pcm-v1".equals(audioPolicy)
+                && (row == Row.SGB || row == Row.SGB2)) {
+            return "dmg-action-v1";
+        }
+        return expectedInputContract(row);
+    }
+
+    private static boolean validScenarioCompletion(Row row, String audioPolicy,
+            String inputContract,
             long sessionGeneration, long scenarioSessionGeneration, Boolean completed,
             int completedFrames, int expectedFrames, Boolean sourceClosed, Boolean audioDrained) {
         int contractFrames = expectedScenarioFrames(inputContract);
-        return row != null && expectedInputContract(row).equals(inputContract)
+        return row != null && expectedInputContract(row, audioPolicy).equals(inputContract)
                 && sessionGeneration > 0L
                 && (contractFrames == 0 ? scenarioSessionGeneration == 0L
                         : scenarioSessionGeneration == sessionGeneration)

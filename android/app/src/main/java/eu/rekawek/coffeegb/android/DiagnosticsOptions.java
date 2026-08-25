@@ -328,16 +328,22 @@ final class DiagnosticsOptions {
                 ? benchmarkScenario : BenchmarkScenario.NONE;
         AudioPolicy requestedPolicy = audioPolicy == null ? AudioPolicy.CANONICAL : audioPolicy;
         // The silent calendar is intentionally unavailable outside the measured PERFORMANCE
-        // topology, when host audio is disabled, or when the explicit profile could resolve to
-        // an SGB clock. The official silent runner is deliberately bounded to DMG/CGB rows;
-        // unknown/AUTO and SGB profiles fail closed to canonical evidence.
+        // topology, when host audio is disabled, or when the hardware profile is unresolved.
+        // Exact silent PCM has an SGB/SGB2 calendar proof; the relaxed APU policy remains bounded
+        // to the five DMG/CGB rows until it has equivalent SGB evidence. AUTO still fails closed
+        // because its clock cannot be proven from the launch request.
         this.audioPolicy = enabled && this.executionMode == ExecutionMode.PERFORMANCE
                 && audioOutput && requestedPolicy.isSilent()
-                && supportsSilentPcmProfile(hardware)
+                && supportsSilentPcmProfile(hardware, requestedPolicy)
                 ? requestedPolicy : AudioPolicy.CANONICAL;
     }
 
-    private static boolean supportsSilentPcmProfile(Hardware hardware) {
+    private static boolean supportsSilentPcmProfile(Hardware hardware, AudioPolicy policy) {
+        if (policy == AudioPolicy.SILENT_PCM_V1) {
+            return hardware == Hardware.DMG || hardware == Hardware.MGB
+                    || hardware == Hardware.CGB || hardware == Hardware.CGB0
+                    || hardware == Hardware.SGB || hardware == Hardware.SGB2;
+        }
         return hardware == Hardware.DMG || hardware == Hardware.MGB
                 || hardware == Hardware.CGB || hardware == Hardware.CGB0;
     }

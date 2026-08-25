@@ -37,6 +37,12 @@ adjacent parent/candidate runs in 12 randomized seven-row blocks:
 for each mode; the app emits the selected strategy as `execution_mode` in both `matrix_run` and
 `final_result` records. The setting is session-scoped and never enters save-state data.
 
+For muted PERFORMANCE runs, pass `--audio-policy silent-pcm-v1`. This exact silent calendar
+covers the complete seven-row matrix, including SGB and SGB2, while retaining its canonical APU
+semantics. The explicitly relaxed `silent-pcm-relaxed-apu-v1` remains bounded to the five DMG/CGB
+rows until its SGB clock has equivalent evidence. The host only reads the system music-volume/
+mute state and fails closed if it is not already muted; it never changes system audio settings.
+
 The two recent slots are selected by the user for the appropriate color/non-color workload. The
 app assigns and durably persists random opaque workload nonces after selection; the host nonce
 argument is deliberately not part of the workflow. Native CGB and CGB0 are separate rows, and

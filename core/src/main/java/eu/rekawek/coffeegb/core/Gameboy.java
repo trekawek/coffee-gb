@@ -229,7 +229,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient long performanceBulkTicks;
 
-    /** Largest long DMG settled-HALT PERFORMANCE packet in this session (diagnostic only). */
+    /** Largest settled-HALT PERFORMANCE packet in this session (diagnostic only). */
     private transient int performanceBulkMaxTicks;
 
     /** Bounded coarse CPU-epoch diagnostics; absent from portable state. */
@@ -928,8 +928,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         long remaining = ticks;
         try {
             while (remaining > 0 && !stop.getAsBoolean()) {
-                if (!gbc && cpu.getState() == Cpu.State.HALTED) {
-                    int committed = tryPerformanceSettledDmgHaltSpan(remaining);
+                if (cpu.getState() == Cpu.State.HALTED) {
+                    int committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1093,8 +1093,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             long frameEvents = 0;
             long remaining = ticks;
             while (remaining > 0) {
-                if (!gbc && cpu.getState() == Cpu.State.HALTED) {
-                    int committed = tryPerformanceSettledDmgHaltSpan(remaining);
+                if (cpu.getState() == Cpu.State.HALTED) {
+                    int committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1262,6 +1262,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * materialization and the PERFORMANCE scanline-enable lifecycle.
      */
     private int tryPerformancePhaseOnlySpan(long remaining, int cpuSpanLimit) {
+        // SGB's JOYP packet receiver has no tick-driven state. When its cached input
+        // eligibility is false, the span cannot commit anyway; reject before walking the
+        // relatively expensive timer/PPU/STAT horizons. Stable SGB sessions remain eligible
+        // through Joypad's exact write-clocked contract below.
+        if (isSgbPerformanceTopology() && !joypad.isPerformanceQuietSpanStillEligible()) {
+            return 0;
+        }
         // Build one primitive packet plan. Every component horizon is evaluated once against
         // the already-shortened tail; trusted commits do not repeat the walks.
         int span = cpuSpanLimit;
@@ -1270,17 +1277,38 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean steadyRasterSpan = false;
         if (span > 0) {
             span = Math.min(span, timer.performanceQuietSpanLimit(span));
+            if (span <= 0) {
+                return 0;
+            }
             span = Math.min(span, serialPort.performanceQuietSpanLimit(span));
+            if (span <= 0) {
+                return 0;
+            }
             span = Math.min(span, joypad.performanceQuietSpanLimit(span));
+            if (span <= 0) {
+                return 0;
+            }
             span = Math.min(span, sound.performanceQuietSpanLimit(span));
+            if (span <= 0) {
+                return 0;
+            }
             if (cartridgeClocked) {
                 span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+                if (span <= 0) {
+                    return 0;
+                }
             }
             if (slotCartridgeClocked) {
                 span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+                if (span <= 0) {
+                    return 0;
+                }
             }
             if (gbc) {
                 span = Math.min(span, infraredPort.performanceQuietSpanLimit(span));
+                if (span <= 0) {
+                    return 0;
+                }
             }
             int gpuSpanLimit = gpu.performanceQuietSpanLimit();
             if (gpuSpanLimit > 0) {
@@ -1329,6 +1357,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Stable topology only; every tick-local blocker stays in {@link #canStartPerformanceEpoch()}. */
     private boolean isNativeCgbPerformanceEpochTopology() {
         return gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 2;
+    }
+
+    private boolean isSgbPerformanceTopology() {
+        return hardwareProfile.family() == HardwareProfile.Family.SGB;
+    }
+
+    /** CGB hardware running a non-color cartridge at its normal clock. */
+    private boolean isCgbCompatibilityPerformanceTopology() {
+        return gbc && speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1;
     }
 
     private boolean canContinueNativeCgbNegativeStatLease() {
@@ -1764,8 +1801,115 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochRasterFastTicks += ticks;
     }
 
+    /** Selects the normal-speed settled-HALT lane for the current non-native topology. */
+    private int tryPerformanceSettledHaltSpan(long remaining) {
+        if (isCgbCompatibilityPerformanceTopology()) {
+            return tryPerformanceSettledCgbCompatHaltSpan(remaining);
+        }
+        if (!gbc) {
+            return tryPerformanceSettledDmgHaltSpan(remaining);
+        }
+        return 0;
+    }
+
     /**
-     * Attempts the long settled-HALT packet used only by the DMG PERFORMANCE side entrance.
+     * Attempts a CGB-compatibility settled-HALT packet. This is deliberately separate from
+     * the physical-DMG packet: normal-speed CGB compatibility still clocks the CGB infrared and
+     * HDMA control planes, and their idle guards must remain part of the proof.
+     */
+    private int tryPerformanceSettledCgbCompatHaltSpan(long remaining) {
+        if (remaining <= 0 || !cpu.performanceSettledHaltSpanEligible()) {
+            return 0;
+        }
+        int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
+        span = Math.min(span, timer.performanceSettledHaltSpanLimit(span));
+        span = Math.min(span, serialPort.performanceSettledHaltSpanLimit(span));
+        span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        span = Math.min(span, sound.performanceQuietSpanLimit(span));
+        span = Math.min(span, infraredPort.performanceSettledHaltSpanLimit(span));
+        if (cartridgeClocked) {
+            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        }
+        if (slotCartridgeClocked) {
+            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        }
+        int gpuSpanLimit = gpu.performanceQuietSpanLimit();
+        span = Math.min(span, gpuSpanLimit);
+        boolean directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
+        boolean steadyRasterSpan = span > 0 && !directRasterSpan
+                && gpu.isPerformanceSteadyCursorActive();
+        span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
+        if (span <= 3
+                || warmResetRequested
+                || speedSwitchTailTicks != 0
+                || !cpu.performanceNoPendingPpuReadPhase()
+                || dma.isTransferInProgress()
+                || dma.requiresClockTick(true)
+                || hdma.hasActiveOrPendingTransfer()
+                || hdma.hasPendingHblankTransfer()
+                || hdma.isHaltRequestLatched()
+                || hdma.holdsHblankSpeedSwitchTail()
+                || hdma.pausesOamDmaForSpeedSwitchBurst()
+                || hdma.requiresCpuHdmaPhaseFlags()
+                || !joypad.isPerformanceQuietSpanStillEligible()
+                || !canStartCgbCompatSettledHaltSpan()) {
+            return 0;
+        }
+        tickPerformanceSettledCgbCompatHaltSpan(span, directRasterSpan, steadyRasterSpan);
+        performanceBulkSpanCount++;
+        performanceBulkTicks += span;
+        if (span > performanceBulkMaxTicks) {
+            performanceBulkMaxTicks = span;
+        }
+        return span;
+    }
+
+    private boolean canStartCgbCompatSettledHaltSpan() {
+        return isCgbCompatibilityPerformanceTopology()
+                && !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && !debugHistoryReplay
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && gpu.isLcdEnabled()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(true)
+                && !hdma.hasActiveOrPendingTransfer()
+                && !hdma.hasPendingHblankTransfer()
+                && !hdma.isHaltRequestLatched()
+                && !hdma.holdsHblankSpeedSwitchTail()
+                && !hdma.pausesOamDmaForSpeedSwitchBurst()
+                && !hdma.requiresCpuHdmaPhaseFlags();
+    }
+
+    /** Commits a CGB-compatibility settled-HALT packet with the complete CGB idle plane. */
+    private void tickPerformanceSettledCgbCompatHaltSpan(
+            int ticks, boolean directRasterSpan, boolean steadyRasterSpan) {
+        if (cartridgeClocked) {
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        timer.tickPerformanceQuietSpanTrusted(ticks);
+        sound.tickFrameSequencer(false);
+        assert !sound.hasPendingFrameSequencerClock()
+                : "frame sequencer edge crossed a CGB-compatibility settled-HALT span";
+        sound.commitFrameSequencerClock();
+        sound.tickPerformanceQuietSpan(ticks);
+        serialPort.tickPerformanceQuietSpanTrusted(ticks);
+        infraredPort.tickPerformanceQuietSpanTrusted(ticks);
+        joypad.tickPerformanceQuietSpanTrusted(ticks);
+        cpu.advancePerformanceSettledHaltSpanTrusted(ticks);
+        gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
+        statRegister.tickPerformanceQuietSpanTrusted(ticks);
+        hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                gpu.isStatModeLatchRephasedBySpeedSwitch());
+        cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+    }
+
+    /**
+     * Attempts the long settled-HALT packet used by the normal-speed monochrome side entrance.
      * Every horizon and volatile guard is read before the commit, so a zero result leaves the
      * machine untouched and lets the ordinary PERFORMANCE scheduler handle the next scalar phase.
      */
@@ -1911,7 +2055,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return performanceBulkTicks;
     }
 
-    /** Largest long DMG settled-HALT PERFORMANCE packet in the current session. */
+    /** Largest settled-HALT PERFORMANCE packet in the current session. */
     public int getPerformanceBulkMaxTicks() {
         return performanceBulkMaxTicks;
     }

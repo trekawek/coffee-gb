@@ -7,6 +7,8 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.cpu.Cpu;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
@@ -162,6 +164,181 @@ public final class GameboyPlayerInputHubPerformanceTest {
                     assertTrue("DMG settled HALT never crossed a machine-cycle boundary"
                                     + " maxSpan=" + performance.getPerformanceBulkMaxTicks(),
                             performance.getPerformanceBulkMaxTicks() > 3);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void cgbCompatibilitySettledHaltMatchesScalarWithCgbIdlePlane() throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0}) {
+            PlayerInputHub performanceHub = new PlayerInputHub();
+            performanceHub.openSource(0);
+            try (Gameboy performance = haltCgbCompatSession(profile, performanceHub);
+                    Gameboy scalar = haltCgbCompatSession(profile,
+                            () -> PlayerInputSnapshot.released())) {
+                performance.runTicks(128);
+                scalar.runTicks(128);
+                assertTrue(profile.id() + " compatibility setup did not enter DMG-compat mode",
+                        performance.getSpeedMode().isDmgCompat());
+                assertEquals(Cpu.State.HALTED, performance.getCpu().getState());
+                assertEquals(Cpu.State.HALTED, scalar.getCpu().getState());
+
+                performance.resetPerformanceBulkCounters();
+                scalar.resetPerformanceBulkCounters();
+                for (int chunk = 0; chunk < 120; chunk++) {
+                    assertEquals(profile.id() + " compatibility HALT callbacks chunk=" + chunk,
+                            runScalarTicks(scalar, 100), performance.runTicks(100));
+                    assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                            profile.id() + " compatibility HALT chunk=" + chunk);
+                    assertRasterEquivalent(scalar, performance,
+                            profile.id() + " compatibility HALT chunk=" + chunk);
+                }
+                assertTrue(profile.id() + " compatibility settled HALT did not cross a machine cycle",
+                        performance.getPerformanceBulkMaxTicks() > 3);
+                assertTrue(profile.id() + " compatibility settled HALT had no substantial bulk coverage",
+                        performance.getPerformanceBulkTicks() > 1_000);
+            }
+        }
+    }
+
+    @Test
+    public void sgbSettledHaltMatchesScalarForBothClockProfiles() throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            PlayerInputHub performanceHub = new PlayerInputHub();
+            performanceHub.openSource(0);
+            try (Gameboy performance = haltProfileSession(profile, performanceHub);
+                    Gameboy scalar = haltProfileSession(profile,
+                            () -> PlayerInputSnapshot.released())) {
+                performance.runTicks(128);
+                scalar.runTicks(128);
+                assertEquals(profile.id() + " CPU state", Cpu.State.HALTED,
+                        performance.getCpu().getState());
+                assertEquals(profile.id() + " scalar CPU state", Cpu.State.HALTED,
+                        scalar.getCpu().getState());
+
+                performance.resetPerformanceBulkCounters();
+                scalar.resetPerformanceBulkCounters();
+                // Run beyond one 70,224-dot frame so the SGB VRAM transfer reaches its
+                // VBlank/materialization boundary while the scalar oracle remains authoritative.
+                for (int chunk = 0; chunk < 800; chunk++) {
+                    assertEquals(profile.id() + " frame callbacks chunk=" + chunk,
+                            runScalarTickCalls(scalar, 100), performance.runTicks(100));
+                    ComponentState<Gameboy> scalarState = scalar.captureState();
+                    ComponentState<Gameboy> performanceState = performance.captureState();
+                    // The VRAM transfer is checked at every materialization boundary; the full
+                    // recursive state hash is sampled periodically because it includes large
+                    // display records and would dominate this intentionally long cross-frame run.
+                    assertEquals(profile.id() + " VRAM transfer chunk=" + chunk,
+                            recordComponentHash(scalarState, "vRamTransferMemento"),
+                            recordComponentHash(performanceState, "vRamTransferMemento"));
+                    if ((chunk & 63) == 0 || chunk >= 700) {
+                        assertStateEquivalent(scalarState, performanceState,
+                                profile.id() + " HALT chunk=" + chunk);
+                    }
+                    assertRasterEquivalent(scalar, performance,
+                            profile.id() + " HALT chunk=" + chunk);
+                }
+                assertTrue(profile.id() + " settled HALT did not cross a machine cycle",
+                        performance.getPerformanceBulkMaxTicks() > 3);
+                assertTrue(profile.id() + " settled HALT had no substantial bulk coverage: "
+                                + performance.getPerformanceBulkTicks(),
+                        performance.getPerformanceBulkTicks() > 100);
+            }
+        }
+    }
+
+    @Test
+    public void cgbCompatibilitySettledHaltRejectsActiveOamDma() throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        performanceHub.openSource(0);
+        try (Gameboy performance = haltCgbCompatSession(
+                HardwareProfileRegistry.CGB, performanceHub);
+                Gameboy scalar = haltCgbCompatSession(
+                        HardwareProfileRegistry.CGB, () -> PlayerInputSnapshot.released())) {
+            performance.runTicks(128);
+            scalar.runTicks(128);
+            performance.resetPerformanceBulkCounters();
+            scalar.resetPerformanceBulkCounters();
+
+            performance.getAddressSpace().setByte(0xff46, 0xc0);
+            scalar.getAddressSpace().setByte(0xff46, 0xc0);
+            assertEquals("active OAM DMA setup",
+                    recordComponentHash(scalar.captureState(), "dmaMemento"),
+                    recordComponentHash(performance.captureState(), "dmaMemento"));
+            assertEquals("active OAM DMA frame callbacks", runScalarTicks(scalar, 54),
+                    performance.runTicks(54));
+            assertEquals("CGB compatibility HALT must not bulk through OAM DMA", 0L,
+                    performance.getPerformanceBulkTicks());
+            assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                    "CGB compatibility active OAM DMA");
+        }
+    }
+
+    @Test
+    public void cgbCompatibilitySettledHaltRejectsActiveHdma() throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        performanceHub.openSource(0);
+        try (Gameboy performance = haltCgbCompatSession(
+                HardwareProfileRegistry.CGB, performanceHub);
+                Gameboy scalar = haltCgbCompatSession(
+                        HardwareProfileRegistry.CGB, () -> PlayerInputSnapshot.released())) {
+            performance.runTicks(128);
+            scalar.runTicks(128);
+            performance.resetPerformanceBulkCounters();
+            scalar.resetPerformanceBulkCounters();
+
+            startOneBlockGdma(performance);
+            startOneBlockGdma(scalar);
+            assertEquals("active HDMA setup",
+                    stateHash(scalar.getHdma().captureState()),
+                    stateHash(performance.getHdma().captureState()));
+            assertEquals("active HDMA frame callbacks", runScalarTicks(scalar, 54),
+                    performance.runTicks(54));
+            assertEquals("CGB compatibility HALT must not bulk through HDMA", 0L,
+                    performance.getPerformanceBulkTicks());
+            assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                    "CGB compatibility active HDMA");
+        }
+    }
+
+    @Test
+    public void cgbCompatibilitySettledHaltWakeEdgesMatchScalarForBothProfiles()
+            throws Exception {
+        int[] tails = {1, 3, 7, 17, 53};
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.CGB, HardwareProfileRegistry.CGB0}) {
+            for (WakeSource wakeSource : WakeSource.values()) {
+                for (int tail : tails) {
+                    PlayerInputHub hub = new PlayerInputHub();
+                    hub.openSource(0);
+                    try (Gameboy performance = haltCgbCompatSession(profile, hub);
+                            Gameboy scalar = haltCgbCompatSession(profile,
+                                    () -> PlayerInputSnapshot.released())) {
+                        settleHalt(performance, scalar, true, wakeSource, tail);
+                        armWakeSource(performance, wakeSource);
+                        armWakeSource(scalar, wakeSource);
+                        performance.resetPerformanceBulkCounters();
+                        scalar.resetPerformanceBulkCounters();
+
+                        int elapsed = 0;
+                        while (performance.getCpu().getState() == Cpu.State.HALTED
+                                && elapsed < 2_000) {
+                            assertEquals(profile.id() + " compat " + wakeSource + " tail=" + tail,
+                                    runScalarTicks(scalar, tail), performance.runTicks(tail));
+                            assertEquals(profile.id() + " compat CPU wake tail=" + tail,
+                                    scalar.getCpu().getState(), performance.getCpu().getState());
+                            elapsed += tail;
+                        }
+                        assertTrue(profile.id() + " compat " + wakeSource + " did not wake",
+                                performance.getCpu().getState() != Cpu.State.HALTED);
+                        assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                                profile.id() + " compat " + wakeSource + " tail=" + tail);
+                        assertRasterEquivalent(scalar, performance,
+                                profile.id() + " compat " + wakeSource + " tail=" + tail);
+                    }
                 }
             }
         }
@@ -517,6 +694,42 @@ public final class GameboyPlayerInputHubPerformanceTest {
         return gameboy;
     }
 
+    private static Gameboy haltCgbCompatSession(
+            HardwareProfile profile, PlayerInputSource inputSource) throws Exception {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x76; // HALT with no interrupt sources enabled
+        image[0x101] = 0x00;
+        image[0x143] = 0;
+        image[0x147] = 0;
+        Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(profile)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+        gameboy.init(new EventBusImpl(null, null, false), new Peer2PeerSerialEndpoint(), null);
+        return gameboy;
+    }
+
+    private static Gameboy haltProfileSession(
+            HardwareProfile profile, PlayerInputSource inputSource) throws Exception {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x76; // HALT with no interrupt sources enabled
+        image[0x101] = 0x00;
+        image[0x143] = 0;
+        image[0x147] = 0;
+        Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(profile)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+        gameboy.init(new EventBusImpl(null, null, false), new Peer2PeerSerialEndpoint(), null);
+        return gameboy;
+    }
+
     private static Gameboy nativeDoubleSpeedHaltSession(PlayerInputSource inputSource)
             throws Exception {
         Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(nativeDoubleSpeedHaltRom()))
@@ -604,6 +817,17 @@ public final class GameboyPlayerInputHubPerformanceTest {
         long frameEvents = 0;
         for (int tick = 0; tick < ticks; tick++) {
             frameEvents += scalar.runTicks(1);
+        }
+        return frameEvents;
+    }
+
+    /** Exact scalar oracle used by the long SGB boundary test without scheduler setup overhead. */
+    private static long runScalarTickCalls(Gameboy scalar, int ticks) {
+        long frameEvents = 0;
+        for (int tick = 0; tick < ticks; tick++) {
+            if (scalar.tick()) {
+                frameEvents++;
+            }
         }
         return frameEvents;
     }

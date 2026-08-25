@@ -113,6 +113,18 @@ public class InfraredPort implements AddressSpace, StatefulComponent<InfraredPor
         return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
     }
 
+    /** Same exact idle proof for a settled normal-speed HALT packet, without the three-dot cap. */
+    public int performanceSettledHaltSpanLimit(int requested) {
+        if (requested <= 0 || !gbc || speedMode.getSpeedMode() != 1
+                || fullChangerActive
+                || endpoint != InfraredEndpoint.NULL_ENDPOINT
+                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
+                || debugHooks != null) {
+            return 0;
+        }
+        return requested;
+    }
+
     public boolean canTickPerformanceQuietSpan(int ticks) {
         return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
     }
