@@ -335,9 +335,6 @@ public class DmgPixelFifo implements PixelFifo, StatefulComponent<DmgPixelFifo> 
 
     @Override
     public void advancePerformanceOutputIdleSpanTrusted(int ticks) {
-        if (ticks < 0 || !isPerformanceOutputIdle()) {
-            throw new IllegalStateException("DMG output delay is not idle");
-        }
         outputTicks += ticks;
     }
 

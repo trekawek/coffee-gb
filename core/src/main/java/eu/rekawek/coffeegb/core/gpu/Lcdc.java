@@ -125,6 +125,14 @@ public class Lcdc implements AddressSpace, StatefulComponent<Lcdc> {
         }
     }
 
+    /** Physical-DMG counterpart of the native-CGB fixed-point span commit. */
+    void advancePerformancePhysicalDmgMode2FixedPointSpanTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceQuietSpanFixedPoint()) {
+            throw new IllegalStateException(
+                    "LCDC is not at its physical-DMG PERFORMANCE mode-2 fixed point");
+        }
+    }
+
     /** Called once per GPU tick: the mix value lives for the single tick after the write. */
     void tickConflicts() {
         dmgBlobBackgroundEnable = pendingDmgBlobBackgroundEnable;

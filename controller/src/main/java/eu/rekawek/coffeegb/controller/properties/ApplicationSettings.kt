@@ -9,6 +9,12 @@ import java.nio.file.Path
 import java.util.Collections
 import java.util.EnumMap
 
+/** Process-local shape selector for the disposable runtime warmup; never persisted. */
+enum class RuntimeWarmupFlavor {
+  SCALAR,
+  SHADOW_MEASURED_EXACT_V1,
+}
+
 /** Immutable, validated desktop settings independent from their on-disk representation. */
 data class ApplicationSettings(
     val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
@@ -626,6 +632,7 @@ data class ApplicationSettingsOverrides(
     val suppressCloseAutosave: Boolean = false,
     val rewindEnabled: Boolean? = null,
     val runtimeWarmupEnabled: Boolean? = null,
+    val runtimeWarmupFlavor: RuntimeWarmupFlavor = RuntimeWarmupFlavor.SCALAR,
     /** Transient benchmark policy; never persisted into user settings or save state. */
     val benchmarkPolicyEnabled: Boolean = false,
     /** Transient execution-mode selection; it takes precedence over persisted settings. */

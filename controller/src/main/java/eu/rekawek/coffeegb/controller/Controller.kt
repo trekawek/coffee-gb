@@ -170,7 +170,9 @@ interface Controller : AutoCloseable {
    * pause. PERFORMANCE keeps its scheduler semantics; the session generation prevents a delayed
    * Android owner callback from controlling a replacement session.
    */
-  data class BenchmarkGameplayScenarioStartEvent(
+  data class BenchmarkGameplayScenarioStartEvent
+  @JvmOverloads
+  constructor(
       val sessionGeneration: Long,
       val expectedFrames: Int,
   ) : Event {
@@ -310,6 +312,19 @@ interface Controller : AutoCloseable {
       val performanceEpochRasterFastTicks: Long = 0L,
       val performanceEpochMode2ReplayTicks: Long = 0L,
       val performanceEpochMode2BulkTicks: Long = 0L,
+      /** Host-only benchmark audio policy requested for this measured generation. */
+      val benchmarkAudioPolicy: String = "canonical",
+      val benchmarkAudioRequested: Boolean = false,
+      val benchmarkAudioActiveAtBoundary: Boolean = false,
+      val benchmarkAudioDisabledAfterBoundary: Boolean = false,
+      val benchmarkAudioSkippedTicks: Long = 0L,
+      val benchmarkAudioZeroSampleSlots: Long = 0L,
+      val benchmarkAudioZeroSampleEvents: Long = 0L,
+      val benchmarkAudioMaxDebt: Long = 0L,
+      val benchmarkAudioApuReads: Long = 0L,
+      val benchmarkAudioApuWrites: Long = 0L,
+      val benchmarkAudioFrameSequencerCommits: Long = 0L,
+      val benchmarkAudioDroppedChannelTicks: Long = 0L,
   ) : Event {
     /** Java/source compatibility for callers that predate bulk telemetry. */
     constructor(
@@ -317,7 +332,11 @@ interface Controller : AutoCloseable {
         effectiveGbc: Boolean,
         effectiveDmgCompat: Boolean,
         speedMode: Int,
-    ) : this(frame, effectiveGbc, effectiveDmgCompat, speedMode, 0L, 0L)
+    ) : this(
+        frame, effectiveGbc, effectiveDmgCompat, speedMode,
+        0L, 0L, 0L, 0L, 0, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+    )
 
     /** Java/source compatibility for callers that supply the original bulk telemetry pair. */
     constructor(
@@ -328,18 +347,9 @@ interface Controller : AutoCloseable {
         performanceBulkSpans: Long,
         performanceBulkTicks: Long,
     ) : this(
-        frame,
-        effectiveGbc,
-        effectiveDmgCompat,
-        speedMode,
-        performanceBulkSpans,
-        performanceBulkTicks,
-        0L,
-        0L,
-        0,
-        0L,
-        0L,
-        0L,
+        frame, effectiveGbc, effectiveDmgCompat, speedMode,
+        performanceBulkSpans, performanceBulkTicks, 0L, 0L, 0, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
     /** Java/source compatibility for callers that predate the mode-2 bulk subset metric. */
@@ -356,18 +366,33 @@ interface Controller : AutoCloseable {
         performanceEpochRasterFastTicks: Long,
         performanceEpochMode2ReplayTicks: Long,
     ) : this(
-        frame,
-        effectiveGbc,
-        effectiveDmgCompat,
-        speedMode,
-        performanceBulkSpans,
-        performanceBulkTicks,
-        performanceEpochCount,
-        performanceEpochTicks,
-        performanceEpochMaxTicks,
-        performanceEpochRasterFastTicks,
-        performanceEpochMode2ReplayTicks,
-        0L,
+        frame, effectiveGbc, effectiveDmgCompat, speedMode,
+        performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
+        performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
+        performanceEpochMode2ReplayTicks, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+    )
+
+    /** Java/source compatibility for callers that supplied the complete pre-policy telemetry. */
+    constructor(
+        frame: Long,
+        effectiveGbc: Boolean,
+        effectiveDmgCompat: Boolean,
+        speedMode: Int,
+        performanceBulkSpans: Long,
+        performanceBulkTicks: Long,
+        performanceEpochCount: Long,
+        performanceEpochTicks: Long,
+        performanceEpochMaxTicks: Int,
+        performanceEpochRasterFastTicks: Long,
+        performanceEpochMode2ReplayTicks: Long,
+        performanceEpochMode2BulkTicks: Long,
+    ) : this(
+        frame, effectiveGbc, effectiveDmgCompat, speedMode,
+        performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
+        performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
+        performanceEpochMode2ReplayTicks, performanceEpochMode2BulkTicks,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
     init {
@@ -387,6 +412,34 @@ interface Controller : AutoCloseable {
       require(performanceEpochMode2BulkTicks >= 0L) {
         "Benchmark epoch mode-2 bulk tick count must be non-negative"
       }
+      require(benchmarkAudioPolicy == "canonical" || benchmarkAudioPolicy == "silent-pcm-v1"
+          || benchmarkAudioPolicy == "silent-pcm-relaxed-apu-v1") {
+        "Benchmark audio policy must be canonical, silent-pcm-v1, or silent-pcm-relaxed-apu-v1"
+      }
+      require(benchmarkAudioSkippedTicks >= 0L) {
+        "Benchmark audio skipped tick count must be non-negative"
+      }
+      require(benchmarkAudioZeroSampleSlots >= 0L) {
+        "Benchmark audio zero sample slot count must be non-negative"
+      }
+      require(benchmarkAudioZeroSampleEvents >= 0L) {
+        "Benchmark audio zero sample event count must be non-negative"
+      }
+      require(benchmarkAudioMaxDebt >= 0L) {
+        "Benchmark audio maximum debt must be non-negative"
+      }
+      require(benchmarkAudioApuReads >= 0L) {
+        "Benchmark audio APU read count must be non-negative"
+      }
+      require(benchmarkAudioApuWrites >= 0L) {
+        "Benchmark audio APU write count must be non-negative"
+      }
+      require(benchmarkAudioFrameSequencerCommits >= 0L) {
+        "Benchmark audio frame-sequencer commit count must be non-negative"
+      }
+      require(benchmarkAudioDroppedChannelTicks >= 0L) {
+        "Benchmark audio dropped channel tick count must be non-negative"
+      }
     }
   }
 
@@ -395,10 +448,14 @@ interface Controller : AutoCloseable {
    * observed the materialized/paused session and captured its compositor baseline.  It is not
    * emitted or consumed by ordinary sessions.
    */
-  data class BenchmarkArmEvent(
+  data class BenchmarkArmEvent
+  @JvmOverloads
+  constructor(
       val generation: Long,
       val token: String,
       val sessionGeneration: Long,
+      /** The selected silent policy token is carried through rejected arms as well. */
+      val policy: String = "canonical",
   ) : Event {
     init {
       require(generation > 0L) { "Benchmark generation must be positive" }
@@ -406,6 +463,11 @@ interface Controller : AutoCloseable {
         "Benchmark arm token must be opaque and parser-safe"
       }
       require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
+      require(policy == "canonical"
+          || policy == BenchmarkSilentPcmPolicyEvent.POLICY
+          || policy == BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY) {
+        "Unsupported benchmark audio policy"
+      }
     }
   }
 
@@ -425,6 +487,53 @@ interface Controller : AutoCloseable {
         "Benchmark arm token must be opaque and parser-safe"
       }
       require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
+    }
+  }
+
+  /**
+   * Generation-bound host-audio policy decision.  The controller owns the only call that enables
+   * the transient silent calendar; Android posts this event before the matching Resume event.
+   */
+  data class BenchmarkSilentPcmPolicyEvent
+  @JvmOverloads
+  constructor(
+      val requested: Boolean,
+      val generation: Long,
+      val sessionGeneration: Long,
+      val accepted: Boolean = true,
+      val policy: String = if (requested) POLICY else "canonical",
+  ) : Event {
+    init {
+      require(generation > 0L) { "Benchmark generation must be positive" }
+      require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
+      require(policy == "canonical" && !requested
+          || policy == POLICY || policy == RELAXED_APU_POLICY) {
+        "Unsupported benchmark audio policy"
+      }
+      require(!accepted || requested || policy == "canonical") {
+        "Accepted benchmark audio policy must request canonical OFF or a silent calendar"
+      }
+    }
+
+    companion object {
+      const val POLICY: String = "silent-pcm-v1"
+      const val RELAXED_APU_POLICY: String = "silent-pcm-relaxed-apu-v1"
+    }
+  }
+
+  /** Owner-thread fence for a read-only system-audio failure detected during a frame callback. */
+  data class BenchmarkSystemAudioViolationEvent(
+      val generation: Long,
+      val sessionGeneration: Long,
+      val policy: String,
+  ) : Event {
+    init {
+      require(generation > 0L) { "Benchmark generation must be positive" }
+      require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
+      require(policy == BenchmarkSilentPcmPolicyEvent.POLICY
+          || policy == BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY) {
+        "Unsupported benchmark audio policy"
+      }
     }
   }
 
@@ -782,6 +891,32 @@ interface Controller : AutoCloseable {
   data class ControllerState(val state: MachineState, val rom: Rom)
 
   companion object {
+    /**
+     * Benchmark resume interlock. Ordinary/pre-arm resumes retain the historical behavior;
+     * once an arm is accepted, a matching policy decision must have been processed before the
+     * measured core can run. Canonical audio is an accepted decision with requested=false;
+     * rejection or lifecycle revocation is accepted=false and cannot resume the generation.
+     */
+    internal fun benchmarkResumePolicyAllows(
+        benchmarkPolicyEnabled: Boolean,
+        benchmarkArmed: Boolean,
+        benchmarkCoreFrozen: Boolean,
+        policyProcessed: Boolean,
+        policyAccepted: Boolean,
+        policyGenerationMatches: Boolean,
+        policyRequested: Boolean,
+        calendarEnabled: Boolean,
+    ): Boolean {
+      if (!benchmarkPolicyEnabled || !benchmarkArmed) {
+        return true
+      }
+      if (benchmarkCoreFrozen || !policyProcessed || !policyAccepted
+          || !policyGenerationMatches) {
+        return false
+      }
+      return !policyRequested || calendarEnabled
+    }
+
     fun createGameboyConfig(
       properties: EmulatorProperties,
       rom: Rom,

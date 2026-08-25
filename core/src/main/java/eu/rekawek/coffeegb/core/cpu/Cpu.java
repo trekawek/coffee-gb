@@ -518,6 +518,37 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
+     * Returns whether a native CGB double-speed HALT is settled enough to own a multi-dot
+     * PERFORMANCE packet.  This is intentionally separate from the normal-speed HALT lane:
+     * double speed has a two-dot CPU machine-cycle phase and its PPU/interrupt synchronizers
+     * have additional residue which must remain on the scalar owner.
+     */
+    public boolean performanceNativeCgbSettledHaltSpanEligible() {
+        return speedMode.getSpeedMode() == 2
+                && speedMode.isGbc()
+                && !speedMode.isDmgCompat()
+                && state == State.HALTED
+                && clockCycle >= 0
+                && clockCycle < 2
+                && haltEntrySampleTicks == 0
+                && !synchronousHaltEntryStatPhase
+                && !asynchronousHaltEntryStatPhase
+                && !ordinaryHaltWakeStatPhase
+                && !haltBugMode
+                && !phasedPpuInputHigh
+                && !fastPhasedPpuDispatch
+                && !hdmaOpcodePrefetched
+                && !hdmaArbitrationOpcodeValid
+                && !haltOpcodePrefetchValid
+                && !speedSwitchPaddingReplayValid
+                && !interruptManager.hasPendingCpuReadPhase()
+                && !interruptManager.hasPpuTickSignals()
+                && !interruptManager.isInterruptEnablePending()
+                && !interruptManager.hasRawPendingEnabledInterrupt()
+                && !interruptManager.isInterruptRequestedForHalt()
+                && !interruptManager.isInterruptRequestedWhileHaltWakeBlocked();
+    }
+    /**
      * Advances the CPU clock phase without entering the instruction sequencer when this
      * master tick is not a CPU machine-cycle boundary.
      *
@@ -659,6 +690,20 @@ public class Cpu implements StatefulComponent<Cpu> {
         int completedBoundaries = ticks >= distanceToBoundary
                 ? 1 + (ticks - distanceToBoundary) / 4 : 0;
         clockCycle = (clockCycle + ticks) & 0x03;
+        haltedCpuCycles = Math.min(2, haltedCpuCycles + completedBoundaries);
+    }
+
+    /** Advances a preflighted native-CGB double-speed settled-HALT span on the two-dot phase. */
+    public void advancePerformanceNativeCgbSettledHaltSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        hdmaOpcodePrefetched = false;
+        updatePhasedPpuInput();
+        int distanceToBoundary = 2 - clockCycle;
+        int completedBoundaries = ticks >= distanceToBoundary
+                ? 1 + (ticks - distanceToBoundary) / 2 : 0;
+        clockCycle = (clockCycle + ticks) % 2;
         haltedCpuCycles = Math.min(2, haltedCpuCycles + completedBoundaries);
     }
 

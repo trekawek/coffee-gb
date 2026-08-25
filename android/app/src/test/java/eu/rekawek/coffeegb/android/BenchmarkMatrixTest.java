@@ -5,6 +5,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -222,6 +223,136 @@ public class BenchmarkMatrixTest {
         BenchmarkMatrix.Report stoppedReport = parse(stopped);
         assertFalse(stoppedReport.accepted());
         assertContains(stoppedReport.errors(), "audio arm baseline is not drained and playing");
+    }
+
+    @Test
+    public void silentPcmPolicyRequiresPositiveCalendarAndFrameSequencerEvidence() {
+        List<String> valid = withSilentPolicyForSilentRows(
+                omitFinalAudioStartFields(syntheticSilentSummaryLog(61.0, 62.0)));
+        assertTrue(parse(valid).errors().toString(), parse(valid).accepted());
+
+        List<String> compact = valid.stream().map(line -> line.startsWith("event=final_result")
+                ? compactFinalAudioProof(line, "111", "1000,10,2,100,0,0,1,0") : line)
+                .collect(java.util.stream.Collectors.toList());
+        assertTrue(parse(compact).errors().toString(), parse(compact).accepted());
+
+        List<String> negativeCompact = syntheticSummaryLog(61.0, 62.0).stream()
+                .map(line -> line.startsWith("event=final_result")
+                        ? compactFinalAudioProof(line, "111", "-1,-1,-1,-1,-1,-1,-1,-1")
+                        : line)
+                .collect(java.util.stream.Collectors.toList());
+        BenchmarkMatrix.Report negativeReport = parse(negativeCompact);
+        assertFalse(negativeReport.accepted());
+        assertContains(negativeReport.errors(), "invalid compact benchmark audio calendar");
+
+        ArrayList<String> negativeExpanded = new ArrayList<>(valid);
+        for (int index = 0; index < negativeExpanded.size(); index++) {
+            String line = negativeExpanded.get(index);
+            if (line.startsWith("event=final_result")) {
+                for (String key : List.of(
+                        "benchmark_audio_skipped_ticks",
+                        "benchmark_audio_zero_sample_slots",
+                        "benchmark_audio_zero_sample_events",
+                        "benchmark_audio_max_debt", "benchmark_audio_apu_reads",
+                        "benchmark_audio_apu_writes",
+                        "benchmark_audio_frame_sequencer_commits",
+                        "benchmark_audio_dropped_channel_ticks")) {
+                    line = line.replaceAll(" " + key + "=[^ ]*", " " + key + "=-1");
+                }
+                negativeExpanded.set(index, line);
+                break;
+            }
+        }
+        BenchmarkMatrix.Report negativeExpandedReport = parse(negativeExpanded);
+        assertFalse(negativeExpandedReport.accepted());
+        assertContains(negativeExpandedReport.errors(),
+                "expanded benchmark audio calendar must be nonnegative");
+
+        ArrayList<String> mixedSchemas = new ArrayList<>(valid);
+        for (int index = 0; index < mixedSchemas.size(); index++) {
+            String line = mixedSchemas.get(index);
+            if (line.startsWith("event=final_result")) {
+                mixedSchemas.set(index, line + " benchmark_audio_flags=111"
+                        + " benchmark_audio_calendar=1000,10,2,100,0,0,1,0");
+                break;
+            }
+        }
+        BenchmarkMatrix.Report mixedSchemaReport = parse(mixedSchemas);
+        assertFalse(mixedSchemaReport.accepted());
+        assertContains(mixedSchemaReport.errors(),
+                "compact and expanded benchmark audio proofs cannot be mixed");
+
+        for (String field : List.of(
+                "benchmark_audio_zero_sample_slots",
+                "benchmark_audio_zero_sample_events",
+                "benchmark_audio_max_debt",
+                "benchmark_audio_frame_sequencer_commits")) {
+            List<String> missing = replaceFirstLineKey(
+                    valid, "event=final_result", "pair_id=p00-dmg ", field, "0");
+            BenchmarkMatrix.Report report = parse(missing);
+            assertFalse(field, report.accepted());
+            assertContains(report.errors(), "intrinsic audio output evidence");
+        }
+    }
+
+    @Test
+    public void relaxedSilentPcmPolicyRequiresDroppedTicksEqualToSkippedTicks() {
+        List<String> exact = withSilentPolicyForSilentRows(
+                omitFinalAudioStartFields(syntheticSilentSummaryLog(61.0, 62.0)));
+        List<String> relaxed = exact.stream().map(line -> {
+            if (silentRow(line, List.of("dmg", "mgb", "cgb-native", "cgb0-native",
+                    "cgb-dmg-compat")) == null) {
+                return line;
+            }
+            return line.replace("silent-pcm-v1", "silent-pcm-relaxed-apu-v1")
+                    .replace("benchmark_audio_dropped_channel_ticks=0",
+                            "benchmark_audio_dropped_channel_ticks=1000");
+        }).collect(java.util.stream.Collectors.toList());
+        assertTrue(parse(relaxed).errors().toString(), parse(relaxed).accepted());
+
+        List<String> mismatch = relaxed.stream()
+                .map(line -> line.replace("benchmark_audio_dropped_channel_ticks=1000",
+                        "benchmark_audio_dropped_channel_ticks=999"))
+                .collect(java.util.stream.Collectors.toList());
+        BenchmarkMatrix.Report report = parse(mismatch);
+        assertFalse(report.accepted());
+        assertContains(report.errors(), "intrinsic audio output evidence");
+    }
+
+    @Test
+    public void rejectsMixedCanonicalAndSilentPolicies() {
+        List<String> mixed = withSilentPolicyForSilentRows(syntheticSummaryLog(61.0, 62.0));
+        BenchmarkMatrix.Report report = parse(mixed);
+        assertFalse(report.accepted());
+        assertContains(report.errors(), "mixed benchmark audio policies");
+    }
+
+    @Test
+    public void silentPolicyRejectsSgbRows() {
+        List<String> allRows = withSilentPolicyForRows(syntheticSummaryLog(61.0, 62.0),
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat",
+                        "sgb", "sgb2"));
+        BenchmarkMatrix.Report report = parse(allRows);
+        assertFalse(report.accepted());
+        assertContains(report.errors(), "row_order is outside selected matrix");
+    }
+
+    @Test
+    public void silentPolicyRequiresAndBindsBenchmarkToken() {
+        List<String> valid = withSilentPolicyForSilentRows(
+                omitFinalAudioStartFields(syntheticSilentSummaryLog(61.0, 62.0)));
+        List<String> missing = replaceFirstLine(valid, "event=matrix_run", "",
+                "benchmark_token=silent-token-001 ", "");
+        BenchmarkMatrix.Report missingReport = parse(missing);
+        assertFalse(missingReport.accepted());
+        assertContains(missingReport.errors(), "silent benchmark token is missing");
+
+        List<String> drift = replaceFirstLine(valid, "event=final_result", "",
+                "benchmark_token=silent-token-001",
+                "benchmark_token=drift-token-0001");
+        BenchmarkMatrix.Report driftReport = parse(drift);
+        assertFalse(driftReport.accepted());
+        assertContains(driftReport.errors(), "final evidence does not match matrix_run");
     }
 
     @Test
@@ -909,6 +1040,55 @@ public class BenchmarkMatrixTest {
         return lines;
     }
 
+    private static List<String> syntheticSilentSummaryLog(double parentFps, double candidateFps) {
+        List<String> source = syntheticSummaryLog(parentFps, candidateFps);
+        List<String> silentRows = List.of("dmg", "mgb", "cgb-native", "cgb0-native",
+                "cgb-dmg-compat");
+        Map<String, Map<String, Integer>> orders = new java.util.LinkedHashMap<>();
+        List<String> selected = new ArrayList<>();
+        for (String line : source) {
+            String row = silentRow(line, silentRows);
+            if (row == null) {
+                continue;
+            }
+            String block = field(line, "matrix_block");
+            if (line.startsWith("event=matrix_run")) {
+                Map<String, Integer> blockOrders = orders.computeIfAbsent(block,
+                        ignored -> new java.util.LinkedHashMap<>());
+                blockOrders.computeIfAbsent(row, ignored -> blockOrders.size());
+            }
+            selected.add(line);
+        }
+        List<String> remapped = new ArrayList<>(selected.size());
+        for (String line : selected) {
+            String row = silentRow(line, silentRows);
+            String block = field(line, "matrix_block");
+            Integer order = orders.get(block).get(row);
+            remapped.add(line.replaceFirst("row_order=[0-9]+", "row_order=" + order));
+        }
+        return remapped;
+    }
+
+    private static String silentRow(String line, List<String> rows) {
+        for (String row : rows) {
+            if (line.contains("-" + row + " ")) {
+                return row;
+            }
+        }
+        return null;
+    }
+
+    private static String field(String line, String key) {
+        String prefix = key + "=";
+        int start = line.indexOf(prefix);
+        if (start < 0) {
+            throw new IllegalArgumentException("missing field " + key);
+        }
+        int valueStart = start + prefix.length();
+        int end = line.indexOf(' ', valueStart);
+        return line.substring(valueStart, end < 0 ? line.length() : end);
+    }
+
     private static List<String> declarationsBeforeCompletions() {
         ArrayList<String> result = new ArrayList<>();
         for (String block : BLOCK_NAMES) {
@@ -1291,6 +1471,90 @@ public class BenchmarkMatrixTest {
                 + " " + audioStartEvidence()
                 + " audio_focus_granted=true audio_focus_start_loss_count=0"
                 + " audio_focus_loss_count=0";
+    }
+
+    private static List<String> withSilentPolicyForSilentRows(List<String> source) {
+        return withSilentPolicyForRows(source,
+                List.of("dmg", "mgb", "cgb-native", "cgb0-native", "cgb-dmg-compat"));
+    }
+
+    private static List<String> withSilentPolicyForRows(List<String> source,
+            List<String> selectedRows) {
+        String token = "silent-token-001";
+        ArrayList<String> result = new ArrayList<>(source.size());
+        for (String original : source) {
+            if (silentRow(original, selectedRows) == null) {
+                result.add(original);
+                continue;
+            }
+            String line = original;
+            if (line.startsWith("event=matrix_run")) {
+                line += " benchmark_token=" + token + " benchmark_audio_policy=silent-pcm-v1"
+                        + " audio_start_active=true audio_start_paused=false"
+                        + " audio_start_muted=false audio_start_volume=100"
+                        + " audio_start_system_volume=0 audio_start_system_volume_max=15"
+                        + " audio_start_system_music_muted=true audio_start_queued_frames=0"
+                        + " audio_start_reopen_pending=false"
+                        + " audio_start_output_identity=11 audio_start_queue_identity=12";
+                line = line.replace("audio_start_input_events=0", "audio_start_input_events=1")
+                        .replace("audio_start_input_frames=0", "audio_start_input_frames=1")
+                        .replace("audio_start_written_bytes=0", "audio_start_written_bytes=4")
+                        .replace("audio_start_written_frames=0", "audio_start_written_frames=1");
+            } else if (line.startsWith("event=final_result")) {
+                line = line.replace("audio_system_volume=10", "audio_system_volume=0")
+                        .replace("audio_system_music_muted=false",
+                                "audio_system_music_muted=true");
+                line = incrementLongField(line, "audio_pcm_input_events", 1L);
+                line = incrementLongField(line, "audio_pcm_input_frames", 1L);
+                line = incrementLongField(line, "audio_pcm_written_bytes", 4L);
+                line = incrementLongField(line, "audio_pcm_written_frames", 1L);
+                line += " benchmark_token=" + token + " benchmark_audio_policy=silent-pcm-v1"
+                        + " benchmark_audio_requested=true"
+                        + " benchmark_audio_active_at_boundary=true"
+                        + " benchmark_audio_disabled_after=true"
+                        + " benchmark_audio_skipped_ticks=1000"
+                        + " benchmark_audio_zero_sample_slots=10"
+                        + " benchmark_audio_zero_sample_events=2"
+                        + " benchmark_audio_max_debt=100"
+                        + " benchmark_audio_apu_reads=0 benchmark_audio_apu_writes=0"
+                        + " benchmark_audio_frame_sequencer_commits=1"
+                        + " benchmark_audio_dropped_channel_ticks=0"
+                        + " system_audio_sample_count=12 system_audio_bad_count=0"
+                        + " audio_output_identity=11 audio_queue_identity=12";
+            }
+            result.add(line);
+        }
+        return result;
+    }
+
+    private static String incrementLongField(String line, String key, long delta) {
+        String prefix = key + "=";
+        int start = line.indexOf(prefix);
+        if (start < 0) {
+            throw new IllegalArgumentException("missing field " + key);
+        }
+        int valueStart = start + prefix.length();
+        int end = line.indexOf(' ', valueStart);
+        if (end < 0) {
+            end = line.length();
+        }
+        long value = Long.parseLong(line.substring(valueStart, end));
+        return line.substring(0, valueStart) + (value + delta) + line.substring(end);
+    }
+
+    private static String compactFinalAudioProof(String line, String flags, String calendar) {
+        String compact = line;
+        for (String key : List.of(
+                "benchmark_audio_requested", "benchmark_audio_active_at_boundary",
+                "benchmark_audio_disabled_after", "benchmark_audio_skipped_ticks",
+                "benchmark_audio_zero_sample_slots", "benchmark_audio_zero_sample_events",
+                "benchmark_audio_max_debt", "benchmark_audio_apu_reads",
+                "benchmark_audio_apu_writes", "benchmark_audio_frame_sequencer_commits",
+                "benchmark_audio_dropped_channel_ticks")) {
+            compact = compact.replaceAll(" " + key + "=[^ ]*", "");
+        }
+        return compact + " benchmark_audio_flags=" + flags
+                + " benchmark_audio_calendar=" + calendar;
     }
 
     private record Evidence(String requestedProfile, String profile, boolean gbc,

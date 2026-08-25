@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
+import eu.rekawek.coffeegb.core.memory.Ram;
 
 import java.util.Arrays;
 import java.util.Objects;
@@ -34,6 +35,12 @@ public final class PerformanceScanlineRenderer {
 
     private static final int SCREEN_WIDTH = Display.DISPLAY_WIDTH;
 
+    private static final int COLOR_MASK = 0xffff;
+
+    private static final int SPRITE_VALID = 1 << 16;
+
+    private static final int SPRITE_PRIORITY = 1 << 17;
+
     private final AddressSpace videoRam0;
 
     private final AddressSpace videoRam1;
@@ -49,6 +56,16 @@ public final class PerformanceScanlineRenderer {
     private final ColorPalette oamPalette;
 
     private final boolean gbc;
+
+    /** Direct aliases are deliberately enabled only for the exact production RAM shape. */
+    private final int[] nativeVideoRam0;
+
+    private final int[] nativeVideoRam1;
+
+    /** Palette rows are live references, so palette writes remain visible after construction. */
+    private final int[][] nativeBgPalettes;
+
+    private final int[][] nativeOamPalettes;
 
     // KEY0 can switch a live CGB between native and DMG-compatible output after boot. Keep this
     // line renderer session-owned but refresh the mode at the same owner-thread boundary as the
@@ -105,6 +122,21 @@ public final class PerformanceScanlineRenderer {
         this.gbc = gbc;
         this.dmgCompat = dmgCompat;
         this.sprites = Objects.requireNonNull(sprites, "sprites");
+        this.nativeVideoRam0 = exactVram(videoRam0);
+        this.nativeVideoRam1 = exactVram(videoRam1);
+        if (gbc
+                && bgPalette.getClass() == ColorPalette.class
+                && oamPalette.getClass() == ColorPalette.class) {
+            this.nativeBgPalettes = new int[8][];
+            this.nativeOamPalettes = new int[8][];
+            for (int i = 0; i < 8; i++) {
+                nativeBgPalettes[i] = bgPalette.getPalette(i);
+                nativeOamPalettes[i] = oamPalette.getPalette(i);
+            }
+        } else {
+            this.nativeBgPalettes = null;
+            this.nativeOamPalettes = null;
+        }
         if (sprites.length > 10) {
             throw new IllegalArgumentException("A Game Boy line can select at most 10 sprites");
         }
@@ -149,6 +181,14 @@ public final class PerformanceScanlineRenderer {
         Objects.requireNonNull(output, "output");
         if (output.length < SCREEN_WIDTH) {
             throw new IllegalArgumentException("Scanline output must contain 160 pixels");
+        }
+        if (gbc && !dmgCompat
+                && nativeVideoRam0 != null
+                && nativeVideoRam1 != null
+                && nativeBgPalettes != null
+                && nativeOamPalettes != null) {
+            renderNativeCgbLine(ly, windowLine, output);
+            return;
         }
         prepareSprites(ly);
         boolean objEnabled = lcdc.isObjDisplay();
@@ -243,6 +283,92 @@ public final class PerformanceScanlineRenderer {
                     bgp,
                     obp0,
                     obp1);
+        }
+    }
+
+    /**
+     * Stable owner-side boundary for the PERFORMANCE scanline call. R8 keeps this small method
+     * as a separate optimization unit so the generic scheduler cannot absorb the renderer body.
+     */
+    void renderLinePerformanceBoundary(Display display, int ly, int windowLine) {
+        renderLine(display, ly, windowLine);
+    }
+
+    private void renderNativeCgbLine(int ly, int windowLine, int[] output) {
+        prepareSprites(ly);
+        prepareNativeSpriteOverlay(lcdc.isObjDisplay());
+
+        int scx = registers.get(SCX) & 0xff;
+        int scy = registers.get(SCY) & 0xff;
+        int wy = registers.get(WY) & 0xff;
+        int wx = registers.get(WX) & 0xff;
+        boolean bgEnabled = lcdc.isBgAndWindowDisplay();
+        boolean windowEnabled = lcdc.isWindowDisplay()
+                && ly >= wy
+                && wx < 167;
+        int windowLeft = wx <= 7 ? 0 : wx - 7;
+        int windowY = windowLine >= 0 ? windowLine : Math.max(0, ly - wy);
+        int bgMap = lcdc.getBgTileMapDisplay();
+        int windowMap = lcdc.getWindowTileMapDisplay();
+        boolean signedTileIds = lcdc.isBgWindowTileDataSigned();
+        int bgMapY = (scy + ly) & 0xff;
+
+        if (windowEnabled && windowLeft > 0) {
+            renderNativeTileRun(0, windowLeft, scx, bgMapY, bgMap, signedTileIds, bgEnabled, output);
+            renderNativeTileRun(windowLeft, SCREEN_WIDTH, 0, windowY, windowMap,
+                    signedTileIds, bgEnabled, output);
+        } else if (windowEnabled) {
+            renderNativeTileRun(0, SCREEN_WIDTH, 0, windowY, windowMap,
+                    signedTileIds, bgEnabled, output);
+        } else {
+            renderNativeTileRun(0, SCREEN_WIDTH, scx, bgMapY, bgMap,
+                    signedTileIds, bgEnabled, output);
+        }
+    }
+
+    private void renderNativeTileRun(
+            int startX,
+            int endX,
+            int mapX,
+            int mapY,
+            int mapBase,
+            boolean signedTileIds,
+            boolean bgEnabled,
+            int[] output) {
+        int x = startX;
+        mapX &= 0xff;
+        int mapRow = ((mapY >> 3) & 0x1f) << 5;
+        int sourceRow = mapY & 7;
+        while (x < endX) {
+            int mapAddress = mapBase + mapRow + ((mapX >> 3) & 0x1f);
+            int tileId = nativeVideoRam0[mapAddress - 0x8000] & 0xff;
+            int attributes = nativeVideoRam1[mapAddress - 0x8000] & 0xff;
+            int tileRow = (attributes & 0x40) == 0 ? sourceRow : 7 - sourceRow;
+            int bank = (attributes >> 3) & 1;
+            int address = tileAddress(tileId, tileRow, signedTileIds) - 0x8000;
+            int low = (bank == 0 ? nativeVideoRam0 : nativeVideoRam1)[address] & 0xff;
+            int high = (bank == 0 ? nativeVideoRam0 : nativeVideoRam1)[address + 1] & 0xff;
+            int palette = attributes & 7;
+            boolean backgroundPriority = (attributes & 0x80) != 0;
+            boolean xFlip = (attributes & 0x20) != 0;
+            int pixels = Math.min(endX - x, 8 - (mapX & 7));
+            int bit = xFlip ? mapX & 7 : 7 - (mapX & 7);
+            int step = xFlip ? 1 : -1;
+            int[] paletteRow = nativeBgPalettes[palette];
+            for (int i = 0; i < pixels; i++) {
+                int backgroundRaw = ((low >> bit) & 1) | (((high >> bit) & 1) << 1);
+                int packedSprite = spriteOverlay[x];
+                int color = paletteRow[backgroundRaw] & COLOR_MASK;
+                if ((packedSprite & SPRITE_VALID) != 0
+                        && (!bgEnabled
+                        || backgroundRaw == 0
+                        || (!backgroundPriority && (packedSprite & SPRITE_PRIORITY) == 0))) {
+                    color = packedSprite & COLOR_MASK;
+                }
+                output[x++] = color;
+                bit += step;
+            }
+            mapX = (mapX + pixels) & 0xff;
         }
     }
 
@@ -387,6 +513,31 @@ public final class PerformanceScanlineRenderer {
         }
     }
 
+    private void prepareNativeSpriteOverlay(boolean objEnabled) {
+        Arrays.fill(spriteOverlay, 0);
+        if (!objEnabled) {
+            return;
+        }
+        // CGB priority is OAM-index based. Painting high indices first and allowing lower
+        // indices to overwrite preserves the first (lowest-address) non-transparent pixel.
+        for (int order = spriteCount - 1; order >= 0; order--) {
+            SpriteLine sprite = spriteLines[spriteOrder[order]];
+            int start = Math.max(0, sprite.left);
+            int end = Math.min(SCREEN_WIDTH, sprite.left + 8);
+            int[] palette = nativeOamPalettes[sprite.palette];
+            for (int x = start; x < end; x++) {
+                int pixelX = x - sprite.left;
+                int bit = sprite.xFlip ? pixelX : 7 - pixelX;
+                int raw = ((sprite.low >> bit) & 1) | (((sprite.high >> bit) & 1) << 1);
+                if (raw != 0) {
+                    spriteOverlay[x] = (palette[raw] & COLOR_MASK)
+                            | SPRITE_VALID
+                            | (sprite.priority ? SPRITE_PRIORITY : 0);
+                }
+            }
+        }
+    }
+
     private void prepareSprites(int ly) {
         spriteCount = 0;
         int spriteHeight = lcdc.getSpriteHeight();
@@ -462,6 +613,21 @@ public final class PerformanceScanlineRenderer {
             return videoRam1.getByte(address) & 0xff;
         }
         return videoRam0.getByte(address) & 0xff;
+    }
+
+    private static int[] exactVram(AddressSpace space) {
+        if (space == null || space.getClass() != Ram.class) {
+            return null;
+        }
+        Ram ram = (Ram) space;
+        if (ram.getSpace().length != 0x2000
+                || !ram.accepts(0x8000)
+                || !ram.accepts(0x9fff)
+                || ram.accepts(0x7fff)
+                || ram.accepts(0xa000)) {
+            return null;
+        }
+        return ram.getSpace();
     }
 
     private final class SpriteLine {

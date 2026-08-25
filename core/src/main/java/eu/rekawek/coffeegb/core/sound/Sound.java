@@ -24,6 +24,17 @@ import java.util.Objects;
 public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     /**
+     * Host-only PERFORMANCE audio calendars. OFF is the normal path, EXACT preserves the APU
+     * channel clock state at every materialization boundary, and RELAXED_APU keeps the frame
+     * sequencer/control-plane calendar while deliberately dropping deferred channel clocks.
+     */
+    public enum PerformanceSystemMutedAudioMode {
+        OFF,
+        EXACT,
+        RELAXED_APU
+    }
+
+    /**
      * PERFORMANCE audio is intentionally represented at one fifty-fifth of the master-tick
      * rate. The source is sampled at approximately 76.26 kHz, which is still comfortably above
      * the host audio band and gives the emulator a 55-master-tick quiet window in which to batch
@@ -99,6 +110,31 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      * SoundState: captureState() materializes it first and restoreState() always resets it.
      */
     private transient int pendingPerformanceTicks;
+
+    /**
+     * Host-controlled PERFORMANCE-only calendar for a system-muted benchmark. It skips per-tick
+     * channel dispatch and emits zero PCM while retaining sample cadence; deferred channel clocks
+     * are materialized canonically at every existing APU boundary. It is never part of machine
+     * state and is disabled by default.
+     */
+    private transient PerformanceSystemMutedAudioMode performanceSystemMutedAudioMode =
+            PerformanceSystemMutedAudioMode.OFF;
+
+    private transient long performanceSystemMutedAudioCalendarSkippedTicks;
+
+    private transient long performanceSystemMutedAudioCalendarZeroSampleSlots;
+
+    private transient long performanceSystemMutedAudioCalendarZeroSampleEvents;
+
+    private transient long performanceSystemMutedAudioCalendarMaxPendingTicks;
+
+    private transient long performanceSystemMutedAudioCalendarDroppedChannelTicks;
+
+    private transient long performanceSystemMutedAudioCalendarApuReads;
+
+    private transient long performanceSystemMutedAudioCalendarApuWrites;
+
+    private transient long performanceSystemMutedAudioCalendarFrameSequencerCommits;
 
     private final Timer timer;
 
@@ -235,6 +271,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (ticks <= 0) {
             return;
         }
+        if (performanceSystemMutedAudioCalendarUsable()) {
+            accumulateSilentPcmTicks(ticks);
+            return;
+        }
         if (!performanceAudio || debugHooks != null || outputObserver != null
                 || performanceSamplePhase + ticks >= performanceAudioDecimation) {
             materializePendingPerformanceTicks();
@@ -261,6 +301,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             return;
         }
         pendingPerformanceTicks = 0;
+        if (performanceSystemMutedAudioMode == PerformanceSystemMutedAudioMode.RELAXED_APU) {
+            performanceSystemMutedAudioCalendarDroppedChannelTicks += ticks;
+            return;
+        }
         if (!enabled) {
             return;
         }
@@ -365,6 +409,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (firedStep < 0) {
             return;
         }
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            performanceSystemMutedAudioCalendarFrameSequencerCommits++;
+        }
         materializePendingPerformanceTicks();
         int enabledBefore = getDebugEnabledChannelMask();
         notifyDebugEvent(ApuTrace.Kind.FRAME_SEQUENCER_STEP, -1, -1, firedStep);
@@ -396,6 +443,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
                 || pendingFrameSequencerStep >= 0) {
             return 0;
         }
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            return requested;
+        }
         return Math.min(requested,
                 performanceAudioDecimation - performanceSamplePhase - 1);
     }
@@ -413,6 +463,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (!performanceAudio) {
             return requested;
         }
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            return requested;
+        }
         return Math.min(requested,
                 performanceAudioDecimation - performanceSamplePhase - 1);
     }
@@ -424,6 +477,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
      * accessors; only the next compact-output boundary needs to run this tick immediately.
      */
     public void tickPerformanceBoundary(boolean divReset) {
+        if (performanceSystemMutedAudioCalendarUsable()) {
+            accumulateSilentPcmTicks(1);
+            return;
+        }
         if (!performanceAudio || debugHooks != null || outputObserver != null
                 || performanceSamplePhase + 1 >= performanceAudioDecimation) {
             tick(divReset);
@@ -438,6 +495,116 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     public void onSpeedSwitch() {
         materializePendingPerformanceTicks();
         frameSequencerClockPhase = (frameSequencerClockPhase + 1) & 3;
+    }
+
+    /**
+     * Compatibility setter for the original silent-pcm-v1 policy. True selects EXACT; false
+     * selects OFF. New callers should use {@link #setPerformanceSystemMutedAudioMode}.
+     */
+    public void setPerformanceSystemMutedAudioCalendar(boolean enabled) {
+        setPerformanceSystemMutedAudioMode(enabled
+                ? PerformanceSystemMutedAudioMode.EXACT
+                : PerformanceSystemMutedAudioMode.OFF);
+    }
+
+    /** Sets the transient owner-thread system-muted PERFORMANCE audio calendar mode. */
+    public void setPerformanceSystemMutedAudioMode(PerformanceSystemMutedAudioMode mode) {
+        Objects.requireNonNull(mode, "mode");
+        if (mode == performanceSystemMutedAudioMode) {
+            return;
+        }
+        if (mode != PerformanceSystemMutedAudioMode.OFF && !performanceAudio) {
+            throw new IllegalStateException(
+                    "system-muted audio calendar requires PERFORMANCE audio");
+        }
+        // Materialize using the old mode before changing policy. This preserves exact channel
+        // state when arming relaxed mode and records any intentionally dropped debt when turning
+        // relaxed mode off.
+        materializePendingPerformanceTicks();
+        if (mode != PerformanceSystemMutedAudioMode.OFF) {
+            Arrays.fill(buffer, 0);
+        }
+        performanceSystemMutedAudioMode = mode;
+    }
+
+    public boolean isPerformanceSystemMutedAudioCalendarEnabled() {
+        return performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF;
+    }
+
+    public PerformanceSystemMutedAudioMode getPerformanceSystemMutedAudioMode() {
+        return performanceSystemMutedAudioMode;
+    }
+
+    public void resetPerformanceSystemMutedAudioCalendarCounters() {
+        performanceSystemMutedAudioCalendarSkippedTicks = 0L;
+        performanceSystemMutedAudioCalendarZeroSampleSlots = 0L;
+        performanceSystemMutedAudioCalendarZeroSampleEvents = 0L;
+        performanceSystemMutedAudioCalendarMaxPendingTicks = 0L;
+        performanceSystemMutedAudioCalendarDroppedChannelTicks = 0L;
+        performanceSystemMutedAudioCalendarApuReads = 0L;
+        performanceSystemMutedAudioCalendarApuWrites = 0L;
+        performanceSystemMutedAudioCalendarFrameSequencerCommits = 0L;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarSkippedTicks() {
+        return performanceSystemMutedAudioCalendarSkippedTicks;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarZeroSampleSlots() {
+        return performanceSystemMutedAudioCalendarZeroSampleSlots;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarZeroSampleEvents() {
+        return performanceSystemMutedAudioCalendarZeroSampleEvents;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarMaxPendingTicks() {
+        return performanceSystemMutedAudioCalendarMaxPendingTicks;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarDroppedChannelTicks() {
+        return performanceSystemMutedAudioCalendarDroppedChannelTicks;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarApuReads() {
+        return performanceSystemMutedAudioCalendarApuReads;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarApuWrites() {
+        return performanceSystemMutedAudioCalendarApuWrites;
+    }
+
+    public long getPerformanceSystemMutedAudioCalendarFrameSequencerCommits() {
+        return performanceSystemMutedAudioCalendarFrameSequencerCommits;
+    }
+
+    private boolean performanceSystemMutedAudioCalendarUsable() {
+        return performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF
+                && performanceAudio
+                && debugHooks == null && outputObserver == null
+                && pendingFrameSequencerStep < 0;
+    }
+
+    private void accumulateSilentPcmTicks(int ticks) {
+        pendingPerformanceTicks += ticks;
+        performanceSystemMutedAudioCalendarSkippedTicks += ticks;
+        performanceSystemMutedAudioCalendarMaxPendingTicks = Math.max(
+                performanceSystemMutedAudioCalendarMaxPendingTicks, pendingPerformanceTicks);
+
+        long phaseTicks = (long) performanceSamplePhase + ticks;
+        int sampleSlots = (int) (phaseTicks / performanceAudioDecimation);
+        performanceSamplePhase = (int) (phaseTicks % performanceAudioDecimation);
+        performanceSystemMutedAudioCalendarZeroSampleSlots += sampleSlots;
+        for (int slot = 0; slot < sampleSlots; slot++) {
+            buffer[i] = 0;
+            buffer[i + 1] = 0;
+            i += 2;
+            if (i == buffer.length) {
+                performanceSystemMutedAudioCalendarZeroSampleEvents++;
+                eventBus.post(new SoundSampleEvent(buffer, outputClockSpec));
+                i = 0;
+            }
+        }
     }
 
     /** Package-private so the disabled exact-output hot path can be allocation-regression tested. */
@@ -485,6 +652,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     @Override
     public void setByte(int address, int value) {
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            performanceSystemMutedAudioCalendarApuWrites++;
+        }
         materializePendingPerformanceTicks();
         if (address == 0xff26) {
             int enabledBefore = getDebugEnabledChannelMask();
@@ -689,6 +859,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     @Override
     public int getByte(int address) {
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            performanceSystemMutedAudioCalendarApuReads++;
+        }
         materializePendingPerformanceTicks();
 
         int result;
@@ -845,6 +1018,8 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         this.frameSequencerDivOffset = mem.frameSequencerDivOffset;
         this.performanceSamplePhase = pendingAudioFits ? mem.performanceSamplePhase : 0;
         this.pendingPerformanceTicks = 0;
+        this.performanceSystemMutedAudioMode = PerformanceSystemMutedAudioMode.OFF;
+        resetPerformanceSystemMutedAudioCalendarCounters();
         this.mixerDirty = true;
 
     }

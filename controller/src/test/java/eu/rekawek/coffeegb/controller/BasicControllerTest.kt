@@ -32,6 +32,7 @@ import eu.rekawek.coffeegb.core.persistence.AtomicFileWriter
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay
+import eu.rekawek.coffeegb.core.sound.Sound
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
@@ -44,6 +45,7 @@ import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import java.util.function.BooleanSupplier
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -55,6 +57,101 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerTest {
+
+  @Test
+  fun benchmarkResumePolicyInterlockCoversPreArmAcceptedCanonicalRevokedMismatchAndFrozen() {
+    assertTrue(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = false,
+            benchmarkCoreFrozen = false,
+            policyProcessed = false,
+            policyAccepted = false,
+            policyGenerationMatches = false,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "pre-arm resume must retain ordinary behavior",
+    )
+    assertFalse(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = false,
+            policyProcessed = false,
+            policyAccepted = false,
+            policyGenerationMatches = true,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "an armed generation cannot resume before policy processing",
+    )
+    assertTrue(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = false,
+            policyProcessed = true,
+            policyAccepted = true,
+            policyGenerationMatches = true,
+            policyRequested = true,
+            calendarEnabled = true,
+        ),
+        "matching enabled policy permits resume",
+    )
+    assertTrue(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = false,
+            policyProcessed = true,
+            policyAccepted = true,
+            policyGenerationMatches = true,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "accepted canonical policy permits resume",
+    )
+    assertFalse(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = false,
+            policyProcessed = true,
+            policyAccepted = false,
+            policyGenerationMatches = true,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "revoked or rejected policy cannot resume",
+    )
+    assertFalse(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = false,
+            policyProcessed = true,
+            policyAccepted = true,
+            policyGenerationMatches = false,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "stale policy decisions cannot resume a newer generation",
+    )
+    assertFalse(
+        Controller.benchmarkResumePolicyAllows(
+            benchmarkPolicyEnabled = true,
+            benchmarkArmed = true,
+            benchmarkCoreFrozen = true,
+            policyProcessed = true,
+            policyAccepted = true,
+            policyGenerationMatches = true,
+            policyRequested = false,
+            calendarEnabled = false,
+        ),
+        "frame-600 frozen core cannot resume",
+    )
+  }
 
   @Test
   fun closeDeadlineBoundsBlockedTimingThreadAndAllowsRetry() {
@@ -1727,6 +1824,326 @@ class BasicControllerTest {
       assertEquals(0L, fourArgument.performanceEpochCount)
       assertEquals(0L, sixArgument.performanceEpochTicks)
     } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkPreArmResumeReleasesTheAnchorPause() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val rom = namedRom("BENCHMARK_PRE_ARM_RESUME")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val controller =
+        BasicController(
+            eventBus,
+            properties,
+            null,
+            SessionPreparer { currentProperties, event ->
+              val config =
+                  Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                      .setBootstrapMode(BootstrapMode.SKIP)
+                      .setExecutionMode(ExecutionMode.PERFORMANCE)
+              PreparedSession.Ready(config, Gameboy(config))
+            })
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      // The benchmark session starts paused so the host can capture its anchor. Before ARM the
+      // normal lifecycle command must still release that pause.
+      eventBus.post(Controller.ResumeEmulationEvent())
+      val resumed =
+          generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
+              .first { !it.paused }
+      assertFalse(resumed.paused)
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkPhysicalBoundaryStopsMeasuredPerformanceBatchWithoutOneMoreTick() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
+    val boundary = LinkedBlockingQueue<Controller.BenchmarkFrameBoundaryEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
+    eventBus.register<Controller.BenchmarkFrameBoundaryEvent>(boundary::add)
+    val executedTicks = AtomicInteger()
+    val boundaryPosted = AtomicInteger()
+    val generation = AtomicLong()
+    val rom = namedRom("BENCHMARK_MEASURED_STOP")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.PERFORMANCE)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun runMeasuredTicksUntilStop(
+                    ticks: Int,
+                    stop: BooleanSupplier,
+                ): Int {
+                  var executed = 0
+                  while (executed < ticks && !stop.asBoolean) {
+                    executed++
+                    executedTicks.incrementAndGet()
+                    if (executed == 5 && boundaryPosted.compareAndSet(0, 1)) {
+                      eventBus.post(
+                          Controller.BenchmarkPhysicalFrameBoundaryEvent(
+                              600L,
+                              generation.get(),
+                          ))
+                    }
+                  }
+                  return executed
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val sessionGeneration = assertNotNull(session.sessionGeneration)
+      val benchmarkGeneration = 97L
+      generation.set(benchmarkGeneration)
+      eventBus.post(
+          Controller.BenchmarkArmEvent(
+              benchmarkGeneration,
+              "stage8-measured-stop-0001",
+              sessionGeneration,
+          ))
+      assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(Controller.ResumeEmulationEvent())
+      Thread.sleep(100)
+      assertEquals(0, executedTicks.get(), "armed benchmark resumed before policy processing")
+      eventBus.post(
+          Controller.BenchmarkSilentPcmPolicyEvent(
+              false,
+              benchmarkGeneration,
+              sessionGeneration,
+          ))
+      eventBus.post(Controller.ResumeEmulationEvent())
+
+      assertNotNull(
+          boundary.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "measured batch did not reach the synchronous frame boundary",
+      )
+      assertEquals(5, executedTicks.get())
+      Thread.sleep(100)
+      assertEquals(5, executedTicks.get(), "a post-boundary measured tick was executed")
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkSystemAudioViolationFreezesRelaxedMeasuredBatchSynchronously() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
+    val executedTicks = AtomicInteger()
+    val measuredReturned = CountDownLatch(1)
+    val generation = 99L
+    val sessionGenerationRef = AtomicLong()
+    val gameboyRef = AtomicReference<Gameboy>()
+    val rom = namedRom("BENCHMARK_SYSTEM_AUDIO_VIOLATION")
+    val properties = EmulatorProperties(
+        ApplicationSettingsOverrides(
+            benchmarkPolicyEnabled = true,
+            executionMode = ExecutionMode.PERFORMANCE,
+        ))
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.SKIP)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      val gameboy = object : Gameboy(config) {
+        override fun runMeasuredTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int {
+          var executed = 0
+          while (executed < ticks && !stop.asBoolean) {
+            executed++
+            executedTicks.incrementAndGet()
+            if (executed == 5) {
+              eventBus.post(Controller.BenchmarkSystemAudioViolationEvent(
+                  generation,
+                  sessionGenerationRef.get(),
+                  Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY,
+              ))
+            }
+          }
+          measuredReturned.countDown()
+          return executed
+        }
+      }
+      gameboyRef.set(gameboy)
+      PreparedSession.Ready(config, gameboy)
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+    try {
+      controller.startController()
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val sessionGeneration = assertNotNull(session.sessionGeneration)
+      sessionGenerationRef.set(sessionGeneration)
+      // The relaxed token is selected at ARM and is immutable for this generation.
+      eventBus.post(Controller.BenchmarkArmEvent(
+          generation, "system-audio-violation-01", sessionGeneration,
+          Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY))
+      assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(Controller.BenchmarkSilentPcmPolicyEvent(
+          true, generation, sessionGeneration, true,
+          Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY))
+      eventBus.post(Controller.ResumeEmulationEvent())
+      assertTrue(measuredReturned.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(5, executedTicks.get(), "mute violation allowed a measured tick tail")
+      val sound = gameboyRef.get().sound
+      assertEquals(Sound.PerformanceSystemMutedAudioMode.OFF,
+          sound.getPerformanceSystemMutedAudioMode())
+      assertFalse(sound.isPerformanceSystemMutedAudioCalendarEnabled())
+      // A stale generation and a non-owner post cannot mutate the already frozen generation.
+      eventBus.post(Controller.BenchmarkSystemAudioViolationEvent(
+          generation + 1L, sessionGeneration,
+          Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY))
+      val nonOwner = Thread {
+        eventBus.post(Controller.BenchmarkSystemAudioViolationEvent(
+            generation, sessionGeneration,
+            Controller.BenchmarkSilentPcmPolicyEvent.RELAXED_APU_POLICY))
+      }
+      nonOwner.start()
+      nonOwner.join(TIMEOUT_SECONDS * 1_000L)
+      assertEquals(5, executedTicks.get())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkRejectedAudioPolicyFreezesRunningCoreBeforeOrdinaryBatch() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val measuredEntered = CountDownLatch(1)
+    val releaseMeasured = CountDownLatch(1)
+    val measuredCalls = AtomicInteger()
+    val ordinaryBatches = AtomicInteger()
+    val rom = namedRom("BENCHMARK_POLICY_REVOKE")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.PERFORMANCE)
+          val gameboy =
+              object : Gameboy(config) {
+                override fun runMeasuredTicksUntilStop(
+                    ticks: Int,
+                    stop: BooleanSupplier,
+                ): Int {
+                  measuredCalls.incrementAndGet()
+                  measuredEntered.countDown()
+                  releaseMeasured.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                  return 1
+                }
+
+                override fun runTicks(ticks: Int): Int {
+                  ordinaryBatches.incrementAndGet()
+                  return 0
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val sessionGeneration = assertNotNull(session.sessionGeneration)
+      val benchmarkGeneration = 98L
+      eventBus.post(
+          Controller.BenchmarkArmEvent(
+              benchmarkGeneration,
+              "stage8-policy-revoke-0001",
+              sessionGeneration,
+          ))
+      assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkSilentPcmPolicyEvent(
+              false,
+              benchmarkGeneration,
+              sessionGeneration,
+          ))
+      eventBus.post(Controller.ResumeEmulationEvent())
+      assertTrue(
+          measuredEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+          "accepted benchmark policy did not start the measured batch",
+      )
+
+      playback.clear()
+      eventBus.post(
+          Controller.BenchmarkSilentPcmPolicyEvent(
+              false,
+              benchmarkGeneration,
+              sessionGeneration,
+              accepted = false,
+          ))
+      releaseMeasured.countDown()
+
+      val paused = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(paused.paused, "revocation was not an owner-thread terminal pause")
+      assertEquals(1, measuredCalls.get())
+      assertEquals(
+          0,
+          ordinaryBatches.get(),
+          "revocation fell through to an ordinary runTicks batch",
+      )
+    } finally {
+      releaseMeasured.countDown()
       controller.close()
       properties.close()
       eventBus.close()

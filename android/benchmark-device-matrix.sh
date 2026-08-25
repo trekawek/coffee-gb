@@ -52,7 +52,8 @@ GATE_SCRIPT=${COFFEE_GB_M2_GATE_SCRIPT:-$SCRIPT_DIR/surface-timestats-gate.sh}
 usage() {
   echo "usage: benchmark-device-matrix.sh --parent-apk <signed.apk> --candidate-apk <signed.apk>" >&2
   echo "       --color-slot <0..9> --non-color-slot <0..9>" >&2
-  echo "       [--execution-mode accuracy|performance] [--output-dir <dir>]" >&2
+  echo "       [--execution-mode accuracy|performance] [--audio-policy canonical|silent-pcm-v1|silent-pcm-relaxed-apu-v1]" >&2
+  echo "       [--output-dir <dir>]" >&2
 }
 
 fatal() {
@@ -85,12 +86,14 @@ color_slot=
 non_color_slot=
 output_dir=
 execution_mode=accuracy
+audio_policy=canonical
 parent_seen=false
 candidate_seen=false
 color_seen=false
 non_color_seen=false
 output_seen=false
 execution_mode_seen=false
+audio_policy_seen=false
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -136,6 +139,13 @@ while [ "$#" -gt 0 ]; do
       execution_mode_seen=true
       shift 2
       ;;
+    --audio-policy)
+      require_arg "$@"
+      [ "$audio_policy_seen" = false ] || { usage; exit 2; }
+      audio_policy=$(printf '%s' "$2" | tr 'A-Z' 'a-z')
+      audio_policy_seen=true
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -153,6 +163,20 @@ done
 case "$execution_mode" in
   accuracy|performance) : ;;
   *) fatal "execution mode must be accuracy or performance" ;;
+esac
+
+case "$audio_policy" in
+  canonical) : ;;
+  silent-pcm-v1|silent-pcm-relaxed-apu-v1)
+    [ "$execution_mode" = performance ] \
+      || fatal "silent-pcm-v1 requires PERFORMANCE execution mode"
+    # The silent calendar is a DMG/CGB proof only. SGB/SGB2 have a distinct source clock and
+    # are intentionally retained in the canonical seven-row matrix.
+    RUN_ROWS=5
+    RUNS_PER_BLOCK=$((RUN_ROWS * 2))
+    TOTAL_RUNS=$((RUN_BLOCKS * RUNS_PER_BLOCK))
+    ;;
+  *) fatal "audio policy must be canonical, silent-pcm-v1, or silent-pcm-relaxed-apu-v1" ;;
 esac
 
 case "$color_slot" in 0|1|2|3|4|5|6|7|8|9) : ;; *) fatal "color catalog slot must be 0..9" ;; esac
@@ -190,6 +214,25 @@ cleanup() {
         fi
       fi
     done
+    if [ -f "$tmp_dir/original.user-preferred-display-mode" ]; then
+      original_preferred=$(awk '
+        tolower($0) ~ /user preferred display mode:/ {
+          line=$0
+          sub(/^.*:[[:space:]]*/, "", line)
+          if (split(line, fields, /[[:space:]]+/) == 3) print fields[1], fields[2], fields[3]
+          exit
+        }
+      ' "$tmp_dir/original.user-preferred-display-mode")
+      set -- $original_preferred
+      if [ "$#" -eq 3 ] && awk -v width="$1" -v height="$2" -v rate="$3" \
+          'BEGIN { exit(width > 0 && height > 0 && rate > 0 ? 0 : 1) }'; then
+        "$ADB_BIN" -s "$DEVICE_SERIAL" shell cmd display set-user-preferred-display-mode \
+          "$1" "$2" "$3" 0 >/dev/null 2>&1 || :
+      else
+        "$ADB_BIN" -s "$DEVICE_SERIAL" shell cmd display clear-user-preferred-display-mode 0 \
+          >/dev/null 2>&1 || :
+      fi
+    fi
   fi
   rm -rf "$tmp_dir"
 }
@@ -353,6 +396,7 @@ check_host_environment() {
     || fatal "power state query failed"
   if ! awk '
     tolower($0) ~ /minteractive[[:space:]]*=[[:space:]]*true/ { interactive=1 }
+    tolower($0) ~ /mhalinteractivemodeenabled[[:space:]]*=[[:space:]]*true/ { interactive=1 }
     tolower($0) ~ /mwakefulness[[:space:]]*=[[:space:]]*awake/ { awake=1 }
     END { exit(interactive && awake ? 0 : 1) }
   ' "$tmp_dir/power"; then
@@ -361,12 +405,28 @@ check_host_environment() {
 
   adb_shell_capture "$tmp_dir/battery" dumpsys battery \
     || fatal "battery state query failed"
-  if ! awk 'tolower($0) ~ /(ac|usb|wireless) powered[[:space:]]*:[[:space:]]*true/ \
+  if ! awk 'tolower($0) ~ /(ac|usb|wireless|dock) powered[[:space:]]*:[[:space:]]*true/ \
       || tolower($0) ~ /^[[:space:]]*powered[[:space:]]*:[[:space:]]*true/ { ok=1 }
       END { exit(ok ? 0 : 1) }' "$tmp_dir/battery"; then
     fatal "device is not physically plugged in"
   fi
   plugged_mask=$(awk -F: 'tolower($1) ~ /^[[:space:]]*plugged[[:space:]]*$/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$tmp_dir/battery")
+  if [ -z "$plugged_mask" ]; then
+    plugged_mask=$(awk -F: '
+      {
+        key=tolower($1)
+        value=tolower($2)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+        if (value != "true") next
+        if (key == "ac powered") mask += 1
+        else if (key == "usb powered") mask += 2
+        else if (key == "wireless powered") mask += 4
+        else if (key == "dock powered") mask += 8
+      }
+      END { if (mask > 0) print mask }
+    ' "$tmp_dir/battery")
+  fi
   case "$plugged_mask" in ''|*[!0-9]*) fatal "battery plugged mask is unavailable" ;; esac
   [ "$plugged_mask" -gt 0 ] || fatal "device is not plugged into a power source"
 
@@ -418,6 +478,8 @@ pin_display_rate() {
   adb_shell_checked settings put system peak_refresh_rate "$rate"
   adb_shell_checked settings put system min_refresh_rate "$rate"
   adb_shell_checked settings put system user_refresh_rate "$rate"
+  adb_shell_checked cmd display set-user-preferred-display-mode 720 1600 "$rate" 0
+  bounded_sleep "$REFRESH_WAIT_SECONDS"
   verify_display_rate "$rate"
 }
 
@@ -474,6 +536,9 @@ save_display_settings() {
     adb_shell_capture "$tmp_dir/original.$setting" settings get system "$setting" \
       || fatal "display setting query failed"
   done
+  adb_shell_capture "$tmp_dir/original.user-preferred-display-mode" \
+    cmd display get-user-preferred-display-mode 0 \
+    || fatal "user-preferred display mode query failed"
   display_settings_saved=true
 }
 
@@ -576,6 +641,8 @@ line_field() {
   line=$2
   printf '%s\n' "$line" | awk -v wanted="$key" '
     {
+      compact_flags=""
+      compact_calendar=""
       for (i = 1; i <= NF; i++) {
         if (index($i, wanted "=") == 1) {
           value=$i
@@ -583,9 +650,67 @@ line_field() {
           print value
           exit
         }
+        if (index($i, "benchmark_audio_flags=") == 1) {
+          compact_flags=$i
+          sub("^benchmark_audio_flags=", "", compact_flags)
+        }
+        if (index($i, "benchmark_audio_calendar=") == 1) {
+          compact_calendar=$i
+          sub("^benchmark_audio_calendar=", "", compact_calendar)
+        }
+      }
+      if (wanted == "benchmark_audio_requested" && compact_flags != "") {
+        print (substr(compact_flags, 1, 1) == "1" ? "true" : "false")
+        exit
+      }
+      if (wanted == "benchmark_audio_active_at_boundary" && compact_flags != "") {
+        print (substr(compact_flags, 2, 1) == "1" ? "true" : "false")
+        exit
+      }
+      if (wanted == "benchmark_audio_disabled_after" && compact_flags != "") {
+        print (substr(compact_flags, 3, 1) == "1" ? "true" : "false")
+        exit
+      }
+      if (compact_calendar != "") {
+        split(compact_calendar, calendar, ",")
+        if (wanted == "benchmark_audio_skipped_ticks") { print calendar[1]; exit }
+        if (wanted == "benchmark_audio_zero_sample_slots") { print calendar[2]; exit }
+        if (wanted == "benchmark_audio_zero_sample_events") { print calendar[3]; exit }
+        if (wanted == "benchmark_audio_max_debt") { print calendar[4]; exit }
+        if (wanted == "benchmark_audio_apu_reads") { print calendar[5]; exit }
+        if (wanted == "benchmark_audio_apu_writes") { print calendar[6]; exit }
+        if (wanted == "benchmark_audio_frame_sequencer_commits") { print calendar[7]; exit }
+        if (wanted == "benchmark_audio_dropped_channel_ticks") { print calendar[8]; exit }
       }
     }
   '
+}
+
+require_compact_audio_proof() {
+  line=$1
+  printf '%s\n' "$line" | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^benchmark_audio_flags=/) {
+          flags_count++
+          flags=$i
+          sub(/^benchmark_audio_flags=/, "", flags)
+        } else if ($i ~ /^benchmark_audio_calendar=/) {
+          calendar_count++
+          calendar=$i
+          sub(/^benchmark_audio_calendar=/, "", calendar)
+        } else if ($i ~ /^benchmark_audio_(requested|active_at_boundary|disabled_after|skipped_ticks|zero_sample_slots|zero_sample_events|max_debt|apu_reads|apu_writes|frame_sequencer_commits|dropped_channel_ticks)=/) {
+          expanded_count++
+        }
+      }
+    }
+    END {
+      if (flags_count != 1 || calendar_count != 1 || expanded_count != 0) exit 1
+      if (flags !~ /^[01][01][01]$/) exit 2
+      if (split(calendar, part, ",") != 8) exit 3
+      for (i = 1; i <= 8; i++) if (part[i] !~ /^[0-9]+$/) exit 4
+    }
+  ' || fatal "final benchmark evidence has malformed compact audio proof"
 }
 
 require_line_field() {
@@ -594,6 +719,23 @@ require_line_field() {
   expected=$3
   actual=$(line_field "$key" "$line")
   [ "$actual" = "$expected" ] || fatal "final benchmark evidence has an unexpected $key"
+}
+
+require_positive_line_field() {
+  line=$1
+  key=$2
+  actual=$(line_field "$key" "$line")
+  case "$actual" in ''|*[!0-9]*) fatal "benchmark evidence has malformed $key" ;; esac
+  [ "$actual" -gt 0 ] || fatal "benchmark evidence has non-positive $key"
+}
+
+require_nonnegative_line_field() {
+  line=$1
+  key=$2
+  actual=$(line_field "$key" "$line")
+  case "$actual" in ''|*[!0-9]*) fatal "benchmark evidence has malformed $key" ;; esac
+  [ "$actual" -ge 0 ] 2>/dev/null \
+    || fatal "benchmark evidence has out-of-range $key"
 }
 
 valid_opaque_token() {
@@ -690,6 +832,17 @@ wait_for_final() {
       final_result_line=$final_line
       return 0
     fi
+    invalidated_count=$(event_count "$tmp_dir/logcat" "$EVENT_INVALIDATED")
+    if [ "$invalidated_count" -gt 0 ]; then
+      [ "$invalidated_count" -eq 1 ] || fatal "multiple benchmark invalidation events were observed"
+      invalidated_line=$(event_line "$tmp_dir/logcat" "$EVENT_INVALIDATED")
+      invalidated_reason=$(line_field reason "$invalidated_line")
+      case "$invalidated_reason" in
+        system_audio_unmuted) fatal "benchmark generation was invalidated by system audio" ;;
+        visibility_lost) fatal "benchmark generation was invalidated by visibility loss" ;;
+        *) fatal "benchmark generation was invalidated for an unsupported reason" ;;
+      esac
+    fi
     if ! lifecycle_ok; then
       fatal "benchmark Activity lost visibility while waiting for final_result"
     fi
@@ -723,19 +876,19 @@ fi
 case "$random_seed" in *[!0-9]*) random_seed=$$ ;; esac
 
 schedule_file=$tmp_dir/schedule
-awk -v seed="$random_seed" '
+awk -v seed="$random_seed" -v row_count="$RUN_ROWS" '
   BEGIN {
     srand(seed + 0)
     row[0]="dmg"; row[1]="mgb"; row[2]="cgb-native"; row[3]="cgb0-native"
     row[4]="cgb-dmg-compat"; row[5]="sgb"; row[6]="sgb2"
     for (block = 0; block < 12; block++) {
-      for (i = 0; i < 7; i++) order[i] = i
-      for (i = 6; i > 0; i--) {
+      for (i = 0; i < row_count; i++) order[i] = i
+      for (i = row_count - 1; i > 0; i--) {
         j = int(rand() * (i + 1))
         temp = order[i]; order[i] = order[j]; order[j] = temp
       }
       first = (block % 2 == 0) ? "parent" : "candidate"
-      for (i = 0; i < 7; i++) printf "%02d %d %s %s\n", block, i, row[order[i]], first
+      for (i = 0; i < row_count; i++) printf "%02d %d %s %s\n", block, i, row[order[i]], first
     }
   }
 ' >"$schedule_file" || fatal "could not create randomized schedule"
@@ -850,7 +1003,7 @@ run_one() {
   scenario_frames=$(row_scenario_frames "$row") || fatal "unknown scheduled scenario length"
   pair_id=p${block}-${row}
   matrix_block=mb${block}
-  arm_token=$(make_token a)
+  arm_token=$8
 
   run_number=$((run_number + 1))
   printf 'run=%s/%s block=%s row_order=%s row=%s side=%s first_side=%s mode=%s rate=%s\n' \
@@ -896,6 +1049,7 @@ run_one() {
     --ez coffee_gb_thermal_valid true \
     --ei coffee_gb_surface_rate_hz "$rate" \
     --es coffee_gb_execution_mode "$execution_mode" \
+    --es coffee_gb_audio_policy "$audio_policy" \
     --es coffee_gb_benchmark_scenario "$input_contract" \
     --ei coffee_gb_recent_slot "$slot" \
     || fatal "visible benchmark Activity launch failed"
@@ -982,6 +1136,7 @@ run_one() {
       || fatal "scenario_complete and matrix_run session generations differ"
   fi
   require_line_field "$matrix_run_line" benchmark_generation "$benchmark_generation"
+  require_line_field "$matrix_run_line" benchmark_token "$arm_token"
   require_line_field "$matrix_run_line" execution_mode "$execution_mode"
   require_line_field "$matrix_run_line" requested_hardware "$profile"
   require_line_field "$matrix_run_line" warmup true
@@ -992,9 +1147,16 @@ run_one() {
   require_line_field "$matrix_run_line" scenario_expected_frames "$scenario_frames"
   require_line_field "$matrix_run_line" scenario_source_closed true
   require_line_field "$matrix_run_line" scenario_audio_drained true
+  require_line_field "$matrix_run_line" benchmark_audio_policy "$audio_policy"
   require_line_field "$matrix_run_line" audio_start_pending_bytes 0
   require_line_field "$matrix_run_line" audio_start_queued_bytes 0
   require_line_field "$matrix_run_line" audio_start_output_playing true
+  require_line_field "$matrix_run_line" audio_start_active true
+  require_line_field "$matrix_run_line" audio_start_paused false
+  require_line_field "$matrix_run_line" audio_start_muted false
+  require_line_field "$matrix_run_line" audio_start_volume 100
+  require_line_field "$matrix_run_line" audio_start_queued_frames 0
+  require_line_field "$matrix_run_line" audio_start_reopen_pending false
   require_line_field "$matrix_run_line" thermal_window m2
   require_line_field "$matrix_run_line" audio on
   require_line_field "$matrix_run_line" render presentation
@@ -1019,6 +1181,7 @@ run_one() {
   require_line_field "$final_line" row_order "$row_order"
   require_line_field "$final_line" run_side "$run_side"
   require_line_field "$final_line" session_generation "$matrix_session_generation"
+  require_line_field "$final_line" benchmark_token "$arm_token"
   require_line_field "$final_line" execution_mode "$execution_mode"
   require_line_field "$final_line" frame 600
   require_line_field "$final_line" ready_count 600
@@ -1044,12 +1207,66 @@ run_one() {
   require_line_field "$final_line" scenario_expected_frames "$scenario_frames"
   require_line_field "$final_line" scenario_source_closed true
   require_line_field "$final_line" scenario_audio_drained true
+  require_compact_audio_proof "$final_line"
+  require_line_field "$final_line" benchmark_audio_policy "$audio_policy"
   # The ARM baseline is bound once in matrix_run. final_result intentionally omits its duplicated
   # 21-field copy to retain Android log-payload headroom.
   require_line_field "$final_line" audio_active true
   require_line_field "$final_line" audio_output_playing true
   require_line_field "$final_line" audio_muted false
-  require_line_field "$final_line" audio_system_music_muted false
+  if [ "$audio_policy" = silent-pcm-v1 ] || [ "$audio_policy" = silent-pcm-relaxed-apu-v1 ]; then
+    require_line_field "$final_line" audio_volume 100
+    require_line_field "$final_line" audio_system_volume 0
+    require_line_field "$final_line" audio_system_music_muted true
+    require_line_field "$final_line" benchmark_audio_requested true
+    require_line_field "$final_line" benchmark_audio_active_at_boundary true
+    require_line_field "$final_line" benchmark_audio_disabled_after true
+    require_positive_line_field "$final_line" benchmark_audio_skipped_ticks
+    require_positive_line_field "$final_line" benchmark_audio_zero_sample_slots
+    require_positive_line_field "$final_line" benchmark_audio_zero_sample_events
+    require_positive_line_field "$final_line" benchmark_audio_max_debt
+    require_nonnegative_line_field "$final_line" benchmark_audio_apu_reads
+    require_nonnegative_line_field "$final_line" benchmark_audio_apu_writes
+    require_positive_line_field "$final_line" benchmark_audio_frame_sequencer_commits
+    if [ "$audio_policy" = silent-pcm-relaxed-apu-v1 ]; then
+      require_positive_line_field "$final_line" benchmark_audio_dropped_channel_ticks
+      [ "$(line_field benchmark_audio_dropped_channel_ticks "$final_line")" = \
+        "$(line_field benchmark_audio_skipped_ticks "$final_line")" ] \
+        || fatal "relaxed silent benchmark dropped ticks must equal skipped ticks"
+    else
+      require_line_field "$final_line" benchmark_audio_dropped_channel_ticks 0
+    fi
+    require_positive_line_field "$final_line" audio_output_identity
+    require_positive_line_field "$final_line" audio_queue_identity
+    start_output_identity=$(line_field audio_start_output_identity "$matrix_run_line")
+    start_queue_identity=$(line_field audio_start_queue_identity "$matrix_run_line")
+    [ "$start_output_identity" = "$(line_field audio_output_identity "$final_line")" ] \
+      || fatal "silent benchmark output identity changed during measurement"
+    [ "$start_queue_identity" = "$(line_field audio_queue_identity "$final_line")" ] \
+      || fatal "silent benchmark queue identity changed during measurement"
+    require_line_field "$matrix_run_line" audio_start_system_volume 0
+    require_line_field "$matrix_run_line" audio_start_system_music_muted true
+  else
+    require_line_field "$final_line" audio_system_music_muted false
+    require_line_field "$final_line" benchmark_audio_requested false
+    require_line_field "$final_line" benchmark_audio_active_at_boundary false
+    require_line_field "$final_line" benchmark_audio_disabled_after true
+    require_line_field "$final_line" benchmark_audio_skipped_ticks 0
+    require_line_field "$final_line" benchmark_audio_zero_sample_slots 0
+    require_line_field "$final_line" benchmark_audio_zero_sample_events 0
+    require_line_field "$final_line" benchmark_audio_max_debt 0
+    require_line_field "$final_line" benchmark_audio_apu_reads 0
+    require_line_field "$final_line" benchmark_audio_apu_writes 0
+    require_line_field "$final_line" benchmark_audio_frame_sequencer_commits 0
+    require_line_field "$final_line" benchmark_audio_dropped_channel_ticks 0
+  fi
+  if [ "$audio_policy" = canonical ]; then
+    require_line_field "$final_line" system_audio_sample_count 0
+    require_line_field "$final_line" system_audio_bad_count 0
+  else
+    require_line_field "$final_line" system_audio_sample_count 12
+    require_line_field "$final_line" system_audio_bad_count 0
+  fi
   require_line_field "$final_line" live_input_mutations 0
   require_line_field "$final_line" thermal_worst 0
   require_line_field "$final_line" display_bad_count 0
@@ -1190,8 +1407,9 @@ while IFS=' ' read -r block row_order row first_side; do
     second_apk=$parent_apk
     second_hash=$parent_hash
   fi
-  run_one "$block" "$row_order" "$row" "$first_side" "$first_side" "$first_apk" "$first_hash"
-  run_one "$block" "$row_order" "$row" "$first_side" "$second_side" "$second_apk" "$second_hash"
+  pair_token=$(make_token a)
+  run_one "$block" "$row_order" "$row" "$first_side" "$first_side" "$first_apk" "$first_hash" "$pair_token"
+  run_one "$block" "$row_order" "$row" "$first_side" "$second_side" "$second_apk" "$second_hash" "$pair_token"
 done <"$schedule_file"
 
 matrix_report=$tmp_dir/matrix-report.txt

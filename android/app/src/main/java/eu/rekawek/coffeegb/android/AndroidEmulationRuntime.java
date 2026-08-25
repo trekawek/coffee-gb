@@ -14,6 +14,7 @@ import eu.rekawek.coffeegb.controller.BasicController;
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides;
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties;
+import eu.rekawek.coffeegb.controller.properties.RuntimeWarmupFlavor;
 import eu.rekawek.coffeegb.controller.state.StateIdentity;
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
@@ -175,7 +176,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         benchmarkScenario = new BenchmarkGameplayScenario(
                 diagnosticsOptions.benchmarkScenario,
                 diagnosticsOptions.benchmarkNativeFrameKind());
-        diagnostics = new AndroidBenchmarkDiagnostics(this.context, diagnosticsOptions);
+        diagnostics = new AndroidBenchmarkDiagnostics(this.context, diagnosticsOptions,
+                this::onSystemAudioViolation);
         // Release/non-diagnostic sessions use a null sink so the native frame hot path does not
         // enter synchronized benchmark methods on every frame.
         frames = new NativeFrameStore(diagnostics.enabled() ? diagnostics : null,
@@ -201,8 +203,20 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
         return new ApplicationSettingsOverrides(profile, bootstrapMode,
                 checked.enabled ? false : null, false, false, false,
-                checked.enabled && checked.runtimeWarmup, checked.enabled,
+                checked.enabled && checked.runtimeWarmup, runtimeWarmupFlavor(checked), checked.enabled,
                 checked.enabled ? checked.executionMode : null);
+    }
+
+    private static RuntimeWarmupFlavor runtimeWarmupFlavor(DiagnosticsOptions options) {
+        if (options.enabled
+                && options.runtimeWarmup
+                && options.hardware == DiagnosticsOptions.Hardware.CGB
+                && options.executionMode == ExecutionMode.PERFORMANCE
+                && options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.CGB_ACTION_V1
+                && options.audioPolicy == DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1) {
+            return RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1;
+        }
+        return RuntimeWarmupFlavor.SCALAR;
     }
 
     public RuntimeState state() {
@@ -215,6 +229,59 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
+    }
+
+    /** Revokes one silent-PCM generation on the first bad read-only system-audio sample. */
+    private void onSystemAudioViolation(long generation, long sessionGeneration) {
+        if (!diagnostics.enabled() || eventBus == null || generation <= 0L
+                || sessionGeneration <= 0L || generation != diagnostics.benchmarkGeneration()
+                || sessionGeneration != activeSessionGeneration
+                || !diagnostics.systemAudioBadLatched()) {
+            return;
+        }
+        // This callback can originate while diagnostics holds its monitor. Do not acquire the
+        // lifecycle gate here: visibility/focus paths take that gate before sampling diagnostics,
+        // so taking it in the reverse order would deadlock. BasicController's owner-thread
+        // listener freezes synchronously before app PCM is paused. Keep all three safety actions
+        // independent so a sink or event subscriber failure cannot skip the owner freeze or the
+        // generation-bound terminal policy record.
+        RuntimeException failure = null;
+        try {
+            eventBus.post(new Controller.BenchmarkSystemAudioViolationEvent(
+                    generation, sessionGeneration, diagnosticsOptions.audioPolicy.externalValue()));
+        } catch (RuntimeException exception) {
+            failure = exception;
+        }
+        try {
+            AndroidAudioSink activeAudio = audio;
+            if (activeAudio != null) {
+                // Stop and clear app-owned PCM immediately; this does not touch system volume/mute.
+                activeAudio.pause();
+            }
+        } catch (RuntimeException exception) {
+            if (failure == null) {
+                failure = exception;
+            }
+        }
+        try {
+            eventBus.post(new Controller.BenchmarkSilentPcmPolicyEvent(
+                    false, generation, sessionGeneration, false,
+                    diagnosticsOptions.audioPolicy.externalValue()));
+        } catch (RuntimeException exception) {
+            if (failure == null) {
+                failure = exception;
+            }
+        }
+        try {
+            eventBus.post(new Controller.PauseEmulationEvent());
+        } catch (RuntimeException exception) {
+            if (failure == null) {
+                failure = exception;
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     /** Advances the configured timeline on the controller's physical native-frame callback. */
@@ -855,6 +922,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 // Diagnostics owns the atomic current-or-next generation decision. This closes
                 // both the pre-OPENING queue race and the LOADING-to-STARTED handoff.
                 diagnostics.benchmarkVisibilityLost();
+                postBenchmarkAudioDisableAndPauseLocked();
                 AndroidAudioSink activeAudio = audio;
                 if (activeAudio != null) {
                     // The same gate surrounds the only pre-ARM resume path. If a poll wins first,
@@ -901,13 +969,42 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Audio loss follows the same conservative policy: pause, flush, and require user resume. */
     public void onAudioFocusLost() {
-        diagnostics.audioFocusLost();
+        if (diagnostics.enabled()) {
+            benchmarkAudioLifecycle.run(() -> {
+                diagnostics.audioFocusLost();
+                postBenchmarkAudioDisableAndPauseLocked();
+                AndroidAudioSink activeAudio = audio;
+                if (activeAudio != null) {
+                    activeAudio.pause();
+                }
+            });
+            return;
+        }
         onHostNotVisible();
     }
 
     /** Records the service's intrinsic focus request result before a benchmark ARM. */
     public void onAudioFocusResult(boolean granted) {
-        diagnostics.audioFocusResult(granted);
+        if (diagnostics.enabled()) {
+            benchmarkAudioLifecycle.run(() -> diagnostics.audioFocusResult(granted));
+        } else {
+            diagnostics.audioFocusResult(granted);
+        }
+    }
+
+    /** Runs under benchmarkAudioLifecycle; policy disable is FIFO before the pause command. */
+    private void postBenchmarkAudioDisableAndPauseLocked() {
+        if (!diagnostics.enabled() || eventBus == null) {
+            return;
+        }
+        long generation = diagnostics.benchmarkGeneration();
+        long sessionGeneration = activeSessionGeneration;
+        if (generation > 0L && sessionGeneration > 0L) {
+            eventBus.post(new Controller.BenchmarkSilentPcmPolicyEvent(
+                    false, generation, sessionGeneration, false,
+                    diagnosticsOptions.audioPolicy.externalValue()));
+        }
+        eventBus.post(new Controller.PauseEmulationEvent());
     }
 
     /** Audio focus gain intentionally does not resume emulation without an explicit user command. */
@@ -969,7 +1066,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             // acknowledgement on its owner thread. CPU/priority/environment baselines and the
             // matrix_run record are taken only from that acknowledgement callback.
             eventBus.post(new Controller.BenchmarkArmEvent(
-                    generation, token, sessionGeneration));
+                    generation, token, sessionGeneration,
+                    diagnosticsOptions.audioPolicy.externalValue()));
         });
     }
 
@@ -1339,31 +1437,72 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 event -> diagnostics.benchmarkFrameBoundary(event),
                 Controller.BenchmarkFrameBoundaryEvent.class);
+        // A rejected ARM is reported by BasicController as a generation-bound false policy. Clear
+        // only the matching pending host request; a stale false event must never cancel a newer
+        // generation or touch the controller's already-authoritative policy state.
+        eventBus.register(
+                (Controller.BenchmarkSilentPcmPolicyEvent event) -> {
+                    if (!diagnostics.enabled() || event.getRequested()) {
+                        return;
+                    }
+                    PendingBenchmarkArm pending = pendingBenchmarkArm;
+                    if (pending != null
+                            && pending.sessionGeneration() == event.getSessionGeneration()
+                            && pending.generation() == event.getGeneration()) {
+                        // This listener may run while diagnostics owns its sample monitor.
+                        // The field is volatile and clearing it needs no lifecycle lock.
+                        pendingBenchmarkArm = null;
+                    }
+                },
+                Controller.BenchmarkSilentPcmPolicyEvent.class);
         eventBus.register(
                 event -> {
                     if (!diagnostics.enabled()) {
                         return;
                     }
-                    PendingBenchmarkArm pending = pendingBenchmarkArm;
-                    if (pending == null || !pending.matches(event)
-                            || !benchmarkSessionMatches(
-                                    event.getSessionGeneration(), activeSessionGeneration,
-                                    benchmarkScenario.enabled()
-                                            ? benchmarkScenario.sessionGeneration()
-                                            : event.getSessionGeneration(),
-                                    state.sessionGeneration())
-                            || state.phase() != RuntimeState.Phase.PAUSED) {
-                        return;
-                    }
-                    pendingBenchmarkArm = null;
-                    if (!diagnostics.armBenchmark(
-                            event.getSessionGeneration(), event.getGeneration(), event.getToken(),
-                            pending.baseline())) {
-                        return;
-                    }
-                    frames.beginBenchmarkEpoch(event.getGeneration());
-                    input.lockBenchmarkWindow();
-                    eventBus.post(new Controller.ResumeEmulationEvent());
+                    benchmarkAudioLifecycle.run(() -> {
+                        PendingBenchmarkArm pending = pendingBenchmarkArm;
+                        if (pending == null || !pending.matches(event)
+                                || !benchmarkSessionMatches(
+                                        event.getSessionGeneration(), activeSessionGeneration,
+                                        benchmarkScenario.enabled()
+                                                ? benchmarkScenario.sessionGeneration()
+                                                : event.getSessionGeneration(),
+                                        state.sessionGeneration())
+                                || state.phase() != RuntimeState.Phase.PAUSED) {
+                            return;
+                        }
+                        pendingBenchmarkArm = null;
+                        // The pre-ACK sample only gates the host's arm request. The controller
+                        // acknowledgement is the authority boundary, so capture a fresh sink
+                        // baseline here while the lifecycle gate excludes drain/focus races.
+                        AndroidAudioSink activeAudio = audio;
+                        AndroidAudioSink.AudioBaseline freshBaseline = activeAudio == null
+                                ? AndroidAudioSink.AudioBaseline.unavailable()
+                                : activeAudio.benchmarkBaseline();
+                        if (!diagnostics.armBenchmark(
+                                event.getSessionGeneration(), event.getGeneration(), event.getToken(),
+                                freshBaseline)) {
+                            // Never resume an arm whose fresh host proof failed. A matching false
+                            // policy event also clears any controller-side stale calendar. A
+                            // system-audio violation already emitted its one revocation callback
+                            // synchronously while armBenchmark sampled the baseline.
+                            if (!diagnostics.systemAudioBadLatched()) {
+                                eventBus.post(new Controller.BenchmarkSilentPcmPolicyEvent(
+                                        false, event.getGeneration(),
+                                        event.getSessionGeneration(), false,
+                                        diagnosticsOptions.audioPolicy.externalValue()));
+                            }
+                            return;
+                        }
+                        frames.beginBenchmarkEpoch(event.getGeneration());
+                        input.lockBenchmarkWindow();
+                        eventBus.post(new Controller.BenchmarkSilentPcmPolicyEvent(
+                                diagnosticsOptions.audioPolicy.isSilent(),
+                                event.getGeneration(), event.getSessionGeneration(), true,
+                                diagnosticsOptions.audioPolicy.externalValue()));
+                        eventBus.post(new Controller.ResumeEmulationEvent());
+                    });
                 },
                 Controller.BenchmarkArmAcknowledgedEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy

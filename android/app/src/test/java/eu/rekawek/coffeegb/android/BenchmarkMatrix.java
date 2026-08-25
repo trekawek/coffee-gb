@@ -91,6 +91,7 @@ public final class BenchmarkMatrix {
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "first_side", "thermal_window", "audio", "render", "availability",
             "session_generation", "benchmark_generation",
+            "benchmark_token",
             "requested_hardware", "requested_profile", "profile", "effective_gbc",
             "effective_dmg_compat", "effective_mode", "device_id", "speed_mode_initial",
             "build_profile",
@@ -116,7 +117,12 @@ public final class BenchmarkMatrix {
             "audio_start_restarts",
             "audio_start_route_failures",
             "audio_start_output_open", "audio_start_output_playing", "audio_start_sample_rate",
-            "audio_start_queue_capacity_frames", "audio_start_max_frame_bytes");
+            "audio_start_queue_capacity_frames", "audio_start_max_frame_bytes",
+            "audio_start_active", "audio_start_paused", "audio_start_muted",
+            "audio_start_volume", "audio_start_system_volume", "audio_start_system_volume_max",
+            "audio_start_system_music_muted", "audio_start_queued_frames",
+            "audio_start_reopen_pending", "audio_start_output_identity", "audio_start_queue_identity",
+            "benchmark_audio_policy");
     private static final Set<String> SCENARIO_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "session_generation", "input_contract", "completed",
@@ -131,6 +137,7 @@ public final class BenchmarkMatrix {
     private static final Set<String> FINAL_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "session_generation", "benchmark_generation",
+            "benchmark_token",
             "build_profile",
             "frame", "ready_count", "submitted_count", "dropped_count", "duplicate_count",
             "late_count", "corrupt_count", "ready_first_id", "ready_last_id",
@@ -160,7 +167,14 @@ public final class BenchmarkMatrix {
             "audio_output_open", "audio_output_playing", "audio_muted", "audio_volume",
             "audio_route_failures", "audio_playback_position_frames", "audio_system_volume",
             "audio_system_volume_max", "audio_system_music_muted", "audio_queue_capacity_frames",
-            "audio_max_frame_bytes",
+            "audio_max_frame_bytes", "audio_output_identity", "audio_queue_identity",
+            "benchmark_audio_policy", "benchmark_audio_requested",
+            "benchmark_audio_active_at_boundary", "benchmark_audio_disabled_after",
+            "benchmark_audio_flags", "benchmark_audio_calendar",
+            "benchmark_audio_skipped_ticks", "benchmark_audio_zero_sample_slots",
+            "benchmark_audio_zero_sample_events", "benchmark_audio_max_debt",
+            "benchmark_audio_apu_reads", "benchmark_audio_apu_writes",
+            "benchmark_audio_frame_sequencer_commits", "benchmark_audio_dropped_channel_ticks",
             "audio_start_input_frames",
             "audio_start_input_events", "audio_start_enqueued_bytes",
             "audio_start_enqueued_frames", "audio_start_written_bytes",
@@ -183,6 +197,7 @@ public final class BenchmarkMatrix {
             "interactive_bad_count", "plugged_bad_count", "power_save_bad_count",
             "stay_awake_bad_count", "priority_bad_count", "importance_bad_count",
             "battery_temp_min", "battery_temp_max", "live_input_mutations",
+            "system_audio_sample_count", "system_audio_bad_count",
             "surface_vote_hz", "display_target_hz", "surface_content_rate_millihz",
             "controller_cpu_ms", "controller_util_pct", "gc_count_delta",
             "gc_time_ms_delta", "alloc_bytes_delta");
@@ -197,9 +212,25 @@ public final class BenchmarkMatrix {
             "compositor_histogram_fps",
             "dropped_frames", "late_acquire_frames", "bad_desired_present_frames",
             "display_refresh_hz", "measurement");
+    private static final List<String> EXPANDED_AUDIO_PROOF_FIELDS = List.of(
+            "benchmark_audio_requested", "benchmark_audio_active_at_boundary",
+            "benchmark_audio_disabled_after", "benchmark_audio_skipped_ticks",
+            "benchmark_audio_zero_sample_slots", "benchmark_audio_zero_sample_events",
+            "benchmark_audio_max_debt", "benchmark_audio_apu_reads",
+            "benchmark_audio_apu_writes", "benchmark_audio_frame_sequencer_commits",
+            "benchmark_audio_dropped_channel_ticks");
+    private static final List<String> AUDIO_CALENDAR_COUNTER_FIELDS = List.of(
+            "benchmark_audio_skipped_ticks", "benchmark_audio_zero_sample_slots",
+            "benchmark_audio_zero_sample_events", "benchmark_audio_max_debt",
+            "benchmark_audio_apu_reads", "benchmark_audio_apu_writes",
+            "benchmark_audio_frame_sequencer_commits",
+            "benchmark_audio_dropped_channel_ticks");
     private static final List<Row> REQUIRED_ROWS = List.of(
             Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE,
             Row.CGB_DMG_COMPAT, Row.SGB, Row.SGB2);
+    /** Silent PCM calendars have only the five DMG/CGB performance rows. */
+    private static final List<Row> SILENT_REQUIRED_ROWS = List.of(
+            Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE, Row.CGB_DMG_COMPAT);
 
     private BenchmarkMatrix() {
     }
@@ -319,6 +350,8 @@ public final class BenchmarkMatrix {
                     addFinal(fields, lineNumber + 1, runs, errors);
                 } else if ("compositor_result".equals(event)) {
                     addCompositor(fields, lineNumber + 1, runs, errors);
+                } else if ("speed_sample".equals(event)) {
+                    validateSpeedSampleSchema(fields, lineNumber + 1, errors);
                 }
             }
         }
@@ -394,7 +427,7 @@ public final class BenchmarkMatrix {
         System.out.println("accepted=" + report.accepted);
         System.out.println("parent_artifact_id=" + expectedParent
                 + " candidate_artifact_id=" + expectedCandidate);
-        for (Row row : REQUIRED_ROWS) {
+        for (Row row : report.rows.keySet()) {
             RowSummary summary = report.rows.get(row);
             if (summary == null) {
                 continue;
@@ -766,7 +799,8 @@ public final class BenchmarkMatrix {
         // records because acceptance still requires a later valid matrix_run/final_result pair.
         if ("reason".equals(key) && !Set.of("not_anchor_ready", "not_warming",
                 "post_failed", "stale_session", "audio_pending", "audio_not_playing",
-                "audio_focus", "visibility_lost").contains(value)) {
+                "audio_focus", "audio_focus_history", "visibility_lost",
+                "silent_pcm_baseline", "system_audio_unmuted").contains(value)) {
             errors.add("line " + lineNumber + ": invalid benchmark rejection reason");
             return;
         }
@@ -779,6 +813,24 @@ public final class BenchmarkMatrix {
         if ("speed_mode_sample".equals(key)) {
             if (!("boot_resolved".equals(value) || "frame_600".equals(value))) {
                 errors.add("line " + lineNumber + ": invalid speed_mode_sample");
+            }
+            return;
+        }
+        if ("benchmark_audio_policy".equals(key)
+                && !Set.of("canonical", "silent-pcm-v1", "silent-pcm-relaxed-apu-v1")
+                        .contains(value)) {
+            errors.add("line " + lineNumber + ": invalid benchmark audio policy");
+            return;
+        }
+        if ("benchmark_audio_flags".equals(key)) {
+            if (!value.matches("[01]{3}")) {
+                errors.add("line " + lineNumber + ": invalid compact benchmark audio flags");
+            }
+            return;
+        }
+        if ("benchmark_audio_calendar".equals(key)) {
+            if (!value.matches("[0-9]+(,[0-9]+){7}")) {
+                errors.add("line " + lineNumber + ": invalid compact benchmark audio calendar");
             }
             return;
         }
@@ -830,8 +882,14 @@ public final class BenchmarkMatrix {
                 || key.equals("audio_output_open") || key.equals("audio_output_playing")
                 || key.equals("audio_start_output_open")
                 || key.equals("audio_start_output_playing")
+                || key.equals("audio_start_active") || key.equals("audio_start_paused")
+                || key.equals("audio_start_muted") || key.equals("audio_start_system_music_muted")
+                || key.equals("audio_start_reopen_pending")
                 || key.equals("audio_muted") || key.equals("audio_system_music_muted")
-                || key.equals("audio_focus_granted");
+                || key.equals("audio_focus_granted")
+                || key.equals("benchmark_audio_requested")
+                || key.equals("benchmark_audio_active_at_boundary")
+                || key.equals("benchmark_audio_disabled_after");
     }
 
     private static boolean isFloatingField(String key) {
@@ -860,8 +918,20 @@ public final class BenchmarkMatrix {
                 || key.equals("display_state_end") || key.equals("thread_priority_start")
                 || key.equals("thread_priority_end") || key.equals("app_importance_start")
                 || key.equals("app_importance_end") || key.equals("audio_volume")
+                || key.equals("audio_start_volume")
                 || key.equals("audio_system_volume") || key.equals("audio_system_volume_max")
-                || key.equals("audio_route_failures") || key.equals("layer_uid");
+                || key.equals("audio_output_identity") || key.equals("audio_queue_identity")
+                || key.equals("audio_route_failures") || key.equals("layer_uid")
+                || key.equals("benchmark_audio_zero_sample_slots")
+                || key.equals("benchmark_audio_max_debt")
+                || key.equals("benchmark_audio_apu_reads")
+                || key.equals("benchmark_audio_apu_writes")
+                || key.equals("benchmark_audio_frame_sequencer_commits")
+                || key.equals("benchmark_audio_dropped_channel_ticks")
+                || key.equals("audio_start_system_volume")
+                || key.equals("audio_start_system_volume_max")
+                || key.equals("audio_start_output_identity")
+                || key.equals("audio_start_queue_identity");
     }
 
     private static void integerValue(String value, int lineNumber, List<String> errors,
@@ -909,7 +979,13 @@ public final class BenchmarkMatrix {
                     "performance_epoch_count", "performance_epoch_ticks",
                     "performance_epoch_max_ticks", "performance_epoch_raster_fast_ticks",
                     "performance_epoch_mode2_replay_ticks",
-                    "performance_epoch_mode2_bulk_ticks");
+                    "performance_epoch_mode2_bulk_ticks", "benchmark_audio_policy",
+                    "benchmark_audio_requested", "benchmark_audio_active_at_boundary",
+                    "benchmark_audio_disabled_after", "benchmark_audio_skipped_ticks",
+                    "benchmark_audio_zero_sample_slots", "benchmark_audio_zero_sample_events",
+                    "benchmark_audio_max_debt", "benchmark_audio_apu_reads",
+                    "benchmark_audio_apu_writes", "benchmark_audio_frame_sequencer_commits",
+                    "benchmark_audio_dropped_channel_ticks");
             case "first_frame" -> Set.of("event", "frame", "wall_ns", "since_launch_ms",
                     "prep_to_frame_ms");
             case "frames" -> Set.of("event", "frame", "ready_count", "submitted_count",
@@ -920,6 +996,63 @@ public final class BenchmarkMatrix {
                     "configured_buffer_bytes", "actual_buffer_bytes");
             default -> Set.of("event");
         };
+    }
+
+    /** Current speed samples carry the complete audio-policy proof as one atomic schema. */
+    private static void validateSpeedSampleSchema(Map<String, String> fields, int lineNumber,
+            List<String> errors) {
+        if (!fields.containsKey("benchmark_audio_policy")) {
+            return; // pre-policy diagnostic fixtures
+        }
+        String[] required = {
+            "benchmark_audio_policy", "benchmark_audio_requested",
+            "benchmark_audio_active_at_boundary", "benchmark_audio_disabled_after",
+            "benchmark_audio_skipped_ticks", "benchmark_audio_zero_sample_slots",
+            "benchmark_audio_zero_sample_events", "benchmark_audio_max_debt",
+            "benchmark_audio_apu_reads", "benchmark_audio_apu_writes",
+            "benchmark_audio_frame_sequencer_commits",
+            "benchmark_audio_dropped_channel_ticks"
+        };
+        for (String key : required) {
+            if (!fields.containsKey(key)) {
+                errors.add("line " + lineNumber + ": speed_sample is missing " + key);
+            } else if ("benchmark_audio_requested".equals(key)
+                    || "benchmark_audio_active_at_boundary".equals(key)
+                    || "benchmark_audio_disabled_after".equals(key)) {
+                if (!"true".equals(fields.get(key)) && !"false".equals(fields.get(key))) {
+                    errors.add("line " + lineNumber + ": invalid boolean " + key);
+                }
+            } else if (!"benchmark_audio_policy".equals(key)) {
+                integerValue(fields.get(key), lineNumber, errors, key);
+            }
+        }
+        String policy = fields.get("benchmark_audio_policy");
+        if ("canonical".equals(policy)
+                && (!"false".equals(fields.get("benchmark_audio_requested"))
+                || !"false".equals(fields.get("benchmark_audio_active_at_boundary"))
+                || !"true".equals(fields.get("benchmark_audio_disabled_after")))) {
+            errors.add("line " + lineNumber
+                    + ": canonical speed_sample policy flags are not terminal-off");
+        } else if ("canonical".equals(policy)) {
+            for (String key : required) {
+                if (!key.endsWith("policy") && !key.endsWith("requested")
+                        && !key.endsWith("boundary") && !key.endsWith("after")
+                        && !"0".equals(fields.get(key))) {
+                    errors.add("line " + lineNumber
+                            + ": canonical speed_sample calendar counters are not zero");
+                    break;
+                }
+            }
+        } else if ("silent-pcm-v1".equals(policy)
+                && !"0".equals(fields.get("benchmark_audio_dropped_channel_ticks"))) {
+            errors.add("line " + lineNumber + ": exact speed_sample dropped ticks are non-zero");
+        } else if ("silent-pcm-relaxed-apu-v1".equals(policy)
+                && ("0".equals(fields.get("benchmark_audio_skipped_ticks"))
+                || !fields.get("benchmark_audio_dropped_channel_ticks")
+                        .equals(fields.get("benchmark_audio_skipped_ticks")))) {
+            errors.add("line " + lineNumber
+                    + ": relaxed speed_sample dropped ticks must equal positive skipped ticks");
+        }
     }
 
     private static boolean containsForbiddenKey(String key) {
@@ -970,7 +1103,8 @@ public final class BenchmarkMatrix {
         Side runSide = side(fields.get("run_side"), "run_side", lineNumber, errors);
         long sessionGeneration = longValue(
                 fields, "session_generation", lineNumber, errors);
-        if (!"visibility_lost".equals(fields.get("reason"))) {
+        if (!"visibility_lost".equals(fields.get("reason"))
+                && !"system_audio_unmuted".equals(fields.get("reason"))) {
             errors.add("line " + lineNumber
                     + ": benchmark_invalidated has an unsupported reason");
         }
@@ -1046,9 +1180,22 @@ public final class BenchmarkMatrix {
         Side side = side(fields.get("run_side"), "run_side", lineNumber, errors);
         Side firstSide = side(fields.get("first_side"), "first_side", lineNumber, errors);
         int rowOrder = integer(fields, "row_order", lineNumber, errors);
+        String benchmarkToken = fields.getOrDefault("benchmark_token", "unknown");
+        if (!"unknown".equals(benchmarkToken)
+                && !benchmarkToken.matches("[a-z0-9][a-z0-9._-]{15,63}")) {
+            errors.add("line " + lineNumber + ": invalid benchmark token");
+        }
         String requestedProfile = requiredToken(fields, "requested_profile", lineNumber, errors);
         String profile = requiredToken(fields, "profile", lineNumber, errors);
         String executionMode = fields.getOrDefault("execution_mode", "accuracy");
+        String benchmarkAudioPolicy = fields.getOrDefault("benchmark_audio_policy", "canonical");
+        if (!Set.of("canonical", "silent-pcm-v1", "silent-pcm-relaxed-apu-v1")
+                .contains(benchmarkAudioPolicy)) {
+            errors.add("line " + lineNumber + ": invalid benchmark audio policy");
+        }
+        if (!"canonical".equals(benchmarkAudioPolicy) && "unknown".equals(benchmarkToken)) {
+            errors.add("line " + lineNumber + ": silent benchmark token is missing");
+        }
         String workloadNonce = requiredToken(fields, "workload_nonce", lineNumber, errors);
         boolean warmup = booleanValue(fields, "warmup", lineNumber, errors);
         String inputContract = requiredToken(fields, "input_contract", lineNumber, errors);
@@ -1114,8 +1261,10 @@ public final class BenchmarkMatrix {
             errors.add("line " + lineNumber + ": missing render");
             render = "unknown";
         }
-        if (rowOrder < 0 || rowOrder >= REQUIRED_ROWS.size()) {
-            errors.add("line " + lineNumber + ": row_order must be 0..6");
+        int requiredRowCount = "canonical".equals(benchmarkAudioPolicy)
+                ? REQUIRED_ROWS.size() : SILENT_REQUIRED_ROWS.size();
+        if (rowOrder < 0 || rowOrder >= requiredRowCount) {
+            errors.add("line " + lineNumber + ": row_order is outside selected matrix");
         }
         EnvironmentFields environment = parseStartEnvironment(fields, lineNumber, errors);
         AudioStartFields audioStart = parseMatrixAudioStart(fields, lineNumber, errors);
@@ -1160,7 +1309,7 @@ public final class BenchmarkMatrix {
                 render, !unavailable, environment, workloadNonce, warmup, inputContract,
                 surfaceVoteHz, displayTargetHz, surfaceContentRateMillihz, sessionGeneration,
                 benchmarkGeneration, scenarioSessionGeneration, scenarioCompletedFrames,
-                scenarioExpectedFrames, audioStart));
+                scenarioExpectedFrames, audioStart, benchmarkAudioPolicy, benchmarkToken));
     }
 
     private static void addFrame(Map<String, String> fields, int lineNumber,
@@ -1210,6 +1359,11 @@ public final class BenchmarkMatrix {
             }
             long sessionGeneration = longValue(fields, "session_generation", lineNumber, errors);
             long benchmarkGeneration = longValue(fields, "benchmark_generation", lineNumber, errors);
+            String benchmarkToken = fields.getOrDefault("benchmark_token", "unknown");
+            if (!"unknown".equals(benchmarkToken)
+                    && !benchmarkToken.matches("[a-z0-9][a-z0-9._-]{15,63}")) {
+                errors.add("line " + lineNumber + ": invalid benchmark token");
+            }
             String requestedProfile = requiredToken(fields, "requested_profile", lineNumber, errors);
             String profile = requiredToken(fields, "profile", lineNumber, errors);
             Boolean effectiveGbc = strictBoolean(fields, "effective_gbc", lineNumber, errors);
@@ -1252,6 +1406,10 @@ public final class BenchmarkMatrix {
             // counters but may omit that duplicated 21-field block to stay below Android's log
             // payload cliff. Older fixtures which repeat it remain accepted and are cross-bound.
             AudioFields audio = parseAudio(fields, lineNumber, errors, run.audioStart);
+            if (audio != null && !"canonical".equals(audio.benchmarkAudioPolicy)
+                    && "unknown".equals(benchmarkToken)) {
+                errors.add("line " + lineNumber + ": silent benchmark token is missing");
+            }
             if (!requestedProfileMatches(requestedProfile, profile)) {
                 errors.add("line " + lineNumber
                         + ": final requested profile does not match actual profile");
@@ -1262,6 +1420,7 @@ public final class BenchmarkMatrix {
                     scenarioCompletedFrames, scenarioExpectedFrames,
                     Boolean.TRUE.equals(scenarioSourceClosed),
                     Boolean.TRUE.equals(scenarioAudioDrained),
+                    benchmarkToken,
                     requestedProfile, profile, effectiveGbc, effectiveDmgCompat,
                     effectiveMode, executionMode, speedModeInitial, speedModeFinal, clock, deviceId, start, end,
                     audio,
@@ -1303,7 +1462,9 @@ public final class BenchmarkMatrix {
                     integer(fields, "battery_temp_min", lineNumber, errors),
                     integer(fields, "battery_temp_max", lineNumber, errors),
                     integer(fields, "live_input_mutations", lineNumber, errors), surfaceVoteHz,
-                    displayTargetHz, surfaceContentRateMillihz);
+                    displayTargetHz, surfaceContentRateMillihz,
+                    optionalLong(fields, "system_audio_sample_count"),
+                    optionalLong(fields, "system_audio_bad_count"));
         }
     }
 
@@ -1387,12 +1548,25 @@ public final class BenchmarkMatrix {
     private static Report finish(Map<String, RunBuilder> runs, List<String> errors,
             long seed, int resamples, String expectedParentArtifact,
             String expectedCandidateArtifact) {
+        Set<String> benchmarkAudioPolicies = new LinkedHashSet<>();
+        for (RunBuilder run : runs.values()) {
+            benchmarkAudioPolicies.add(run.benchmarkAudioPolicy);
+        }
+        if (benchmarkAudioPolicies.size() > 1) {
+            errors.add("mixed benchmark audio policies");
+        }
+        String selectedAudioPolicy = benchmarkAudioPolicies.isEmpty()
+                ? "canonical" : benchmarkAudioPolicies.iterator().next();
+        List<Row> requiredRows = "canonical".equals(selectedAudioPolicy)
+                ? REQUIRED_ROWS : SILENT_REQUIRED_ROWS;
         LinkedHashMap<Row, List<RunBuilder>> byRow = new LinkedHashMap<>();
-        for (Row row : REQUIRED_ROWS) {
+        for (Row row : requiredRows) {
             byRow.put(row, new ArrayList<>());
         }
         validateEventIntervals(runs.values(), errors);
-        List<BlockSummary> completeBlocks = validateBlocks(runs.values(), errors);
+        List<BlockSummary> completeBlocks = validateBlocks(runs.values(), errors, requiredRows);
+        validateRowOrderPermutations(runs.values(), errors, requiredRows);
+        validateObservedRowOrder(runs.values(), errors, requiredRows);
         Set<String> completeBlockNames = new LinkedHashSet<>();
         for (BlockSummary block : completeBlocks) {
             completeBlockNames.add(block.name);
@@ -1416,7 +1590,7 @@ public final class BenchmarkMatrix {
             if (run.row == Row.CGB0_DMG_COMPAT && run.available) {
                 errors.add(run.key + " is diagnostic-only cgb0-dmg-compat and cannot be measured");
             }
-            if (run.row != null && REQUIRED_ROWS.contains(run.row) && run.available
+            if (run.row != null && requiredRows.contains(run.row) && run.available
                     && completeBlockNames.contains(run.matrixBlock)) {
                 byRow.get(run.row).add(run);
             }
@@ -1467,11 +1641,11 @@ public final class BenchmarkMatrix {
             errors.add("mixed audio requests");
         }
 
-        validateRandomizedOrder(completeBlocks, errors);
+        validateRandomizedOrder(completeBlocks, errors, requiredRows);
         validateWorkloadNonces(runs.values(), completeBlocks, errors);
 
         LinkedHashMap<Row, RowSummary> summaries = new LinkedHashMap<>();
-        for (Row row : REQUIRED_ROWS) {
+        for (Row row : requiredRows) {
             List<RunBuilder> rowRuns = byRow.get(row);
             List<Pair> pairs = pairRuns(row, rowRuns, errors);
             if (pairs.size() < MIN_PAIRS) {
@@ -1482,7 +1656,7 @@ public final class BenchmarkMatrix {
             }
         }
 
-        for (Row row : REQUIRED_ROWS) {
+        for (Row row : requiredRows) {
             if (byRow.get(row).isEmpty()) {
                 boolean explicitUnavailable = hasExplicitUnavailable(runs.values(), row);
                 errors.add(explicitUnavailable
@@ -1497,13 +1671,13 @@ public final class BenchmarkMatrix {
                 && expectedCandidateArtifact != null;
         boolean targetAudioEligible = true;
         for (RunBuilder run : runs.values()) {
-            if (run.available && run.row != null && REQUIRED_ROWS.contains(run.row)) {
+            if (run.available && run.row != null && requiredRows.contains(run.row)) {
                 targetAudioEligible &= run.audioTargetEligible;
             }
         }
         boolean accepted = errors.isEmpty() && pinnedArtifacts && visiblePresentation
-                && summaries.size() == REQUIRED_ROWS.size() && targetAudioEligible;
-        boolean valid = errors.isEmpty() && summaries.size() == REQUIRED_ROWS.size();
+                && summaries.size() == requiredRows.size() && targetAudioEligible;
+        boolean valid = errors.isEmpty() && summaries.size() == requiredRows.size();
         for (RowSummary summary : summaries.values()) {
             accepted &= summary.lowerBoundPass && !summary.alarm && !summary.regression;
         }
@@ -1513,7 +1687,7 @@ public final class BenchmarkMatrix {
     }
 
     private static void validateRandomizedOrder(List<BlockSummary> blocks,
-            List<String> errors) {
+            List<String> errors, List<Row> requiredRows) {
         if (blocks.size() < MIN_PAIRS) {
             errors.add("fewer than " + MIN_PAIRS + " complete matrix blocks");
         }
@@ -1527,7 +1701,7 @@ public final class BenchmarkMatrix {
             signatures.add(block.rowSignature);
         }
         if (blocks.size() > 1 && signatures.size() < 2) {
-            errors.add("seven-row order was not randomized between blocks");
+            errors.add(requiredRows.size() + "-row order was not randomized between blocks");
         }
     }
 
@@ -1574,7 +1748,7 @@ public final class BenchmarkMatrix {
     }
 
     private static List<BlockSummary> validateBlocks(Iterable<RunBuilder> runs,
-            List<String> errors) {
+            List<String> errors, List<Row> requiredRows) {
         Map<String, BlockState> states = new LinkedHashMap<>();
         ArrayList<RunBuilder> orderedRuns = new ArrayList<>();
         for (RunBuilder run : runs) {
@@ -1601,18 +1775,19 @@ public final class BenchmarkMatrix {
         for (BlockState state : states.values()) {
             state.runs.sort(Comparator.comparingInt(run -> run.ingestionOrdinal));
             boolean ok = true;
-            if (state.byRow.size() != REQUIRED_ROWS.size()
-                    || !state.byRow.keySet().containsAll(REQUIRED_ROWS)
-                    || state.runs.size() != REQUIRED_ROWS.size() * 2) {
+            if (state.byRow.size() != requiredRows.size()
+                    || !state.byRow.keySet().containsAll(requiredRows)
+                    || state.runs.size() != requiredRows.size() * 2) {
                 errors.add("matrix block " + state.name
-                        + " does not contain exactly one parent/candidate pair for seven rows");
+                        + " does not contain exactly one parent/candidate pair for "
+                        + requiredRows.size() + " rows");
                 ok = false;
             }
-            ok &= validateObservedSequence(state, errors);
+            ok &= validateObservedSequence(state, errors, requiredRows);
             Side firstSide = null;
             int firstOrdinal = Integer.MAX_VALUE;
             ArrayList<RunBuilder> firstRows = new ArrayList<>();
-            for (Row row : REQUIRED_ROWS) {
+            for (Row row : requiredRows) {
                 List<RunBuilder> rowRuns = state.byRow.get(row);
                 if (rowRuns == null || rowRuns.size() != 2) {
                     ok = false;
@@ -1679,12 +1854,13 @@ public final class BenchmarkMatrix {
         return complete;
     }
 
-    private static boolean validateObservedSequence(BlockState state, List<String> errors) {
-        if (state.runs.size() != REQUIRED_ROWS.size() * 2) {
+    private static boolean validateObservedSequence(BlockState state, List<String> errors,
+            List<Row> requiredRows) {
+        if (state.runs.size() != requiredRows.size() * 2) {
             return false;
         }
         boolean ok = true;
-        for (int rowOrder = 0; rowOrder < REQUIRED_ROWS.size(); rowOrder++) {
+        for (int rowOrder = 0; rowOrder < requiredRows.size(); rowOrder++) {
             RunBuilder first = state.runs.get(rowOrder * 2);
             RunBuilder second = state.runs.get(rowOrder * 2 + 1);
             if (first.rowOrder != rowOrder || second.rowOrder != rowOrder
@@ -1753,7 +1929,7 @@ public final class BenchmarkMatrix {
     }
 
     private static void validateRowOrderPermutations(Iterable<RunBuilder> runs,
-            List<String> errors) {
+            List<String> errors, List<Row> requiredRows) {
         Map<String, Map<Integer, Row>> rowsByBlock = new LinkedHashMap<>();
         for (RunBuilder run : runs) {
             if (!run.available || run.row == null) {
@@ -1768,27 +1944,32 @@ public final class BenchmarkMatrix {
             }
         }
         for (Map.Entry<String, Map<Integer, Row>> entry : rowsByBlock.entrySet()) {
-            if (entry.getValue().size() != REQUIRED_ROWS.size()
-                    || !entry.getValue().keySet().containsAll(Set.of(0, 1, 2, 3, 4, 5, 6))) {
+            Set<Integer> expectedOrders = new LinkedHashSet<>();
+            for (int order = 0; order < requiredRows.size(); order++) {
+                expectedOrders.add(order);
+            }
+            if (entry.getValue().size() != requiredRows.size()
+                    || !entry.getValue().keySet().containsAll(expectedOrders)) {
                 errors.add("matrix block " + entry.getKey()
-                        + " does not contain a seven-row order permutation");
+                        + " does not contain a " + requiredRows.size()
+                        + "-row order permutation");
             }
         }
         Set<String> signatures = new LinkedHashSet<>();
         for (Map<Integer, Row> rowSlots : rowsByBlock.values()) {
             StringBuilder signature = new StringBuilder();
-            for (int rowOrder = 0; rowOrder < REQUIRED_ROWS.size(); rowOrder++) {
+            for (int rowOrder = 0; rowOrder < requiredRows.size(); rowOrder++) {
                 signature.append(rowSlots.get(rowOrder)).append('/');
             }
             signatures.add(signature.toString());
         }
         if (rowsByBlock.size() > 1 && signatures.size() < 2) {
-            errors.add("seven-row order was not randomized between blocks");
+            errors.add(requiredRows.size() + "-row order was not randomized between blocks");
         }
     }
 
     private static void validateObservedRowOrder(Iterable<RunBuilder> runs,
-            List<String> errors) {
+            List<String> errors, List<Row> requiredRows) {
         Map<String, Map<Row, RunBuilder>> firstByRowByBlock = new LinkedHashMap<>();
         for (RunBuilder run : runs) {
             if (!run.available || run.row == null) {
@@ -1804,10 +1985,10 @@ public final class BenchmarkMatrix {
         for (Map.Entry<String, Map<Row, RunBuilder>> entry : firstByRowByBlock.entrySet()) {
             List<RunBuilder> firstRows = new ArrayList<>(entry.getValue().values());
             firstRows.sort(Comparator.comparingInt(run -> run.ingestionOrdinal));
-            if (firstRows.size() != REQUIRED_ROWS.size()) {
+            if (firstRows.size() != requiredRows.size()) {
                 continue;
             }
-            for (int expectedOrder = 0; expectedOrder < REQUIRED_ROWS.size(); expectedOrder++) {
+            for (int expectedOrder = 0; expectedOrder < requiredRows.size(); expectedOrder++) {
                 RunBuilder observed = firstRows.get(expectedOrder);
                 if (observed.rowOrder != expectedOrder) {
                     errors.add("matrix block " + entry.getKey()
@@ -1880,6 +2061,7 @@ public final class BenchmarkMatrix {
                     || !parent.thermalWindow.equals(candidate.thermalWindow)
                     || !parent.requestedProfile.equals(candidate.requestedProfile)
                     || !parent.profile.equals(candidate.profile)
+                    || !parent.benchmarkToken.equals(candidate.benchmarkToken)
                     || parent.effectiveGbc != candidate.effectiveGbc
                     || parent.effectiveDmgCompat != candidate.effectiveDmgCompat
                     || !parent.effectiveMode.equals(candidate.effectiveMode)
@@ -1966,7 +2148,8 @@ public final class BenchmarkMatrix {
                 && parent.maximumFrameBytes == candidate.maximumFrameBytes
                 && parent.systemVolume == candidate.systemVolume
                 && parent.systemVolumeMax == candidate.systemVolumeMax
-                && parent.systemMusicMuted.equals(candidate.systemMusicMuted);
+                && parent.systemMusicMuted.equals(candidate.systemMusicMuted)
+                && parent.benchmarkAudioPolicy.equals(candidate.benchmarkAudioPolicy);
     }
 
     private static boolean memoryWithinTolerance(long first, long second) {
@@ -1995,6 +2178,7 @@ public final class BenchmarkMatrix {
         if (!run.artifactId.equals(result.artifactId)
                 || run.sessionGeneration != result.sessionGeneration
                 || run.benchmarkGeneration != result.benchmarkGeneration
+                || !run.benchmarkToken.equals(result.benchmarkToken)
                 || run.scenarioSessionGeneration != result.scenarioSessionGeneration
                 || run.scenarioCompletedFrames != result.scenarioCompletedFrames
                 || run.scenarioExpectedFrames != result.scenarioExpectedFrames
@@ -2016,9 +2200,12 @@ public final class BenchmarkMatrix {
                 || run.displayTargetHz != result.displayTargetHz
                 || run.surfaceContentRateMillihz != result.surfaceContentRateMillihz
                 || !run.environment.equals(result.environmentStart)
+                || result.audio == null
+                || !run.benchmarkAudioPolicy.equals(result.audio.benchmarkAudioPolicy)
                 || (run.audioStart != null && !run.audioStart.equals(audioStart(result.audio)))) {
             errors.add(run.key + " final evidence does not match matrix_run");
         }
+        validateSystemAudioProof(run, result, errors);
         if (!validScenarioCompletion(run.row, result.inputContract, result.sessionGeneration,
                 result.scenarioSessionGeneration, result.scenarioCompleted,
                 result.scenarioCompletedFrames, result.scenarioExpectedFrames,
@@ -2133,6 +2320,30 @@ public final class BenchmarkMatrix {
                     || !close(result.presentationIntervalFps, submissionFps)) {
                 errors.add(run.key + " reports an inexact interval FPS");
             }
+        }
+    }
+
+    private static void validateSystemAudioProof(RunBuilder run, FinalFields result,
+            List<String> errors) {
+        long samples = result.systemAudioSampleCount;
+        long bad = result.systemAudioBadCount;
+        if (samples < 0L && bad < 0L) {
+            if ("canonical".equals(run.benchmarkAudioPolicy)) {
+                return; // legacy canonical fixture without the compact proof
+            }
+            errors.add(run.key + " silent run is missing system-audio proof");
+            return;
+        }
+        if (samples < 0L || bad < 0L) {
+            errors.add(run.key + " has an incomplete system-audio proof");
+            return;
+        }
+        if ("canonical".equals(run.benchmarkAudioPolicy)) {
+            if (samples != 0L || bad != 0L) {
+                errors.add(run.key + " canonical system-audio counters are not zero");
+            }
+        } else if (samples != 12L || bad != 0L) {
+            errors.add(run.key + " silent system-audio proof must be 12/0");
         }
     }
 
@@ -2552,6 +2763,36 @@ public final class BenchmarkMatrix {
             List<String> errors, AudioStartFields inheritedStart) {
         AudioStartFields inlineStart = parseMatrixAudioStart(fields, lineNumber, errors);
         AudioStartFields start = inlineStart == null ? inheritedStart : inlineStart;
+        boolean expandedProofPresent = EXPANDED_AUDIO_PROOF_FIELDS.stream()
+                .anyMatch(fields::containsKey);
+        if (expandedProofPresent && !fields.keySet().containsAll(EXPANDED_AUDIO_PROOF_FIELDS)) {
+            errors.add("line " + lineNumber
+                    + ": expanded benchmark audio proof must be all-or-none");
+        }
+        if (expandedProofPresent) {
+            for (String key : AUDIO_CALENDAR_COUNTER_FIELDS) {
+                if (optionalLong(fields, key) < 0L) {
+                    errors.add("line " + lineNumber
+                            + ": expanded benchmark audio calendar must be nonnegative");
+                    break;
+                }
+            }
+        }
+        CompactAudioProof compact = parseCompactAudioProof(fields, lineNumber, errors);
+        Boolean requested = compact == null ? (fields.containsKey("benchmark_audio_requested")
+                ? strictBoolean(fields, "benchmark_audio_requested", lineNumber, errors) : false)
+                : compact.requested;
+        Boolean activeAtBoundary = compact == null
+                ? (fields.containsKey("benchmark_audio_active_at_boundary")
+                        ? strictBoolean(fields, "benchmark_audio_active_at_boundary", lineNumber,
+                                errors) : false)
+                : compact.activeAtBoundary;
+        Boolean disabledAfter = compact == null
+                ? (fields.containsKey("benchmark_audio_disabled_after")
+                        ? strictBoolean(fields, "benchmark_audio_disabled_after", lineNumber, errors)
+                        : false)
+                : compact.disabledAfter;
+        long[] calendar = compact == null ? null : compact.calendar;
         return new AudioFields(
                 strictBoolean(fields, "audio_active", lineNumber, errors),
                 integer(fields, "audio_sample_rate", lineNumber, errors),
@@ -2585,6 +2826,8 @@ public final class BenchmarkMatrix {
                 strictBoolean(fields, "audio_system_music_muted", lineNumber, errors),
                 integer(fields, "audio_queue_capacity_frames", lineNumber, errors),
                 integer(fields, "audio_max_frame_bytes", lineNumber, errors),
+                optionalLong(fields, "audio_output_identity"),
+                optionalLong(fields, "audio_queue_identity"),
                 start == null ? -1L : start.inputEvents,
                 start == null ? -1L : start.inputFrames,
                 start == null ? -1L : start.enqueuedBytes,
@@ -2606,9 +2849,84 @@ public final class BenchmarkMatrix {
                 start == null ? -1 : start.sampleRate,
                 start == null ? -1 : start.queueCapacityFrames,
                 start == null ? -1 : start.maximumFrameBytes,
+                start == null ? null : start.active,
+                start == null ? null : start.paused,
+                start == null ? null : start.muted,
+                start == null ? -1 : start.volume,
+                start == null ? -1 : start.systemVolume,
+                start == null ? -1 : start.systemVolumeMax,
+                start == null ? null : start.systemMusicMuted,
+                start == null ? -1 : start.queuedFrames,
+                start == null ? null : start.reopenPending,
+                start == null ? -1L : start.outputIdentity,
+                start == null ? -1L : start.queueIdentity,
                 strictBoolean(fields, "audio_focus_granted", lineNumber, errors),
                 longValue(fields, "audio_focus_start_loss_count", lineNumber, errors),
-                longValue(fields, "audio_focus_loss_count", lineNumber, errors));
+                longValue(fields, "audio_focus_loss_count", lineNumber, errors),
+                fields.getOrDefault("benchmark_audio_policy", "canonical"),
+                requested,
+                activeAtBoundary,
+                disabledAfter,
+                calendar == null ? optionalLong(fields, "benchmark_audio_skipped_ticks") : calendar[0],
+                calendar == null ? optionalLong(fields, "benchmark_audio_zero_sample_slots") : calendar[1],
+                calendar == null ? optionalLong(fields, "benchmark_audio_zero_sample_events") : calendar[2],
+                calendar == null ? optionalLong(fields, "benchmark_audio_max_debt") : calendar[3],
+                calendar == null ? optionalLong(fields, "benchmark_audio_apu_reads") : calendar[4],
+                calendar == null ? optionalLong(fields, "benchmark_audio_apu_writes") : calendar[5],
+                calendar == null ? optionalLong(fields, "benchmark_audio_frame_sequencer_commits") : calendar[6],
+                calendar == null ? optionalLong(fields, "benchmark_audio_dropped_channel_ticks") : calendar[7]);
+    }
+
+    /** Decodes compact final-result policy proof while retaining legacy expanded fields. */
+    private static CompactAudioProof parseCompactAudioProof(Map<String, String> fields,
+            int lineNumber, List<String> errors) {
+        String flagsValue = fields.get("benchmark_audio_flags");
+        String calendarValue = fields.get("benchmark_audio_calendar");
+        if (flagsValue == null && calendarValue == null) {
+            return null;
+        }
+        boolean expandedProofPresent = EXPANDED_AUDIO_PROOF_FIELDS.stream()
+                .anyMatch(fields::containsKey);
+        if (expandedProofPresent) {
+            errors.add("line " + lineNumber
+                    + ": compact and expanded benchmark audio proofs cannot be mixed");
+            return null;
+        }
+        if (flagsValue == null || calendarValue == null) {
+            errors.add("line " + lineNumber + ": compact benchmark audio proof is incomplete");
+            return null;
+        }
+        if (!flagsValue.matches("[01]{3}")) {
+            errors.add("line " + lineNumber + ": invalid compact benchmark audio flags");
+            return null;
+        }
+        boolean requested = flagsValue.charAt(0) == '1';
+        boolean activeAtBoundary = flagsValue.charAt(1) == '1';
+        boolean disabledAfter = flagsValue.charAt(2) == '1';
+        String[] parts = calendarValue.split(",", -1);
+        long[] calendar = new long[8];
+        if (parts.length != calendar.length) {
+            errors.add("line " + lineNumber + ": compact benchmark audio calendar has wrong width");
+            return null;
+        }
+        for (int index = 0; index < calendar.length; index++) {
+            if (!parts[index].matches("[0-9]+")) {
+                errors.add("line " + lineNumber
+                        + ": invalid compact benchmark audio calendar");
+                return null;
+            }
+            try {
+                calendar[index] = Long.parseLong(parts[index]);
+            } catch (NumberFormatException malformed) {
+                errors.add("line " + lineNumber + ": invalid compact benchmark audio calendar");
+                return null;
+            }
+        }
+        return new CompactAudioProof(requested, activeAtBoundary, disabledAfter, calendar);
+    }
+
+    private record CompactAudioProof(boolean requested, boolean activeAtBoundary,
+            boolean disabledAfter, long[] calendar) {
     }
 
     /**
@@ -2642,7 +2960,27 @@ public final class BenchmarkMatrix {
                 strictBoolean(fields, "audio_start_output_playing", lineNumber, errors),
                 integer(fields, "audio_start_sample_rate", lineNumber, errors),
                 integer(fields, "audio_start_queue_capacity_frames", lineNumber, errors),
-                integer(fields, "audio_start_max_frame_bytes", lineNumber, errors));
+                integer(fields, "audio_start_max_frame_bytes", lineNumber, errors),
+                fields.containsKey("audio_start_active")
+                        ? strictBoolean(fields, "audio_start_active", lineNumber, errors) : null,
+                fields.containsKey("audio_start_paused")
+                        ? strictBoolean(fields, "audio_start_paused", lineNumber, errors) : null,
+                fields.containsKey("audio_start_muted")
+                        ? strictBoolean(fields, "audio_start_muted", lineNumber, errors) : null,
+                fields.containsKey("audio_start_volume")
+                        ? integer(fields, "audio_start_volume", lineNumber, errors) : -1,
+                fields.containsKey("audio_start_system_volume")
+                        ? integer(fields, "audio_start_system_volume", lineNumber, errors) : -1,
+                fields.containsKey("audio_start_system_volume_max")
+                        ? integer(fields, "audio_start_system_volume_max", lineNumber, errors) : -1,
+                fields.containsKey("audio_start_system_music_muted")
+                        ? strictBoolean(fields, "audio_start_system_music_muted", lineNumber, errors) : null,
+                fields.containsKey("audio_start_queued_frames")
+                        ? integer(fields, "audio_start_queued_frames", lineNumber, errors) : -1,
+                fields.containsKey("audio_start_reopen_pending")
+                        ? strictBoolean(fields, "audio_start_reopen_pending", lineNumber, errors) : null,
+                optionalLong(fields, "audio_start_output_identity"),
+                optionalLong(fields, "audio_start_queue_identity"));
     }
 
     private static AudioStartFields audioStart(AudioFields audio) {
@@ -2654,7 +2992,10 @@ public final class BenchmarkMatrix {
                 audio.startUnderruns, audio.startOutputUnderruns, audio.startRestarts,
                 audio.startRouteFailures, audio.startOutputOpen, audio.startOutputPlaying,
                 audio.startSampleRate, audio.startQueueCapacityFrames,
-                audio.startMaximumFrameBytes);
+                audio.startMaximumFrameBytes, audio.startActive, audio.startPaused,
+                audio.startMuted, audio.startVolume, audio.startSystemVolume,
+                audio.startSystemVolumeMax, audio.startSystemMusicMuted, audio.startQueuedFrames,
+                audio.startReopenPending, audio.startOutputIdentity, audio.startQueueIdentity);
     }
 
     private static Row recomputeRow(String profile, Boolean effectiveGbc,
@@ -2925,7 +3266,64 @@ public final class BenchmarkMatrix {
         } catch (ArithmeticException overflow) {
             return false;
         }
-        return audio.sampleRate > 0 && audio.startSampleRate == audio.sampleRate
+        boolean exactSilentPolicy = "silent-pcm-v1".equals(audio.benchmarkAudioPolicy);
+        boolean relaxedSilentPolicy = "silent-pcm-relaxed-apu-v1".equals(
+                audio.benchmarkAudioPolicy);
+        boolean silentPolicy = exactSilentPolicy || relaxedSilentPolicy;
+        boolean canonicalCalendarAbsent = audio.benchmarkAudioSkippedTicks < 0L
+                && audio.benchmarkAudioZeroSampleSlots < 0L
+                && audio.benchmarkAudioZeroSampleEvents < 0L
+                && audio.benchmarkAudioMaxDebt < 0L
+                && audio.benchmarkAudioApuReads < 0L
+                && audio.benchmarkAudioApuWrites < 0L
+                && audio.benchmarkAudioFrameSequencerCommits < 0L
+                && audio.benchmarkAudioDroppedChannelTicks < 0L;
+        boolean canonicalCalendarZero = canonicalCalendarAbsent
+                || Boolean.FALSE.equals(audio.benchmarkAudioRequested)
+                && Boolean.FALSE.equals(audio.benchmarkAudioActiveAtBoundary)
+                && Boolean.TRUE.equals(audio.benchmarkAudioDisabledAfterBoundary)
+                && audio.benchmarkAudioSkippedTicks == 0L
+                && audio.benchmarkAudioZeroSampleSlots == 0L
+                && audio.benchmarkAudioZeroSampleEvents == 0L
+                && audio.benchmarkAudioMaxDebt == 0L
+                && audio.benchmarkAudioApuReads == 0L
+                && audio.benchmarkAudioApuWrites == 0L
+                && audio.benchmarkAudioFrameSequencerCommits == 0L
+                && audio.benchmarkAudioDroppedChannelTicks == 0L;
+        boolean policyProof = !silentPolicy
+                ? "canonical".equals(audio.benchmarkAudioPolicy) && canonicalCalendarZero
+                : Boolean.TRUE.equals(audio.benchmarkAudioRequested)
+                && Boolean.TRUE.equals(audio.benchmarkAudioActiveAtBoundary)
+                && Boolean.TRUE.equals(audio.benchmarkAudioDisabledAfterBoundary)
+                && audio.benchmarkAudioSkippedTicks > 0L
+                && audio.benchmarkAudioZeroSampleSlots > 0L
+                && audio.benchmarkAudioZeroSampleEvents > 0L
+                && audio.benchmarkAudioMaxDebt > 0L
+                && audio.benchmarkAudioApuReads >= 0L
+                && audio.benchmarkAudioApuWrites >= 0L
+                && audio.benchmarkAudioFrameSequencerCommits > 0L
+                && (exactSilentPolicy
+                        ? audio.benchmarkAudioDroppedChannelTicks == 0L
+                        : audio.benchmarkAudioDroppedChannelTicks
+                                == audio.benchmarkAudioSkippedTicks
+                                && audio.benchmarkAudioDroppedChannelTicks > 0L);
+        boolean silentBaseline = !silentPolicy || audio.startActive != null
+                && Boolean.TRUE.equals(audio.startActive)
+                && Boolean.FALSE.equals(audio.startPaused)
+                && Boolean.FALSE.equals(audio.startMuted)
+                && audio.startVolume == 100
+                && audio.startSystemVolume == 0
+                && audio.startSystemVolumeMax > 0
+                && Boolean.TRUE.equals(audio.startSystemMusicMuted)
+                && audio.startQueuedFrames == 0
+                && Boolean.FALSE.equals(audio.startReopenPending)
+                && audio.startOutputIdentity > 0L
+                && audio.startQueueIdentity > 0L
+                && audio.startInputEvents > 0L
+                && audio.startWrittenBytes > 0L
+                && audio.startWrittenFrames > 0L;
+        return policyProof && silentBaseline
+                && audio.sampleRate > 0 && audio.startSampleRate == audio.sampleRate
                 && (!requireRealtime || (overruns == 0L && underruns == 0L
                 && outputUnderruns == 0L && restarts == 0L))
                 && writeFailures == 0L && discardedBytes == 0L && routeFailures == 0L
@@ -2934,9 +3332,17 @@ public final class BenchmarkMatrix {
                 && Boolean.TRUE.equals(audio.startOutputPlaying)
                 && Boolean.TRUE.equals(audio.outputOpen)
                 && Boolean.TRUE.equals(audio.outputPlaying)
-                && Boolean.FALSE.equals(audio.muted) && audio.volume > 0 && audio.volume <= 100
-                && audio.systemVolume > 0 && audio.systemVolumeMax >= audio.systemVolume
-                && Boolean.FALSE.equals(audio.systemMusicMuted)
+                && Boolean.FALSE.equals(audio.muted)
+                && (silentPolicy ? audio.volume == 100 : audio.volume > 0 && audio.volume <= 100)
+                && (silentPolicy
+                        ? audio.systemVolume == 0 && audio.systemVolumeMax > 0
+                                && Boolean.TRUE.equals(audio.systemMusicMuted)
+                                && audio.audioOutputIdentity > 0L
+                                && audio.audioQueueIdentity > 0L
+                                && audio.audioOutputIdentity == audio.startOutputIdentity
+                                && audio.audioQueueIdentity == audio.startQueueIdentity
+                        : audio.systemVolume > 0 && audio.systemVolumeMax >= audio.systemVolume
+                                && Boolean.FALSE.equals(audio.systemMusicMuted))
                 && Boolean.TRUE.equals(audio.focusGranted) && focusLosses == 0L
                 && audio.playbackPositionFrames > audio.startPlaybackPositionFrames
                 && audio.minimumBufferBytes > 0 && audio.configuredBufferBytes > 0
@@ -3204,6 +3610,8 @@ public final class BenchmarkMatrix {
         final long scenarioSessionGeneration;
         final int scenarioCompletedFrames;
         final int scenarioExpectedFrames;
+        final String benchmarkAudioPolicy;
+        final String benchmarkToken;
         final List<Long> readyIds = new ArrayList<>();
         final List<Long> readyNanos = new ArrayList<>();
         final List<Long> submissionIds = new ArrayList<>();
@@ -3224,7 +3632,7 @@ public final class BenchmarkMatrix {
                 int displayTargetHz, int surfaceContentRateMillihz, long sessionGeneration,
                 long benchmarkGeneration, long scenarioSessionGeneration,
                 int scenarioCompletedFrames, int scenarioExpectedFrames,
-                AudioStartFields audioStart) {
+                AudioStartFields audioStart, String benchmarkAudioPolicy, String benchmarkToken) {
             this.key = key;
             this.ingestionOrdinal = ingestionOrdinal;
             this.artifactId = artifactId;
@@ -3260,6 +3668,8 @@ public final class BenchmarkMatrix {
             this.scenarioSessionGeneration = scenarioSessionGeneration;
             this.scenarioCompletedFrames = scenarioCompletedFrames;
             this.scenarioExpectedFrames = scenarioExpectedFrames;
+            this.benchmarkAudioPolicy = benchmarkAudioPolicy;
+            this.benchmarkToken = benchmarkToken;
         }
     }
 
@@ -3267,6 +3677,7 @@ public final class BenchmarkMatrix {
             long scenarioSessionGeneration, boolean scenarioCompleted,
             int scenarioCompletedFrames, int scenarioExpectedFrames,
             boolean scenarioSourceClosed, boolean scenarioAudioDrained,
+            String benchmarkToken,
             String requestedProfile, String profile,
             Boolean effectiveGbc, Boolean effectiveDmgCompat, String effectiveMode,
             String executionMode,
@@ -3286,7 +3697,8 @@ public final class BenchmarkMatrix {
             int interactiveBadCount, int pluggedBadCount, int powerSaveBadCount,
             int stayAwakeBadCount, int priorityBadCount, int importanceBadCount,
             int batteryTempMin, int batteryTempMax, int liveInputMutations, int surfaceVoteHz,
-            int displayTargetHz, int surfaceContentRateMillihz) {
+            int displayTargetHz, int surfaceContentRateMillihz,
+            long systemAudioSampleCount, long systemAudioBadCount) {
     }
 
     private record EnvironmentFields(int thermalStatus, int batteryTemperatureDeciC,
@@ -3316,9 +3728,10 @@ public final class BenchmarkMatrix {
             long enqueuedFrames, long writtenBytes, long writtenFrames, long writeFailures,
             long discardedBytes, long pendingBytes, long queuedBytes, int queueFrames,
             Boolean outputOpen, Boolean outputPlaying, Boolean muted, int volume,
-                long routeFailures, long playbackPositionFrames, int systemVolume,
-                int systemVolumeMax, Boolean systemMusicMuted, int queueCapacityFrames,
-                int maximumFrameBytes, long startInputEvents, long startInputFrames,
+            long routeFailures, long playbackPositionFrames, int systemVolume,
+            int systemVolumeMax, Boolean systemMusicMuted, int queueCapacityFrames,
+            int maximumFrameBytes, long audioOutputIdentity, long audioQueueIdentity,
+            long startInputEvents, long startInputFrames,
                 long startEnqueuedBytes,
                 long startEnqueuedFrames, long startWrittenBytes, long startWrittenFrames,
                 long startWriteFailures, long startDiscardedBytes, long startPendingBytes,
@@ -3326,8 +3739,18 @@ public final class BenchmarkMatrix {
                 long startUnderruns, long startOutputUnderruns,
                 long startRestarts, long startRouteFailures, Boolean startOutputOpen,
                 Boolean startOutputPlaying, int startSampleRate, int startQueueCapacityFrames,
-                int startMaximumFrameBytes, Boolean focusGranted, long focusStartLossCount,
-                long focusLossCount) {
+                int startMaximumFrameBytes, Boolean startActive, Boolean startPaused,
+                Boolean startMuted, int startVolume, int startSystemVolume,
+                int startSystemVolumeMax, Boolean startSystemMusicMuted, int startQueuedFrames,
+                Boolean startReopenPending, long startOutputIdentity, long startQueueIdentity,
+                Boolean focusGranted, long focusStartLossCount,
+                long focusLossCount, String benchmarkAudioPolicy,
+                Boolean benchmarkAudioRequested, Boolean benchmarkAudioActiveAtBoundary,
+                Boolean benchmarkAudioDisabledAfterBoundary, long benchmarkAudioSkippedTicks,
+                long benchmarkAudioZeroSampleSlots, long benchmarkAudioZeroSampleEvents,
+                long benchmarkAudioMaxDebt, long benchmarkAudioApuReads,
+                long benchmarkAudioApuWrites, long benchmarkAudioFrameSequencerCommits,
+                long benchmarkAudioDroppedChannelTicks) {
     }
 
     private record AudioStartFields(long inputEvents, long inputFrames, long enqueuedBytes,
@@ -3335,7 +3758,10 @@ public final class BenchmarkMatrix {
             long discardedBytes, long pendingBytes, long queuedBytes, long playbackPositionFrames,
             long overruns, long underruns, long outputUnderruns, long restarts,
             long routeFailures, Boolean outputOpen, Boolean outputPlaying, int sampleRate,
-            int queueCapacityFrames, int maximumFrameBytes) {
+            int queueCapacityFrames, int maximumFrameBytes, Boolean active, Boolean paused,
+            Boolean muted, int volume, int systemVolume, int systemVolumeMax,
+            Boolean systemMusicMuted, int queuedFrames, Boolean reopenPending,
+            long outputIdentity, long queueIdentity) {
     }
 
     private record CompositorFields(String artifactId, String deviceId, long benchmarkGeneration,

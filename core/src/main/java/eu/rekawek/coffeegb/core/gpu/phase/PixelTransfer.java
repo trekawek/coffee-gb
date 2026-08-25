@@ -703,9 +703,6 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /** Advances the empty physical-DMG LCD clock without entering either FIFO dot path. */
     public void advancePerformanceDmgIdleOutputSpanTrusted(int ticks) {
-        if (ticks < 0 || !isPerformanceDmgIdleOutput()) {
-            throw new IllegalStateException("DMG pixel output is not idle in PERFORMANCE span");
-        }
         fifo.advancePerformanceOutputIdleSpanTrusted(ticks);
     }
 

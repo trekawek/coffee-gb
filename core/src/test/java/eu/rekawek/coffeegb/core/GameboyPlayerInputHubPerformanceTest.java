@@ -306,6 +306,170 @@ public final class GameboyPlayerInputHubPerformanceTest {
         }
     }
 
+    @Test
+    public void nativeDoubleSpeedSettledHaltMatchesScalarAcrossPacketTails() throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        performanceHub.openSource(0);
+        try (Gameboy performance = nativeDoubleSpeedHaltSession(performanceHub);
+                Gameboy scalar = nativeDoubleSpeedHaltSession(
+                        () -> PlayerInputSnapshot.released())) {
+            settleNativeDoubleSpeedHalt(performance, scalar);
+            ComponentState<Gameboy> settledPerformance = performance.captureState();
+            ComponentState<Gameboy> settledScalar = scalar.captureState();
+            int[] tails = {1, 2, 3, 17, 53, 54, 55};
+            for (int tail : tails) {
+                performance.restoreState(settledPerformance);
+                scalar.restoreState(settledScalar);
+                assertEquals("native HALT tail=" + tail + " frame events",
+                        runScalarTicks(scalar, tail), performance.runTicks(tail));
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "native HALT tail=" + tail);
+                assertRasterEquivalent(scalar, performance, "native HALT tail=" + tail);
+            }
+
+            performance.restoreState(settledPerformance);
+            scalar.restoreState(settledScalar);
+            performance.resetPerformanceBulkCounters();
+            assertEquals("native HALT 1000-dot frame events", runScalarTicks(scalar, 1_000),
+                    performance.runTicks(1_000));
+            assertTrue("native double-speed HALT did not cross a CPU phase boundary",
+                    performance.getPerformanceBulkMaxTicks() > 3);
+            assertTrue("native double-speed HALT had no substantial packet coverage",
+                    performance.getPerformanceBulkTicks() > 3);
+            assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                    "native HALT 54-dot packet");
+        }
+    }
+
+    @Test
+    public void nativeDoubleSpeedSettledHaltWakeEdgesMatchScalarForAllTails() throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        performanceHub.openSource(0);
+        try (Gameboy performance = nativeDoubleSpeedHaltSession(performanceHub);
+                Gameboy scalar = nativeDoubleSpeedHaltSession(
+                        () -> PlayerInputSnapshot.released())) {
+            settleNativeDoubleSpeedHalt(performance, scalar);
+            ComponentState<Gameboy> settledPerformance = performance.captureState();
+            ComponentState<Gameboy> settledScalar = scalar.captureState();
+            int[] tails = {1, 2, 3, 17, 53, 54, 55};
+            for (WakeSource wakeSource : WakeSource.values()) {
+                for (int tail : tails) {
+                    performance.restoreState(settledPerformance);
+                    scalar.restoreState(settledScalar);
+                    armWakeSource(performance, wakeSource);
+                    armWakeSource(scalar, wakeSource);
+                    int elapsed = 0;
+                    while (performance.getCpu().getState() == Cpu.State.HALTED
+                            && elapsed < 4_000) {
+                        assertEquals(context(true, wakeSource, tail) + " frame events",
+                                runScalarTicks(scalar, tail), performance.runTicks(tail));
+                        assertEquals(context(true, wakeSource, tail) + " CPU state",
+                                scalar.getCpu().getState(), performance.getCpu().getState());
+                        elapsed += tail;
+                    }
+                    assertTrue(context(true, wakeSource, tail) + " did not wake",
+                            performance.getCpu().getState() != Cpu.State.HALTED);
+                    assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                            context(true, wakeSource, tail) + " wake");
+                    assertRasterEquivalent(scalar, performance,
+                            context(true, wakeSource, tail) + " wake");
+                }
+            }
+        }
+    }
+
+    @Test
+    public void nativeDoubleSpeedSettledHaltPlayerInputPollAndRestoreAtBothCpuPhases()
+            throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        PlayerInputHub.SourceHandle performanceSource = performanceHub.openSource(0);
+        AtomicReference<PlayerInputSnapshot> scalarInput = new AtomicReference<>(
+                PlayerInputSnapshot.released());
+        try (Gameboy performance = nativeDoubleSpeedHaltSession(performanceHub);
+                Gameboy scalar = nativeDoubleSpeedHaltSession(scalarInput::get)) {
+            settleNativeDoubleSpeedHalt(performance, scalar);
+            ComponentState<Gameboy> settledPerformance = performance.captureState();
+            ComponentState<Gameboy> settledScalar = scalar.captureState();
+            for (int phase = 0; phase < 2; phase++) {
+                performance.restoreState(settledPerformance);
+                scalar.restoreState(settledScalar);
+                int guard = 0;
+                while (performance.getCpu().getDebugMachineCycle() != phase
+                        && guard++ < 4) {
+                    assertEquals("phase setup frame", scalar.tick(), performance.tick());
+                }
+                assertEquals("native HALT phase setup", phase,
+                        performance.getCpu().getDebugMachineCycle());
+                ComponentState<Gameboy> phasePerformance = performance.captureState();
+                ComponentState<Gameboy> phaseScalar = scalar.captureState();
+                assertStateEquivalent(phaseScalar, phasePerformance,
+                        "native HALT saved phase=" + phase);
+
+                assertEquals("native HALT restore frame phase=" + phase,
+                        runScalarTicks(scalar, 17), performance.runTicks(17));
+                performance.restoreState(phasePerformance);
+                scalar.restoreState(phaseScalar);
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "native HALT restored phase=" + phase);
+                assertEquals("native HALT restored tail phase=" + phase,
+                        runScalarTicks(scalar, 55), performance.runTicks(55));
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "native HALT restored run phase=" + phase);
+
+                performance.restoreState(phasePerformance);
+                scalar.restoreState(phaseScalar);
+                performance.runTicks(11);
+                scalar.runTicks(11);
+                Set<Button> held = Set.of(Button.A, Button.LEFT);
+                performanceSource.update(held);
+                while ((joypadTick(performance) & 63L) != 0) {
+                    assertEquals("native HALT hub pre-poll phase=" + phase,
+                            runScalarTicks(scalar, 1), performance.runTicks(1));
+                    assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                            "native HALT hub pre-poll phase=" + phase);
+                }
+                scalarInput.set(snapshot(held));
+                assertEquals("native HALT hub poll phase=" + phase,
+                        runScalarTicks(scalar, 1), performance.runTicks(1));
+                assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                        "native HALT hub poll phase=" + phase);
+                scalarInput.set(PlayerInputSnapshot.released());
+                performanceSource.update(Set.of());
+                // sampledInput is intentionally host-only and is not serialized. Let both
+                // hosts observe the release through their ordinary poll before the next phase
+                // restore, so the memento restore starts from the same physical source state.
+                for (int tick = 0; tick < 80; tick++) {
+                    scalar.tick();
+                    performance.tick();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void nativeDoubleSpeedSettledHaltRejectsActiveOamDma() throws Exception {
+        PlayerInputHub performanceHub = new PlayerInputHub();
+        performanceHub.openSource(0);
+        try (Gameboy performance = nativeDoubleSpeedHaltSession(performanceHub);
+                Gameboy scalar = nativeDoubleSpeedHaltSession(
+                        () -> PlayerInputSnapshot.released())) {
+            settleNativeDoubleSpeedHalt(performance, scalar);
+            performance.resetPerformanceBulkCounters();
+            scalar.resetPerformanceBulkCounters();
+            performance.getAddressSpace().setByte(0xff46, 0xc0);
+            scalar.getAddressSpace().setByte(0xff46, 0xc0);
+            assertEquals("active OAM DMA state",
+                    recordComponentHash(scalar.captureState(), "dmaMemento"),
+                    recordComponentHash(performance.captureState(), "dmaMemento"));
+            assertEquals("active OAM DMA frame events", runScalarTicks(scalar, 54),
+                    performance.runTicks(54));
+            assertEquals("active OAM DMA must reject HALT packets", 0L,
+                    performance.getPerformanceBulkTicks());
+            assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                    "active OAM DMA HALT");
+        }
+    }
+
     private static Gameboy session(boolean cgb, ExecutionMode mode, PlayerInputHub hub)
             throws Exception {
         return session(cgb, mode, (PlayerInputSource) hub);
@@ -353,6 +517,33 @@ public final class GameboyPlayerInputHubPerformanceTest {
         return gameboy;
     }
 
+    private static Gameboy nativeDoubleSpeedHaltSession(PlayerInputSource inputSource)
+            throws Exception {
+        Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(nativeDoubleSpeedHaltRom()))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+        gameboy.init(new EventBusImpl(null, null, false), new Peer2PeerSerialEndpoint(), null);
+        return gameboy;
+    }
+
+    private static void settleNativeDoubleSpeedHalt(Gameboy performance, Gameboy scalar) {
+        int guard = 0;
+        while (!(performance.getSpeedMode().getSpeedMode() == 2
+                        && performance.getCpu().getState() == Cpu.State.HALTED
+                        && performance.getCpu().performanceNativeCgbSettledHaltSpanEligible())
+                && guard++ < 300_000) {
+            assertEquals("native HALT setup frame events", scalar.tick(), performance.tick());
+        }
+        assertTrue("native double-speed HALT setup did not settle", guard < 300_000);
+        assertEquals(Cpu.State.HALTED, scalar.getCpu().getState());
+        assertEquals(2, scalar.getSpeedMode().getSpeedMode());
+        assertStateEquivalent(scalar.captureState(), performance.captureState(),
+                "native double-speed HALT settled");
+    }
+
     private static void settleHalt(Gameboy performance, Gameboy scalar, boolean cgb,
                                    WakeSource wakeSource, int tail) {
         performance.runTicks(128);
@@ -395,6 +586,20 @@ public final class GameboyPlayerInputHubPerformanceTest {
         }
     }
 
+    private static byte[] nativeDoubleSpeedHaltRom() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x3e; // LD A,1
+        image[0x101] = 0x01;
+        image[0x102] = (byte) 0xe0; // LDH (FF4D),A
+        image[0x103] = 0x4d;
+        image[0x104] = 0x10; // STOP + padding: enters CGB double speed
+        image[0x105] = 0x00;
+        image[0x106] = 0x76; // HALT after the speed-switch countdown
+        image[0x107] = 0x00;
+        image[0x143] = (byte) 0x80;
+        return image;
+    }
+
     private static long runScalarTicks(Gameboy scalar, int ticks) {
         long frameEvents = 0;
         for (int tick = 0; tick < ticks; tick++) {
@@ -419,6 +624,10 @@ public final class GameboyPlayerInputHubPerformanceTest {
     }
 
     private static int recordComponentHash(Object value, String componentName) {
+        return stateHash(recordComponentValue(value, componentName));
+    }
+
+    private static Object recordComponentValue(Object value, String componentName) {
         for (RecordComponent component : value.getClass().getRecordComponents()) {
             if (!component.getName().equals(componentName)) {
                 continue;
@@ -426,12 +635,17 @@ public final class GameboyPlayerInputHubPerformanceTest {
             try {
                 var accessor = component.getAccessor();
                 accessor.setAccessible(true);
-                return stateHash(accessor.invoke(value));
+                return accessor.invoke(value);
             } catch (ReflectiveOperationException e) {
                 throw new AssertionError("Cannot hash state component " + component, e);
             }
         }
         throw new AssertionError("Missing record component " + componentName);
+    }
+
+    private static long joypadTick(Gameboy gameboy) {
+        Object memento = recordComponentValue(gameboy.captureState(), "joypadMemento");
+        return ((Number) recordComponentValue(memento, "tick")).longValue();
     }
 
     private enum WakeSource {

@@ -139,10 +139,11 @@ public class SoundMode1 extends AbstractSoundMode {
         // ordinary spans (the hot path) are handled as 2-MHz events below.
         int calculationAt = frequencySweep.calculationExpiryOffset(ticks);
         if (calculationAt > 0) {
+            int output = getCurrentOutput();
             for (int i = 0; i < ticks; i++) {
-                tick(false);
+                output = tick(false);
             }
-            return getCurrentOutput();
+            return output;
         }
 
         frequencySweep.tickPerformanceSpan(ticks);

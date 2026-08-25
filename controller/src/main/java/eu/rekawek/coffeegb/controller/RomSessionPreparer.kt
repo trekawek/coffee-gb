@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller
 
 import eu.rekawek.coffeegb.controller.Controller.LoadRomEvent
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.controller.properties.RuntimeWarmupFlavor
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootState
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
@@ -65,7 +66,11 @@ internal class RomSessionPreparer(
     // the disposable 120-frame run would delay first presentation; null retains the desktop
     // default and avoids making this policy persistent.
     if (properties.overrides.runtimeWarmupEnabled != false) {
-      val warmed = warmRuntime(config, properties.overrides.benchmarkPolicyEnabled)
+      val warmed = warmRuntime(
+          config,
+          properties.overrides.benchmarkPolicyEnabled,
+          properties.overrides.runtimeWarmupFlavor,
+      )
       if (properties.overrides.benchmarkPolicyEnabled && !warmed) {
         throw IllegalStateException("Benchmark runtime warmup was unavailable")
       }
@@ -94,9 +99,13 @@ internal class RomSessionPreparer(
    * This is intentionally best-effort: a failed disposable machine must never reject a playable
    * ROM. Cancellation remains observable because a superseded load must not continue preparing.
    */
-  private fun warmRuntime(config: GameboyConfiguration, benchmarkPolicy: Boolean): Boolean {
+  private fun warmRuntime(
+      config: GameboyConfiguration,
+      benchmarkPolicy: Boolean,
+      flavor: RuntimeWarmupFlavor,
+  ): Boolean {
     try {
-      return runtimeWarmupCache.warm(config, ::ensureActive)
+      return runtimeWarmupCache.warm(config, flavor, ::ensureActive)
     } catch (error: CancellationException) {
       throw error
     } catch (error: VirtualMachineError) {
@@ -127,6 +136,13 @@ internal class RomSessionPreparer(
 /** Invokes a disposable, service-free machine without making tests execute millions of ticks. */
 internal fun interface RuntimeWarmupExecutor {
   fun warm(config: GameboyConfiguration, ticks: Int, ensureActive: () -> Unit)
+
+  fun warm(
+      config: GameboyConfiguration,
+      ticks: Int,
+      flavor: RuntimeWarmupFlavor,
+      ensureActive: () -> Unit,
+  ) = warm(config, ticks, ensureActive)
 }
 
 /**
@@ -162,8 +178,15 @@ internal class RuntimeWarmupCache(
    * Performs at most one successful warmup per shape. Waiters observe a completed owner run or
    * take ownership after its cancellation/failure; only successful, still-active runs are cached.
    */
-  fun warm(config: GameboyConfiguration, ensureActive: () -> Unit): Boolean {
-    val key = RuntimeWarmupKey.from(config) ?: return false
+  fun warm(config: GameboyConfiguration, ensureActive: () -> Unit): Boolean =
+      warm(config, RuntimeWarmupFlavor.SCALAR, ensureActive)
+
+  fun warm(
+      config: GameboyConfiguration,
+      flavor: RuntimeWarmupFlavor,
+      ensureActive: () -> Unit,
+  ): Boolean {
+    val key = RuntimeWarmupKey.from(config, flavor) ?: return false
     ensureActive()
     synchronized(monitor) {
       while (true) {
@@ -188,7 +211,7 @@ internal class RuntimeWarmupCache(
       val warmupConfig = config.forRuntimeWarmup().setPlayerInputSource(PlayerInputHub())
       val ticks = Math.multiplyExact(WARMUP_FRAMES, warmupConfig.clockSpec.controllerTicksPerFrame())
       require(ticks > 0) { "Runtime warmup must contain positive controller ticks" }
-      executor.warm(warmupConfig, ticks, ensureActive)
+      executor.warm(warmupConfig, ticks, flavor, ensureActive)
       ensureActive()
       synchronized(monitor) {
         completed[key] = Unit
@@ -203,6 +226,8 @@ internal class RuntimeWarmupCache(
   }
 
   private data class RuntimeWarmupKey(
+      val executionMode: eu.rekawek.coffeegb.core.ExecutionMode,
+      val flavor: RuntimeWarmupFlavor,
       val profileId: String,
       val mapper: Mapper,
       val cartridgeType: CartridgeType,
@@ -215,7 +240,10 @@ internal class RuntimeWarmupCache(
       val codeBreakerRumble: Boolean,
   ) {
     companion object {
-      fun from(config: GameboyConfiguration): RuntimeWarmupKey? {
+      fun from(
+          config: GameboyConfiguration,
+          flavor: RuntimeWarmupFlavor,
+      ): RuntimeWarmupKey? {
         val rom = config.rom
         if (config.bootstrapMode != BootstrapMode.SKIP ||
             config.slotRom != null ||
@@ -223,8 +251,16 @@ internal class RuntimeWarmupCache(
             !isOrdinaryNonRtcCartridge(rom.type)) {
           return null
         }
+        if (flavor == RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1
+            && (config.executionMode != eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE
+                || config.hardwareProfile.id() != "cgb"
+                || rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB)) {
+          return null
+        }
         val cartridgeFeatures = Feature.values().filter(rom.cartridgeProperties::has)
         return RuntimeWarmupKey(
+            config.executionMode,
+            flavor,
             config.hardwareProfile.id(),
             rom.cartridgeProperties.mapper,
             rom.type,
@@ -240,8 +276,17 @@ internal class RuntimeWarmupCache(
     }
   }
 
-  private object GameboyRuntimeWarmupExecutor : RuntimeWarmupExecutor {
+  internal object GameboyRuntimeWarmupExecutor : RuntimeWarmupExecutor {
     override fun warm(config: GameboyConfiguration, ticks: Int, ensureActive: () -> Unit) {
+      warm(config, ticks, RuntimeWarmupFlavor.SCALAR, ensureActive)
+    }
+
+    override fun warm(
+        config: GameboyConfiguration,
+        ticks: Int,
+        flavor: RuntimeWarmupFlavor,
+        ensureActive: () -> Unit,
+    ) {
       val delegate = EventBusImpl(null, "runtime-warmup", false)
       val eventBus = StagedEventBus(delegate)
       var gameboy: Gameboy? = null
@@ -255,16 +300,76 @@ internal class RuntimeWarmupCache(
         )
         // Match the live Session receiver shape without attaching any UI/audio subscribers.
         eventBus.activate()
-        repeat(ticks) { tick ->
-          if (tick % CANCELLATION_CHECK_TICKS == 0) {
-            ensureActive()
+        if (flavor == RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1) {
+          val frameTicks = config.clockSpec.controllerTicksPerFrame()
+          require(frameTicks > 0) { "Runtime warmup frame must contain positive controller ticks" }
+          val gate = BenchmarkCoreFrozenGate()
+          gameboy.sound.setPerformanceSystemMutedAudioMode(
+              eu.rekawek.coffeegb.core.sound.Sound.PerformanceSystemMutedAudioMode.EXACT)
+          gameboy.resetPerformanceBulkCounters()
+          gameboy.sound.resetPerformanceSystemMutedAudioCalendarCounters()
+          var fullTicks = 0L
+          repeat(WARMUP_FRAMES) { frame ->
+            if (frame % CANCELLATION_CHECK_FRAMES == 0) {
+              ensureActive()
+            }
+            val executed = gameboy.runMeasuredTicksUntilStop(frameTicks, gate)
+            require(executed == frameTicks) {
+              "Shadow measured warmup stopped after $executed/$frameTicks ticks"
+            }
+            fullTicks += executed.toLong()
           }
-          gameboy.tick()
+          ensureActive()
+          val totalTicks = Math.multiplyExact(WARMUP_FRAMES.toLong(), frameTicks.toLong())
+          require(ticks.toLong() == totalTicks) {
+            "Shadow measured warmup received an unexpected tick budget"
+          }
+          require(fullTicks == totalTicks) {
+            "Shadow measured warmup did not execute its full tick budget"
+          }
+          val sound = gameboy.sound
+          require(sound.getPerformanceSystemMutedAudioCalendarSkippedTicks() == totalTicks) {
+            "Shadow measured warmup did not account every tick in EXACT mode"
+          }
+          require(sound.getPerformanceSystemMutedAudioCalendarZeroSampleSlots() > 0L) {
+            "Shadow measured warmup emitted no silent PCM slots"
+          }
+          require(sound.getPerformanceSystemMutedAudioCalendarDroppedChannelTicks() == 0L) {
+            "Shadow measured warmup dropped channel ticks"
+          }
+          require(sound.getPerformanceSystemMutedAudioCalendarZeroSampleEvents() > 0L) {
+            "Shadow measured warmup emitted no silent PCM events"
+          }
+          require(sound.getPerformanceSystemMutedAudioCalendarMaxPendingTicks() > 0L) {
+            "Shadow measured warmup did not accumulate an EXACT span"
+          }
+          require(sound.getPerformanceSystemMutedAudioCalendarFrameSequencerCommits() > 0L) {
+            "Shadow measured warmup did not commit the frame sequencer"
+          }
+          require(gameboy.getPerformanceEpochCount() > 0L
+              && gameboy.getPerformanceEpochTicks() > 0L
+              && gameboy.getPerformanceEpochMaxTicks() <= MAX_NATIVE_EPOCH_TICKS) {
+            "Shadow measured warmup did not exercise bounded native epochs"
+          }
+        } else {
+          repeat(ticks) { tick ->
+            if (tick % CANCELLATION_CHECK_TICKS == 0) {
+              ensureActive()
+            }
+            gameboy.tick()
+          }
         }
         ensureActive()
       } finally {
         try {
-          gameboy?.discardUnstarted()
+          gameboy?.let {
+            try {
+              it.sound.setPerformanceSystemMutedAudioMode(
+                  eu.rekawek.coffeegb.core.sound.Sound.PerformanceSystemMutedAudioMode.OFF)
+            } finally {
+              it.discardUnstarted()
+            }
+          }
         } finally {
           eventBus.close()
         }
@@ -275,6 +380,8 @@ internal class RuntimeWarmupCache(
   companion object {
     const val WARMUP_FRAMES = 120
     const val CANCELLATION_CHECK_TICKS = 4_096
+    const val CANCELLATION_CHECK_FRAMES = 8
+    const val MAX_NATIVE_EPOCH_TICKS = 54
     const val DEFAULT_CAPACITY = 8
 
     internal val shared = RuntimeWarmupCache()
