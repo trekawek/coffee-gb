@@ -50,7 +50,7 @@ class StateCodecTest {
         assertEquals(StateRootKind.SESSION, inspection.rootKind)
         assertEquals(compression, inspection.compression)
         assertTrue(inspection.checksumValid)
-        assertEquals(listOf(1, 2, 3), inspection.sections.map { it.id })
+        assertEquals(listOf(1, 2, 3, 4), inspection.sections.map { it.id })
         assertEquals(file.diagnostics, inspection.diagnostics)
         assertTrue(inspection.render().contains("magic=CGBS format=1"))
         assertTrue(inspection.render().contains("core=test-core build=deterministic-build"))
@@ -101,6 +101,62 @@ class StateCodecTest {
     } finally {
       gameboy.stop()
       gameboy.close()
+    }
+  }
+
+  @Test
+  fun bootstrapOutcomeSidecarRoundTripsEveryOutcomeAndCanBeAbsentForLegacyState() {
+    StateCodecTestSupport.session().use { session ->
+      val captured = StateCodec.capture(session)
+      val original = (captured.root as SessionStateRoot).session
+      Gameboy.BootstrapOutcome.entries.forEach { outcome ->
+        val machine = original.machine
+        val withOutcome =
+            SessionState(
+                MachineState(
+                    machine.root,
+                    machine.rtcRuntime,
+                    machine.hardware,
+                    machine.dmgFifoRuntime,
+                    outcome,
+                ),
+                original.serialPeripheral,
+                original.serialState,
+                original.serialRuntime,
+                original.heldButtons,
+            )
+        val file = StateFile(captured.identities, SessionStateRoot(withOutcome))
+        val encoded = StateCodec.encode(file)
+        assertTrue(StateCodec.inspect(encoded).sections.any { it.id == StateBootstrapOutcomeSectionCodec.ID })
+        assertEquals(
+            outcome,
+            (StateCodec.decode(encoded).root as SessionStateRoot).session.machine.bootstrapOutcome,
+        )
+      }
+
+      val legacyMachine = original.machine
+      val legacySession =
+          SessionState(
+              MachineState(
+                  legacyMachine.root,
+                  legacyMachine.rtcRuntime,
+                  legacyMachine.hardware,
+                  legacyMachine.dmgFifoRuntime,
+              ),
+              original.serialPeripheral,
+              original.serialState,
+              original.serialRuntime,
+              original.heldButtons,
+          )
+      val legacy = StateFile(captured.identities, SessionStateRoot(legacySession))
+      val legacyBytes = StateCodec.encode(legacy)
+      assertTrue(StateCodec.inspect(legacyBytes).sections.none { it.id == StateBootstrapOutcomeSectionCodec.ID })
+      assertNull(
+          (StateCodec.decode(legacyBytes).root as SessionStateRoot)
+              .session
+              .machine
+              .bootstrapOutcome,
+      )
     }
   }
 

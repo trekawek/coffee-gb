@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.StateTypeRegistry
 import eu.rekawek.coffeegb.controller.StateLimits
+import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile as CoreHardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import java.nio.charset.StandardCharsets
@@ -708,4 +709,183 @@ internal object StateDiagnosticSectionCodec {
       StateDiagnosticMetadata(reader.readString(), reader.readString()).also {
         reader.requireExhausted()
       }
+}
+
+/**
+ * Optional bootstrap-provenance sidecar for detached machine/session/linked roots.
+ *
+ * The historical payload section intentionally remains unchanged.  Each entry is keyed by its
+ * canonical player slot and may be absent, which lets a current reader preserve the behavior of
+ * old files that predate this sidecar.  Unknown readers skip this optional section by design.
+ */
+internal object StateBootstrapOutcomeSectionCodec {
+  const val ID = 4
+  const val VERSION = 1
+
+  private const val OUTCOME_PENDING = 1
+  private const val OUTCOME_SKIPPED = 2
+  private const val OUTCOME_AUTHENTIC_HANDOFF = 3
+  private const val OUTCOME_TIMED_OUT_FALLBACK = 4
+
+  /** Returns null when no machine in the root carries current provenance metadata. */
+  fun encode(root: StateFileRoot): ByteArray? =
+      try {
+        encodeChecked(root)
+      } catch (failure: StateDecodeException) {
+        throw StateEncodeException(
+            failure.message ?: "Portable bootstrap outcome metadata is invalid",
+            failure,
+        )
+      }
+
+  private fun encodeChecked(root: StateFileRoot): ByteArray? {
+    val outcomes = machineOutcomes(root)
+    if (outcomes.none { it != null }) return null
+    if (root is LinkedSessionStateRoot) {
+      val active = root.linked.players.mapNotNull { it.session?.machine?.bootstrapOutcome }
+      val activeCount = root.linked.players.count { it.session != null }
+      if (active.size != activeCount) {
+        malformed("Linked active machines must all carry bootstrap outcomes")
+      }
+    } else if (outcomes[0] == null) {
+      // This branch is unreachable after the all-null return, but keeping the invariant explicit
+      // makes the one-machine wire shape unambiguous if another root kind is added later.
+      malformed("Active machine must carry a bootstrap outcome")
+    }
+    val writer = PortableWriter(StateLimits.PORTABLE_MAX_SECTION_BYTES)
+    writer.writeU32(outcomes.size.toLong())
+    outcomes.forEachIndexed { player, outcome ->
+      writer.writeByte(player)
+      writer.writeBoolean(outcome != null)
+      outcome?.let { writer.writeByte(outcomeId(it)) }
+    }
+    return writer.toByteArray()
+  }
+
+  fun decode(kind: StateRootKind, reader: PortableReader): List<Gameboy.BootstrapOutcome?> {
+    val expected = machineCount(kind)
+    val count =
+        PortableBounds.requireCount(
+            reader.readU32(),
+            expected.toLong(),
+            "Bootstrap outcome count",
+        )
+    if (count != expected) malformed("Bootstrap outcome count $count is not $expected")
+    val outcomes = ArrayList<Gameboy.BootstrapOutcome?>(count)
+    repeat(count) { expectedPlayer ->
+      val player = reader.readByte()
+      if (player != expectedPlayer) malformed("Bootstrap outcome players are not canonical")
+      outcomes += if (reader.readBoolean()) outcome(reader.readByte()) else null
+    }
+    reader.requireExhausted()
+    return outcomes
+  }
+
+  /** Applies a decoded sidecar without changing the historical payload record graph. */
+  fun apply(
+      root: StateFileRoot,
+      outcomes: List<Gameboy.BootstrapOutcome?>,
+  ): StateFileRoot {
+    val expected = machineCount(root.kind)
+    if (outcomes.size != expected) malformed("Bootstrap outcome count does not match root")
+    return when (root) {
+      is MachineStateRoot ->
+          MachineStateRoot(
+              withOutcome(
+                  root.machine,
+                  outcomes[0] ?: malformed("Machine state is missing bootstrap outcome"),
+              ))
+      is SessionStateRoot ->
+          SessionStateRoot(
+              withOutcome(
+                  root.session,
+                  outcomes[0] ?: malformed("Session state is missing bootstrap outcome"),
+              ))
+      is LinkedSessionStateRoot -> {
+        val players =
+            root.linked.players.mapIndexed { index, player ->
+              val session = player.session
+              if (session == null && outcomes[index] != null) {
+                malformed("Bootstrap outcome exists for absent linked player $index")
+              }
+              if (session != null && outcomes[index] == null) {
+                malformed("Active linked player $index is missing bootstrap outcome")
+              }
+              LinkedPlayerState(
+                  player.player,
+                  session?.let { withOutcome(it, outcomes[index]) },
+              )
+            }
+        LinkedSessionStateRoot(
+            LinkedSessionState(
+                root.linked.frame,
+                root.linked.localPlayer,
+                root.linked.topology,
+                players,
+            ))
+      }
+    }
+  }
+
+  private fun machineOutcomes(root: StateFileRoot): List<Gameboy.BootstrapOutcome?> =
+      when (root) {
+        is MachineStateRoot -> listOf(root.machine.bootstrapOutcome)
+        is SessionStateRoot -> listOf(root.session.machine.bootstrapOutcome)
+        is LinkedSessionStateRoot ->
+            root.linked.players.map { it.session?.machine?.bootstrapOutcome }
+      }
+
+  private fun withOutcome(
+      session: SessionState,
+      outcome: Gameboy.BootstrapOutcome?,
+  ): SessionState =
+      SessionState(
+          withOutcome(session.machine, outcome),
+          session.serialPeripheral,
+          session.serialState,
+          session.serialRuntime,
+          session.heldButtons,
+      )
+
+  private fun withOutcome(
+      machine: MachineState,
+      outcome: Gameboy.BootstrapOutcome?,
+  ): MachineState =
+      MachineState(
+          machine.root,
+          machine.rtcRuntime,
+          machine.hardware,
+          machine.dmgFifoRuntime,
+          outcome,
+      )
+
+  private fun machineCount(kind: StateRootKind): Int =
+      if (kind == StateRootKind.LINKED_SESSION) {
+        StateLimits.PORTABLE_MAX_LINKED_PLAYERS
+      } else {
+        1
+      }
+
+  private fun outcomeId(value: Gameboy.BootstrapOutcome): Int =
+      when (value) {
+        Gameboy.BootstrapOutcome.PENDING -> OUTCOME_PENDING
+        Gameboy.BootstrapOutcome.SKIPPED -> OUTCOME_SKIPPED
+        Gameboy.BootstrapOutcome.AUTHENTIC_HANDOFF -> OUTCOME_AUTHENTIC_HANDOFF
+        Gameboy.BootstrapOutcome.TIMED_OUT_FALLBACK -> OUTCOME_TIMED_OUT_FALLBACK
+      }
+
+  private fun outcome(id: Int): Gameboy.BootstrapOutcome =
+      when (id) {
+        OUTCOME_PENDING -> Gameboy.BootstrapOutcome.PENDING
+        OUTCOME_SKIPPED -> Gameboy.BootstrapOutcome.SKIPPED
+        OUTCOME_AUTHENTIC_HANDOFF -> Gameboy.BootstrapOutcome.AUTHENTIC_HANDOFF
+        OUTCOME_TIMED_OUT_FALLBACK -> Gameboy.BootstrapOutcome.TIMED_OUT_FALLBACK
+        else ->
+            throw StateDecodeException(
+                StateDecodeReason.MALFORMED_ENUM,
+                "Unknown bootstrap outcome $id",
+            )
+      }
+
+  private fun malformed(message: String): Nothing = PortableBounds.malformed(message)
 }

@@ -25,4 +25,14 @@ public class EmulationServiceTest {
 
         assertEquals("silent-pcm-v1", EmulationService.audioPolicyExtraValue(options));
     }
+
+    @Test
+    public void startWireForwardsTypedBootstrapMode() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "accuracy", null, null, null, null, null, "full");
+
+        assertEquals("normal", DiagnosticsOptions.bootstrapModeValue(options.bootstrapMode));
+    }
 }

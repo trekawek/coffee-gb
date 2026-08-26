@@ -12,12 +12,14 @@ final class BenchmarkGameplayScenario {
 
     enum NativeFrameKind {
         DMG,
-        GBC
+        GBC,
+        SGB
     }
 
     static final int UNCHANGED = -1;
     static final int NONE_MASK = 0;
     static final int RIGHT_MASK = 1 << 0;
+    static final int A_MASK = 1 << 4;
     static final int B_MASK = 1 << 5;
     static final int START_MASK = 1 << 7;
 
@@ -30,6 +32,7 @@ final class BenchmarkGameplayScenario {
     }
 
     private final DiagnosticsOptions.BenchmarkScenario scenario;
+    private final BenchmarkWorkload.Timeline workloadTimeline;
     private final NativeFrameKind nativeFrameKind;
     private final int releaseBeforeActionFrames;
     private final int firstActionMask;
@@ -52,6 +55,7 @@ final class BenchmarkGameplayScenario {
     BenchmarkGameplayScenario(DiagnosticsOptions.BenchmarkScenario scenario,
             NativeFrameKind nativeFrameKind) {
         this.scenario = scenario == null ? DiagnosticsOptions.BenchmarkScenario.NONE : scenario;
+        this.workloadTimeline = null;
         this.nativeFrameKind = nativeFrameKind == null ? NativeFrameKind.DMG : nativeFrameKind;
         if (this.scenario == DiagnosticsOptions.BenchmarkScenario.DMG_ACTION_V1) {
             releaseBeforeActionFrames = 120;
@@ -83,8 +87,25 @@ final class BenchmarkGameplayScenario {
         phase = enabled() ? Phase.DISABLED : Phase.READY;
     }
 
+    /** Creates a scenario from a workload-owned immutable timeline. */
+    BenchmarkGameplayScenario(BenchmarkWorkload.Timeline timeline, NativeFrameKind nativeFrameKind) {
+        this.scenario = DiagnosticsOptions.BenchmarkScenario.NONE;
+        this.workloadTimeline = timeline;
+        this.nativeFrameKind = nativeFrameKind == null ? NativeFrameKind.DMG : nativeFrameKind;
+        releaseBeforeActionFrames = 0;
+        firstActionMask = NONE_MASK;
+        firstActionFrames = 0;
+        releaseBetweenActionsFrames = 0;
+        secondActionMask = NONE_MASK;
+        secondActionFrames = 0;
+        releaseAfterActionFrames = 0;
+        endpointFrame = timeline != null && timeline.complete() ? timeline.endpointFrame() : 0;
+        phase = enabled() ? Phase.DISABLED : Phase.READY;
+    }
+
     boolean enabled() {
-        return scenario != DiagnosticsOptions.BenchmarkScenario.NONE;
+        return workloadTimeline != null ? workloadTimeline.complete()
+                : scenario != DiagnosticsOptions.BenchmarkScenario.NONE;
     }
 
     /** Begins one generation-bound timeline after the controller materializes a paused session. */
@@ -184,6 +205,9 @@ final class BenchmarkGameplayScenario {
     }
 
     private int maskForFrame(int frameNumber) {
+        if (workloadTimeline != null) {
+            return workloadTimeline.maskForFrame(frameNumber);
+        }
         int cursor = releaseBeforeActionFrames;
         if (frameNumber < cursor) {
             return NONE_MASK;

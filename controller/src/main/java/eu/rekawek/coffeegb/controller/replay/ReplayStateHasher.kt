@@ -17,6 +17,7 @@ import eu.rekawek.coffeegb.controller.state.Int64ArrayState
 import eu.rekawek.coffeegb.controller.state.Int64State
 import eu.rekawek.coffeegb.controller.state.ListState
 import eu.rekawek.coffeegb.controller.state.MachineHardwareState
+import eu.rekawek.coffeegb.controller.state.MachineState
 import eu.rekawek.coffeegb.controller.state.Mbc3RtcRuntimeState
 import eu.rekawek.coffeegb.controller.state.NoSerialRuntimeState
 import eu.rekawek.coffeegb.controller.state.NullState
@@ -25,6 +26,10 @@ import eu.rekawek.coffeegb.controller.state.RecordState
 import eu.rekawek.coffeegb.controller.state.SerialPeripheralState
 import eu.rekawek.coffeegb.controller.state.SessionState
 import eu.rekawek.coffeegb.controller.state.SessionStateRoot
+import eu.rekawek.coffeegb.controller.state.LinkedPlayerState
+import eu.rekawek.coffeegb.controller.state.LinkedSessionState
+import eu.rekawek.coffeegb.controller.state.LinkedSessionStateRoot
+import eu.rekawek.coffeegb.controller.state.MachineStateRoot
 import eu.rekawek.coffeegb.controller.state.StateCodec
 import eu.rekawek.coffeegb.controller.state.StateCompression
 import eu.rekawek.coffeegb.controller.state.StateField
@@ -111,7 +116,7 @@ object ReplayStateHasher {
     val canonical =
         StateFile(
             file.identities,
-            file.root,
+            withoutBootstrapOutcome(file.root),
             diagnostics = null,
             formatVersion = StateCodec.LATEST_FORMAT_VERSION,
         )
@@ -146,6 +151,45 @@ object ReplayStateHasher {
         },
     )
   }
+
+  /** Replay schema v1 intentionally excludes session/bootstrap provenance sidecars. */
+  private fun withoutBootstrapOutcome(root: eu.rekawek.coffeegb.controller.state.StateFileRoot):
+      eu.rekawek.coffeegb.controller.state.StateFileRoot =
+      when (root) {
+        is MachineStateRoot -> MachineStateRoot(withoutBootstrapOutcome(root.machine))
+        is SessionStateRoot ->
+            SessionStateRoot(withoutBootstrapOutcome(root.session))
+        is LinkedSessionStateRoot ->
+            LinkedSessionStateRoot(
+                LinkedSessionState(
+                    root.linked.frame,
+                    root.linked.localPlayer,
+                    root.linked.topology,
+                    root.linked.players.map { player ->
+                      LinkedPlayerState(
+                          player.player,
+                          player.session?.let(::withoutBootstrapOutcome),
+                      )
+                    },
+                ))
+      }
+
+  private fun withoutBootstrapOutcome(session: SessionState): SessionState =
+      SessionState(
+          withoutBootstrapOutcome(session.machine),
+          session.serialPeripheral,
+          session.serialState,
+          session.serialRuntime,
+          session.heldButtons,
+      )
+
+  private fun withoutBootstrapOutcome(machine: MachineState): MachineState =
+      MachineState(
+          machine.root,
+          machine.rtcRuntime,
+          machine.hardware,
+          machine.dmgFifoRuntime,
+      )
 
   private fun hashFields(
       domain: String,

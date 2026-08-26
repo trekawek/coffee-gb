@@ -94,3 +94,37 @@ are rejected. The parser retains bounded evidence and errors only; it has no ROM
 
 Current builds may truthfully fail the performance or compositor gates. Do not relax the cadence,
 display, 600-window, audio-continuity, thermal, power, or identity checks to make a run pass.
+
+## Eight-cell PERFORMANCE goal matrix
+
+`benchmark-goal-matrix.sh` is the focused PERFORMANCE workflow for four private, app-catalog
+workloads. It runs exactly eight cells: D on DMG/CGB compatibility/SGB, U on
+DMG/native CGB/SGB, and C1/C2 on native CGB. SGB2 is intentionally outside this contract. The
+four recent entries must already occupy app-owned slots 0 through 3 in D, U, C1, C2 order; only
+their random persisted workload nonces appear in evidence. ROM names, paths, titles, headers, and
+hashes never leave the app-private selection boundary.
+
+```text
+./benchmark-goal-matrix.sh \
+  --parent-apk /path/to/parent-signed.apk \
+  --candidate-apk /path/to/candidate-signed.apk \
+  --bootstrap fast-forward \
+  --output-dir /path/to/private-report-dir
+```
+
+The default bootstrap is `fast-forward`; `skip` and `normal` are accepted for explicit validation.
+Each artifact runs once per cell under the exact `silent-pcm-v1` calendar. The phone must already
+have STREAM_MUSIC muted at volume zero. The runner only reads audio state, pins the required
+60/120-Hz display mode transactionally, and restores every display setting on success or failure.
+It requires an identity-bound boot result before ARM, an exact frame-600 core scheduler result,
+600 ready/submitted frames, clean AudioTrack and compositor evidence, exact per-profile clocks,
+and candidate ready/submission cadence at least 99% of nominal. The standalone strict report also
+requires each candidate/parent cell ratio to be at least 0.995.
+
+For the two SGB cells, the parent artifact is the explicit allocation control: it must report
+exactly one output-array allocation for each of the 600 measured frames. The candidate must report
+zero. This keeps the A/B mechanism visible in the core result instead of accepting two identical
+optimized artifacts as a performance comparison.
+
+Run `./benchmark-goal-matrix-test.sh` for the host-only three-bootstrap hermetic contract test. It
+uses fake device commands and never changes a connected phone.

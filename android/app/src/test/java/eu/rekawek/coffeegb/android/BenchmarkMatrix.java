@@ -103,6 +103,8 @@ public final class BenchmarkMatrix {
             "stay_on_plugged_mask_start", "thread_priority_start", "app_importance_start",
             "system_load_start_milli", "cpu_count_start", "memory_available_start_bytes",
             "workload_nonce", "warmup", "input_contract", "surface_vote_hz",
+            "matrix_version", "cell_id", "workload_slot", "scenario_id", "scenario_count",
+            "expected_profile", "effective_profile",
             "scenario_session_generation", "scenario_completed",
             "scenario_completed_frames", "scenario_expected_frames",
             "scenario_source_closed", "scenario_audio_drained",
@@ -126,7 +128,9 @@ public final class BenchmarkMatrix {
     private static final Set<String> SCENARIO_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "session_generation", "input_contract", "completed",
-            "completed_frames", "expected_frames", "source_closed", "audio_drained");
+            "completed_frames", "expected_frames", "source_closed", "audio_drained",
+            "matrix_version", "cell_id", "workload_slot", "scenario_id", "scenario_count",
+            "expected_profile", "effective_profile", "workload_nonce");
     private static final Set<String> FRAME_READY_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "benchmark_generation",
@@ -149,6 +153,8 @@ public final class BenchmarkMatrix {
             "execution_mode",
             "clock_frames_num", "clock_frames_den", "clock_ticks_frame",
             "workload_nonce", "warmup", "input_contract", "scenario_session_generation",
+            "matrix_version", "cell_id", "workload_slot", "scenario_id", "scenario_count",
+            "expected_profile", "effective_profile",
             "scenario_completed", "scenario_completed_frames", "scenario_expected_frames",
             "scenario_source_closed", "scenario_audio_drained",
             "drain_success",
@@ -714,6 +720,44 @@ public final class BenchmarkMatrix {
             }
             return;
         }
+        if ("matrix_version".equals(key)) {
+            if (!"goal-matrix-v1".equals(value) && !"legacy-v1".equals(value)) {
+                errors.add("line " + lineNumber + ": unsupported matrix version");
+            }
+            return;
+        }
+        if ("cell_id".equals(key)) {
+            if (!"unknown".equals(value)
+                    && BenchmarkWorkload.Cell.fromExternalValue(value) == null) {
+                errors.add("line " + lineNumber + ": invalid goal matrix cell");
+            }
+            return;
+        }
+        if ("workload_slot".equals(key)) {
+            if (!"unknown".equals(value)
+                    && BenchmarkWorkload.Slot.fromExternalValue(value) == null) {
+                errors.add("line " + lineNumber + ": invalid workload slot");
+            }
+            return;
+        }
+        if ("scenario_id".equals(key)) {
+            if (!SAFE_TOKEN.matcher(value).matches()) {
+                errors.add("line " + lineNumber + ": invalid scenario id");
+            }
+            return;
+        }
+        if ("scenario_count".equals(key)) {
+            integerValue(value, lineNumber, errors, key);
+            return;
+        }
+        if ("expected_profile".equals(key) || "effective_profile".equals(key)) {
+            if (!Set.of("unknown", "dmg", "cgb-compat", "cgb-native", "sgb",
+                    "cgb-dmg-compat", "cgb0-dmg-compat", "cgb0-native", "mgb", "sgb2")
+                    .contains(value)) {
+                errors.add("line " + lineNumber + ": invalid " + key);
+            }
+            return;
+        }
         if ("profile".equals(key) || "requested_profile".equals(key)) {
             if (!("auto".equals(value) || Set.of("dmg", "mgb", "cgb", "cgb0", "sgb", "sgb2")
                     .contains(value))) {
@@ -961,13 +1005,17 @@ public final class BenchmarkMatrix {
             case "recent_missing" -> Set.of("event");
             case "hardware_profile" -> Set.of("event", "requested_hardware", "requested_profile",
                     "profile", "family", "effective_gbc", "effective_dmg_compat",
-                    "effective_mode", "speed_mode_initial", "speed_mode_sample",
+                    "effective_mode", "expected_profile", "effective_profile", "cell_id",
+                    "workload_slot", "scenario_id", "scenario_count", "matrix_version",
+                    "speed_mode_initial", "speed_mode_sample",
                     "clock_ticks_num", "clock_ticks_den", "clock_frames_num",
                     "clock_frames_den", "clock_ticks_frame", "device_id");
             case "emulation_started" -> Set.of("event", "wall_ns", "prep_ms",
                     "session_generation",
                     "requested_hardware", "profile", "effective_gbc", "effective_dmg_compat",
-                    "effective_mode", "speed_mode_initial", "speed_mode_sample",
+                    "effective_mode", "expected_profile", "effective_profile", "cell_id",
+                    "workload_slot", "scenario_id", "scenario_count", "matrix_version",
+                    "speed_mode_initial", "speed_mode_sample",
                     "clock_ticks_num", "clock_ticks_den", "clock_frames_num",
                     "clock_frames_den", "clock_ticks_frame");
             case "warmup_complete" -> Set.of("event", "completed", "phase");
@@ -1171,6 +1219,10 @@ public final class BenchmarkMatrix {
 
     private static void addMatrixRun(Map<String, String> fields, int lineNumber,
             Map<String, RunBuilder> runs, List<String> errors) {
+        if ("goal-matrix-v1".equals(fields.get("matrix_version"))) {
+            errors.add("line " + lineNumber
+                    + ": legacy matrix parser rejects goal-matrix-v1 records");
+        }
         String artifactId = artifactToken(fields, "artifact_id", lineNumber, errors);
         if (!"benchmark".equals(fields.get("build_profile"))) {
             errors.add("line " + lineNumber + ": benchmark build profile is missing or invalid");

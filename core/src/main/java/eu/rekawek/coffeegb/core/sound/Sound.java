@@ -136,6 +136,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     private transient long performanceSystemMutedAudioCalendarFrameSequencerCommits;
 
+    /** Number of positive deferred-audio debts materialized since the last benchmark arm. */
+    private transient long performanceAudioMaterializations;
+
     private final Timer timer;
 
     private final boolean gbc;
@@ -299,6 +302,12 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         int ticks = pendingPerformanceTicks;
         if (ticks <= 0) {
             return;
+        }
+        // Canonical PERFORMANCE debt is an implementation detail, not measured silent-calendar
+        // evidence. Count only debt materialized while the old/current calendar mode is active;
+        // this keeps an OFF -> EXACT activation from importing pre-arm canonical work.
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            performanceAudioMaterializations++;
         }
         pendingPerformanceTicks = 0;
         if (performanceSystemMutedAudioMode == PerformanceSystemMutedAudioMode.RELAXED_APU) {
@@ -544,6 +553,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         performanceSystemMutedAudioCalendarApuReads = 0L;
         performanceSystemMutedAudioCalendarApuWrites = 0L;
         performanceSystemMutedAudioCalendarFrameSequencerCommits = 0L;
+        performanceAudioMaterializations = 0L;
     }
 
     public long getPerformanceSystemMutedAudioCalendarSkippedTicks() {
@@ -576,6 +586,11 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
 
     public long getPerformanceSystemMutedAudioCalendarFrameSequencerCommits() {
         return performanceSystemMutedAudioCalendarFrameSequencerCommits;
+    }
+
+    /** Number of positive deferred PERFORMANCE-audio debts materialized since reset. */
+    public long getPerformanceAudioMaterializations() {
+        return performanceAudioMaterializations;
     }
 
     private boolean performanceSystemMutedAudioCalendarUsable() {

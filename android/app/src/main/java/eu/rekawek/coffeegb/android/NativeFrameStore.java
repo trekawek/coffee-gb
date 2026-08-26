@@ -157,8 +157,21 @@ final class NativeFrameStore implements AutoCloseable {
         if (slot == null) {
             return;
         }
-        event.toRgb(slot.pixels, false);
-        makeOpaque(slot.pixels, Math.multiplyExact(width, height));
+        try {
+            int expectedLength = Math.multiplyExact(width, height);
+            int[] source = event.buffer();
+            if (source == null || source.length != expectedLength) {
+                throw new IllegalArgumentException(
+                        "SGB frame pixel count must be exactly " + expectedLength);
+            }
+            // SgbFrameReadyEvent is callback-scoped; fuse RGB copying and alpha insertion while
+            // the producer still owns the source. A failed conversion must not strand the slot in
+            // WRITING, otherwise one malformed callback permanently reduces the three-slot pool.
+            event.copyToOpaqueArgb(slot.pixels);
+        } catch (RuntimeException | Error failure) {
+            abortWriting(slot);
+            throw failure;
+        }
         publish(slot);
     }
 
@@ -375,6 +388,10 @@ final class NativeFrameStore implements AutoCloseable {
     private void publish(Slot slot) {
         synchronized (this) {
             if (closed || slot.state != SlotState.WRITING) {
+                if (slot.state == SlotState.WRITING) {
+                    slot.state = SlotState.FREE;
+                    slot.presentationConsumed = false;
+                }
                 recordDroppedFrame();
                 return;
             }
@@ -383,6 +400,13 @@ final class NativeFrameStore implements AutoCloseable {
             slot.state = SlotState.PUBLISHED;
         }
         notifyListeners();
+    }
+
+    private synchronized void abortWriting(Slot slot) {
+        if (slot.state == SlotState.WRITING) {
+            slot.state = SlotState.FREE;
+            slot.presentationConsumed = false;
+        }
     }
 
     private void notifyListeners() {
@@ -405,12 +429,6 @@ final class NativeFrameStore implements AutoCloseable {
         boolean boundary = diagnostics.frameReady();
         if (boundary && benchmarkBoundary != null) {
             benchmarkBoundary.accept(diagnostics.benchmarkGeneration());
-        }
-    }
-
-    private static void makeOpaque(int[] pixels, int length) {
-        for (int index = 0; index < length; index++) {
-            pixels[index] |= 0xff000000;
         }
     }
 

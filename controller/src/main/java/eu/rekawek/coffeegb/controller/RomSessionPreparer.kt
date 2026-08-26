@@ -95,7 +95,7 @@ internal class RomSessionPreparer(
   }
 
   /**
-   * Warms ordinary SKIP-start game code before the candidate reaches the controller thread.
+   * Warms ordinary post-boot game code before the candidate reaches the controller thread.
    * This is intentionally best-effort: a failed disposable machine must never reject a playable
    * ROM. Cancellation remains observable because a superseded load must not continue preparing.
    */
@@ -245,8 +245,11 @@ internal class RuntimeWarmupCache(
           flavor: RuntimeWarmupFlavor,
       ): RuntimeWarmupKey? {
         val rom = config.rom
-        if (config.bootstrapMode != BootstrapMode.SKIP ||
-            config.slotRom != null ||
+        // Warmup always runs a disposable post-boot machine.  The requested session may use
+        // SKIP, FAST_FORWARD, or NORMAL bootstrap, but replaying an authentic boot here would
+        // both waste the preparation worker's budget and contaminate the execution-shape cache
+        // with a boot policy that is not part of the warmed game-code path.
+        if (config.slotRom != null ||
             rom.cartridgeProperties.mapper != Mapper.STANDARD ||
             !isOrdinaryNonRtcCartridge(rom.type)) {
           return null
@@ -448,6 +451,8 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
   private data class BootKey(
       val romDigest: String,
       val profileId: String,
+      val executionMode: eu.rekawek.coffeegb.core.ExecutionMode,
+      val bootstrapMode: BootstrapMode,
       val displaySgbBorder: Boolean,
       val mealybugDmgBlob: Boolean,
       val codeBreakerRumble: Boolean,
@@ -464,6 +469,8 @@ internal class BootStateCache(private val capacity: Int = DEFAULT_CAPACITY) {
         return BootKey(
             digest(rom),
             config.hardwareProfile.id(),
+            config.executionMode,
+            config.bootstrapMode,
             config.isDisplaySgbBorder,
             config.isMealybugDmgBlob,
             config.isCodeBreakerRumble,

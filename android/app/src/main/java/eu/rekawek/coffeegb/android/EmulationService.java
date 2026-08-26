@@ -90,8 +90,15 @@ public final class EmulationService extends Service implements AudioManager.OnAu
                 .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot)
                 .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
                         DiagnosticsOptions.executionModeValue(checked.executionMode))
+                .putExtra(DiagnosticsOptions.EXTRA_BOOTSTRAP,
+                        DiagnosticsOptions.bootstrapModeValue(checked.bootstrapMode))
                 .putExtra(DiagnosticsOptions.EXTRA_BENCHMARK_SCENARIO,
                         benchmarkScenarioExtraValue(checked))
+                .putExtra(DiagnosticsOptions.EXTRA_MATRIX_VERSION, checked.matrixVersion)
+                .putExtra(DiagnosticsOptions.EXTRA_CELL_ID, checked.cellId)
+                .putExtra(DiagnosticsOptions.EXTRA_WORKLOAD_SLOT,
+                        checked.workloadSlot == null ? "unknown"
+                                : checked.workloadSlot.externalValue())
                 .putExtra(DiagnosticsOptions.EXTRA_AUDIO_POLICY,
                         audioPolicyExtraValue(checked));
     }

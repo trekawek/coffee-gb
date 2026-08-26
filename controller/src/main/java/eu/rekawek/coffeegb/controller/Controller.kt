@@ -183,6 +183,22 @@ interface Controller : AutoCloseable {
   }
 
   /**
+   * Declares whether the active benchmark generation has a gameplay preconditioning scenario.
+   *
+   * Hosts must post this decision after [BootstrapReadyEvent] and before either a scenario start,
+   * benchmark arm, or benchmark resume. A `required = false` decision explicitly completes the
+   * no-scenario path; the controller never infers that path from the absence of a start event.
+   */
+  data class BenchmarkGameplayScenarioRequirementEvent(
+      val sessionGeneration: Long,
+      val required: Boolean,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Benchmark session generation must be positive" }
+    }
+  }
+
+  /**
    * Synchronous endpoint raised from a native Display callback on the controller owner thread.
    * Unlike [PauseEmulationEvent], this is not queued until the current runTicks tail completes.
    */
@@ -193,6 +209,19 @@ interface Controller : AutoCloseable {
     init {
       require(sessionGeneration > 0L) { "Session generation must be positive" }
       require(completedFrames > 0) { "Benchmark scenario frame count must be positive" }
+    }
+  }
+
+  /**
+   * Synchronous fail-closed stop for a benchmark bootstrap protocol violation.  Android posts this
+   * from its generation-bound event handler before invalidating its host session; the controller
+   * owner freezes the core immediately so a queued/active scenario cannot run another guest tick.
+   */
+  data class BenchmarkBootstrapAbortEvent(
+      val sessionGeneration: Long,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Session generation must be positive" }
     }
   }
 
@@ -294,6 +323,35 @@ interface Controller : AutoCloseable {
   ) : Event
 
   /**
+   * Authoritative bootstrap completion for a benchmark generation.
+   *
+   * HardwareProfileEvent is emitted early so a host can select a frame route while a NORMAL
+   * session is still in its BIOS. This event is the later transaction boundary: its effective
+   * machine fields are sampled only after the core's bootstrap gate is ready, and its generation
+   * must match the EmulationStartedEvent that materialized the session.
+   */
+  data class BootstrapReadyEvent(
+      val sessionGeneration: Long,
+      val requestedBootstrapMode: Gameboy.BootstrapMode,
+      val bootstrapOutcome: Gameboy.BootstrapOutcome,
+      val profile: HardwareProfile,
+      val identity: HardwareProfileIdentity = profile.identity(),
+      val effectiveGbc: Boolean,
+      val effectiveDmgCompat: Boolean,
+      val effectiveSpeedMode: Int,
+  ) : Event {
+    init {
+      require(sessionGeneration > 0L) { "Bootstrap session generation must be positive" }
+      require(bootstrapOutcome.isReady()) {
+        "BootstrapReadyEvent requires a terminal bootstrap outcome"
+      }
+      require(effectiveSpeedMode == 1 || effectiveSpeedMode == 2) {
+        "Bootstrap speed mode must be 1 or 2"
+      }
+    }
+  }
+
+  /**
    * Benchmark-only physical display-boundary evidence sampled on the controller owner thread. The
    * event is emitted only when [ApplicationSettingsOverrides.benchmarkPolicyEnabled] is true, so
    * ordinary sessions retain their zero-allocation frame loop. A frame-600 sample is taken from
@@ -325,6 +383,8 @@ interface Controller : AutoCloseable {
       val benchmarkAudioApuWrites: Long = 0L,
       val benchmarkAudioFrameSequencerCommits: Long = 0L,
       val benchmarkAudioDroppedChannelTicks: Long = 0L,
+      /** Immutable measured-core snapshot; null on legacy boundary events. */
+      val coreResult: Gameboy.PerformanceTelemetrySnapshot? = null,
   ) : Event {
     /** Java/source compatibility for callers that predate bulk telemetry. */
     constructor(
@@ -335,7 +395,7 @@ interface Controller : AutoCloseable {
     ) : this(
         frame, effectiveGbc, effectiveDmgCompat, speedMode,
         0L, 0L, 0L, 0L, 0, 0L, 0L, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, null,
     )
 
     /** Java/source compatibility for callers that supply the original bulk telemetry pair. */
@@ -349,7 +409,7 @@ interface Controller : AutoCloseable {
     ) : this(
         frame, effectiveGbc, effectiveDmgCompat, speedMode,
         performanceBulkSpans, performanceBulkTicks, 0L, 0L, 0, 0L, 0L, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, null,
     )
 
     /** Java/source compatibility for callers that predate the mode-2 bulk subset metric. */
@@ -370,7 +430,7 @@ interface Controller : AutoCloseable {
         performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
         performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
         performanceEpochMode2ReplayTicks, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, null,
     )
 
     /** Java/source compatibility for callers that supplied the complete pre-policy telemetry. */
@@ -392,7 +452,7 @@ interface Controller : AutoCloseable {
         performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
         performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
         performanceEpochMode2ReplayTicks, performanceEpochMode2BulkTicks,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, null,
     )
 
     init {
@@ -916,6 +976,19 @@ interface Controller : AutoCloseable {
       }
       return !policyRequested || calendarEnabled
     }
+
+    /**
+     * Benchmark sessions are paused at their bootstrap/preconditioning anchor. A Resume may
+     * release that pause only for the active gameplay preconditioning transaction or after the
+     * host has armed the measured generation. Keeping this gate separate from the audio-policy
+     * interlock makes the pre-arm ownership rule explicit and directly testable.
+     */
+    internal fun benchmarkResumeScenarioOrArmAllows(
+        benchmarkPolicyEnabled: Boolean,
+        gameplayScenarioActive: Boolean,
+        benchmarkArmed: Boolean,
+    ): Boolean =
+        !benchmarkPolicyEnabled || gameplayScenarioActive || benchmarkArmed
 
     fun createGameboyConfig(
       properties: EmulatorProperties,

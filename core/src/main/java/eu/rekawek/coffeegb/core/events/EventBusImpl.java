@@ -107,6 +107,10 @@ public class EventBusImpl implements EventBus {
             if (doStop || stopped) {
                 throw new IllegalStateException("This EventBus is no longer active.");
             }
+            if (event instanceof SynchronousBorrowedEvent) {
+                throw new IllegalArgumentException(
+                        "Borrowed events can only be delivered synchronously");
+            }
             asyncEvents.addLast(event);
             asyncEventSignal.release();
         }

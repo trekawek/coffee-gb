@@ -12,6 +12,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 
 public class NativeFrameStoreTest {
 
@@ -156,6 +157,29 @@ public class NativeFrameStoreTest {
             assertEquals(Display.DISPLAY_WIDTH, frame.width());
             assertEquals(Display.DISPLAY_HEIGHT, frame.height());
             assertEquals(0xfff80000, frame.pixels()[0]);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void malformedSgbLengthAbortsWritingSlotAndReclaimsPrimarySlot() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            int expected = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
+            assertThrows(IllegalArgumentException.class,
+                    () -> store.publish(new SgbDisplay.SgbFrameReadyEvent(
+                            new int[expected - 1], false)));
+
+            int[] valid = new int[expected];
+            valid[0] = 0x00010203;
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(valid, false));
+            NativeFrameStore.Frame frame = store.takeLatest();
+            assertNotNull(frame);
+            assertSame(store.bufferAt(0), frame.pixels());
+            store.finishDrawing(frame);
+            NativeFrameStore.Snapshot snapshot = requireSnapshot(store);
+            assertEquals(0xff010203, snapshot.pixels()[0]);
         } finally {
             store.close();
         }

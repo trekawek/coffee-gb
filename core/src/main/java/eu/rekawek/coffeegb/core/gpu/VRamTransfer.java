@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -76,6 +77,6 @@ public class VRamTransfer implements StatefulComponent<VRamTransfer> {
     /** Importer-only compatibility record for released local snapshots. */
     private record VRamTransferMemento(int[] buffer, int i) implements Memento<VRamTransfer> {}
 
-    public record VRamTransferComplete(int[] buffer) implements Event {
+    public record VRamTransferComplete(int[] buffer) implements SynchronousBorrowedEvent {
     }
 }

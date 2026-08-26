@@ -71,6 +71,21 @@ final class RecentSafDocuments {
         }
         StoredEntry newest = stored(uri, romName, candidateToken, archiveEntryName,
                 archiveEntryOccurrence, romHash, System.currentTimeMillis());
+        // Re-opening/reordering a selected game must retain its app-owned benchmark nonce.  The
+        // nonce is catalog identity, not launch input, so replacing the entry without carrying it
+        // would make the same recent slot look like a new workload.
+        for (StoredEntry prior : storedEntries()) {
+            // A nonce names the exact app-owned catalog identity, not merely a URI/archive
+            // coordinate.  Preserve it only when the bytes still hash identically; an in-place
+            // SAF replacement must clear the old nonce so the next benchmark launch rotates it.
+            if (sameGame(prior, newest) && hasValidRomHash(prior.romHash())
+                    && hasValidRomHash(newest.romHash())
+                    && prior.romHash().equalsIgnoreCase(newest.romHash())
+                    && hasValidBenchmarkNonce(prior.benchmarkNonce())) {
+                newest = withBenchmarkNonce(newest, prior.benchmarkNonce());
+                break;
+            }
+        }
         ArrayList<StoredEntry> ordered = new ArrayList<>();
         ordered.add(newest);
         for (StoredEntry entry : storedEntries()) {
@@ -153,7 +168,8 @@ final class RecentSafDocuments {
                         object.optString("entryName", ""),
                         object.optInt("entryOccurrence", -1),
                         object.optString("romHash", ""),
-                        object.optLong("lastPlayed", 0L));
+                        object.optLong("lastPlayed", 0L),
+                        object.optString("benchmarkNonce", ""));
                 if (hasValidRomHash(entry.romHash()) && hasPersistedReadPermission(entry.uri())) {
                     if (readableIndex++ != slot) {
                         continue;
@@ -194,19 +210,38 @@ final class RecentSafDocuments {
                         object.optLong("candidateToken",
                                 RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN),
                         object.optString("entryName", ""), object.optInt("entryOccurrence", -1),
-                        object.optString("romHash", ""), object.optLong("lastPlayed", 0L));
+                        object.optString("romHash", ""), object.optLong("lastPlayed", 0L),
+                        object.optString("benchmarkNonce", ""));
                 if (!sameGame(candidate, stored(target.uri(), target.romName(),
                         target.candidateToken(), target.archiveEntryName(),
                         target.archiveEntryOccurrence(), target.romHash(),
                         target.lastPlayedMillis()))) {
                     continue;
                 }
-                String existing = object.optString("benchmarkNonce", "").trim().toLowerCase(
-                        java.util.Locale.ROOT);
-                if (existing.matches("[a-z0-9][a-z0-9._-]{15,63}")) {
+                if (!hasValidRomHash(candidate.romHash())
+                        || !hasValidRomHash(target.romHash())
+                        || !candidate.romHash().equalsIgnoreCase(target.romHash())) {
+                    continue;
+                }
+                String existing = normalizeBenchmarkNonce(object.optString("benchmarkNonce", ""));
+                if (hasValidBenchmarkNonce(existing)) {
                     return existing;
                 }
-                String nonce = randomBenchmarkNonce();
+                Set<String> used = new HashSet<>();
+                for (int otherIndex = 0; otherIndex < array.length(); otherIndex++) {
+                    JSONObject other = array.optJSONObject(otherIndex);
+                    if (other != null) {
+                        String otherNonce = normalizeBenchmarkNonce(
+                                other.optString("benchmarkNonce", ""));
+                        if (hasValidBenchmarkNonce(otherNonce)) {
+                            used.add(otherNonce);
+                        }
+                    }
+                }
+                String nonce;
+                do {
+                    nonce = randomBenchmarkNonce();
+                } while (used.contains(nonce));
                 object.put("benchmarkNonce", nonce);
                 if (preferences.edit().putString(KEY_GAME_ENTRIES, array.toString()).commit()) {
                     return nonce;
@@ -306,7 +341,8 @@ final class RecentSafDocuments {
                 String romName = object.optString("romName", "");
                 String romHash = object.optString("romHash", "");
                 result.add(stored(uri, romName, candidateToken, entryName, occurrence, romHash,
-                        object.optLong("lastPlayed", 0L)));
+                        object.optLong("lastPlayed", 0L),
+                        object.optString("benchmarkNonce", "")));
             }
             if (result.size() != array.length() || array.length() > CAPACITY) {
                 saveEntries(result);
@@ -377,6 +413,9 @@ final class RecentSafDocuments {
                 object.put("entryOccurrence", entry.archiveEntryOccurrence());
                 object.put("romHash", entry.romHash());
                 object.put("lastPlayed", entry.lastPlayedMillis());
+                if (hasValidBenchmarkNonce(entry.benchmarkNonce())) {
+                    object.put("benchmarkNonce", entry.benchmarkNonce());
+                }
             } catch (Exception ignored) {
                 continue;
             }
@@ -497,6 +536,13 @@ final class RecentSafDocuments {
 
     private static StoredEntry stored(Uri uri, String romName, long candidateToken,
             String entryName, int occurrence, String romHash, long lastPlayedMillis) {
+        return stored(uri, romName, candidateToken, entryName, occurrence, romHash,
+                lastPlayedMillis, "");
+    }
+
+    private static StoredEntry stored(Uri uri, String romName, long candidateToken,
+            String entryName, int occurrence, String romHash, long lastPlayedMillis,
+            String benchmarkNonce) {
         long token = candidateToken < RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
                 ? RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN : candidateToken;
         String archiveName = token == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
@@ -504,7 +550,23 @@ final class RecentSafDocuments {
         int archiveOccurrence = token == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN
                 ? -1 : Math.max(0, occurrence);
         return new StoredEntry(uri, normalizeName(romName, "RECENT GAME"), token, archiveName,
-                archiveOccurrence, normalizeHash(romHash), Math.max(0L, lastPlayedMillis));
+                archiveOccurrence, normalizeHash(romHash), Math.max(0L, lastPlayedMillis),
+                normalizeBenchmarkNonce(benchmarkNonce));
+    }
+
+    private static StoredEntry withBenchmarkNonce(StoredEntry entry, String nonce) {
+        return new StoredEntry(entry.uri(), entry.romName(), entry.candidateToken(),
+                entry.archiveEntryName(), entry.archiveEntryOccurrence(), entry.romHash(),
+                entry.lastPlayedMillis(), normalizeBenchmarkNonce(nonce));
+    }
+
+    private static String normalizeBenchmarkNonce(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static boolean hasValidBenchmarkNonce(String value) {
+        return value != null && value.matches("[a-z0-9][a-z0-9._-]{15,63}")
+                && !"unknown".equals(value) && !"invalid".equals(value);
     }
 
     private static boolean sameGame(StoredEntry left, StoredEntry right) {
@@ -583,6 +645,6 @@ final class RecentSafDocuments {
 
     private record StoredEntry(Uri uri, String romName, long candidateToken,
                                String archiveEntryName, int archiveEntryOccurrence, String romHash,
-                               long lastPlayedMillis) {
+                               long lastPlayedMillis, String benchmarkNonce) {
     }
 }

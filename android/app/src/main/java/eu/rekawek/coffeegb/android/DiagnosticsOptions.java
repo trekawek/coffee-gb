@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.android;
 import android.content.Intent;
 
 import eu.rekawek.coffeegb.core.ExecutionMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.sound.Sound;
@@ -48,8 +49,16 @@ final class DiagnosticsOptions {
     static final String EXTRA_BENCHMARK_ARM_TOKEN = "coffee_gb_benchmark_arm_token";
     /** Session execution strategy; Accuracy is the compatibility-safe default. */
     static final String EXTRA_EXECUTION_MODE = "coffee_gb_execution_mode";
+    /** Benchmark bootstrap strategy; missing benchmark extras default to bounded fast-forward. */
+    static final String EXTRA_BOOTSTRAP = "coffee_gb_bootstrap";
     /** Benchmark-only deterministic gameplay preconditioning contract. */
     static final String EXTRA_BENCHMARK_SCENARIO = "coffee_gb_benchmark_scenario";
+    /** Pinned identity-free Android benchmark matrix schema. */
+    static final String EXTRA_MATRIX_VERSION = "coffee_gb_matrix_version";
+    /** Opaque workload slot selected from the app-owned recent catalog. */
+    static final String EXTRA_WORKLOAD_SLOT = "coffee_gb_workload_slot";
+    /** One of the eight goal-matrix cells; never a ROM or title identifier. */
+    static final String EXTRA_CELL_ID = "coffee_gb_cell_id";
     /** Host-audio evidence policy; canonical is the compatibility-safe default. */
     static final String EXTRA_AUDIO_POLICY = "coffee_gb_audio_policy";
 
@@ -229,9 +238,13 @@ final class DiagnosticsOptions {
     }
 
     BenchmarkGameplayScenario.NativeFrameKind benchmarkNativeFrameKind() {
-        return hardware == Hardware.CGB || hardware == Hardware.CGB0
-                ? BenchmarkGameplayScenario.NativeFrameKind.GBC
-                : BenchmarkGameplayScenario.NativeFrameKind.DMG;
+        if (hardware == Hardware.CGB || hardware == Hardware.CGB0) {
+            return BenchmarkGameplayScenario.NativeFrameKind.GBC;
+        }
+        // SGB/SGB2 publish derived frames, but the workload input timeline is defined by the
+        // underlying raw DMG producer.  SGB MASK_EN/FREEZE may suppress derived callbacks; using
+        // that stream here would stall or shift the shared DMG/CGB/SGB scenario.
+        return BenchmarkGameplayScenario.NativeFrameKind.DMG;
     }
 
     enum RunSide {
@@ -267,7 +280,8 @@ final class DiagnosticsOptions {
             false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
             "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
             UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-            ExecutionMode.ACCURACY, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
+            ExecutionMode.ACCURACY, BenchmarkScenario.NONE, AudioPolicy.CANONICAL,
+            null, null, null, BootstrapMode.SKIP);
 
     final boolean enabled;
     final Hardware hardware;
@@ -293,17 +307,29 @@ final class DiagnosticsOptions {
     final int recentSlot;
     /** Core-owned session strategy. This is not persisted in a save state. */
     final ExecutionMode executionMode;
+    /** Core-owned bootstrap strategy; benchmark launches default to FAST_FORWARD. */
+    final BootstrapMode bootstrapMode;
     /** Deterministic benchmark-only input contract; never persisted or exposed to release UI. */
     final BenchmarkScenario benchmarkScenario;
     /** Explicit host-audio evidence policy; never persisted or exposed to release UI. */
     final AudioPolicy audioPolicy;
+    /** Matrix schema; {@code legacy-v1} is retained for pre-goal benchmark fixtures only. */
+    final String matrixVersion;
+    /** Exact goal-matrix cell, or {@code unknown} for legacy/non-matrix launches. */
+    final String cellId;
+    /** Opaque app-owned workload slot for the goal matrix. */
+    final BenchmarkWorkload.Slot workloadSlot;
+    /** Immutable workload timeline selected independently from the requested hardware row. */
+    final BenchmarkWorkload.Timeline workloadTimeline;
 
     private DiagnosticsOptions(boolean enabled, Hardware hardware, boolean audioOutput,
             Render render, boolean runtimeWarmup, boolean launchRecent, String buildId,
             String pairId, String matrixBlock, int rowOrder, RunSide runSide,
             RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
             String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode,
-            BenchmarkScenario benchmarkScenario, AudioPolicy audioPolicy) {
+            BenchmarkScenario benchmarkScenario, AudioPolicy audioPolicy,
+            String matrixVersionValue, String cellIdValue, String workloadSlotValue,
+            BootstrapMode bootstrapModeValue) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
@@ -319,13 +345,30 @@ final class DiagnosticsOptions {
         this.deviceBuild = deviceBuild;
         this.thermalWindow = thermalWindow;
         this.thermalValid = thermalValid;
-        this.workloadNonce = workloadNonce;
         this.displayTargetHz = displayTargetHz;
         this.surfaceContentRateMillihz = contentRateMillihz(hardware);
         this.recentSlot = recentSlot >= 0 && recentSlot < 10 ? recentSlot : -1;
         this.executionMode = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
+        this.bootstrapMode = bootstrapModeValue == null
+                ? BootstrapMode.FAST_FORWARD : bootstrapModeValue;
         this.benchmarkScenario = enabled && benchmarkScenario != null
                 ? benchmarkScenario : BenchmarkScenario.NONE;
+        this.matrixVersion = safeToken(matrixVersionValue, "legacy-v1");
+        this.cellId = safeToken(cellIdValue, UNKNOWN_TOKEN);
+        this.workloadSlot = BenchmarkWorkload.Slot.fromExternalValue(workloadSlotValue);
+        this.workloadTimeline = workloadSlot == null
+                ? null : BenchmarkWorkload.timeline(workloadSlot);
+        // A goal launch is bound to the app-owned catalog slot.  The host may select the slot, but
+        // it cannot replace the nonce that identifies that catalog contract on the evidence wire.
+        // The nonce is deliberately unknown until the selected recent entry is opened and the
+        // app-owned nonce is read/generated by RecentSafDocuments.ensureBenchmarkNonce().
+        BenchmarkWorkload.Cell goalCell = BenchmarkWorkload.Cell.fromExternalValue(this.cellId);
+        boolean goalContract = BenchmarkWorkload.MATRIX_VERSION.equals(this.matrixVersion)
+                && this.workloadSlot != null && goalCell != null
+                && goalCell.workload() == this.workloadSlot
+                && this.recentSlot == this.workloadSlot.recentSlot();
+        this.workloadNonce = goalContract ? UNKNOWN_TOKEN
+                : safeToken(workloadNonce, UNKNOWN_TOKEN);
         AudioPolicy requestedPolicy = audioPolicy == null ? AudioPolicy.CANONICAL : audioPolicy;
         // The silent calendar is intentionally unavailable outside the measured PERFORMANCE
         // topology, when host audio is disabled, or when the hardware profile is unresolved.
@@ -360,7 +403,8 @@ final class DiagnosticsOptions {
         return new DiagnosticsOptions(false, Hardware.AUTO, true, Render.PRESENTATION, false,
                 false, "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN,
                 RunSide.UNKNOWN, UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-                selected, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
+                selected, BenchmarkScenario.NONE, AudioPolicy.CANONICAL, null, null, null,
+                BootstrapMode.SKIP);
     }
 
     static ExecutionMode parseExecutionMode(String value) {
@@ -370,6 +414,39 @@ final class DiagnosticsOptions {
 
     static String executionModeValue(ExecutionMode mode) {
         return mode == ExecutionMode.PERFORMANCE ? "performance" : "accuracy";
+    }
+
+    /** Parses the bounded benchmark bootstrap wire, defaulting missing/malformed values to FF. */
+    static BootstrapMode parseBootstrapMode(String value) {
+        if (value == null || value.isBlank()) {
+            return BootstrapMode.FAST_FORWARD;
+        }
+        switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "skip":
+            case "skipped":
+                return BootstrapMode.SKIP;
+            case "fast-forward":
+            case "fast_forward":
+            case "fastforward":
+            case "ff":
+                return BootstrapMode.FAST_FORWARD;
+            case "full":
+            case "normal":
+            case "authentic":
+                return BootstrapMode.NORMAL;
+            default:
+                return BootstrapMode.FAST_FORWARD;
+        }
+    }
+
+    static String bootstrapModeValue(BootstrapMode mode) {
+        if (mode == BootstrapMode.SKIP) {
+            return "skip";
+        }
+        if (mode == BootstrapMode.NORMAL) {
+            return "normal";
+        }
+        return "fast-forward";
     }
 
     private static int contentRateMillihz(Hardware hardware) {
@@ -426,7 +503,11 @@ final class DiagnosticsOptions {
                 intExtra(intent, EXTRA_RECENT_SLOT, -1),
                 stringExtra(intent, EXTRA_EXECUTION_MODE),
                 stringExtra(intent, EXTRA_BENCHMARK_SCENARIO),
-                stringExtra(intent, EXTRA_AUDIO_POLICY));
+                stringExtra(intent, EXTRA_AUDIO_POLICY),
+                stringExtra(intent, EXTRA_MATRIX_VERSION),
+                stringExtra(intent, EXTRA_CELL_ID),
+                stringExtra(intent, EXTRA_WORKLOAD_SLOT),
+                stringExtra(intent, EXTRA_BOOTSTRAP));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
@@ -508,6 +589,35 @@ final class DiagnosticsOptions {
             String runSide, String firstSide, String deviceBuild, String thermalWindow,
             boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
             String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, executionModeValue, benchmarkScenarioValue, audioPolicyValue,
+                null, null, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue,
+            String matrixVersionValue, String cellIdValue, String workloadSlotValue) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, executionModeValue, benchmarkScenarioValue, audioPolicyValue,
+                matrixVersionValue, cellIdValue, workloadSlotValue, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue,
+            String matrixVersionValue, String cellIdValue, String workloadSlotValue,
+            String bootstrapModeValue) {
         if (!diagnosticsEnabled) {
             return disabled(parseExecutionMode(executionModeValue));
         }
@@ -519,15 +629,67 @@ final class DiagnosticsOptions {
         }
         int rate = displayTargetHz == 60 || displayTargetHz == 90 || displayTargetHz == 120
                 ? displayTargetHz : -1;
-        return new DiagnosticsOptions(true, hardware, audio, render, warmup, recent,
+        BenchmarkWorkload.Cell goalCell = BenchmarkWorkload.Cell.fromExternalValue(cellIdValue);
+        BenchmarkWorkload.Slot goalSlot = BenchmarkWorkload.Slot.fromExternalValue(workloadSlotValue);
+        boolean goalContract = BenchmarkWorkload.MATRIX_VERSION.equals(
+                safeToken(matrixVersionValue, "legacy-v1"))
+                && goalCell != null && goalSlot != null && goalCell.workload() == goalSlot
+                && recentSlot == goalSlot.recentSlot();
+        // Keep the legacy parser's compatibility aliases, but never let one silently become a
+        // canonical goal identity.  A goal launch must have the exact wire spelling and the
+        // performance strategy; malformed goal metadata is emitted through the legacy/fail-closed
+        // path instead of being normalized into an apparently valid cell.
+        Hardware parsedHardware = hardware;
+        if (goalContract && !isCanonicalHardwareValue(hardwareValue, hardware)) {
+            parsedHardware = Hardware.AUTO;
+        }
+        ExecutionMode parsedExecutionMode = parseExecutionMode(executionModeValue);
+        if (goalContract && !"performance".equals(executionModeValue)) {
+            parsedExecutionMode = ExecutionMode.ACCURACY;
+        }
+        return new DiagnosticsOptions(true, parsedHardware, audio, render, warmup, recent,
                 safeToken(buildId, defaultBuildId()), safeToken(pairId, UNKNOWN_TOKEN),
-                safeToken(matrixBlock, UNKNOWN_TOKEN), boundedRowOrder(rowOrder),
+                safeToken(matrixBlock, UNKNOWN_TOKEN), boundedRowOrder(rowOrder, goalContract),
                 RunSide.fromExternalValue(runSide), RunSide.fromExternalValue(firstSide),
                 safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
                 thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot,
-                parseExecutionMode(executionModeValue),
+                parsedExecutionMode,
                 BenchmarkScenario.fromExternalValue(benchmarkScenarioValue),
-                AudioPolicy.fromExternalValue(audioPolicyValue));
+                AudioPolicy.fromExternalValue(audioPolicyValue), matrixVersionValue,
+                cellIdValue, workloadSlotValue, parseBootstrapMode(bootstrapModeValue));
+    }
+
+    private static boolean isCanonicalHardwareValue(String value, Hardware hardware) {
+        return value != null && hardware != null
+                && hardware != Hardware.AUTO
+                && hardware.externalValue().equals(value.trim().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Constructs a goal-matrix launch using only opaque workload metadata.  The remaining
+     * diagnostics fields intentionally use their conservative defaults; the device runner fills
+     * pairing and environment tokens through the regular launch parser.
+     */
+    static DiagnosticsOptions parseGoalValues(boolean diagnosticsEnabled, String hardwareValue,
+            String matrixVersionValue, String cellIdValue, String workloadSlotValue,
+            String workloadNonce, String executionModeValue, String audioPolicyValue,
+            int recentSlot) {
+        BenchmarkWorkload.Cell cell = BenchmarkWorkload.Cell.fromExternalValue(cellIdValue);
+        int rowOrder = cell == null ? -1 : cell.ordinal();
+        return parseValues(diagnosticsEnabled, hardwareValue, true, "presentation", false, true,
+                false, null, null, null, rowOrder, null, null, null, null, false, workloadNonce, -1,
+                recentSlot, executionModeValue, null, audioPolicyValue, matrixVersionValue,
+                cellIdValue, workloadSlotValue);
+    }
+
+    /** True only when all opaque goal identity components form one catalog-backed cell. */
+    boolean goalMatrixContract() {
+        BenchmarkWorkload.Cell cell = BenchmarkWorkload.Cell.fromExternalValue(cellId);
+        return enabled && BenchmarkWorkload.MATRIX_VERSION.equals(matrixVersion)
+                && workloadSlot != null && cell != null && cell.workload() == workloadSlot
+                && recentSlot == workloadSlot.recentSlot()
+                && hardware == cell.requestedHardware()
+                && executionMode == ExecutionMode.PERFORMANCE;
     }
 
     private static Hardware parseHardware(String value) {
@@ -599,8 +761,9 @@ final class DiagnosticsOptions {
         return defaultValue;
     }
 
-    private static int boundedRowOrder(int value) {
-        return value >= 0 && value < 7 ? value : -1;
+    private static int boundedRowOrder(int value, boolean goalContract) {
+        int limit = goalContract ? 8 : 7;
+        return value >= 0 && value < limit ? value : -1;
     }
 
     private static String safeToken(String value, String fallback) {

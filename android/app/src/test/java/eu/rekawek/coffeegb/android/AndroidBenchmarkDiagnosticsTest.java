@@ -2,11 +2,15 @@ package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapOutcome;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.nio.charset.StandardCharsets;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -159,6 +163,77 @@ public class AndroidBenchmarkDiagnosticsTest {
             throw new AssertionError("zero epoch accepted");
         } catch (IllegalArgumentException expected) {
             // expected
+        }
+    }
+
+    @Test
+    public void bootstrapReadyIsGenerationBoundAndAcceptsOnlyAuthenticRequestedOutcome() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        List<String> records = new ArrayList<>();
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false,
+                "ignored-build", "pair-0001", "block-0001", 0,
+                "parent", "parent", "ignored-device", "thermal", true,
+                "workload-0001", 60);
+        AndroidBenchmarkDiagnostics diagnostics = new AndroidBenchmarkDiagnostics(
+                null, options, records::add, () -> 1_000_000L);
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION);
+
+        Controller.BootstrapReadyEvent stale = new Controller.BootstrapReadyEvent(
+                SESSION - 1L, BootstrapMode.FAST_FORWARD, BootstrapOutcome.AUTHENTIC_HANDOFF,
+                HardwareProfileRegistry.DMG, HardwareProfileRegistry.DMG.identity(), false, false, 1);
+        assertFalse(diagnostics.acceptBootstrapReady(stale));
+        assertFalse(diagnostics.bootstrapReadyForTesting());
+
+        Controller.BootstrapReadyEvent fallback = new Controller.BootstrapReadyEvent(
+                SESSION, BootstrapMode.FAST_FORWARD, BootstrapOutcome.TIMED_OUT_FALLBACK,
+                HardwareProfileRegistry.DMG, HardwareProfileRegistry.DMG.identity(), false, false, 1);
+        assertFalse(diagnostics.acceptBootstrapReady(fallback));
+        assertFalse(diagnostics.bootstrapReadyForTesting());
+
+        Controller.BootstrapReadyEvent ready = new Controller.BootstrapReadyEvent(
+                SESSION, BootstrapMode.FAST_FORWARD, BootstrapOutcome.AUTHENTIC_HANDOFF,
+                HardwareProfileRegistry.DMG, HardwareProfileRegistry.DMG.identity(), false, false, 1);
+        assertTrue(diagnostics.acceptBootstrapReady(ready));
+        assertTrue(diagnostics.bootstrapReadyForTesting());
+        assertEquals(BootstrapOutcome.AUTHENTIC_HANDOFF,
+                diagnostics.bootstrapOutcomeForTesting());
+        assertFalse(diagnostics.acceptBootstrapReady(ready));
+        assertTrue(records.stream().anyMatch(line -> line.startsWith("event=boot_result ")
+                && line.contains("requested_bootstrap=fast-forward")
+                && line.contains("bootstrap_outcome=authentic_handoff")
+                && line.contains("session_generation=7")));
+    }
+
+    @Test
+    public void bootstrapSkipRequiresSkippedOutcomeAndFullRequiresAuthenticHandoff() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        for (String mode : new String[]{"skip", "full"}) {
+            BootstrapMode requested = "skip".equals(mode)
+                    ? BootstrapMode.SKIP : BootstrapMode.NORMAL;
+            DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                    true, "dmg", true, "presentation", false, true, false,
+                    null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                    "accuracy", null, null, null, null, null, mode);
+            AndroidBenchmarkDiagnostics diagnostics = new AndroidBenchmarkDiagnostics(
+                    null, options, message -> { }, () -> 1_000_000L);
+            diagnostics.sessionLaunch();
+            diagnostics.beginSession(SESSION);
+            BootstrapOutcome wrong = requested == BootstrapMode.SKIP
+                    ? BootstrapOutcome.AUTHENTIC_HANDOFF : BootstrapOutcome.SKIPPED;
+            assertFalse(diagnostics.acceptBootstrapReady(new Controller.BootstrapReadyEvent(
+                    SESSION, requested, wrong, HardwareProfileRegistry.DMG,
+                    HardwareProfileRegistry.DMG.identity(), false, false, 1)));
+            BootstrapOutcome right = requested == BootstrapMode.SKIP
+                    ? BootstrapOutcome.SKIPPED : BootstrapOutcome.AUTHENTIC_HANDOFF;
+            assertTrue(diagnostics.acceptBootstrapReady(new Controller.BootstrapReadyEvent(
+                    SESSION, requested, right, HardwareProfileRegistry.DMG,
+                    HardwareProfileRegistry.DMG.identity(), false, false, 1)));
         }
     }
 
@@ -538,7 +613,7 @@ public class AndroidBenchmarkDiagnosticsTest {
                 Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
                 "silent-pcm-relaxed-apu-v1", true, true, true,
                 999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
-                999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L));
+                999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L, null));
         for (int submission = 1; submission <= 600; submission++) {
             diagnostics.frameSubmitted(submission);
         }
@@ -570,6 +645,159 @@ public class AndroidBenchmarkDiagnosticsTest {
             assertTrue(record.getBytes(StandardCharsets.UTF_8).length
                     <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
         }
+    }
+
+    @Test
+    public void productionLengthGoalFinalRecordStaysBelowBoundedUtf8Payload() throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        List<String> records = new ArrayList<>();
+        String longToken = "a".repeat(64);
+        String workloadNonce = "b".repeat(64);
+        long sessionGeneration = 9_223_372_036_854_775_000L;
+        long benchmarkGeneration = 9_223_372_036_854_774_000L;
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                longToken, "c".repeat(64), "d".repeat(64), 6,
+                "parent", "parent", "ignored-device", "thermal", true,
+                null, 120, 2, "performance", null, "silent-pcm-v1",
+                BenchmarkWorkload.MATRIX_VERSION, "c1-cgb-native", "c1", "fast-forward");
+        AtomicLong now = new AtomicLong(9_000_000_000_000_000L);
+        AndroidBenchmarkDiagnostics diagnostics = new AndroidBenchmarkDiagnostics(
+                null, options, records::add, () -> now.addAndGet(1_000_000L),
+                "1".repeat(64), "2".repeat(64));
+        diagnostics.sessionLaunch();
+        assertTrue(diagnostics.setWorkloadNonce(workloadNonce));
+        diagnostics.hardwareProfile(new Controller.HardwareProfileEvent(
+                HardwareProfileRegistry.CGB,
+                HardwareProfileRegistry.CGB.identity(), true, false, 1));
+        diagnostics.beginSession(sessionGeneration, silentSessionStartAudioBaseline());
+        diagnostics.benchmarkScenarioCompleted(
+                sessionGeneration, 1_582, 1_582, true, true, true);
+        diagnostics.emulationStarted(sessionGeneration);
+        diagnostics.benchmarkAnchorPosted(sessionGeneration, true);
+        diagnostics.audioFocusResult(true);
+        assertTrue(diagnostics.armBenchmark(
+                sessionGeneration, benchmarkGeneration, "z".repeat(64),
+                productionLikeAudioBaseline()));
+        diagnostics.setSystemAudioBaselineForTesting(productionLikeAudioBaseline());
+        for (int frame = 1; frame <= 600; frame++) {
+            diagnostics.frameReady();
+        }
+        diagnostics.benchmarkFrameBoundary(new Controller.BenchmarkFrameBoundaryEvent(
+                600L, true, false, 2, 9_999_999L, 999_999_999L,
+                999_999_999L, Long.MAX_VALUE, Integer.MAX_VALUE,
+                Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
+                "silent-pcm-v1", true, true, true,
+                42_134_400L, 766_080L, 603L, 999_999_999L,
+                999_999_999L, 999_999_999L, 0L, 0L, goalTelemetrySnapshot()));
+        for (int submission = 1; submission <= 600; submission++) {
+            diagnostics.frameSubmitted(submission);
+        }
+        java.lang.reflect.Field terminalStats = AndroidBenchmarkDiagnostics.class
+                .getDeclaredField("audioTerminalStats");
+        terminalStats.setAccessible(true);
+        terminalStats.set(diagnostics, productionLikeAudioStats());
+        diagnostics.benchmarkDrainPosted(true);
+
+        String finalRecord = records.stream()
+                .filter(line -> line.startsWith("event=final_result"))
+                .findFirst()
+                .orElseThrow();
+        String coreRecord = records.stream()
+                .filter(line -> line.startsWith("event=core_result"))
+                .findFirst()
+                .orElseThrow();
+        int finalBytes = finalRecord.getBytes(StandardCharsets.UTF_8).length;
+        int coreBytes = coreRecord.getBytes(StandardCharsets.UTF_8).length;
+        assertEquals(2_970, finalBytes);
+        assertEquals(1_561, coreBytes);
+        assertTrue("goal final payload bytes=" + finalBytes,
+                finalBytes <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        assertTrue("goal core payload bytes=" + coreBytes,
+                coreBytes <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        // Keep an explicit safety margin so a future identity field cannot silently reach the
+        // Android log cliff.  This assertion is intentionally against the actual emitted record,
+        // not a hand-built approximation of the production concatenation.
+        assertTrue("goal final payload has insufficient headroom: " + finalBytes,
+                finalBytes <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES - 64);
+        assertTrue(finalRecord.contains("matrix_version=" + BenchmarkWorkload.MATRIX_VERSION));
+        assertTrue(finalRecord.contains("benchmark_generation=" + benchmarkGeneration));
+        assertTrue(finalRecord.contains("requested_hardware=cgb"));
+        assertTrue(finalRecord.contains("clock_ticks_num=4194304"));
+        assertTrue(finalRecord.contains("clock_ticks_den=1"));
+        assertTrue(finalRecord.contains("clock_frames_num=60"));
+        assertTrue(finalRecord.contains("clock_frames_den=1"));
+        assertTrue(finalRecord.contains("clock_ticks_frame=69905"));
+        assertTrue(finalRecord.contains("core_result_id="));
+        assertTrue(finalRecord.contains("audio_start_ledger="));
+        for (String record : records) {
+            assertTrue(record.getBytes(StandardCharsets.UTF_8).length
+                    <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        }
+    }
+
+    @Test
+    public void goalSgbCoreResultBindsFrameAllocationsToArtifactSide() throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        Method validCoreResult = AndroidBenchmarkDiagnostics.class.getDeclaredMethod(
+                "validCoreResult",
+                eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot.class);
+        validCoreResult.setAccessible(true);
+
+        AndroidBenchmarkDiagnostics parent = goalSgbDiagnostics("parent");
+        assertTrue((Boolean) validCoreResult.invoke(parent,
+                goalTelemetrySnapshot(3_830_400L, 600L, 13_824_000L)));
+        assertFalse((Boolean) validCoreResult.invoke(parent,
+                goalTelemetrySnapshot(3_830_400L, 599L, 13_824_000L)));
+        assertFalse((Boolean) validCoreResult.invoke(parent,
+                goalTelemetrySnapshot(3_830_400L, 601L, 13_824_000L)));
+
+        AndroidBenchmarkDiagnostics candidate = goalSgbDiagnostics("candidate");
+        assertTrue((Boolean) validCoreResult.invoke(candidate,
+                goalTelemetrySnapshot(3_830_400L, 0L, 13_824_000L)));
+        assertFalse((Boolean) validCoreResult.invoke(candidate,
+                goalTelemetrySnapshot(3_830_400L, 1L, 13_824_000L)));
+    }
+
+    private static AndroidBenchmarkDiagnostics goalSgbDiagnostics(String side) {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "sgb", true, "presentation", true, true, false,
+                "build-token-0001", "pair-token-0001", "block-token-0001", 2,
+                side, "parent", "device-build-0001", "thermal-window-0001", true,
+                null, 120, 0, "performance", null, "silent-pcm-v1",
+                BenchmarkWorkload.MATRIX_VERSION, "d-sgb", "d", "fast-forward");
+        return new AndroidBenchmarkDiagnostics(null, options, ignored -> { },
+                System::nanoTime, "1".repeat(64), "2".repeat(64));
+    }
+
+    private static eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot
+            goalTelemetrySnapshot() throws Exception {
+        return goalTelemetrySnapshot(766_080L, 0L, 0L);
+    }
+
+    private static eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot
+            goalTelemetrySnapshot(long sampleSlots, long frameArrayAllocations,
+                    long centerPixels) throws Exception {
+        Class<?> snapshot = eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot.class;
+        Constructor<?> constructor = snapshot.getDeclaredConstructor(
+                long.class, long.class, long.class, long.class, int.class,
+                long.class, long.class, int.class, long.class, long.class, int.class,
+                long.class, long.class, long.class, long.class, long.class,
+                long.class, long.class, long.class, long.class, long.class, long.class,
+                long.class, long.class, long.class, long.class, long.class, long.class,
+                long.class, long.class, long.class, long.class);
+        constructor.setAccessible(true);
+        return (eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot) constructor.newInstance(
+                42_134_400L, 42_134_400L, 0L, 0L, 0,
+                0L, 0L, 0, 0L, 0L, 0,
+                0L, 0L, 0L, 0L, 0L,
+                42_134_400L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 42_134_400L, sampleSlots,
+                1L, frameArrayAllocations, 0L, centerPixels);
     }
 
     private static AndroidAudioSink.AudioBaseline readyAudioBaseline() {

@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.controller.state.StateStorageLayout
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapOutcome
 import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.debug.Console
 import eu.rekawek.coffeegb.core.debug.DebugPort
@@ -155,6 +156,34 @@ class BasicControllerTest {
             calendarEnabled = false,
         ),
         "frame-600 frozen core cannot resume",
+    )
+  }
+
+  @Test
+  fun benchmarkResumeRequiresScenarioOrArmedMeasurement() {
+    assertFalse(
+        Controller.benchmarkResumeScenarioOrArmAllows(
+            benchmarkPolicyEnabled = true,
+            gameplayScenarioActive = false,
+            benchmarkArmed = false,
+        ),
+        "a pre-arm benchmark resume without a scenario must remain blocked",
+    )
+    assertTrue(
+        Controller.benchmarkResumeScenarioOrArmAllows(
+            benchmarkPolicyEnabled = true,
+            gameplayScenarioActive = true,
+            benchmarkArmed = false,
+        ),
+        "an active gameplay scenario may resume before measurement arm",
+    )
+    assertTrue(
+        Controller.benchmarkResumeScenarioOrArmAllows(
+            benchmarkPolicyEnabled = true,
+            gameplayScenarioActive = false,
+            benchmarkArmed = true,
+        ),
+        "an armed measurement may resume without an active scenario",
     )
   }
 
@@ -1836,6 +1865,288 @@ class BasicControllerTest {
   }
 
   @Test
+  fun benchmarkSkipPublishesBootstrapReadyAfterStartedAndRemainsPaused() {
+    val eventBus = EventBusImpl()
+    val order = CopyOnWriteArrayList<String>()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val ready = LinkedBlockingQueue<Controller.BootstrapReadyEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    val ordinaryBatches = AtomicInteger()
+    eventBus.register<EmulationStartedEvent> {
+      order.add("started")
+      started.add(it)
+    }
+    eventBus.register<Controller.BootstrapReadyEvent> {
+      order.add("bootstrap")
+      ready.add(it)
+    }
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val rom = namedRom("BENCHMARK_BOOTSTRAP_SKIP")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                bootstrapMode = BootstrapMode.SKIP,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.SKIP)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      val gameboy = object : Gameboy(config) {
+        override fun runTicks(ticks: Int): Int {
+          ordinaryBatches.incrementAndGet()
+          return super.runTicks(ticks)
+        }
+      }
+      PreparedSession.Ready(config, gameboy)
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val startedEvent = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val readyEvent = assertNotNull(ready.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(
+              readyEvent.sessionGeneration, false))
+      assertEquals(listOf("started", "bootstrap"), order)
+      assertEquals(startedEvent.sessionGeneration, readyEvent.sessionGeneration)
+      assertEquals(BootstrapMode.SKIP, readyEvent.requestedBootstrapMode)
+      assertEquals(BootstrapOutcome.SKIPPED, readyEvent.bootstrapOutcome)
+      assertEquals(1, readyEvent.effectiveSpeedMode)
+      assertTrue(assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).paused)
+      assertEquals(0, ordinaryBatches.get(), "bootstrap must not enter a gameplay frame batch")
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkNormalRunsPausedScalarBootstrapOnceAndPublishesAuthoritativeOutcome() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val ready = LinkedBlockingQueue<Controller.BootstrapReadyEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    val bootstrapBatches = AtomicInteger()
+    val ordinaryBatches = AtomicInteger()
+    val gameboyRef = AtomicReference<Gameboy>()
+    val rom = namedRom("BENCHMARK_BOOTSTRAP_NORMAL")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                bootstrapMode = BootstrapMode.NORMAL,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BootstrapReadyEvent>(ready::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.NORMAL)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      val gameboy = object : Gameboy(config) {
+        private var bootstrapReady = false
+
+        override fun isBootstrapReady(): Boolean = bootstrapReady
+
+        override fun getBootstrapOutcome(): BootstrapOutcome =
+            if (bootstrapReady) BootstrapOutcome.AUTHENTIC_HANDOFF else BootstrapOutcome.PENDING
+
+        override fun runTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int {
+          assertFalse(stop.asBoolean, "owner bootstrap batch must begin before readiness")
+          bootstrapBatches.incrementAndGet()
+          bootstrapReady = true
+          return 1
+        }
+
+        override fun runTicks(ticks: Int): Int {
+          ordinaryBatches.incrementAndGet()
+          return 0
+        }
+      }
+      gameboyRef.set(gameboy)
+      PreparedSession.Ready(config, gameboy)
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val startedEvent = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val readyEvent = assertNotNull(ready.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(
+              readyEvent.sessionGeneration, false))
+      assertEquals(startedEvent.sessionGeneration, readyEvent.sessionGeneration)
+      assertEquals(BootstrapMode.NORMAL, readyEvent.requestedBootstrapMode)
+      assertEquals(BootstrapOutcome.AUTHENTIC_HANDOFF, readyEvent.bootstrapOutcome)
+      assertEquals(1, bootstrapBatches.get())
+      assertEquals(0, ordinaryBatches.get(), "paused bootstrap must not run a gameplay batch")
+      assertTrue(assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).paused)
+      assertEquals(0L, assertNotNull(gameboyRef.get()).getPerformanceBulkTicks())
+      assertEquals(0L, gameboyRef.get().getPerformanceEpochTicks())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkFastForwardFallbackPublishesWithoutReleasingPause() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val ready = LinkedBlockingQueue<Controller.BootstrapReadyEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BootstrapReadyEvent>(ready::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val rom = namedRom("BENCHMARK_BOOTSTRAP_FALLBACK")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                bootstrapMode = BootstrapMode.FAST_FORWARD,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.FAST_FORWARD)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      // Use a restore-shell machine for this controller transaction test: the core outcome is
+      // overridden to model the already materialized timed-out FF cache sidecar without booting a
+      // malformed cartridge for tens of millions of ticks.
+      val gameboy = object : Gameboy(config.forRestore()) {
+        override fun isBootstrapReady(): Boolean = true
+
+        override fun getBootstrapOutcome(): BootstrapOutcome =
+            BootstrapOutcome.TIMED_OUT_FALLBACK
+      }
+      PreparedSession.Ready(config, gameboy)
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val startedEvent = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val readyEvent = assertNotNull(ready.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(
+              readyEvent.sessionGeneration, false))
+      assertEquals(startedEvent.sessionGeneration, readyEvent.sessionGeneration)
+      assertEquals(BootstrapMode.FAST_FORWARD, readyEvent.requestedBootstrapMode)
+      assertEquals(BootstrapOutcome.TIMED_OUT_FALLBACK, readyEvent.bootstrapOutcome)
+      assertTrue(assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).paused)
+      assertNull(playback.poll(100, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkArmAndResumeStayRejectedUntilHostDecidesNoScenario() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
+    val rom = namedRom("BENCHMARK_SCENARIO_DECISION")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                bootstrapMode = BootstrapMode.SKIP,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.SKIP)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      PreparedSession.Ready(config, Gameboy(config))
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val sessionGeneration = assertNotNull(session.sessionGeneration)
+      val arm = Controller.BenchmarkArmEvent(501L, "scenario-decision-gate-01", sessionGeneration)
+      eventBus.post(Controller.ResumeEmulationEvent())
+      eventBus.post(arm)
+      assertNull(
+          acknowledged.poll(500, TimeUnit.MILLISECONDS),
+          "bootstrap/scenario decision must gate pre-arm Resume and ARM",
+      )
+
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(sessionGeneration, false))
+      eventBus.post(arm)
+      assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun benchmarkBootstrapNoProgressReportsActivationFailure() {
+    val eventBus = EventBusImpl()
+    val failed = LinkedBlockingQueue<Controller.LoadRomFailedEvent>()
+    val ready = LinkedBlockingQueue<Controller.BootstrapReadyEvent>()
+    eventBus.register<Controller.LoadRomFailedEvent>(failed::add)
+    eventBus.register<Controller.BootstrapReadyEvent>(ready::add)
+    val rom = namedRom("BENCHMARK_BOOTSTRAP_NO_PROGRESS")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                bootstrapMode = BootstrapMode.NORMAL,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer = SessionPreparer { currentProperties, event ->
+      val config = Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+          .setBootstrapMode(BootstrapMode.NORMAL)
+          .setExecutionMode(ExecutionMode.PERFORMANCE)
+      val gameboy = object : Gameboy(config) {
+        override fun isBootstrapReady(): Boolean = false
+
+        override fun getBootstrapOutcome(): BootstrapOutcome = BootstrapOutcome.PENDING
+
+        override fun runTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int = 0
+      }
+      PreparedSession.Ready(config, gameboy)
+    }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      val failure = assertNotNull(failed.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(Controller.RomLoadFailureKind.CORE_STARTUP, failure.kind)
+      assertNull(ready.poll(100, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
   fun benchmarkBoundaryCarriesPerformanceEpochTelemetry() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
@@ -1884,6 +2195,8 @@ class BasicControllerTest {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
       val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       val sessionGeneration = assertNotNull(session.sessionGeneration)
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(sessionGeneration, false))
       val benchmarkGeneration = 83L
       val token = "stage8-epoch-token-0001"
       eventBus.post(
@@ -1916,12 +2229,13 @@ class BasicControllerTest {
   }
 
   @Test
-  fun benchmarkPreArmResumeReleasesTheAnchorPause() {
+  fun benchmarkNoScenarioUnarmedResumeRemainsPaused() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    val ordinaryBatches = AtomicInteger()
     val rom = namedRom("BENCHMARK_PRE_ARM_RESUME")
     val properties =
         EmulatorProperties(
@@ -1939,20 +2253,29 @@ class BasicControllerTest {
                   Controller.createGameboyConfig(currentProperties, Rom(event.rom))
                       .setBootstrapMode(BootstrapMode.SKIP)
                       .setExecutionMode(ExecutionMode.PERFORMANCE)
-              PreparedSession.Ready(config, Gameboy(config))
+              val gameboy = object : Gameboy(config) {
+                override fun runTicks(ticks: Int): Int {
+                  ordinaryBatches.incrementAndGet()
+                  return super.runTicks(ticks)
+                }
+              }
+              PreparedSession.Ready(config, gameboy)
             })
 
     controller.startController()
     try {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
-      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
-      // The benchmark session starts paused so the host can capture its anchor. Before ARM the
-      // normal lifecycle command must still release that pause.
+      val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(
+              assertNotNull(session.sessionGeneration), false))
+      assertTrue(assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).paused)
+      // No scenario and no ARM leave the benchmark preconditioning anchor owned by the
+      // controller; a lifecycle Resume must not release it or execute guest ticks.
       eventBus.post(Controller.ResumeEmulationEvent())
-      val resumed =
-          generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
-              .first { !it.paused }
-      assertFalse(resumed.paused)
+      Thread.sleep(100)
+      assertNull(playback.poll(100, TimeUnit.MILLISECONDS))
+      assertEquals(0, ordinaryBatches.get())
     } finally {
       controller.close()
       properties.close()
@@ -2016,6 +2339,8 @@ class BasicControllerTest {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
       val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       val sessionGeneration = assertNotNull(session.sessionGeneration)
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(sessionGeneration, false))
       val benchmarkGeneration = 97L
       generation.set(benchmarkGeneration)
       eventBus.post(
@@ -2100,6 +2425,8 @@ class BasicControllerTest {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
       val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       val sessionGeneration = assertNotNull(session.sessionGeneration)
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(sessionGeneration, false))
       sessionGenerationRef.set(sessionGeneration)
       // The relaxed token is selected at ARM and is immutable for this generation.
       eventBus.post(Controller.BenchmarkArmEvent(
@@ -2188,6 +2515,8 @@ class BasicControllerTest {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
       val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       val sessionGeneration = assertNotNull(session.sessionGeneration)
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(sessionGeneration, false))
       val benchmarkGeneration = 98L
       eventBus.post(
           Controller.BenchmarkArmEvent(
@@ -2286,6 +2615,8 @@ class BasicControllerTest {
       val session = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       val generation = assertNotNull(session.sessionGeneration)
       endpointSession.set(generation)
+      eventBus.post(
+          Controller.BenchmarkGameplayScenarioRequirementEvent(generation, true))
       eventBus.post(Controller.BenchmarkGameplayScenarioStartEvent(generation, 313))
       eventBus.post(Controller.ResumeEmulationEvent())
 

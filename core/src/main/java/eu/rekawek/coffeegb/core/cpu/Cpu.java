@@ -94,6 +94,15 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private transient long performanceEpochTerminalAccesses;
 
+    /** Access classes observed by the native PERFORMANCE epoch bus. */
+    private transient long performanceEpochSafeAccesses;
+
+    private transient long performanceEpochDirectRomReads;
+
+    private transient long performanceEpochTerminalReads;
+
+    private transient long performanceEpochTerminalWrites;
+
     private transient IntConsumer performanceEpochPrefixCommitter;
 
     private transient int performanceEpochElapsed;
@@ -293,6 +302,9 @@ public class Cpu implements StatefulComponent<Cpu> {
             performanceEpochActive = false;
             performanceEpochAccesses += bus.accesses();
             performanceEpochTerminalAccesses += bus.terminalAccesses();
+            performanceEpochSafeAccesses += bus.safeAccesses();
+            performanceEpochTerminalReads += bus.terminalReads();
+            performanceEpochTerminalWrites += bus.terminalWrites();
             performanceEpochTicks += elapsed;
             if (elapsed > 0) {
                 performanceEpochCount++;
@@ -366,6 +378,9 @@ public class Cpu implements StatefulComponent<Cpu> {
             performanceEpochActive = false;
             performanceEpochAccesses += bus.accesses();
             performanceEpochTerminalAccesses += bus.terminalAccesses();
+            performanceEpochSafeAccesses += bus.safeAccesses();
+            performanceEpochTerminalReads += bus.terminalReads();
+            performanceEpochTerminalWrites += bus.terminalWrites();
             performanceEpochTicks += elapsed;
             if (elapsed > 0) {
                 performanceEpochCount++;
@@ -499,6 +514,10 @@ public class Cpu implements StatefulComponent<Cpu> {
         performanceEpochTicks = 0L;
         performanceEpochAccesses = 0L;
         performanceEpochTerminalAccesses = 0L;
+        performanceEpochSafeAccesses = 0L;
+        performanceEpochDirectRomReads = 0L;
+        performanceEpochTerminalReads = 0L;
+        performanceEpochTerminalWrites = 0L;
     }
 
     public long getPerformanceEpochCount() {
@@ -515,6 +534,22 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public long getPerformanceEpochTerminalAccesses() {
         return performanceEpochTerminalAccesses;
+    }
+
+    public long getPerformanceEpochSafeAccesses() {
+        return performanceEpochSafeAccesses;
+    }
+
+    public long getPerformanceEpochDirectRomReads() {
+        return performanceEpochDirectRomReads;
+    }
+
+    public long getPerformanceEpochTerminalReads() {
+        return performanceEpochTerminalReads;
+    }
+
+    public long getPerformanceEpochTerminalWrites() {
+        return performanceEpochTerminalWrites;
     }
 
     /**
@@ -2948,6 +2983,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         if (romAccess != null && address >= 0 && address < 0x8000) {
             int value = romAccess.readCpuByte(address);
             if (value >= 0) {
+                performanceEpochDirectRomReads++;
                 return value;
             }
         }
@@ -3524,6 +3560,12 @@ public class Cpu implements StatefulComponent<Cpu> {
 
         private int terminalAccesses;
 
+        private int safeAccesses;
+
+        private int terminalReads;
+
+        private int terminalWrites;
+
         private PerformanceEpochBus(Cpu owner) {
             this.owner = owner;
         }
@@ -3532,6 +3574,9 @@ public class Cpu implements StatefulComponent<Cpu> {
             this.target = target;
             accesses = 0;
             terminalAccesses = 0;
+            safeAccesses = 0;
+            terminalReads = 0;
+            terminalWrites = 0;
         }
 
         private int accesses() {
@@ -3540,6 +3585,18 @@ public class Cpu implements StatefulComponent<Cpu> {
 
         private int terminalAccesses() {
             return terminalAccesses;
+        }
+
+        private int safeAccesses() {
+            return safeAccesses;
+        }
+
+        private int terminalReads() {
+            return terminalReads;
+        }
+
+        private int terminalWrites() {
+            return terminalWrites;
         }
 
         @Override
@@ -3552,8 +3609,11 @@ public class Cpu implements StatefulComponent<Cpu> {
             accesses++;
             if (!isSafeRead(address)) {
                 terminalAccesses++;
+                terminalReads++;
                 owner.markPerformanceEpochTerminal();
                 owner.flushPerformanceEpochPrefix();
+            } else {
+                safeAccesses++;
             }
             return target.getByte(address);
         }
@@ -3570,6 +3630,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                     // here. Never defer either through the post-PPU journal.
                     owner.markPerformanceEpochTerminal();
                     terminalAccesses++;
+                    terminalWrites++;
                     owner.flushPerformanceEpochPrefix();
                     target.setByte(address, value);
                     return;
@@ -3580,9 +3641,11 @@ public class Cpu implements StatefulComponent<Cpu> {
                 owner.journalPerformanceEpochWrite(address, value);
                 owner.markPerformanceEpochTerminal();
                 terminalAccesses++;
+                terminalWrites++;
                 owner.flushPerformanceEpochPrefix();
                 return;
             }
+            safeAccesses++;
             target.setByte(address, value);
         }
 

@@ -7,6 +7,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -26,6 +27,7 @@ class StateFileGoldenTest {
     assertEquals(MachineHardwareState.DMG, identity.profile.hardware)
     assertEquals("dmg", identity.profile.canonicalProfileId)
     val session = assertIs<SessionStateRoot>(decoded.root).session
+    assertNull(session.machine.bootstrapOutcome)
     assertEquals(
         listOf(HeldButtonState.RIGHT, HeldButtonState.A, HeldButtonState.START),
         session.heldButtons,

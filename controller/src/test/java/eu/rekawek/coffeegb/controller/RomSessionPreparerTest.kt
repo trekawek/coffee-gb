@@ -68,8 +68,11 @@ class RomSessionPreparerTest {
     val config =
         Controller.createGameboyConfig(PROPERTIES, Rom(ROM)).setBootstrapMode(BootstrapMode.SKIP)
     val source = config.build()
+    repeat(32) { source.tick() }
+    assertTrue(source.cpu.registers.pc != 0x100)
     source.addressSpace.setByte(0xc123, 0x5a)
     val state = DetachedStateAdapter.capture(source)
+    assertEquals(Gameboy.BootstrapOutcome.SKIPPED, state.bootstrapOutcome)
     source.discardUnstarted()
 
     val cache = BootStateCache(2)
@@ -80,9 +83,127 @@ class RomSessionPreparerTest {
     val restored = prepared.materialize()
     try {
       assertEquals(0x5a, restored.addressSpace.getByte(0xc123))
+      assertEquals(Gameboy.BootstrapOutcome.SKIPPED, restored.bootstrapOutcome)
+      assertTrue(restored.isBootstrapReady)
       assertEquals(0, cache.size)
     } finally {
       restored.discardUnstarted()
+    }
+  }
+
+  @Test
+  fun productionDetachedMaterializationRetainsAuthenticHandoffAfterGameplayAdvances() {
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                hardwareProfile = HardwareProfileRegistry.DMG,
+                bootstrapMode = BootstrapMode.NORMAL,
+                runtimeWarmupEnabled = false,
+            ))
+    try {
+      val sourceConfig =
+          Controller.createGameboyConfig(properties, Rom(ROM))
+              .setBootstrapMode(BootstrapMode.NORMAL)
+              .setSupportBatterySave(false)
+      val source = sourceConfig.build()
+      val state =
+          try {
+            var ticks = 0
+            while (!source.isBootstrapReady && ticks++ < 40_000_000) {
+              source.tick()
+            }
+            assertTrue(source.isBootstrapReady, "NORMAL bootstrap did not reach handoff")
+            assertEquals(Gameboy.BootstrapOutcome.AUTHENTIC_HANDOFF, source.bootstrapOutcome)
+            repeat(8) { source.tick() }
+            assertTrue(
+                source.cpu.registers.pc != 0x0100,
+                "fixture must capture detached state after the cartridge entry point",
+            )
+            DetachedStateAdapter.capture(source)
+          } finally {
+            source.discardUnstarted()
+          }
+
+      assertEquals(Gameboy.BootstrapOutcome.AUTHENTIC_HANDOFF, state.bootstrapOutcome)
+      val prepared =
+          assertIs<PreparedSession.FromDetachedState>(
+              RomSessionPreparer(
+                      BootStateCache(2),
+                      runtimeWarmupCache = noopWarmupCache(),
+                  )
+                  .prepare(properties, LoadRomEvent(ROM, state)))
+      val restored = prepared.materialize()
+      try {
+        assertEquals(Gameboy.BootstrapOutcome.AUTHENTIC_HANDOFF, restored.bootstrapOutcome)
+        assertTrue(restored.isBootstrapReady)
+        assertTrue(
+            restored.cpu.registers.pc != 0x0100,
+            "detached materialization must not require the gameplay PC to remain at 0x0100",
+        )
+        assertEquals(state.root, DetachedStateAdapter.capture(restored).root)
+      } finally {
+        restored.discardUnstarted()
+      }
+    } finally {
+      properties.close()
+    }
+  }
+
+  @Test
+  fun productionDetachedMaterializationRetainsMappedAndRejectedPendingBootstrap() {
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                hardwareProfile = HardwareProfileRegistry.DMG,
+                bootstrapMode = BootstrapMode.NORMAL,
+                runtimeWarmupEnabled = false,
+            ))
+    try {
+      val sourceConfig = Controller.createGameboyConfig(properties, Rom(ROM))
+          .setSupportBatterySave(false)
+
+      fun capturePending(transform: (Gameboy) -> Unit = {}):
+          eu.rekawek.coffeegb.controller.state.MachineState {
+        val source = sourceConfig.build()
+        return try {
+          transform(source)
+          DetachedStateAdapter.capture(source)
+        } finally {
+          source.discardUnstarted()
+        }
+      }
+
+      val mapped = capturePending()
+      val earlyRelease = capturePending {
+        it.addressSpace.setByte(0xff50, 1)
+        it.tick()
+      }
+      val warmReset = capturePending {
+        it.requestWarmReset(true)
+        it.tick()
+      }
+
+      listOf(mapped, earlyRelease, warmReset).forEach { state ->
+        assertEquals(Gameboy.BootstrapOutcome.PENDING, state.bootstrapOutcome)
+        val prepared =
+            assertIs<PreparedSession.FromDetachedState>(
+                RomSessionPreparer(
+                        BootStateCache(2),
+                        runtimeWarmupCache = noopWarmupCache(),
+                    )
+                    .prepare(properties, LoadRomEvent(ROM, state)))
+        val restored = prepared.materialize()
+        try {
+          assertEquals(Gameboy.BootstrapOutcome.PENDING, restored.bootstrapOutcome)
+          assertFalse(restored.isBootstrapReady)
+          assertEquals(0L, restored.performanceEpochTicks)
+          assertEquals(0L, restored.performanceBulkTicks)
+        } finally {
+          restored.discardUnstarted()
+        }
+      }
+    } finally {
+      properties.close()
     }
   }
 
@@ -183,17 +304,33 @@ class RomSessionPreparerTest {
   }
 
   @Test
-  fun unsupportedWarmupShapeDoesNotClaimACompletedWarmup() {
+  fun runtimeWarmupDerivesSkipForAnAuthenticBootstrapRequest() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(2, executor)
 
-    assertFalse(
+    assertTrue(
         cache.warm(
             skipConfig().setBootstrapMode(BootstrapMode.FAST_FORWARD),
             {},
         ))
-    assertTrue(executor.calls.isEmpty())
-    assertEquals(0, cache.size)
+    assertEquals(1, executor.calls.size)
+    assertEquals(BootstrapMode.SKIP, executor.calls.single().config.bootstrapMode)
+    assertEquals(1, cache.size)
+  }
+
+  @Test
+  fun runtimeWarmupDerivesSkipForAFullBootstrapRequest() {
+    val executor = RecordingWarmupExecutor()
+    val cache = RuntimeWarmupCache(2, executor)
+
+    assertTrue(
+        cache.warm(
+            skipConfig().setBootstrapMode(BootstrapMode.NORMAL),
+            {},
+        ))
+    assertEquals(1, executor.calls.size)
+    assertEquals(BootstrapMode.SKIP, executor.calls.single().config.bootstrapMode)
+    assertEquals(1, cache.size)
   }
 
   @Test
@@ -276,7 +413,7 @@ class RomSessionPreparerTest {
                 .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE),
             RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
         ) {})
-    assertFalse(
+    assertTrue(
         cache.warm(
             skipConfig(cgbNativeImage())
                 .setHardwareProfile(HardwareProfileRegistry.CGB)

@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.events
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.events.Subscriber
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent
 import java.util.ArrayDeque
 import java.util.IdentityHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -105,6 +106,10 @@ class EventQueue(
   }
 
   private fun enqueue(event: Event) {
+    if (event is SynchronousBorrowedEvent) {
+      throw IllegalArgumentException(
+          "Borrowed events cannot be retained by an asynchronous event queue")
+    }
     val weight = eventWeight(event)
     if (weight < 0) throw IllegalArgumentException("Negative event weight")
     val source = eventSource(event) ?: LOCAL_SOURCE

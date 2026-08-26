@@ -40,7 +40,7 @@ object StateCodec {
   fun encode(file: StateFile, compression: StateCompression = StateCompression.NONE): ByteArray {
     validateFileForEncoding(file)
     val formatVersion = file.formatVersion
-    val sections = ArrayList<EncodedSection>(3)
+    val sections = ArrayList<EncodedSection>(4)
     sections +=
         EncodedSection(
             StateIdentitySectionCodec.ID,
@@ -62,6 +62,15 @@ object StateCodec {
               StateDiagnosticSectionCodec.VERSION,
               required = false,
               StateDiagnosticSectionCodec.encode(it),
+          )
+    }
+    StateBootstrapOutcomeSectionCodec.encode(file.root)?.let {
+      sections +=
+          EncodedSection(
+              StateBootstrapOutcomeSectionCodec.ID,
+              StateBootstrapOutcomeSectionCodec.VERSION,
+              required = false,
+              it,
           )
     }
     val decoded = encodeSections(sections)
@@ -607,6 +616,7 @@ object StateCodec {
     var identities: List<StateIdentityEntry>? = null
     var root: StateFileRoot? = null
     var diagnostics: StateDiagnosticMetadata? = null
+    var bootstrapOutcomes: List<Gameboy.BootstrapOutcome?>? = null
     var previousId = 0
     val seenIds = HashSet<Int>(envelope.sectionCount)
     val inspections = ArrayList<StateSectionInspection>(envelope.sectionCount)
@@ -664,6 +674,13 @@ object StateCodec {
           if (version != StateDiagnosticSectionCodec.VERSION) unsupportedSection(id, version)
           diagnostics = StateDiagnosticSectionCodec.decode(section)
         }
+        StateBootstrapOutcomeSectionCodec.ID -> {
+          if (required) malformedRequiredFlag(id, false)
+          if (version != StateBootstrapOutcomeSectionCodec.VERSION) {
+            unsupportedSection(id, version)
+          }
+          bootstrapOutcomes = StateBootstrapOutcomeSectionCodec.decode(envelope.kind, section)
+        }
         else -> {
           if (required) {
             throw StateDecodeException(
@@ -689,7 +706,13 @@ object StateCodec {
           "StateFile has no state section",
       )
     }
-    return DecodedSections(identities, root, diagnostics, inspections)
+    val hydratedRoot =
+        if (decodeState && root != null && bootstrapOutcomes != null) {
+          StateBootstrapOutcomeSectionCodec.apply(root, bootstrapOutcomes)
+        } else {
+          root
+        }
+    return DecodedSections(identities, hydratedRoot, diagnostics, inspections)
   }
 
   private fun validateFileForEncoding(file: StateFile) {
@@ -744,7 +767,9 @@ object StateCodec {
           if ((session == null) != (identity == null)) {
             PortableBounds.malformed("Linked player $player identity presence does not match state")
           }
-          if (session != null) requireIdentityHardware(identities[player], session.machine)
+          if (session != null) {
+            requireIdentityHardware(identities[player], session.machine)
+          }
         }
       }
     }
@@ -869,6 +894,7 @@ object StateCodec {
           machine.rtcRuntime,
           machine.hardware,
           machine.dmgFifoRuntime,
+          machine.bootstrapOutcome,
       )
 
   private fun convertLegacyV1SgbRtcPhase(value: StateValue): StateValue =

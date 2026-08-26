@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.controller.state.StateField
 import eu.rekawek.coffeegb.controller.state.StateFile
 import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapOutcome
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -42,6 +43,21 @@ class ReplayStateHasherTest {
       assertEquals(ReplayStateHasher.hash(captured), ReplayStateHasher.hash(withoutDiagnostics))
       assertEquals(ReplayStateHasher.hash(captured), ReplayStateHasher.hash(withDiagnostics))
       assertEquals(ReplayStateHasher.hash(session), ReplayStateHasher.hash(session))
+    }
+  }
+
+  @Test
+  fun bootstrapOutcomeSidecarDoesNotChangeReplayHashes() {
+    StateCodecTestSupport.session().use { session ->
+      repeat(31) { session.gameboy.tick() }
+      val captured = StateCodec.captureVersion2(session)
+      val hashes =
+          listOf<BootstrapOutcome?>(null, *BootstrapOutcome.entries.toTypedArray())
+              .map { ReplayStateHasher.hash(withBootstrapOutcome(captured, it)) }
+
+      hashes.drop(1).forEach { actual ->
+        assertHashesEqual(hashes.first(), actual)
+      }
     }
   }
 
@@ -152,6 +168,43 @@ class ReplayStateHasherTest {
         diagnostics = null,
         formatVersion = StateCodec.LATEST_FORMAT_VERSION,
     )
+  }
+
+  private fun withBootstrapOutcome(file: StateFile, outcome: BootstrapOutcome?): StateFile {
+    val session = (file.root as SessionStateRoot).session
+    val machine = session.machine
+    val changedMachine =
+        MachineState(
+            machine.root,
+            machine.rtcRuntime,
+            machine.hardware,
+            machine.dmgFifoRuntime,
+            outcome,
+        )
+    return StateFile(
+        file.identities,
+        SessionStateRoot(
+            SessionState(
+                changedMachine,
+                session.serialPeripheral,
+                session.serialState,
+                session.serialRuntime,
+                session.heldButtons,
+            )),
+        file.diagnostics,
+        file.formatVersion,
+    )
+  }
+
+  private fun assertHashesEqual(expected: ReplayStateHashes, actual: ReplayStateHashes) {
+    assertContentEquals(expected.full, actual.full)
+    assertContentEquals(expected.cpu, actual.cpu)
+    assertContentEquals(expected.memory, actual.memory)
+    assertContentEquals(expected.ppu, actual.ppu)
+    assertContentEquals(expected.apu, actual.apu)
+    assertContentEquals(expected.mapper, actual.mapper)
+    assertContentEquals(expected.serial, actual.serial)
+    assertContentEquals(expected.input, actual.input)
   }
 
   private fun assertDigestDiffers(left: ByteArray, right: ByteArray) {

@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.events
 
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBusImpl
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import org.junit.Test
@@ -189,7 +190,22 @@ class EventQueueTest {
     }
   }
 
+  @Test
+  fun borrowedEventsAreRejectedBeforeTheyCanEscapeTheirSynchronousCallback() {
+    val bus = EventBusImpl()
+    val queue = EventQueue(bus)
+    queue.register<BorrowedEvent> {}
+    try {
+      assertFailsWith<IllegalArgumentException> { bus.post(BorrowedEvent) }
+      assertEquals(false, queue.dispatchOne())
+    } finally {
+      bus.close()
+    }
+  }
+
   private data class WeightedEvent(val bytes: Long, val source: Any = LOCAL) : Event
+
+  private object BorrowedEvent : SynchronousBorrowedEvent
 
   private data class Source(val label: String)
 

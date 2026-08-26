@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.state.StatefulComponent;
@@ -186,7 +187,7 @@ public class Display implements StatefulComponent<Display> {
         this.firstFrameAfterLcdEnable = mem.firstFrameAfterLcdEnable;
     }
 
-    public record GbcFrameReadyEvent(int[] pixels) implements Event {
+    public record GbcFrameReadyEvent(int[] pixels) implements SynchronousBorrowedEvent {
 
         // CGB LCD response (SameBoy's modern-balanced correction): per-channel
         // brightness curve plus the green-blue gamma mix of the panel
@@ -260,7 +261,7 @@ public class Display implements StatefulComponent<Display> {
      * {@code lcdBlank} distinguishes panel blanking from a game-rendered shade-0 frame.
      * Frontends use it to avoid carrying a short-lived transition scanout into the blank.
      */
-    public record DmgFrameReadyEvent(int[] pixels, boolean lcdBlank) implements Event {
+    public record DmgFrameReadyEvent(int[] pixels, boolean lcdBlank) implements SynchronousBorrowedEvent {
 
         public DmgFrameReadyEvent(int[] pixels) {
             this(pixels, false);

@@ -2453,15 +2453,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private static String systemBootstrap(SharedPreferences preferences) {
-        String value = preferences.getString(PREF_SYSTEM_BOOTSTRAP, "skip");
-        if (value == null) {
-            return "skip";
-        }
-        return switch (value.toLowerCase(java.util.Locale.ROOT)) {
-            case "fast_forward", "fast-forward" -> "fast-forward";
-            case "full" -> "full";
-            default -> "skip";
-        };
+        return AndroidBootstrapPreference.read(preferences, PREF_SYSTEM_BOOTSTRAP);
     }
 
     /** Reads the persisted core strategy; malformed/legacy values safely select Accuracy. */

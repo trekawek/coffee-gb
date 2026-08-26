@@ -292,6 +292,8 @@ class MachineState internal constructor(
     val rtcRuntime: CartridgeRtcRuntimeState,
     val hardware: MachineHardwareState,
     val dmgFifoRuntime: DmgFifoRuntimeState?,
+    /** Null denotes a legacy detached state without bootstrap provenance. */
+    val bootstrapOutcome: Gameboy.BootstrapOutcome? = null,
 ) {
   fun recordCount(className: String): Int =
       StateGraph.countRecords(root, className)
@@ -301,9 +303,10 @@ class MachineState internal constructor(
           root == other.root &&
           rtcRuntime == other.rtcRuntime &&
           hardware == other.hardware &&
-          dmgFifoRuntime == other.dmgFifoRuntime
+          dmgFifoRuntime == other.dmgFifoRuntime &&
+          bootstrapOutcome == other.bootstrapOutcome
   override fun hashCode(): Int =
-      arrayOf(root, rtcRuntime, hardware, dmgFifoRuntime).contentHashCode()
+      arrayOf(root, rtcRuntime, hardware, dmgFifoRuntime, bootstrapOutcome).contentHashCode()
 }
 
 enum class HeldButtonState {
@@ -390,6 +393,7 @@ internal data class PreparedMachineState(
     val componentState: ComponentState<Gameboy>,
     val rtcRuntime: Gameboy.RtcRuntimeState,
     val dmgFifoRuntime: Gpu.DmgFifoRuntimeState?,
+    val bootstrapOutcome: Gameboy.BootstrapOutcome?,
 )
 
 internal data class PreparedSessionState(
@@ -417,6 +421,7 @@ internal object DetachedStateAdapter {
           gameboy.captureRtcRuntimeState().toDetached(),
           gameboy.hardwareProfile.toMachineHardware(),
           gameboy.captureDmgFifoRuntimeState().toDetached(),
+          gameboy.bootstrapOutcome,
       )
 
   private fun captureWithoutTimeSource(gameboy: Gameboy): MachineState =
@@ -425,6 +430,7 @@ internal object DetachedStateAdapter {
           gameboy.captureRtcRuntimeStateWithoutTimeSource().toDetached(),
           gameboy.hardwareProfile.toMachineHardware(),
           gameboy.captureDmgFifoRuntimeState().toDetached(),
+          gameboy.bootstrapOutcome,
       )
 
   /**
@@ -485,6 +491,7 @@ internal object DetachedStateAdapter {
         componentState,
         current.rtcRuntime.toCore(),
         current.dmgFifoRuntime.toCore(),
+        null,
     )
   }
 
@@ -770,7 +777,7 @@ internal object DetachedStateAdapter {
     @Suppress("UNCHECKED_CAST") val componentState = detached as ComponentState<Gameboy>
     val rtcRuntime = state.rtcRuntime.toCore()
     val dmgFifoRuntime = state.dmgFifoRuntime.toCore()
-    return PreparedMachineState(componentState, rtcRuntime, dmgFifoRuntime)
+    return PreparedMachineState(componentState, rtcRuntime, dmgFifoRuntime, state.bootstrapOutcome)
   }
 
   internal fun commit(
@@ -780,7 +787,9 @@ internal object DetachedStateAdapter {
   ) {
     // The caller owns the complete transaction boundary. Publishing host output here would expose
     // a speculative machine state if a later runtime, endpoint, or linked-player step failed.
-    gameboy.restoreStateSilently(prepared.componentState)
+    prepared.bootstrapOutcome?.let {
+      gameboy.restoreDetachedStateSilently(prepared.componentState, it)
+    } ?: gameboy.restoreStateSilently(prepared.componentState)
     gameboy.restoreDmgFifoRuntimeState(prepared.dmgFifoRuntime)
     gameboy.restoreRtcRuntimeState(prepared.rtcRuntime)
     probe?.invoke(ApplyStage.AFTER_MACHINE_MUTATION)

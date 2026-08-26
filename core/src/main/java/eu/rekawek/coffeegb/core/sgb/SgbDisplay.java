@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.core.memento.Memento;
 
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent;
 import eu.rekawek.coffeegb.core.gpu.Display.DmgFrameReadyEvent;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -34,6 +35,8 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
 
     private static final int DMG_WINDOW_Y = 40;
 
+    private static final long INVALID_BORDER_GENERATION = Long.MIN_VALUE;
+
     private volatile boolean sgbBorder;
 
     private final boolean sgb;
@@ -48,6 +51,15 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
 
     private final int[] sgbMask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
 
+    /**
+     * Private, canonical border/base images. These arrays are never published to subscribers;
+     * every render lease copies its geometry's generation into its callback-scoped target before
+     * repainting the Game Boy window.
+     */
+    private final int[] borderedBase = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+
+    private final int[] centerBase = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+
     private final int[][] palettes = new int[4][4];
 
     private final int[][] systemPalettes = new int[512][4];
@@ -59,6 +71,26 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     private GameboyScreenMask screenMask = GameboyScreenMask.CANCEL;
 
     private int borderFade;
+
+    /**
+     * Border data is derived presentation state. A new generation is published only when a
+     * committed background, an actually different fade, or a state restore changes its source.
+     * Render leases materialize that generation lazily for each synchronous re-entrant depth.
+     */
+    private long borderGeneration = 1;
+
+    private long borderedBaseGeneration = INVALID_BORDER_GENERATION;
+
+    private long centerBaseGeneration = INVALID_BORDER_GENERATION;
+
+    private final transient ThreadLocal<RenderLeasePool> renderLeasePool =
+            ThreadLocal.withInitial(RenderLeasePool::new);
+
+    private volatile long frameArrayAllocations;
+
+    private volatile long borderRebuilds;
+
+    private volatile long centerPixels;
 
     /**
      * PAL_PRI controls whether later game palette commands reclaim a palette selected in the
@@ -79,7 +111,7 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         if (sgb) {
             this.eventBus = eventBus;
             eventBus.register(this::onSgbBackground, Background.SgbBackgroundReadyEvent.class);
-            eventBus.register(e -> borderFade = e.amount(), Background.SgbBackgroundFadeEvent.class);
+            eventBus.register(this::onSgbBackgroundFade, Background.SgbBackgroundFadeEvent.class);
             eventBus.register(this::onDmgFrame, DmgFrameReadyEvent.class);
             eventBus.register(e -> this.sgbBorder = e.borderEnabled, SetSgbBorder.class);
 
@@ -256,58 +288,109 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         System.arraycopy(updated, 0, paletteMap, 0, paletteMap.length);
     }
 
+    private void onSgbBackgroundFade(Background.SgbBackgroundFadeEvent event) {
+        int amount = event.amount();
+        if (borderFade != amount) {
+            borderFade = amount;
+            invalidateBorderCache();
+        }
+    }
+
     private void onDmgFrame(DmgFrameReadyEvent dmgFrameReadyEvent) {
         if (screenMask == GameboyScreenMask.FREEZE) {
             return;
         }
-        int offsetX = sgbBorder ? 0 : 48;
-        int offsetY = sgbBorder ? 0 : 40;
-        int width = sgbBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
-        int height = sgbBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
-        int[] result = new int[width * height];
+        boolean includeBorder = sgbBorder;
+        RenderLeasePool pool = renderLeasePool.get();
+        RenderLease lease = pool.acquire(includeBorder);
+        try {
+            int[] result = lease.frame;
+            int[] base = canonicalBase(includeBorder);
+            System.arraycopy(base, 0, result, 0, base.length);
+            renderCenter(result, dmgFrameReadyEvent.pixels(), includeBorder);
+            centerPixels += (long) DISPLAY_WIDTH * DISPLAY_HEIGHT;
+            // The leased array remains valid through every synchronous subscriber callback. It is
+            // returned to this depth-specific pool only after the complete post has unwound.
+            eventBus.post(new SgbFrameReadyEvent(result, includeBorder));
+        } finally {
+            pool.release(lease);
+        }
+    }
 
-        for (int y = offsetY; y < offsetY + height; y++) {
-            int sgbRowOffset = y * SGB_DISPLAY_WIDTH;
-            int resultRowOffset = (y - offsetY) * width;
-            for (int x = offsetX; x < offsetX + width; x++) {
-                int sgbPixel = sgbBuffer[x + sgbRowOffset];
-                int mask = sgbMask[x + sgbRowOffset];
-                int dmgPixel;
-                if (x >= DMG_WINDOW_X && x < DMG_WINDOW_X + DISPLAY_WIDTH && y >= DMG_WINDOW_Y && y < DMG_WINDOW_Y + DISPLAY_HEIGHT) {
-                    int dmgX = x - DMG_WINDOW_X;
-                    int dmgY = y - DMG_WINDOW_Y;
-                    int tileX = dmgX / 8;
-                    int tileY = dmgY / 8;
-                    int charId = tileX + tileY * DMG_TILES_WIDTH;
-                    int paletteId = paletteMap[charId];
-                    int p = dmgFrameReadyEvent.pixels()[dmgX + dmgY * DISPLAY_WIDTH];
-                    if (screenMask == GameboyScreenMask.BLANK_COLOR0) {
-                        p = 0;
-                    }
-                    if (p == 0) {
-                        paletteId = 0;
-                    }
-                    dmgPixel = palettes[paletteId][p];
-                    if (screenMask == GameboyScreenMask.BLANK_BLACK) {
-                        dmgPixel = 0;
-                    }
-                } else {
-                    dmgPixel = 0;
-                }
-                int i = (x - offsetX) + resultRowOffset;
-                if (mask == 0) {
-                    result[i] = translateGbcRgb(dmgPixel);
-                } else {
-                    result[i] = translateGbcRgb(fadeBorderColor(sgbPixel, borderFade));
-                }
+    /** Returns the generation-cached canonical base for the requested output geometry. */
+    private int[] canonicalBase(boolean includeBorder) {
+        if (includeBorder) {
+            if (borderedBaseGeneration != borderGeneration) {
+                rebuildBorder(borderedBase, true);
+                borderedBaseGeneration = borderGeneration;
+            }
+            return borderedBase;
+        }
+        if (centerBaseGeneration != borderGeneration) {
+            rebuildBorder(centerBase, false);
+            centerBaseGeneration = borderGeneration;
+        }
+        return centerBase;
+    }
+
+    /** Rebuilds the private canonical border/base image for one output geometry. */
+    private void rebuildBorder(int[] target, boolean includeBorder) {
+        int width = includeBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
+        int height = includeBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
+        int sourceOffsetX = includeBorder ? 0 : DMG_WINDOW_X;
+        int sourceOffsetY = includeBorder ? 0 : DMG_WINDOW_Y;
+        for (int y = 0; y < height; y++) {
+            int sourceRow = (y + sourceOffsetY) * SGB_DISPLAY_WIDTH + sourceOffsetX;
+            int targetRow = y * width;
+            for (int x = 0; x < width; x++) {
+                int source = sourceRow + x;
+                target[targetRow + x] = sgbMask[source] == 0
+                        ? 0
+                        : translateGbcRgb(fadeBorderColor(sgbBuffer[source], borderFade));
             }
         }
-        eventBus.post(new SgbFrameReadyEvent(result, sgbBorder));
+        borderRebuilds++;
+    }
+
+    /** Repaints the only part of an SGB output that changes at every Game Boy frame. */
+    private void renderCenter(int[] target, int[] dmgPixels, boolean includeBorder) {
+        int width = includeBorder ? SGB_DISPLAY_WIDTH : DISPLAY_WIDTH;
+        int sourceOffsetX = DMG_WINDOW_X;
+        int sourceOffsetY = DMG_WINDOW_Y;
+        for (int dmgY = 0; dmgY < DISPLAY_HEIGHT; dmgY++) {
+            int sourceRow = (dmgY + sourceOffsetY) * SGB_DISPLAY_WIDTH + sourceOffsetX;
+            int dmgRow = dmgY * DISPLAY_WIDTH;
+            int targetRow = (includeBorder ? dmgY + sourceOffsetY : dmgY) * width
+                    + (includeBorder ? sourceOffsetX : 0);
+            for (int dmgX = 0; dmgX < DISPLAY_WIDTH; dmgX++) {
+                int source = sourceRow + dmgX;
+                int output = targetRow + dmgX;
+                // A nonzero SGB mask keeps the cached border pixel in the Game Boy window.
+                if (sgbMask[source] != 0) {
+                    continue;
+                }
+                int p = dmgPixels[dmgRow + dmgX];
+                if (screenMask == GameboyScreenMask.BLANK_COLOR0) {
+                    p = 0;
+                }
+                int paletteId = p == 0 ? 0 : paletteMap[(dmgX / 8) + (dmgY / 8) * DMG_TILES_WIDTH];
+                int dmgPixel = palettes[paletteId][p];
+                if (screenMask == GameboyScreenMask.BLANK_BLACK) {
+                    dmgPixel = 0;
+                }
+                target[output] = translateGbcRgb(dmgPixel);
+            }
+        }
     }
 
     private void onSgbBackground(Background.SgbBackgroundReadyEvent sgbBackgroundReadyEvent) {
         System.arraycopy(sgbBackgroundReadyEvent.buffer(), 0, sgbBuffer, 0, sgbBuffer.length);
         System.arraycopy(sgbBackgroundReadyEvent.mask(), 0, sgbMask, 0, sgbMask.length);
+        invalidateBorderCache();
+    }
+
+    private void invalidateBorderCache() {
+        borderGeneration++;
     }
 
     private static int fadeBorderColor(int color, int fade) {
@@ -392,6 +475,29 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         this.screenMask = mem.screenMask;
         this.borderFade = mem.borderFade & STATE_BORDER_FADE_MASK;
         this.palettePriority = (mem.borderFade & STATE_PALETTE_PRIORITY) != 0;
+        invalidateBorderCache();
+    }
+
+    /** Resets transient SGB presentation counters without changing emulated or cached state. */
+    public void resetPerformanceCounters() {
+        frameArrayAllocations = 0L;
+        borderRebuilds = 0L;
+        centerPixels = 0L;
+    }
+
+    /** Number of retained output arrays allocated by the SGB renderer since the last reset. */
+    public long getFrameArrayAllocations() {
+        return frameArrayAllocations;
+    }
+
+    /** Number of full border/base rebuilds since the last reset. */
+    public long getBorderRebuilds() {
+        return borderRebuilds;
+    }
+
+    /** Number of Game Boy-window pixel positions visited since the last reset. */
+    public long getCenterPixels() {
+        return centerPixels;
     }
 
     boolean isPalettePriorityEnabled() {
@@ -431,6 +537,55 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         return clone;
     }
 
+    /** One reusable render target per synchronous re-entrant depth and output geometry. */
+    private final class RenderLease {
+        private int[] borderedFrame;
+        private int[] centerFrame;
+        private int[] frame;
+
+        private void select(boolean includeBorder) {
+            if (includeBorder) {
+                if (borderedFrame == null) {
+                    borderedFrame = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+                    frameArrayAllocations++;
+                }
+                frame = borderedFrame;
+            } else {
+                if (centerFrame == null) {
+                    centerFrame = new int[DISPLAY_WIDTH * DISPLAY_HEIGHT];
+                    frameArrayAllocations++;
+                }
+                frame = centerFrame;
+            }
+        }
+    }
+
+    private final class RenderLeasePool {
+        private RenderLease[] leases = new RenderLease[1];
+        private int depth;
+
+        private RenderLease acquire(boolean includeBorder) {
+            int index = depth++;
+            if (index == leases.length) {
+                leases = Arrays.copyOf(leases, leases.length * 2);
+            }
+            RenderLease lease = leases[index];
+            if (lease == null) {
+                lease = new RenderLease();
+                leases[index] = lease;
+            }
+            lease.select(includeBorder);
+            return lease;
+        }
+
+        private void release(RenderLease lease) {
+            if (depth <= 0 || leases[depth - 1] != lease) {
+                throw new IllegalStateException("Unbalanced SGB render lease");
+            }
+            depth--;
+        }
+    }
+
     private record SgbDisplayState(int[] sgbBuffer, int[] sgbMask, int[][] palettes, int[][] systemPalettes,
                                      int[] paletteMap, int[][] attributeFiles, GameboyScreenMask screenMask,
                                      int borderFade) implements ComponentState<SgbDisplay> {
@@ -442,9 +597,29 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
                                      int borderFade) implements Memento<SgbDisplay> {
     }
 
-    public record SgbFrameReadyEvent(int[] buffer, boolean includeBorder) implements Event {
+    /**
+     * SGB output backed by a producer-owned render lease.
+     *
+     * <p>The buffer is valid only for the duration of the synchronous event-bus callback. A
+     * subscriber that needs to retain a frame must copy it before returning; the producer may
+     * reuse this exact array on the next publication (or a nested publication may use another
+     * lease at the same time).</p>
+     */
+    public record SgbFrameReadyEvent(int[] buffer, boolean includeBorder)
+            implements SynchronousBorrowedEvent {
         public void toRgb(int[] target, boolean unused) {
             System.arraycopy(buffer, 0, target, 0, buffer.length);
+        }
+
+        /** Copies this callback-scoped RGB payload into opaque Android-style ARGB storage. */
+        public void copyToOpaqueArgb(int[] target) {
+            if (target == null || target.length < buffer.length) {
+                throw new IllegalArgumentException(
+                        "Target pixel array is shorter than the SGB frame payload");
+            }
+            for (int i = 0; i < buffer.length; i++) {
+                target[i] = buffer[i] | 0xff000000;
+            }
         }
     }
 

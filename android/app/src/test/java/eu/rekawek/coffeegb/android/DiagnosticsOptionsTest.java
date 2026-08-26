@@ -2,6 +2,8 @@ package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.ExecutionMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
+
 
 import org.junit.Test;
 
@@ -65,6 +67,24 @@ public class DiagnosticsOptionsTest {
         assertFalse(options.launchRecent);
         assertEquals(ExecutionMode.ACCURACY, options.executionMode);
         assertEquals(DiagnosticsOptions.BenchmarkScenario.NONE, options.benchmarkScenario);
+        assertEquals(BootstrapMode.FAST_FORWARD, options.bootstrapMode);
+    }
+
+    @Test
+    public void benchmarkBootstrapDefaultsToFastForwardAndSurvivesIntentModes() {
+        DiagnosticsOptions defaults = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", false, true, false);
+        assertEquals(BootstrapMode.FAST_FORWARD, defaults.bootstrapMode);
+
+        for (String token : new String[]{"skip", "fast-forward", "full"}) {
+            DiagnosticsOptions parsed = DiagnosticsOptions.parseValues(
+                    true, "dmg", true, "presentation", false, true, false,
+                    null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                    "accuracy", null, null, null, null, null, token);
+            BootstrapMode expected = "skip".equals(token) ? BootstrapMode.SKIP
+                    : "full".equals(token) ? BootstrapMode.NORMAL : BootstrapMode.FAST_FORWARD;
+            assertEquals(token, expected, parsed.bootstrapMode);
+        }
     }
 
     @Test
@@ -299,6 +319,46 @@ public class DiagnosticsOptionsTest {
         assertEquals(59_728, legacy.surfaceContentRateMillihz);
         assertEquals(120, sgb.displayTargetHz);
         assertEquals(61_168, sgb.surfaceContentRateMillihz);
+    }
+
+    @Test
+    public void goalRowsAllowSevenButLegacyRowsFailClosed() {
+        DiagnosticsOptions goal = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, "pair-c2-cgb-native", "matrix-01", 7, "candidate", "parent",
+                null, null, false, "host-supplied-000000000001", -1, 3,
+                "performance", null, "silent-pcm-v1", BenchmarkWorkload.MATRIX_VERSION,
+                "c2-cgb-native", "c2");
+        DiagnosticsOptions legacy = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, "pair-legacy", "matrix-01", 7, "candidate", "parent",
+                null, null, false, "host-supplied-000000000001", -1, -1,
+                "performance", null, "silent-pcm-v1");
+
+        assertEquals(7, goal.rowOrder);
+        assertEquals("unknown", goal.workloadNonce);
+        assertEquals(-1, legacy.rowOrder);
+        assertEquals("host-supplied-000000000001", legacy.workloadNonce);
+    }
+
+    @Test
+    public void goalLaunchRejectsHardwareAliasesMismatchesAndAccuracy() {
+        DiagnosticsOptions alias = DiagnosticsOptions.parseGoalValues(true, "forced-dmg",
+                BenchmarkWorkload.MATRIX_VERSION, "d-dmg", "d", "host-supplied-000000000001",
+                "performance", "silent-pcm-v1", 0);
+        DiagnosticsOptions mismatch = DiagnosticsOptions.parseGoalValues(true, "cgb",
+                BenchmarkWorkload.MATRIX_VERSION, "d-dmg", "d", "host-supplied-000000000001",
+                "performance", "silent-pcm-v1", 0);
+        DiagnosticsOptions accuracy = DiagnosticsOptions.parseGoalValues(true, "dmg",
+                BenchmarkWorkload.MATRIX_VERSION, "d-dmg", "d", "host-supplied-000000000001",
+                "accuracy", "silent-pcm-v1", 0);
+
+        assertFalse(alias.goalMatrixContract());
+        assertFalse(mismatch.goalMatrixContract());
+        assertFalse(accuracy.goalMatrixContract());
+        assertEquals("unknown", alias.workloadNonce);
+        assertEquals(DiagnosticsOptions.Hardware.AUTO, alias.hardware);
+        assertEquals(ExecutionMode.ACCURACY, accuracy.executionMode);
     }
 
     private static Object expectedProfile(DiagnosticsOptions.Hardware hardware) {

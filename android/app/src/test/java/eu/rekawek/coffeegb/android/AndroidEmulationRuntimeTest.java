@@ -290,7 +290,7 @@ public class AndroidEmulationRuntimeTest {
                          new EmulatorProperties(AndroidEmulationRuntime.androidSettingsOverrides(options))) {
                 assertEquals(hardware.profileOverride(),
                         properties.getOverrides().getHardwareProfile());
-                assertEquals(BootstrapMode.SKIP,
+                assertEquals(BootstrapMode.FAST_FORWARD,
                         properties.getOverrides().getBootstrapMode());
                 assertEquals(Boolean.FALSE, properties.getOverrides().getRewindEnabled());
             }

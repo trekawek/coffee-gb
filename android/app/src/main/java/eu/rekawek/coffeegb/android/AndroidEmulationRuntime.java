@@ -122,6 +122,19 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             new BenchmarkAudioLifecycleGate();
     /** Owner-thread fence invalidating every scheduled scenario/audio poll on replacement. */
     private long benchmarkScenarioCompletionEpoch;
+    /** Generation-bound bootstrap transaction; no scenario or arm may cross this fence early. */
+    private boolean benchmarkBootstrapReady;
+    private long benchmarkBootstrapSessionGeneration;
+    /** Callback-thread fence set before queuing Android work, closing back-to-back event races. */
+    private final AtomicLong benchmarkBootstrapReadySeen = new AtomicLong();
+    /**
+     * Generation announced by the synchronous controller callback.  The runtime owner updates
+     * {@link #activeSessionGeneration} only after its queued materialization work runs, so using
+     * that field as the callback fence would drop a valid SKIP/FAST_FORWARD ready event that is
+     * posted immediately from the same controller stack.  This callback-thread expectation is
+     * replaced atomically for every EmulationStarted event and is never used as owner state.
+     */
+    private final AtomicLong benchmarkBootstrapExpectedGeneration = new AtomicLong();
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
     private volatile AndroidCameraSource camera;
@@ -177,9 +190,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     AndroidEmulationRuntime(Context context, DiagnosticsOptions options) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
         diagnosticsOptions = options == null ? DiagnosticsOptions.disabled() : options;
-        benchmarkScenario = new BenchmarkGameplayScenario(
-                diagnosticsOptions.benchmarkScenario,
-                diagnosticsOptions.benchmarkNativeFrameKind());
+        benchmarkScenario = diagnosticsOptions.workloadTimeline != null
+                ? new BenchmarkGameplayScenario(diagnosticsOptions.workloadTimeline,
+                        diagnosticsOptions.benchmarkNativeFrameKind())
+                : new BenchmarkGameplayScenario(diagnosticsOptions.benchmarkScenario,
+                        diagnosticsOptions.benchmarkNativeFrameKind());
         diagnostics = new AndroidBenchmarkDiagnostics(this.context, diagnosticsOptions,
                 this::onSystemAudioViolation);
         // Release/non-diagnostic sessions use a null sink so the native frame hot path does not
@@ -201,10 +216,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     static ApplicationSettingsOverrides androidSettingsOverrides(DiagnosticsOptions options) {
         DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
         HardwareProfile profile = checked.enabled ? checked.hardware.profileOverride() : null;
-        // Benchmark sessions must not inherit NORMAL boot from user settings: the profile event
-        // is emitted at session materialization and needs the actual post-boot KEY0/GPU mode.
-        // Release/non-diagnostic callers retain the ordinary settings path unchanged.
-        BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
+        // Benchmark sessions own their bootstrap strategy so a persisted UI preference cannot
+        // silently change the measured topology.  Release/non-diagnostic callers retain the
+        // ordinary settings path unchanged.
+        BootstrapMode bootstrapMode = checked.enabled ? checked.bootstrapMode : null;
         return new ApplicationSettingsOverrides(profile, bootstrapMode,
                 checked.enabled ? false : null, false, false, false,
                 checked.enabled && checked.runtimeWarmup, runtimeWarmupFlavor(checked), checked.enabled,
@@ -886,9 +901,22 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         false, false, false);
                 return;
             }
+            String benchmarkNonce = recentStore.ensureBenchmarkNonce(recent);
+            if ("unknown".equals(benchmarkNonce) || "invalid".equals(benchmarkNonce)) {
+                diagnostics.noRecentEntry();
+                publish(RuntimeState.Phase.FAILED,
+                        "The selected recent game has no benchmark identity.", List.of(),
+                        false, false, false);
+                return;
+            }
+            if (!diagnostics.setWorkloadNonce(benchmarkNonce)) {
+                diagnostics.noRecentEntry();
+                publish(RuntimeState.Phase.FAILED,
+                        "The selected recent game has no benchmark identity.", List.of(),
+                        false, false, false);
+                return;
+            }
             diagnostics.openStart();
-            diagnostics.setWorkloadNonce(new RecentSafDocuments(context)
-                    .ensureBenchmarkNonce(recent));
             // Freeze gameplay input before materialization. A configured scenario keeps only its
             // private frame-driven source admitted until the preconditioning pause; the ordinary
             // benchmark path locks all sources immediately. The ACK handler repeats this
@@ -1087,6 +1115,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     || requestedSessionGeneration != sessionGeneration
                     || sessionGeneration <= 0L || state.phase() != RuntimeState.Phase.PAUSED
                     || state.sessionGeneration() != sessionGeneration
+                    || !benchmarkBootstrapReady
+                    || benchmarkBootstrapSessionGeneration != sessionGeneration
                     || !diagnostics.benchmarkAnchorReady(sessionGeneration)) {
                 return;
             }
@@ -1107,6 +1137,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     boolean benchmarkAnchorReady(long sessionGeneration) {
         return diagnostics.enabled() && sessionGeneration > 0L
                 && sessionGeneration == activeSessionGeneration
+                && benchmarkBootstrapReady
+                && benchmarkBootstrapSessionGeneration == sessionGeneration
                 && state.phase() == RuntimeState.Phase.PAUSED
                 && state.sessionGeneration() == sessionGeneration
                 && diagnostics.benchmarkAnchorReady(sessionGeneration);
@@ -1115,7 +1147,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** The host may request its compositor anchor only after optional input preconditioning. */
     boolean benchmarkPreconditionReady() {
         return !diagnostics.enabled()
-                || diagnostics.benchmarkPreArmValid(activeSessionGeneration)
+                || (benchmarkBootstrapReady
+                && benchmarkBootstrapSessionGeneration == activeSessionGeneration
+                && diagnostics.benchmarkPreArmValid(activeSessionGeneration))
                 && (!benchmarkScenario.enabled() || benchmarkScenario.preconditionReady());
     }
 
@@ -1205,6 +1239,100 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             publish(RuntimeState.Phase.PAUSED, "Benchmark preconditioning complete.", List.of(),
                     true, true, current.flushPending());
         }
+    }
+
+    /**
+     * Consumes the controller's terminal bootstrap event and opens exactly one benchmark
+     * transaction for its generation. EmulationStarted only materializes a paused shell; this
+     * method is the sole path that may admit the scripted scenario or the no-scenario decision.
+     */
+    private void handleBootstrapReady(Controller.BootstrapReadyEvent event) {
+        if (!diagnostics.enabled() || event == null) {
+            return;
+        }
+        // This callback is invoked synchronously on the controller owner from the event bus.  A
+        // duplicate for the live generation must freeze that owner before we enqueue the Android
+        // invalidation/presentation failure; posting only from the runtime executor leaves a
+        // scenario-sized window in which the controller can continue ticking.
+        long generation = event.getSessionGeneration();
+        // Do not let an old callback reserve the fence.  EmulationStarted publishes the new
+        // generation synchronously above, so this check is safe even while the runtime owner is
+        // still draining its queued materialization work.
+        if (generation <= 0L || generation != benchmarkBootstrapExpectedGeneration.get()) {
+            return;
+        }
+        boolean duplicateCallback;
+        for (;;) {
+            long seenGeneration = benchmarkBootstrapReadySeen.get();
+            if (seenGeneration == generation) {
+                duplicateCallback = true;
+                break;
+            }
+            if (benchmarkBootstrapReadySeen.compareAndSet(seenGeneration, generation)) {
+                duplicateCallback = false;
+                break;
+            }
+        }
+        if (duplicateCallback) {
+            eventBus.post(new Controller.BenchmarkBootstrapAbortEvent(
+                    generation));
+        }
+        submit(() -> {
+            long eventGeneration = event.getSessionGeneration();
+            if (eventGeneration <= 0L || eventGeneration != activeSessionGeneration
+                    || state.sessionGeneration() != eventGeneration) {
+                // A replacement may already own this runtime. Do not invalidate the current
+                // generation when a stale controller notification arrives.
+                return;
+            }
+            if (benchmarkBootstrapReady
+                    && benchmarkBootstrapSessionGeneration == eventGeneration) {
+                // A duplicate terminal event is a protocol violation for this generation. Keep
+                // the fail-closed behavior local and never start a second scenario/measurement.
+                invalidateBenchmarkSession(false);
+                publish(RuntimeState.Phase.FAILED,
+                        "Benchmark bootstrap completed more than once.",
+                        List.of(), activeLayout != null, true, false);
+                return;
+            }
+            if (!diagnostics.acceptBootstrapReady(event)) {
+                benchmarkBootstrapReady = false;
+                benchmarkBootstrapSessionGeneration = 0L;
+                invalidateBenchmarkSession(false);
+                publish(RuntimeState.Phase.FAILED,
+                        "Coffee GB could not establish an authentic benchmark bootstrap.",
+                        List.of(), activeLayout != null, true, false);
+                return;
+            }
+            benchmarkBootstrapReady = true;
+            benchmarkBootstrapSessionGeneration = eventGeneration;
+            boolean configuredScenario = benchmarkScenario.enabled();
+            if (configuredScenario) {
+                benchmarkScenario.beginSession(eventGeneration);
+                if (!input.beginBenchmarkScenario()) {
+                    invalidateBenchmarkSession(false);
+                    publishBenchmarkScenarioInputFailure();
+                    return;
+                }
+                // The requirement is intentionally posted before Start. BasicController rejects
+                // both Start and Resume until this generation-bound decision is consumed.
+                eventBus.post(new Controller.BenchmarkGameplayScenarioRequirementEvent(
+                        eventGeneration, true));
+                eventBus.post(new Controller.BenchmarkGameplayScenarioStartEvent(
+                        eventGeneration, benchmarkScenario.endpointFrameForTesting()));
+                eventBus.post(new Controller.ResumeEmulationEvent());
+                publish(RuntimeState.Phase.PAUSED,
+                        "Benchmark bootstrap ready; running preconditioning scenario.",
+                        List.of(), true, true, false);
+            } else {
+                eventBus.post(new Controller.BenchmarkGameplayScenarioRequirementEvent(
+                        eventGeneration, false));
+                diagnostics.emulationStarted(eventGeneration);
+                publish(RuntimeState.Phase.PAUSED,
+                        "Loaded benchmark session. App-private saves are ready.",
+                        List.of(), true, true, false);
+            }
+        });
     }
 
     /** Stops one session and recreates its controller shell for a later load without leaks. */
@@ -1468,6 +1596,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 },
                 Controller.HardwareProfileEvent.class);
         eventBus.register(
+                this::handleBootstrapReady,
+                Controller.BootstrapReadyEvent.class);
+        eventBus.register(
                 event -> diagnostics.benchmarkFrameBoundary(event),
                 Controller.BenchmarkFrameBoundaryEvent.class);
         // A rejected ARM is reported by BasicController as a generation-bound false policy. Clear
@@ -1554,7 +1685,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     benchmarkScenarioFrameReady(BenchmarkGameplayScenario.NativeFrameKind.GBC);
                 },
                 Display.GbcFrameReadyEvent.class);
-        eventBus.register(frames::publish, SgbDisplay.SgbFrameReadyEvent.class);
+        eventBus.register(
+                (SgbDisplay.SgbFrameReadyEvent event) -> {
+                    frames.publish(event);
+                    benchmarkScenarioFrameReady(BenchmarkGameplayScenario.NativeFrameKind.SGB);
+                },
+                SgbDisplay.SgbFrameReadyEvent.class);
         eventBus.register(printer::append, Controller.PrinterPrintEvent.class);
         eventBus.register(
                 (Controller.BenchmarkGameplayScenarioCompletedEvent event) -> {
@@ -1588,6 +1724,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.RomLoadingEvent.class);
         eventBus.register(
                 (Controller.EmulationStartedEvent event) -> {
+                    // The controller dispatches this event on the owner thread before the
+                    // runtime's queued presentation work runs.  Publish the generation here so
+                    // a stale BootstrapReady callback cannot claim the duplicate fence while the
+                    // new session is still being materialized on the runtime executor.
+                    Long eventGeneration = event.getSessionGeneration();
+                    if (diagnostics.enabled() && eventGeneration != null
+                            && eventGeneration > 0L) {
+                        benchmarkBootstrapExpectedGeneration.set(eventGeneration);
+                        benchmarkBootstrapReadySeen.set(0L);
+                    }
                     // This callback runs synchronously on the controller thread. Keep the CPU
                     // sample on that thread instead of the runtime owner executor.
                     AndroidPerformanceBoost.apply(executionModeForSession());
@@ -1631,28 +1777,22 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         if (gpsEnabled) {
                             eventBus.post(new Controller.SetGpsReceiverEvent(true));
                         }
-                        boolean configuredScenario = diagnostics.enabled()
-                                && benchmarkScenario.enabled();
-                        if (configuredScenario) {
-                            benchmarkScenario.beginSession(activeSessionGeneration);
-                            if (!input.beginBenchmarkScenario()) {
-                                benchmarkScenario.resetSession();
-                                diagnostics.invalidateSession();
-                                publishBenchmarkScenarioInputFailure();
-                                return;
-                            }
-                            eventBus.post(new Controller.BenchmarkGameplayScenarioStartEvent(
-                                    activeSessionGeneration,
-                                    benchmarkScenario.endpointFrameForTesting()));
-                            eventBus.post(new Controller.ResumeEmulationEvent());
+                        if (diagnostics.enabled()) {
+                            // BootstrapReadyEvent owns the later transition into either the
+                            // scripted scenario or the no-scenario warming phase.  Keep every
+                            // benchmark materialization paused, including configured scenarios.
+                            benchmarkBootstrapReady = false;
+                            benchmarkBootstrapSessionGeneration = 0L;
+                            publish(RuntimeState.Phase.PAUSED,
+                                    "Loaded benchmark session; waiting for bootstrap.",
+                                    List.of(), true, true, false);
                         } else {
                             diagnostics.emulationStarted(activeSessionGeneration);
+                            publish(RuntimeState.Phase.RUNNING,
+                                    "Loaded " + event.getRomName()
+                                            + ". App-private saves are ready.",
+                                    List.of(), true, false, false);
                         }
-                        boolean benchmarkPaused = diagnostics.enabled() && !configuredScenario;
-                        publish(benchmarkPaused ? RuntimeState.Phase.PAUSED
-                                        : RuntimeState.Phase.RUNNING,
-                                "Loaded " + event.getRomName() + ". App-private saves are ready.",
-                                List.of(), true, benchmarkPaused, false);
                     }
                     });
                 },
@@ -1887,24 +2027,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     ? snapshot.loadSingle()
                     : snapshot.load(token);
             Rom rom = new Rom(image);
-            String hash;
-            if (diagnostics.enabled() && recent != null
-                    && RecentSafDocuments.hasValidRomHash(recent.romHash())) {
-                // The benchmark reuses the recent catalog identity and intentionally does not
-                // hash cartridge bytes or write a new recent preview. Normal opens retain the
-                // existing change-detection path below.
-                hash = recent.romHash().toLowerCase(java.util.Locale.ROOT);
-            } else if (diagnostics.enabled()) {
-                diagnostics.noRecentEntry();
-                recentGameUnavailable(recent, "Recent game identity is unavailable.");
-                return;
-            } else {
-                hash = StateIdentity.INSTANCE.hash(rom).hex();
-                if (recent != null && !recentHashMatches(recent.romHash(), hash)) {
-                    recentGameUnavailable(recent,
-                            "That recent game has changed since it was last played.");
+            // Always hash the bytes that were actually opened.  In benchmark mode the recent
+            // row is an app-private identity anchor; trusting its stored hash without recomputing
+            // would let an in-place SAF replacement reuse the old workload nonce and catalog slot.
+            String hash = StateIdentity.INSTANCE.hash(rom).hex();
+            if (diagnostics.enabled()) {
+                if (recent == null || !RecentSafDocuments.hasValidRomHash(recent.romHash())
+                        || !recentHashMatches(recent.romHash(), hash)) {
+                    diagnostics.noRecentEntry();
+                    recentGameUnavailable(recent, "Recent game identity is unavailable.");
                     return;
                 }
+            } else if (recent != null && !recentHashMatches(recent.romHash(), hash)) {
+                recentGameUnavailable(recent,
+                        "That recent game has changed since it was last played.");
+                return;
             }
             StateStorageLayout layout = persistenceStore.layout(hash);
             // Preserve the currently paused session until the candidate has been positively
@@ -2157,6 +2294,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return true;
         }
         pendingBenchmarkArm = null;
+        benchmarkBootstrapReady = false;
+        benchmarkBootstrapSessionGeneration = 0L;
+        benchmarkBootstrapReadySeen.set(0L);
+        benchmarkBootstrapExpectedGeneration.set(0L);
         benchmarkScenarioCompletionEpoch++;
         benchmarkScenario.resetSession();
         diagnostics.invalidateSession();

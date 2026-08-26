@@ -51,6 +51,10 @@ public interface EventBus extends AutoCloseable {
 
         @Override
         public <E extends Event> void postAsync(E event) {
+            if (event instanceof SynchronousBorrowedEvent) {
+                throw new IllegalArgumentException(
+                        "Borrowed events can only be delivered synchronously");
+            }
         }
 
         @NotNull

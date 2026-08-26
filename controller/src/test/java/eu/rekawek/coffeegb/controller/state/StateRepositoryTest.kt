@@ -144,7 +144,7 @@ class StateRepositoryTest {
             StateDecodeReason.UNKNOWN_REQUIRED_SECTION to
                 fixture.plain.clone().also {
                   val diagnostic = sectionOffsets.last()
-                  writeU16(it, diagnostic, 4)
+                  writeU16(it, diagnostic, 5)
                   writeU16(it, diagnostic + 4, 1)
                   refreshEnvelopeChecksum(it)
                 },

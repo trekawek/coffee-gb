@@ -400,6 +400,11 @@ class BasicController private constructor(
   private var benchmarkGameplayScenarioReady = true
   private var benchmarkGameplayScenarioStopRequested = false
   private var benchmarkGameplayScenarioCompletedFrames = 0
+  /** True only after the generation-bound bootstrap transaction has been published. */
+  private var benchmarkBootstrapReadyPublished = false
+  /** Hosts must explicitly decide whether this generation has a gameplay preconditioning step. */
+  private var benchmarkGameplayScenarioRequirementDecided = false
+  private var benchmarkGameplayScenarioRequired = false
 
   private var debugTrackingEnabled = false
 
@@ -571,9 +576,28 @@ class BasicController private constructor(
       }
       setPaused(true)
     }
+    eventQueue.register<Controller.BenchmarkGameplayScenarioRequirementEvent> {
+      val currentGeneration = playbackSessionGeneration
+      if (!properties.overrides.benchmarkPolicyEnabled
+          || !benchmarkBootstrapReadyPublished
+          || benchmarkGameplayScenarioRequirementDecided
+          || session == null
+          || !isEffectivelyPaused()
+          || currentGeneration != it.sessionGeneration) {
+        return@register
+      }
+      benchmarkGameplayScenarioRequirementDecided = true
+      benchmarkGameplayScenarioRequired = it.required
+      benchmarkGameplayScenarioReady = !it.required
+    }
     eventQueue.register<Controller.BenchmarkGameplayScenarioStartEvent> {
       val currentGeneration = playbackSessionGeneration
       if (properties.overrides.benchmarkPolicyEnabled && session != null
+          && benchmarkBootstrapReadyPublished
+          && benchmarkGameplayScenarioRequirementDecided
+          && benchmarkGameplayScenarioRequired
+          && !benchmarkGameplayScenarioActive
+          && !benchmarkGameplayScenarioReady
           && isEffectivelyPaused() && currentGeneration == it.sessionGeneration) {
         benchmarkGameplayScenarioActive = true
         benchmarkGameplayScenarioExpectedFrames = it.expectedFrames
@@ -596,11 +620,26 @@ class BasicController private constructor(
       benchmarkGameplayScenarioCompletedFrames = it.completedFrames
       benchmarkGameplayScenarioStopRequested = true
     }
+    // Android uses this synchronous lane when a terminal bootstrap notification is duplicated or
+    // malformed.  Freeze before the host invalidates its generation so an active scenario cannot
+    // consume a queued Resume or execute another guest tick in the failure window.
+    eventBus.register<Controller.BenchmarkBootstrapAbortEvent> {
+      if (!properties.overrides.benchmarkPolicyEnabled
+          || Thread.currentThread() !== thread
+          || playbackSessionGeneration != it.sessionGeneration) {
+        return@register
+      }
+      benchmarkCoreFrozenGate.setFrozen(true)
+      benchmarkGameplayScenarioStopRequested = true
+      setPaused(true)
+    }
     eventQueue.register<Controller.BenchmarkArmEvent> {
       val currentSession = session
       val accepted = properties.overrides.benchmarkPolicyEnabled && !benchmarkArmed
           && currentSession != null && isEffectivelyPaused()
           && benchmarkGameplayScenarioReady
+          && benchmarkBootstrapReadyPublished
+          && benchmarkGameplayScenarioRequirementDecided
           && playbackSessionGeneration == it.sessionGeneration
       if (!accepted) {
         // A rejected arm must terminate the host's pending policy decision. It is deliberately
@@ -738,6 +777,18 @@ class BasicController private constructor(
       benchmarkAudioPolicyProcessed = true
     }
     eventQueue.register<Controller.ResumeEmulationEvent> {
+      if (!Controller.benchmarkResumeScenarioOrArmAllows(
+              properties.overrides.benchmarkPolicyEnabled,
+              benchmarkGameplayScenarioActive,
+              benchmarkArmed,
+          )
+          || !benchmarkBootstrapReadyPublished
+          || !benchmarkGameplayScenarioRequirementDecided
+          || (benchmarkGameplayScenarioRequired
+              && !benchmarkGameplayScenarioActive
+              && !benchmarkGameplayScenarioReady)) {
+        return@register
+      }
       if (properties.overrides.benchmarkPolicyEnabled && benchmarkCoreFrozenGate.getAsBoolean()) {
         // The 600th measured core boundary owns the terminal freeze.  A lifecycle/audio resume
         // cannot accidentally create an unmeasured 601st frame before the host collects SF data.
@@ -1045,6 +1096,7 @@ class BasicController private constructor(
         && selectedModeMatches
     if (audioRequestedAtBoundary && !selectedModeMatches) {
       sound.setPerformanceSystemMutedAudioCalendar(false)
+      currentSession.gameboy.disablePerformanceTelemetry()
       benchmarkAudioPolicyProcessed = true
       benchmarkAudioPolicyAccepted = false
       benchmarkAudioPolicyRequested = false
@@ -1065,6 +1117,10 @@ class BasicController private constructor(
     val frameSequencerCommits =
         sound.getPerformanceSystemMutedAudioCalendarFrameSequencerCommits()
     val droppedChannelTicks = sound.getPerformanceSystemMutedAudioCalendarDroppedChannelTicks()
+    // Sound OFF above materializes the final measured debt. Capture the complete immutable
+    // core telemetry only after that transition, then disable per-tick accounting before the
+    // synchronous event reaches Android and any re-entrant subscribers.
+    val coreResult = currentSession.gameboy.capturePerformanceTelemetrySnapshotAndDisable()
     // Publish the terminal ownership decision before notifying host consumers. A synchronous
     // subscriber must observe the frozen core, and cannot re-enter a measured tick while the
     // boundary event is being delivered.
@@ -1099,6 +1155,7 @@ class BasicController private constructor(
             apuWrites,
             frameSequencerCommits,
             droppedChannelTicks,
+            coreResult,
         ),
     )
     setPaused(true)
@@ -4429,6 +4486,76 @@ class BasicController private constructor(
     }
   }
 
+  /**
+   * Completes a benchmark session's core bootstrap while the session remains paused.
+   *
+   * The core's bootstrap gate makes each pending PERFORMANCE call scalar; using the public
+   * stop-aware seam here keeps that invariant local to the owner transaction and stops before any
+   * post-handoff tail. No controller frame, gameplay scenario, benchmark counter, or measurement
+   * boundary is entered until the terminal outcome is published.
+   */
+  private fun completeBenchmarkBootstrap(currentSession: Session): Boolean {
+    val generation = playbackSessionGeneration ?: return false
+    if (currentSession !== session || doStop) return false
+
+    val gameboy = currentSession.gameboy
+    var remaining = BENCHMARK_BOOTSTRAP_MAX_TICKS
+    while (!gameboy.isBootstrapReady()) {
+      if (doStop || currentSession !== session || playbackSessionGeneration != generation) {
+        return false
+      }
+      if (remaining <= 0L) {
+        throw IllegalStateException(
+            "Benchmark bootstrap did not become ready before its bounded scalar budget")
+      }
+      val batch = minOf(BENCHMARK_BOOTSTRAP_BATCH_TICKS.toLong(), remaining).toInt()
+      val executed =
+          gameboy.runTicksUntilStop(batch) {
+            doStop
+                || currentSession !== session
+                || playbackSessionGeneration != generation
+                || gameboy.isBootstrapReady()
+          }
+      remaining -= executed.toLong()
+      if (executed == 0 && !gameboy.isBootstrapReady()
+          && !doStop && currentSession === session
+          && playbackSessionGeneration == generation) {
+        throw IllegalStateException(
+            "Benchmark bootstrap made no progress while its outcome remained pending")
+      }
+    }
+
+    if (doStop || currentSession !== session || playbackSessionGeneration != generation) {
+      return false
+    }
+    val speedMode = gameboy.getSpeedMode()
+    val gpu = gameboy.getGpu()
+    val outcome = gameboy.getBootstrapOutcome()
+    if (!outcome.isReady()) {
+      throw IllegalStateException("Bootstrap reported ready without a terminal outcome")
+    }
+    // Set the publication fence before posting so a synchronous subscriber cannot observe a
+    // terminal event while the arm/scenario gates still look unready.
+    benchmarkBootstrapReadyPublished = true
+    // A host must explicitly declare whether a gameplay scenario is required. Until that decision
+    // arrives, both ARM and benchmark Resume remain rejected for this generation.
+    benchmarkGameplayScenarioReady = false
+    postSessionEventSafely(
+        currentSession,
+        Controller.BootstrapReadyEvent(
+            generation,
+            currentSession.config.bootstrapMode,
+            outcome,
+            gameboy.getHardwareProfile(),
+            gameboy.getHardwareProfileIdentity(),
+            gpu.isGbc(),
+            gpu.isDmgCompatMode(),
+            speedMode.getSpeedMode(),
+        ),
+    )
+    return true
+  }
+
   private fun start(
       openRequestId: Long? = null,
       allowAutosaveResume: Boolean = true,
@@ -4452,9 +4579,12 @@ class BasicController private constructor(
     benchmarkAudioPolicySessionGeneration = 0L
     benchmarkGameplayScenarioActive = false
     benchmarkGameplayScenarioExpectedFrames = 0
-    benchmarkGameplayScenarioReady = true
+    benchmarkGameplayScenarioReady = !properties.overrides.benchmarkPolicyEnabled
     benchmarkGameplayScenarioStopRequested = false
     benchmarkGameplayScenarioCompletedFrames = 0
+    benchmarkBootstrapReadyPublished = !properties.overrides.benchmarkPolicyEnabled
+    benchmarkGameplayScenarioRequirementDecided = !properties.overrides.benchmarkPolicyEnabled
+    benchmarkGameplayScenarioRequired = false
     debugPaused = false
     playbackSessionGeneration = SessionPresentationGeneration.next()
     pauseStateBeforeResume = null
@@ -4533,6 +4663,13 @@ class BasicController private constructor(
             openRequestId,
             playbackSessionGeneration,
         ))
+    if (properties.overrides.benchmarkPolicyEnabled
+        && !completeBenchmarkBootstrap(session)) {
+      // The owner was asked to stop or the session was superseded while the scalar bootstrap
+      // transaction was running. Do not publish presentation/arm state for a generation that no
+      // longer owns the machine; the committed session remains paused until teardown completes.
+      return
+    }
     postSessionEventSafely(
         session,
         Controller.SessionPresentationEvent(
@@ -4760,6 +4897,9 @@ class BasicController private constructor(
       postSessionEventSafely(session, Controller.EmulationStoppedEvent())
     }
     playbackSessionGeneration = null
+    benchmarkBootstrapReadyPublished = false
+    benchmarkGameplayScenarioRequirementDecided = false
+    benchmarkGameplayScenarioRequired = false
     stateContext = null
     pendingResume = null
     pendingSlotLoadAvailability = null
@@ -5421,6 +5561,12 @@ class BasicController private constructor(
     const val DEFAULT_TRACE_CAPACITY = 4096
 
     const val MAX_TRACE_READ_ENTRIES = 1024
+
+    /** Bounded owner-thread slices keep close/replacement cancellation responsive during NORMAL. */
+    const val BENCHMARK_BOOTSTRAP_BATCH_TICKS = 16_384
+
+    /** Matches the core FAST_FORWARD budget for malformed BIOS/cartridge combinations. */
+    const val BENCHMARK_BOOTSTRAP_MAX_TICKS = 40_000_000L
 
     val BREAKPOINT_KINDS: Set<DebugBreakpointKind> =
         EnumSet.of(

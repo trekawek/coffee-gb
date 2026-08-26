@@ -246,6 +246,44 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Subset of mode-2 epoch ticks committed by the allocation-free OAM transaction. */
     private transient long performanceEpochMode2BulkTicks;
 
+    /** Session-only measured scheduler telemetry, enabled by the benchmark ARM reset. */
+    private transient boolean performanceTelemetryEnabled;
+
+    /** Terminal benchmark snapshot; a frozen view remains stable while emulation continues. */
+    private transient PerformanceTelemetrySnapshot frozenPerformanceTelemetrySnapshot;
+
+    private transient long performanceTelemetryMasterTicks;
+
+    private transient long performanceTelemetryScalarTicks;
+
+    private transient long performanceTelemetryPhaseCount;
+
+    private transient long performanceTelemetryPhaseTicks;
+
+    private transient int performanceTelemetryPhaseMaxTicks;
+
+    private transient long performanceTelemetryHaltCount;
+
+    private transient long performanceTelemetryHaltTicks;
+
+    private transient int performanceTelemetryHaltMaxTicks;
+
+    private transient long performanceTelemetryLengthBucket0;
+
+    private transient long performanceTelemetryLengthBucket1;
+
+    private transient long performanceTelemetryLengthBucket2;
+
+    private transient long performanceTelemetryLengthBucket3;
+
+    private transient long performanceTelemetryLengthBucket4;
+
+    private transient long performanceTelemetrySpeed1Ticks;
+
+    private transient long performanceTelemetrySpeed2Ticks;
+
+    private transient long performanceTelemetrySpeedSwitchTicks;
+
     /** Raster transaction selected before the CPU observes its frozen peripheral view. */
     private transient PerformanceEpochPpuPlan performanceEpochPpuPlan =
             PerformanceEpochPpuPlan.NONE;
@@ -267,6 +305,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         MODE2_REPLAY
     }
 
+    private enum PerformanceTelemetryPacket {
+        PHASE,
+        HALT,
+        EPOCH,
+    }
+
     /** PPU commit selected for a normal-speed, phase-only PERFORMANCE packet. */
     private enum PerformancePhasePpuPlan {
         QUIET,
@@ -286,11 +330,27 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Session metadata; deliberately excluded from the emulated machine state. */
     private final ExecutionMode executionMode;
 
+    /** Bootstrap mode selected for this session; deliberately excluded from machine state. */
+    private final BootstrapMode bootstrapMode;
+
+    /**
+     * Session/bootstrap-cache metadata.  This is not part of the portable machine state: a
+     * machine snapshot contains the BIOS overlay itself, while a boot template carries this
+     * small outcome alongside that state.
+     */
+    private transient BootstrapOutcome bootstrapOutcome;
+
+    /** Guards against treating a BIOS release away from the cartridge entry point as authentic. */
+    private transient boolean bootstrapHandoffRejected;
+
     /** History replay keeps its service-free deterministic scheduler on the scalar path. */
     private final boolean debugHistoryReplay;
 
     public Gameboy(GameboyConfiguration configuration) {
         this.executionMode = Objects.requireNonNull(configuration.executionMode, "executionMode");
+        this.bootstrapMode = Objects.requireNonNull(configuration.bootstrapMode, "bootstrapMode");
+        this.bootstrapOutcome = bootstrapMode == BootstrapMode.SKIP
+                ? BootstrapOutcome.SKIPPED : BootstrapOutcome.PENDING;
         this.debugHistoryReplay = configuration.debugHistoryReplay;
         this.hardwareProfile = HardwareProfileRegistry.requireRegistered(configuration.hardwareProfile);
         if (configuration.bootstrapMode != BootstrapMode.SKIP
@@ -477,6 +537,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             if (configuration.bootCancellation.getAsBoolean()) {
                 throw new CancellationException("Boot cancelled");
             }
+            // Preserve the historical FAST_FORWARD constructor boundary: it stops as soon as
+            // the CPU reaches the cartridge entry point.  On some profiles the final FF50 write
+            // is still in flight at this boundary; the owner must then continue scalar ticks
+            // before exposing a PERFORMANCE-ready session.
             while (cpu.getRegisters().getPC() != 0x100 && limit-- > 0) {
                 tick();
                 // Controller ROM preparation may be superseded by a newer load request.
@@ -494,7 +558,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     statRegister.tick();
                 }
             }
-            bootTimedOut = cpu.getRegisters().getPC() != 0x100;
+            // PC=$0100 alone is not an authentic handoff. A malformed boot image can reach
+            // that address without releasing the BIOS overlay; treating it as ready would let
+            // PERFORMANCE bypass the scalar boot path and would poison a reusable cache entry.
+            bootTimedOut = bootstrapHandoffRejected || cpu.getRegisters().getPC() != 0x100;
+            if (!bootTimedOut && biosShadow.isBootFinished()) {
+                bootstrapOutcome = BootstrapOutcome.AUTHENTIC_HANDOFF;
+            }
         }
         if (bootTimedOut || configuration.bootstrapMode == BootstrapMode.SKIP) {
             // Some unlicensed mappers transform the header only while the console boot ROM is
@@ -508,6 +578,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // so the machine boots native-colour despite the dump's garbage flag byte
             applyPostBootState(configuration.rom.getGameboyColorFlag() == Rom.GameboyColorFlag.NON_CGB
                     && !cartridgeProperties.has(CartridgeProperties.Feature.DATEL_CGB_HEADER));
+            bootstrapOutcome = configuration.bootstrapMode == BootstrapMode.SKIP
+                    ? BootstrapOutcome.SKIPPED : BootstrapOutcome.TIMED_OUT_FALLBACK;
         }
         applyBootCompatibilityIfReady();
     }
@@ -543,7 +615,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (bootCompatibilityResolved) {
             return;
         }
+        // A BIOS FF50 write is necessary but not sufficient for an authentic handoff. Keep
+        // NORMAL/PERFORMANCE sessions scalar until the CPU reaches the cartridge entry point.
         if (!biosShadow.isBootFinished()) {
+            return;
+        }
+        if (cpu.getRegisters().getPC() != 0x100) {
+            if (bootstrapOutcome == BootstrapOutcome.PENDING) {
+                bootstrapHandoffRejected = true;
+            }
+            return;
+        }
+        if (bootstrapHandoffRejected) {
             return;
         }
         if (blankCgbBootTilePending) {
@@ -575,6 +658,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         bootCompatibilityResolved = true;
         gpu.setBootCompatibilityResolved(true);
+        if (bootstrapOutcome == BootstrapOutcome.PENDING) {
+            bootstrapOutcome = BootstrapOutcome.AUTHENTIC_HANDOFF;
+        }
     }
 
     /**
@@ -583,6 +669,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * hardware that pulses the console's reset line (the Datel Action Replay game launch).
      */
     private void applyPostBootState(boolean nonCgbCart) {
+        bootstrapHandoffRejected = false;
         speedMode.setDmgCompat(gbc && nonCgbCart);
         gpu.prepareForTick();
         biosShadow.setByte(0xff50, 1);
@@ -614,6 +701,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private void applyWarmReset() {
         nativeCgbScalarOwner = false;
+        boolean bootstrapWasPending = bootstrapOutcome == BootstrapOutcome.PENDING;
+        bootstrapHandoffRejected = false;
         // the boot ROM leaves the LCD running with the DMG-compatible defaults
         interruptManager.disableInterrupts(false);
         mmu.setByte(0xffff, 0x00);
@@ -626,6 +715,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         mmu.setByte(0xff4a, 0x00);
         mmu.setByte(0xff4b, 0x00);
         applyPostBootState(warmResetNonCgbCart);
+        // A cartridge reset can arrive while NORMAL bootstrap is still pending. It installs
+        // post-boot state without a BIOS handoff, so keep the session fail-closed rather than
+        // allowing the common PC=$0100 resolver to label it an authentic handoff.
+        if (bootstrapWasPending) {
+            bootstrapHandoffRejected = true;
+        }
     }
 
     public void init(EventBus eventBus, SerialEndpoint serialEndpoint, Console console) {
@@ -705,6 +800,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * @return true if there was a new frame emitted in this tick
      */
     public boolean tick() {
+        // The frame-600 display callback is synchronous and can return through the host before
+        // this method exits. Charge direct scalar ownership before any subsystem callback so the
+        // terminal hand-off belongs to the measured window visible in that callback.
+        accountPerformanceScalarTick();
         DebugInstrumentation instrumentation = debugInstrumentation;
         if (instrumentation != null) {
             instrumentation.onMasterTickStarted();
@@ -819,6 +918,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             throw new IllegalArgumentException("ticks must be non-negative");
         }
         if (executionMode == ExecutionMode.PERFORMANCE
+                && isBootstrapReady()
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -852,6 +952,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         Objects.requireNonNull(stop, "stop");
         if (executionMode == ExecutionMode.PERFORMANCE
+                && isBootstrapReady()
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -898,6 +999,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         Objects.requireNonNull(stop, "stop");
         if (executionMode == ExecutionMode.PERFORMANCE
+                && isBootstrapReady()
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -1262,6 +1364,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * materialization and the PERFORMANCE scanline-enable lifecycle.
      */
     private int tryPerformancePhaseOnlySpan(long remaining, int cpuSpanLimit) {
+        if (!isBootstrapReady()) {
+            return 0;
+        }
         // SGB's JOYP packet receiver has no tick-driven state. When its cached input
         // eligibility is false, the span cannot commit anyway; reject before walking the
         // relatively expensive timer/PPU/STAT horizons. Stable SGB sessions remain eligible
@@ -1351,6 +1456,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         tickPerformanceQuietSpan(span, ppuPlan, directRasterSpan, steadyRasterSpan);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
+        accountPerformancePacket(PerformanceTelemetryPacket.PHASE, span);
         return span;
     }
 
@@ -1369,7 +1475,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private boolean canContinueNativeCgbNegativeStatLease() {
-        if (!isNativeCgbPerformanceEpochTopology()) {
+        if (!isBootstrapReady() || !isNativeCgbPerformanceEpochTopology()) {
             return false;
         }
         Cpu.State state = cpu.getState();
@@ -1397,7 +1503,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     private boolean canStartPerformanceEpoch() {
-        return !warmResetRequested
+        return isBootstrapReady()
+                && !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
                 && debugInstrumentation == null
@@ -1414,7 +1521,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Stable physical-DMG topology; tick-local CPU, timer, raster and STAT guards follow. */
     private boolean canStartPhysicalDmgPerformanceEpoch() {
-        return !warmResetRequested
+        return isBootstrapReady()
+                && !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
                 && debugInstrumentation == null
@@ -1524,6 +1632,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochCount++;
         performanceEpochTicks += elapsed;
         performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+        accountPerformancePacket(PerformanceTelemetryPacket.EPOCH, elapsed);
         return elapsed;
     }
 
@@ -1585,11 +1694,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
         performanceBulkMaxTicks = Math.max(performanceBulkMaxTicks, span);
+        accountPerformancePacket(PerformanceTelemetryPacket.HALT, span);
         return span;
     }
 
     private boolean canStartNativeCgbSettledHaltSpan() {
-        return isNativeCgbPerformanceEpochTopology()
+        return isBootstrapReady()
+                && isNativeCgbPerformanceEpochTopology()
                 && !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
@@ -1708,6 +1819,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochCount++;
         performanceEpochTicks += elapsed;
         performanceEpochMaxTicks = Math.max(performanceEpochMaxTicks, elapsed);
+        accountPerformancePacket(PerformanceTelemetryPacket.EPOCH, elapsed);
         return elapsed;
     }
 
@@ -1803,6 +1915,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Selects the normal-speed settled-HALT lane for the current non-native topology. */
     private int tryPerformanceSettledHaltSpan(long remaining) {
+        if (!isBootstrapReady()) {
+            return 0;
+        }
         if (isCgbCompatibilityPerformanceTopology()) {
             return tryPerformanceSettledCgbCompatHaltSpan(remaining);
         }
@@ -1861,11 +1976,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (span > performanceBulkMaxTicks) {
             performanceBulkMaxTicks = span;
         }
+        accountPerformancePacket(PerformanceTelemetryPacket.HALT, span);
         return span;
     }
 
     private boolean canStartCgbCompatSettledHaltSpan() {
-        return isCgbCompatibilityPerformanceTopology()
+        return isBootstrapReady()
+                && isCgbCompatibilityPerformanceTopology()
                 && !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
@@ -1914,7 +2031,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * machine untouched and lets the ordinary PERFORMANCE scheduler handle the next scalar phase.
      */
     private int tryPerformanceSettledDmgHaltSpan(long remaining) {
-        if (remaining <= 0 || !cpu.performanceSettledHaltSpanEligible()) {
+        if (!isBootstrapReady()
+                || remaining <= 0 || !cpu.performanceSettledHaltSpanEligible()) {
             return 0;
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
@@ -1953,6 +2071,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (span > performanceBulkMaxTicks) {
             performanceBulkMaxTicks = span;
         }
+        accountPerformancePacket(PerformanceTelemetryPacket.HALT, span);
         return span;
     }
 
@@ -2030,8 +2149,87 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
     }
 
-    /** Resets the session-only PERFORMANCE bulk counters at benchmark arm. */
+    /** Accounts one direct scalar hand-off before entering the tick body. */
+    private void accountPerformanceScalarTick() {
+        if (!performanceTelemetryEnabled) {
+            return;
+        }
+        performanceTelemetryMasterTicks++;
+        performanceTelemetryScalarTicks++;
+        accountPerformanceSpeed(1);
+    }
+
+    /** Accounts one successful coarse PERFORMANCE packet exactly once. */
+    private void accountPerformancePacket(
+            PerformanceTelemetryPacket packet, int ticks) {
+        if (!performanceTelemetryEnabled || ticks <= 0) {
+            return;
+        }
+        performanceTelemetryMasterTicks += ticks;
+        accountPerformanceSpeed(ticks);
+        switch (packet) {
+            case PHASE -> {
+                performanceTelemetryPhaseCount++;
+                performanceTelemetryPhaseTicks += ticks;
+                performanceTelemetryPhaseMaxTicks =
+                        Math.max(performanceTelemetryPhaseMaxTicks, ticks);
+            }
+            case HALT -> {
+                performanceTelemetryHaltCount++;
+                performanceTelemetryHaltTicks += ticks;
+                performanceTelemetryHaltMaxTicks =
+                        Math.max(performanceTelemetryHaltMaxTicks, ticks);
+            }
+            case EPOCH -> {
+                // The legacy epoch fields retain their historical meaning and are exposed in the
+                // snapshot below.  The new packet count/ticks are intentionally kept separate so
+                // phase, HALT, and epoch ownership remains a disjoint partition.
+            }
+        }
+        switch (ticks <= 1 ? 0 : ticks <= 3 ? 1 : ticks <= 7 ? 2 : ticks <= 15 ? 3 : 4) {
+            case 0 -> performanceTelemetryLengthBucket0++;
+            case 1 -> performanceTelemetryLengthBucket1++;
+            case 2 -> performanceTelemetryLengthBucket2++;
+            case 3 -> performanceTelemetryLengthBucket3++;
+            default -> performanceTelemetryLengthBucket4++;
+        }
+    }
+
+    private void accountPerformanceSpeed(int ticks) {
+        if (speedSwitchTailTicks > 0 || cpu.isSpeedSwitching()) {
+            performanceTelemetrySpeedSwitchTicks += ticks;
+        } else if (speedMode.getSpeedMode() == 2) {
+            performanceTelemetrySpeed2Ticks += ticks;
+        } else {
+            performanceTelemetrySpeed1Ticks += ticks;
+        }
+    }
+
+    /** Resets the session-only PERFORMANCE counters at benchmark arm. */
     public void resetPerformanceBulkCounters() {
+        performanceTelemetryEnabled = true;
+        frozenPerformanceTelemetrySnapshot = null;
+        resetPerformanceTelemetryCounters();
+    }
+
+    /** Clears transient measured counters without enabling the PERFORMANCE accounting path. */
+    private void resetPerformanceTelemetryCounters() {
+        performanceTelemetryMasterTicks = 0L;
+        performanceTelemetryScalarTicks = 0L;
+        performanceTelemetryPhaseCount = 0L;
+        performanceTelemetryPhaseTicks = 0L;
+        performanceTelemetryPhaseMaxTicks = 0;
+        performanceTelemetryHaltCount = 0L;
+        performanceTelemetryHaltTicks = 0L;
+        performanceTelemetryHaltMaxTicks = 0;
+        performanceTelemetryLengthBucket0 = 0L;
+        performanceTelemetryLengthBucket1 = 0L;
+        performanceTelemetryLengthBucket2 = 0L;
+        performanceTelemetryLengthBucket3 = 0L;
+        performanceTelemetryLengthBucket4 = 0L;
+        performanceTelemetrySpeed1Ticks = 0L;
+        performanceTelemetrySpeed2Ticks = 0L;
+        performanceTelemetrySpeedSwitchTicks = 0L;
         performanceBulkSpanCount = 0L;
         performanceBulkTicks = 0L;
         performanceBulkMaxTicks = 0;
@@ -2043,6 +2241,90 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochMode2BulkTicks = 0L;
         performanceEpochPpuPlan = PerformanceEpochPpuPlan.NONE;
         cpu.resetPerformanceEpochTelemetry();
+        sound.resetPerformanceSystemMutedAudioCalendarCounters();
+        sgbDisplay.resetPerformanceCounters();
+    }
+
+    /** Immutable owner-thread snapshot used for the frame-600 benchmark core_result. */
+    public PerformanceTelemetrySnapshot getPerformanceTelemetrySnapshot() {
+        if (!performanceTelemetryEnabled && frozenPerformanceTelemetrySnapshot != null) {
+            return frozenPerformanceTelemetrySnapshot;
+        }
+        validatePerformanceTelemetryConsistency();
+        return new PerformanceTelemetrySnapshot(
+                performanceTelemetryMasterTicks,
+                performanceTelemetryScalarTicks,
+                performanceTelemetryPhaseCount,
+                performanceTelemetryPhaseTicks,
+                performanceTelemetryPhaseMaxTicks,
+                performanceTelemetryHaltCount,
+                performanceTelemetryHaltTicks,
+                performanceTelemetryHaltMaxTicks,
+                performanceEpochCount,
+                performanceEpochTicks,
+                performanceEpochMaxTicks,
+                performanceTelemetryLengthBucket0,
+                performanceTelemetryLengthBucket1,
+                performanceTelemetryLengthBucket2,
+                performanceTelemetryLengthBucket3,
+                performanceTelemetryLengthBucket4,
+                performanceTelemetrySpeed1Ticks,
+                performanceTelemetrySpeed2Ticks,
+                performanceTelemetrySpeedSwitchTicks,
+                performanceEpochRasterFastTicks,
+                Math.max(0L, performanceEpochMode2ReplayTicks
+                        - performanceEpochMode2BulkTicks),
+                performanceEpochMode2BulkTicks,
+                cpu.getPerformanceEpochSafeAccesses(),
+                cpu.getPerformanceEpochDirectRomReads(),
+                cpu.getPerformanceEpochTerminalReads(),
+                cpu.getPerformanceEpochTerminalWrites(),
+                sound.getPerformanceSystemMutedAudioCalendarSkippedTicks(),
+                sound.getPerformanceSystemMutedAudioCalendarZeroSampleSlots(),
+                sound.getPerformanceAudioMaterializations(),
+                sgbDisplay.getFrameArrayAllocations(),
+                sgbDisplay.getBorderRebuilds(),
+                sgbDisplay.getCenterPixels());
+    }
+
+    /**
+     * Checks the off-wire CPU accounting joins before exposing a measured snapshot.  The
+     * scheduler owns the epoch packet totals while Cpu owns its bus-access classes; allowing an
+     * inconsistent pair to escape would make a host-side core_result appear internally complete
+     * while silently dropping terminal reads/writes.  These fields are transient instrumentation,
+     * so a broken debug seam should fail the capture rather than alter portable machine state.
+     */
+    private void validatePerformanceTelemetryConsistency() {
+        if (cpu.getPerformanceEpochCount() != performanceEpochCount
+                || cpu.getPerformanceEpochTicks() != performanceEpochTicks) {
+            throw new IllegalStateException("CPU and Gameboy performance epoch totals diverged");
+        }
+        long terminalReads = cpu.getPerformanceEpochTerminalReads();
+        long terminalWrites = cpu.getPerformanceEpochTerminalWrites();
+        long terminalAccesses = cpu.getPerformanceEpochTerminalAccesses();
+        long accesses = cpu.getPerformanceEpochAccesses();
+        if (terminalReads < 0L || terminalWrites < 0L || terminalAccesses < 0L
+                || accesses < 0L || terminalReads > Long.MAX_VALUE - terminalWrites
+                || terminalReads + terminalWrites != terminalAccesses
+                || cpu.getPerformanceEpochSafeAccesses() > Long.MAX_VALUE - terminalAccesses
+                || cpu.getPerformanceEpochSafeAccesses() + terminalAccesses != accesses) {
+            throw new IllegalStateException("CPU performance access classes diverged");
+        }
+    }
+
+    /** Captures measured telemetry once and disables its per-tick accounting thereafter. */
+    public PerformanceTelemetrySnapshot capturePerformanceTelemetrySnapshotAndDisable() {
+        PerformanceTelemetrySnapshot snapshot = getPerformanceTelemetrySnapshot();
+        frozenPerformanceTelemetrySnapshot = snapshot;
+        performanceTelemetryEnabled = false;
+        return snapshot;
+    }
+
+    /** Disables session-only measured telemetry on abort, replacement, or restore. */
+    public void disablePerformanceTelemetry() {
+        performanceTelemetryEnabled = false;
+        frozenPerformanceTelemetrySnapshot = null;
+        resetPerformanceTelemetryCounters();
     }
 
     /** Number of all-subsystem PERFORMANCE bulk spans taken by the current session. */
@@ -2273,7 +2555,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (dma.requiresClockTick(dmaCpuClockPaused)) {
             dma.tick(dmaCpuClockPaused, halted);
         }
-        if (executionMode == ExecutionMode.PERFORMANCE) {
+        if (executionMode == ExecutionMode.PERFORMANCE && isBootstrapReady()) {
             sound.tickPerformanceBoundary(divReset);
         } else {
             sound.tick(divReset);
@@ -2295,6 +2577,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             hdma.advanceHblankRequest();
         }
         boolean performanceSteadyCursor = executionMode == ExecutionMode.PERFORMANCE
+                && isBootstrapReady()
                 && gpu.isPerformanceSteadyCursorActive();
         boolean performanceQuietRaster = performanceSteadyCursor
                 && gpu.isPerformanceSteadyTickQuiet();
@@ -2332,6 +2615,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      */
     private void tickCpuPerformanceAware() {
         if (executionMode != ExecutionMode.PERFORMANCE
+                || !isBootstrapReady()
                 || debugInstrumentation != null
                 || debugRetirementTrackingActive
                 || debugHistoryReplay) {
@@ -2907,6 +3191,68 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return executionMode;
     }
 
+    /**
+     * Returns the current session bootstrap outcome.  The value is metadata and is intentionally
+     * not part of the portable machine-state schema.
+     */
+    public BootstrapOutcome getBootstrapOutcome() {
+        return bootstrapOutcome;
+    }
+
+    /** Whether this session has completed (or deliberately skipped) bootstrap. */
+    public boolean isBootstrapReady() {
+        return bootstrapOutcome != null && bootstrapOutcome.isReady();
+    }
+
+    /**
+     * Restores detached bootstrap provenance after the emulated component state has been
+     * restored.
+     *
+     * <p>The outcome is deliberately not part of {@link GameboyState}; it belongs to the session
+     * bootstrap/cache boundary.  Callers restoring a detached state must therefore apply this
+     * seam only after the component graph is live.  Ready outcomes are accepted only when the
+     * graph describes a completed boot handoff (the BIOS is unmapped and all boot-compatibility
+     * work has settled).  A pending outcome is always
+     * fail-closed: if the BIOS is already unmapped, retain the rejection marker so a later tick
+     * cannot reinterpret an early FF50 release or warm reset as an authentic handoff.
+     *
+     * @param outcome exact bootstrap provenance captured with the detached state
+     * @throws IllegalArgumentException if the outcome and restored component state disagree
+     */
+    public void restoreDetachedStateSilently(
+            ComponentState<Gameboy> state,
+            BootstrapOutcome outcome) {
+        if (!(state instanceof GameboyState mem)) {
+            throw new IllegalArgumentException("Invalid detached Game Boy state");
+        }
+        if (outcome == null) {
+            throw new IllegalArgumentException("Bootstrap outcome is required");
+        }
+        withStateTimeSourceAccessSuppressed(() -> {
+            restoreMachineState(mem, true);
+            restoreBootstrapOutcome(outcome);
+            return null;
+        });
+    }
+
+    private void restoreBootstrapOutcome(BootstrapOutcome outcome) {
+        boolean biosFinished = biosShadow.isBootFinished();
+        if (outcome.isReady()) {
+            if (!biosFinished || !bootCompatibilityResolved) {
+                throw new IllegalArgumentException(
+                        "Ready bootstrap outcome does not match the restored machine state");
+            }
+            bootstrapHandoffRejected = false;
+        } else {
+            // Keep PENDING conservative even for a BIOS-disabled state.  This is the state
+            // produced by an early FF50 release and by a warm reset while boot was pending.
+            bootCompatibilityResolved = false;
+            gpu.setBootCompatibilityResolved(false);
+            bootstrapHandoffRejected = biosFinished;
+        }
+        bootstrapOutcome = outcome;
+    }
+
     /** @deprecated Use {@link #getHardwareProfile()}. */
     @Deprecated
     public GameboyType getGameboyType() {
@@ -3117,26 +3463,55 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Captures the authentic boot-ROM handoff for reuse by another machine with the same ROM
-     * and hardware configuration. Production boot templates are created without file-backed
-     * battery data; restoring one deliberately keeps the receiving cartridge's freshly loaded
-     * RAM, RTC and mapper state.
+     * Captures a reusable bootstrap state for another machine with the same ROM and hardware
+     * configuration. A pending state is intentionally accepted only at the historical
+     * FAST_FORWARD constructor boundary (PC=$0100 while the BIOS overlay is still mapped), so
+     * an arbitrary NORMAL in-progress boot can never be mistaken for a cacheable template.
+     * Production boot templates are created without file-backed battery data; restoring one
+     * deliberately keeps the receiving cartridge's freshly loaded RAM, RTC and mapper state.
      */
     public BootState saveBootState() {
-        return new BootState((GameboyState) captureState());
+        if (bootstrapOutcome == BootstrapOutcome.PENDING
+                && (bootstrapMode != BootstrapMode.FAST_FORWARD
+                || cpu.getRegisters().getPC() != 0x100
+                || biosShadow.isBootFinished()
+                || bootstrapHandoffRejected
+                || bootCompatibilityResolved)) {
+            throw new IllegalStateException(
+                    "Only a FAST_FORWARD state at the unreleased PC=$0100 BIOS boundary may be saved as pending");
+        }
+        return new BootState((GameboyState) captureState(), bootstrapOutcome, bootstrapMode);
     }
 
     public void restoreBootState(BootState bootState) {
         if (bootState == null) {
             throw new IllegalArgumentException("Boot state is required");
         }
+        if (bootState.bootstrapOutcome == BootstrapOutcome.PENDING
+                && bootState.bootstrapMode != BootstrapMode.FAST_FORWARD) {
+            throw new IllegalArgumentException(
+                    "Pending boot states can only be produced by FAST_FORWARD sessions");
+        }
         boolean previousRumble = isRumbleActive();
         restoreMachineState(bootState.state, false);
+        if (bootState.bootstrapOutcome == BootstrapOutcome.PENDING
+                && (biosShadow.isBootFinished()
+                || cpu.getRegisters().getPC() != 0x100
+                || bootstrapHandoffRejected
+                || bootCompatibilityResolved)) {
+            throw new IllegalArgumentException(
+                    "Pending boot state does not describe the unreleased PC=$0100 BIOS boundary");
+        }
+        restoreBootstrapOutcome(bootState.bootstrapOutcome);
         synchronizeRumbleOutput(previousRumble);
     }
 
     private void restoreMachineState(GameboyState mem, boolean restoreCartridge) {
+        // Telemetry is a benchmark-arm lease, not emulated state. A portable restore must not
+        // keep charging the old lease (or expose its counters) after the machine timeline jumps.
+        disablePerformanceTelemetry();
         nativeCgbScalarOwner = false;
+        bootstrapHandoffRejected = false;
         biosShadow.restoreState(mem.biosShadowMemento());
         if (restoreCartridge) {
             cartridge.restoreState(mem.cartridgeMemento());
@@ -3179,6 +3554,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !clearBootTilemapPending
                 && !clearCgbBootOamShadowPending;
         gpu.setBootCompatibilityResolved(bootCompatibilityResolved);
+        // Raw GameboyState/memento snapshots intentionally do not carry bootstrap provenance. A
+        // snapshot taken before the BIOS handoff must therefore re-open the performance gate on
+        // restore. Once the BIOS is gone, a PENDING receiver cannot tell an authentic handoff
+        // from an early FF50 release or a warm reset, so retain PENDING and latch the rejection.
+        // Detached StateFile restores apply their optional bootstrap sidecar immediately after
+        // this method; boot templates likewise restore their exact outcome after this boundary.
+        if (!biosShadow.isBootFinished()) {
+            bootstrapOutcome = BootstrapOutcome.PENDING;
+        } else if (bootstrapOutcome == BootstrapOutcome.PENDING) {
+            // Retain the fail-closed marker across the transient restore boundary. A later tick
+            // must not reinterpret a BIOS-disabled state created by an early FF50 write/reset as
+            // an authentic handoff.
+            bootstrapHandoffRejected = true;
+        }
     }
 
     /**
@@ -3300,13 +3689,188 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sgbBus.close();
     }
 
+    /**
+     * Immutable, session-only PERFORMANCE telemetry captured by the controller at frame 600.
+     * These values are deliberately not part of GameboyState or any portable save format. The
+     * scheduler counters form disjoint ownership partitions: scalar direct ticks, phase packets,
+     * settled-HALT packets, and CPU epochs. PPU/CPU/audio fields describe only the measured
+     * PERFORMANCE transactions and never expose ROM, title, or device identity.
+     */
+    public static final class PerformanceTelemetrySnapshot {
+
+        private final long schedulerMasterTicks;
+        private final long schedulerScalarTicks;
+        private final long schedulerPhaseCount;
+        private final long schedulerPhaseTicks;
+        private final int schedulerPhaseMaxTicks;
+        private final long schedulerHaltCount;
+        private final long schedulerHaltTicks;
+        private final int schedulerHaltMaxTicks;
+        private final long schedulerEpochCount;
+        private final long schedulerEpochTicks;
+        private final int schedulerEpochMaxTicks;
+        private final long schedulerLengthBucket0;
+        private final long schedulerLengthBucket1;
+        private final long schedulerLengthBucket2;
+        private final long schedulerLengthBucket3;
+        private final long schedulerLengthBucket4;
+        private final long schedulerSpeed1Ticks;
+        private final long schedulerSpeed2Ticks;
+        private final long schedulerSpeedSwitchTicks;
+        private final long schedulerPpuDirectTicks;
+        private final long schedulerPpuFallbackTicks;
+        private final long schedulerPpuFastTicks;
+        private final long schedulerCpuSafeTicks;
+        private final long schedulerCpuDirectRomTicks;
+        private final long schedulerCpuTerminalReadTicks;
+        private final long schedulerCpuTerminalWriteTicks;
+        private final long schedulerAudioBlockTicks;
+        private final long schedulerAudioSampleTicks;
+        private final long schedulerAudioMaterializations;
+        private final long schedulerSgbFrameArrayAllocations;
+        private final long schedulerSgbBorderRebuilds;
+        private final long schedulerSgbCenterPixels;
+
+        private PerformanceTelemetrySnapshot(
+                long schedulerMasterTicks,
+                long schedulerScalarTicks,
+                long schedulerPhaseCount,
+                long schedulerPhaseTicks,
+                int schedulerPhaseMaxTicks,
+                long schedulerHaltCount,
+                long schedulerHaltTicks,
+                int schedulerHaltMaxTicks,
+                long schedulerEpochCount,
+                long schedulerEpochTicks,
+                int schedulerEpochMaxTicks,
+                long schedulerLengthBucket0,
+                long schedulerLengthBucket1,
+                long schedulerLengthBucket2,
+                long schedulerLengthBucket3,
+                long schedulerLengthBucket4,
+                long schedulerSpeed1Ticks,
+                long schedulerSpeed2Ticks,
+                long schedulerSpeedSwitchTicks,
+                long schedulerPpuDirectTicks,
+                long schedulerPpuFallbackTicks,
+                long schedulerPpuFastTicks,
+                long schedulerCpuSafeTicks,
+                long schedulerCpuDirectRomTicks,
+                long schedulerCpuTerminalReadTicks,
+                long schedulerCpuTerminalWriteTicks,
+                long schedulerAudioBlockTicks,
+                long schedulerAudioSampleTicks,
+                long schedulerAudioMaterializations,
+                long schedulerSgbFrameArrayAllocations,
+                long schedulerSgbBorderRebuilds,
+                long schedulerSgbCenterPixels) {
+            this.schedulerMasterTicks = nonNegative(schedulerMasterTicks);
+            this.schedulerScalarTicks = nonNegative(schedulerScalarTicks);
+            this.schedulerPhaseCount = nonNegative(schedulerPhaseCount);
+            this.schedulerPhaseTicks = nonNegative(schedulerPhaseTicks);
+            this.schedulerPhaseMaxTicks = nonNegativeInt(schedulerPhaseMaxTicks);
+            this.schedulerHaltCount = nonNegative(schedulerHaltCount);
+            this.schedulerHaltTicks = nonNegative(schedulerHaltTicks);
+            this.schedulerHaltMaxTicks = nonNegativeInt(schedulerHaltMaxTicks);
+            this.schedulerEpochCount = nonNegative(schedulerEpochCount);
+            this.schedulerEpochTicks = nonNegative(schedulerEpochTicks);
+            this.schedulerEpochMaxTicks = nonNegativeInt(schedulerEpochMaxTicks);
+            this.schedulerLengthBucket0 = nonNegative(schedulerLengthBucket0);
+            this.schedulerLengthBucket1 = nonNegative(schedulerLengthBucket1);
+            this.schedulerLengthBucket2 = nonNegative(schedulerLengthBucket2);
+            this.schedulerLengthBucket3 = nonNegative(schedulerLengthBucket3);
+            this.schedulerLengthBucket4 = nonNegative(schedulerLengthBucket4);
+            this.schedulerSpeed1Ticks = nonNegative(schedulerSpeed1Ticks);
+            this.schedulerSpeed2Ticks = nonNegative(schedulerSpeed2Ticks);
+            this.schedulerSpeedSwitchTicks = nonNegative(schedulerSpeedSwitchTicks);
+            this.schedulerPpuDirectTicks = nonNegative(schedulerPpuDirectTicks);
+            this.schedulerPpuFallbackTicks = nonNegative(schedulerPpuFallbackTicks);
+            this.schedulerPpuFastTicks = nonNegative(schedulerPpuFastTicks);
+            this.schedulerCpuSafeTicks = nonNegative(schedulerCpuSafeTicks);
+            this.schedulerCpuDirectRomTicks = nonNegative(schedulerCpuDirectRomTicks);
+            this.schedulerCpuTerminalReadTicks = nonNegative(schedulerCpuTerminalReadTicks);
+            this.schedulerCpuTerminalWriteTicks = nonNegative(schedulerCpuTerminalWriteTicks);
+            this.schedulerAudioBlockTicks = nonNegative(schedulerAudioBlockTicks);
+            this.schedulerAudioSampleTicks = nonNegative(schedulerAudioSampleTicks);
+            this.schedulerAudioMaterializations = nonNegative(schedulerAudioMaterializations);
+            this.schedulerSgbFrameArrayAllocations = nonNegative(schedulerSgbFrameArrayAllocations);
+            this.schedulerSgbBorderRebuilds = nonNegative(schedulerSgbBorderRebuilds);
+            this.schedulerSgbCenterPixels = nonNegative(schedulerSgbCenterPixels);
+        }
+
+        private static long nonNegative(long value) {
+            if (value < 0L) {
+                throw new IllegalArgumentException("Performance telemetry value must be non-negative");
+            }
+            return value;
+        }
+
+        private static int nonNegativeInt(int value) {
+            if (value < 0) {
+                throw new IllegalArgumentException("Performance telemetry value must be non-negative");
+            }
+            return value;
+        }
+
+        public long getSchedulerMasterTicks() { return schedulerMasterTicks; }
+        public long getSchedulerScalarTicks() { return schedulerScalarTicks; }
+        public long getSchedulerPhaseCount() { return schedulerPhaseCount; }
+        public long getSchedulerPhaseTicks() { return schedulerPhaseTicks; }
+        public int getSchedulerPhaseMaxTicks() { return schedulerPhaseMaxTicks; }
+        public long getSchedulerHaltCount() { return schedulerHaltCount; }
+        public long getSchedulerHaltTicks() { return schedulerHaltTicks; }
+        public int getSchedulerHaltMaxTicks() { return schedulerHaltMaxTicks; }
+        public long getSchedulerEpochCount() { return schedulerEpochCount; }
+        public long getSchedulerEpochTicks() { return schedulerEpochTicks; }
+        public int getSchedulerEpochMaxTicks() { return schedulerEpochMaxTicks; }
+        public long getSchedulerLengthBucket0() { return schedulerLengthBucket0; }
+        public long getSchedulerLengthBucket1() { return schedulerLengthBucket1; }
+        public long getSchedulerLengthBucket2() { return schedulerLengthBucket2; }
+        public long getSchedulerLengthBucket3() { return schedulerLengthBucket3; }
+        public long getSchedulerLengthBucket4() { return schedulerLengthBucket4; }
+        public long getSchedulerSpeed1Ticks() { return schedulerSpeed1Ticks; }
+        public long getSchedulerSpeed2Ticks() { return schedulerSpeed2Ticks; }
+        public long getSchedulerSpeedSwitchTicks() { return schedulerSpeedSwitchTicks; }
+        public long getSchedulerPpuDirectTicks() { return schedulerPpuDirectTicks; }
+        public long getSchedulerPpuFallbackTicks() { return schedulerPpuFallbackTicks; }
+        public long getSchedulerPpuFastTicks() { return schedulerPpuFastTicks; }
+        public long getSchedulerCpuSafeTicks() { return schedulerCpuSafeTicks; }
+        public long getSchedulerCpuDirectRomTicks() { return schedulerCpuDirectRomTicks; }
+        public long getSchedulerCpuTerminalReadTicks() { return schedulerCpuTerminalReadTicks; }
+        public long getSchedulerCpuTerminalWriteTicks() { return schedulerCpuTerminalWriteTicks; }
+        public long getSchedulerAudioBlockTicks() { return schedulerAudioBlockTicks; }
+        public long getSchedulerAudioSampleTicks() { return schedulerAudioSampleTicks; }
+        public long getSchedulerAudioMaterializations() { return schedulerAudioMaterializations; }
+        public long getSchedulerSgbFrameArrayAllocations() {
+            return schedulerSgbFrameArrayAllocations;
+        }
+        public long getSchedulerSgbBorderRebuilds() { return schedulerSgbBorderRebuilds; }
+        public long getSchedulerSgbCenterPixels() { return schedulerSgbCenterPixels; }
+    }
+
     public static final class BootState {
 
         private final GameboyState state;
 
-        private BootState(GameboyState state) {
+        private final BootstrapOutcome bootstrapOutcome;
+
+        /** Mode that produced this state; only pending FAST_FORWARD states depend on it. */
+        private final BootstrapMode bootstrapMode;
+
+        private BootState(
+                GameboyState state,
+                BootstrapOutcome bootstrapOutcome,
+                BootstrapMode bootstrapMode) {
             this.state = state;
+            this.bootstrapOutcome = Objects.requireNonNull(bootstrapOutcome, "bootstrapOutcome");
+            this.bootstrapMode = Objects.requireNonNull(bootstrapMode, "bootstrapMode");
         }
+
+        /** Outcome observed when this reusable boot state was captured. */
+        public BootstrapOutcome getBootstrapOutcome() {
+            return bootstrapOutcome;
+        }
+
     }
 
     private record GameboyState(ComponentState<BiosShadow> biosShadowMemento, ComponentState<Cartridge> cartridgeMemento,
@@ -3350,6 +3914,39 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public enum BootstrapMode {
         NORMAL, FAST_FORWARD, SKIP,
+    }
+
+    /**
+     * Outcome of the session's bootstrap path.
+     *
+     * <p>This is session/cache metadata, not emulated hardware state.  In particular, a timed
+     * out FAST_FORWARD boot is deliberately distinguishable from an authentic BIOS handoff even
+     * though both leave the CPU at the cartridge entry point.</p>
+     */
+    public enum BootstrapOutcome {
+        /** Authentic or requested bootstrap work has not released the performance gate yet. */
+        PENDING(false),
+
+        /** The post-boot register policy was installed without running the BIOS. */
+        SKIPPED(true),
+
+        /** The BIOS disabled itself and handed control to the cartridge at {@code PC=$0100}. */
+        AUTHENTIC_HANDOFF(true),
+
+        /** FAST_FORWARD exhausted its bounded boot budget and installed the skip fallback. */
+        TIMED_OUT_FALLBACK(true);
+
+        private final boolean ready;
+
+        BootstrapOutcome(boolean ready) {
+            this.ready = ready;
+        }
+
+        /** Whether PERFORMANCE shortcuts may be enabled for this session. */
+        public boolean isReady() {
+            return ready;
+        }
+
     }
 
     public static class GameboyConfiguration {

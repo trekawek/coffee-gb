@@ -79,6 +79,94 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void measuredTelemetryJoinsAndFreezesAfterCapture() throws Exception {
+        try (Gameboy gameboy = nativeDoubleSpeedSession()) {
+            // The first call starts on the legacy normal-speed scheduler; establish native
+            // double speed before arming telemetry so the measured window is guaranteed to
+            // exercise the epoch lane.
+            gameboy.runTicks(160_000);
+            gameboy.runTicks(100_000);
+            assertEquals("test ROM did not enter CGB double speed", 2,
+                    gameboy.getSpeedMode().getSpeedMode());
+            gameboy.resetPerformanceBulkCounters();
+            gameboy.runTicks(260_000);
+
+            Gameboy.PerformanceTelemetrySnapshot measured =
+                    gameboy.getPerformanceTelemetrySnapshot();
+            assertEquals("measured master tick window", 260_000L,
+                    measured.getSchedulerMasterTicks());
+            assertTrue("measured window must contain a native epoch",
+                    measured.getSchedulerEpochCount() > 0L);
+            assertTrue("measured native epoch ticks must be nonzero",
+                    measured.getSchedulerEpochTicks() > 0L);
+            assertEquals("master tick ownership", measured.getSchedulerMasterTicks(),
+                    measured.getSchedulerScalarTicks()
+                            + measured.getSchedulerPhaseTicks()
+                            + measured.getSchedulerHaltTicks()
+                            + measured.getSchedulerEpochTicks());
+            assertEquals("speed ownership", measured.getSchedulerMasterTicks(),
+                    measured.getSchedulerSpeed1Ticks()
+                            + measured.getSchedulerSpeed2Ticks()
+                            + measured.getSchedulerSpeedSwitchTicks());
+            assertEquals("packet length ownership", measured.getSchedulerPhaseCount()
+                            + measured.getSchedulerHaltCount()
+                            + measured.getSchedulerEpochCount(),
+                    measured.getSchedulerLengthBucket0()
+                            + measured.getSchedulerLengthBucket1()
+                            + measured.getSchedulerLengthBucket2()
+                            + measured.getSchedulerLengthBucket3()
+                            + measured.getSchedulerLengthBucket4());
+            assertEquals("PPU epoch ownership", measured.getSchedulerEpochTicks(),
+                    measured.getSchedulerPpuDirectTicks()
+                            + measured.getSchedulerPpuFallbackTicks()
+                            + measured.getSchedulerPpuFastTicks());
+
+            Gameboy.PerformanceTelemetrySnapshot frozen =
+                    gameboy.capturePerformanceTelemetrySnapshotAndDisable();
+            assertTelemetryEquals(measured, frozen);
+            long legacyEpochCount = gameboy.getPerformanceEpochCount();
+            long legacyEpochTicks = gameboy.getPerformanceEpochTicks();
+            int postCaptureRuns = 0;
+            while (gameboy.getPerformanceEpochCount() == legacyEpochCount
+                    && postCaptureRuns++ < 64) {
+                gameboy.runTicks(4_096);
+            }
+            assertTrue("post-capture interval must exercise the legacy epoch counters",
+                    gameboy.getPerformanceEpochCount() > legacyEpochCount);
+            assertTrue("post-capture legacy epoch ticks must advance",
+                    gameboy.getPerformanceEpochTicks() > legacyEpochTicks);
+            assertTelemetryEquals(frozen, gameboy.getPerformanceTelemetrySnapshot());
+        }
+    }
+
+    private static void assertTelemetryEquals(
+            Gameboy.PerformanceTelemetrySnapshot expected,
+            Gameboy.PerformanceTelemetrySnapshot actual) {
+        assertEquals(expected.getSchedulerMasterTicks(), actual.getSchedulerMasterTicks());
+        assertEquals(expected.getSchedulerScalarTicks(), actual.getSchedulerScalarTicks());
+        assertEquals(expected.getSchedulerPhaseCount(), actual.getSchedulerPhaseCount());
+        assertEquals(expected.getSchedulerPhaseTicks(), actual.getSchedulerPhaseTicks());
+        assertEquals(expected.getSchedulerPhaseMaxTicks(), actual.getSchedulerPhaseMaxTicks());
+        assertEquals(expected.getSchedulerHaltCount(), actual.getSchedulerHaltCount());
+        assertEquals(expected.getSchedulerHaltTicks(), actual.getSchedulerHaltTicks());
+        assertEquals(expected.getSchedulerHaltMaxTicks(), actual.getSchedulerHaltMaxTicks());
+        assertEquals(expected.getSchedulerEpochCount(), actual.getSchedulerEpochCount());
+        assertEquals(expected.getSchedulerEpochTicks(), actual.getSchedulerEpochTicks());
+        assertEquals(expected.getSchedulerEpochMaxTicks(), actual.getSchedulerEpochMaxTicks());
+        assertEquals(expected.getSchedulerLengthBucket0(), actual.getSchedulerLengthBucket0());
+        assertEquals(expected.getSchedulerLengthBucket1(), actual.getSchedulerLengthBucket1());
+        assertEquals(expected.getSchedulerLengthBucket2(), actual.getSchedulerLengthBucket2());
+        assertEquals(expected.getSchedulerLengthBucket3(), actual.getSchedulerLengthBucket3());
+        assertEquals(expected.getSchedulerLengthBucket4(), actual.getSchedulerLengthBucket4());
+        assertEquals(expected.getSchedulerSpeed1Ticks(), actual.getSchedulerSpeed1Ticks());
+        assertEquals(expected.getSchedulerSpeed2Ticks(), actual.getSchedulerSpeed2Ticks());
+        assertEquals(expected.getSchedulerSpeedSwitchTicks(), actual.getSchedulerSpeedSwitchTicks());
+        assertEquals(expected.getSchedulerPpuDirectTicks(), actual.getSchedulerPpuDirectTicks());
+        assertEquals(expected.getSchedulerPpuFallbackTicks(), actual.getSchedulerPpuFallbackTicks());
+        assertEquals(expected.getSchedulerPpuFastTicks(), actual.getSchedulerPpuFastTicks());
+    }
+
+    @Test
     public void physicalDmgEntersEpochWhileCgbCompatibilityStaysLegacy() throws Exception {
         byte[] loop = new byte[0x8000];
         loop[0x100] = (byte) 0xc3;

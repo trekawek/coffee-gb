@@ -17,8 +17,12 @@ import android.view.Display;
 
 import eu.rekawek.coffeegb.controller.Controller;
 import eu.rekawek.coffeegb.core.ExecutionMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapOutcome;
+import eu.rekawek.coffeegb.core.Gameboy.PerformanceTelemetrySnapshot;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileIdentity;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -141,6 +145,11 @@ final class AndroidBenchmarkDiagnostics {
     private DiagnosticsOptions.EffectiveMode effectiveMode = DiagnosticsOptions.EffectiveMode.UNKNOWN;
     private ClockSpec effectiveClock;
     private boolean emulationStarted;
+    /** Authoritative terminal bootstrap metadata for the active benchmark generation. */
+    private boolean bootstrapReady;
+    private long bootstrapReadySessionGeneration;
+    private BootstrapMode requestedBootstrapMode = BootstrapMode.FAST_FORWARD;
+    private BootstrapOutcome bootstrapOutcome = BootstrapOutcome.PENDING;
     private EnvironmentSample environmentStart = EnvironmentSample.unavailable();
     private int environmentSampleCount;
     private int thermalWorst;
@@ -186,6 +195,9 @@ final class AndroidBenchmarkDiagnostics {
     private boolean systemAudioBadLatched;
     private int systemAudioLastFrame;
     private final SystemAudioViolationSink systemAudioViolationSink;
+    /** True only after a validated core_result has been emitted for this measurement window. */
+    private boolean coreResultEmitted;
+    private String coreResultId = "unknown";
 
     AndroidBenchmarkDiagnostics(DiagnosticsOptions options) {
         this(null, options, AndroidBenchmarkDiagnostics::logRecord,
@@ -255,11 +267,133 @@ final class AndroidBenchmarkDiagnostics {
     }
 
     /** Installs the app-persisted opaque selection nonce after the recent entry is selected. */
-    synchronized void setWorkloadNonce(String nonce) {
-        if (!enabled || nonce == null || !nonce.matches("[a-z0-9][a-z0-9._-]{0,63}")) {
-            return;
+    synchronized boolean setWorkloadNonce(String nonce) {
+        // Goal-matrix nonces are app-owned values read from the selected recent catalog entry.
+        // Host intent metadata may not seed or rewrite them.  Binding is one-shot for a session;
+        // a replacement must start a new diagnostics session before another nonce is accepted.
+        if (!enabled || nonce == null) {
+            return false;
         }
-        workloadNonce = nonce;
+        String normalized = nonce.trim().toLowerCase(java.util.Locale.ROOT);
+        if (goalMatrixConfigured()) {
+            if (!normalized.matches("[a-z0-9][a-z0-9._-]{15,63}")
+                    || "unknown".equals(normalized) || "invalid".equals(normalized)
+                    || !"unknown".equals(workloadNonce)) {
+                return false;
+            }
+            workloadNonce = normalized;
+            return true;
+        }
+        if (normalized.matches("[a-z0-9][a-z0-9._-]{0,63}")) {
+            workloadNonce = normalized;
+            return true;
+        }
+        return false;
+    }
+
+    /** True for both complete and deliberately incomplete goal-matrix workload contracts. */
+    private boolean benchmarkScenarioConfigured() {
+        return options.workloadSlot != null
+                || options.benchmarkScenario != DiagnosticsOptions.BenchmarkScenario.NONE;
+    }
+
+    private boolean goalMatrixConfigured() {
+        return options.goalMatrixContract();
+    }
+
+    private String scenarioId() {
+        if (options.workloadTimeline != null) {
+            return options.workloadTimeline.id();
+        }
+        return options.benchmarkScenario.externalValue();
+    }
+
+    private int scenarioCount() {
+        if (options.workloadTimeline != null) {
+            return options.workloadTimeline.endpointFrame();
+        }
+        switch (options.benchmarkScenario) {
+            case DMG_ACTION_V1:
+                return 313;
+            case CGB_ACTION_V1:
+                return 923;
+            default:
+                return 0;
+        }
+    }
+
+    private String expectedProfile() {
+        if (options.cellId != null) {
+            BenchmarkWorkload.Cell cell = BenchmarkWorkload.Cell.fromExternalValue(options.cellId);
+            if (cell != null) {
+                return cell.effectiveProfile().externalValue();
+            }
+        }
+        return "unknown";
+    }
+
+    /**
+     * Maps the core's revision-specific effective-mode labels onto the four goal-matrix profile
+     * tokens.  In particular, both CGB revision compatibility labels are one canonical
+     * {@code cgb-compat} profile in the matrix; leaving the internal {@code cgb-dmg-compat}
+     * spelling on the wire would make a valid D compatibility cell unparsable.
+     */
+    private String effectiveProfile() {
+        return effectiveProfileFor(effectiveMode);
+    }
+
+    private String effectiveProfileFor(DiagnosticsOptions.EffectiveMode mode) {
+        if (!goalMatrixConfigured()) {
+            return mode.externalValue();
+        }
+        switch (mode) {
+            case DMG:
+            case MGB:
+                return BenchmarkWorkload.EffectiveProfile.DMG.externalValue();
+            case CGB_NATIVE:
+            case CGB0_NATIVE:
+                return BenchmarkWorkload.EffectiveProfile.CGB_NATIVE.externalValue();
+            case CGB_DMG_COMPAT:
+            case CGB0_DMG_COMPAT:
+                return BenchmarkWorkload.EffectiveProfile.CGB_COMPAT.externalValue();
+            case SGB:
+            case SGB2:
+                return BenchmarkWorkload.EffectiveProfile.SGB.externalValue();
+            default:
+                return effectiveMode.externalValue();
+        }
+    }
+
+    private String workloadMatrixFields() {
+        return "matrix_version=" + options.matrixVersion
+                + " cell_id=" + options.cellId
+                + " workload_slot=" + (options.workloadSlot == null
+                        ? "unknown" : options.workloadSlot.externalValue())
+                + " recent_slot=" + options.recentSlot
+                + " scenario_id=" + scenarioId()
+                + " scenario_count=" + scenarioCount()
+                + " expected_profile=" + expectedProfile()
+                + " effective_profile=" + effectiveProfile();
+    }
+
+    /** Minimal identity shared by strict goal-matrix records; no artifact or cartridge metadata. */
+    private String goalMatrixIdentityFields() {
+        return "matrix_version=" + options.matrixVersion
+                + " cell_id=" + options.cellId
+                + " workload_slot=" + options.workloadSlot.externalValue()
+                + " workload_nonce=" + workloadNonce
+                + " scenario_id=" + scenarioId()
+                + " scenario_count=" + scenarioCount()
+                + " expected_profile=" + expectedProfile()
+                + " effective_profile=" + effectiveProfile()
+                + " requested_hardware=" + options.hardware.externalValue()
+                + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode)
+                + " pair_id=" + options.pairId
+                + " matrix_block=" + options.matrixBlock
+                + " row_order=" + options.rowOrder
+                + " recent_slot=" + options.recentSlot
+                + " run_side=" + options.runSide.externalValue()
+                + " session_generation=" + activeSessionGeneration;
     }
 
     /** Returns whether the host may issue the one-shot compositor-baseline arm action. */
@@ -646,6 +780,20 @@ final class AndroidBenchmarkDiagnostics {
         benchmarkAudioApuWrites = event.getBenchmarkAudioApuWrites();
         benchmarkAudioFrameSequencerCommits = event.getBenchmarkAudioFrameSequencerCommits();
         benchmarkAudioDroppedChannelTicks = event.getBenchmarkAudioDroppedChannelTicks();
+        if (goalMatrixConfigured()) {
+            PerformanceTelemetrySnapshot snapshot = event.getCoreResult();
+            if (!validCoreResult(snapshot)) {
+                // A goal run cannot be accepted on host-side speed/epoch evidence alone.  The
+                // controller's immutable frame-600 snapshot is the measured core_result source;
+                // missing or inconsistent partitions suppress both core_result and final_result.
+                measurementArmed = false;
+                phase = Phase.CORE_FROZEN;
+                return;
+            }
+            coreResultId = goalCoreResultId();
+            recordCoreResult(snapshot, coreResultId);
+            coreResultEmitted = true;
+        }
         record("event=speed_sample frame=600 effective_gbc=" + event.getEffectiveGbc()
                 + " effective_dmg_compat=" + event.getEffectiveDmgCompat()
                 + " speed_mode_final=" + speedModeFinal + " speed_mode_sample=frame_600"
@@ -684,6 +832,186 @@ final class AndroidBenchmarkDiagnostics {
         emitFinalResult();
     }
 
+    private boolean validCoreResult(PerformanceTelemetrySnapshot snapshot) {
+        if (snapshot == null
+                || snapshot.getSchedulerMasterTicks() != 42_134_400L
+                || !sumsTo(42_134_400L, snapshot.getSchedulerScalarTicks(),
+                snapshot.getSchedulerPhaseTicks(), snapshot.getSchedulerHaltTicks(),
+                snapshot.getSchedulerEpochTicks())
+                || !sumsTo(42_134_400L, snapshot.getSchedulerSpeed1Ticks(),
+                snapshot.getSchedulerSpeed2Ticks(), snapshot.getSchedulerSpeedSwitchTicks())) {
+            return false;
+        }
+        // Only native CGB cells may enter double speed.  A legacy, compatibility, or SGB
+        // result that merely balances its speed counters can otherwise masquerade as the
+        // requested hardware profile while still summing to the measured tick budget.
+        if (!BenchmarkWorkload.EffectiveProfile.CGB_NATIVE.externalValue().equals(expectedProfile())
+                && (snapshot.getSchedulerSpeed1Ticks() != 42_134_400L
+                || snapshot.getSchedulerSpeed2Ticks() != 0L
+                || snapshot.getSchedulerSpeedSwitchTicks() != 0L)) {
+            return false;
+        }
+        long packetCount = safeAdd(snapshot.getSchedulerPhaseCount(),
+                snapshot.getSchedulerHaltCount());
+        if (packetCount < 0L) {
+            return false;
+        }
+        packetCount = safeAdd(packetCount, snapshot.getSchedulerEpochCount());
+        long packetTicks = snapshot.getSchedulerScalarTicks() >= 0L
+                && snapshot.getSchedulerScalarTicks() <= 42_134_400L
+                ? 42_134_400L - snapshot.getSchedulerScalarTicks() : -1L;
+        if (packetCount < 0L || packetTicks < 0L || packetCount > packetTicks) {
+            return false;
+        }
+        if (!sumsTo(packetCount, snapshot.getSchedulerLengthBucket0(),
+                snapshot.getSchedulerLengthBucket1(), snapshot.getSchedulerLengthBucket2(),
+                snapshot.getSchedulerLengthBucket3(), snapshot.getSchedulerLengthBucket4())) {
+            return false;
+        }
+        if (!validPacketClass(snapshot.getSchedulerPhaseCount(),
+                snapshot.getSchedulerPhaseTicks(), snapshot.getSchedulerPhaseMaxTicks())
+                || !validPacketClass(snapshot.getSchedulerHaltCount(),
+                snapshot.getSchedulerHaltTicks(), snapshot.getSchedulerHaltMaxTicks())
+                || !validPacketClass(snapshot.getSchedulerEpochCount(),
+                snapshot.getSchedulerEpochTicks(), snapshot.getSchedulerEpochMaxTicks())) {
+            return false;
+        }
+        long weightedMinimum = weightedPacketTicks(snapshot.getSchedulerLengthBucket0(),
+                snapshot.getSchedulerLengthBucket1(), snapshot.getSchedulerLengthBucket2(),
+                snapshot.getSchedulerLengthBucket3(), snapshot.getSchedulerLengthBucket4(), false);
+        long weightedMaximum = weightedPacketTicks(snapshot.getSchedulerLengthBucket0(),
+                snapshot.getSchedulerLengthBucket1(), snapshot.getSchedulerLengthBucket2(),
+                snapshot.getSchedulerLengthBucket3(), snapshot.getSchedulerLengthBucket4(), true);
+        if (weightedMinimum < 0L || weightedMaximum < 0L
+                || packetTicks < weightedMinimum || packetTicks > weightedMaximum
+                || !sumsTo(snapshot.getSchedulerEpochTicks(), snapshot.getSchedulerPpuDirectTicks(),
+                snapshot.getSchedulerPpuFallbackTicks(), snapshot.getSchedulerPpuFastTicks())) {
+            return false;
+        }
+        long expectedAudioSlots = "sgb".equals(expectedProfile()) ? 3_830_400L : 766_080L;
+        if (snapshot.getSchedulerAudioBlockTicks() != 42_134_400L
+                || snapshot.getSchedulerAudioSampleTicks() != expectedAudioSlots
+                || snapshot.getSchedulerAudioMaterializations() <= 0L) {
+            return false;
+        }
+        if ("sgb".equals(expectedProfile())) {
+            // The parent is an explicit one-array-per-frame control artifact; the candidate is
+            // the leased-buffer implementation.  Binding the expected count to the authenticated
+            // side prevents an identical optimized APK pair from posing as the allocation A/B.
+            long expectedAllocations = options.runSide == DiagnosticsOptions.RunSide.PARENT
+                    ? FINAL_FRAME : 0L;
+            return snapshot.getSchedulerSgbFrameArrayAllocations() == expectedAllocations
+                    && snapshot.getSchedulerSgbBorderRebuilds() >= 0L
+                    && snapshot.getSchedulerSgbBorderRebuilds() <= FINAL_FRAME
+                    && snapshot.getSchedulerSgbCenterPixels() == 13_824_000L;
+        }
+        return snapshot.getSchedulerSgbFrameArrayAllocations() == 0L
+                && snapshot.getSchedulerSgbBorderRebuilds() == 0L
+                && snapshot.getSchedulerSgbCenterPixels() == 0L;
+    }
+
+    private static boolean sumsTo(long expected, long... values) {
+        if (expected < 0L) {
+            return false;
+        }
+        long remaining = expected;
+        for (long value : values) {
+            if (value < 0L || value > remaining) {
+                return false;
+            }
+            remaining -= value;
+        }
+        return remaining == 0L;
+    }
+
+    private static long safeAdd(long first, long second) {
+        return first < 0L || second < 0L || first > Long.MAX_VALUE - second
+                ? -1L : first + second;
+    }
+
+    private static boolean validPacketClass(long count, long ticks, long max) {
+        if (count < 0L || ticks < 0L || max < 0L || max > 54L) {
+            return false;
+        }
+        if (count == 0L) {
+            return ticks == 0L && max == 0L;
+        }
+        return ticks >= count && max >= 1L && max <= ticks;
+    }
+
+    private static long weightedPacketTicks(long bucket0, long bucket1, long bucket2,
+            long bucket3, long bucket4, boolean maximum) {
+        long[] weights = maximum ? new long[]{1L, 3L, 7L, 15L, 54L}
+                : new long[]{1L, 2L, 4L, 8L, 16L};
+        long[] buckets = {bucket0, bucket1, bucket2, bucket3, bucket4};
+        long result = 0L;
+        for (int index = 0; index < buckets.length; index++) {
+            long bucket = buckets[index];
+            if (bucket < 0L || bucket > Long.MAX_VALUE / weights[index]) {
+                return -1L;
+            }
+            long contribution = bucket * weights[index];
+            if (result > Long.MAX_VALUE - contribution) {
+                return -1L;
+            }
+            result += contribution;
+        }
+        return result;
+    }
+
+    private void recordCoreResult(PerformanceTelemetrySnapshot snapshot, String resultId) {
+        StringBuilder result = new StringBuilder("event=core_result ");
+        result.append(goalMatrixIdentityFields())
+                .append(" core_result_id=").append(resultId)
+                .append(" frame=600")
+                .append(" scheduler_master_ticks=").append(snapshot.getSchedulerMasterTicks())
+                .append(" scheduler_scalar_ticks=").append(snapshot.getSchedulerScalarTicks())
+                .append(" scheduler_phase_count=").append(snapshot.getSchedulerPhaseCount())
+                .append(" scheduler_phase_ticks=").append(snapshot.getSchedulerPhaseTicks())
+                .append(" scheduler_phase_max_ticks=").append(snapshot.getSchedulerPhaseMaxTicks())
+                .append(" scheduler_halt_count=").append(snapshot.getSchedulerHaltCount())
+                .append(" scheduler_halt_ticks=").append(snapshot.getSchedulerHaltTicks())
+                .append(" scheduler_halt_max_ticks=").append(snapshot.getSchedulerHaltMaxTicks())
+                .append(" scheduler_epoch_count=").append(snapshot.getSchedulerEpochCount())
+                .append(" scheduler_epoch_ticks=").append(snapshot.getSchedulerEpochTicks())
+                .append(" scheduler_epoch_max_ticks=").append(snapshot.getSchedulerEpochMaxTicks())
+                .append(" scheduler_length_bucket_0=").append(snapshot.getSchedulerLengthBucket0())
+                .append(" scheduler_length_bucket_1=").append(snapshot.getSchedulerLengthBucket1())
+                .append(" scheduler_length_bucket_2=").append(snapshot.getSchedulerLengthBucket2())
+                .append(" scheduler_length_bucket_3=").append(snapshot.getSchedulerLengthBucket3())
+                .append(" scheduler_length_bucket_4=").append(snapshot.getSchedulerLengthBucket4())
+                .append(" scheduler_speed1_ticks=").append(snapshot.getSchedulerSpeed1Ticks())
+                .append(" scheduler_speed2_ticks=").append(snapshot.getSchedulerSpeed2Ticks())
+                .append(" scheduler_speed_switch_ticks=")
+                .append(snapshot.getSchedulerSpeedSwitchTicks())
+                .append(" scheduler_ppu_direct_ticks=")
+                .append(snapshot.getSchedulerPpuDirectTicks())
+                .append(" scheduler_ppu_fallback_ticks=")
+                .append(snapshot.getSchedulerPpuFallbackTicks())
+                .append(" scheduler_ppu_fast_ticks=")
+                .append(snapshot.getSchedulerPpuFastTicks())
+                .append(" scheduler_cpu_safe_accesses=").append(snapshot.getSchedulerCpuSafeTicks())
+                .append(" scheduler_cpu_direct_rom_reads=")
+                .append(snapshot.getSchedulerCpuDirectRomTicks())
+                .append(" scheduler_cpu_terminal_reads=")
+                .append(snapshot.getSchedulerCpuTerminalReadTicks())
+                .append(" scheduler_cpu_terminal_writes=")
+                .append(snapshot.getSchedulerCpuTerminalWriteTicks())
+                .append(" scheduler_audio_skipped_ticks=")
+                .append(snapshot.getSchedulerAudioBlockTicks())
+                .append(" scheduler_audio_zero_sample_slots=")
+                .append(snapshot.getSchedulerAudioSampleTicks())
+                .append(" scheduler_audio_materializations=")
+                .append(snapshot.getSchedulerAudioMaterializations())
+                .append(" scheduler_sgb_frame_array_allocations=")
+                .append(snapshot.getSchedulerSgbFrameArrayAllocations())
+                .append(" scheduler_sgb_border_rebuilds=")
+                .append(snapshot.getSchedulerSgbBorderRebuilds())
+                .append(" scheduler_sgb_center_pixels=")
+                .append(snapshot.getSchedulerSgbCenterPixels());
+        record(result.toString());
+    }
+
     synchronized void sessionLaunch() {
         if (!enabled) {
             return;
@@ -713,6 +1041,8 @@ final class AndroidBenchmarkDiagnostics {
         lateFrames = 0L;
         corruptFrames = 0L;
         finalResultEmitted = false;
+        coreResultEmitted = false;
+        coreResultId = "unknown";
         benchmarkDrainSuccess = false;
         warmupComplete = false;
         measurementArmed = false;
@@ -723,7 +1053,9 @@ final class AndroidBenchmarkDiagnostics {
         audioTerminalStats = null;
         audioTerminalOutputIdentity = 0L;
         audioTerminalQueueIdentity = 0L;
-        workloadNonce = "unknown";
+        // Preserve an explicitly host-assigned nonce; a recent-catalog launch may replace it
+        // with the persisted slot nonce immediately before materialization.
+        workloadNonce = options.workloadNonce;
         liveInputMutations = 0L;
         profile = null;
         effectiveGbc = null;
@@ -732,6 +1064,10 @@ final class AndroidBenchmarkDiagnostics {
         effectiveMode = DiagnosticsOptions.EffectiveMode.UNKNOWN;
         effectiveClock = null;
         emulationStarted = false;
+        bootstrapReady = false;
+        bootstrapReadySessionGeneration = 0L;
+        requestedBootstrapMode = options.bootstrapMode;
+        bootstrapOutcome = BootstrapOutcome.PENDING;
         environmentStart = EnvironmentSample.unavailable();
         environmentSampleCount = 0;
         thermalWorst = UNKNOWN;
@@ -814,9 +1150,127 @@ final class AndroidBenchmarkDiagnostics {
                 + " effective_gbc=" + valueOrUnknown(effectiveGbc)
                 + " effective_dmg_compat=" + valueOrUnknown(effectiveDmgCompat)
                 + " effective_mode=" + effectiveMode.externalValue()
+                + " " + workloadMatrixFields()
                 + " speed_mode_initial=" + valueOrUnknown(effectiveSpeedMode)
                 + " speed_mode_sample=boot_resolved"
                 + " " + clockFields());
+    }
+
+    /**
+     * Accepts the generation-bound terminal bootstrap transaction.  The early hardware-profile
+     * event is useful for frame routing, but it is not allowed to authorize a benchmark.  This
+     * method is the only diagnostics seam that promotes a benchmark session to an authoritative
+     * post-bootstrap hardware/effective-mode identity.
+     */
+    synchronized boolean acceptBootstrapReady(Controller.BootstrapReadyEvent next) {
+        if (!enabled || next == null) {
+            return false;
+        }
+        String reason = bootstrapRejectionReason(next);
+        if (reason != null) {
+            if (goalMatrixConfigured()) {
+                recordBootstrapResult(next, false, reason);
+            }
+            return false;
+        }
+        profile = next.getProfile();
+        effectiveGbc = next.getEffectiveGbc();
+        effectiveDmgCompat = next.getEffectiveDmgCompat();
+        effectiveSpeedMode = next.getEffectiveSpeedMode();
+        effectiveMode = DiagnosticsOptions.EffectiveMode.classify(
+                profile, effectiveGbc, effectiveDmgCompat);
+        effectiveClock = next.getIdentity().clockSpec();
+        requestedBootstrapMode = next.getRequestedBootstrapMode();
+        bootstrapOutcome = next.getBootstrapOutcome();
+        bootstrapReady = true;
+        bootstrapReadySessionGeneration = next.getSessionGeneration();
+        recordBootstrapResult(next, true, null);
+        return true;
+    }
+
+    private String bootstrapRejectionReason(Controller.BootstrapReadyEvent next) {
+        if (next.getSessionGeneration() <= 0L
+                || next.getSessionGeneration() != activeSessionGeneration) {
+            return "stale_session";
+        }
+        if (bootstrapReady) {
+            return "duplicate";
+        }
+        if (next.getRequestedBootstrapMode() != options.bootstrapMode) {
+            return "requested_bootstrap_mismatch";
+        }
+        BootstrapOutcome outcome = next.getBootstrapOutcome();
+        boolean expectedOutcome = options.bootstrapMode == BootstrapMode.SKIP
+                ? outcome == BootstrapOutcome.SKIPPED
+                : outcome == BootstrapOutcome.AUTHENTIC_HANDOFF;
+        if (!expectedOutcome) {
+            return "outcome_not_authentic";
+        }
+        HardwareProfile nextProfile = next.getProfile();
+        HardwareProfileIdentity identity = next.getIdentity();
+        if (nextProfile == null || identity == null
+                || !nextProfile.id().equals(identity.profileId())
+                || !nextProfile.clockSpec().equals(identity.clockSpec())) {
+            return "profile_identity_mismatch";
+        }
+        HardwareProfile requestedProfile = options.hardware.profileOverride();
+        if (requestedProfile != null && !requestedProfile.id().equals(nextProfile.id())) {
+            return "requested_hardware_mismatch";
+        }
+        if (next.getEffectiveSpeedMode() != 1) {
+            return "effective_speed_mismatch";
+        }
+        DiagnosticsOptions.EffectiveMode nextMode = DiagnosticsOptions.EffectiveMode.classify(
+                nextProfile, next.getEffectiveGbc(), next.getEffectiveDmgCompat());
+        if (nextMode == DiagnosticsOptions.EffectiveMode.UNKNOWN) {
+            return "effective_mode_mismatch";
+        }
+        if (goalMatrixConfigured()
+                && !expectedProfile().equals(effectiveProfileFor(nextMode))) {
+            return "effective_profile_mismatch";
+        }
+        return null;
+    }
+
+    private void recordBootstrapResult(Controller.BootstrapReadyEvent next, boolean accepted,
+            String reason) {
+        StringBuilder result = new StringBuilder("event=boot_result ");
+        if (goalMatrixConfigured()) {
+            result.append(goalMatrixIdentityFields());
+        } else {
+            result.append("pair_id=").append(options.pairId)
+                    .append(" matrix_block=").append(options.matrixBlock)
+                    .append(" row_order=").append(options.rowOrder)
+                    .append(" run_side=").append(options.runSide.externalValue())
+                    .append(" requested_hardware=").append(options.hardware.externalValue())
+                    .append(" execution_mode=")
+                    .append(DiagnosticsOptions.executionModeValue(options.executionMode));
+        }
+        if (!goalMatrixConfigured()) {
+            result.append(" session_generation=").append(next.getSessionGeneration());
+        }
+        result.append(" requested_bootstrap=")
+                .append(DiagnosticsOptions.bootstrapModeValue(next.getRequestedBootstrapMode()))
+                .append(" bootstrap_outcome=")
+                .append(next.getBootstrapOutcome().name().toLowerCase(java.util.Locale.ROOT))
+                .append(" profile=")
+                .append(next.getProfile() == null ? "unknown" : next.getProfile().id())
+                .append(" effective_gbc=").append(next.getEffectiveGbc())
+                .append(" effective_dmg_compat=").append(next.getEffectiveDmgCompat())
+                .append(" effective_speed_mode=").append(next.getEffectiveSpeedMode())
+                .append(" accepted=").append(accepted);
+        if (reason != null) {
+            result.append(" reason=").append(reason);
+        }
+        record(result.toString());
+    }
+
+    synchronized boolean bootstrapReadyForTesting() {
+        return bootstrapReady;
+    }
+
+    synchronized BootstrapOutcome bootstrapOutcomeForTesting() {
+        return bootstrapOutcome;
     }
 
     /**
@@ -837,15 +1291,19 @@ final class AndroidBenchmarkDiagnostics {
             return;
         }
         activeSessionGeneration = sessionGeneration;
+        bootstrapReady = false;
+        bootstrapReadySessionGeneration = 0L;
+        requestedBootstrapMode = options.bootstrapMode;
+        bootstrapOutcome = BootstrapOutcome.PENDING;
         audioSessionBaseline = sessionBaseline == null
                 ? AndroidAudioSink.AudioBaseline.unavailable() : sessionBaseline;
         benchmarkGeneration = 0L;
         measurementArmed = false;
-        scenarioExpectedFrames = options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE
+        scenarioExpectedFrames = !benchmarkScenarioConfigured()
                 ? 0 : -1;
         scenarioSessionGeneration = 0L;
         scenarioCompletedFrames = 0;
-        scenarioCompleted = options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE;
+        scenarioCompleted = !benchmarkScenarioConfigured();
         scenarioSourceClosed = scenarioCompleted;
         scenarioAudioDrained = scenarioCompleted;
         // A benchmark runtime is one visibility-continuous attempt. Once the host disappears,
@@ -860,6 +1318,9 @@ final class AndroidBenchmarkDiagnostics {
 
     synchronized void invalidateSession() {
         activeSessionGeneration = 0L;
+        bootstrapReady = false;
+        bootstrapReadySessionGeneration = 0L;
+        bootstrapOutcome = BootstrapOutcome.PENDING;
         benchmarkGeneration = 0L;
         measurementArmed = false;
         scenarioCompleted = false;
@@ -867,6 +1328,8 @@ final class AndroidBenchmarkDiagnostics {
         scenarioSourceClosed = false;
         scenarioAudioDrained = false;
         preArmVisibilityLost = false;
+        coreResultEmitted = false;
+        coreResultId = "unknown";
         audioSessionBaseline = AndroidAudioSink.AudioBaseline.unavailable();
         phase = Phase.IDLE;
     }
@@ -911,7 +1374,7 @@ final class AndroidBenchmarkDiagnostics {
     synchronized void benchmarkScenarioCompleted(long sessionGeneration, int completedFrames,
             int expectedFrames, boolean completed, boolean sourceClosed, boolean audioDrained) {
         if (!enabled || sessionGeneration <= 0L || sessionGeneration != activeSessionGeneration
-                || options.benchmarkScenario == DiagnosticsOptions.BenchmarkScenario.NONE) {
+                || !benchmarkScenarioConfigured()) {
             return;
         }
         scenarioExpectedFrames = expectedFrames;
@@ -928,6 +1391,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " run_side=" + options.runSide.externalValue()
                 + " session_generation=" + sessionGeneration
                 + " input_contract=" + options.benchmarkScenario.externalValue()
+                + " " + workloadMatrixFields()
                 + " completed=" + scenarioCompleted
                 + " completed_frames=" + completedFrames
                 + " expected_frames=" + expectedFrames
@@ -962,6 +1426,8 @@ final class AndroidBenchmarkDiagnostics {
         lateFrames = 0L;
         corruptFrames = 0L;
         finalResultEmitted = false;
+        coreResultEmitted = false;
+        coreResultId = "unknown";
         benchmarkDrainSuccess = false;
         controllerThreadPriority = UNKNOWN;
         environmentStart = EnvironmentSample.unavailable();
@@ -985,6 +1451,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " effective_gbc=" + valueOrUnknown(effectiveGbc)
                 + " effective_dmg_compat=" + valueOrUnknown(effectiveDmgCompat)
                 + " effective_mode=" + effectiveMode.externalValue()
+                + " " + workloadMatrixFields()
                 + " speed_mode_initial=" + valueOrUnknown(effectiveSpeedMode)
                 + " speed_mode_sample=boot_resolved"
                 + " " + clockFields());
@@ -1018,6 +1485,8 @@ final class AndroidBenchmarkDiagnostics {
         lateFrames = 0L;
         corruptFrames = 0L;
         finalResultEmitted = false;
+        coreResultEmitted = false;
+        coreResultId = "unknown";
         benchmarkDrainSuccess = false;
         speedFinalSample = false;
         speedModeFinal = UNKNOWN;
@@ -1029,6 +1498,10 @@ final class AndroidBenchmarkDiagnostics {
     }
 
     private void recordMatrixRun() {
+        if (goalMatrixConfigured()) {
+            record("event=matrix_run " + goalMatrixIdentityFields());
+            return;
+        }
         record("event=matrix_run artifact_id=" + artifactId
                 + " pair_id=" + options.pairId
                 + " matrix_block=" + options.matrixBlock
@@ -1041,6 +1514,7 @@ final class AndroidBenchmarkDiagnostics {
                 + " workload_nonce=" + workloadNonce
                 + " warmup=" + warmupComplete
                 + " input_contract=" + options.benchmarkScenario.externalValue()
+                + " " + workloadMatrixFields()
                 + " scenario_session_generation=" + scenarioSessionGeneration
                 + " scenario_completed=" + scenarioCompleted
                 + " scenario_completed_frames=" + scenarioCompletedFrames
@@ -1251,6 +1725,7 @@ final class AndroidBenchmarkDiagnostics {
         // ahead of the frame-600 speed callback.  The renderer's one delayed out-of-epoch drain
         // is the explicit latch that lets the host take a complete TimeStats after-dump.
         if (finalResultEmitted || systemAudioBadLatched || !terminal || !speedFinalSample
+                || (goalMatrixConfigured() && !coreResultEmitted)
                 || (options.render == DiagnosticsOptions.Render.PRESENTATION
                 && !benchmarkDrainSuccess)) {
             return;
@@ -1268,66 +1743,96 @@ final class AndroidBenchmarkDiagnostics {
         double utilization = cpuElapsed * 100.0 / Math.max(1L, current - preparationNanos);
         EnvironmentSample environmentEnd = sampleEnvironment(controllerThreadPriority);
         observeEnvironment(environmentEnd);
-        record("event=final_result " + matrixIdentityFields()
-                + " frame=600"
-                + " ready_count=" + readyFrames + " submitted_count=" + submittedFrames
-                + " dropped_count=" + droppedFrames + " duplicate_count=" + duplicateFrames
-                + " late_count=" + lateFrames + " corrupt_count=" + corruptFrames
-                + " ready_first_id=" + (readyFrames == 0L ? 0L : 1L)
-                + " ready_last_id=" + readyFrames
-                + " ready_first_ns=" + readyFirstNanos
-                + " ready_last_ns=" + readyLastNanos
-                + " submission_first_id=" + firstSubmittedId
-                + " submission_last_id=" + lastSubmittedId
-                + " submission_first_ns=" + submittedFirstNanos
-                + " submission_last_ns=" + submittedLastNanos
-                + " ready_interval_fps=" + formatExact(readyFps)
-                + " submission_interval_fps=" + formatExact(submissionFps)
-                + " wall_ms=" + elapsedMillis(current, firstFrameNanos)
-                + " fps=" + format(submissionFps)
-                + " " + finalHardwareEvidenceFields()
-                + " " + environmentEndFields(environmentEnd)
-                + " environment_sample_count=" + environmentSampleCount
-                + " thermal_worst=" + thermalWorst
-                + " system_load_worst_milli=" + systemLoadWorstMilli
-                + " cpu_freq_min_khz=" + cpuFreqMinKHz
-                + " " + audioEvidenceFields()
-                + " system_audio_sample_count=" + systemAudioSampleCount
-                + " system_audio_bad_count=" + systemAudioBadCount
-                + " display_refresh_min_millihz=" + displayRefreshMinMillihz
-                + " display_bad_count=" + displayBadCount
-                + " interactive_bad_count=" + interactiveBadCount
-                + " plugged_bad_count=" + pluggedBadCount
-                + " power_save_bad_count=" + powerSaveBadCount
-                + " stay_awake_bad_count=" + stayAwakeBadCount
-                + " priority_bad_count=" + priorityBadCount
-                + " importance_bad_count=" + importanceBadCount
-                + " battery_temp_min=" + batteryTempMin
-                + " battery_temp_max=" + batteryTempMax
-                + " live_input_mutations=" + liveInputMutations
-                + " audio_focus_granted=" + audioFocusGranted
-                + " audio_focus_start_loss_count=" + audioFocusStartLossCount
-                + " audio_focus_loss_count=" + audioFocusLossCount
-                + " surface_vote_hz=" + options.displayTargetHz
-                + " display_target_hz=" + options.displayTargetHz
-                + " surface_content_rate_millihz=" + options.surfaceContentRateMillihz
-                + " speed_mode_sample=frame_600"
-                + " drain_success=" + benchmarkDrainSuccess
-                + " controller_cpu_ms=" + (cpuElapsed / NANOS_PER_MILLI)
-                + " controller_util_pct=" + format(utilization)
-                + " gc_count_delta=" + delta(globalGcCount(), gcCountStart)
-                + " gc_time_ms_delta=" + delta(globalGcTime(), gcTimeStart)
-                + " alloc_bytes_delta=" + delta(globalAllocBytes(), allocBytesStart));
+        boolean goal = goalMatrixConfigured();
+        String finalIdentity = goal ? goalFinalIdentityFields() : matrixIdentityFields();
+        if (goal) {
+            finalIdentity += " core_result_id=" + coreResultId;
+        }
+        StringBuilder result = new StringBuilder("event=final_result ")
+                .append(finalIdentity)
+                .append(" frame=600")
+                .append(" ready_count=").append(readyFrames)
+                .append(" submitted_count=").append(submittedFrames)
+                .append(" dropped_count=").append(droppedFrames)
+                .append(" duplicate_count=").append(duplicateFrames)
+                .append(" late_count=").append(lateFrames)
+                .append(" corrupt_count=").append(corruptFrames)
+                .append(" ready_first_id=").append(readyFrames == 0L ? 0L : 1L)
+                .append(" ready_last_id=").append(readyFrames)
+                .append(" ready_first_ns=").append(readyFirstNanos)
+                .append(" ready_last_ns=").append(readyLastNanos)
+                .append(" submission_first_id=").append(firstSubmittedId)
+                .append(" submission_last_id=").append(lastSubmittedId)
+                .append(" submission_first_ns=").append(submittedFirstNanos)
+                .append(" submission_last_ns=").append(submittedLastNanos)
+                .append(" ready_interval_fps=").append(formatExact(readyFps))
+                .append(" submission_interval_fps=").append(formatExact(submissionFps))
+                .append(" wall_ms=").append(elapsedMillis(current, firstFrameNanos))
+                .append(" fps=").append(format(submissionFps)).append(" ")
+                .append(goal ? goalFinalHardwareEvidenceFields() : finalHardwareEvidenceFields());
+        if (goal) {
+            // Goal records are consumed under Android's per-record log bound.  Keep every field
+            // required by the strict parser, but omit the legacy environment and verbose sink
+            // diagnostics that duplicate the frame-600 core/audio proof.
+            result.append(" ").append(goalFinalAudioEvidenceFields())
+                    .append(" system_audio_sample_count=").append(systemAudioSampleCount)
+                    .append(" system_audio_bad_count=").append(systemAudioBadCount)
+                    .append(" live_input_mutations=").append(liveInputMutations)
+                    .append(" audio_focus_granted=").append(audioFocusGranted)
+                    .append(" speed_mode_sample=frame_600")
+                    .append(" drain_success=").append(benchmarkDrainSuccess)
+                    .append(" ").append(audioStartLedgerFields());
+        } else {
+            result.append(" ").append(environmentEndFields(environmentEnd))
+                    .append(" environment_sample_count=").append(environmentSampleCount)
+                    .append(" thermal_worst=").append(thermalWorst)
+                    .append(" system_load_worst_milli=").append(systemLoadWorstMilli)
+                    .append(" cpu_freq_min_khz=").append(cpuFreqMinKHz)
+                    .append(" ").append(audioEvidenceFields())
+                    .append(" system_audio_sample_count=").append(systemAudioSampleCount)
+                    .append(" system_audio_bad_count=").append(systemAudioBadCount)
+                    .append(" display_refresh_min_millihz=").append(displayRefreshMinMillihz)
+                    .append(" display_bad_count=").append(displayBadCount)
+                    .append(" interactive_bad_count=").append(interactiveBadCount)
+                    .append(" plugged_bad_count=").append(pluggedBadCount)
+                    .append(" power_save_bad_count=").append(powerSaveBadCount)
+                    .append(" stay_awake_bad_count=").append(stayAwakeBadCount)
+                    .append(" priority_bad_count=").append(priorityBadCount)
+                    .append(" importance_bad_count=").append(importanceBadCount)
+                    .append(" battery_temp_min=").append(batteryTempMin)
+                    .append(" battery_temp_max=").append(batteryTempMax)
+                    .append(" live_input_mutations=").append(liveInputMutations)
+                    .append(" audio_focus_granted=").append(audioFocusGranted)
+                    .append(" audio_focus_loss_count=").append(audioFocusLossCount)
+                    .append(" surface_vote_hz=").append(options.displayTargetHz)
+                    .append(" display_target_hz=").append(options.displayTargetHz)
+                    .append(" surface_content_rate_millihz=")
+                    .append(options.surfaceContentRateMillihz)
+                    .append(" speed_mode_sample=frame_600")
+                    .append(" drain_success=").append(benchmarkDrainSuccess)
+                    .append(" controller_cpu_ms=").append(cpuElapsed / NANOS_PER_MILLI)
+                    .append(" controller_util_pct=").append(format(utilization))
+                    .append(" gc_count_delta=").append(delta(globalGcCount(), gcCountStart))
+                    .append(" gc_time_ms_delta=").append(delta(globalGcTime(), gcTimeStart))
+                    .append(" alloc_bytes_delta=").append(delta(globalAllocBytes(), allocBytesStart));
+        }
+        record(result.toString());
         phase = Phase.DONE;
         measurementArmed = false;
         emulationStarted = false;
     }
 
+    private String goalCoreResultId() {
+        return "core-" + options.cellId + "-" + options.runSide.externalValue()
+                + "-" + benchmarkGeneration;
+    }
+
     private String matrixIdentityFields() {
-        return "build_profile=" + BuildConfig.BUILD_TYPE
+        String identity = "build_profile=" + BuildConfig.BUILD_TYPE
                 + " artifact_id=" + artifactId + " pair_id=" + options.pairId
                 + " matrix_block=" + options.matrixBlock + " row_order=" + options.rowOrder
                 + " run_side=" + options.runSide.externalValue()
+                + " recent_slot=" + options.recentSlot
                 + " session_generation=" + activeSessionGeneration
                 + " benchmark_generation=" + benchmarkGeneration
                 + " benchmark_token=" + benchmarkToken
@@ -1339,8 +1844,51 @@ final class AndroidBenchmarkDiagnostics {
                 + " scenario_completed_frames=" + scenarioCompletedFrames
                 + " scenario_expected_frames=" + scenarioExpectedFrames
                 + " scenario_source_closed=" + scenarioSourceClosed
-                + " scenario_audio_drained=" + scenarioAudioDrained
-                + " execution_mode=" + DiagnosticsOptions.executionModeValue(options.executionMode);
+                + " scenario_audio_drained=" + scenarioAudioDrained;
+        if (goalMatrixConfigured()) {
+            // Goal evidence binds every record to the catalog cell.  Legacy records intentionally
+            // omit these optional identity echoes to keep the terminal Android log payload below
+            // the platform's bounded-record limit; matrix_run remains the source of truth there.
+            identity += " " + workloadMatrixFields()
+                    + " requested_hardware=" + options.hardware.externalValue();
+        }
+        return identity + " execution_mode="
+                + DiagnosticsOptions.executionModeValue(options.executionMode);
+    }
+
+    /**
+     * Compact identity for a goal final_result.  The matrix/core records already carry the
+     * verbose benchmark-generation and warmup diagnostics; final only needs the immutable
+     * catalog identity plus scenario completion proof.
+     */
+    private String goalFinalIdentityFields() {
+        return "build_profile=" + BuildConfig.BUILD_TYPE
+                + " artifact_id=" + artifactId
+                + " pair_id=" + options.pairId
+                + " matrix_block=" + options.matrixBlock
+                + " row_order=" + options.rowOrder
+                + " run_side=" + options.runSide.externalValue()
+                + " recent_slot=" + options.recentSlot
+                + " session_generation=" + activeSessionGeneration
+                + " benchmark_generation=" + benchmarkGeneration
+                + " matrix_version=" + options.matrixVersion
+                + " cell_id=" + options.cellId
+                + " workload_slot=" + (options.workloadSlot == null
+                        ? "unknown" : options.workloadSlot.externalValue())
+                + " workload_nonce=" + workloadNonce
+                + " scenario_id=" + scenarioId()
+                + " scenario_count=" + scenarioCount()
+                + " expected_profile=" + expectedProfile()
+                + " effective_profile=" + effectiveProfile()
+                + " requested_hardware=" + options.hardware.externalValue()
+                + " execution_mode="
+                + DiagnosticsOptions.executionModeValue(options.executionMode)
+                + " scenario_session_generation=" + scenarioSessionGeneration
+                + " scenario_completed=" + scenarioCompleted
+                + " scenario_completed_frames=" + scenarioCompletedFrames
+                + " scenario_expected_frames=" + scenarioExpectedFrames
+                + " scenario_source_closed=" + scenarioSourceClosed
+                + " scenario_audio_drained=" + scenarioAudioDrained;
     }
 
     private String matrixHardwareEvidenceFields() {
@@ -1358,6 +1906,21 @@ final class AndroidBenchmarkDiagnostics {
     private String finalHardwareEvidenceFields() {
         // matrixIdentityFields already contributes the immutable build marker on final_result;
         // do not repeat build_profile here because the host parser rejects duplicate keys.
+        return "requested_profile=" + requestedProfile()
+                + " profile=" + (profile == null ? "unknown" : profile.id())
+                + " effective_gbc=" + valueOrUnknown(effectiveGbc)
+                + " effective_dmg_compat=" + valueOrUnknown(effectiveDmgCompat)
+                + " effective_mode=" + effectiveMode.externalValue()
+                + " device_id=" + deviceId
+                + " speed_mode_initial=" + valueOrUnknown(effectiveSpeedMode)
+                + " " + clockFields()
+                + " speed_mode_final=" + speedModeFinal;
+    }
+
+    private String goalFinalHardwareEvidenceFields() {
+        // Bind the exact clock domain at the terminal boundary.  Profile labels alone are not
+        // enough: a substituted revision or clock configuration could otherwise satisfy the
+        // scheduler partition while reporting the requested cell name.
         return "requested_profile=" + requestedProfile()
                 + " profile=" + (profile == null ? "unknown" : profile.id())
                 + " effective_gbc=" + valueOrUnknown(effectiveGbc)
@@ -1467,6 +2030,68 @@ final class AndroidBenchmarkDiagnostics {
     }
 
     /**
+     * Required audio subset for the strict goal final proof.  The legacy final keeps the full
+     * sink schema; goal runs retain only counters used by the parser's device, error, and queue
+     * conservation gates so worst-case opaque identities remain below Android's record limit.
+     */
+    private String goalFinalAudioEvidenceFields() {
+        AndroidAudioSink.Stats stats = audioTerminalStats != null
+                ? audioTerminalStats : (audioSink == null ? null : audioSink.stats());
+        if (stats == null) {
+            return "audio_active=false audio_sample_rate=0 audio_overruns=-1"
+                    + " audio_underruns=-1 audio_track_underruns=-1 audio_restarts=-1"
+                    + " audio_paused=true audio_pcm_input_events=0 audio_pcm_input_frames=0"
+                    + " audio_pcm_enqueued_bytes=0 audio_pcm_enqueued_frames=0"
+                    + " audio_pcm_written_bytes=0 audio_pcm_written_frames=0"
+                    + " audio_write_failures=-1 audio_pcm_discarded_bytes=0"
+                    + " audio_pcm_pending_bytes=0 audio_pcm_queued_bytes=0 audio_queue_frames=0"
+                    + " audio_output_open=false audio_output_playing=false audio_muted=true"
+                    + " audio_volume=0 audio_route_failures=-1 audio_playback_position_frames=-1"
+                    + " audio_system_volume=-1 audio_system_volume_max=-1"
+                    + " audio_system_music_muted=true audio_queue_capacity_frames=0"
+                    + " audio_max_frame_bytes=0 audio_output_identity="
+                    + audioTerminalOutputIdentity + " audio_queue_identity="
+                    + audioTerminalQueueIdentity + " benchmark_audio_policy="
+                    + benchmarkAudioPolicy.externalValue() + " benchmark_audio_flags="
+                    + compactAudioFlags() + " benchmark_audio_calendar=" + compactAudioCalendar();
+        }
+        return "audio_active=" + stats.active()
+                + " audio_sample_rate=" + stats.sampleRate()
+                + " audio_overruns=" + stats.overruns()
+                + " audio_underruns=" + stats.underruns()
+                + " audio_track_underruns=" + stats.outputUnderruns()
+                + " audio_restarts=" + stats.restarts()
+                + " audio_paused=" + stats.paused()
+                + " audio_pcm_input_events=" + stats.pcmInputEvents()
+                + " audio_pcm_input_frames=" + stats.pcmInputFrames()
+                + " audio_pcm_enqueued_bytes=" + stats.pcmEnqueuedBytes()
+                + " audio_pcm_enqueued_frames=" + stats.pcmEnqueuedFrames()
+                + " audio_pcm_written_bytes=" + stats.pcmWrittenBytes()
+                + " audio_pcm_written_frames=" + stats.pcmWrittenFrames()
+                + " audio_write_failures=" + stats.writeFailures()
+                + " audio_pcm_discarded_bytes=" + stats.pcmDiscardedBytes()
+                + " audio_pcm_pending_bytes=" + stats.pcmPendingBytes()
+                + " audio_pcm_queued_bytes=" + stats.pcmQueuedBytes()
+                + " audio_queue_frames=" + stats.queuedFrames()
+                + " audio_output_open=" + stats.outputOpen()
+                + " audio_output_playing=" + stats.outputPlaying()
+                + " audio_muted=" + stats.muted()
+                + " audio_volume=" + stats.volume()
+                + " audio_route_failures=" + stats.routeFailures()
+                + " audio_playback_position_frames=" + stats.playbackPositionFrames()
+                + " audio_system_volume=" + stats.systemVolume()
+                + " audio_system_volume_max=" + stats.systemVolumeMax()
+                + " audio_system_music_muted=" + stats.systemMusicMuted()
+                + " audio_queue_capacity_frames=" + stats.queueCapacityFrames()
+                + " audio_max_frame_bytes=" + stats.maximumFrameBytes()
+                + " audio_output_identity=" + audioTerminalOutputIdentity
+                + " audio_queue_identity=" + audioTerminalQueueIdentity
+                + " benchmark_audio_policy=" + benchmarkAudioPolicy.externalValue()
+                + " benchmark_audio_flags=" + compactAudioFlags()
+                + " benchmark_audio_calendar=" + compactAudioCalendar();
+    }
+
+    /**
      * Compact final-result policy flags in requested, active-at-boundary, disabled-after order.
      * The speed_sample event intentionally keeps the expanded policy schema for host diagnostics.
      */
@@ -1520,6 +2145,17 @@ final class AndroidBenchmarkDiagnostics {
                 + " audio_start_reopen_pending=" + baseline.reopenPending()
                 + " audio_start_output_identity=" + baseline.outputIdentity()
                 + " audio_start_queue_identity=" + baseline.queueIdentity();
+    }
+
+    /** Compact final-only baseline needed by the goal parser's conservation/stability gate. */
+    private String audioStartLedgerFields() {
+        AndroidAudioSink.AudioBaseline baseline = audioBaseline;
+        return "audio_start_ledger=" + baseline.inputEvents() + ","
+                + baseline.inputFrames() + "," + baseline.enqueuedBytes() + ","
+                + baseline.enqueuedFrames() + "," + baseline.writtenBytes() + ","
+                + baseline.writtenFrames() + "," + baseline.pendingBytes() + ","
+                + baseline.queuedBytes() + "," + baseline.outputIdentity() + ","
+                + baseline.queueIdentity();
     }
 
     private EnvironmentSample sampleEnvironment(int observedThreadPriority) {

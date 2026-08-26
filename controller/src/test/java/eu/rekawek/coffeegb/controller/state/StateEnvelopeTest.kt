@@ -6,6 +6,7 @@ import java.util.zip.Deflater
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNull
 import org.junit.Test
 
 class StateEnvelopeTest {
@@ -115,16 +116,17 @@ class StateEnvelopeTest {
       StateCodec.decode(
           StateCodecTestSupport.rawFile(
               StateRootKind.SESSION,
-              listOf(identity, state, RawSection(4, 99, 1, 0, byteArrayOf(1))),
+            listOf(identity, state, RawSection(5, 99, 1, 0, byteArrayOf(1))),
           ))
     }
     val optional =
         StateCodecTestSupport.rawFile(
             StateRootKind.SESSION,
-            listOf(identity, state, RawSection(4, 99, 0, 0, byteArrayOf(1, 2, 3))),
+            listOf(identity, state, RawSection(5, 99, 0, 0, byteArrayOf(1, 2, 3))),
         )
-    assertEquals(StateCodec.decode(baseline).root, StateCodec.decode(optional).root)
-    assertEquals(listOf(1, 2, 4), StateCodec.inspect(optional).sections.map { it.id })
+    val optionalRoot = StateCodec.decode(optional).root
+    assertNull((optionalRoot as SessionStateRoot).session.machine.bootstrapOutcome)
+    assertEquals(listOf(1, 2, 5), StateCodec.inspect(optional).sections.map { it.id })
 
     assertReason(StateDecodeReason.TRUNCATED) {
       StateCodec.decode(
@@ -176,7 +178,7 @@ class StateEnvelopeTest {
     }
 
     val maximumDirectory =
-        listOf(identity, state) + (4..65).map { RawSection(it, 1, 0, 0, byteArrayOf()) }
+        listOf(identity, state) + (5..66).map { RawSection(it, 1, 0, 0, byteArrayOf()) }
     StateCodec.decode(StateCodecTestSupport.rawFile(StateRootKind.SESSION, maximumDirectory))
   }
 
