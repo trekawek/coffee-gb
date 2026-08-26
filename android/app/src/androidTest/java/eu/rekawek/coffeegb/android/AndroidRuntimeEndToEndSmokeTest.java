@@ -5,10 +5,13 @@ import android.view.KeyEvent;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.controller.state.StateEntryKey;
 import eu.rekawek.coffeegb.controller.state.StateOperation;
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
 import eu.rekawek.coffeegb.controller.state.StateOperationFailedEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
+import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent;
+import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent;
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import org.junit.Test;
@@ -90,6 +93,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
                     stateRestored.countDown();
                 }
             }, StateOperationFailedEvent.class);
+            assertAutosaveOfferAccepted(events);
             runtime.openRom(FixtureRomProvider.URI, 0);
             awaitFixtureStart(runtime, loadFailure);
 
@@ -114,6 +118,29 @@ public class AndroidRuntimeEndToEndSmokeTest {
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             assertFrame(runtime, "after state restore");
 
+            // The in-screen menu owns the pause it creates. A successful game choice transfers
+            // that ownership to the replacement request instead of leaving the new game paused
+            // behind a hidden menu.
+            runtime.pause();
+            await("pause before ROM replacement",
+                    () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
+            long firstGeneration = runtime.state().sessionGeneration();
+            runtime.openRom(FixtureRomProvider.SECOND_URI, 0, true);
+            await("playing ROM replacement", () -> runtime.state().phase()
+                    == RuntimeState.Phase.RUNNING
+                    && runtime.state().sessionGeneration() > firstGeneration);
+            assertEquals("CI SMOKE CGB", runtime.state().romTitle());
+            assertFrame(runtime, "after ROM replacement");
+
+            runtime.pause();
+            await("pause before reset",
+                    () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
+            long replacementGeneration = runtime.state().sessionGeneration();
+            runtime.reset(true);
+            await("playing reset", () -> runtime.state().phase() == RuntimeState.Phase.RUNNING
+                    && runtime.state().sessionGeneration() > replacementGeneration);
+            assertFrame(runtime, "after reset");
+
             runtime.onHostNotVisible();
             await("background pause", () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
             runtime.onHostVisible();
@@ -122,6 +149,41 @@ public class AndroidRuntimeEndToEndSmokeTest {
             runtime.stop();
             await("runtime stop", () -> runtime.state().phase() == RuntimeState.Phase.STOPPED);
         }
+    }
+
+    private static void assertAutosaveOfferAccepted(EventBus events) throws Exception {
+        long requestId = 8_001L;
+        long sessionId = 8_002L;
+        CountDownLatch decisionReceived = new CountDownLatch(1);
+        AtomicReference<StateResumeDecisionEvent> decision = new AtomicReference<>();
+        events.register(event -> {
+            if (event.getRequestId() == requestId && event.getExpectedSessionId() == sessionId) {
+                decision.set(event);
+                decisionReceived.countDown();
+            }
+        }, StateResumeDecisionEvent.class);
+
+        // The portable controller defaults to ASK. Android has no corresponding prompt, so the
+        // runtime must answer the offer or a reopened game remains paused on its first frame.
+        StateResumeAvailableEvent offer = new StateResumeAvailableEvent(
+                requestId,
+                sessionId,
+                new StateEntryKey(StateRef.Autosave.INSTANCE, 0),
+                null,
+                null);
+        long deadline = SystemClock.elapsedRealtime() + STATE_REQUEST_TIMEOUT_MILLIS;
+        do {
+            // The runtime publishes its EventBus before createController has registered every
+            // listener. Retry this synthetic probe until owner initialization reaches the Android
+            // resume handler; production ROM requests are already serialized behind initialization.
+            events.post(offer);
+            if (decisionReceived.await(50L, TimeUnit.MILLISECONDS)) {
+                break;
+            }
+        } while (SystemClock.elapsedRealtime() < deadline);
+
+        assertEquals("Android autosave resume decision", 0L, decisionReceived.getCount());
+        assertTrue("Android accepts managed autosave", decision.get().getAccept());
     }
 
     private static void assertFixtureReadable() throws Exception {

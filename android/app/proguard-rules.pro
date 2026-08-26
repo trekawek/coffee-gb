@@ -5,11 +5,31 @@
 # desktop APIs.
 -dontwarn java.io.ObjectInputFilter
 
-# Portable save states reflect over every ComponentState record's canonical constructor and
-# component fields. Keep their names and Java parameter metadata stable after R8 so a state file
-# created by a release build has the same schema as a debug or desktop build.
+# Portable save states reflect over every audited record's canonical constructor and component
+# fields. Most roots implement ComponentState, but registered child records (for example cheat
+# patches and delayed PPU writes) deliberately do not. StateTypeRegistry resolves all of them by
+# their stable binary names, so keep both roots and nested record types intact after R8.
 -keepattributes MethodParameters,Signature
 -keep class * implements eu.rekawek.coffeegb.core.state.ComponentState { <fields>; <init>(...); }
+-keep class eu.rekawek.coffeegb.core.**$*State { <fields>; <init>(...); }
+
+# Session snapshots classify installed link peripherals by their audited binary class names. Keep
+# only those names stable; implementations may still be shrunk and optimized normally.
+-keepnames class * implements eu.rekawek.coffeegb.core.serial.SerialEndpoint
+
+# The bounded legacy importer resolves its allowlisted compatibility records by their released
+# names. These classes are otherwise reflection-only and would be removed from a minified build.
+-keep class eu.rekawek.coffeegb.core.**$*Memento { <fields>; <init>(...); }
+-keep class eu.rekawek.coffeegb.core.genie.GameGeniePatch { <fields>; <init>(...); }
+-keep class eu.rekawek.coffeegb.core.genie.GameSharkPatch { <fields>; <init>(...); }
+-keep class eu.rekawek.coffeegb.core.gpu.Gpu$PendingPpuWrite { <fields>; <init>(...); }
+-keep class eu.rekawek.coffeegb.core.gpu.phase.PixelTransfer$DelayedWindowWrite {
+    <fields>;
+    <init>(...);
+}
+
+# Audited enum classes are also resolved by stable binary name before their ordinals are encoded.
+-keep enum eu.rekawek.coffeegb.core.** { *; }
 
 # Keep the normal-speed monochrome/compatibility settled-HALT lane bodies visible to R8's call
 # graph without pinning their class or method names. The tiny selector remains free to inline.

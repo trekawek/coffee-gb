@@ -4,6 +4,7 @@
     <provider
         android:name="eu.rekawek.coffeegb.android.FixtureRomProvider"
         android:authorities="eu.rekawek.coffeegb.android.test.fixture"
+        android:process=":fixture"
         android:exported="true" />
   </application>
 </manifest>

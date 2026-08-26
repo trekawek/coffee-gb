@@ -11,7 +11,12 @@ import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
+import eu.rekawek.coffeegb.controller.state.FileStateStore
+import eu.rekawek.coffeegb.controller.state.RomPersistenceStore
+import eu.rekawek.coffeegb.controller.state.SessionPersistence
 import eu.rekawek.coffeegb.controller.state.StateCodec
+import eu.rekawek.coffeegb.controller.state.StateStorageLayout
+import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.ExecutionMode
@@ -774,6 +779,85 @@ class BasicControllerTest {
       controller.close()
       eventBus.close()
       sgbRom.delete()
+    }
+  }
+
+  @Test
+  fun hostPersistenceStoreSurvivesPathlessProfileReloadsAndReset() {
+    val directory = Files.createTempDirectory("coffee-gb-host-persistence-reload")
+    val eventBus = EventBusImpl()
+    val properties = testProperties()
+    val profileEvents = LinkedBlockingQueue<HardwareProfileEvent>()
+    val stateSessions = LinkedBlockingQueue<StateUxSessionEvent>()
+    val failures = LinkedBlockingQueue<LoadRomFailedEvent>()
+    eventBus.register<HardwareProfileEvent>(profileEvents::add)
+    eventBus.register<StateUxSessionEvent>(stateSessions::add)
+    eventBus.register<LoadRomFailedEvent>(failures::add)
+    val image =
+        RomImage.memory(
+            ROM.readBytes().also { bytes ->
+              bytes[0x143] = 0
+              bytes[0x146] = 0x03
+            },
+            "pathless-profile-reload.gb",
+        )
+    properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+        HardwareProfileRegistry.SGB.id()
+    val resolveCalls = AtomicInteger()
+    val layout = StateStorageLayout(directory.resolve("games").resolve("pathless"))
+    val persistenceStore =
+        RomPersistenceStore { _, _ ->
+          resolveCalls.incrementAndGet()
+          SessionPersistence(FileStateStore(layout), null, null)
+        }
+    val controller = BasicController(eventBus, properties, null)
+
+    controller.startController()
+    try {
+      eventBus.post(
+          LoadRomEvent(
+              image,
+              persistenceStore = persistenceStore,
+              allowAutosaveResume = false,
+          ))
+      assertEquals(
+          HardwareProfileRegistry.SGB,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+      assertTrue(assertNotNull(stateSessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+
+      properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+          HardwareProfileRegistry.DMG.id()
+      eventBus.post(Controller.UpdatedSystemMappingEvent())
+      assertEquals(
+          HardwareProfileRegistry.DMG,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+      assertTrue(assertNotNull(stateSessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+
+      properties.properties[EmulatorProperties.Key.DmgGamesType.propertyName] =
+          HardwareProfileRegistry.SGB2.id()
+      eventBus.post(Controller.UpdatedSystemMappingEvent())
+      assertEquals(
+          HardwareProfileRegistry.SGB2,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+      assertTrue(assertNotNull(stateSessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+
+      eventBus.post(Controller.ResetEmulationEvent())
+      assertEquals(
+          HardwareProfileRegistry.SGB2,
+          assertNotNull(profileEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).profile,
+      )
+      assertTrue(assertNotNull(stateSessions.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)).available)
+
+      assertEquals(4, resolveCalls.get())
+      assertNull(failures.poll(250, TimeUnit.MILLISECONDS))
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      deleteTree(directory)
     }
   }
 

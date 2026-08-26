@@ -60,7 +60,7 @@ public final class AndroidRomPersistenceStore implements RomPersistenceStore {
 
     private BatteryStorage battery(StateStorageLayout layout) {
         return new BatteryStorage(
-                BatteryStorage.Source.managed(layout.getBatteryFile(), root),
+                BatteryStorage.Source.appPrivate(layout.getBatteryFile(), root),
                 java.util.List.of());
     }
 }
