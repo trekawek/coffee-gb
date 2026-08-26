@@ -92,6 +92,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String STATE_PENDING_REQUEST = "document.pending.request";
     private static final String STATE_PENDING_URI = "document.pending.uri";
     private static final String STATE_PENDING_FLAGS = "document.pending.flags";
+    private static final String STATE_PENDING_RELEASE_MENU_PAUSE =
+            "document.pending.release-menu-pause";
     private static final String STATE_OPTIONAL_STATUS = "status.optional-devices";
     private static final String STATE_PRINTER_STATUS = "status.printer";
     private static final String STATE_ABOUT_STATUS = "status.about";
@@ -434,6 +436,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             outState.putInt(STATE_PENDING_REQUEST, pendingDocumentResult.requestCode());
             outState.putString(STATE_PENDING_URI, pendingDocumentResult.uri().toString());
             outState.putInt(STATE_PENDING_FLAGS, pendingDocumentResult.flags());
+            outState.putBoolean(STATE_PENDING_RELEASE_MENU_PAUSE,
+                    pendingDocumentResult.releaseMenuPause());
         }
         super.onSaveInstanceState(outState);
     }
@@ -981,10 +985,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (token < 0 || recentGamesLoading) {
             return;
         }
+        boolean releaseMenuPause = menuPauseOwned;
         selectionActionInFlight = true;
         menuPauseOwned = false;
         menuController.hide();
-        active.selectRecentGame(token);
+        active.selectRecentGame(token, releaseMenuPause);
     }
 
     private void handleLibraryItem(String id) {
@@ -1436,8 +1441,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         switch (variant) {
             case RESET -> {
                 if (active != null) {
+                    boolean releaseMenuPause = menuPauseOwned;
                     closeMenuWithoutResume();
-                    active.reset();
+                    active.reset(releaseMenuPause);
                 }
             }
             case STOP -> {
@@ -1747,13 +1753,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         Uri uri = data == null ? null : data.getData();
         boolean successful = resultCode == RESULT_OK && uri != null;
         MenuExternalSurfaceState.Action action = externalSurface.action();
+        boolean releaseMenuPause = externalSurface.pauseOwned();
         externalSurface = externalSurface.afterResult(successful);
         if (!successful) {
             restoreExternalSurfaceIfRequested();
             return;
         }
         PendingDocumentResult result = new PendingDocumentResult(
-                action, requestCode, uri, data.getFlags());
+                action, requestCode, uri, data.getFlags(), releaseMenuPause);
         if (runtime == null) {
             pendingDocumentResult = result;
             return;
@@ -1866,7 +1873,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         switch (result.action()) {
-            case OPEN_ROM -> active.openRom(result.uri(), result.flags());
+            case OPEN_ROM -> active.openRom(
+                    result.uri(), result.flags(), result.releaseMenuPause());
             case IMPORT_BATTERY -> active.importBattery(result.uri());
             case EXPORT_BATTERY -> active.exportBattery(result.uri());
             case IMPORT_STATE_0 -> active.importState(result.uri());
@@ -2715,7 +2723,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 pendingDocumentResult = new PendingDocumentResult(
                         MenuExternalSurfaceState.Action.valueOf(pendingAction),
                         state.getInt(STATE_PENDING_REQUEST, -1), Uri.parse(pendingUri),
-                        state.getInt(STATE_PENDING_FLAGS));
+                        state.getInt(STATE_PENDING_FLAGS),
+                        state.getBoolean(STATE_PENDING_RELEASE_MENU_PAUSE));
             } catch (IllegalArgumentException ignored) {
                 pendingDocumentResult = null;
             }
@@ -2930,7 +2939,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private record PendingDocumentResult(MenuExternalSurfaceState.Action action, int requestCode,
-                                         Uri uri, int flags) {
+                                         Uri uri, int flags, boolean releaseMenuPause) {
     }
 
     private enum StateMenuMode {

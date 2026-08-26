@@ -61,6 +61,24 @@ private val forbiddenZipEntrySuffixes = listOf(
     ".cgbstate",
 )
 
+// These runtime types cross a portable-state reflection boundary by binary name. A release APK
+// may optimize their implementations, but renaming any reachable entry makes ROM-switch autosave
+// fail only after R8, which debug/instrumentation builds cannot reproduce.
+private val releaseStableStateClassNames = listOf(
+    "eu.rekawek.coffeegb.core.serial.SerialEndpoint\$1",
+    "eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint",
+    "eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint",
+    "eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint",
+    "eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint",
+    "eu.rekawek.coffeegb.core.serial.mobile.MobileAdapterSerialEndpoint",
+    "eu.rekawek.coffeegb.core.genie.Genie\$GameGeniePatchState",
+    "eu.rekawek.coffeegb.core.gpu.Gpu\$PendingPpuWriteState",
+    "eu.rekawek.coffeegb.core.cpu.Cpu\$State",
+    "eu.rekawek.coffeegb.core.gpu.Mode",
+    "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
+    "eu.rekawek.coffeegb.core.genie.GameGeniePatch",
+)
+
 private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Collection<File>): List<String> {
   val violations = mutableListOf<String>()
   sourceFiles.filter(File::isFile).sorted().forEach { source ->
@@ -368,6 +386,43 @@ androidComponents {
     tasks.configureEach {
       if (name == "assembleDebug") {
         dependsOn(verifyPermissions)
+      }
+    }
+  }
+  onVariants(selector().withBuildType("release")) { variant ->
+    val mapping = variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+    val verifyStateNames = tasks.register("verifyReleaseStateReflectionNames") {
+      group = "verification"
+      description = "Rejects R8 renaming at portable-state reflection boundaries."
+      inputs.file(mapping)
+      doLast {
+        val classMappings = mapping.get().asFile.useLines { lines ->
+          lines.mapNotNull { line ->
+            if (line.isBlank() || line.first().isWhitespace() || !line.endsWith(':')) {
+              return@mapNotNull null
+            }
+            val separator = line.indexOf(" -> ")
+            if (separator < 0) {
+              return@mapNotNull null
+            }
+            line.substring(0, separator) to line.substring(separator + 4, line.length - 1)
+          }.toMap()
+        }
+        val missing = releaseStableStateClassNames.filterNot(classMappings::containsKey)
+        check(missing.isEmpty()) {
+          "Release mapping omitted portable-state boundary classes: $missing"
+        }
+        val renamed = releaseStableStateClassNames.mapNotNull { original ->
+          classMappings[original]?.takeIf { it != original }?.let { "$original -> $it" }
+        }
+        check(renamed.isEmpty()) {
+          "R8 renamed portable-state boundary classes: $renamed"
+        }
+      }
+    }
+    tasks.configureEach {
+      if (name == "assembleRelease") {
+        dependsOn(verifyStateNames)
       }
     }
   }

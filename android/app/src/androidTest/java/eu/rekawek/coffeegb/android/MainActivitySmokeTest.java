@@ -443,12 +443,12 @@ public class MainActivitySmokeTest {
                             + "$PendingDocumentResult");
                     java.lang.reflect.Constructor<?> constructor = type.getDeclaredConstructor(
                             eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState.Action.class,
-                            int.class, Uri.class, int.class);
+                            int.class, Uri.class, int.class, boolean.class);
                     constructor.setAccessible(true);
                     Object pending = constructor.newInstance(
                             eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState.Action
                                     .EXPORT_STATE_0,
-                            5, FixtureRomProvider.URI, 0x43);
+                            5, FixtureRomProvider.URI, 0x43, true);
                     Field field = MainActivity.class.getDeclaredField("pendingDocumentResult");
                     field.setAccessible(true);
                     field.set(activity, pending);
@@ -469,6 +469,7 @@ public class MainActivitySmokeTest {
                     assertEquals(FixtureRomProvider.URI,
                             recordValue(type, restored, "uri"));
                     assertEquals(0x43, recordValue(type, restored, "flags"));
+                    assertEquals(true, recordValue(type, restored, "releaseMenuPause"));
                 } catch (ReflectiveOperationException failure) {
                     throw new AssertionError(failure);
                 }

@@ -19,6 +19,8 @@ import eu.rekawek.coffeegb.controller.state.StateIdentity;
 import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateRef;
 import eu.rekawek.coffeegb.controller.state.StateRepository;
+import eu.rekawek.coffeegb.controller.state.StateResumeAvailableEvent;
+import eu.rekawek.coffeegb.controller.state.StateResumeDecisionEvent;
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent;
 import eu.rekawek.coffeegb.controller.state.StateOperation;
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent;
@@ -131,6 +133,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private AndroidRomPersistenceStore persistenceStore;
     private RomSourceSnapshot pendingSnapshot;
     private Uri pendingSource;
+    /** Carries pause ownership through a multi-entry archive chooser. */
+    private boolean pendingSnapshotReleasesMenuPause;
     private List<Uri> pendingRecents = List.of();
     private List<RecentSafDocuments.Entry> pendingRecentGames = List.of();
     private Uri currentSource;
@@ -641,11 +645,19 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Resets only the active emulator session through its portable controller event. */
     public void reset() {
+        reset(false);
+    }
+
+    /** Resets after an in-screen menu action, releasing only the pause owned by that menu. */
+    void reset(boolean releaseMenuPause) {
         if (rejectBenchmarkMutation()) {
             return;
         }
         submit(() -> {
             if (controller != null && activeLayout != null) {
+                if (releaseMenuPause) {
+                    preparePlayingReplacement();
+                }
                 eventBus.post(new Controller.ResetEmulationEvent());
             }
         });
@@ -765,10 +777,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     /** Opens the user-selected SAF document; all metadata, archive and ROM work stays off-main. */
     public void openRom(Uri uri, int resultFlags) {
+        openRom(uri, resultFlags, false);
+    }
+
+    /** Opens a document selected from a menu that may own the current session's pause. */
+    void openRom(Uri uri, int resultFlags, boolean releaseMenuPause) {
         Uri checked = Objects.requireNonNull(uri, "uri");
         submit(() -> {
             retainReadPermission(checked, resultFlags);
-            openRom(checked);
+            openRom(checked, releaseMenuPause);
         });
     }
 
@@ -783,9 +800,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         List.of(), false, false, false);
                 return;
             }
+            boolean releaseMenuPause = pendingSnapshotReleasesMenuPause;
             pendingSnapshot = null;
             pendingSource = null;
-            activateSnapshot(snapshot, token, source);
+            pendingSnapshotReleasesMenuPause = false;
+            activateSnapshot(snapshot, token, source, releaseMenuPause);
         });
     }
 
@@ -836,7 +855,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     /** Opens one opaque Recent Games token published by {@link #requestRecentGames(Consumer)}. */
-    void selectRecentGame(long token) {
+    void selectRecentGame(long token, boolean releaseMenuPause) {
         submit(() -> {
             if (token < 0 || token >= pendingRecentGames.size()) {
                 publish(RuntimeState.Phase.FAILED,
@@ -846,7 +865,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             }
             RecentSafDocuments.Entry entry = pendingRecentGames.get((int) token);
             pendingRecentGames = List.of();
-            openRecentGame(entry);
+            openRecentGame(entry, releaseMenuPause);
         });
     }
 
@@ -878,7 +897,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 publishBenchmarkScenarioInputFailure();
                 return;
             }
-            openRecentGame(recent);
+            openRecentGame(recent, false);
         });
     }
 
@@ -893,7 +912,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             }
             Uri uri = pendingRecents.get((int) token);
             pendingRecents = List.of();
-            openRom(uri);
+            openRom(uri, false);
         });
     }
 
@@ -1017,25 +1036,39 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (controller == null || activeLayout == null) {
                 return;
             }
-            AndroidAudioSink activeAudio = audio;
-            if (activeAudio != null) {
-                activeAudio.resume();
-            }
-            AndroidRumbleSink activeRumble = rumble;
-            if (activeRumble != null) {
-                activeRumble.resume();
-            }
-            AndroidTiltSink activeTilt = tilt;
-            if (activeTilt != null) {
-                activeTilt.resume();
-            }
-            AndroidCameraSource activeCamera = camera;
-            if (activeCamera != null) {
-                activeCamera.resume();
-            }
-            lifecycle.resumedByUser();
-            eventBus.post(new Controller.ResumeEmulationEvent());
+            resumeSession();
         });
+    }
+
+    /**
+     * Releases the controller and Android-output pause immediately before a replacement request.
+     * The controller queue orders this event before the following load/reset event, so the
+     * replacement inherits the user's intent to play.
+     */
+    private void preparePlayingReplacement() {
+        clearPauseMenuSnapshotInternal();
+        resumeSession();
+    }
+
+    private void resumeSession() {
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.resume();
+        }
+        AndroidRumbleSink activeRumble = rumble;
+        if (activeRumble != null) {
+            activeRumble.resume();
+        }
+        AndroidTiltSink activeTilt = tilt;
+        if (activeTilt != null) {
+            activeTilt.resume();
+        }
+        AndroidCameraSource activeCamera = camera;
+        if (activeCamera != null) {
+            activeCamera.resume();
+        }
+        lifecycle.resumedByUser();
+        eventBus.post(new Controller.ResumeEmulationEvent());
     }
 
     /**
@@ -1677,6 +1710,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     }
                 }),
                 Controller.LoadRomFailedEvent.class);
+        // The desktop ASK policy emits a prompt before restoring a managed close autosave.
+        // Android does not expose that desktop prompt, so leaving the offer unanswered freezes
+        // the newly loaded game on its first (usually black) frame. Mobile sessions continue
+        // from their managed autosave automatically; Reset still opts out of resume scanning.
+        eventBus.register(
+                (StateResumeAvailableEvent event) -> {
+                    eventBus.post(new StateResumeDecisionEvent(
+                            event.getRequestId(), event.getSessionId(), true));
+                },
+                StateResumeAvailableEvent.class);
         eventBus.register(
                 (Controller.SessionPlaybackStateEvent event) -> submit(() -> {
                     if (activeLayout == null || state.phase() == RuntimeState.Phase.LOADING) {
@@ -1727,7 +1770,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         controller.startController();
     }
 
-    private void openRom(Uri uri) {
+    private void openRom(Uri uri, boolean releaseMenuPause) {
         persistCurrentRecentGame();
         clearPendingSource();
         frames.clear();
@@ -1740,11 +1783,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         snapshot.isArchive()
                                 ? snapshot.candidates().get(0).token()
                                 : RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN,
-                        uri);
+                        uri, releaseMenuPause);
                 return;
             }
             pendingSnapshot = snapshot;
             pendingSource = uri;
+            pendingSnapshotReleasesMenuPause = releaseMenuPause;
             List<RuntimeState.Selection> choices = snapshot.candidates().stream()
                     .map(candidate -> new RuntimeState.Selection(candidate.token(), candidate.displayName()))
                     .collect(Collectors.toList());
@@ -1761,7 +1805,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     /** Reopens the exact game-level archive entry retained by the recent catalog. */
-    private void openRecentGame(RecentSafDocuments.Entry recent) {
+    private void openRecentGame(RecentSafDocuments.Entry recent, boolean releaseMenuPause) {
         persistCurrentRecentGame();
         clearPendingSource();
         publish(RuntimeState.Phase.OPENING, "Opening recent game…", List.of(),
@@ -1793,6 +1837,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     } else {
                         pendingSnapshot = snapshot;
                         pendingSource = recent.uri();
+                        pendingSnapshotReleasesMenuPause = releaseMenuPause;
                         List<RuntimeState.Selection> choices = snapshot.candidates().stream()
                                 .map(candidate -> new RuntimeState.Selection(candidate.token(),
                                         candidate.displayName()))
@@ -1817,7 +1862,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 }
                 token = resolved;
             }
-            activateSnapshot(snapshot, token, recent.uri(), recent);
+            activateSnapshot(snapshot, token, recent.uri(), recent, releaseMenuPause);
         } catch (Exception failure) {
             closeQuietly(snapshot);
             recentGameUnavailable(recent,
@@ -1825,12 +1870,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
-    private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source) {
-        activateSnapshot(snapshot, token, source, null);
+    private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source,
+            boolean releaseMenuPause) {
+        activateSnapshot(snapshot, token, source, null, releaseMenuPause);
     }
 
     private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source,
-            RecentSafDocuments.Entry recent) {
+            RecentSafDocuments.Entry recent, boolean releaseMenuPause) {
         try {
             RomSourceSnapshot.ArchiveCandidate candidate = token
                     == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN ? null
@@ -1888,6 +1934,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA);
             publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
                     false, true, false);
+            if (releaseMenuPause) {
+                preparePlayingReplacement();
+            }
             controllerEventBus().post(new Controller.LoadRomEvent(
                     image, null, persistenceStore, activeOpenRequestId, !diagnostics.enabled()));
         } catch (Exception failure) {
@@ -2259,6 +2308,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         RomSourceSnapshot snapshot = pendingSnapshot;
         pendingSnapshot = null;
         pendingSource = null;
+        pendingSnapshotReleasesMenuPause = false;
         pendingRecents = List.of();
         pendingRecentGames = List.of();
         closeQuietly(snapshot);

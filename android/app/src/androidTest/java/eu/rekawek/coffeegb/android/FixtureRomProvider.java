@@ -25,7 +25,10 @@ import java.nio.charset.StandardCharsets;
 public final class FixtureRomProvider extends ContentProvider {
 
     static final Uri URI = Uri.parse("content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke.gb");
+    static final Uri SECOND_URI = Uri.parse(
+            "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-cgb.gbc");
     private static final String DISPLAY_NAME = "coffee-gb-ci-smoke.gb";
+    private static final String SECOND_DISPLAY_NAME = "coffee-gb-ci-smoke-cgb.gbc";
     private static final int ROM_SIZE = 0x8000;
 
     @Override
@@ -39,7 +42,7 @@ public final class FixtureRomProvider extends ContentProvider {
         assertFixture(uri);
         MatrixCursor cursor = new MatrixCursor(new String[]{
                 OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE});
-        cursor.addRow(new Object[]{DISPLAY_NAME, ROM_SIZE});
+        cursor.addRow(new Object[]{displayName(uri), ROM_SIZE});
         return cursor;
     }
 
@@ -60,10 +63,12 @@ public final class FixtureRomProvider extends ContentProvider {
             if (context == null) {
                 throw new FileNotFoundException("The CI fixture provider is not initialized");
             }
-            File fixture = new File(context.getCacheDir(), DISPLAY_NAME);
+            File fixture = new File(context.getCacheDir(), displayName(uri));
             if (!fixture.isFile() || fixture.length() != ROM_SIZE) {
                 try (FileOutputStream output = new FileOutputStream(fixture)) {
-                    output.write(fixtureBytes());
+                    output.write(fixtureBytes(
+                            uri.equals(SECOND_URI) ? "CI SMOKE CGB" : "CI SMOKE",
+                            uri.equals(SECOND_URI)));
                 }
             }
             return ParcelFileDescriptor.open(fixture, ParcelFileDescriptor.MODE_READ_ONLY);
@@ -88,18 +93,24 @@ public final class FixtureRomProvider extends ContentProvider {
     }
 
     private static void assertFixture(Uri uri) {
-        if (!URI.equals(uri)) {
+        if (!URI.equals(uri) && !SECOND_URI.equals(uri)) {
             throw new IllegalArgumentException("Unknown CI fixture");
         }
     }
 
-    private static byte[] fixtureBytes() {
+    private static String displayName(Uri uri) {
+        assertFixture(uri);
+        return uri.equals(SECOND_URI) ? SECOND_DISPLAY_NAME : DISPLAY_NAME;
+    }
+
+    private static byte[] fixtureBytes(String fixtureTitle, boolean cgb) {
         byte[] rom = new byte[ROM_SIZE];
         rom[0x0100] = (byte) 0xc3; // JP 0x0150
         rom[0x0101] = 0x50;
         rom[0x0102] = 0x01;
-        byte[] title = "CI SMOKE".getBytes(StandardCharsets.US_ASCII);
+        byte[] title = fixtureTitle.getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(title, 0, rom, 0x0134, title.length);
+        rom[0x0143] = cgb ? (byte) 0x80 : 0x00;
         rom[0x0147] = 0x00; // ROM only
         rom[0x0148] = 0x00; // 32 KiB
         rom[0x0149] = 0x00; // no RAM

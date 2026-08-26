@@ -384,6 +384,48 @@ public class FileBatteryTest {
     }
 
     @Test
+    public void appPrivateTargetWritesBelowItsValidatedManagedRoot() throws Exception {
+        withDirectory(directory -> {
+            Path appPrivateRoot = Files.createDirectory(directory.resolve("app-private"));
+            Path target = appPrivateRoot.resolve("games").resolve("identity").resolve("battery.sav");
+            FileBattery battery = new FileBattery(
+                    new BatteryStorage(
+                            BatteryStorage.Source.appPrivate(target, appPrivateRoot), List.of()),
+                    4);
+            battery.saveRam(new int[] {1, 2, 3, 4});
+
+            BatteryPersistenceResult result = battery.prepareFlush(() -> { }).persist();
+
+            assertTrue(result instanceof BatteryPersistenceResult.Success);
+            assertArrayEquals(new byte[] {1, 2, 3, 4}, Files.readAllBytes(target));
+        });
+    }
+
+    @Test
+    public void appPrivateTargetStillRefusesASymlinkManagedRoot() throws Exception {
+        withDirectory(directory -> {
+            Path actualRoot = Files.createDirectory(directory.resolve("actual"));
+            Path linkedRoot = directory.resolve("app-private-link");
+            try {
+                Files.createSymbolicLink(linkedRoot, actualRoot);
+            } catch (IOException | UnsupportedOperationException unsupported) {
+                return;
+            }
+            Path target = linkedRoot.resolve("battery.sav");
+            FileBattery battery = new FileBattery(
+                    new BatteryStorage(
+                            BatteryStorage.Source.appPrivate(target, linkedRoot), List.of()),
+                    4);
+            battery.saveRam(new int[] {1, 2, 3, 4});
+
+            BatteryPersistenceResult result = battery.prepareFlush(() -> { }).persist();
+
+            assertTrue(result instanceof BatteryPersistenceResult.Failure);
+            assertFalse(Files.exists(actualRoot.resolve("battery.sav")));
+        });
+    }
+
+    @Test
     public void newerPreviousDestinationReplacesStaleActiveTargetWithoutDeletingEitherGeneration()
             throws Exception {
         withDirectory(directory -> {

@@ -22,6 +22,7 @@ import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
 import eu.rekawek.coffeegb.controller.state.DetachedStateAdapter
 import eu.rekawek.coffeegb.controller.state.ExclusiveWriteRecovery
 import eu.rekawek.coffeegb.controller.state.ResolvedBatteryStorage
+import eu.rekawek.coffeegb.controller.state.RomPersistenceStore
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
 import eu.rekawek.coffeegb.controller.state.StateCatalogRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateCompression
@@ -413,6 +414,9 @@ class BasicController private constructor(
   private var stateContext: StateWorkerContext? = null
 
   private var currentRomHashes: StateRomHashes? = null
+
+  /** Host persistence identity follows the committed session across reset/profile reloads. */
+  private var currentPersistenceStore: RomPersistenceStore? = null
 
   private var stateSessionId = 0L
 
@@ -809,7 +813,11 @@ class BasicController private constructor(
       session?.config?.rom?.image?.let {
         requestLoad(
             properties,
-            Controller.LoadRomEvent(it, allowAutosaveResume = false),
+            Controller.LoadRomEvent(
+                it,
+                persistenceStore = currentPersistenceStore,
+                allowAutosaveResume = false,
+            ),
             clearPatches = false,
         )
       }
@@ -855,7 +863,11 @@ class BasicController private constructor(
         if (newProfile != config.hardwareProfile ||
             newBootstrapMode != config.bootstrapMode ||
             newExecutionMode != config.executionMode) {
-          eventBus.post(Controller.LoadRomEvent(config.rom.image))
+          eventBus.post(
+              Controller.LoadRomEvent(
+                  config.rom.image,
+                  persistenceStore = currentPersistenceStore,
+              ))
         }
       }
     }
@@ -3614,6 +3626,7 @@ class BasicController private constructor(
     session = committedSession
     commitMobileAdapterAttachment(committedSession)
     currentRomHashes = job.prepared.romHashes
+    currentPersistenceStore = job.event.persistenceStore
     snapshotManager = nextSnapshotManager
     nextSession = null
     nextSnapshotManager = null
@@ -4771,6 +4784,7 @@ class BasicController private constructor(
     console?.setDebugPort(null)
     this.session = null
     currentRomHashes = null
+    currentPersistenceStore = null
     snapshotManager = null
   }
 

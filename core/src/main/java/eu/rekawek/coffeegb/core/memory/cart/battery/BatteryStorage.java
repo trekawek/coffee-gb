@@ -167,21 +167,38 @@ public final class BatteryStorage {
 
         private final Path managedRoot;
 
-        private Source(Path path, Path managedRoot) {
+        private final boolean trustedManagedRootAncestors;
+
+        private Source(Path path, Path managedRoot, boolean trustedManagedRootAncestors) {
             this.path = normalizeFile(path);
             this.managedRoot =
                     managedRoot == null ? null : normalizeDirectory(managedRoot, "managedRoot");
+            this.trustedManagedRootAncestors = trustedManagedRootAncestors;
             if (this.managedRoot != null && !this.path.startsWith(this.managedRoot)) {
                 throw new IllegalArgumentException("Battery path escapes its managed root");
             }
         }
 
         public static Source direct(Path path) {
-            return new Source(path, null);
+            return new Source(path, null, false);
         }
 
         public static Source managed(Path path, Path managedRoot) {
-            return new Source(path, Objects.requireNonNull(managedRoot, "managedRoot"));
+            return new Source(path, Objects.requireNonNull(managedRoot, "managedRoot"), false);
+        }
+
+        /**
+         * Constrains a target below a platform-created app-private directory.
+         *
+         * <p>Android deliberately allows an app to traverse its own package directory while
+         * denying metadata access to shared ancestors such as {@code /data/user/0}. The ordinary
+         * managed source validates every ancestor from the filesystem root and therefore cannot
+         * distinguish that policy from an unsafe path. This variant treats only the supplied
+         * managed root's ancestors as platform-trusted; the root itself and every existing
+         * component below it are still checked without following symbolic links.
+         */
+        public static Source appPrivate(Path path, Path managedRoot) {
+            return new Source(path, Objects.requireNonNull(managedRoot, "managedRoot"), true);
         }
 
         public Path path() {
@@ -231,11 +248,15 @@ public final class BatteryStorage {
             if (root == null) {
                 throw new IOException("Managed battery root must be absolute");
             }
-            requireDirectory(root, "Filesystem root");
-            Path rootCursor = root;
-            for (Path component : managedRoot) {
-                rootCursor = rootCursor.resolve(component);
-                requireDirectory(rootCursor, "Battery root component");
+            if (trustedManagedRootAncestors) {
+                requireDirectory(managedRoot, "App-private battery root");
+            } else {
+                requireDirectory(root, "Filesystem root");
+                Path rootCursor = root;
+                for (Path component : managedRoot) {
+                    rootCursor = rootCursor.resolve(component);
+                    requireDirectory(rootCursor, "Battery root component");
+                }
             }
 
             Path parent = path.getParent();
