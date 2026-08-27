@@ -51,6 +51,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.BooleanSupplier
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -1832,6 +1833,65 @@ class BasicControllerTest {
     } finally {
       controller.close()
       eventBus.close()
+    }
+  }
+
+  @Test
+  fun benchmarkBootstrapCompletesBeforeProfileAndStartedEvents() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val profile = LinkedBlockingQueue<HardwareProfileEvent>()
+    val bootstrapCalls = AtomicInteger()
+    val bootstrapReadyAtProfile = AtomicBoolean()
+    eventBus.register<EmulationStartedEvent> {
+      assertTrue(bootstrapReadyAtProfile.get())
+      started.add(it)
+    }
+    eventBus.register<HardwareProfileEvent> {
+      assertTrue(bootstrapCalls.get() > 0)
+      bootstrapReadyAtProfile.set(true)
+      profile.add(it)
+    }
+    val rom = namedRom("BENCHMARK_BOOTSTRAP")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                benchmarkPolicyEnabled = true,
+                executionMode = ExecutionMode.PERFORMANCE,
+            ))
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.PERFORMANCE)
+          val gameboy =
+              object : Gameboy(config) {
+                private var ready = false
+
+                override fun isBootstrapReady(): Boolean = ready
+
+                override fun runTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int {
+                  bootstrapCalls.incrementAndGet()
+                  ready = true
+                  return 1
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      assertNotNull(profile.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(1, bootstrapCalls.get())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
     }
   }
 

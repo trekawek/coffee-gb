@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.android;
 import android.content.Intent;
 
 import eu.rekawek.coffeegb.core.ExecutionMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.sound.Sound;
@@ -48,6 +49,8 @@ final class DiagnosticsOptions {
     static final String EXTRA_BENCHMARK_ARM_TOKEN = "coffee_gb_benchmark_arm_token";
     /** Session execution strategy; Accuracy is the compatibility-safe default. */
     static final String EXTRA_EXECUTION_MODE = "coffee_gb_execution_mode";
+    /** Benchmark-only BIOS bootstrap strategy; skip is the compatibility-safe default. */
+    static final String EXTRA_BOOTSTRAP = "coffee_gb_bootstrap";
     /** Benchmark-only deterministic gameplay preconditioning contract. */
     static final String EXTRA_BENCHMARK_SCENARIO = "coffee_gb_benchmark_scenario";
     /** Host-audio evidence policy; canonical is the compatibility-safe default. */
@@ -267,7 +270,8 @@ final class DiagnosticsOptions {
             false, Hardware.AUTO, true, Render.PRESENTATION, false, false,
             "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN, RunSide.UNKNOWN,
             UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-            ExecutionMode.ACCURACY, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
+            ExecutionMode.ACCURACY, BootstrapMode.SKIP, BenchmarkScenario.NONE,
+            AudioPolicy.CANONICAL);
 
     final boolean enabled;
     final Hardware hardware;
@@ -293,6 +297,8 @@ final class DiagnosticsOptions {
     final int recentSlot;
     /** Core-owned session strategy. This is not persisted in a save state. */
     final ExecutionMode executionMode;
+    /** Benchmark-only BIOS bootstrap strategy; ordinary launches do not use this field. */
+    final BootstrapMode bootstrapMode;
     /** Deterministic benchmark-only input contract; never persisted or exposed to release UI. */
     final BenchmarkScenario benchmarkScenario;
     /** Explicit host-audio evidence policy; never persisted or exposed to release UI. */
@@ -303,7 +309,8 @@ final class DiagnosticsOptions {
             String pairId, String matrixBlock, int rowOrder, RunSide runSide,
             RunSide firstSide, String deviceBuild, String thermalWindow, boolean thermalValid,
             String workloadNonce, int displayTargetHz, int recentSlot, ExecutionMode executionMode,
-            BenchmarkScenario benchmarkScenario, AudioPolicy audioPolicy) {
+            BootstrapMode bootstrapMode, BenchmarkScenario benchmarkScenario,
+            AudioPolicy audioPolicy) {
         this.enabled = enabled;
         this.hardware = hardware;
         this.audioOutput = audioOutput;
@@ -324,6 +331,7 @@ final class DiagnosticsOptions {
         this.surfaceContentRateMillihz = contentRateMillihz(hardware);
         this.recentSlot = recentSlot >= 0 && recentSlot < 10 ? recentSlot : -1;
         this.executionMode = executionMode == null ? ExecutionMode.ACCURACY : executionMode;
+        this.bootstrapMode = bootstrapMode == null ? BootstrapMode.SKIP : bootstrapMode;
         this.benchmarkScenario = enabled && benchmarkScenario != null
                 ? benchmarkScenario : BenchmarkScenario.NONE;
         AudioPolicy requestedPolicy = audioPolicy == null ? AudioPolicy.CANONICAL : audioPolicy;
@@ -360,7 +368,7 @@ final class DiagnosticsOptions {
         return new DiagnosticsOptions(false, Hardware.AUTO, true, Render.PRESENTATION, false,
                 false, "disabled", UNKNOWN_TOKEN, UNKNOWN_TOKEN, -1, RunSide.UNKNOWN,
                 RunSide.UNKNOWN, UNKNOWN_TOKEN, UNKNOWN_TOKEN, false, UNKNOWN_TOKEN, -1, -1,
-                selected, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
+                selected, BootstrapMode.SKIP, BenchmarkScenario.NONE, AudioPolicy.CANONICAL);
     }
 
     static ExecutionMode parseExecutionMode(String value) {
@@ -370,6 +378,29 @@ final class DiagnosticsOptions {
 
     static String executionModeValue(ExecutionMode mode) {
         return mode == ExecutionMode.PERFORMANCE ? "performance" : "accuracy";
+    }
+
+    static BootstrapMode parseBootstrapMode(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        if ("fast-forward".equals(normalized) || "fast_forward".equals(normalized)
+                || "fastforward".equals(normalized) || "ff".equals(normalized)) {
+            return BootstrapMode.FAST_FORWARD;
+        }
+        if ("full".equals(normalized) || "normal".equals(normalized)
+                || "authentic".equals(normalized)) {
+            return BootstrapMode.NORMAL;
+        }
+        return BootstrapMode.SKIP;
+    }
+
+    static String bootstrapModeValue(BootstrapMode mode) {
+        if (mode == BootstrapMode.FAST_FORWARD) {
+            return "fast-forward";
+        }
+        if (mode == BootstrapMode.NORMAL) {
+            return "normal";
+        }
+        return "skip";
     }
 
     private static int contentRateMillihz(Hardware hardware) {
@@ -426,7 +457,8 @@ final class DiagnosticsOptions {
                 intExtra(intent, EXTRA_RECENT_SLOT, -1),
                 stringExtra(intent, EXTRA_EXECUTION_MODE),
                 stringExtra(intent, EXTRA_BENCHMARK_SCENARIO),
-                stringExtra(intent, EXTRA_AUDIO_POLICY));
+                stringExtra(intent, EXTRA_AUDIO_POLICY),
+                stringExtra(intent, EXTRA_BOOTSTRAP));
     }
 
     static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
@@ -508,6 +540,19 @@ final class DiagnosticsOptions {
             String runSide, String firstSide, String deviceBuild, String thermalWindow,
             boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
             String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue) {
+        return parseValues(diagnosticsEnabled, hardwareValue, audioValue, renderValue, warmup,
+                recent, frameSink, buildId, pairId, matrixBlock, rowOrder, runSide, firstSide,
+                deviceBuild, thermalWindow, thermalValid, workloadNonce, displayTargetHz,
+                recentSlot, executionModeValue, benchmarkScenarioValue, audioPolicyValue, null);
+    }
+
+    static DiagnosticsOptions parseValues(boolean diagnosticsEnabled, String hardwareValue,
+            Object audioValue, String renderValue, boolean warmup, boolean recent,
+            boolean frameSink, String buildId, String pairId, String matrixBlock, int rowOrder,
+            String runSide, String firstSide, String deviceBuild, String thermalWindow,
+            boolean thermalValid, String workloadNonce, int displayTargetHz, int recentSlot,
+            String executionModeValue, String benchmarkScenarioValue, String audioPolicyValue,
+            String bootstrapModeValue) {
         if (!diagnosticsEnabled) {
             return disabled(parseExecutionMode(executionModeValue));
         }
@@ -526,6 +571,7 @@ final class DiagnosticsOptions {
                 safeToken(deviceBuild, UNKNOWN_TOKEN), safeToken(thermalWindow, UNKNOWN_TOKEN),
                 thermalValid, safeToken(workloadNonce, UNKNOWN_TOKEN), rate, recentSlot,
                 parseExecutionMode(executionModeValue),
+                parseBootstrapMode(bootstrapModeValue),
                 BenchmarkScenario.fromExternalValue(benchmarkScenarioValue),
                 AudioPolicy.fromExternalValue(audioPolicyValue));
     }

@@ -201,10 +201,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     static ApplicationSettingsOverrides androidSettingsOverrides(DiagnosticsOptions options) {
         DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
         HardwareProfile profile = checked.enabled ? checked.hardware.profileOverride() : null;
-        // Benchmark sessions must not inherit NORMAL boot from user settings: the profile event
-        // is emitted at session materialization and needs the actual post-boot KEY0/GPU mode.
+        // Benchmark sessions use their transiently requested bootstrap mode: the profile event
+        // is emitted only after the actual post-boot KEY0/GPU mode has been reached.
         // Release/non-diagnostic callers retain the ordinary settings path unchanged.
-        BootstrapMode bootstrapMode = checked.enabled ? BootstrapMode.SKIP : null;
+        BootstrapMode bootstrapMode = checked.enabled ? checked.bootstrapMode : null;
         return new ApplicationSettingsOverrides(profile, bootstrapMode,
                 checked.enabled ? false : null, false, false, false,
                 checked.enabled && checked.runtimeWarmup, runtimeWarmupFlavor(checked), checked.enabled,

@@ -10,7 +10,9 @@ import java.util.concurrent.CancellationException;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class GameboyBootStateTest {
 
@@ -25,9 +27,10 @@ public class GameboyBootStateTest {
                 AddressSpace bus = gameboy.getAddressSpace();
 
                 assertArrayEquals(
-                        new int[]{0xe0, 0x00, 0x00, 0x70},
+                    new int[]{0xe0, 0x00, 0x00, 0x70},
                         new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
                                 bus.getByte(0xff25), bus.getByte(0xff26)});
+                assertFalse(gameboy.isBootstrapReady());
             }
         }
     }
@@ -42,9 +45,10 @@ public class GameboyBootStateTest {
             AddressSpace bus = gameboy.getAddressSpace();
 
             assertArrayEquals(
-                    new int[]{0xe1, 0x77, 0x00, 0xf0},
-                    new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
-                            bus.getByte(0xff25), bus.getByte(0xff26)});
+                        new int[]{0xe1, 0x77, 0x00, 0xf0},
+                        new int[]{bus.getByte(0xff0f), bus.getByte(0xff24),
+                                bus.getByte(0xff25), bus.getByte(0xff26)});
+            assertTrue(gameboy.isBootstrapReady());
         }
     }
 

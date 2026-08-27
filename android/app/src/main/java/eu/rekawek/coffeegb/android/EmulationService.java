@@ -66,6 +66,11 @@ public final class EmulationService extends Service implements AudioManager.OnAu
         return checked.audioPolicy.externalValue();
     }
 
+    static String bootstrapModeExtraValue(DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        return DiagnosticsOptions.bootstrapModeValue(checked.bootstrapMode);
+    }
+
     private static Intent populateStartIntent(Intent intent, DiagnosticsOptions checked) {
         nextStartOptions = checked;
         return intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
@@ -90,6 +95,8 @@ public final class EmulationService extends Service implements AudioManager.OnAu
                 .putExtra(DiagnosticsOptions.EXTRA_RECENT_SLOT, checked.recentSlot)
                 .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
                         DiagnosticsOptions.executionModeValue(checked.executionMode))
+                .putExtra(DiagnosticsOptions.EXTRA_BOOTSTRAP,
+                        bootstrapModeExtraValue(checked))
                 .putExtra(DiagnosticsOptions.EXTRA_BENCHMARK_SCENARIO,
                         benchmarkScenarioExtraValue(checked))
                 .putExtra(DiagnosticsOptions.EXTRA_AUDIO_POLICY,

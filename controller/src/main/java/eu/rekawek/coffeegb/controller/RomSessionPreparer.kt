@@ -245,8 +245,7 @@ internal class RuntimeWarmupCache(
           flavor: RuntimeWarmupFlavor,
       ): RuntimeWarmupKey? {
         val rom = config.rom
-        if (config.bootstrapMode != BootstrapMode.SKIP ||
-            config.slotRom != null ||
+        if (config.slotRom != null ||
             rom.cartridgeProperties.mapper != Mapper.STANDARD ||
             !isOrdinaryNonRtcCartridge(rom.type)) {
           return null

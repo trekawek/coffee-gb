@@ -237,6 +237,19 @@ public class AndroidEmulationRuntimeTest {
     }
 
     @Test
+    public void benchmarkBootstrapModeReachesControllerSessionOverrides() {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, null, "normal");
+        try (EmulatorProperties properties = new EmulatorProperties(
+                AndroidEmulationRuntime.androidSettingsOverrides(options))) {
+            assertEquals(BootstrapMode.NORMAL,
+                    properties.getOverrides().getBootstrapMode());
+        }
+    }
+
+    @Test
     public void shadowMeasuredWarmupSelectorIsOnlyNativeCgbPerformanceSilentScenario() {
         DiagnosticsOptions eligible = DiagnosticsOptions.parseValues(
                 true, "cgb", true, "presentation", true, true, false,

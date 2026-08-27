@@ -183,17 +183,14 @@ class RomSessionPreparerTest {
   }
 
   @Test
-  fun unsupportedWarmupShapeDoesNotClaimACompletedWarmup() {
+  fun runtimeWarmupUsesSkipDisposableCopyForNonSkipBootstrap() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(2, executor)
 
-    assertFalse(
-        cache.warm(
-            skipConfig().setBootstrapMode(BootstrapMode.FAST_FORWARD),
-            {},
-        ))
-    assertTrue(executor.calls.isEmpty())
-    assertEquals(0, cache.size)
+    assertTrue(cache.warm(skipConfig().setBootstrapMode(BootstrapMode.FAST_FORWARD), {}))
+    assertEquals(1, executor.calls.size)
+    assertEquals(BootstrapMode.SKIP, executor.calls.single().config.bootstrapMode)
+    assertEquals(1, cache.size)
   }
 
   @Test
@@ -276,7 +273,7 @@ class RomSessionPreparerTest {
                 .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE),
             RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
         ) {})
-    assertFalse(
+    assertTrue(
         cache.warm(
             skipConfig(cgbNativeImage())
                 .setHardwareProfile(HardwareProfileRegistry.CGB)

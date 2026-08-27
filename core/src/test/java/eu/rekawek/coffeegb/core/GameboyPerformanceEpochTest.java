@@ -13,6 +13,7 @@ import java.lang.reflect.RecordComponent;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /** Focused native-CGB smoke coverage for the coarse PERFORMANCE epoch entrance. */
@@ -75,6 +76,56 @@ public final class GameboyPerformanceEpochTest {
             assertEquals(4_096, gameboy.runMeasuredTicksUntilStop(4_096, () -> false));
             assertTrue("measured stop-aware PERFORMANCE path lost native epoch coverage",
                     gameboy.getPerformanceEpochTicks() > 0L);
+        }
+    }
+
+    @Test
+    public void cgbDmgCompatibilityBootstrapStaysScalarUntilAuthenticHandoff() throws Exception {
+        try (Gameboy gameboy = new Gameboy.GameboyConfiguration(
+                new Rom(validNonColorRom()))
+                .setGameboyType(GameboyType.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.NORMAL)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setSupportBatterySave(false)
+                .build()) {
+            assertFalse(gameboy.isBootstrapReady());
+            assertEquals(0L, gameboy.getPerformanceBulkSpanCount());
+            assertEquals(0L, gameboy.getPerformanceEpochCount());
+
+            int executed = gameboy.runTicksUntilStop(40_000_000,
+                    gameboy::isBootstrapReady);
+
+            assertTrue("authentic bootstrap did not reach the cartridge handoff", executed > 0);
+            assertTrue(gameboy.isBootstrapReady());
+            assertEquals(0x0100, gameboy.getCpu().getRegisters().getPC());
+            assertEquals(0xff, gameboy.getAddressSpace().getByte(0xff50));
+            assertTrue(gameboy.getSpeedMode().isDmgCompat());
+            assertEquals(0L, gameboy.getPerformanceBulkSpanCount());
+            assertEquals(0L, gameboy.getPerformanceEpochCount());
+        }
+    }
+
+    @Test
+    public void fastForwardStopsAtTheEntryPointThenSettlesTheHandoffScalar() throws Exception {
+        try (Gameboy gameboy = new Gameboy.GameboyConfiguration(
+                new Rom(validNonColorRom()))
+                .setGameboyType(GameboyType.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setSupportBatterySave(false)
+                .build()) {
+            assertEquals(0x0100, gameboy.getCpu().getRegisters().getPC());
+            assertFalse(gameboy.isBootstrapReady());
+
+            int executed = gameboy.runTicksUntilStop(32, gameboy::isBootstrapReady);
+
+            assertTrue("fast-forward handoff tail did not execute", executed > 0);
+            assertTrue(gameboy.isBootstrapReady());
+            assertEquals(0x0100, gameboy.getCpu().getRegisters().getPC());
+            assertEquals(0xff, gameboy.getAddressSpace().getByte(0xff50));
+            assertTrue(gameboy.getSpeedMode().isDmgCompat());
+            assertEquals(0L, gameboy.getPerformanceBulkSpanCount());
+            assertEquals(0L, gameboy.getPerformanceEpochCount());
         }
     }
 
@@ -387,6 +438,34 @@ public final class GameboyPerformanceEpochTest {
         } catch (ReflectiveOperationException e) {
             throw new AssertionError("Cannot compare " + path, e);
         }
+    }
+
+    private static byte[] validNonColorRom() {
+        byte[] image = new byte[0x8000];
+        int[] logo = {
+                0xce, 0xed, 0x66, 0x66, 0xcc, 0x0d, 0x00, 0x0b,
+                0x03, 0x73, 0x00, 0x83, 0x00, 0x0c, 0x00, 0x0d,
+                0x00, 0x08, 0x11, 0x1f, 0x88, 0x89, 0x00, 0x0e,
+                0xdc, 0xcc, 0x6e, 0xe6, 0xdd, 0xdd, 0xd9, 0x99,
+                0xbb, 0xbb, 0x67, 0x63, 0x6e, 0x0e, 0xec, 0xcc,
+                0xdd, 0xdc, 0x99, 0x9f, 0xbb, 0xb9, 0x33, 0x3e,
+        };
+        for (int index = 0; index < logo.length; index++) {
+            image[0x104 + index] = (byte) logo[index];
+        }
+        image[0x100] = (byte) 0xc3; // JP 0100, keep the post-boot fixture alive
+        image[0x101] = 0x00;
+        image[0x102] = 0x01;
+        image[0x143] = 0x00; // non-color cartridge on a CGB profile
+        image[0x147] = 0x00;
+        image[0x148] = 0x00;
+        image[0x149] = 0x00;
+        int checksum = 0;
+        for (int address = 0x134; address <= 0x14c; address++) {
+            checksum = (checksum - (image[address] & 0xff) - 1) & 0xff;
+        }
+        image[0x14d] = (byte) checksum;
+        return image;
     }
 
     private static byte[] doubleSpeedLoop() {
