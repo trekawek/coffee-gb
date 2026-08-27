@@ -309,7 +309,21 @@ public class Cpu implements StatefulComponent<Cpu> {
      * @return master ticks consumed by the CPU epoch
      */
     public int runPhysicalDmgPerformanceEpoch(int maxMasterTicks) {
-        if (maxMasterTicks <= 0 || !performancePhysicalDmgEpochEntryEligible()) {
+        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false);
+    }
+
+    /**
+     * Fixed four-master-dot epoch for ordinary CGB hardware in DMG compatibility mode.
+     * The CPU bus and machine-cycle timing are the same normal-speed width as physical DMG,
+     * while the owner supplies the CGB-only peripheral/PPU plane around this transaction.
+     */
+    public int runCgbCompatibilityPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceNormalSpeedEpoch(maxMasterTicks, true);
+    }
+
+    /** Shared fixed-width normal-speed epoch; {@code cgbCompat} is an explicit topology guard. */
+    private int runPerformanceNormalSpeedEpoch(int maxMasterTicks, boolean cgbCompat) {
+        if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbCompat)) {
             return 0;
         }
         int requested = Math.min(maxMasterTicks, PERFORMANCE_EPOCH_MAX_TICKS);
@@ -423,6 +437,19 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Cheap state-only entrance check for the fixed-width physical-DMG epoch. */
     public boolean performancePhysicalDmgEpochEntryEligible() {
+        return performanceNormalSpeedEpochEntryEligible(false);
+    }
+
+    /** Cheap state-only entrance check for ordinary CGB DMG-compatibility epochs. */
+    public boolean performanceCgbCompatibilityEpochEntryEligible() {
+        return performanceNormalSpeedEpochEntryEligible(true);
+    }
+
+    /** Shared state-only entrance check for the fixed-width normal-speed epoch. */
+    public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbCompat) {
+        boolean topologyMatches = cgbCompat
+                ? speedMode.isGbc() && speedMode.isDmgCompat()
+                : !speedMode.isGbc();
         if (debugAddressSpace != null || debugHooks != null || debugRetirementTracker != null
                 || state == State.HALTED || state == State.STOPPED
                 || state == State.SPEED_SWITCH || state == State.LOCKED
@@ -442,7 +469,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 || interruptManager.hasRawPendingEnabledInterrupt()) {
             return false;
         }
-        return speedMode.getSpeedMode() == 1 && !speedMode.isGbc();
+        return speedMode.getSpeedMode() == 1 && topologyMatches;
     }
 
     private boolean isPerformanceEpochLifecycleState() {
@@ -1109,7 +1136,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         }
     }
 
-    /** Physical-DMG fetch/decode front end for its fixed four-dot direct tier. */
+    /** Normal-speed fetch/decode front end for the fixed four-dot direct tier. */
     private int tickPerformancePhysicalDmgEpochInstructionPipelineAtMachineCycle(
             int remainingMasterTicks) {
         int pc = registers.getPC();

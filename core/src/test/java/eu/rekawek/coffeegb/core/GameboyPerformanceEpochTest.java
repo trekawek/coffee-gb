@@ -16,7 +16,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/** Focused native-CGB smoke coverage for the coarse PERFORMANCE epoch entrance. */
+/** Focused native-CGB and CGB-compatibility coverage for the coarse PERFORMANCE epoch entrance. */
 public final class GameboyPerformanceEpochTest {
 
     @Test
@@ -102,6 +102,11 @@ public final class GameboyPerformanceEpochTest {
             assertTrue(gameboy.getSpeedMode().isDmgCompat());
             assertEquals(0L, gameboy.getPerformanceBulkSpanCount());
             assertEquals(0L, gameboy.getPerformanceEpochCount());
+
+            gameboy.resetPerformanceBulkCounters();
+            gameboy.runTicks(4_096);
+            assertTrue("ordinary CGB compatibility did not enter the epoch lane after NORMAL handoff",
+                    gameboy.getPerformanceEpochTicks() > 0);
         }
     }
 
@@ -126,11 +131,16 @@ public final class GameboyPerformanceEpochTest {
             assertTrue(gameboy.getSpeedMode().isDmgCompat());
             assertEquals(0L, gameboy.getPerformanceBulkSpanCount());
             assertEquals(0L, gameboy.getPerformanceEpochCount());
+
+            gameboy.resetPerformanceBulkCounters();
+            gameboy.runTicks(4_096);
+            assertTrue("ordinary CGB compatibility did not enter the epoch lane after FAST_FORWARD handoff",
+                    gameboy.getPerformanceEpochTicks() > 0);
         }
     }
 
     @Test
-    public void physicalDmgEntersEpochWhileCgbCompatibilityStaysLegacy() throws Exception {
+    public void physicalDmgAndCgbCompatibilityEnterTheirEpochLanes() throws Exception {
         byte[] loop = new byte[0x8000];
         loop[0x100] = (byte) 0xc3;
         loop[0x101] = 0x00;
@@ -151,8 +161,124 @@ public final class GameboyPerformanceEpochTest {
             compat.runTicks(100_000);
             assertTrue("physical DMG did not enter the coarse epoch lane",
                     dmg.getPerformanceEpochTicks() > 0);
-            assertEquals(0L, compat.getPerformanceEpochTicks());
+            assertTrue("ordinary CGB compatibility did not enter the coarse epoch lane",
+                    compat.getPerformanceEpochTicks() > 0);
             assertTrue(compat.getSpeedMode().isDmgCompat());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityRomWramLoopMatchesFallbackWithEpochCoverage()
+            throws Exception {
+        byte[] image = dmgRomWramLoop();
+        try (Gameboy scalar = cgbCompatibilitySession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = cgbCompatibilitySession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            for (int chunk = 0; chunk < 20; chunk++) {
+                scalarFrames += scalar.runTicks(5_000);
+                candidateFrames += candidate.runTicks(5_000);
+            }
+
+            assertEquals("CGB compatibility frame callbacks", scalarFrames, candidateFrames);
+            assertEquals("custom-source oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("CGB compatibility ROM/WRAM loop had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000);
+            assertEquals("CGB compatibility used a non-raster epoch plan",
+                    candidate.getPerformanceEpochTicks(),
+                    candidate.getPerformanceEpochRasterFastTicks());
+            assertEquals(0L, candidate.getPerformanceEpochMode2ReplayTicks());
+            assertEquals(scalar.getAddressSpace().getByte(0xc000),
+                    candidate.getAddressSpace().getByte(0xc000));
+            assertDeepStateEquals("CGB compatibility ROM/WRAM loop",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityUnsafeIoWriteMatchesFallbackAndTerminatesEpoch()
+            throws Exception {
+        byte[] image = cgbCompatibilityIoWriteLoop();
+        try (Gameboy scalar = cgbCompatibilitySession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = cgbCompatibilitySession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            for (int chunk = 0; chunk < 12; chunk++) {
+                assertEquals("CGB compatibility IO frame callback", scalar.runTicks(5_000),
+                        candidate.runTicks(5_000));
+            }
+            assertTrue("CGB compatibility IO loop had no coarse coverage epochs="
+                            + candidate.getPerformanceEpochCount()
+                            + " ticks=" + candidate.getPerformanceEpochTicks()
+                            + " bulk=" + candidate.getPerformanceBulkTicks()
+                            + " pc=" + Integer.toHexString(candidate.getCpu().getRegisters().getPC())
+                            + " mode=" + candidate.getGpu().getMode()
+                            + " line=" + candidate.getGpu().getLine()
+                            + " dot=" + candidate.getGpu().getTicksInLine(),
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertTrue("unsafe IO did not terminate a CGB compatibility epoch",
+                    candidate.getCpu().getPerformanceEpochTerminalAccesses() > 0);
+            assertDeepStateEquals("CGB compatibility IO loop",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityOamDmaWriteMatchesFallback() throws Exception {
+        byte[] image = cgbCompatibilityOamDmaWriteLoop();
+        try (Gameboy scalar = cgbCompatibilitySession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = cgbCompatibilitySession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            for (int chunk = 0; chunk < 8; chunk++) {
+                assertEquals("CGB compatibility OAM-DMA frame callback", scalar.runTicks(5_000),
+                        candidate.runTicks(5_000));
+                assertDeepStateEquals("CGB compatibility OAM-DMA chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+            assertTrue("CGB compatibility OAM-DMA loop had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertTrue("CGB compatibility OAM-DMA write did not terminate an epoch",
+                    candidate.getCpu().getPerformanceEpochTerminalAccesses() > 0);
+        }
+    }
+
+    @Test
+    public void unmeasuredNormalSpeedTopologiesStayOutsideFixedEpochLane() throws Exception {
+        byte[] nonColor = dmgRomWramLoop();
+        byte[] nativeColor = dmgRomWramLoop();
+        nativeColor[0x143] = (byte) 0x80;
+        try (Gameboy cgb0 = new Gameboy.GameboyConfiguration(new Rom(nonColor))
+                     .setHardwareProfile(HardwareProfileRegistry.CGB0)
+                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                     .setExecutionMode(ExecutionMode.PERFORMANCE)
+                     .setSupportBatterySave(false)
+                     .build();
+             Gameboy sgb = new Gameboy.GameboyConfiguration(new Rom(nonColor))
+                     .setHardwareProfile(HardwareProfileRegistry.SGB)
+                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                     .setExecutionMode(ExecutionMode.PERFORMANCE)
+                     .setSupportBatterySave(false)
+                     .build();
+             Gameboy nativeSpeed1 = new Gameboy.GameboyConfiguration(new Rom(nativeColor))
+                     .setHardwareProfile(HardwareProfileRegistry.CGB)
+                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                     .setExecutionMode(ExecutionMode.PERFORMANCE)
+                     .setSupportBatterySave(false)
+                     .build()) {
+            cgb0.runTicks(100_000);
+            sgb.runTicks(100_000);
+            nativeSpeed1.runTicks(100_000);
+            assertEquals(0L, cgb0.getPerformanceEpochTicks());
+            assertEquals(0L, sgb.getPerformanceEpochTicks());
+            assertEquals(0L, nativeSpeed1.getPerformanceEpochTicks());
+            assertFalse(nativeSpeed1.getSpeedMode().isDmgCompat());
         }
     }
 
@@ -235,6 +361,57 @@ public final class GameboyPerformanceEpochTest {
             assertDeepStateEquals("after physical-DMG HALT epoch",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityEpochRetiringHaltMatchesScalarDeepState() throws Exception {
+        byte[] image = dmgRomWramLoop();
+        image[0x200] = 0x76; // HALT, selected after reaching a trusted CGB raster span
+        try (Gameboy scalar = cgbCompatibilitySession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = cgbCompatibilitySession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            int guard = 0;
+            while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
+                    && candidate.getGpu().getTicksInLine() >= 100
+                    && candidate.getGpu().getTicksInLine() <= 180
+                    && candidate.getCpu().getState() == Cpu.State.OPCODE
+                    && candidate.getCpu().getDebugMachineCycle() == 0
+                    && candidate.getCpu().performanceCgbCompatibilityEpochEntryEligible())
+                    && guard++ < 200_000) {
+                assertEquals("CGB compatibility HALT setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("test did not reach a trusted CGB compatibility HALT entry",
+                    guard < 200_000);
+            assertDeepStateEquals("before CGB compatibility HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.getCpu().getRegisters().setPC(0x0200);
+            candidate.getCpu().getRegisters().setPC(0x0200);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("CGB compatibility HALT frame callback", scalar.runTicks(8),
+                    candidate.runTicks(8));
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertTrue("HALT fetch did not retire inside a CGB compatibility epoch",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertDeepStateEquals("after CGB compatibility HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityMeasuredWindowRetainsEpochLane() throws Exception {
+        try (Gameboy gameboy = cgbCompatibilitySession(
+                dmgRomWramLoop(), PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            gameboy.resetPerformanceBulkCounters();
+            assertEquals(4_096, gameboy.runMeasuredTicksUntilStop(4_096, () -> false));
+            assertTrue("measured CGB compatibility window lost epoch coverage",
+                    gameboy.getPerformanceEpochTicks() > 0);
         }
     }
 
@@ -327,6 +504,18 @@ public final class GameboyPerformanceEpochTest {
             throws Exception {
         return new Gameboy.GameboyConfiguration(new Rom(image))
                 .setHardwareProfile(HardwareProfileRegistry.DMG)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(executionMode)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy cgbCompatibilitySession(
+            byte[] image, PlayerInputSource inputSource, ExecutionMode executionMode)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setExecutionMode(executionMode)
                 .setPlayerInputSource(inputSource)
@@ -493,6 +682,32 @@ public final class GameboyPerformanceEpochTest {
         image[0x105] = 0x77; // LD (HL),A
         image[0x106] = 0x18; // JR 0103
         image[0x107] = (byte) 0xfb;
+        image[0x143] = 0x00;
+        return image;
+    }
+
+    private static byte[] cgbCompatibilityIoWriteLoop() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x3e; // LD A,1
+        image[0x101] = 0x01;
+        image[0x102] = (byte) 0xe0; // LDH (FF47),A
+        image[0x103] = 0x47;
+        image[0x104] = (byte) 0xc3; // JP 0100
+        image[0x105] = 0x00;
+        image[0x106] = 0x01;
+        image[0x143] = 0x00;
+        return image;
+    }
+
+    private static byte[] cgbCompatibilityOamDmaWriteLoop() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x3e; // LD A,1
+        image[0x101] = 0x01;
+        image[0x102] = (byte) 0xe0; // LDH (FF46),A
+        image[0x103] = 0x46;
+        image[0x104] = (byte) 0xc3; // JP 0100
+        image[0x105] = 0x00;
+        image[0x106] = 0x01;
         image[0x143] = 0x00;
         return image;
     }

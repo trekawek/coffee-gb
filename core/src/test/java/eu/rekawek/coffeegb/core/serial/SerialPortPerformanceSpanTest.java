@@ -51,6 +51,30 @@ public class SerialPortPerformanceSpanTest {
                 new InterruptManager(true), true, new SpeedMode(true));
         assertFalse(cgbNormal.performanceEpochIdle(54));
         assertFalse(cgbNormal.performancePhysicalDmgEpochIdle(54));
+        assertFalse(cgbNormal.performanceNormalSpeedEpochIdle(54, true));
+    }
+
+    @Test
+    public void cgbCompatibilityIdleEpochMatchesScalarNormalSpeedTicks() {
+        SpeedMode scalarSpeed = new SpeedMode(true);
+        SpeedMode bulkSpeed = new SpeedMode(true);
+        scalarSpeed.setDmgCompat(true);
+        bulkSpeed.setDmgCompat(true);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(scalarInterrupts, true, scalarSpeed);
+        SerialPort bulk = new SerialPort(bulkInterrupts, true, bulkSpeed);
+        for (int tick = 0; tick < 37; tick++) {
+            scalar.tick();
+            bulk.tick();
+        }
+        assertTrue(bulk.performanceNormalSpeedEpochIdle(54, true));
+        for (int tick = 0; tick < 54; tick++) {
+            scalar.tick();
+        }
+        bulk.tickPerformanceNormalSpeedEpochIdle(54);
+        assertEquals(scalar.captureState(), bulk.captureState());
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
     }
 
     @Test

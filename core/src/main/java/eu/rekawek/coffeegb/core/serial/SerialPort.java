@@ -179,9 +179,17 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
     /** Physical-DMG normal-speed epoch guard; transfers and callbacks remain scalar. */
     public boolean performancePhysicalDmgEpochIdle(int requested) {
+        return performanceNormalSpeedEpochIdle(requested, false);
+    }
+
+    /** Normal-speed epoch guard shared by physical DMG and CGB compatibility. */
+    public boolean performanceNormalSpeedEpochIdle(int requested, boolean cgbCompat) {
+        boolean topologyMatches = cgbCompat
+                ? speedMode.isGbc() && speedMode.isDmgCompat()
+                : !speedMode.isGbc();
         return requested > 0
                 && speedMode.getSpeedMode() == 1
-                && !speedMode.isGbc()
+                && topologyMatches
                 && serialEndpoint.canTickPerformanceQuietSpan(requested)
                 && (sc & 0x80) == 0
                 && haltWakeDelay == 0
@@ -190,6 +198,11 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
 
     /** Applies a preflighted physical-DMG idle serial phase at one clock per master tick. */
     public void tickPerformancePhysicalDmgEpochIdle(int ticks) {
+        tickPerformanceNormalSpeedEpochIdle(ticks);
+    }
+
+    /** Applies a preflighted fixed-x1 normal-speed serial phase. */
+    public void tickPerformanceNormalSpeedEpochIdle(int ticks) {
         if (ticks <= 0) {
             return;
         }
