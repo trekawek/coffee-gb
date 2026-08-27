@@ -61,6 +61,10 @@ public final class GameboyPlayerInputHubPerformanceTest {
                                         + ", chunk=" + chunkIndex + " "
                                         + componentHashes(scalarState, performanceState),
                                 stateHash(scalarState), stateHash(performanceState));
+                        assertEquals("host audio cgb=" + cgb + ", held=" + held
+                                        + ", chunk=" + chunkIndex,
+                                soundHostOutputHash(scalarState),
+                                soundHostOutputHash(performanceState));
                         assertRasterEquivalent(scalar, performance,
                                 "cgb=" + cgb + ", held=" + held + ", chunk=" + chunkIndex);
                     }
@@ -158,6 +162,9 @@ public final class GameboyPlayerInputHubPerformanceTest {
                 assertEquals("HALT differential cgb=" + cgb + " "
                                 + componentHashes(scalar.captureState(), performance.captureState()),
                         stateHash(scalar.captureState()), stateHash(performance.captureState()));
+                assertEquals("HALT host audio cgb=" + cgb,
+                        soundHostOutputHash(scalar.captureState()),
+                        soundHostOutputHash(performance.captureState()));
                 assertRasterEquivalent(scalar, performance, "HALT cgb=" + cgb);
                 assertTrue("stable HALT had no substantial bulk coverage cgb=" + cgb
                                 + " ticks=" + performance.getPerformanceBulkTicks(),
@@ -166,6 +173,10 @@ public final class GameboyPlayerInputHubPerformanceTest {
                                 + " settled HALT never crossed a machine-cycle boundary"
                                 + " maxSpan=" + performance.getPerformanceBulkMaxTicks(),
                         performance.getPerformanceBulkMaxTicks() > 3);
+                if (cgb) {
+                    assertTrue("CGB settled HALT never crossed a compact sample boundary",
+                            performance.getPerformanceBulkMaxTicks() > 54);
+                }
             }
         }
     }
@@ -867,6 +878,17 @@ public final class GameboyPlayerInputHubPerformanceTest {
     private static long joypadTick(Gameboy gameboy) {
         Object memento = recordComponentValue(gameboy.captureState(), "joypadMemento");
         return ((Number) recordComponentValue(memento, "tick")).longValue();
+    }
+
+    /** Exact host-audio prefix omitted from the canonical machine-state differential above. */
+    private static int soundHostOutputHash(ComponentState<Gameboy> gameboyState) {
+        Object soundState = recordComponentValue(gameboyState, "soundMemento");
+        int hash = stateHash(recordComponentValue(soundState, "buffer"));
+        hash = 31 * hash + stateHash(recordComponentValue(soundState, "i"));
+        hash = 31 * hash + stateHash(recordComponentValue(
+                soundState, "performanceSamplePhase"));
+        hash = 31 * hash + stateHash(recordComponentValue(soundState, "audioDecimation"));
+        return hash;
     }
 
     private enum WakeSource {

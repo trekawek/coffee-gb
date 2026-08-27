@@ -121,8 +121,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     static final int OAM_DMA_HBLANK_SPEED_SWITCH_DELAY_TICKS = 2;
 
-    /** Maximum packet horizon for the settled normal-speed HALT path. */
-    private static final int SETTLED_HALT_PERFORMANCE_MAX_SPAN = 54;
+    /** Maximum settled-HALT packet horizon; Android's next input poll trims this to at most 63. */
+    private static final int SETTLED_HALT_PERFORMANCE_MAX_SPAN = 64;
 
     // A granted HBlank burst can finish while the CPU speed-switch countdown is still
     // running. Its completed bus hand-off removes five ticks from the retained tail.
@@ -1587,7 +1587,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
         span = Math.min(span, timer.performanceEpochSpanLimit(span));
-        span = Math.min(span, sound.performanceEpochSpanLimit(span));
+        // This is a settled no-bus HALT transaction, so ordinary compact samples cannot race a
+        // deferred CPU sound-register write. Only the synchronous host callback stays scalar.
+        span = Math.min(span, sound.performanceQuietSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
         if (span <= 0 || !serialPort.performanceEpochIdle(span)
                 || !infraredPort.performanceEpochIdle(span)) {
@@ -1729,7 +1731,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
         span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
-        span = Math.min(span, sound.performanceEpochSpanLimit(span));
+        span = Math.min(span, nativeCgbNormalSpeed || sgb
+                ? sound.performanceFencedEpochSpanLimit(span)
+                : sound.performanceEpochSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
         if (cgbHardware) {
             span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, true)

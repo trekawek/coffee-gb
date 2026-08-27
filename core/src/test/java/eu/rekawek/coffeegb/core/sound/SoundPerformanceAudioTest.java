@@ -68,6 +68,26 @@ public class SoundPerformanceAudioTest {
     }
 
     @Test
+    public void canonicalSpanStopsBeforeSynchronousHostCallback() {
+        ClockSpec sourceClock = new ClockSpec(550, 1, 1);
+        Sound sound = newSound(sourceClock);
+        EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        List<Sound.SoundSampleEvent> events = new ArrayList<>();
+        eventBus.register(events::add, Sound.SoundSampleEvent.class);
+        sound.init(eventBus);
+
+        // Ten compact samples fill this host buffer. The first 549 ticks may be one exact span,
+        // while the callback-producing 550th tick remains owned by the scalar scheduler.
+        assertEquals(549, sound.performanceQuietSpanLimit(1_000));
+        sound.tickPerformanceQuietSpan(549);
+        assertEquals(0, events.size());
+        assertEquals(0, sound.performanceQuietSpanLimit(1));
+        sound.tick(false);
+        assertEquals(1, events.size());
+        assertEquals(20, events.get(0).buffer().length);
+    }
+
+    @Test
     public void sgbPerformanceSourcesEmit1254SamplesPerExactFrame() {
         for (ClockSpec sourceClock : new ClockSpec[]{ClockSpec.SGB, ClockSpec.SGB2}) {
             Sound sound = newSound(sourceClock);

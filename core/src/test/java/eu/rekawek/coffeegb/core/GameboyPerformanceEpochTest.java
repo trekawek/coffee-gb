@@ -49,6 +49,41 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void nativeDoubleSpeedNr50WritesAcrossSamplesMatchScalarHostAudio()
+            throws Exception {
+        byte[] image = nativeDoubleSpeedNr50Loop();
+        try (Gameboy scalar = nativeDoubleSpeedSession(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeDoubleSpeedSession(
+                     image, PlayerInputSource.RELEASED)) {
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            // The speed-switch preamble is about 130k master ticks. The alternating NR50
+            // loop then writes every 20 double-speed master ticks, walking every phase of the
+            // 55-dot compact-output cadence and repeatedly terminating unfenced epochs.
+            for (int chunk = 0; chunk < 60; chunk++) {
+                scalarFrames += scalar.runTicks(5_000);
+                candidateFrames += candidate.runTicks(5_000);
+            }
+
+            assertEquals("native CGB x2 NR50 frame callbacks", scalarFrames, candidateFrames);
+            assertEquals(2, scalar.getSpeedMode().getSpeedMode());
+            assertEquals(2, candidate.getSpeedMode().getSpeedMode());
+            assertEquals("custom-source oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("native CGB x2 NR50 loop had no coarse epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertTrue("NR50 writes did not terminate an unfenced native CGB x2 epoch",
+                    candidate.getCpu().getPerformanceEpochTerminalAccesses() > 0);
+            // This includes SoundState.buffer/i/performanceSamplePhase, so a sample captured
+            // before replaying its preceding NR50 write is observable even when CPU/PPU agree.
+            assertDeepStateEquals("native CGB x2 NR50/sample ordering",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
     public void stopAwarePreconditioningNeverUsesEpochLane() throws Exception {
         try (Gameboy gameboy = new Gameboy.GameboyConfiguration(new Rom(doubleSpeedLoop()))
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
@@ -1210,6 +1245,56 @@ public final class GameboyPerformanceEpochTest {
         image[0x106] = (byte) 0xc3; // JP 0106
         image[0x107] = 0x06;
         image[0x108] = 0x01;
+        image[0x143] = (byte) 0x80;
+        return image;
+    }
+
+    private static byte[] nativeDoubleSpeedNr50Loop() {
+        byte[] image = new byte[0x8000];
+        int pc = 0x100;
+        image[pc++] = 0x3e; // LD A,1
+        image[pc++] = 0x01;
+        image[pc++] = (byte) 0xe0; // LDH (FF4D),A
+        image[pc++] = 0x4d;
+        image[pc++] = 0x10; // STOP + padding: enter native CGB double speed
+        image[pc++] = 0x00;
+
+        image[pc++] = 0x3e; // LD A,80
+        image[pc++] = (byte) 0x80;
+        image[pc++] = (byte) 0xe0; // LDH (FF26),A: APU on
+        image[pc++] = 0x26;
+        image[pc++] = 0x3e; // LD A,11
+        image[pc++] = 0x11;
+        image[pc++] = (byte) 0xe0; // LDH (FF25),A: route CH1 to both outputs
+        image[pc++] = 0x25;
+        image[pc++] = 0x3e; // LD A,80
+        image[pc++] = (byte) 0x80;
+        image[pc++] = (byte) 0xe0; // LDH (FF11),A: 50% duty
+        image[pc++] = 0x11;
+        image[pc++] = 0x3e; // LD A,F0
+        image[pc++] = (byte) 0xf0;
+        image[pc++] = (byte) 0xe0; // LDH (FF12),A: CH1 DAC/envelope
+        image[pc++] = 0x12;
+        image[pc++] = 0x3e; // LD A,FF
+        image[pc++] = (byte) 0xff;
+        image[pc++] = (byte) 0xe0; // LDH (FF13),A
+        image[pc++] = 0x13;
+        image[pc++] = 0x3e; // LD A,87
+        image[pc++] = (byte) 0x87;
+        image[pc++] = (byte) 0xe0; // LDH (FF14),A: trigger CH1
+        image[pc++] = 0x14;
+
+        int loop = pc;
+        image[pc++] = 0x3e; // LD A,77
+        image[pc++] = 0x77;
+        image[pc++] = (byte) 0xe0; // LDH (FF24),A: maximum output volume
+        image[pc++] = 0x24;
+        image[pc++] = (byte) 0xee; // XOR 77 => 00
+        image[pc++] = 0x77;
+        image[pc++] = (byte) 0xe0; // LDH (FF24),A: minimum output volume
+        image[pc++] = 0x24;
+        image[pc++] = 0x18; // JR loop
+        image[pc++] = (byte) (loop - pc);
         image[0x143] = (byte) 0x80;
         return image;
     }

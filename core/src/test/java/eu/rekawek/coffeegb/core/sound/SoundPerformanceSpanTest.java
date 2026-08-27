@@ -62,6 +62,61 @@ public final class SoundPerformanceSpanTest {
     }
 
     @Test
+    public void multiSampleSpansMatchScalarChannelStateAndCompactPcm() throws Exception {
+        int[] warmups = {0, 1, 17, 54};
+        int[] spans = {55, 56, 109, 110, 111, 257, 456};
+        for (boolean gbc : new boolean[]{false, true}) {
+            for (int warmup : warmups) {
+                for (int span : spans) {
+                    Sound scalar = configured(gbc);
+                    Sound bulk = configured(gbc);
+                    for (int tick = 0; tick < warmup; tick++) {
+                        scalar.tick(false);
+                        bulk.tick(false);
+                    }
+                    assertEquals("admission gbc=" + gbc + " warmup=" + warmup
+                                    + " span=" + span,
+                            span, bulk.performanceQuietSpanLimit(span));
+                    for (int tick = 0; tick < span; tick++) {
+                        scalar.tick(false);
+                    }
+                    bulk.tickPerformanceQuietSpan(span);
+                    // Unlike canonicalSoundDigest(), this includes the compact PCM prefix,
+                    // buffer index, and sample phase as well as every emulated APU field.
+                    assertEquals("gbc=" + gbc + " warmup=" + warmup + " span=" + span,
+                            digest(scalar.captureState()), digest(bulk.captureState()));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void sgb56TickCadenceMultiSampleSpansMatchScalarStateAndPcm() throws Exception {
+        int[] warmups = {0, 1, 18, 55};
+        int[] spans = {56, 57, 111, 112, 257, 456};
+        for (int warmup : warmups) {
+            for (int span : spans) {
+                Sound scalar = configured(false, ClockSpec.SGB);
+                Sound bulk = configured(false, ClockSpec.SGB);
+                for (int tick = 0; tick < warmup; tick++) {
+                    scalar.tick(false);
+                    bulk.tick(false);
+                }
+                assertEquals("SGB admission warmup=" + warmup + " span=" + span,
+                        span, bulk.performanceQuietSpanLimit(span));
+                for (int tick = 0; tick < span; tick++) {
+                    scalar.tick(false);
+                }
+                bulk.tickPerformanceQuietSpan(span);
+                // Full SoundState digest includes the compact stereo prefix, write index,
+                // 56-dot phase, and all channel state.
+                assertEquals("SGB warmup=" + warmup + " span=" + span,
+                        digest(scalar.captureState()), digest(bulk.captureState()));
+            }
+        }
+    }
+
+    @Test
     public void unsupportedBoundaryFallsBackToScalarOutputCadence() throws Exception {
         Sound scalar = configured(true);
         Sound bulk = configured(true);
@@ -419,10 +474,13 @@ public final class SoundPerformanceSpanTest {
     }
 
     private static Sound configured(boolean gbc) {
+        return configured(gbc, new ClockSpec(1_100_000, 1, 100, 1));
+    }
+
+    private static Sound configured(boolean gbc, ClockSpec clockSpec) {
         SpeedMode speedMode = new SpeedMode(gbc);
         Timer timer = new Timer(new InterruptManager(gbc), speedMode);
-        Sound sound = new Sound(timer, speedMode, gbc,
-                new ClockSpec(1_100_000, 1, 100, 1), ExecutionMode.PERFORMANCE);
+        Sound sound = new Sound(timer, speedMode, gbc, clockSpec, ExecutionMode.PERFORMANCE);
         sound.setByte(0xff26, 0x80);
         sound.setByte(0xff24, 0x77);
         sound.setByte(0xff25, 0xff);
