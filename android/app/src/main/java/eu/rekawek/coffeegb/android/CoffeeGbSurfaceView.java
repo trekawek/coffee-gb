@@ -131,14 +131,29 @@ public final class CoffeeGbSurfaceView extends SurfaceView
      * new snapshot. Passing {@code null} is equivalent to {@link #clearMenuPresentation()}.
      */
     public void setMenuPresentation(MenuPresentation presentation) {
+        if (presentation == null) {
+            clearMenuPresentation();
+            return;
+        }
         menuPresentation = presentation;
         onFrameAvailable();
     }
 
-    /** Clears the in-screen menu and schedules one redraw without changing frame ownership. */
+    /**
+     * Clears the UI-thread-owned menu snapshot. A present snapshot schedules exactly one redraw;
+     * an already-cleared snapshot leaves the retained game frame and renderer asleep.
+     */
     public void clearMenuPresentation() {
+        if (!requiresMenuInvalidationOnClear(menuPresentation)) {
+            return;
+        }
         menuPresentation = null;
         onFrameAvailable();
+    }
+
+    /** Pure seam for keeping an already-hidden menu from resubmitting the retained game frame. */
+    static boolean requiresMenuInvalidationOnClear(MenuPresentation presentation) {
+        return presentation != null;
     }
 
     /**
