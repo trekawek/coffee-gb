@@ -220,6 +220,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 && options.audioPolicy == DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1) {
             return RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1;
         }
+        if (options.enabled
+                && options.runtimeWarmup
+                && options.executionMode == ExecutionMode.PERFORMANCE) {
+            return RuntimeWarmupFlavor.PERFORMANCE;
+        }
         return RuntimeWarmupFlavor.SCALAR;
     }
 

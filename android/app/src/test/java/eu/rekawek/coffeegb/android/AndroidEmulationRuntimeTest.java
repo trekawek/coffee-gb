@@ -250,7 +250,7 @@ public class AndroidEmulationRuntimeTest {
     }
 
     @Test
-    public void shadowMeasuredWarmupSelectorIsOnlyNativeCgbPerformanceSilentScenario() {
+    public void warmupSelectorUsesExactSilentShapeThenMatchingPerformanceScheduler() {
         DiagnosticsOptions eligible = DiagnosticsOptions.parseValues(
                 true, "cgb", true, "presentation", true, true, false,
                 null, null, null, -1, null, null, null, null, false, null, -1, -1,
@@ -269,9 +269,19 @@ public class AndroidEmulationRuntimeTest {
                     "performance", "cgb-action-v1", "silent-pcm-v1");
             try (EmulatorProperties properties = new EmulatorProperties(
                     AndroidEmulationRuntime.androidSettingsOverrides(rejected))) {
-                assertEquals(RuntimeWarmupFlavor.SCALAR,
+                assertEquals(RuntimeWarmupFlavor.PERFORMANCE,
                         properties.getOverrides().getRuntimeWarmupFlavor());
             }
+        }
+
+        DiagnosticsOptions canonical = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", true, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, null);
+        try (EmulatorProperties properties = new EmulatorProperties(
+                AndroidEmulationRuntime.androidSettingsOverrides(canonical))) {
+            assertEquals(RuntimeWarmupFlavor.PERFORMANCE,
+                    properties.getOverrides().getRuntimeWarmupFlavor());
         }
 
         DiagnosticsOptions accuracy = DiagnosticsOptions.parseValues(

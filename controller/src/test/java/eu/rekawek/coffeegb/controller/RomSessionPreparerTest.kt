@@ -245,7 +245,7 @@ class RomSessionPreparerTest {
   }
 
   @Test
-  fun shadowMeasuredWarmupIsCgbPerformanceOnlyAndHasAnIsolatedCacheKey() {
+  fun performanceWarmupsRequirePerformanceModeAndHaveIsolatedCacheKeys() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(8, executor)
     val cgbPerformance =
@@ -282,9 +282,17 @@ class RomSessionPreparerTest {
             RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
         ) {})
     assertTrue(cache.warm(cgbPerformance, RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1) {})
+    assertFalse(
+        cache.warm(
+            skipConfig(cgbNativeImage())
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.ACCURACY),
+            RuntimeWarmupFlavor.PERFORMANCE,
+        ) {})
+    assertTrue(cache.warm(cgbPerformance, RuntimeWarmupFlavor.PERFORMANCE) {})
     assertTrue(cache.warm(cgbPerformance, RuntimeWarmupFlavor.SCALAR) {})
-    assertEquals(2, executor.calls.size)
-    assertEquals(2, cache.size)
+    assertEquals(3, executor.calls.size)
+    assertEquals(3, cache.size)
   }
 
   @Test
@@ -308,6 +316,21 @@ class RomSessionPreparerTest {
         config.forRuntimeWarmup(),
         120 * config.clockSpec.controllerTicksPerFrame(),
         RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1,
+    ) {}
+    assertContentEquals(originalConfigRom, config.rom.rom)
+  }
+
+  @Test
+  fun productionPerformanceExecutorRunsItsFrameBatchedSchedulerPath() {
+    val config =
+        skipConfig(cgbNativeImage())
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+            .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)
+    val originalConfigRom = config.rom.rom.copyOf()
+    RuntimeWarmupCache.GameboyRuntimeWarmupExecutor.warm(
+        config.forRuntimeWarmup(),
+        120 * config.clockSpec.controllerTicksPerFrame(),
+        RuntimeWarmupFlavor.PERFORMANCE,
     ) {}
     assertContentEquals(originalConfigRom, config.rom.rom)
   }
