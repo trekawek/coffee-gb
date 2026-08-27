@@ -311,9 +311,12 @@ public final class GameboyPerformanceEpochTest {
                     0L, scalar.getPerformanceEpochTicks());
             assertTrue("native CGB x1 ROM/WRAM loop had no coarse coverage",
                     candidate.getPerformanceEpochTicks() > 10_000);
-            assertEquals("native CGB x1 used a non-raster epoch plan",
+            assertTrue("native CGB x1 ROM/WRAM loop had no mode-2 epoch coverage",
+                    candidate.getPerformanceEpochMode2BulkTicks() > 0);
+            assertEquals("native CGB x1 epoch plan accounting",
                     candidate.getPerformanceEpochTicks(),
-                    candidate.getPerformanceEpochRasterFastTicks());
+                    candidate.getPerformanceEpochRasterFastTicks()
+                            + candidate.getPerformanceEpochMode2BulkTicks());
             assertFalse(candidate.getSpeedMode().isDmgCompat());
             assertEquals(1, candidate.getSpeedMode().getSpeedMode());
             assertEquals(scalar.getAddressSpace().getByte(0xc000),
@@ -347,9 +350,12 @@ public final class GameboyPerformanceEpochTest {
                     0L, scalar.getPerformanceEpochTicks());
             assertTrue("native CGB external-clock wait had no coarse coverage",
                     candidate.getPerformanceEpochTicks() > 10_000);
-            assertEquals("native CGB external-clock wait used a non-raster epoch plan",
+            assertTrue("native CGB external-clock wait had no mode-2 epoch coverage",
+                    candidate.getPerformanceEpochMode2BulkTicks() > 0);
+            assertEquals("native CGB external-clock wait epoch plan accounting",
                     candidate.getPerformanceEpochTicks(),
-                    candidate.getPerformanceEpochRasterFastTicks());
+                    candidate.getPerformanceEpochRasterFastTicks()
+                            + candidate.getPerformanceEpochMode2BulkTicks());
             assertEquals(scalar.getAddressSpace().getByte(0xc000),
                     candidate.getAddressSpace().getByte(0xc000));
             assertDeepStateEquals("native CGB external-clock wait",

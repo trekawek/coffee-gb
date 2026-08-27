@@ -1213,9 +1213,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Fixed-x1 normal-speed coarse scheduler. Only the trusted rendered raster may join a CPU
-     * epoch; mode 2, STAT/line edges, DMA, IRQ/HALT, and every rejected topology retain the
-     * established normal-speed PERFORMANCE scheduler.
+     * Fixed-x1 normal-speed coarse scheduler. Trusted rendered raster spans may join every
+     * supported CPU epoch; native CGB x1 may also use the exact mode-2 OAM transaction. STAT
+     * and line edges, DMA, IRQ boundaries, and every rejected topology retain the established
+     * normal-speed PERFORMANCE scheduler.
      */
     private long runNormalSpeedPerformanceTicks(long ticks) {
         gpu.setPerformanceScanlineEnabled(true);
@@ -1739,13 +1740,23 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     ? span : 0);
         }
 
+        PerformanceEpochPpuPlan ppuPlan;
         int rasterSpan = cgbHardware
                 ? gpu.performanceEpochSpanLimit(span)
                 : gpu.performancePhysicalDmgEpochSpanLimit(span);
-        if (rasterSpan <= 0) {
+        if (rasterSpan > 0) {
+            span = Math.min(span, rasterSpan);
+            ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+        } else if (nativeCgbNormalSpeed) {
+            int mode2Span = gpu.performanceCgbNormalSpeedMode2PhaseSpanLimit(span);
+            if (mode2Span <= 0) {
+                return 0;
+            }
+            span = Math.min(span, mode2Span);
+            ppuPlan = PerformanceEpochPpuPlan.MODE2_BULK;
+        } else {
             return 0;
         }
-        span = Math.min(span, rasterSpan);
         span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
         if (span <= 0) {
             return 0;
@@ -1758,7 +1769,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochDirectRaster = gpu.isPerformanceScanlineCursorActive();
         performanceEpochSteadyRaster = !performanceEpochDirectRaster
                 && gpu.isPerformanceSteadyCursorActive();
-        performanceEpochPpuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+        performanceEpochPpuPlan = ppuPlan;
         performanceEpochPrefixCommitted = 0;
         IntConsumer prefixCommitter;
         if (cgbHardware) {
@@ -1942,7 +1953,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         commitNormalSpeedPerformanceEpochPeripherals(ticks, false);
     }
 
-    /** Normal-speed CGB prefix commit through the existing CGB quiet epoch plane. */
+    /** Normal-speed CGB prefix commit through the selected raster or mode-2 PPU plane. */
     private void commitCgbNormalSpeedPerformanceEpochPeripherals(int ticks) {
         commitNormalSpeedPerformanceEpochPeripherals(ticks, true);
     }
@@ -1968,14 +1979,26 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // The preflight admits only inactive countdowns, so their zero-clock ages are the
             // complete arithmetic transaction skipped by this fixed-x1 packet.
             hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
-            gpu.advancePerformanceEpochQuietSpanTrusted(
-                    ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+            switch (performanceEpochPpuPlan) {
+                case TRUSTED_RASTER -> {
+                    gpu.advancePerformanceEpochQuietSpanTrusted(
+                            ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+                    performanceEpochRasterFastTicks += ticks;
+                }
+                case MODE2_BULK -> {
+                    gpu.advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(ticks);
+                    performanceEpochMode2ReplayTicks += ticks;
+                    performanceEpochMode2BulkTicks += ticks;
+                }
+                default -> throw new IllegalStateException(
+                        "normal-speed CGB epoch has no PPU plan");
+            }
         } else {
             gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
                     ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+            performanceEpochRasterFastTicks += ticks;
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
-        performanceEpochRasterFastTicks += ticks;
         if (cgbHardware) {
             hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
                     gpu.isStatModeLatchRephasedBySpeedSwitch());

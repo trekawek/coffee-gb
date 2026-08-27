@@ -17,7 +17,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-/** Differential coverage for the short normal-speed mode-2 phase packet. */
+/** Differential coverage for the normal-speed mode-2 PERFORMANCE packets. */
 public final class GameboyPerformanceMode2PhaseTest {
 
     /** Deliberately non-identity source: PERFORMANCE's input horizon must reject this leg. */
@@ -65,6 +65,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             HardwareProfile[] profiles, boolean nativeColor) throws Exception {
         for (HardwareProfile profile : profiles) {
             for (boolean tallSprites : new boolean[] {false, true}) {
+                boolean sawNativeMode2Epoch = false;
                 for (int start : new int[] {0, 1, 2, 3, 13, 20, 76, 77, 78}) {
                     int[] spans = {1, 2, 3};
                     for (int requested : spans) {
@@ -102,15 +103,17 @@ public final class GameboyPerformanceMode2PhaseTest {
                             }
                             assertEquals("candidate frame callback",
                                     0, candidate.runTicks(requested));
+                            long committedMode2Ticks = performanceMode2CommittedTicks(candidate);
+                            sawNativeMode2Epoch |= candidate.getPerformanceEpochMode2BulkTicks() > 0;
                             if (start >= 13 && requested <= cpuPhaseLimit) {
                                 assertTrue("mode-2 packet was not selected (" + caseDetails
-                                                + ", bulkTicks="
-                                                + candidate.getPerformanceBulkTicks() + ")",
-                                        candidate.getPerformanceBulkTicks() > 0);
+                                                + ", committedTicks="
+                                                + committedMode2Ticks + ")",
+                                        committedMode2Ticks > 0);
                             } else if (start <= 3) {
                                 assertEquals("early mode-2 STAT checkpoint took a bulk packet ("
                                                 + caseDetails + ")", 0,
-                                        candidate.getPerformanceBulkTicks());
+                                        committedMode2Ticks);
                             }
                             assertDeepStateEquals("profile=" + profile.id()
                                             + " native=" + nativeColor + " tall="
@@ -120,6 +123,11 @@ public final class GameboyPerformanceMode2PhaseTest {
                                     candidate.captureStateWithoutTimeSource());
                         }
                     }
+                }
+                if (nativeColor) {
+                    assertTrue("native CGB x1 did not enter a mode-2 CPU epoch tall="
+                                    + tallSprites,
+                            sawNativeMode2Epoch);
                 }
             }
         }
@@ -172,7 +180,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             assertEquals(0, candidate.runTicks(3));
             assertEquals(79, candidate.getGpu().getTicksInLine());
             assertEquals(Mode.OamSearch, candidate.getGpu().getMode());
-            long packetTicks = candidate.getPerformanceBulkTicks();
+            long packetTicks = performanceMode2CommittedTicks(candidate);
             assertTrue("mode-2 prefix was not bulk committed", packetTicks > 0);
 
             scalar.tick();
@@ -180,7 +188,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             assertEquals(80, candidate.getGpu().getTicksInLine());
             assertEquals(Mode.PixelTransfer, candidate.getGpu().getMode());
             assertEquals("mode-3 handoff entered the mode-2 packet", packetTicks,
-                    candidate.getPerformanceBulkTicks());
+                    performanceMode2CommittedTicks(candidate));
             if (profile == HardwareProfileRegistry.CGB) {
                 assertEquals("CGB handoff compatibility identity", !nativeColor,
                         candidate.getGpu().isDmgCompatMode());
@@ -243,7 +251,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             }
             assertEquals(0, candidate.runTicks(3));
             assertEquals("active OAM DMA entered a mode-2 packet", 0,
-                    candidate.getPerformanceBulkTicks());
+                    performanceMode2CommittedTicks(candidate));
             assertDeepStateEquals(profile.id() + " native=" + nativeColor
                             + " active OAM DMA",
                     scalar.captureStateWithoutTimeSource(),
@@ -296,7 +304,7 @@ public final class GameboyPerformanceMode2PhaseTest {
                 candidate.runTicks(1);
             }
             assertEquals("restore drain entered a mode-2 packet", 0,
-                    candidate.getPerformanceBulkTicks());
+                    performanceMode2CommittedTicks(candidate));
             assertDeepStateEquals(profile.id() + " native=" + nativeColor
                             + " restore mode-2 drain",
                     scalar.captureStateWithoutTimeSource(),
@@ -336,7 +344,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             }
             assertEquals(0, candidate.runTicks(3));
             assertEquals("active HDMA entered a mode-2 packet", 0,
-                    candidate.getPerformanceBulkTicks());
+                    performanceMode2CommittedTicks(candidate));
             assertDeepStateEquals("CGB native=" + nativeColor + " active HDMA",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -364,7 +372,7 @@ public final class GameboyPerformanceMode2PhaseTest {
             }
             assertEquals(0, candidate.runTicks(tail));
             assertTrue("completed GDMA tail did not enter a mode-2 packet",
-                    candidate.getPerformanceBulkTicks() > 0);
+                    performanceMode2CommittedTicks(candidate) > 0);
             assertDeepStateEquals("CGB native=" + nativeColor
                             + " completed-GDMA request clock",
                     scalar.captureStateWithoutTimeSource(),
@@ -416,7 +424,7 @@ public final class GameboyPerformanceMode2PhaseTest {
     }
 
     @Test
-    public void nativeCgbNormalSpeedLineZeroMode2UsesOnlyThePhasePacket() throws Exception {
+    public void nativeCgbNormalSpeedLineZeroMode2UsesTheFencedCpuEpoch() throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
         try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
              Gameboy scalar = session(HardwareProfileRegistry.CGB, SCALAR_INPUT,
@@ -435,10 +443,12 @@ public final class GameboyPerformanceMode2PhaseTest {
                 scalar.tick();
             }
             assertEquals(0, candidate.runTicks(3));
-            assertTrue("native CGB x1 line-0 mode 2 did not enter a phase packet",
-                    candidate.getPerformanceBulkTicks() > 0);
-            assertEquals("native CGB x1 mode 2 entered a CPU epoch", 0L,
-                    candidate.getPerformanceEpochTicks());
+            assertEquals("native CGB x1 line-0 mode 2 used the phase-only packet", 0L,
+                    candidate.getPerformanceBulkTicks());
+            assertTrue("native CGB x1 line-0 mode 2 did not enter a CPU epoch",
+                    candidate.getPerformanceEpochMode2BulkTicks() > 0);
+            assertEquals("native CGB x1 line-0 mode 2 used the raster epoch plan", 0L,
+                    candidate.getPerformanceEpochRasterFastTicks());
             assertDeepStateEquals("native CGB x1 line-0 mode 2",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -537,6 +547,11 @@ public final class GameboyPerformanceMode2PhaseTest {
         return profile == HardwareProfileRegistry.CGB
                 ? gameboy.getGpu().performanceCgbNormalSpeedMode2PhaseSpanLimit(requested)
                 : gameboy.getGpu().performancePhysicalDmgMode2PhaseSpanLimit(requested);
+    }
+
+    private static long performanceMode2CommittedTicks(Gameboy gameboy) {
+        return gameboy.getPerformanceBulkTicks()
+                + gameboy.getPerformanceEpochMode2BulkTicks();
     }
 
     @Test
