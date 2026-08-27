@@ -767,6 +767,32 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         return transferInProgress;
     }
 
+    /** Whether an inactive OAM-search packet may advance only the serialized request ages. */
+    public boolean isPerformanceOamSearchPhaseClockStable() {
+        return !transferInProgress
+                && gpuMode == Mode.OamSearch
+                && hblankRequestTicks <= 0
+                && nextHblankRequestTicks <= 0
+                && cpuRequestArbitration == CpuRequestArbitration.NONE;
+    }
+
+    /**
+     * Replays the arithmetic part of {@link #advanceHblankRequest()} for a preflighted inactive
+     * OAM-search packet. Zero clocks age once per scalar dot; negative clocks remain invariant.
+     */
+    public void advancePerformanceOamSearchPhaseClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceOamSearchPhaseClockStable()) {
+            throw new IllegalStateException(
+                    "HDMA request clock is not stable for an OAM-search PERFORMANCE span");
+        }
+        if (!cpuHalted && hblankRequestTicks == 0) {
+            hblankRequestAge += ticks;
+        }
+        if (nextHblankRequestTicks == 0) {
+            nextHblankRequestAge += ticks;
+        }
+    }
+
     /** Captures the retained HDMA latches and current block progress without bus reads. */
     public DebugHardwareInspection.VramDma captureDebugVramDmaInspection() {
         int sourceAddress = src & 0xfff0;

@@ -1321,6 +1321,63 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Horizon for a short ordinary-CGB DMG-compatibility mode-2 phase packet. The CGB OAM
+     * reader still uses its Y/X height latch in compatibility mode, but its CPU clock is x1.
+     * Only non-CPU dots before the dot-79-to-80 handoff are admitted; every fixed-point,
+     * observation, DMA, and HDMA miss leaves the complete phase to the scalar scheduler.
+     */
+    public int performanceCgbCompatibilityMode2PhaseSpanLimit(int requested) {
+        if (!performanceDmgCompatTiming || requested <= 0 || !gbc || !dmgCompatValue
+                || speedModeValue != 1 || !lcdEnabled || firstLine || line >= 144
+                || mode != Mode.OamSearch || phase != oamSearchPhase
+                || performanceScanlineCursor || performanceScanlineLine || dma == null
+                || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || hdma == null || hdma.hasActiveOrPendingTransfer()
+                || !hdma.isPerformanceOamSearchPhaseClockStable()) {
+            return 0;
+        }
+        if (!performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !bootCompatibilityResolved || displayEnabledDelay != 0
+                || steadyTimingCursor || !lcdc.isPerformanceMode2FixedPoint()
+                || !pixelTransferPhase.isPerformanceNativeCgbMode2IdleOutput()
+                || !pixelMachine.isPerformanceNativeCgbMode2IdleOutput()
+                || !oamSearchPhase.isPerformanceNoDmaStableSpanEligible(
+                ticksInLine, lcdc.getSpriteHeight(), 1)) {
+            return 0;
+        }
+        return Math.min(requested, Math.max(0, 79 - ticksInLine));
+    }
+
+    /** Advances a preflighted ordinary-CGB compatibility mode-2 prefix. */
+    public void advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        int startTick = ticksInLine;
+        if (startTick + ticks > 79) {
+            throw new IllegalStateException(
+                    "GPU is not eligible for a CGB compatibility PERFORMANCE mode-2 span");
+        }
+        assert performanceCgbCompatibilityMode2PhaseSpanLimit(ticks) >= ticks
+                : "trusted CGB compatibility mode-2 proof changed before commit";
+
+        lcdc.advancePerformanceMode2FixedPointSpanTrusted(ticks);
+        pixelTransferPhase.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
+        pixelMachine.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
+        oamSearchPhase.advancePerformanceNoDmaStableSpanTrusted(
+                startTick, ticks, lcdc.getSpriteHeight(), 1);
+
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        cpuLyReadAcrossLineEdge = false;
+        synchronizePerformanceWindowLineCounter();
+    }
+
+    /**
      * Horizon for a short physical-DMG/SGB mode-2 phase packet. Only the non-CPU dots before
      * the next normal-speed machine-cycle boundary use this lane; the dot-79-to-80 handoff
      * remains scalar so the existing OAM/PixelTransfer transition and renderer arm stay

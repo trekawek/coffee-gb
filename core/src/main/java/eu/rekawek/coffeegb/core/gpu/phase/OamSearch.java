@@ -275,6 +275,13 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
         return isPerformanceMode2SpanEligible(readerPosition, spriteHeight, true, 2);
     }
 
+    /** CGB-reader counterpart with an owner-proven CPU speed. */
+    public boolean isPerformanceNoDmaStableSpanEligible(
+            int readerPosition, int spriteHeight, int expectedSpeedMode) {
+        return isPerformanceMode2SpanEligible(
+                readerPosition, spriteHeight, true, expectedSpeedMode);
+    }
+
     /**
      * Whether a bounded physical-DMG mode-2 span can use the allocation-free OAM scanner.
      *
@@ -317,6 +324,13 @@ public class OamSearch implements GpuPhase, StatefulComponent<OamSearch> {
     public void advancePerformanceNoDmaStableSpanTrusted(
             int readerPosition, int ticks, int currentSpriteHeight) {
         advancePerformanceMode2SpanTrusted(readerPosition, ticks, currentSpriteHeight, true, 2);
+    }
+
+    /** Advances a preflighted CGB-reader span at an owner-proven CPU speed. */
+    public void advancePerformanceNoDmaStableSpanTrusted(
+            int readerPosition, int ticks, int currentSpriteHeight, int expectedSpeedMode) {
+        advancePerformanceMode2SpanTrusted(
+                readerPosition, ticks, currentSpriteHeight, true, expectedSpeedMode);
     }
 
     /** Advances a preflighted physical-DMG mode-2 prefix using the same exact slot arithmetic. */
