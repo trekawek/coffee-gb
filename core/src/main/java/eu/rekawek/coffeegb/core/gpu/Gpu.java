@@ -1321,14 +1321,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
-     * Horizon for a short ordinary-CGB DMG-compatibility mode-2 phase packet. The CGB OAM
-     * reader still uses its Y/X height latch in compatibility mode, but its CPU clock is x1.
-     * Only non-CPU dots before the dot-79-to-80 handoff are admitted; every fixed-point,
-     * observation, DMA, and HDMA miss leaves the complete phase to the scalar scheduler.
+     * Horizon for a short ordinary-CGB normal-speed mode-2 phase packet. The CGB OAM reader
+     * uses the same Y/X height latch at x1 in native and compatibility modes. Only non-CPU dots
+     * before the dot-79-to-80 handoff are admitted; every fixed-point, observation, DMA, and
+     * HDMA miss leaves the complete phase to the scalar scheduler.
      */
-    public int performanceCgbCompatibilityMode2PhaseSpanLimit(int requested) {
-        if (!performanceDmgCompatTiming || requested <= 0 || !gbc || !dmgCompatValue
-                || speedModeValue != 1 || !lcdEnabled || firstLine || line >= 144
+    public int performanceCgbNormalSpeedMode2PhaseSpanLimit(int requested) {
+        if (!performanceDmgCompatTiming || requested <= 0 || !gbc || speedModeValue != 1
+                || !lcdEnabled || firstLine || line >= 144
                 || mode != Mode.OamSearch || phase != oamSearchPhase
                 || performanceScanlineCursor || performanceScanlineLine || dma == null
                 || dma.isTransferInProgress() || dma.ownsOamForPpu()
@@ -1352,18 +1352,29 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return Math.min(requested, Math.max(0, 79 - ticksInLine));
     }
 
-    /** Advances a preflighted ordinary-CGB compatibility mode-2 prefix. */
-    public void advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(int ticks) {
+    /**
+     * @deprecated use {@link #performanceCgbNormalSpeedMode2PhaseSpanLimit(int)}. This
+     * compatibility alias retains the original DMG-compatibility-only contract.
+     */
+    @Deprecated
+    public int performanceCgbCompatibilityMode2PhaseSpanLimit(int requested) {
+        return dmgCompatValue
+                ? performanceCgbNormalSpeedMode2PhaseSpanLimit(requested)
+                : 0;
+    }
+
+    /** Advances a preflighted ordinary-CGB normal-speed mode-2 prefix. */
+    public void advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(int ticks) {
         if (ticks <= 0) {
             return;
         }
         int startTick = ticksInLine;
         if (startTick + ticks > 79) {
             throw new IllegalStateException(
-                    "GPU is not eligible for a CGB compatibility PERFORMANCE mode-2 span");
+                    "GPU is not eligible for a CGB normal-speed PERFORMANCE mode-2 span");
         }
-        assert performanceCgbCompatibilityMode2PhaseSpanLimit(ticks) >= ticks
-                : "trusted CGB compatibility mode-2 proof changed before commit";
+        assert performanceCgbNormalSpeedMode2PhaseSpanLimit(ticks) >= ticks
+                : "trusted CGB normal-speed mode-2 proof changed before commit";
 
         lcdc.advancePerformanceMode2FixedPointSpanTrusted(ticks);
         pixelTransferPhase.advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(ticks);
@@ -1375,6 +1386,19 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         timingGeneration += ticks;
         cpuLyReadAcrossLineEdge = false;
         synchronizePerformanceWindowLineCounter();
+    }
+
+    /**
+     * @deprecated use {@link #advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(int)}.
+     */
+    @Deprecated
+    public void advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        assert performanceCgbCompatibilityMode2PhaseSpanLimit(ticks) >= ticks
+                : "trusted CGB compatibility mode-2 proof changed before commit";
+        advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(ticks);
     }
 
     /**

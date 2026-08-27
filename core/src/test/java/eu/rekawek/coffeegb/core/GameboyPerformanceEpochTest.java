@@ -164,7 +164,7 @@ public final class GameboyPerformanceEpochTest {
             scalar.getGpu().setPerformanceScanlineEnabled(true);
             candidate.getGpu().setPerformanceScanlineEnabled(true);
             assertTrue("FAST_FORWARD compatibility mode 2 rejected its phase transaction",
-                    candidate.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3) > 0);
+                    candidate.getGpu().performanceCgbNormalSpeedMode2PhaseSpanLimit(3) > 0);
             scalar.resetPerformanceBulkCounters();
             candidate.resetPerformanceBulkCounters();
 

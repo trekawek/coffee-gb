@@ -661,14 +661,15 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     /**
-     * Native-CGB mode-2 fixed point used by the coarse CPU epoch.  The pixel machine is
-     * stopped between scanlines, so only its absolute LCD output clock normally changes.
-     * Recent window writes and a non-empty delay line deliberately keep the exact dot path.
+     * Ordinary-CGB mode-2 fixed point used by the coarse CPU epoch and short phase packet.
+     * The pixel machine is stopped between scanlines, so only its absolute LCD output clock
+     * normally changes. Recent window writes and a non-empty delay line deliberately keep the
+     * exact dot path.
      */
     public boolean isPerformanceNativeCgbMode2IdleOutput() {
-        // Gpu's native mode-2 preflight already proves CGB, non-compat, double-speed
-        // topology. Keeping that proof out of both pixel-machine predicates avoids paying
-        // the same immutable topology branch twice on every native epoch.
+        // Gpu's callers already prove an ordinary-CGB mode-2 topology. Keeping that proof out
+        // of both pixel-machine predicates avoids paying the same immutable topology branch
+        // twice on every epoch or phase packet.
         return isPerformanceIdleOutput();
     }
 
@@ -692,7 +693,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /**
      * Advances the empty LCD output clock after
-     * {@link #isPerformanceNativeCgbMode2IdleOutput()} under the caller's native-CGB proof.
+     * {@link #isPerformanceNativeCgbMode2IdleOutput()} under the caller's ordinary-CGB proof.
      */
     public void advancePerformanceNativeCgbMode2IdleOutputSpanTrusted(int ticks) {
         if (ticks < 0 || !isPerformanceNativeCgbMode2IdleOutput()) {
