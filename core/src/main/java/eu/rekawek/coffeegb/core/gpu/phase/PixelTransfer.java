@@ -82,6 +82,11 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     // instance is ticked from the GPU every T-cycle since it outlives the skeleton's mode 3
     private boolean machineActive;
 
+    // Successful idle-output proofs are stable across empty output-clock advances. Cache only
+    // that TRUE result: a failed proof may recover as soon as a delay line drains or a deferred
+    // write settles. This is session-transient PERFORMANCE metadata, not portable machine state.
+    private boolean performanceIdleOutputKnownTrue;
+
     private int position;
 
     private boolean window;
@@ -391,6 +396,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     private void bindTimingFifo() {
+        invalidatePerformanceIdleOutputCache();
         if (!timingSkeleton || timingFifo == null) {
             throw new IllegalStateException("Scalar timing FIFO is not allowed for this machine");
         }
@@ -401,6 +407,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     private void bindFullFifo() {
+        invalidatePerformanceIdleOutputCache();
         if (fullFifo instanceof ColorPixelFifo colorPixelFifo) {
             colorPixelFifo.setRenderOutput(renderOutput);
         } else if (fullFifo instanceof DmgPixelFifo dmgPixelFifo) {
@@ -413,11 +420,13 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     private void deoptToFullFifo() {
+        invalidatePerformanceIdleOutputCache();
         bindFullFifo();
         fullFifo.resetForMissingState();
     }
 
     public PixelTransfer start(int extraEntryDelay, boolean lcdEnableFirstLine) {
+        invalidatePerformanceIdleOutputCache();
         this.lcdEnableFirstLine = lcdEnableFirstLine;
         entryTicks = entryDelay + extraEntryDelay;
         machineActive = true;
@@ -492,6 +501,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      * its exact CGB map-attribute, bank, and tile-flip reads.
      */
     public void advanceSteadyBackgroundSpan(int ticks) {
+        invalidatePerformanceIdleOutputCache();
         if (!timingSkeleton
                 || !(fifo instanceof ScalarTimingDmgPixelFifo
                 || fifo instanceof ScalarTimingColorPixelFifo)
@@ -514,6 +524,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      * skeleton, and materializes it before any observable boundary.</p>
      */
     public void advanceSteadyBackgroundOutputSpan(int ticks) {
+        invalidatePerformanceIdleOutputCache();
         if (timingSkeleton
                 || !(fifo instanceof DmgPixelFifo || fifo instanceof ColorPixelFifo)
                 || ticks < 0) {
@@ -618,6 +629,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     public void restoreDmgFifoRuntimeState(DmgPixelFifo.RuntimeState state) {
+        invalidatePerformanceIdleOutputCache();
         validateDmgFifoRuntimeState(state);
         if (fifo instanceof DmgPixelFifo dmgFifo) {
             dmgFifo.restoreRuntimeState(state);
@@ -679,6 +691,19 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     private boolean isPerformanceIdleOutput() {
+        if (performanceIdleOutputKnownTrue) {
+            assert isPerformanceIdleOutputSlow()
+                    : "cached PERFORMANCE idle-output proof became stale";
+            return true;
+        }
+        if (isPerformanceIdleOutputSlow()) {
+            performanceIdleOutputKnownTrue = true;
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isPerformanceIdleOutputSlow() {
         return
                 // The timing skeleton is driven directly through Gpu.phase.tick(); its
                 // historical machineActive marker remains set after a scalar mode-3 end, but
@@ -689,6 +714,12 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
                 && pendingWindowXWrites.isEmpty()
                 && windowWyDelay < 0
                 && windowWyOldOnWriteTick < 0;
+    }
+
+    private void invalidatePerformanceIdleOutputCache() {
+        if (performanceIdleOutputKnownTrue) {
+            performanceIdleOutputKnownTrue = false;
+        }
     }
 
     /**
@@ -782,6 +813,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     public void scheduleWindowDisplayWrite(boolean windowDisplay, int delayDots) {
+        invalidatePerformanceIdleOutputCache();
         if (pendingWindowDisplayWrites.isEmpty()) {
             windowDisplayOverride = isWindowDisplay() ? 1 : 0;
         }
@@ -790,6 +822,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
     }
 
     public void scheduleWindowXWrite(int windowX, int delayDots) {
+        invalidatePerformanceIdleOutputCache();
         if (pendingWindowXWrites.isEmpty()) {
             windowXOverride = getWindowX();
         }
@@ -957,6 +990,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     /** Schedules the secondary WY comparator latch after a WY write. */
     public void scheduleWindowYWrite(int value, int delayDots) {
+        invalidatePerformanceIdleOutputCache();
         pendingWindowWy = value & 0xff;
         if (gbc && delayDots > 0) {
             windowWyOldOnWriteTick = r.get(WY);
@@ -1036,6 +1070,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     @Override
     public boolean tick() {
+        invalidatePerformanceIdleOutputCache();
         boolean windowDisplay = isWindowDisplay();
         tickWindowDisplay = windowDisplay;
         tickWindowX = getWindowX();
@@ -1582,6 +1617,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
 
     @Override
     public void restoreState(ComponentState<PixelTransfer> state) {
+        invalidatePerformanceIdleOutputCache();
         if (!(state instanceof PixelTransferState mem)) {
             throw new IllegalArgumentException("Invalid state type");
         }
@@ -1715,6 +1751,7 @@ public class PixelTransfer implements GpuPhase, StatefulComponent<PixelTransfer>
      */
     @SuppressWarnings("unchecked")
     private void restoreFifoState(ComponentState<?> state) {
+        invalidatePerformanceIdleOutputCache();
         validateFifoState(state);
         if (state instanceof ScalarTimingDmgPixelFifo.State scalarDmg) {
             if (timingSkeleton && !renderOutput && !gbc) {
