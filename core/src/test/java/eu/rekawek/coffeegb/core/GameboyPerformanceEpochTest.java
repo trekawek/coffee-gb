@@ -740,6 +740,33 @@ public final class GameboyPerformanceEpochTest {
             assertDeepStateEquals("native CGB x1 settled HALT",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+
+            // A quiet-raster settled-HALT packet does not prove the native-x1 mode-2 lane.
+            // Place both machines at a visible OAM-search fixed point, then run exactly to the
+            // scalar dot-79 handoff.  Before this optimization, the scheduler could cover this
+            // interval only with one-to-three-dot phase packets, so bulkMaxTicks stayed <= 3.
+            advanceScalarPairToVisibleMode2Dot(scalar, candidate, 20);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+            assertEquals("native CGB x1 mode-2 settled-HALT frame callback",
+                    scalar.runTicks(59), candidate.runTicks(59));
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertEquals(Mode.OamSearch, candidate.getGpu().getMode());
+            assertEquals(79, candidate.getGpu().getTicksInLine());
+            assertEquals("mode-2 settled HALT unexpectedly used a running-CPU epoch",
+                    0L, candidate.getPerformanceEpochTicks());
+            assertTrue("native CGB x1 mode-2 settled HALT had no long packet",
+                    candidate.getPerformanceBulkMaxTicks() > 3);
+            assertDeepStateEquals("native CGB x1 mode-2 settled HALT at dot 79",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            assertEquals("native CGB x1 scalar dot-80 handoff frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+            assertEquals(Mode.PixelTransfer, candidate.getGpu().getMode());
+            assertDeepStateEquals("native CGB x1 scalar dot-80 handoff",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
         }
     }
 

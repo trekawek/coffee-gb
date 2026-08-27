@@ -2038,11 +2038,26 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (slotCartridgeClocked) {
             span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
         }
+        PerformancePhasePpuPlan ppuPlan = PerformancePhasePpuPlan.QUIET;
         int gpuSpanLimit = gpu.performanceQuietSpanLimit();
-        span = Math.min(span, gpuSpanLimit);
-        boolean directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
-        boolean steadyRasterSpan = span > 0 && !directRasterSpan
-                && gpu.isPerformanceSteadyCursorActive();
+        boolean directRasterSpan = false;
+        boolean steadyRasterSpan = false;
+        if (gpuSpanLimit > 0) {
+            span = Math.min(span, gpuSpanLimit);
+            directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
+            steadyRasterSpan = span > 0 && !directRasterSpan
+                    && gpu.isPerformanceSteadyCursorActive();
+        } else if (isNativeCgbNormalSpeedPerformanceEpochTopology()) {
+            int mode2SpanLimit = gpu.performanceCgbNormalSpeedMode2PhaseSpanLimit(span);
+            if (mode2SpanLimit > 0) {
+                span = Math.min(span, mode2SpanLimit);
+                ppuPlan = PerformancePhasePpuPlan.CGB_NORMAL_SPEED_MODE2;
+            } else {
+                span = 0;
+            }
+        } else {
+            span = 0;
+        }
         span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
         if (span <= 3
                 || warmResetRequested
@@ -2060,7 +2075,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 || !canStartCgbNormalSpeedSettledHaltSpan()) {
             return 0;
         }
-        tickPerformanceSettledCgbHaltSpan(span, directRasterSpan, steadyRasterSpan);
+        tickPerformanceSettledCgbHaltSpan(
+                span, ppuPlan, directRasterSpan, steadyRasterSpan);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
         if (span > performanceBulkMaxTicks) {
@@ -2089,9 +2105,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && hdma.isPerformanceInactiveRequestClockStable();
     }
 
-    /** Commits a normal-speed CGB settled-HALT packet with the complete CGB idle plane. */
+    /**
+     * Commits a normal-speed CGB settled-HALT packet through either the quiet raster plane or
+     * the exact native-x1 mode-2 OAM transaction selected during preflight.
+     */
     private void tickPerformanceSettledCgbHaltSpan(
-            int ticks, boolean directRasterSpan, boolean steadyRasterSpan) {
+            int ticks, PerformancePhasePpuPlan ppuPlan,
+            boolean directRasterSpan, boolean steadyRasterSpan) {
         if (cartridgeClocked) {
             cartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
@@ -2109,7 +2129,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         joypad.tickPerformanceQuietSpanTrusted(ticks);
         cpu.advancePerformanceSettledHaltSpanTrusted(ticks);
         hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
-        gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
+        switch (ppuPlan) {
+            case QUIET -> gpu.advancePerformanceQuietSpanTrusted(
+                    ticks, directRasterSpan, steadyRasterSpan);
+            case CGB_NORMAL_SPEED_MODE2 ->
+                    gpu.advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(ticks);
+            default -> throw new IllegalStateException(
+                    "normal-speed CGB settled HALT has no PPU plan");
+        }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
                 gpu.isStatModeLatchRephasedBySpeedSwitch());
