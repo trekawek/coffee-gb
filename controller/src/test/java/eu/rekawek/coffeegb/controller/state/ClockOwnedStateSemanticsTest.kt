@@ -154,6 +154,36 @@ class ClockOwnedStateSemanticsTest {
   }
 
   @Test
+  fun sgbPerformanceSoundAcceptsCurrentAndLegacyDecimationShapes() {
+    val clock = ClockSpec.SGB
+    val speedMode = SpeedMode(false)
+    val sound = Sound(
+        Timer(InterruptManager(false), speedMode), speedMode, false, clock, ExecutionMode.PERFORMANCE)
+    val base = record(sound.captureState())
+
+    listOf(11, 56).forEach { decimation ->
+      val capacity = Math.multiplyExact(clock.controllerTicksPerFrame() / decimation, 2)
+      val valid =
+          base
+              .replaceField("i", Int32State(capacity - 2))
+              .replaceField("buffer", Int32ArrayState(IntArray(capacity)))
+              .replaceField("performanceSamplePhase", Int32State(decimation - 1))
+              .replaceField("audioDecimation", Int32State(decimation))
+      StateSemantics.validateForClock(soundState(valid), clock)
+    }
+
+    val current =
+        base
+            .replaceField("i", Int32State(1_254 * 2 - 2))
+            .replaceField("buffer", Int32ArrayState(IntArray(1_254 * 2)))
+            .replaceField("performanceSamplePhase", Int32State(56))
+            .replaceField("audioDecimation", Int32State(56))
+    assertFailsWith<StateApplyException> {
+      StateSemantics.validateForClock(soundState(current), clock)
+    }
+  }
+
+  @Test
   fun customClockSoundRejectsIndicesAndFullBufferShapesBeforeMutation() {
     val clock = ClockSpec(8_388_608, 60, 1)
     val capacity = Math.multiplyExact(clock.controllerTicksPerFrame(), 2)

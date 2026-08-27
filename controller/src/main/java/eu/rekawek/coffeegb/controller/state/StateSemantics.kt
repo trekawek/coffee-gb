@@ -258,7 +258,7 @@ internal object StateSemantics {
                 it.range("frameSequencerClockPhase", 0, 3)
                 val samplePhase = it.int("performanceSamplePhase")
                 val decimation = it.int("audioDecimation")
-                it.require(decimation == 1 || decimation == 11 || decimation == 55,
+                it.require(decimation == 1 || decimation == 11 || decimation == 55 || decimation == 56,
                     "has unsupported audio decimation")
                 it.require(samplePhase in 0 until decimation,
                     "has invalid audio decimation phase $samplePhase for decimation $decimation")

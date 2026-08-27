@@ -35,18 +35,21 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     }
 
     /**
-     * PERFORMANCE audio is intentionally represented at one fifty-fifth of the master-tick
-     * rate. The source is sampled at approximately 76.26 kHz, which is still comfortably above
-     * the host audio band and gives the emulator a 55-master-tick quiet window in which to batch
-     * the PSG. 55 also divides the historical 69,905-T controller chunk exactly (1,271 samples),
-     * so compact audio cannot drift one source tick per frame. The pending span is transient:
-     * CPU-visible operations and state boundaries materialize it before observing or serializing
-     * channel state.
+     * PERFORMANCE audio is intentionally represented at a decimated master-tick rate. The normal
+     * source is sampled at approximately 76.26 kHz, which is still comfortably above the host
+     * audio band and gives the emulator a 54-master-tick quiet window in which to batch the PSG.
+     * SGB-family clocks use a 56-tick decimation, yielding exactly 1,254 samples in their
+     * 70,224-tick frame while retaining a 55-master-tick quiet window. The pending span is
+     * transient: CPU-visible operations and state boundaries materialize it before observing or
+     * serializing channel state.
      */
     private static final int PERFORMANCE_AUDIO_DECIMATION = 55;
 
-    /** SGB frame clocks retain the historical exact-frame compact stream for now. */
-    private static final int SGB_PERFORMANCE_AUDIO_DECIMATION = 11;
+    /** Retained for portable PERFORMANCE states written before SGB decimation was widened. */
+    private static final int LEGACY_SGB_PERFORMANCE_AUDIO_DECIMATION = 11;
+
+    /** SGB/SGB2 compact samples exactly divide their 70,224-tick controller frame. */
+    private static final int SGB_PERFORMANCE_AUDIO_DECIMATION = 56;
 
     private static final int ACCURACY_AUDIO_DECIMATION = 1;
 
@@ -283,10 +286,10 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             }
             return;
         }
-        // The PERFORMANCE horizon stops before the next decimated sample, where the
-        // pending span is materialized.  Consequently this accumulator is bounded by
-        // performanceAudioDecimation - 1 (54 today), so an overflow-checked add in the
-        // 1.7M-packets-per-sample hot path cannot provide any additional protection.
+        // The PERFORMANCE horizon stops before the next decimated sample, where the pending span
+        // is materialized. Consequently this accumulator is bounded by
+        // performanceAudioDecimation - 1, so an overflow-checked add in the hot path cannot
+        // provide any additional protection.
         pendingPerformanceTicks += ticks;
         performanceSamplePhase += ticks;
     }
@@ -982,8 +985,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             throw new IllegalArgumentException("ComponentState buffer length doesn't contain its prefix");
         }
         if (mem.audioDecimation != ACCURACY_AUDIO_DECIMATION
-                && mem.audioDecimation != SGB_PERFORMANCE_AUDIO_DECIMATION
-                && mem.audioDecimation != PERFORMANCE_AUDIO_DECIMATION) {
+                && mem.audioDecimation != LEGACY_SGB_PERFORMANCE_AUDIO_DECIMATION
+                && mem.audioDecimation != PERFORMANCE_AUDIO_DECIMATION
+                && mem.audioDecimation != SGB_PERFORMANCE_AUDIO_DECIMATION) {
             throw new IllegalArgumentException("ComponentState audio decimation is invalid");
         }
         if (mem.performanceSamplePhase < 0
