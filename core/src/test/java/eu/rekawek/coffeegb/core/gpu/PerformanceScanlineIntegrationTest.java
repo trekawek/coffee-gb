@@ -4,8 +4,11 @@ import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.Gameboy;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
+import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import org.junit.Test;
 
 import java.lang.reflect.Array;
@@ -43,6 +46,34 @@ public final class PerformanceScanlineIntegrationTest {
                     gameboy.getGpu().getPerformanceScanlineLines() > 0);
             assertTrue("CGB direct/quiet span did not skip raster work",
                     gameboy.getGpu().getPerformanceScanlineFastTicks() > 0);
+        }
+    }
+
+    @Test
+    public void performanceRunTicksActivatesSgbScanlineAndPreservesVblankPayloads()
+            throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[] {
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (SgbProbe accuracy = new SgbProbe(profile, ExecutionMode.ACCURACY);
+                    SgbProbe performance = new SgbProbe(profile, ExecutionMode.PERFORMANCE)) {
+                accuracy.runToTransfer();
+                performance.runToTransfer();
+
+                assertTrue(profile.id() + " direct scanline path did not activate",
+                        performance.gameboy.getGpu().getPerformanceScanlineLines() > 0);
+                assertTrue(profile.id() + " direct raster path did not skip work",
+                        performance.gameboy.getGpu().getPerformanceScanlineFastTicks() > 0);
+                assertTrue(profile.id() + " accuracy SGB frame was not emitted",
+                        accuracy.sgbFrameCount > 0);
+                assertEquals(profile.id() + " SGB frame count",
+                        accuracy.sgbFrameCount, performance.sgbFrameCount);
+                assertEquals(profile.id() + " SGB frame hash",
+                        accuracy.sgbFrameHash, performance.sgbFrameHash);
+                assertEquals(profile.id() + " VRAM transfer count",
+                        accuracy.transferCount, performance.transferCount);
+                assertEquals(profile.id() + " VRAM transfer hash",
+                        accuracy.transferHash, performance.transferHash);
+            }
         }
     }
 
@@ -576,6 +607,70 @@ public final class PerformanceScanlineIntegrationTest {
                 .setExecutionMode(ExecutionMode.PERFORMANCE)
                 .setSupportBatterySave(false)
                 .build();
+    }
+
+    private static final class SgbProbe implements AutoCloseable {
+        private final EventBusImpl eventBus = new EventBusImpl(null, null, false);
+        private final Gameboy gameboy;
+        private int transferCount;
+        private int sgbFrameCount;
+        private long transferHash = 0xcbf29ce484222325L;
+        private long sgbFrameHash = 0xcbf29ce484222325L;
+
+        private SgbProbe(HardwareProfile profile, ExecutionMode executionMode) throws Exception {
+            eventBus.register(event -> {
+                sgbFrameCount++;
+                for (int pixel : ((SgbDisplay.SgbFrameReadyEvent) event).buffer()) {
+                    sgbFrameHash ^= pixel & 0xffffffffL;
+                    sgbFrameHash *= 0x100000001b3L;
+                }
+            }, SgbDisplay.SgbFrameReadyEvent.class);
+            gameboy = new Gameboy.GameboyConfiguration(new Rom(sgbRom()))
+                    .setHardwareProfile(profile)
+                    .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                    .setExecutionMode(executionMode)
+                    .setSupportBatterySave(false)
+                    .setDisplaySgbBorder(profile.capabilities().superGameboyBorder())
+                    .build();
+            gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            sgbBus(gameboy).register(event -> {
+                transferCount++;
+                for (int pixel : ((VRamTransfer.VRamTransferComplete) event).buffer()) {
+                    transferHash ^= pixel & 0xffffffffL;
+                    transferHash *= 0x100000001b3L;
+                }
+            }, VRamTransfer.VRamTransferComplete.class);
+            for (int address = 0x8000; address < 0xa000; address++) {
+                gameboy.getGpu().writeVideoRam0ForCore(
+                        address, (address * 37 ^ address >>> 3 ^ 0x5a) & 0xff);
+            }
+        }
+
+        private void runToTransfer() {
+            int executed = gameboy.runMeasuredTicksUntilStop(200_000,
+                    () -> transferCount > 0);
+            assertTrue("SGB transfer did not reach VBlank", executed > 0 && transferCount > 0);
+        }
+
+        @Override
+        public void close() {
+            gameboy.closeSilently();
+            eventBus.close();
+        }
+    }
+
+    private static EventBusImpl sgbBus(Gameboy gameboy) throws Exception {
+        Field field = Gameboy.class.getDeclaredField("sgbBus");
+        field.setAccessible(true);
+        return (EventBusImpl) field.get(gameboy);
+    }
+
+    private static byte[] sgbRom() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = (byte) 0xc3;
+        image[0x101] = 0;
+        image[0x102] = 1;
+        return image;
     }
 
     private static Gameboy nativeCgbSession() throws Exception {

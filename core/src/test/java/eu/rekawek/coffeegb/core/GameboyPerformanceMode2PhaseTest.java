@@ -176,9 +176,9 @@ public final class GameboyPerformanceMode2PhaseTest {
 
         Mode2ExclusionCase[] cases = {
                 new Mode2ExclusionCase("sgb", HardwareProfileRegistry.SGB,
-                        ExecutionMode.PERFORMANCE, false, false),
+                        ExecutionMode.PERFORMANCE, false, true),
                 new Mode2ExclusionCase("sgb2", HardwareProfileRegistry.SGB2,
-                        ExecutionMode.PERFORMANCE, false, false),
+                        ExecutionMode.PERFORMANCE, false, true),
                 new Mode2ExclusionCase("cgb-native", HardwareProfileRegistry.CGB,
                         ExecutionMode.PERFORMANCE, true, true),
                 new Mode2ExclusionCase("cgb0-native", HardwareProfileRegistry.CGB0,

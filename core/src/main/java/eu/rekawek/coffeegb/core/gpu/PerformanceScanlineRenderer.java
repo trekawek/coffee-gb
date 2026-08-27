@@ -74,6 +74,10 @@ public final class PerformanceScanlineRenderer {
 
     private final SpritePosition[] sprites;
 
+    // Only the profile-gated SGB/SGB2 direct-render owner supplies this transfer. Public
+    // renderer fixtures keep the historical null behavior through the constructor below.
+    private final VRamTransfer vRamTransfer;
+
     // Scratch storage is retained across lines. A performance line should not allocate an
     // object for every tile or sprite, especially on Android's controller thread.
     private final int[] linePixels = new int[SCREEN_WIDTH];
@@ -112,6 +116,23 @@ public final class PerformanceScanlineRenderer {
             boolean gbc,
             boolean dmgCompat,
             SpritePosition[] sprites) {
+        this(videoRam0, videoRam1, oamRam, lcdc, registers, bgPalette, oamPalette,
+                gbc, dmgCompat, sprites, null);
+    }
+
+    /** Internal production constructor carrying the nullable SGB raw-pixel transfer. */
+    PerformanceScanlineRenderer(
+            AddressSpace videoRam0,
+            AddressSpace videoRam1,
+            AddressSpace oamRam,
+            Lcdc lcdc,
+            GpuRegisterValues registers,
+            ColorPalette bgPalette,
+            ColorPalette oamPalette,
+            boolean gbc,
+            boolean dmgCompat,
+            SpritePosition[] sprites,
+            VRamTransfer vRamTransfer) {
         this.videoRam0 = Objects.requireNonNull(videoRam0, "videoRam0");
         this.videoRam1 = videoRam1;
         this.oamRam = Objects.requireNonNull(oamRam, "oamRam");
@@ -122,6 +143,7 @@ public final class PerformanceScanlineRenderer {
         this.gbc = gbc;
         this.dmgCompat = dmgCompat;
         this.sprites = Objects.requireNonNull(sprites, "sprites");
+        this.vRamTransfer = vRamTransfer;
         this.nativeVideoRam0 = exactVram(videoRam0);
         this.nativeVideoRam1 = exactVram(videoRam1);
         if (gbc
@@ -178,6 +200,10 @@ public final class PerformanceScanlineRenderer {
      * {@link #renderLine(Display, int, int)} for the output format.
      */
     public void renderLine(int ly, int windowLine, int[] output) {
+        renderLine(ly, windowLine, output, null);
+    }
+
+    private void renderLine(int ly, int windowLine, int[] output, VRamTransfer vRamTransfer) {
         Objects.requireNonNull(output, "output");
         if (output.length < SCREEN_WIDTH) {
             throw new IllegalArgumentException("Scanline output must contain 160 pixels");
@@ -282,7 +308,8 @@ public final class PerformanceScanlineRenderer {
                     bgEnabled,
                     bgp,
                     obp0,
-                    obp1);
+                    obp1,
+                    vRamTransfer);
         }
     }
 
@@ -291,7 +318,17 @@ public final class PerformanceScanlineRenderer {
      * as a separate optimization unit so the generic scheduler cannot absorb the renderer body.
      */
     void renderLinePerformanceBoundary(Display display, int ly, int windowLine) {
-        renderLine(display, ly, windowLine);
+        Objects.requireNonNull(display, "display");
+        renderLine(ly, windowLine, linePixels, vRamTransfer);
+        if (gbc) {
+            for (int pixel : linePixels) {
+                display.putColorPixel(pixel);
+            }
+        } else {
+            for (int pixel : linePixels) {
+                display.putDmgPixel(pixel);
+            }
+        }
     }
 
     private void renderNativeCgbLine(int ly, int windowLine, int[] output) {
@@ -422,15 +459,36 @@ public final class PerformanceScanlineRenderer {
             int bgp,
             int obp0,
             int obp1) {
+        return resolvePixel(
+                spriteIndex, spritePixel, backgroundRaw, backgroundPalette, backgroundPriority,
+                bgEnabled, bgp, obp0, obp1, null);
+    }
+
+    private int resolvePixel(
+            int spriteIndex,
+            int spritePixel,
+            int backgroundRaw,
+            int backgroundPalette,
+            boolean backgroundPriority,
+            boolean bgEnabled,
+            int bgp,
+            int obp0,
+            int obp1,
+            VRamTransfer vRamTransfer) {
         if (!gbc) {
+            int raw = backgroundRaw;
+            int palette = bgp;
             if (spriteIndex >= 0) {
                 SpriteLine sprite = spriteLines[spriteIndex];
                 if (!sprite.priority || backgroundRaw == 0) {
-                    int palette = sprite.palette == 0 ? obp0 : obp1;
-                    return (palette >> (spritePixel * 2)) & 0x03;
+                    raw = spritePixel;
+                    palette = sprite.palette == 0 ? obp0 : obp1;
                 }
             }
-            return (bgp >> (backgroundRaw * 2)) & 0x03;
+            if (vRamTransfer != null) {
+                vRamTransfer.putPixel(raw);
+            }
+            return (palette >> (raw * 2)) & 0x03;
         }
         return resolveCgb(
                 spriteIndex,
