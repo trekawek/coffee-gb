@@ -95,6 +95,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // direct Gpu.tick() probes and ACCURACY remain on their calibrated dot pipelines.
     private final boolean performanceScanlineCapable;
 
+    // Direct SGB/SGB2 lines still feed the host-visible raw DMG pixel stream into the
+    // Super Game Boy VRAM transfer. Keep this alias profile-gated so every other direct
+    // renderer path remains unchanged.
+    private final VRamTransfer performanceSgbVramTransfer;
+
     // Exact construction-time permission for the short mode-2 phase packet. Keep this narrower
     // than the monochrome pixel/timing cursors: the public Gpu horizon must fail closed for SGB,
     // SGB2, and every compatibility profile even when their clock happens to be normal speed.
@@ -346,7 +351,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 && (hardwareProfile == HardwareProfileRegistry.DMG
                 || hardwareProfile == HardwareProfileRegistry.MGB
                 || hardwareProfile == HardwareProfileRegistry.CGB
-                || hardwareProfile == HardwareProfileRegistry.CGB0);
+                || hardwareProfile == HardwareProfileRegistry.CGB0
+                || hardwareProfile == HardwareProfileRegistry.SGB
+                || hardwareProfile == HardwareProfileRegistry.SGB2);
+        this.performanceSgbVramTransfer = hardwareProfile == HardwareProfileRegistry.SGB
+                || hardwareProfile == HardwareProfileRegistry.SGB2 ? vRamTransfer : null;
         this.performancePhysicalDmgMode2 = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && (hardwareProfile == HardwareProfileRegistry.DMG
@@ -373,7 +382,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.oamSearchPhase = new OamSearch(oamRam, dma, lcdc, r);
         this.performanceScanlineRenderer = new PerformanceScanlineRenderer(
                 videoRam0, videoRam1, oamRam, lcdc, r, bgPalette, oamPalette,
-                gbc, false, oamSearchPhase.getSprites());
+                gbc, false, oamSearchPhase.getSprites(), performanceSgbVramTransfer);
         this.pixelTransferPhase = new PixelTransfer(new Display(gbc), videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), null, speedMode, 0, true);
         this.pixelMachine = new PixelTransfer(display, videoRam0, videoRam1, ppuOam, lcdc, r, gbc, bgPalette, oamPalette, oamSearchPhase.getSprites(), vRamTransfer, speedMode, 4);
         this.pixelMachine.setOamReaderBus(oamSearchPhase);

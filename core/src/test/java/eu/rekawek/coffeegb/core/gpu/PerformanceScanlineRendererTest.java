@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.gpu;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.gpu.phase.OamSearch.SpritePosition;
 import eu.rekawek.coffeegb.core.memory.Ram;
 import eu.rekawek.coffeegb.core.state.ComponentState;
@@ -8,6 +9,7 @@ import org.junit.Test;
 
 import java.util.Arrays;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.BGP;
 import static eu.rekawek.coffeegb.core.gpu.GpuRegister.OBP0;
@@ -74,6 +76,36 @@ public class PerformanceScanlineRendererTest {
         }
         for (int i = 8; i < pixels.length; i++) {
             assertEquals(1, pixels[i]);
+        }
+    }
+
+    @Test
+    public void sgbTransferReceivesSelectedRawPixelsBeforePaletteMapping() {
+        Fixture fixture = new Fixture(false, false);
+        fixture.lcdc.set(0x91);
+        fixture.registers.put(BGP, 0x1b); // reverse 0,1,2,3 into shades 3,2,1,0
+        fixture.fillTile(0, 0x55, 0x33); // raw pixels 0,1,2,3,0,1,2,3
+
+        int[] shades = new int[160];
+        fixture.renderer().renderLine(0, -1, shades);
+        assertArrayEquals(new int[] {3, 2, 1, 0, 3, 2, 1, 0},
+                Arrays.copyOf(shades, 8));
+
+        try (EventBusImpl bus = new EventBusImpl(null, "sgb-transfer", false)) {
+            VRamTransfer transfer = new VRamTransfer(bus);
+            AtomicReference<int[]> payload = new AtomicReference<>();
+            bus.register(event -> payload.set(event.buffer().clone()),
+                    VRamTransfer.VRamTransferComplete.class);
+            PerformanceScanlineRenderer renderer = new PerformanceScanlineRenderer(
+                    fixture.vram0, fixture.vram1, fixture.oam, fixture.lcdc,
+                    fixture.registers, fixture.bgPalette, fixture.oamPalette,
+                    false, false, fixture.sprites, transfer);
+
+            renderer.renderLinePerformanceBoundary(new Display(false), 0, -1);
+            transfer.frameIsReady();
+
+            assertEquals(0x55, payload.get()[0]);
+            assertEquals(0x33, payload.get()[1]);
         }
     }
 
