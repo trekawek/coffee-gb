@@ -95,7 +95,7 @@ public final class TimerPerformanceEpochTest {
     }
 
     @Test
-    public void cgbCompatibilityEpochIncludesThePlusTwoApuTap() {
+    public void normalSpeedCgbEpochIncludesThePlusTwoApuTapInBothColorModes() {
         SpeedMode speed = new SpeedMode(true);
         speed.setDmgCompat(true);
         Timer timer = new Timer(new InterruptManager(true), speed);
@@ -106,7 +106,7 @@ public final class TimerPerformanceEpochTest {
         SpeedMode nativeSpeed = new SpeedMode(true);
         Timer nativeTimer = new Timer(new InterruptManager(true), nativeSpeed);
         nativeTimer.presetDiv(0x1ff9);
-        assertEquals(0, nativeTimer.performanceNormalSpeedEpochSpanLimit(54, true));
+        assertEquals(4, nativeTimer.performanceNormalSpeedEpochSpanLimit(54, true));
     }
 
     @Test

@@ -190,6 +190,51 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void nativeCgbNormalSpeedFourDotEpochMatchesScalarAtEveryBudget()
+            throws Exception {
+        for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
+            for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {
+                ParityMemory directMemory = new ParityMemory();
+                directMemory.bytes[0x0000] = 0x21; // LD HL,C000
+                directMemory.bytes[0x0001] = 0x00;
+                directMemory.bytes[0x0002] = (byte) 0xc0;
+                directMemory.bytes[0x0003] = 0x7e; // LD A,(HL)
+                directMemory.bytes[0x0004] = 0x3c; // INC A
+                directMemory.bytes[0x0005] = 0x77; // LD (HL),A
+                directMemory.bytes[0x0006] = 0x18; // JR 0003
+                directMemory.bytes[0x0007] = (byte) 0xfb;
+                directMemory.bytes[0xc000] = 0x23;
+                ParityMemory scalarMemory = new ParityMemory();
+                System.arraycopy(directMemory.bytes, 0, scalarMemory.bytes, 0,
+                        directMemory.bytes.length);
+
+                InterruptManager directInterrupts = new InterruptManager(true);
+                InterruptManager scalarInterrupts = new InterruptManager(true);
+                SpeedMode directSpeed = new SpeedMode(true);
+                SpeedMode scalarSpeed = new SpeedMode(true);
+                Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                        directSpeed, new Display(false));
+                Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                        scalarSpeed, new Display(false));
+                CpuPair pair = new CpuPair(direct, scalar, directInterrupts, scalarInterrupts,
+                        directMemory, scalarMemory);
+
+                for (int tick = 0; tick < entryPhase; tick++) {
+                    direct.tick();
+                    scalar.tick();
+                }
+
+                assertEquals("native CGB x1 phase " + entryPhase + " budget " + budget,
+                        budget, direct.runNativeCgbNormalSpeedPerformanceEpoch(budget));
+                for (int tick = 0; tick < budget; tick++) {
+                    scalar.tick();
+                }
+                assertCpuPairEquals(pair);
+            }
+        }
+    }
+
+    @Test
     public void nativeCgbAndPhysicalDmgEntryPointsAreTopologyIsolated() {
         Cpu physicalDmg = new Cpu(new CountingMemory(), new InterruptManager(false), null,
                 new SpeedMode(false), new Display(false));
@@ -202,11 +247,22 @@ public final class CpuPerformanceEpochTest {
         assertTrue(nativeCgb.performanceEpochEntryEligible());
         assertFalse(nativeCgb.performancePhysicalDmgEpochEntryEligible());
         assertEquals(0, nativeCgb.runPhysicalDmgPerformanceEpoch(54));
+        assertFalse(nativeCgb.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        assertEquals(0, nativeCgb.runNativeCgbNormalSpeedPerformanceEpoch(54));
 
         Cpu nativeNormalSpeed = new Cpu(new CountingMemory(), new InterruptManager(true), null,
                 new SpeedMode(true), new Display(false));
         assertFalse(nativeNormalSpeed.performanceCgbCompatibilityEpochEntryEligible());
         assertEquals(0, nativeNormalSpeed.runCgbCompatibilityPerformanceEpoch(54));
+        assertTrue(nativeNormalSpeed.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        assertEquals(54, nativeNormalSpeed.runNativeCgbNormalSpeedPerformanceEpoch(54));
+
+        SpeedMode compatibilitySpeed = new SpeedMode(true);
+        compatibilitySpeed.setDmgCompat(true);
+        Cpu compatibility = new Cpu(new CountingMemory(), new InterruptManager(true), null,
+                compatibilitySpeed, new Display(false));
+        assertFalse(compatibility.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        assertEquals(0, compatibility.runNativeCgbNormalSpeedPerformanceEpoch(54));
     }
 
     @Test

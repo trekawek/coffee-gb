@@ -46,12 +46,12 @@ public class SerialPortPerformanceSpanTest {
     }
 
     @Test
-    public void cgbNormalSpeedRemainsOutsideEpochIdleContract() {
+    public void nativeCgbNormalSpeedUsesOnlyTheFixedX1EpochIdleContract() {
         SerialPort cgbNormal = new SerialPort(
                 new InterruptManager(true), true, new SpeedMode(true));
         assertFalse(cgbNormal.performanceEpochIdle(54));
         assertFalse(cgbNormal.performancePhysicalDmgEpochIdle(54));
-        assertFalse(cgbNormal.performanceNormalSpeedEpochIdle(54, true));
+        assertTrue(cgbNormal.performanceNormalSpeedEpochIdle(54, true));
     }
 
     @Test
@@ -73,6 +73,100 @@ public class SerialPortPerformanceSpanTest {
             scalar.tick();
         }
         bulk.tickPerformanceNormalSpeedEpochIdle(54);
+        assertEquals(scalar.captureState(), bulk.captureState());
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+    }
+
+    @Test
+    public void nativeCgbIdleEpochMatchesScalarNormalSpeedTicks() {
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(
+                scalarInterrupts, true, new SpeedMode(true));
+        SerialPort bulk = new SerialPort(
+                bulkInterrupts, true, new SpeedMode(true));
+        for (int tick = 0; tick < 37; tick++) {
+            scalar.tick();
+            bulk.tick();
+        }
+        assertTrue(bulk.performanceNormalSpeedEpochIdle(54, true));
+        for (int tick = 0; tick < 54; tick++) {
+            scalar.tick();
+        }
+        bulk.tickPerformanceNormalSpeedEpochIdle(54);
+        assertEquals(scalar.captureState(), bulk.captureState());
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+    }
+
+    @Test
+    public void nativeCgbExternalClockTransferMatchesScalarNormalSpeedEpoch() {
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(
+                scalarInterrupts, true, new SpeedMode(true));
+        SerialPort bulk = new SerialPort(
+                bulkInterrupts, true, new SpeedMode(true));
+        for (int tick = 0; tick < 37; tick++) {
+            scalar.tick();
+            bulk.tick();
+        }
+        scalar.setByte(0xff02, 0x80);
+        bulk.setByte(0xff02, 0x80);
+
+        assertEquals(3, bulk.performanceQuietSpanLimit(3));
+        assertEquals(54, bulk.performanceSettledHaltSpanLimit(54));
+        assertTrue(bulk.performanceNormalSpeedEpochIdle(54, true));
+        assertFalse(bulk.performancePhysicalDmgEpochIdle(54));
+        for (int tick = 0; tick < 54; tick++) {
+            scalar.tick();
+        }
+        bulk.tickPerformanceNormalSpeedEpochIdle(54);
+
+        assertEquals(scalar.captureState(), bulk.captureState());
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+    }
+
+    @Test
+    public void disconnectedPeerExternalClockTransferMatchesScalarNormalSpeedEpoch() {
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(
+                scalarInterrupts, true, new SpeedMode(true));
+        SerialPort bulk = new SerialPort(
+                bulkInterrupts, true, new SpeedMode(true));
+        scalar.init(new Peer2PeerSerialEndpoint());
+        bulk.init(new Peer2PeerSerialEndpoint());
+        scalar.setByte(0xff02, 0x80);
+        bulk.setByte(0xff02, 0x80);
+
+        assertTrue(bulk.performanceNormalSpeedEpochIdle(54, true));
+        for (int tick = 0; tick < 54; tick++) {
+            scalar.tick();
+        }
+        bulk.tickPerformanceNormalSpeedEpochIdle(54);
+
+        assertEquals(scalar.captureState(), bulk.captureState());
+        assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+    }
+
+    @Test
+    public void nativeCgbExternalClockTransferMatchesScalarDoubleSpeedEpoch()
+            throws ReflectiveOperationException {
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(scalarInterrupts, true, doubleSpeed());
+        SerialPort bulk = new SerialPort(bulkInterrupts, true, doubleSpeed());
+        scalar.setByte(0xff02, 0x80);
+        bulk.setByte(0xff02, 0x80);
+
+        assertTrue(bulk.performanceEpochIdle(54));
+        assertEquals(0, bulk.performanceQuietSpanLimit(3));
+        assertEquals(0, bulk.performanceSettledHaltSpanLimit(54));
+        for (int tick = 0; tick < 54; tick++) {
+            scalar.tick();
+        }
+        bulk.tickPerformanceEpochIdle(54);
+
         assertEquals(scalar.captureState(), bulk.captureState());
         assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
     }
@@ -154,18 +248,35 @@ public class SerialPortPerformanceSpanTest {
 
     @Test
     public void quietSpanFailsClosedForTransfersEndpointsAndDebugHooks() {
-        SerialPort transfer = new SerialPort(
-                new InterruptManager(false), false, new SpeedMode(false));
-        transfer.setByte(0xff02, 0x81);
-        var transferState = transfer.captureState();
-        assertFalse(transfer.canTickPerformanceQuietSpan(1));
-        assertFalse(transfer.tickPerformanceQuietSpan(1));
-        assertEquals(transferState, transfer.captureState());
+        SerialPort internalTransfer = new SerialPort(
+                new InterruptManager(true), true, new SpeedMode(true));
+        internalTransfer.setByte(0xff02, 0x81);
+        var transferState = internalTransfer.captureState();
+        assertFalse(internalTransfer.canTickPerformanceQuietSpan(1));
+        assertFalse(internalTransfer.tickPerformanceQuietSpan(1));
+        assertEquals(0, internalTransfer.performanceSettledHaltSpanLimit(54));
+        assertFalse(internalTransfer.performanceNormalSpeedEpochIdle(54, true));
+        assertEquals(transferState, internalTransfer.captureState());
 
         SerialPort endpoint = new SerialPort(
-                new InterruptManager(false), false, new SpeedMode(false));
+                new InterruptManager(true), true, new SpeedMode(true));
         endpoint.init(new NoopEndpoint());
+        endpoint.setByte(0xff02, 0x80);
         assertEquals(0, endpoint.performanceQuietSpanLimit(1));
+        assertEquals(0, endpoint.performanceSettledHaltSpanLimit(54));
+        assertFalse(endpoint.performanceNormalSpeedEpochIdle(54, true));
+
+        LegacyQuietEndpoint legacyEndpoint = new LegacyQuietEndpoint();
+        SerialPort legacy = new SerialPort(
+                new InterruptManager(true), true, new SpeedMode(true));
+        legacy.init(legacyEndpoint);
+        legacy.setByte(0xff02, 0x80);
+        assertEquals(0, legacy.performanceQuietSpanLimit(1));
+        assertEquals(0, legacy.performanceSettledHaltSpanLimit(54));
+        assertFalse(legacy.performanceNormalSpeedEpochIdle(54, true));
+        legacy.tick();
+        assertTrue("legacy quiet endpoint did not observe the active external wait",
+                legacyEndpoint.activeExternalWaitObserved);
 
         SerialPort debug = new SerialPort(
                 new InterruptManager(false), false, new SpeedMode(false));
@@ -221,6 +332,50 @@ public class SerialPortPerformanceSpanTest {
     }
 
     private static final class NoopEndpoint implements SerialEndpoint {
+        @Override
+        public void setSb(int sb) {
+        }
+
+        @Override
+        public int recvBit() {
+            return -1;
+        }
+
+        @Override
+        public void startSending() {
+        }
+
+        @Override
+        public int sendBit() {
+            return 1;
+        }
+
+        @Override
+        public eu.rekawek.coffeegb.core.state.ComponentState<SerialEndpoint> captureState() {
+            return null;
+        }
+
+        @Override
+        public void restoreState(
+                eu.rekawek.coffeegb.core.state.ComponentState<SerialEndpoint> state) {
+        }
+    }
+
+    /** Models an old quiet-capability implementer which observes active external waits. */
+    private static final class LegacyQuietEndpoint implements SerialEndpoint {
+
+        private boolean activeExternalWaitObserved;
+
+        @Override
+        public int performanceQuietSpanLimit(int requested) {
+            return requested > 0 ? requested : 0;
+        }
+
+        @Override
+        public void setExternalTransfer(boolean inProgress) {
+            activeExternalWaitObserved |= inProgress;
+        }
+
         @Override
         public void setSb(int sb) {
         }

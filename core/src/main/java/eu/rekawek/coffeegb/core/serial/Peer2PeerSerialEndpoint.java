@@ -35,6 +35,12 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
         return requested > 0 && peer == null ? requested : 0;
     }
 
+    /** A disconnected cable also has no device which can observe an armed external wait. */
+    @Override
+    public int performanceExternalClockWaitSpanLimit(int requested) {
+        return requested > 0 && peer == null ? requested : 0;
+    }
+
     @Override
     public void setSb(int sb) {
         this.sb = sb;

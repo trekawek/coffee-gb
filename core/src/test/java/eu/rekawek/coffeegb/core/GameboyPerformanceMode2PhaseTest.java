@@ -341,6 +341,32 @@ public final class GameboyPerformanceMode2PhaseTest {
     }
 
     @Test
+    public void nativeCgbNormalSpeedMode2RemainsScalar() throws Exception {
+        PlayerInputHub candidateHub = new PlayerInputHub();
+        try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
+             Gameboy scalar = session(HardwareProfileRegistry.CGB, SCALAR_INPUT,
+                     ExecutionMode.PERFORMANCE, true);
+             Gameboy candidate = session(HardwareProfileRegistry.CGB, candidateHub,
+                     ExecutionMode.PERFORMANCE, true)) {
+            reachMode2Start(scalar, candidate, 20, false);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            for (int tick = 0; tick < 3; tick++) {
+                scalar.tick();
+            }
+            assertEquals(0, candidate.runTicks(3));
+            assertEquals("native CGB x1 mode 2 entered a phase packet", 0L,
+                    candidate.getPerformanceBulkTicks());
+            assertEquals("native CGB x1 mode 2 entered a CPU epoch", 0L,
+                    candidate.getPerformanceEpochTicks());
+            assertDeepStateEquals("native CGB x1 scalar mode 2",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
     public void physicalDmgMode2ExcludesOtherProfilesAtAnOtherwiseEligibleMode2Point()
             throws Exception {
         // The positive DMG control proves that this exact non-first-line mode-2 fixture has

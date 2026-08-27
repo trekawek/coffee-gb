@@ -328,13 +328,24 @@ public class Cpu implements StatefulComponent<Cpu> {
      * while the owner supplies the CGB-only peripheral/PPU plane around this transaction.
      */
     public int runCgbCompatibilityPerformanceEpoch(int maxMasterTicks) {
-        return runPerformanceNormalSpeedEpoch(maxMasterTicks, true, false);
+        return speedMode.isDmgCompat()
+                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, false) : 0;
+    }
+
+    /**
+     * Fixed four-master-dot epoch for native CGB software which remains at normal speed.
+     * Decoded memory boundaries stay scalar so CPU-visible peripheral writes retain their
+     * position before the owner ticks Sound and the remaining peripherals.
+     */
+    public int runNativeCgbNormalSpeedPerformanceEpoch(int maxMasterTicks) {
+        return !speedMode.isDmgCompat()
+                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, true) : 0;
     }
 
     /** Shared fixed-width normal-speed epoch; topology flags are explicit and allocation-free. */
     private int runPerformanceNormalSpeedEpoch(
-            int maxMasterTicks, boolean cgbCompat, boolean fenceDecodedMemoryCycles) {
-        if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbCompat)) {
+            int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles) {
+        if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbHardware)) {
             return 0;
         }
         int requested = Math.min(maxMasterTicks, PERFORMANCE_EPOCH_MAX_TICKS);
@@ -474,13 +485,18 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Cheap state-only entrance check for ordinary CGB DMG-compatibility epochs. */
     public boolean performanceCgbCompatibilityEpochEntryEligible() {
-        return performanceNormalSpeedEpochEntryEligible(true);
+        return speedMode.isDmgCompat() && performanceNormalSpeedEpochEntryEligible(true);
+    }
+
+    /** Cheap state-only entrance check for native CGB software at the normal clock. */
+    public boolean performanceNativeCgbNormalSpeedEpochEntryEligible() {
+        return performanceNormalSpeedEpochEntryEligible(true) && !speedMode.isDmgCompat();
     }
 
     /** Shared state-only entrance check for the fixed-width normal-speed epoch. */
-    public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbCompat) {
-        boolean topologyMatches = cgbCompat
-                ? speedMode.isGbc() && speedMode.isDmgCompat()
+    public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbHardware) {
+        boolean topologyMatches = cgbHardware
+                ? speedMode.isGbc()
                 : !speedMode.isGbc();
         if (debugAddressSpace != null || debugHooks != null || debugRetirementTracker != null
                 || state == State.HALTED || state == State.STOPPED
