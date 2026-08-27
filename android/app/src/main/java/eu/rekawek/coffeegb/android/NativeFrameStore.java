@@ -26,6 +26,10 @@ final class NativeFrameStore implements AutoCloseable {
     static final int MAX_WIDTH = SuperGameboy.SGB_DISPLAY_WIDTH;
     static final int MAX_HEIGHT = SuperGameboy.SGB_DISPLAY_HEIGHT;
     private static final int SLOT_COUNT = 3;
+    private static final int SLOT_INDEX_BITS = 2;
+    private static final long SLOT_INDEX_MASK = (1L << SLOT_INDEX_BITS) - 1L;
+    private static final long MAX_RESERVATION_TOKEN =
+            Long.MAX_VALUE >>> SLOT_INDEX_BITS;
 
     interface Listener {
         /** Signals availability only; consumers must call {@link #takeLatest()} themselves. */
@@ -45,6 +49,8 @@ final class NativeFrameStore implements AutoCloseable {
     private final LongConsumer benchmarkBoundary;
 
     private long nextSequence;
+    private long nextReservationToken;
+    private long reservationGeneration;
     private long droppedFrames;
     private long benchmarkEpoch;
     private volatile boolean grayscale;
@@ -64,7 +70,7 @@ final class NativeFrameStore implements AutoCloseable {
         this.diagnostics = diagnostics;
         this.benchmarkBoundary = benchmarkBoundary;
         for (int index = 0; index < slots.length; index++) {
-            slots[index] = new Slot();
+            slots[index] = new Slot(index);
         }
     }
 
@@ -97,17 +103,18 @@ final class NativeFrameStore implements AutoCloseable {
         if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
             return;
         }
-        Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
-        if (slot == null) {
+        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
+        if (claim == 0L) {
             return;
         }
+        Slot slot = slotForClaim(claim);
         int[] palette = grayscale ? Display.DmgFrameReadyEvent.COLORS_GRAYSCALE
                 : Display.DmgFrameReadyEvent.COLORS;
         int[] source = event.pixels();
         for (int index = 0; index < source.length; index++) {
             slot.pixels[index] = palette[source[index]] | 0xff000000;
         }
-        publish(slot);
+        publish(claim);
     }
 
     void publish(Display.GbcFrameReadyEvent event) {
@@ -117,16 +124,17 @@ final class NativeFrameStore implements AutoCloseable {
         if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
             return;
         }
-        Slot slot = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
-        if (slot == null) {
+        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
+        if (claim == 0L) {
             return;
         }
+        Slot slot = slotForClaim(claim);
         int[] source = event.pixels();
         for (int index = 0; index < source.length; index++) {
             slot.pixels[index] = Display.GbcFrameReadyEvent.translateGbcRgb(source[index])
                     | 0xff000000;
         }
-        publish(slot);
+        publish(claim);
     }
 
     /** Applies the Android DMG palette choice to future native frames. */
@@ -153,13 +161,27 @@ final class NativeFrameStore implements AutoCloseable {
         }
         int width = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_WIDTH : Display.DISPLAY_WIDTH;
         int height = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_HEIGHT : Display.DISPLAY_HEIGHT;
-        Slot slot = reserve(width, height);
-        if (slot == null) {
+        long claim = reserve(width, height);
+        if (claim == 0L) {
             return;
         }
-        event.toRgb(slot.pixels, false);
-        makeOpaque(slot.pixels, Math.multiplyExact(width, height));
-        publish(slot);
+        Slot slot = slotForClaim(claim);
+        try {
+            int expectedLength = Math.multiplyExact(width, height);
+            int[] source = event.buffer();
+            if (source == null || source.length != expectedLength) {
+                throw new IllegalArgumentException(
+                        "SGB frame pixel count must be exactly " + expectedLength);
+            }
+            // SgbFrameReadyEvent is callback-scoped; fuse RGB copying and alpha insertion while
+            // the producer still owns the source. A failed conversion must not strand the slot in
+            // WRITING, otherwise one malformed callback permanently reduces the three-slot pool.
+            event.copyToOpaqueArgb(slot.pixels);
+        } catch (RuntimeException | Error failure) {
+            abortWriting(claim);
+            throw failure;
+        }
+        publish(claim);
     }
 
     /**
@@ -223,6 +245,7 @@ final class NativeFrameStore implements AutoCloseable {
         // openRom() clears the presentation before it knows whether the old session will actually
         // be replaced; a failed/rejected load must not let that still-active SGB session publish
         // its raw DMG transfer input. The next HardwareProfileEvent overwrites this gate.
+        reservationGeneration++;
         nextSequence++;
         for (Slot slot : slots) {
             if (slot.state == SlotState.PUBLISHED) {
@@ -246,11 +269,17 @@ final class NativeFrameStore implements AutoCloseable {
             throw new IllegalArgumentException("Benchmark generation must be positive");
         }
         benchmarkEpoch = generation;
+        reservationGeneration++;
         nextSequence = 0L;
         for (Slot slot : slots) {
-            slot.state = SlotState.FREE;
-            slot.presentationConsumed = false;
-            slot.epoch = generation;
+            // A producer may still be converting a callback-scoped frame outside this lock.
+            // Keep its WRITING claim until that owner publishes or aborts; reusing its pixels
+            // here would let the old conversion corrupt a newer reservation.
+            if (slot.state != SlotState.WRITING) {
+                slot.state = SlotState.FREE;
+                slot.presentationConsumed = false;
+                slot.epoch = generation;
+            }
         }
         // The anchor renderer is quiescent at this boundary. Do not wake it with a synthetic
         // null draw: the first real measured publication must schedule the renderer callback,
@@ -318,7 +347,12 @@ final class NativeFrameStore implements AutoCloseable {
         closed = true;
         listeners.clear();
         for (Slot slot : slots) {
-            slot.state = SlotState.FREE;
+            // Leave WRITING claims owned until their conversion returns. No future reservation
+            // can observe a closed store, and releasing the claim here could race a new writer in
+            // a concurrently reused store instance.
+            if (slot.state != SlotState.WRITING) {
+                slot.state = SlotState.FREE;
+            }
         }
     }
 
@@ -331,10 +365,10 @@ final class NativeFrameStore implements AutoCloseable {
         return false;
     }
 
-    private synchronized Slot reserve(int width, int height) {
+    private synchronized long reserve(int width, int height) {
         if (closed || width < 1 || height < 1 || width > MAX_WIDTH || height > MAX_HEIGHT) {
             recordDroppedFrame();
-            return null;
+            return 0L;
         }
         Slot chosen = null;
         for (Slot slot : slots) {
@@ -355,7 +389,7 @@ final class NativeFrameStore implements AutoCloseable {
             // Rendering owns every fixed buffer. Dropping one arriving frame is preferable to
             // blocking the controller thread or allocating a fourth frame.
             recordDroppedFrame();
-            return null;
+            return 0L;
         }
         if (chosen.state == SlotState.PUBLISHED) {
             // Reusing a published slot discards that frame before presentation. Count it here;
@@ -365,16 +399,32 @@ final class NativeFrameStore implements AutoCloseable {
             }
             chosen.presentationConsumed = false;
         }
+        long token = nextReservationToken + 1L;
+        if (token <= 0L || token > MAX_RESERVATION_TOKEN) {
+            token = 1L;
+        }
+        nextReservationToken = token;
+        long claim = (token << SLOT_INDEX_BITS) | chosen.index;
         chosen.state = SlotState.WRITING;
         chosen.width = width;
         chosen.height = height;
         chosen.epoch = benchmarkEpoch;
-        return chosen;
+        chosen.reservationClaim = claim;
+        chosen.reservationGeneration = reservationGeneration;
+        return claim;
     }
 
-    private void publish(Slot slot) {
+    private void publish(long claim) {
+        Slot slot = slotForClaim(claim);
         synchronized (this) {
-            if (closed || slot.state != SlotState.WRITING) {
+            boolean owner = slot.state == SlotState.WRITING
+                    && slot.reservationClaim == claim;
+            boolean current = owner && slot.reservationGeneration == reservationGeneration;
+            if (closed || !current) {
+                if (owner) {
+                    slot.state = SlotState.FREE;
+                    slot.presentationConsumed = false;
+                }
                 recordDroppedFrame();
                 return;
             }
@@ -383,6 +433,19 @@ final class NativeFrameStore implements AutoCloseable {
             slot.state = SlotState.PUBLISHED;
         }
         notifyListeners();
+    }
+
+    private synchronized void abortWriting(long claim) {
+        Slot slot = slotForClaim(claim);
+        if (slot.state == SlotState.WRITING
+                && slot.reservationClaim == claim) {
+            slot.state = SlotState.FREE;
+            slot.presentationConsumed = false;
+        }
+    }
+
+    private Slot slotForClaim(long claim) {
+        return slots[(int) (claim & SLOT_INDEX_MASK)];
     }
 
     private void notifyListeners() {
@@ -405,12 +468,6 @@ final class NativeFrameStore implements AutoCloseable {
         boolean boundary = diagnostics.frameReady();
         if (boundary && benchmarkBoundary != null) {
             benchmarkBoundary.accept(diagnostics.benchmarkGeneration());
-        }
-    }
-
-    private static void makeOpaque(int[] pixels, int length) {
-        for (int index = 0; index < length; index++) {
-            pixels[index] |= 0xff000000;
         }
     }
 
@@ -472,13 +529,21 @@ final class NativeFrameStore implements AutoCloseable {
     }
 
     private static final class Slot {
+        private final int index;
         private final int[] pixels = new int[MAX_WIDTH * MAX_HEIGHT];
         private SlotState state = SlotState.FREE;
         private int width;
         private int height;
         private long sequence;
         private long epoch;
+        private long reservationClaim;
+        private long reservationGeneration;
         /** True once the renderer has consumed this published frame; prevents double drop counts. */
         private boolean presentationConsumed;
+
+        private Slot(int index) {
+            this.index = index;
+        }
     }
+
 }

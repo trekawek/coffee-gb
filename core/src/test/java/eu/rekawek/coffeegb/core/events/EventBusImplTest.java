@@ -377,6 +377,18 @@ public class EventBusImplTest {
         assertThrows(IllegalStateException.class, () -> bus.postAsync(new TestEvent()));
     }
 
+    @Test
+    public void borrowedEventsCannotBeQueuedAsynchronously() {
+        EventBusImpl bus = new EventBusImpl(null, "borrowed", true, 1_000);
+        try {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> bus.postAsync(new BorrowedEvent()));
+        } finally {
+            bus.close();
+        }
+    }
+
     private static void await(String description, Condition condition) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (!condition.evaluate() && System.nanoTime() < deadline) {
@@ -391,6 +403,9 @@ public class EventBusImplTest {
     }
 
     private static class TestEvent implements Event {
+    }
+
+    private static class BorrowedEvent implements SynchronousBorrowedEvent {
     }
 
     private static class NestedEvent implements Event {

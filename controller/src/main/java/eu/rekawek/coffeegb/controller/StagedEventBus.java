@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.Subscriber;
+import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +109,10 @@ final class StagedEventBus implements EventBus {
                 // Core resource cleanup may synchronously silence an output after the owning
                 // session bus has quiesced. Treat that signal as local cleanup, not an error.
                 return true;
+            }
+            if (event instanceof SynchronousBorrowedEvent && (async || state == State.STAGED)) {
+                throw new IllegalArgumentException(
+                        "Borrowed events cannot be posted through a staged event bus");
             }
             if (state == State.ACTIVE) {
                 return false;
