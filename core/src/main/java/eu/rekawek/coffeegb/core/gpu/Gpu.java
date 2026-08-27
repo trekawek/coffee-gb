@@ -1322,9 +1322,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
     /**
      * Horizon for a short ordinary-CGB normal-speed mode-2 phase packet. The CGB OAM reader
-     * uses the same Y/X height latch at x1 in native and compatibility modes. Only non-CPU dots
-     * before the dot-79-to-80 handoff are admitted; every fixed-point, observation, DMA, and
-     * HDMA miss leaves the complete phase to the scalar scheduler.
+     * uses the same Y/X height latch at x1 in native and compatibility modes. Only dots before
+     * the dot-79-to-80 handoff are admitted; callers may use the proof for the short phase-only
+     * packet or the fenced native-x1 CPU epoch. Every fixed-point, observation, DMA, and HDMA
+     * miss leaves the complete span to the scalar scheduler.
      */
     public int performanceCgbNormalSpeedMode2PhaseSpanLimit(int requested) {
         if (!performanceDmgCompatTiming || requested <= 0 || !gbc || speedModeValue != 1
