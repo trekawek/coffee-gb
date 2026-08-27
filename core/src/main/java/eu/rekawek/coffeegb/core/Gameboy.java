@@ -273,7 +273,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private enum PerformancePhasePpuPlan {
         QUIET,
         PHYSICAL_DMG_MODE2,
-        CGB_COMPATIBILITY_MODE2
+        CGB_NORMAL_SPEED_MODE2
     }
 
     public Gameboy(Rom rom) {
@@ -1322,15 +1322,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
                 steadyRasterSpan = span > 0 && !directRasterSpan
                         && gpu.isPerformanceSteadyCursorActive();
-            } else if (isCgbCompatibilityPerformanceEpochTopology()) {
-                // CGB compatibility keeps the color OAM-reader semantics. Admit only the
-                // existing allocation-free CGB scan transaction; a fixed-point or reader
-                // miss leaves the complete one-to-three-dot phase on the scalar path.
+            } else if (isCgbNormalSpeedPerformanceEpochTopology()) {
+                // Ordinary CGB x1 keeps the color OAM-reader semantics in both native and
+                // compatibility modes. Admit only the existing allocation-free CGB scan
+                // transaction; a fixed-point or reader miss leaves the complete one-to-three-
+                // dot phase on the scalar path.
                 int mode2SpanLimit =
-                        gpu.performanceCgbCompatibilityMode2PhaseSpanLimit(span);
+                        gpu.performanceCgbNormalSpeedMode2PhaseSpanLimit(span);
                 if (mode2SpanLimit > 0) {
                     span = Math.min(span, mode2SpanLimit);
-                    ppuPlan = PerformancePhasePpuPlan.CGB_COMPATIBILITY_MODE2;
+                    ppuPlan = PerformancePhasePpuPlan.CGB_NORMAL_SPEED_MODE2;
                 } else {
                     span = 0;
                 }
@@ -2207,8 +2208,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     ticks, directRasterSpan, steadyRasterSpan);
             case PHYSICAL_DMG_MODE2 ->
                     gpu.advancePerformancePhysicalDmgMode2PhaseSpanTrusted(ticks);
-            case CGB_COMPATIBILITY_MODE2 ->
-                    gpu.advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(ticks);
+            case CGB_NORMAL_SPEED_MODE2 ->
+                    gpu.advancePerformanceCgbNormalSpeedMode2PhaseSpanTrusted(ticks);
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         if (gbc) {
