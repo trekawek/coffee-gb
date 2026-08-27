@@ -12,6 +12,7 @@ import java.util.EnumMap
 /** Process-local shape selector for the disposable runtime warmup; never persisted. */
 enum class RuntimeWarmupFlavor {
   SCALAR,
+  PERFORMANCE,
   SHADOW_MEASURED_EXACT_V1,
 }
 

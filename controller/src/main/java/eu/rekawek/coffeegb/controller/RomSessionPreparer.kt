@@ -256,6 +256,10 @@ internal class RuntimeWarmupCache(
                 || rom.gameboyColorFlag == Rom.GameboyColorFlag.NON_CGB)) {
           return null
         }
+        if (flavor == RuntimeWarmupFlavor.PERFORMANCE
+            && config.executionMode != eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE) {
+          return null
+        }
         val cartridgeFeatures = Feature.values().filter(rom.cartridgeProperties::has)
         return RuntimeWarmupKey(
             config.executionMode,
@@ -349,6 +353,27 @@ internal class RuntimeWarmupCache(
               && gameboy.getPerformanceEpochTicks() > 0L
               && gameboy.getPerformanceEpochMaxTicks() <= MAX_NATIVE_EPOCH_TICKS) {
             "Shadow measured warmup did not exercise bounded native epochs"
+          }
+        } else if (flavor == RuntimeWarmupFlavor.PERFORMANCE) {
+          require(config.executionMode == eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE) {
+            "PERFORMANCE runtime warmup requires PERFORMANCE execution mode"
+          }
+          val frameTicks = config.clockSpec.controllerTicksPerFrame()
+          require(frameTicks > 0) { "Runtime warmup frame must contain positive controller ticks" }
+          val totalTicks = Math.multiplyExact(WARMUP_FRAMES.toLong(), frameTicks.toLong())
+          require(ticks.toLong() == totalTicks) {
+            "PERFORMANCE runtime warmup received an unexpected tick budget"
+          }
+          gameboy.resetPerformanceBulkCounters()
+          repeat(WARMUP_FRAMES) { frame ->
+            if (frame % CANCELLATION_CHECK_FRAMES == 0) {
+              ensureActive()
+            }
+            gameboy.runTicks(frameTicks)
+          }
+          ensureActive()
+          require(gameboy.performanceBulkTicks + gameboy.performanceEpochTicks > 0L) {
+            "PERFORMANCE runtime warmup did not exercise the frame-batched scheduler"
           }
         } else {
           repeat(ticks) { tick ->
