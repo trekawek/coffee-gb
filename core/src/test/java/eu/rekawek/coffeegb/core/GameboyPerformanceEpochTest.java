@@ -4,8 +4,10 @@ import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
+import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
+import eu.rekawek.coffeegb.core.memory.Hdma;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import org.junit.Test;
 
@@ -137,6 +139,45 @@ public final class GameboyPerformanceEpochTest {
             gameboy.runTicks(4_096);
             assertTrue("ordinary CGB compatibility did not enter the epoch lane after FAST_FORWARD handoff",
                     gameboy.getPerformanceEpochTicks() > 0);
+        }
+    }
+
+    @Test
+    public void fastForwardCgbCompatibilityUsesMode2PhasePacketsAfterBootGdma()
+            throws Exception {
+        PlayerInputHub candidateHub = new PlayerInputHub();
+        try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
+                Gameboy scalar = fastForwardCgbCompatibilitySession(
+                        PlayerInputSnapshot::released);
+                Gameboy candidate = fastForwardCgbCompatibilitySession(candidateHub)) {
+            assertEquals("FAST_FORWARD handoff tail",
+                    scalar.runTicksUntilStop(32, scalar::isBootstrapReady),
+                    candidate.runTicksUntilStop(32, candidate::isBootstrapReady));
+            assertTrue(scalar.isBootstrapReady());
+            assertTrue(candidate.isBootstrapReady());
+            assertTrue(candidate.getSpeedMode().isDmgCompat());
+            Hdma.HdmaState bootHdma = (Hdma.HdmaState) candidate.getHdma().captureState();
+            assertEquals("authentic boot did not retain the completed-GDMA request clock",
+                    0, bootHdma.hblankRequestTicks());
+
+            advanceScalarPairToVisibleMode2Dot(scalar, candidate, 20);
+            scalar.getGpu().setPerformanceScanlineEnabled(true);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            assertTrue("FAST_FORWARD compatibility mode 2 rejected its phase transaction",
+                    candidate.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3) > 0);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            int ticks = 79 - candidate.getGpu().getTicksInLine();
+            for (int i = 0; i < ticks; i++) {
+                scalar.tick();
+            }
+            assertEquals("FAST_FORWARD mode-2 frame callbacks", 0, candidate.runTicks(ticks));
+            assertTrue("FAST_FORWARD compatibility mode 2 had no bulk coverage",
+                    candidate.getPerformanceBulkTicks() > 0);
+            assertDeepStateEquals("FAST_FORWARD compatibility mode-2 dot 79",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
         }
     }
 
@@ -514,6 +555,17 @@ public final class GameboyPerformanceEpochTest {
                 .build();
     }
 
+    private static Gameboy fastForwardCgbCompatibilitySession(PlayerInputSource inputSource)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(validNonColorRom()))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
     private static Gameboy physicalDmgSession(
             byte[] image, PlayerInputSource inputSource, ExecutionMode executionMode)
             throws Exception {
@@ -612,6 +664,25 @@ public final class GameboyPerformanceEpochTest {
             }
         }
         assertTrue("test did not reach a settled native-CGB mode-2 dot", guard < 400_000);
+    }
+
+    private static void advanceScalarPairToVisibleMode2Dot(
+            Gameboy scalar, Gameboy candidate, int targetDot) {
+        int guard = 0;
+        while (!(scalar.getGpu().isLcdEnabled()
+                && !scalar.getGpu().isFirstLine()
+                && scalar.getGpu().getLine() < 144
+                && scalar.getGpu().getMode() == Mode.OamSearch
+                && scalar.getGpu().getTicksInLine() == targetDot)
+                && guard++ < 456 * 160) {
+            assertEquals("FAST_FORWARD mode-2 setup frame callback",
+                    scalar.tick(), candidate.tick());
+        }
+        assertTrue("FAST_FORWARD setup did not reach visible mode-2 dot " + targetDot,
+                guard < 456 * 160);
+        assertDeepStateEquals("FAST_FORWARD visible mode-2 setup",
+                scalar.captureStateWithoutTimeSource(),
+                candidate.captureStateWithoutTimeSource());
     }
 
     /** Record/array-aware equality for the private immutable component-state graph. */

@@ -272,7 +272,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** PPU commit selected for a normal-speed, phase-only PERFORMANCE packet. */
     private enum PerformancePhasePpuPlan {
         QUIET,
-        PHYSICAL_DMG_MODE2
+        PHYSICAL_DMG_MODE2,
+        CGB_COMPATIBILITY_MODE2
     }
 
     public Gameboy(Rom rom) {
@@ -1321,6 +1322,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
                 steadyRasterSpan = span > 0 && !directRasterSpan
                         && gpu.isPerformanceSteadyCursorActive();
+            } else if (isCgbCompatibilityPerformanceEpochTopology()) {
+                // CGB compatibility keeps the color OAM-reader semantics. Admit only the
+                // existing allocation-free CGB scan transaction; a fixed-point or reader
+                // miss leaves the complete one-to-three-dot phase on the scalar path.
+                int mode2SpanLimit =
+                        gpu.performanceCgbCompatibilityMode2PhaseSpanLimit(span);
+                if (mode2SpanLimit > 0) {
+                    span = Math.min(span, mode2SpanLimit);
+                    ppuPlan = PerformancePhasePpuPlan.CGB_COMPATIBILITY_MODE2;
+                } else {
+                    span = 0;
+                }
             } else if (isPhysicalDmgPerformanceEpochTopology()
                     || isSgbPerformanceTopology()) {
                 // Physical-DMG and SGB mode 2 have no quiet-output horizon: the OAM reader
@@ -2141,10 +2154,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // No CPU bus boundary exists inside this span. Advance the free-running phase once;
         // running state, or settled HALT, proves Cpu.onPeripheralsTicked() is a no-op here.
         cpu.advancePerformancePhaseOnlyTrusted(ticks);
-        if (ppuPlan == PerformancePhasePpuPlan.PHYSICAL_DMG_MODE2) {
-            gpu.advancePerformancePhysicalDmgMode2PhaseSpanTrusted(ticks);
-        } else {
-            gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
+        switch (ppuPlan) {
+            case QUIET -> gpu.advancePerformanceQuietSpanTrusted(
+                    ticks, directRasterSpan, steadyRasterSpan);
+            case PHYSICAL_DMG_MODE2 ->
+                    gpu.advancePerformancePhysicalDmgMode2PhaseSpanTrusted(ticks);
+            case CGB_COMPATIBILITY_MODE2 -> {
+                hdma.advancePerformanceOamSearchPhaseClockTrusted(ticks);
+                gpu.advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(ticks);
+            }
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         if (gbc) {

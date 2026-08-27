@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputHub;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
+import eu.rekawek.coffeegb.core.memory.Hdma;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import org.junit.Test;
 
@@ -41,6 +42,13 @@ public final class GameboyPerformanceMode2PhaseTest {
                 HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2});
     }
 
+    @Test
+    public void cgbCompatibilityMode2PacketsMatchScalarForBothSpriteHeights()
+            throws Exception {
+        assertMode2PacketsMatchScalarForBothSpriteHeights(new HardwareProfile[] {
+                HardwareProfileRegistry.CGB});
+    }
+
     private static void assertMode2PacketsMatchScalarForBothSpriteHeights(
             HardwareProfile[] profiles) throws Exception {
         for (HardwareProfile profile : profiles) {
@@ -60,11 +68,11 @@ public final class GameboyPerformanceMode2PhaseTest {
                             candidate.getGpu().setPerformanceScanlineEnabled(true);
                             assertEquals("mode-2 quiet span was unexpectedly admitted",
                                     0, candidate.getGpu().performanceQuietSpanLimit());
-                            assertTrue("DMG-clocked mode-2 preflight rejected profile="
+                            assertTrue("mode-2 phase preflight rejected profile="
                                             + profile.id() + " tall=" + tallSprites
                                             + " start=" + start + " span=" + requested,
-                                    candidate.getGpu().performancePhysicalDmgMode2PhaseSpanLimit(
-                                            requested) > 0);
+                                    performanceMode2PhaseSpanLimit(
+                                            candidate, profile, requested) > 0);
                             int cpuPhaseLimit = candidate.getCpu().performancePhaseOnlySpanLimit();
                             String caseDetails = "profile=" + profile.id()
                                     + " tall=" + tallSprites + " start=" + start
@@ -114,6 +122,11 @@ public final class GameboyPerformanceMode2PhaseTest {
         }
     }
 
+    @Test
+    public void cgbCompatibilityMode2LeavesDot79To80Scalar() throws Exception {
+        assertMode2LeavesDot79To80Scalar(HardwareProfileRegistry.CGB);
+    }
+
     private static void assertMode2LeavesDot79To80Scalar(HardwareProfile profile)
             throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
@@ -140,6 +153,12 @@ public final class GameboyPerformanceMode2PhaseTest {
             assertEquals(Mode.PixelTransfer, candidate.getGpu().getMode());
             assertEquals("mode-3 handoff entered the mode-2 packet", packetTicks,
                     candidate.getPerformanceBulkTicks());
+            if (profile == HardwareProfileRegistry.CGB) {
+                assertTrue("CGB handoff left DMG compatibility mode",
+                        candidate.getGpu().isDmgCompatMode());
+                assertTrue("scalar CGB compatibility handoff did not arm the color renderer",
+                        candidate.getGpu().isPerformanceScanlineCursorActive());
+            }
             assertDeepStateEquals(profile.id() + " dot-79 handoff",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
@@ -159,30 +178,61 @@ public final class GameboyPerformanceMode2PhaseTest {
         }
     }
 
+    @Test
+    public void cgbCompatibilityMode2RejectsActiveOamDma() throws Exception {
+        assertMode2RejectsAnActiveDmaTransfer(HardwareProfileRegistry.CGB);
+    }
+
     private static void assertMode2RejectsAnActiveDmaTransfer(HardwareProfile profile)
             throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
         try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
-                Gameboy gameboy = session(profile, candidateHub)) {
-            reachMode2Start(gameboy, gameboy, 20, false);
-            gameboy.getGpu().setPerformanceScanlineEnabled(true);
-            gameboy.getAddressSpace().setByte(0xff46, 0x80);
-            assertEquals(0,
-                    gameboy.getGpu().performancePhysicalDmgMode2PhaseSpanLimit(3));
+                Gameboy scalar = session(profile, SCALAR_INPUT);
+                Gameboy candidate = session(profile, candidateHub)) {
+            reachMode2Start(scalar, candidate, 20, false);
+            scalar.getGpu().setPerformanceScanlineEnabled(true);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            scalar.getAddressSpace().setByte(0xff46, 0x80);
+            candidate.getAddressSpace().setByte(0xff46, 0x80);
+            assertEquals(0, performanceMode2PhaseSpanLimit(candidate, profile, 3));
+            candidate.resetPerformanceBulkCounters();
+
+            for (int i = 0; i < 3; i++) {
+                scalar.tick();
+            }
+            assertEquals(0, candidate.runTicks(3));
+            assertEquals("active OAM DMA entered a mode-2 packet", 0,
+                    candidate.getPerformanceBulkTicks());
+            assertDeepStateEquals(profile.id() + " active OAM DMA",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
         }
     }
 
     @Test
     public void physicalDmgMode2RestoreFailsClosedThenMatchesScalar() throws Exception {
+        assertMode2RestoreFailsClosedThenMatchesScalar(HardwareProfileRegistry.DMG);
+    }
+
+    @Test
+    public void cgbCompatibilityMode2RestoreFailsClosedThenMatchesScalar() throws Exception {
+        assertMode2RestoreFailsClosedThenMatchesScalar(HardwareProfileRegistry.CGB);
+    }
+
+    private static void assertMode2RestoreFailsClosedThenMatchesScalar(
+            HardwareProfile profile) throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
         try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
-                Gameboy scalar = session(HardwareProfileRegistry.DMG, SCALAR_INPUT);
-                Gameboy candidate = session(HardwareProfileRegistry.DMG, candidateHub)) {
+                Gameboy scalar = session(profile, SCALAR_INPUT);
+                Gameboy candidate = session(profile, candidateHub)) {
             reachMode2Start(scalar, candidate, 20, true);
             scalar.getGpu().setPerformanceScanlineEnabled(true);
             candidate.getGpu().setPerformanceScanlineEnabled(true);
             var checkpoint = candidate.captureState();
             candidate.restoreState(checkpoint);
+            assertEquals("restored mode-2 state entered the fixed-point transaction", 0,
+                    performanceMode2PhaseSpanLimit(candidate, profile, 3));
+            candidate.resetPerformanceBulkCounters();
 
             // Restored LCDC history is intentionally conservative for nine dots. The scalar
             // fallback during that drain must remain observationally equivalent.
@@ -190,9 +240,103 @@ public final class GameboyPerformanceMode2PhaseTest {
                 scalar.tick();
                 candidate.runTicks(1);
             }
-            assertDeepStateEquals("restore mode-2 drain",
+            assertEquals("restore drain entered a mode-2 packet", 0,
+                    candidate.getPerformanceBulkTicks());
+            assertDeepStateEquals(profile.id() + " restore mode-2 drain",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityMode2RejectsActiveHdma() throws Exception {
+        PlayerInputHub candidateHub = new PlayerInputHub();
+        try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
+                Gameboy scalar = session(HardwareProfileRegistry.CGB, SCALAR_INPUT);
+                Gameboy candidate = session(HardwareProfileRegistry.CGB, candidateHub)) {
+            reachMode2Start(scalar, candidate, 20, false);
+            scalar.getGpu().setPerformanceScanlineEnabled(true);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            startOneBlockGdma(scalar);
+            startOneBlockGdma(candidate);
+            assertEquals(0,
+                    candidate.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3));
+            candidate.resetPerformanceBulkCounters();
+
+            for (int i = 0; i < 3; i++) {
+                scalar.tick();
+            }
+            assertEquals(0, candidate.runTicks(3));
+            assertEquals("active HDMA entered a mode-2 packet", 0,
+                    candidate.getPerformanceBulkTicks());
+            assertDeepStateEquals("CGB compatibility active HDMA",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            int guard = 0;
+            while (candidate.getHdma().hasActiveOrPendingTransfer() && guard++ < 64) {
+                scalar.tick();
+                candidate.runTicks(1);
+            }
+            assertTrue("one-block GDMA did not complete inside mode 2", guard < 64);
+            assertEquals(Mode.OamSearch, candidate.getGpu().getMode());
+            assertTrue("GDMA completion crossed the mode-2 packet cap",
+                    candidate.getGpu().getTicksInLine() < 79);
+            Hdma.HdmaState completed = (Hdma.HdmaState) candidate.getHdma().captureState();
+            assertEquals("fixture did not retain the post-GDMA request clock", 0,
+                    completed.hblankRequestTicks());
+
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+            assertTrue("post-GDMA request clock rejected an exact mode-2 packet",
+                    candidate.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3) > 0);
+            candidate.resetPerformanceBulkCounters();
+            int tail = Math.min(8, 79 - candidate.getGpu().getTicksInLine());
+            for (int i = 0; i < tail; i++) {
+                scalar.tick();
+            }
+            assertEquals(0, candidate.runTicks(tail));
+            assertTrue("completed GDMA tail did not enter a mode-2 packet",
+                    candidate.getPerformanceBulkTicks() > 0);
+            assertDeepStateEquals("CGB compatibility completed-GDMA request clock",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void cgbCompatibilityMode2RejectsCgb0NativeAccuracyAndDebug() throws Exception {
+        Mode2ExclusionCase[] cases = {
+                new Mode2ExclusionCase("cgb0-compat", HardwareProfileRegistry.CGB0,
+                        ExecutionMode.PERFORMANCE, false, true),
+                new Mode2ExclusionCase("cgb-native", HardwareProfileRegistry.CGB,
+                        ExecutionMode.PERFORMANCE, true, true),
+                new Mode2ExclusionCase("accuracy-cgb-compat", HardwareProfileRegistry.CGB,
+                        ExecutionMode.ACCURACY, false, false)
+        };
+        for (Mode2ExclusionCase exclusion : cases) {
+            PlayerInputHub hub = new PlayerInputHub();
+            try (PlayerInputHub.SourceHandle ignored = hub.openSource(0);
+                    Gameboy gameboy = session(exclusion.profile(), hub,
+                            exclusion.executionMode(), exclusion.nativeColor())) {
+                reachMode2Start(gameboy, gameboy, 20, false);
+                if (exclusion.scanlineCapable()) {
+                    gameboy.getGpu().setPerformanceScanlineEnabled(true);
+                }
+                assertEquals(exclusion.label() + " entered CGB compatibility mode 2", 0,
+                        gameboy.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3));
+            }
+        }
+
+        PlayerInputHub debugHub = new PlayerInputHub();
+        try (PlayerInputHub.SourceHandle ignored = debugHub.openSource(0);
+                Gameboy debug = session(HardwareProfileRegistry.CGB, debugHub)) {
+            reachMode2Start(debug, debug, 20, false);
+            debug.getGpu().setPerformanceScanlineEnabled(true);
+            assertTrue("ordinary CGB compatibility control was not eligible",
+                    debug.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3) > 0);
+            debug.getGpu().setDebugHooks(new TestDebugHooks());
+            assertEquals("debug hooks entered CGB compatibility mode 2", 0,
+                    debug.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(3));
         }
     }
 
@@ -264,6 +408,13 @@ public final class GameboyPerformanceMode2PhaseTest {
         assertEquals(Mode.OamSearch, gameboy.getGpu().getMode());
         assertTrue("mode-2 exclusion fixture crossed the OAM horizon",
                 gameboy.getGpu().getTicksInLine() < 79);
+    }
+
+    private static int performanceMode2PhaseSpanLimit(
+            Gameboy gameboy, HardwareProfile profile, int requested) {
+        return profile == HardwareProfileRegistry.CGB
+                ? gameboy.getGpu().performanceCgbCompatibilityMode2PhaseSpanLimit(requested)
+                : gameboy.getGpu().performancePhysicalDmgMode2PhaseSpanLimit(requested);
     }
 
     @Test
@@ -370,6 +521,15 @@ public final class GameboyPerformanceMode2PhaseTest {
                 .setPlayerInputSource(inputSource)
                 .setSupportBatterySave(false)
                 .build();
+    }
+
+    private static void startOneBlockGdma(Gameboy gameboy) {
+        var bus = gameboy.getAddressSpace();
+        bus.setByte(0xff51, 0);
+        bus.setByte(0xff52, 0);
+        bus.setByte(0xff53, 0);
+        bus.setByte(0xff54, 0);
+        bus.setByte(0xff55, 0);
     }
 
     private static void assertDeepStateEquals(String path, Object expected, Object actual) {
