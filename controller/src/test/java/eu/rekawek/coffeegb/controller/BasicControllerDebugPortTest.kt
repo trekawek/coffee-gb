@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.controller.state.StateLoadRefRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateOperationCompletedEvent
 import eu.rekawek.coffeegb.controller.state.StateSaveRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.debug.DebugAddressSpace
@@ -66,6 +67,31 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class BasicControllerDebugPortTest {
+
+  @Test
+  fun debuggerOwnedPerformanceStepDoesNotPublishOrdinaryWorkSpans() {
+    withController(
+        namedRom("DEBUG_PERFORMANCE_WORK"),
+        null,
+        null,
+        { config -> config.setExecutionMode(ExecutionMode.PERFORMANCE) },
+    ) { eventBus, port, _, _, _ ->
+      assertTrue(await(port.pause()).isSuccess)
+      val workStarts = AtomicInteger()
+      val workCompletions = AtomicInteger()
+      val workAborts = AtomicInteger()
+      eventBus.register<Controller.PerformanceWorkStartedEvent> { workStarts.incrementAndGet() }
+      eventBus.register<Controller.PerformanceWorkCompletedEvent> {
+        workCompletions.incrementAndGet()
+      }
+      eventBus.register<Controller.PerformanceWorkAbortedEvent> { workAborts.incrementAndGet() }
+
+      assertTrue(await(port.step(DebugStepKind.FRAME)).isSuccess)
+      assertEquals(0, workStarts.get())
+      assertEquals(0, workCompletions.get())
+      assertEquals(0, workAborts.get())
+    }
+  }
 
   @Test
   fun reverseFrameRestoresThePrecedingBoundaryWithoutGuestOrHostSideEffects() {
