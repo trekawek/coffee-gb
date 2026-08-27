@@ -309,7 +309,17 @@ public class Cpu implements StatefulComponent<Cpu> {
      * @return master ticks consumed by the CPU epoch
      */
     public int runPhysicalDmgPerformanceEpoch(int maxMasterTicks) {
-        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false);
+        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false, false);
+    }
+
+    /**
+     * Fixed-width SGB/SGB2 epoch which leaves observable memory-mapped accesses to the scalar
+     * scheduler. SGB JOYP writes and APU/PPU/DMA accesses are visible during their CPU tick, so
+     * they cannot use the physical-DMG deferred journal ordering. Safe direct-whole accesses
+     * may remain inside the epoch.
+     */
+    public int runSgbPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false, true);
     }
 
     /**
@@ -318,11 +328,12 @@ public class Cpu implements StatefulComponent<Cpu> {
      * while the owner supplies the CGB-only peripheral/PPU plane around this transaction.
      */
     public int runCgbCompatibilityPerformanceEpoch(int maxMasterTicks) {
-        return runPerformanceNormalSpeedEpoch(maxMasterTicks, true);
+        return runPerformanceNormalSpeedEpoch(maxMasterTicks, true, false);
     }
 
-    /** Shared fixed-width normal-speed epoch; {@code cgbCompat} is an explicit topology guard. */
-    private int runPerformanceNormalSpeedEpoch(int maxMasterTicks, boolean cgbCompat) {
+    /** Shared fixed-width normal-speed epoch; topology flags are explicit and allocation-free. */
+    private int runPerformanceNormalSpeedEpoch(
+            int maxMasterTicks, boolean cgbCompat, boolean fenceDecodedMemoryCycles) {
         if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbCompat)) {
             return 0;
         }
@@ -355,7 +366,8 @@ public class Cpu implements StatefulComponent<Cpu> {
                     }
                 }
 
-                if (!performanceEpochPrefetchSafe()) {
+                if (!performanceEpochPrefetchSafe()
+                        || fenceDecodedMemoryCycles && !performanceSgbBoundarySafe()) {
                     performanceEpochTerminal = true;
                     break;
                 }
@@ -387,6 +399,26 @@ public class Cpu implements StatefulComponent<Cpu> {
             performanceEpochPrefixCommitter = null;
         }
         return elapsed;
+    }
+
+    /**
+     * Rejects an SGB epoch before a CPU boundary which can reach a data-memory operation.
+     * Operations before the next force-finish marker execute in the same machine-cycle tick;
+     * scanning the complete group here prevents a partial CPU tick before scalar fallback.
+     */
+    private boolean performanceSgbBoundarySafe() {
+        if (state != State.RUNNING || currentExecutionOps == null) {
+            return true;
+        }
+        for (int i = opIndex; i < currentOpCount; i++) {
+            if (currentOpAccessesMemory[i]) {
+                return false;
+            }
+            if (currentExecutionOps[i].forceFinishCycle()) {
+                break;
+            }
+        }
+        return true;
     }
 
     private boolean performanceEpochPrefetchSafe() {

@@ -1382,7 +1382,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Fixed four-master-dot CPU epoch topologies; CGB compatibility still owns CGB peripherals. */
     private boolean isNormalSpeedPerformanceEpochTopology() {
         return isPhysicalDmgPerformanceEpochTopology()
-                || isCgbCompatibilityPerformanceEpochTopology();
+                || isCgbCompatibilityPerformanceEpochTopology()
+                || isSgbPerformanceTopology();
     }
 
     private boolean canContinueNativeCgbNegativeStatLease() {
@@ -1646,9 +1647,34 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
     }
 
-    /** Attempts one trusted-raster-only fixed-x1 epoch for DMG or ordinary CGB compatibility. */
+    /** Routes the fixed-x1 epoch through the SGB raster gate before generic preflight. */
     private int tryNormalSpeedPerformanceEpoch(long remaining) {
+        if (isSgbPerformanceTopology()) {
+            return trySgbPerformanceEpoch(remaining);
+        }
+        return tryFixedNormalSpeedPerformanceEpoch(remaining);
+    }
+
+    /**
+     * SGB/SGB2 running-CPU lane. The direct scanline horizon is cheap to reject while the PPU
+     * is in mode 2 or a scalar mode-3 line, so those dots retain the existing scheduler without
+     * walking the timer/audio/serial/CPU epoch preflight.
+     */
+    private int trySgbPerformanceEpoch(long remaining) {
+        if (remaining <= 0) {
+            return 0;
+        }
+        int requested = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
+        if (gpu.performancePhysicalDmgEpochSpanLimit(requested) <= 0) {
+            return 0;
+        }
+        return tryFixedNormalSpeedPerformanceEpoch(remaining);
+    }
+
+    /** Fixed-width normal-speed epoch implementation shared by SGB and CGB compatibility. */
+    private int tryFixedNormalSpeedPerformanceEpoch(long remaining) {
         boolean cgbCompat = isCgbCompatibilityPerformanceEpochTopology();
+        boolean sgb = isSgbPerformanceTopology();
         if (remaining <= 0 || !cpu.performanceNormalSpeedEpochEntryEligible(cgbCompat)
                 || !canStartNormalSpeedPerformanceEpoch(cgbCompat)) {
             return 0;
@@ -1706,7 +1732,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         try {
             elapsed = cgbCompat
                     ? cpu.runCgbCompatibilityPerformanceEpoch(span)
-                    : cpu.runPhysicalDmgPerformanceEpoch(span);
+                    : sgb
+                            ? cpu.runSgbPerformanceEpoch(span)
+                            : cpu.runPhysicalDmgPerformanceEpoch(span);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
         }

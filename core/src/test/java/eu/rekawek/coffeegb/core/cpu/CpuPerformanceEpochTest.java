@@ -98,6 +98,51 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void sgbEpochStopsBeforeUnsafeIoAtEveryPhaseAndBudget() throws Exception {
+        for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
+            for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {
+                ParityMemory directMemory = new ParityMemory();
+                directMemory.bytes[0x0000] = 0x7e; // LD A,(HL)
+                directMemory.bytes[0xff40] = 0x23;
+                ParityMemory scalarMemory = new ParityMemory();
+                System.arraycopy(directMemory.bytes, 0, scalarMemory.bytes, 0,
+                        directMemory.bytes.length);
+
+                InterruptManager directInterrupts = new InterruptManager(false);
+                InterruptManager scalarInterrupts = new InterruptManager(false);
+                Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                        new SpeedMode(false), new Display(false));
+                Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                        new SpeedMode(false), new Display(false));
+                direct.getRegisters().setHL(0xff40);
+                scalar.getRegisters().setHL(0xff40);
+                CpuPair pair = new CpuPair(direct, scalar, directInterrupts, scalarInterrupts,
+                        directMemory, scalarMemory);
+
+                for (int tick = 0; tick < entryPhase; tick++) {
+                    direct.tick();
+                    scalar.tick();
+                }
+
+                int elapsed = direct.runSgbPerformanceEpoch(budget);
+                assertTrue("SGB phase " + entryPhase + " budget " + budget
+                        + " made no safe progress", elapsed > 0);
+                assertTrue(elapsed <= budget);
+                for (int tick = 0; tick < elapsed; tick++) {
+                    scalar.tick();
+                }
+                assertFalse("SGB epoch deferred a memory access",
+                        direct.hasPerformanceEpochJournal());
+                assertEquals("SGB epoch crossed a terminal memory boundary", 0L,
+                        direct.getPerformanceEpochTerminalAccesses());
+                assertTrue("SGB epoch read the fenced FF40 boundary",
+                        directMemory.lastReadAddress != 0xff40);
+                assertCpuPairEquals(pair);
+            }
+        }
+    }
+
+    @Test
     public void cgbCompatibilityFourDotEpochMatchesScalarAtEveryBudget()
             throws Exception {
         for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
