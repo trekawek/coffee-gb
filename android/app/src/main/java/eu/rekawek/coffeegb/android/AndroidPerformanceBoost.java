@@ -9,6 +9,7 @@ import android.os.SystemClock;
 import eu.rekawek.coffeegb.core.ExecutionMode;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 
+import java.math.BigInteger;
 import java.util.Objects;
 
 /**
@@ -28,8 +29,14 @@ final class AndroidPerformanceBoost implements AutoCloseable {
     /** Urgent-display is high enough for a 60-Hz producer without using the audio RT class. */
     static final int PERFORMANCE_THREAD_PRIORITY = Process.THREAD_PRIORITY_URGENT_DISPLAY;
     static final int DEFAULT_THREAD_PRIORITY = Process.THREAD_PRIORITY_DEFAULT;
-    /** Controller work-cycle deadline, rounded to the nearest nanosecond at 60 Hz. */
-    static final long TARGET_WORK_DURATION_NANOS = 16_666_667L;
+    /**
+     * The controller owns only the emulation portion of a host frame. Reserve the remaining third
+     * for audio and presentation instead of inviting ADPF to stretch controller work across the
+     * complete frame deadline.
+     */
+    static final int WORK_BUDGET_NUMERATOR = 2;
+    static final int WORK_BUDGET_DENOMINATOR = 3;
+    static final long TARGET_WORK_DURATION_NANOS = 11_111_111L;
 
     /** The controller thread survives a ROM replacement; only undo a boost installed by us. */
     private static final ThreadLocal<Integer> ORIGINAL_PRIORITY = new ThreadLocal<>();
@@ -52,9 +59,14 @@ final class AndroidPerformanceBoost implements AutoCloseable {
     /** Latches the controller cadence synchronously before the matching session starts. */
     synchronized void onHardwareProfile(ClockSpec clockSpec) {
         Objects.requireNonNull(clockSpec, "clockSpec");
-        targetWorkDurationNanos = Math.round(
-                1_000_000_000d * clockSpec.controllerFramesPerSecondDenominator()
-                        / clockSpec.controllerFramesPerSecondNumerator());
+        BigInteger numerator = BigInteger.valueOf(1_000_000_000L)
+                .multiply(BigInteger.valueOf(clockSpec.controllerFramesPerSecondDenominator()))
+                .multiply(BigInteger.valueOf(WORK_BUDGET_NUMERATOR));
+        BigInteger denominator = BigInteger.valueOf(clockSpec.controllerFramesPerSecondNumerator())
+                .multiply(BigInteger.valueOf(WORK_BUDGET_DENOMINATOR));
+        BigInteger rounded = numerator.add(denominator.shiftRight(1)).divide(denominator);
+        targetWorkDurationNanos = rounded.max(BigInteger.ONE)
+                .min(BigInteger.valueOf(Long.MAX_VALUE)).longValue();
     }
 
     /** Replaces any previous adaptive session at the controller's ownership-commit boundary. */

@@ -111,7 +111,7 @@ public class AndroidPerformanceBoostTest {
         assertEquals(1, platform.createCalls);
         assertEquals(1, platform.threadIdCalls);
         assertArrayEquals(new int[]{73}, platform.lastThreadIds);
-        assertEquals(16_666_667L, AndroidPerformanceBoost.TARGET_WORK_DURATION_NANOS);
+        assertEquals(11_111_111L, AndroidPerformanceBoost.TARGET_WORK_DURATION_NANOS);
         assertEquals(AndroidPerformanceBoost.TARGET_WORK_DURATION_NANOS,
                 platform.lastTargetWorkDurationNanos);
 
@@ -136,9 +136,23 @@ public class AndroidPerformanceBoostTest {
 
     @Test
     public void hardwareProfileSelectsTheMatchingControllerCadenceTarget() {
-        assertTargetDuration(ClockSpec.LEGACY, 16_666_667L);
-        assertTargetDuration(ClockSpec.SGB, 16_348_444L);
-        assertTargetDuration(ClockSpec.SGB2, 16_742_706L);
+        assertTargetDuration(ClockSpec.LEGACY, 11_111_111L);
+        assertTargetDuration(ClockSpec.SGB, 10_898_963L);
+        assertTargetDuration(ClockSpec.SGB2, 11_161_804L);
+
+        long largeNumerator = Long.MAX_VALUE / 3L + 1L;
+        assertTargetDuration(
+                new ClockSpec(1L, largeNumerator, largeNumerator + 1L),
+                666_666_667L);
+        assertTargetDuration(
+                new ClockSpec(
+                        1_000L,
+                        1_537_228_672_809_129_301L,
+                        23_058_431_245_058_444L),
+                10_000_000L);
+        assertTargetDuration(
+                new ClockSpec(Integer.MAX_VALUE, Integer.MAX_VALUE, 1L),
+                1L);
     }
 
     @Test
