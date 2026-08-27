@@ -37,7 +37,8 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     /**
      * PERFORMANCE audio is intentionally represented at a decimated master-tick rate. The normal
      * source is sampled at approximately 76.26 kHz, which is still comfortably above the host
-     * audio band and gives the emulator a 54-master-tick quiet window in which to batch the PSG.
+     * audio band. Quiet spans may cross ordinary compact samples: each sample boundary
+     * materializes at most 54 deferred PSG clocks before recording the exact mixed value.
      * SGB-family clocks use a 56-tick decimation, yielding exactly 1,254 samples in their
      * 70,224-tick frame while retaining a 55-master-tick quiet window. The pending span is
      * transient: CPU-visible operations and state boundaries materialize it before observing or
@@ -267,8 +268,9 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
     /**
      * Defers a PERFORMANCE-only quiet span without visiting the four channel dispatches for
      * every master tick. The caller must split the span at CPU-visible sound writes,
-     * frame-sequencer commits, DIV resets, and compact-output boundaries. The channel clocks are
-     * materialized arithmetically at the next such boundary.
+     * frame-sequencer commits, DIV resets, and host output callbacks. Ordinary compact samples
+     * are handled inside the span: the channel clocks are materialized arithmetically at each
+     * sample boundary before its exact mixed value is recorded.
      */
     public void tickPerformanceQuietSpan(int ticks) {
         if (ticks <= 0) {
@@ -278,20 +280,37 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
             accumulateSilentPcmTicks(ticks);
             return;
         }
-        if (!performanceAudio || debugHooks != null || outputObserver != null
-                || performanceSamplePhase + ticks >= performanceAudioDecimation) {
+        if (!performanceAudio || debugHooks != null || outputObserver != null) {
             materializePendingPerformanceTicks();
             for (int j = 0; j < ticks; j++) {
                 tick(false);
             }
             return;
         }
-        // The PERFORMANCE horizon stops before the next decimated sample, where the pending span
-        // is materialized. Consequently this accumulator is bounded by
-        // performanceAudioDecimation - 1, so an overflow-checked add in the hot path cannot
-        // provide any additional protection.
-        pendingPerformanceTicks += ticks;
-        performanceSamplePhase += ticks;
+        int quietTicks = performanceAudioDecimation - performanceSamplePhase - 1;
+        if (ticks <= quietTicks) {
+            // Preserve the original sub-sample hot path: most CPU packets do not contain a
+            // compact-output boundary and need only the two lazy counters below.
+            pendingPerformanceTicks += ticks;
+            performanceSamplePhase += ticks;
+            return;
+        }
+        int remaining = ticks;
+        while (remaining > 0) {
+            // Keep each arithmetic channel transaction inside the already-proven sub-sample
+            // bound. The sample tick itself uses the scalar Sound clock after publishing the
+            // deferred prefix, so frequency expiries and the mixed PCM value retain their exact
+            // order without returning through the whole-machine scheduler.
+            quietTicks = Math.min(remaining,
+                    performanceAudioDecimation - performanceSamplePhase - 1);
+            pendingPerformanceTicks += quietTicks;
+            performanceSamplePhase += quietTicks;
+            remaining -= quietTicks;
+            if (remaining > 0) {
+                tick(false);
+                remaining--;
+            }
+        }
     }
 
     /**
@@ -440,7 +459,7 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         return pendingFrameSequencerStep >= 0;
     }
 
-    /** Returns the largest compact-output-safe quiet span not crossing the next sample slot. */
+    /** Returns the largest compact-output-safe quiet span before the next host callback. */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || !performanceAudio || debugHooks != null || outputObserver != null
                 || pendingFrameSequencerStep >= 0) {
@@ -449,14 +468,14 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
             return requested;
         }
-        return Math.min(requested,
-                performanceAudioDecimation - performanceSamplePhase - 1);
+        return performanceHostCallbackSafeSpanLimit(requested);
     }
 
     /**
-     * Horizon used by the native-CGB coarse epoch.  With lazy PERFORMANCE audio enabled,
-     * stop immediately before the next compact sample; with audio disabled there is no host
-     * sample boundary to cross and the regular per-tick state update remains exact.
+     * Horizon used by an unfenced coarse CPU epoch. With lazy PERFORMANCE audio enabled, stop
+     * immediately before the next compact sample so a deferred NRxx journal write is replayed
+     * first. With audio disabled there is no host sample boundary to cross and the regular
+     * per-tick state update remains exact.
      */
     public int performanceEpochSpanLimit(int requested) {
         if (requested <= 0 || debugHooks != null || outputObserver != null
@@ -469,8 +488,41 @@ public class Sound implements AddressSpace, StatefulComponent<Sound> {
         if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
             return requested;
         }
+        // An unfenced CPU epoch may defer an NRxx write until its old-state peripheral prefix
+        // has committed. Keep the next compact sample scalar so that replayed write remains
+        // ordered before a sample on the same tick.
         return Math.min(requested,
                 performanceAudioDecimation - performanceSamplePhase - 1);
+    }
+
+    /**
+     * Callback-only horizon for a CPU epoch whose decoder fences every data-memory boundary.
+     * Such an epoch cannot defer an NRxx write, so ordinary compact samples are exact inside it.
+     */
+    public int performanceFencedEpochSpanLimit(int requested) {
+        if (requested <= 0 || debugHooks != null || outputObserver != null
+                || pendingFrameSequencerStep >= 0) {
+            return 0;
+        }
+        if (!performanceAudio) {
+            return requested;
+        }
+        if (performanceSystemMutedAudioMode != PerformanceSystemMutedAudioMode.OFF) {
+            return requested;
+        }
+        return performanceHostCallbackSafeSpanLimit(requested);
+    }
+
+    /**
+     * Excludes the compact sample which fills the host buffer. SoundSampleEvent is synchronous,
+     * so its tick must retain scalar whole-machine ordering; earlier samples have no observer and
+     * can be recorded inside a preflighted packet.
+     */
+    private int performanceHostCallbackSafeSpanLimit(int requested) {
+        long sampleSlotsRemaining = (buffer.length - i) / 2L;
+        long ticksUntilCallback = sampleSlotsRemaining * performanceAudioDecimation
+                - performanceSamplePhase;
+        return (int) Math.min((long) requested, Math.max(0L, ticksUntilCallback - 1L));
     }
 
 
