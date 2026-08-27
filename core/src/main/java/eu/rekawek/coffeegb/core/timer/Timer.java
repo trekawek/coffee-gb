@@ -167,7 +167,19 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
 
     /** Physical-DMG normal-speed counterpart of {@link #performanceEpochSpanLimit(int)}. */
     public int performancePhysicalDmgEpochSpanLimit(int requested) {
-        if (requested <= 0 || speedMode.getSpeedMode() != 1 || speedMode.isGbc()
+        return performanceNormalSpeedEpochSpanLimit(requested, false);
+    }
+
+    /**
+     * Fixed-x1 normal-speed epoch horizon shared by physical DMG and CGB compatibility.
+     * CGB compatibility retains the later-revision +2 DIV/APU frame-sequencer tap, so that
+     * candidate is stopped before either possible frame-sequencer edge.
+     */
+    public int performanceNormalSpeedEpochSpanLimit(int requested, boolean cgbCompat) {
+        boolean topologyMatches = cgbCompat
+                ? speedMode.isGbc() && speedMode.isDmgCompat()
+                : !speedMode.isGbc();
+        if (requested <= 0 || speedMode.getSpeedMode() != 1 || !topologyMatches
                 || debugHooks != null || divReset || overflow || haltWakeDelay != 0
                 || haltBugDivRippleVisible || suppressNextInterruptRequest
                 || previousBit != timerInput(div, tac)) {
@@ -177,6 +189,11 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         span = capBeforeMasterTicks(span, clocksToOverflowFallingEdge(), 1);
         span = capBeforeMasterTicks(span, clocksToPendingDividerRipple(), 1);
         span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(0), 1);
+        if (cgbCompat) {
+            // The CGB PSG tap is two CPU clocks ahead of the divider until FF04 is reset.
+            // A compatibility epoch must retain that same edge exclusion as native CGB.
+            span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(2), 1);
+        }
         return Math.max(0, span);
     }
 
@@ -191,13 +208,18 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
 
     /** Applies a preflighted physical-DMG epoch at one CPU clock per master tick. */
     public void tickPerformancePhysicalDmgEpochTrusted(int ticks) {
+        tickPerformanceNormalSpeedEpochTrusted(ticks);
+    }
+
+    /** Applies a preflighted fixed-x1 normal-speed epoch. */
+    public void tickPerformanceNormalSpeedEpochTrusted(int ticks) {
         if (ticks <= 0) {
             return;
         }
         acknowledgeInterruptIfNeeded();
         divReset = false;
         long cpuClocks = ticks;
-        int fallingEdges = physicalDmgEpochTimerFallingEdges(ticks);
+        int fallingEdges = normalSpeedEpochTimerFallingEdges(ticks);
         tima = (int) ((tima + fallingEdges) & 0xff);
         div = (int) ((div + cpuClocks) & 0xffff);
         previousBit = timerInput(div, tac);
@@ -400,8 +422,8 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return 1 + (int) ((cpuClocks - first) / period);
     }
 
-    /** Fixed-x1 physical-DMG falling-edge count, kept separate from the native hot path. */
-    private int physicalDmgEpochTimerFallingEdges(int masterTicks) {
+    /** Fixed-x1 falling-edge count, kept separate from the native hot path. */
+    private int normalSpeedEpochTimerFallingEdges(int masterTicks) {
         if ((tac & 0x04) == 0) {
             return 0;
         }

@@ -260,6 +260,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient IntConsumer performancePhysicalDmgEpochPrefixCommitter;
 
+    private transient IntConsumer performanceCgbCompatibilityEpochPrefixCommitter;
+
     private enum PerformanceEpochPpuPlan {
         NONE,
         TRUSTED_RASTER,
@@ -826,8 +828,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             if (isNativeCgbPerformanceEpochTopology()) {
                 return runNativeCgbPerformanceTicks(ticks);
             }
-            if (isPhysicalDmgPerformanceEpochTopology()) {
-                return runPhysicalDmgPerformanceTicks(ticks);
+            if (isNormalSpeedPerformanceEpochTopology()) {
+                return runNormalSpeedPerformanceTicks(ticks);
             }
             return runPerformanceTicks(ticks);
         }
@@ -919,8 +921,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (isNativeCgbPerformanceEpochTopology()) {
             return runNativeCgbPerformanceTicksUntilStop(ticks, stop);
         }
-        if (isPhysicalDmgPerformanceEpochTopology()) {
-            return runPhysicalDmgPerformanceTicksUntilStop(ticks, stop);
+        if (isNormalSpeedPerformanceEpochTopology()) {
+            return runNormalSpeedPerformanceTicksUntilStop(ticks, stop);
         }
         return runFallbackPerformanceTicksUntilStop(ticks, stop);
     }
@@ -1039,20 +1041,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return ticks - remaining;
     }
 
-    /** Stop-aware physical-DMG scheduler; mode-3 packets retain their raster fast path. */
-    private long runPhysicalDmgPerformanceTicksUntilStop(long ticks, BooleanSupplier stop) {
+    /** Stop-aware fixed-x1 scheduler; mode-3 packets retain their raster fast path. */
+    private long runNormalSpeedPerformanceTicksUntilStop(long ticks, BooleanSupplier stop) {
         gpu.setPerformanceScanlineEnabled(true);
         long remaining = ticks;
         try {
             while (remaining > 0 && !stop.getAsBoolean()
-                    && isPhysicalDmgPerformanceEpochTopology()) {
-                int committed = tryPhysicalDmgPerformanceEpoch(remaining);
+                    && isNormalSpeedPerformanceEpochTopology()) {
+                int committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
                 }
                 if (cpu.getState() == Cpu.State.HALTED) {
-                    committed = tryPerformanceSettledDmgHaltSpan(remaining);
+                    committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1078,7 +1080,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             gpu.setPerformanceScanlineEnabled(false);
         }
         if (remaining > 0 && !stop.getAsBoolean()
-                && !isPhysicalDmgPerformanceEpochTopology()) {
+                && !isNormalSpeedPerformanceEpochTopology()) {
             return (ticks - remaining) + runFallbackPerformanceTicksUntilStop(remaining, stop);
         }
         return ticks - remaining;
@@ -1210,17 +1212,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Physical-DMG normal-speed coarse scheduler. Only the trusted rendered raster may join a
-     * CPU epoch; mode 2, STAT/line edges, DMA, IRQ/HALT, and every rejected topology retain the
+     * Fixed-x1 normal-speed coarse scheduler. Only the trusted rendered raster may join a CPU
+     * epoch; mode 2, STAT/line edges, DMA, IRQ/HALT, and every rejected topology retain the
      * established normal-speed PERFORMANCE scheduler.
      */
-    private long runPhysicalDmgPerformanceTicks(long ticks) {
+    private long runNormalSpeedPerformanceTicks(long ticks) {
         gpu.setPerformanceScanlineEnabled(true);
         long frameEvents = 0;
         long remaining = ticks;
         try {
-            while (remaining > 0 && isPhysicalDmgPerformanceEpochTopology()) {
-                int committed = tryPhysicalDmgPerformanceEpoch(remaining);
+            while (remaining > 0 && isNormalSpeedPerformanceEpochTopology()) {
+                int committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
                     remaining -= committed;
                     continue;
@@ -1229,7 +1231,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 // Preserve the pre-existing long settled-HALT side entrance before falling
                 // back to the ordinary scalar/phase scheduler.
                 if (cpu.getState() == Cpu.State.HALTED) {
-                    committed = tryPerformanceSettledDmgHaltSpan(remaining);
+                    committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
                         remaining -= committed;
                         continue;
@@ -1371,6 +1373,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return gbc && speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1;
     }
 
+    /** Exact measured epoch row: ordinary CGB only (CGB0 compatibility remains scalar). */
+    private boolean isCgbCompatibilityPerformanceEpochTopology() {
+        return hardwareProfile == HardwareProfileRegistry.CGB
+                && isCgbCompatibilityPerformanceTopology();
+    }
+
+    /** Fixed four-master-dot CPU epoch topologies; CGB compatibility still owns CGB peripherals. */
+    private boolean isNormalSpeedPerformanceEpochTopology() {
+        return isPhysicalDmgPerformanceEpochTopology()
+                || isCgbCompatibilityPerformanceEpochTopology();
+    }
+
     private boolean canContinueNativeCgbNegativeStatLease() {
         if (!isNativeCgbPerformanceEpochTopology()) {
             return false;
@@ -1393,7 +1407,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return !cpu.performanceEpochEntryEligible();
     }
 
-    /** Physical DMG/MGB only; CGB compatibility and both SGB clocks retain the legacy lane. */
+    /** Physical DMG/MGB only; its mode-2 phase lane remains intentionally DMG-only. */
     private boolean isPhysicalDmgPerformanceEpochTopology() {
         return hardwareProfile.family() == HardwareProfile.Family.DMG
                 && speedMode.getSpeedMode() == 1;
@@ -1413,22 +1427,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !slotCartridgeClocked
                 && serialPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS)
                 && infraredPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
-    }
-
-    /** Stable physical-DMG topology; tick-local CPU, timer, raster and STAT guards follow. */
-    private boolean canStartPhysicalDmgPerformanceEpoch() {
-        return !warmResetRequested
-                && speedSwitchTailTicks == 0
-                && !debugHistoryReplay
-                && debugInstrumentation == null
-                && !debugRetirementTrackingActive
-                && gpu.isLcdEnabled()
-                && !dma.isTransferInProgress()
-                && !dma.requiresClockTick(false)
-                && !cartridgeClocked
-                && !slotCartridgeClocked
-                && serialPort.performancePhysicalDmgEpochIdle(
-                        Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
     }
 
     /**
@@ -1648,18 +1646,29 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
     }
 
-    /** Attempts one trusted-raster-only physical-DMG epoch. */
-    private int tryPhysicalDmgPerformanceEpoch(long remaining) {
-        if (remaining <= 0 || !cpu.performancePhysicalDmgEpochEntryEligible()
-                || !canStartPhysicalDmgPerformanceEpoch()) {
+    /** Attempts one trusted-raster-only fixed-x1 epoch for DMG or ordinary CGB compatibility. */
+    private int tryNormalSpeedPerformanceEpoch(long remaining) {
+        boolean cgbCompat = isCgbCompatibilityPerformanceEpochTopology();
+        if (remaining <= 0 || !cpu.performanceNormalSpeedEpochEntryEligible(cgbCompat)
+                || !canStartNormalSpeedPerformanceEpoch(cgbCompat)) {
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
-        span = Math.min(span, timer.performancePhysicalDmgEpochSpanLimit(span));
+        span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbCompat));
         span = Math.min(span, sound.performanceEpochSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        if (cgbCompat) {
+            span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, true)
+                    ? span : 0);
+            span = Math.min(span, infraredPort.performanceSettledHaltSpanLimit(span));
+        } else {
+            span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, false)
+                    ? span : 0);
+        }
 
-        int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(span);
+        int rasterSpan = cgbCompat
+                ? gpu.performanceEpochSpanLimit(span)
+                : gpu.performancePhysicalDmgEpochSpanLimit(span);
         if (rasterSpan <= 0) {
             return 0;
         }
@@ -1678,14 +1687,26 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && gpu.isPerformanceSteadyCursorActive();
         performanceEpochPpuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         performanceEpochPrefixCommitted = 0;
-        if (performancePhysicalDmgEpochPrefixCommitter == null) {
-            performancePhysicalDmgEpochPrefixCommitter =
-                    this::commitPhysicalDmgPerformanceEpochPrefix;
+        IntConsumer prefixCommitter;
+        if (cgbCompat) {
+            if (performanceCgbCompatibilityEpochPrefixCommitter == null) {
+                performanceCgbCompatibilityEpochPrefixCommitter =
+                        this::commitCgbCompatibilityPerformanceEpochPrefix;
+            }
+            prefixCommitter = performanceCgbCompatibilityEpochPrefixCommitter;
+        } else {
+            if (performancePhysicalDmgEpochPrefixCommitter == null) {
+                performancePhysicalDmgEpochPrefixCommitter =
+                        this::commitPhysicalDmgPerformanceEpochPrefix;
+            }
+            prefixCommitter = performancePhysicalDmgEpochPrefixCommitter;
         }
-        cpu.setPerformanceEpochPrefixCommitter(performancePhysicalDmgEpochPrefixCommitter);
+        cpu.setPerformanceEpochPrefixCommitter(prefixCommitter);
         int elapsed;
         try {
-            elapsed = cpu.runPhysicalDmgPerformanceEpoch(span);
+            elapsed = cgbCompat
+                    ? cpu.runCgbCompatibilityPerformanceEpoch(span)
+                    : cpu.runPhysicalDmgPerformanceEpoch(span);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
         }
@@ -1694,15 +1715,46 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int suffix = elapsed - performanceEpochPrefixCommitted;
         if (suffix > 0) {
-            commitPhysicalDmgPerformanceEpochPeripherals(suffix);
+            if (cgbCompat) {
+                commitCgbCompatibilityPerformanceEpochPeripherals(suffix);
+            } else {
+                commitPhysicalDmgPerformanceEpochPeripherals(suffix);
+            }
         }
-        settlePhysicalDmgPerformanceEpochDmaHaltLatch();
-        cpu.replayPerformanceEpochJournal();
+        boolean journalReplayed = cpu.replayPerformanceEpochJournal();
         boolean divReset = timer.consumeDivReset();
         if (divReset) {
             sound.tickFrameSequencer(true);
             sound.commitFrameSequencerClock();
             serialPort.onDivReset();
+        }
+        Cpu.State finalCpuState = cpu.getState();
+        boolean halted = finalCpuState == Cpu.State.HALTED;
+        if (cgbCompat && halted) {
+            hdma.onCpuHaltState(true);
+        }
+        if (halted || journalReplayed) {
+            if (gbc) {
+                // Keep the one-tick VRAM-DMA source sample seam in the same position as scalar
+                // tick() when a journaled write or HALT transition needs the post-CPU seam.
+                dma.setVramDmaBusSample(hdma.consumeSourceBusSample());
+            }
+            boolean dmaCpuClockPaused = halted || finalCpuState == Cpu.State.STOPPED
+                    || finalCpuState == Cpu.State.SPEED_SWITCH
+                    || speedSwitchTailTicks > 0
+                    || gbc && hdma.pausesOamDmaForSpeedSwitchBurst();
+            if (dma.requiresClockTick(dmaCpuClockPaused)) {
+                dma.tick(dmaCpuClockPaused, halted);
+            }
+        }
+        if (cgbCompat && halted) {
+            // The scalar tick publishes the CPU HALT transition before the final GPU/HDMA
+            // timing callback.  Epoch peripheral commits necessarily advance the GPU first,
+            // so replay that post-GPU publication here to clear haltEnteredThisTick and keep
+            // the CPU's held HDMA opcode latch in the same end-of-tick state.
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+            cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
         }
         if (cpu.hasPendingPeripheralSample()) {
             cpu.onPeripheralsTicked();
@@ -1714,13 +1766,24 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return elapsed;
     }
 
-    /** Publishes the inactive OAM-DMA pause latch when an epoch retires HALT. */
-    private void settlePhysicalDmgPerformanceEpochDmaHaltLatch() {
-        if (cpu.getState() == Cpu.State.HALTED && dma.requiresClockTick(true)) {
-            // The scalar owner calls this after the HALT-fetch CPU boundary. Keep it before
-            // deferred FF46 replay so the existing journal's declared next-dot skew is intact.
-            dma.tick(true, true);
-        }
+    /** Stable normal-speed epoch topology; transient guards are evaluated by the caller. */
+    private boolean canStartNormalSpeedPerformanceEpoch(boolean cgbCompat) {
+        return !warmResetRequested
+                && speedSwitchTailTicks == 0
+                && !debugHistoryReplay
+                && debugInstrumentation == null
+                && !debugRetirementTrackingActive
+                && gpu.isLcdEnabled()
+                && !dma.isTransferInProgress()
+                && !dma.requiresClockTick(false)
+                && !cartridgeClocked
+                && !slotCartridgeClocked
+                && (!cgbCompat || (!hdma.hasActiveOrPendingTransfer()
+                        && !hdma.hasPendingHblankTransfer()
+                        && !hdma.isHaltRequestLatched()
+                        && !hdma.holdsHblankSpeedSwitchTail()
+                        && !hdma.pausesOamDmaForSpeedSwitchBurst()
+                        && !hdma.requiresCpuHdmaPhaseFlags()));
     }
 
     private void commitPerformanceEpochPrefix(int ticks) {
@@ -1785,23 +1848,54 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochPrefixCommitted = ticks;
     }
 
+    private void commitCgbCompatibilityPerformanceEpochPrefix(int ticks) {
+        if (ticks <= performanceEpochPrefixCommitted) {
+            return;
+        }
+        commitCgbCompatibilityPerformanceEpochPeripherals(
+                ticks - performanceEpochPrefixCommitted);
+        performanceEpochPrefixCommitted = ticks;
+    }
+
     /** Physical-DMG prefix commit; CGB-only IR/HDMA state is deliberately absent. */
     private void commitPhysicalDmgPerformanceEpochPeripherals(int ticks) {
+        commitNormalSpeedPerformanceEpochPeripherals(ticks, false);
+    }
+
+    /** CGB-compatibility prefix commit through the existing CGB quiet epoch plane. */
+    private void commitCgbCompatibilityPerformanceEpochPeripherals(int ticks) {
+        commitNormalSpeedPerformanceEpochPeripherals(ticks, true);
+    }
+
+    /** Shared fixed-x1 epoch peripheral commit; CGB compatibility retains IR/HDMA/CGB PPU state. */
+    private void commitNormalSpeedPerformanceEpochPeripherals(int ticks, boolean cgbCompat) {
         if (ticks <= 0) {
             return;
         }
-        timer.tickPerformancePhysicalDmgEpochTrusted(ticks);
+        timer.tickPerformanceNormalSpeedEpochTrusted(ticks);
         sound.tickFrameSequencer(false);
         assert !sound.hasPendingFrameSequencerClock()
-                : "frame sequencer edge crossed a physical-DMG PERFORMANCE epoch";
+                : "frame sequencer edge crossed a fixed-x1 PERFORMANCE epoch";
         sound.commitFrameSequencerClock();
         sound.tickPerformanceQuietSpan(ticks);
-        serialPort.tickPerformancePhysicalDmgEpochIdle(ticks);
+        serialPort.tickPerformanceNormalSpeedEpochIdle(ticks);
+        if (cgbCompat) {
+            infraredPort.tickPerformanceQuietSpanTrusted(ticks);
+        }
         joypad.tickPerformanceQuietSpanTrusted(ticks);
-        gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
-                ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+        if (cgbCompat) {
+            gpu.advancePerformanceEpochQuietSpanTrusted(
+                    ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+        } else {
+            gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
+                    ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+        }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         performanceEpochRasterFastTicks += ticks;
+        if (cgbCompat) {
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+        }
     }
 
     /** Selects the normal-speed settled-HALT lane for the current non-native topology. */

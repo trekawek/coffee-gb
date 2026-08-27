@@ -95,6 +95,21 @@ public final class TimerPerformanceEpochTest {
     }
 
     @Test
+    public void cgbCompatibilityEpochIncludesThePlusTwoApuTap() {
+        SpeedMode speed = new SpeedMode(true);
+        speed.setDmgCompat(true);
+        Timer timer = new Timer(new InterruptManager(true), speed);
+        // DIV+2 is one clock before the bit-12 falling edge; DIV alone is three clocks away.
+        timer.presetDiv(0x1ff9);
+        assertEquals(4, timer.performanceNormalSpeedEpochSpanLimit(54, true));
+
+        SpeedMode nativeSpeed = new SpeedMode(true);
+        Timer nativeTimer = new Timer(new InterruptManager(true), nativeSpeed);
+        nativeTimer.presetDiv(0x1ff9);
+        assertEquals(0, nativeTimer.performanceNormalSpeedEpochSpanLimit(54, true));
+    }
+
+    @Test
     public void nonOverflowTimerEdgesAreCountedInsideEpoch() {
         Timer scalar = new Timer(new InterruptManager(true), doubleSpeed());
         Timer bulk = new Timer(new InterruptManager(true), doubleSpeed());
