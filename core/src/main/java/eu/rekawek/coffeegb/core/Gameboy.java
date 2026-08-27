@@ -819,6 +819,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             throw new IllegalArgumentException("ticks must be non-negative");
         }
         if (executionMode == ExecutionMode.PERFORMANCE
+                && bootCompatibilityResolved
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -852,6 +853,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         Objects.requireNonNull(stop, "stop");
         if (executionMode == ExecutionMode.PERFORMANCE
+                && bootCompatibilityResolved
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -898,6 +900,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         Objects.requireNonNull(stop, "stop");
         if (executionMode == ExecutionMode.PERFORMANCE
+                && bootCompatibilityResolved
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
                 && !debugHistoryReplay) {
@@ -2273,7 +2276,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (dma.requiresClockTick(dmaCpuClockPaused)) {
             dma.tick(dmaCpuClockPaused, halted);
         }
-        if (executionMode == ExecutionMode.PERFORMANCE) {
+        if (executionMode == ExecutionMode.PERFORMANCE && bootCompatibilityResolved) {
             sound.tickPerformanceBoundary(divReset);
         } else {
             sound.tick(divReset);
@@ -2295,6 +2298,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             hdma.advanceHblankRequest();
         }
         boolean performanceSteadyCursor = executionMode == ExecutionMode.PERFORMANCE
+                && bootCompatibilityResolved
                 && gpu.isPerformanceSteadyCursorActive();
         boolean performanceQuietRaster = performanceSteadyCursor
                 && gpu.isPerformanceSteadyTickQuiet();
@@ -2332,6 +2336,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      */
     private void tickCpuPerformanceAware() {
         if (executionMode != ExecutionMode.PERFORMANCE
+                || !bootCompatibilityResolved
                 || debugInstrumentation != null
                 || debugRetirementTrackingActive
                 || debugHistoryReplay) {
@@ -2905,6 +2910,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      */
     public ExecutionMode getExecutionMode() {
         return executionMode;
+    }
+
+    /** Returns true once the BIOS-to-cartridge handoff has settled. */
+    public boolean isBootstrapReady() {
+        return bootCompatibilityResolved;
     }
 
     /** @deprecated Use {@link #getHardwareProfile()}. */

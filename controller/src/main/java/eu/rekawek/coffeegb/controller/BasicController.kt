@@ -4498,6 +4498,11 @@ class BasicController private constructor(
           null
         }
 
+    if (properties.overrides.benchmarkPolicyEnabled &&
+        !completeBenchmarkBootstrap(session)) {
+      return
+    }
+
     postSessionEventSafely(session, AddPatches(patches))
     postSessionEventSafely(session, Controller.GameboyTypeEvent(session.config.gameboyType))
     val effectiveSpeedMode = session.gameboy.getSpeedMode()
@@ -4567,6 +4572,32 @@ class BasicController private constructor(
         Controller.SerialPeripheralStatus.ATTACHED,
     )
     postInitialMobileAdapterNetworkStatus()
+  }
+
+  /** Completes a requested authentic BIOS handoff while the benchmark anchor remains paused. */
+  private fun completeBenchmarkBootstrap(currentSession: Session): Boolean {
+    val gameboy = currentSession.gameboy
+    var remaining = BENCHMARK_BOOTSTRAP_MAX_TICKS
+    while (!gameboy.isBootstrapReady()) {
+      if (doStop || session !== currentSession) {
+        return false
+      }
+      if (remaining <= 0L) {
+        throw IllegalStateException("Benchmark bootstrap did not reach the cartridge handoff")
+      }
+      val chunk = minOf(remaining, BENCHMARK_BOOTSTRAP_CHUNK_TICKS.toLong()).toInt()
+      val executed = gameboy.runTicksUntilStop(chunk) {
+        doStop || session !== currentSession || gameboy.isBootstrapReady()
+      }
+      remaining -= executed.toLong()
+      if (executed == 0 && !gameboy.isBootstrapReady()) {
+        if (doStop || session !== currentSession) {
+          return false
+        }
+        throw IllegalStateException("Benchmark bootstrap made no progress")
+      }
+    }
+    return !doStop && session === currentSession
   }
 
   /**
@@ -5411,6 +5442,10 @@ class BasicController private constructor(
     const val NO_MOBILE_ADAPTER_CONFIGURATION_REVISION = -1L
 
     const val MAX_DEBUG_COMMANDS_PER_SAFE_POINT = 64
+
+    const val BENCHMARK_BOOTSTRAP_CHUNK_TICKS = 16_384
+
+    const val BENCHMARK_BOOTSTRAP_MAX_TICKS = 40_000_000L
 
     const val MAX_DEBUG_CONTROL_EVENTS_PER_SAFE_POINT = 64
 

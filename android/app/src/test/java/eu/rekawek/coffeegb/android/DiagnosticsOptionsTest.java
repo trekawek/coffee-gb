@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.ExecutionMode;
+import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode;
 
 import org.junit.Test;
 
@@ -64,7 +65,31 @@ public class DiagnosticsOptionsTest {
         assertTrue(options.runtimeWarmup);
         assertFalse(options.launchRecent);
         assertEquals(ExecutionMode.ACCURACY, options.executionMode);
+        assertEquals(BootstrapMode.SKIP, options.bootstrapMode);
         assertEquals(DiagnosticsOptions.BenchmarkScenario.NONE, options.benchmarkScenario);
+    }
+
+    @Test
+    public void bootstrapModeAcceptsFastForwardAndFullWithSkipFallback() {
+        DiagnosticsOptions fastForward = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, null, "fast-forward");
+        DiagnosticsOptions normal = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, null, "full");
+        DiagnosticsOptions malformed = DiagnosticsOptions.parseValues(
+                true, "cgb", true, "presentation", false, true, false,
+                null, null, null, -1, null, null, null, null, false, null, -1, -1,
+                "performance", null, null, "turbo");
+
+        assertEquals(BootstrapMode.FAST_FORWARD, fastForward.bootstrapMode);
+        assertEquals(BootstrapMode.NORMAL, normal.bootstrapMode);
+        assertEquals(BootstrapMode.SKIP, malformed.bootstrapMode);
+        assertEquals("fast-forward", DiagnosticsOptions.bootstrapModeValue(fastForward.bootstrapMode));
+        assertEquals("normal", DiagnosticsOptions.bootstrapModeValue(normal.bootstrapMode));
+        assertEquals("skip", DiagnosticsOptions.bootstrapModeValue(malformed.bootstrapMode));
     }
 
     @Test
