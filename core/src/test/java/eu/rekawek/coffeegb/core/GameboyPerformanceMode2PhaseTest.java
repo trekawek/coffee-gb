@@ -16,7 +16,7 @@ import java.util.List;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-/** Differential coverage for the short physical-DMG mode-2 phase packet. */
+/** Differential coverage for the short DMG-clocked mode-2 phase packet. */
 public final class GameboyPerformanceMode2PhaseTest {
 
     /** Deliberately non-identity source: PERFORMANCE's input horizon must reject this leg. */
@@ -30,9 +30,20 @@ public final class GameboyPerformanceMode2PhaseTest {
     @Test
     public void physicalDmgAndMgbMode2PacketsMatchScalarForBothSpriteHeights()
             throws Exception {
-        for (HardwareProfile profile : new HardwareProfile[] {
-                HardwareProfileRegistry.DMG, HardwareProfileRegistry.MGB
-        }) {
+        assertMode2PacketsMatchScalarForBothSpriteHeights(new HardwareProfile[] {
+                HardwareProfileRegistry.DMG, HardwareProfileRegistry.MGB});
+    }
+
+    @Test
+    public void sgbAndSgb2Mode2PacketsMatchScalarForBothSpriteHeights()
+            throws Exception {
+        assertMode2PacketsMatchScalarForBothSpriteHeights(new HardwareProfile[] {
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2});
+    }
+
+    private static void assertMode2PacketsMatchScalarForBothSpriteHeights(
+            HardwareProfile[] profiles) throws Exception {
+        for (HardwareProfile profile : profiles) {
             for (boolean tallSprites : new boolean[] {false, true}) {
                 for (int start : new int[] {0, 1, 2, 3, 13, 20, 76, 77, 78}) {
                     int[] spans = {1, 2, 3};
@@ -49,7 +60,7 @@ public final class GameboyPerformanceMode2PhaseTest {
                             candidate.getGpu().setPerformanceScanlineEnabled(true);
                             assertEquals("mode-2 quiet span was unexpectedly admitted",
                                     0, candidate.getGpu().performanceQuietSpanLimit());
-                            assertTrue("DMG mode-2 preflight rejected profile="
+                            assertTrue("DMG-clocked mode-2 preflight rejected profile="
                                             + profile.id() + " tall=" + tallSprites
                                             + " start=" + start + " span=" + requested,
                                     candidate.getGpu().performancePhysicalDmgMode2PhaseSpanLimit(
@@ -92,10 +103,23 @@ public final class GameboyPerformanceMode2PhaseTest {
 
     @Test
     public void physicalDmgMode2LeavesDot79To80Scalar() throws Exception {
+        assertMode2LeavesDot79To80Scalar(HardwareProfileRegistry.DMG);
+    }
+
+    @Test
+    public void sgbAndSgb2Mode2LeaveDot79To80Scalar() throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[] {
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            assertMode2LeavesDot79To80Scalar(profile);
+        }
+    }
+
+    private static void assertMode2LeavesDot79To80Scalar(HardwareProfile profile)
+            throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
         try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
-                Gameboy scalar = session(HardwareProfileRegistry.DMG, SCALAR_INPUT);
-                Gameboy candidate = session(HardwareProfileRegistry.DMG, candidateHub)) {
+                Gameboy scalar = session(profile, SCALAR_INPUT);
+                Gameboy candidate = session(profile, candidateHub)) {
             reachMode2Start(scalar, candidate, 76, false);
             scalar.getGpu().setPerformanceScanlineEnabled(true);
             candidate.getGpu().setPerformanceScanlineEnabled(true);
@@ -116,16 +140,30 @@ public final class GameboyPerformanceMode2PhaseTest {
             assertEquals(Mode.PixelTransfer, candidate.getGpu().getMode());
             assertEquals("mode-3 handoff entered the mode-2 packet", packetTicks,
                     candidate.getPerformanceBulkTicks());
-            assertDeepStateEquals("dot-79 handoff", scalar.captureStateWithoutTimeSource(),
+            assertDeepStateEquals(profile.id() + " dot-79 handoff",
+                    scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
         }
     }
 
     @Test
     public void physicalDmgMode2RejectsAnActiveDmaTransfer() throws Exception {
+        assertMode2RejectsAnActiveDmaTransfer(HardwareProfileRegistry.DMG);
+    }
+
+    @Test
+    public void sgbAndSgb2Mode2RejectActiveDmaTransfer() throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[] {
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            assertMode2RejectsAnActiveDmaTransfer(profile);
+        }
+    }
+
+    private static void assertMode2RejectsAnActiveDmaTransfer(HardwareProfile profile)
+            throws Exception {
         PlayerInputHub candidateHub = new PlayerInputHub();
         try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
-                Gameboy gameboy = session(HardwareProfileRegistry.DMG, candidateHub)) {
+                Gameboy gameboy = session(profile, candidateHub)) {
             reachMode2Start(gameboy, gameboy, 20, false);
             gameboy.getGpu().setPerformanceScanlineEnabled(true);
             gameboy.getAddressSpace().setByte(0xff46, 0x80);
@@ -175,10 +213,6 @@ public final class GameboyPerformanceMode2PhaseTest {
         }
 
         Mode2ExclusionCase[] cases = {
-                new Mode2ExclusionCase("sgb", HardwareProfileRegistry.SGB,
-                        ExecutionMode.PERFORMANCE, false, true),
-                new Mode2ExclusionCase("sgb2", HardwareProfileRegistry.SGB2,
-                        ExecutionMode.PERFORMANCE, false, true),
                 new Mode2ExclusionCase("cgb-native", HardwareProfileRegistry.CGB,
                         ExecutionMode.PERFORMANCE, true, true),
                 new Mode2ExclusionCase("cgb0-native", HardwareProfileRegistry.CGB0,
@@ -186,6 +220,10 @@ public final class GameboyPerformanceMode2PhaseTest {
                 new Mode2ExclusionCase("cgb-compat", HardwareProfileRegistry.CGB,
                         ExecutionMode.PERFORMANCE, false, true),
                 new Mode2ExclusionCase("accuracy-dmg", HardwareProfileRegistry.DMG,
+                        ExecutionMode.ACCURACY, false, false),
+                new Mode2ExclusionCase("accuracy-sgb", HardwareProfileRegistry.SGB,
+                        ExecutionMode.ACCURACY, false, false),
+                new Mode2ExclusionCase("accuracy-sgb2", HardwareProfileRegistry.SGB2,
                         ExecutionMode.ACCURACY, false, false)
         };
         for (Mode2ExclusionCase exclusion : cases) {

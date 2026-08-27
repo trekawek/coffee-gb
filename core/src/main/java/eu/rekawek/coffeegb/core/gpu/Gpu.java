@@ -100,9 +100,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     // renderer path remains unchanged.
     private final VRamTransfer performanceSgbVramTransfer;
 
-    // Exact construction-time permission for the short mode-2 phase packet. Keep this narrower
-    // than the monochrome pixel/timing cursors: the public Gpu horizon must fail closed for SGB,
-    // SGB2, and every compatibility profile even when their clock happens to be normal speed.
+    // Exact construction-time permission for the short DMG-clocked mode-2 phase packet. Keep
+    // this narrower than the monochrome pixel/timing cursors: only physical DMG/MGB and the
+    // exact SGB/SGB2 profiles may reuse the same OAM-search arithmetic. Compatibility profiles
+    // remain excluded even when their clock happens to be normal speed.
     private final boolean performancePhysicalDmgMode2;
 
     private final ColorPalette bgPalette;
@@ -359,7 +360,9 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         this.performancePhysicalDmgMode2 = executionMode == ExecutionMode.PERFORMANCE
                 && !debugHistoryReplay
                 && (hardwareProfile == HardwareProfileRegistry.DMG
-                || hardwareProfile == HardwareProfileRegistry.MGB);
+                || hardwareProfile == HardwareProfileRegistry.MGB
+                || hardwareProfile == HardwareProfileRegistry.SGB
+                || hardwareProfile == HardwareProfileRegistry.SGB2);
         this.r.setGbc(gbc);
         this.r.setSpeedMode(speedMode);
         this.lcdc.setGbc(gbc);
@@ -1318,9 +1321,10 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
-     * Horizon for a short physical-DMG mode-2 phase packet.  Only the non-CPU dots before the
-     * next normal-speed machine-cycle boundary use this lane; the dot-79-to-80 handoff remains
-     * scalar so the existing OAM/PixelTransfer transition and renderer arm stay authoritative.
+     * Horizon for a short physical-DMG/SGB mode-2 phase packet. Only the non-CPU dots before
+     * the next normal-speed machine-cycle boundary use this lane; the dot-79-to-80 handoff
+     * remains scalar so the existing OAM/PixelTransfer transition and renderer arm stay
+     * authoritative.
      */
     public int performancePhysicalDmgMode2PhaseSpanLimit(int requested) {
         if (!performancePhysicalDmgMode2 || requested <= 0 || gbc || speedModeValue != 1
