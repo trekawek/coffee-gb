@@ -292,11 +292,214 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void unrelatedNormalSpeedTopologiesStayOutsideFixedEpochLane() throws Exception {
-        byte[] nonColor = dmgRomWramLoop();
-        byte[] nativeColor = dmgRomWramLoop();
-        nativeColor[0x143] = (byte) 0x80;
-        try (Gameboy cgb0 = new Gameboy.GameboyConfiguration(new Rom(nonColor))
+    public void nativeCgbNormalSpeedRomWramLoopMatchesFallbackWithEpochCoverage()
+            throws Exception {
+        byte[] image = nativeColor(dmgRomWramLoop());
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            for (int chunk = 0; chunk < 20; chunk++) {
+                scalarFrames += scalar.runTicks(5_000);
+                candidateFrames += candidate.runTicks(5_000);
+            }
+
+            assertEquals("native CGB x1 frame callbacks", scalarFrames, candidateFrames);
+            assertEquals("custom-source oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("native CGB x1 ROM/WRAM loop had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000);
+            assertEquals("native CGB x1 used a non-raster epoch plan",
+                    candidate.getPerformanceEpochTicks(),
+                    candidate.getPerformanceEpochRasterFastTicks());
+            assertFalse(candidate.getSpeedMode().isDmgCompat());
+            assertEquals(1, candidate.getSpeedMode().getSpeedMode());
+            assertEquals(scalar.getAddressSpace().getByte(0xc000),
+                    candidate.getAddressSpace().getByte(0xc000));
+            assertDeepStateEquals("native CGB x1 ROM/WRAM loop",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbExternalClockWaitMatchesFallbackWithEpochCoverage()
+            throws Exception {
+        byte[] image = nativeCgbExternalClockWramLoop();
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            for (int chunk = 0; chunk < 20; chunk++) {
+                scalarFrames += scalar.runTicks(5_000);
+                candidateFrames += candidate.runTicks(5_000);
+            }
+
+            assertEquals("native CGB external-wait frame callbacks",
+                    scalarFrames, candidateFrames);
+            assertEquals("test ROM did not retain its active external-clock transfer",
+                    0x80, candidate.getAddressSpace().getByte(0xff02) & 0x81);
+            assertEquals("custom-source oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("native CGB external-clock wait had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000);
+            assertEquals("native CGB external-clock wait used a non-raster epoch plan",
+                    candidate.getPerformanceEpochTicks(),
+                    candidate.getPerformanceEpochRasterFastTicks());
+            assertEquals(scalar.getAddressSpace().getByte(0xc000),
+                    candidate.getAddressSpace().getByte(0xc000));
+            assertDeepStateEquals("native CGB external-clock wait",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedUnsafeIoWriteMatchesFallbackAndStaysScalar()
+            throws Exception {
+        byte[] image = nativeColor(cgbCompatibilityIoWriteLoop());
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            for (int chunk = 0; chunk < 12; chunk++) {
+                assertEquals("native CGB x1 IO frame callback", scalar.runTicks(5_000),
+                        candidate.runTicks(5_000));
+            }
+            assertTrue("native CGB x1 IO loop had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertEquals("decoded IO write crossed a native CGB x1 epoch",
+                    0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+            assertDeepStateEquals("native CGB x1 IO loop",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedNr44TriggerStaysScalarAfterSafeEpochCoverage()
+            throws Exception {
+        byte[] image = nativeColor(dmgRomWramLoop());
+        image[0x200] = (byte) 0xe0; // LDH (FF23),A: trigger CH4
+        image[0x201] = 0x23;
+        image[0x202] = 0x18; // JR 0202
+        image[0x203] = (byte) 0xfe;
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            int guard = 0;
+            while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
+                    && candidate.getGpu().getTicksInLine() >= 100
+                    && candidate.getGpu().getTicksInLine() <= 180
+                    && candidate.getCpu().getState() == Cpu.State.OPCODE
+                    && candidate.getCpu().getDebugMachineCycle() == 0
+                    && candidate.getCpu().performanceNativeCgbNormalSpeedEpochEntryEligible())
+                    && guard++ < 200_000) {
+                assertEquals("native CGB x1 NR44 setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("test did not reach a trusted native CGB x1 NR44 entry",
+                    guard < 200_000);
+            assertDeepStateEquals("before native CGB x1 NR44 decode",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            scalar.getAddressSpace().setByte(0xff26, 0x80); // APU on
+            candidate.getAddressSpace().setByte(0xff26, 0x80);
+            scalar.getAddressSpace().setByte(0xff21, 0xf3); // CH4 DAC/envelope
+            candidate.getAddressSpace().setByte(0xff21, 0xf3);
+            scalar.getAddressSpace().setByte(0xff22, 0x30); // stable nonzero divisor
+            candidate.getAddressSpace().setByte(0xff22, 0x30);
+            scalar.getCpu().getRegisters().setA(0xc0);
+            candidate.getCpu().getRegisters().setA(0xc0);
+            scalar.getCpu().getRegisters().setPC(0x0200);
+            candidate.getCpu().getRegisters().setPC(0x0200);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            int boundaryGuard = 0;
+            while (!(candidate.getCpu().getState() == Cpu.State.RUNNING
+                    && candidate.getCpu().getDebugOpcode() == 0xe0
+                    && candidate.getCpu().getRegisters().getPC() == 0x0202
+                    && candidate.getCpu().getDebugMachineCycle() == 3)
+                    && boundaryGuard++ < 64) {
+                assertEquals("native CGB x1 NR44 decode frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("test did not stop immediately before the NR44 write", boundaryGuard < 64);
+            assertEquals("native CGB x1 scalar oracle entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("safe NR44 decode prefix had no native CGB x1 epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertDeepStateEquals("before native CGB x1 NR44 trigger boundary",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("native CGB x1 NR44 trigger frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+            assertEquals("decoded NR44 write crossed a native CGB x1 epoch",
+                    0L, candidate.getPerformanceEpochTicks());
+            assertEquals("decoded NR44 write reached the deferred epoch bus",
+                    0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+            assertTrue("NR44 trigger did not enable CH4",
+                    (candidate.getAddressSpace().getByte(0xff26) & 0x08) != 0);
+            assertDeepStateEquals("native CGB x1 NR44 trigger Sound state",
+                    scalar.getSound().captureState(), candidate.getSound().captureState());
+            assertDeepStateEquals("after native CGB x1 NR44 trigger boundary",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void fastForwardNativeCgbNormalSpeedMatchesScalarAfterCompletedBootGdma()
+            throws Exception {
+        PlayerInputHub candidateHub = new PlayerInputHub();
+        try (PlayerInputHub.SourceHandle ignored = candidateHub.openSource(0);
+             Gameboy scalar = fastForwardNativeCgbNormalSpeedSession(
+                     PlayerInputSnapshot::released);
+             Gameboy candidate = fastForwardNativeCgbNormalSpeedSession(candidateHub)) {
+            assertEquals("native CGB FAST_FORWARD handoff tail",
+                    scalar.runTicksUntilStop(32, scalar::isBootstrapReady),
+                    candidate.runTicksUntilStop(32, candidate::isBootstrapReady));
+            assertTrue(scalar.isBootstrapReady());
+            assertTrue(candidate.isBootstrapReady());
+            assertFalse(candidate.getSpeedMode().isDmgCompat());
+            assertEquals(1, candidate.getSpeedMode().getSpeedMode());
+            Hdma.HdmaState bootHdma = (Hdma.HdmaState) candidate.getHdma().captureState();
+            assertEquals("authentic boot did not retain the completed-GDMA request clock",
+                    0, bootHdma.hblankRequestTicks());
+            assertDeepStateEquals("native CGB FAST_FORWARD handoff",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            for (int chunk = 0; chunk < 12; chunk++) {
+                assertEquals("native CGB FAST_FORWARD frame callback " + chunk,
+                        scalar.runTicks(5_000), candidate.runTicks(5_000));
+                assertDeepStateEquals("native CGB FAST_FORWARD chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+            assertEquals("FAST_FORWARD scalar oracle entered the epoch lane", 0L,
+                    scalar.getPerformanceEpochTicks());
+            assertTrue("FAST_FORWARD native CGB x1 had no coarse coverage",
+                    candidate.getPerformanceEpochTicks() > 0L);
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedEpochIsLimitedToOrdinaryPerformanceCgb() throws Exception {
+        byte[] nativeColor = nativeColor(dmgRomWramLoop());
+        try (Gameboy cgb0 = new Gameboy.GameboyConfiguration(new Rom(nativeColor))
                      .setHardwareProfile(HardwareProfileRegistry.CGB0)
                      .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                      .setExecutionMode(ExecutionMode.PERFORMANCE)
@@ -307,12 +510,21 @@ public final class GameboyPerformanceEpochTest {
                      .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                      .setExecutionMode(ExecutionMode.PERFORMANCE)
                      .setSupportBatterySave(false)
+                     .build();
+             Gameboy accuracy = new Gameboy.GameboyConfiguration(new Rom(nativeColor))
+                     .setHardwareProfile(HardwareProfileRegistry.CGB)
+                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                     .setExecutionMode(ExecutionMode.ACCURACY)
+                     .setSupportBatterySave(false)
                      .build()) {
             cgb0.runTicks(100_000);
             nativeSpeed1.runTicks(100_000);
+            accuracy.runTicks(100_000);
             assertEquals(0L, cgb0.getPerformanceEpochTicks());
-            assertEquals(0L, nativeSpeed1.getPerformanceEpochTicks());
+            assertTrue(nativeSpeed1.getPerformanceEpochTicks() > 0L);
+            assertEquals(0L, accuracy.getPerformanceEpochTicks());
             assertFalse(nativeSpeed1.getSpeedMode().isDmgCompat());
+            assertEquals(1, nativeSpeed1.getSpeedMode().getSpeedMode());
         }
     }
 
@@ -436,6 +648,8 @@ public final class GameboyPerformanceEpochTest {
                 image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
              Gameboy candidate = cgbCompatibilitySession(
                      image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            completeOneBlockGdmaPair(scalar, candidate,
+                    "CGB compatibility completed-GDMA HALT setup");
             int guard = 0;
             while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
                     && candidate.getGpu().getTicksInLine() >= 100
@@ -463,6 +677,114 @@ public final class GameboyPerformanceEpochTest {
             assertTrue("HALT fetch did not retire inside a CGB compatibility epoch",
                     candidate.getPerformanceEpochTicks() > 0);
             assertDeepStateEquals("after CGB compatibility HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedEpochAndSettledHaltMatchScalarDeepState()
+            throws Exception {
+        byte[] image = nativeColor(dmgRomWramLoop());
+        image[0x200] = 0x76; // HALT, selected after reaching a trusted CGB raster span
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            completeOneBlockGdmaPair(scalar, candidate,
+                    "native CGB x1 completed-GDMA HALT setup");
+            int guard = 0;
+            while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
+                    && candidate.getGpu().getTicksInLine() >= 100
+                    && candidate.getGpu().getTicksInLine() <= 180
+                    && candidate.getCpu().getState() == Cpu.State.OPCODE
+                    && candidate.getCpu().getDebugMachineCycle() == 0
+                    && candidate.getCpu().performanceNativeCgbNormalSpeedEpochEntryEligible())
+                    && guard++ < 200_000) {
+                assertEquals("native CGB x1 HALT setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("test did not reach a trusted native CGB x1 HALT entry",
+                    guard < 200_000);
+            assertDeepStateEquals("before native CGB x1 HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.getCpu().getRegisters().setPC(0x0200);
+            candidate.getCpu().getRegisters().setPC(0x0200);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("native CGB x1 HALT frame callback",
+                    scalar.runTicks(8), candidate.runTicks(8));
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertEquals("native CGB x1 scalar oracle entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("HALT fetch did not retire inside a native CGB x1 epoch",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertDeepStateEquals("after native CGB x1 HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+            assertEquals("native CGB x1 settled-HALT frame callback",
+                    scalar.runTicks(64), candidate.runTicks(64));
+            assertTrue("native CGB x1 settled HALT had no long packet",
+                    candidate.getPerformanceBulkMaxTicks() > 3);
+            assertDeepStateEquals("native CGB x1 settled HALT",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbDoubleSpeedEpochRetiringHaltAfterCompletedGdmaMatchesScalar()
+            throws Exception {
+        byte[] image = doubleSpeedLoop();
+        image[0x200] = 0x76;
+        try (Gameboy scalar = nativeDoubleSpeedSession(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeDoubleSpeedSession(
+                     image, PlayerInputSource.RELEASED)) {
+            int speedGuard = 0;
+            while (!(candidate.getSpeedMode().getSpeedMode() == 2
+                    && candidate.getCpu().getState() != Cpu.State.SPEED_SWITCH)
+                    && speedGuard++ < 300_000) {
+                assertEquals("native CGB x2 speed setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("native CGB x2 setup did not finish its speed switch",
+                    speedGuard < 300_000);
+            completeOneBlockGdmaPair(scalar, candidate,
+                    "native CGB x2 completed-GDMA HALT setup");
+
+            int guard = 0;
+            while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
+                    && candidate.getGpu().getTicksInLine() >= 100
+                    && candidate.getGpu().getTicksInLine() <= 180
+                    && candidate.getCpu().getState() == Cpu.State.OPCODE
+                    && candidate.getCpu().getDebugMachineCycle() == 1
+                    && candidate.getCpu().performanceEpochEntryEligible())
+                    && guard++ < 200_000) {
+                assertEquals("native CGB x2 HALT setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("test did not reach a trusted native CGB x2 HALT entry",
+                    guard < 200_000);
+            assertDeepStateEquals("before native CGB x2 HALT epoch",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.getCpu().getRegisters().setPC(0x0200);
+            candidate.getCpu().getRegisters().setPC(0x0200);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("native CGB x2 HALT frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertTrue("HALT fetch did not retire inside a native CGB x2 epoch",
+                    candidate.getPerformanceEpochTicks() > 0);
+            assertDeepStateEquals("after native CGB x2 completed-GDMA HALT epoch",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
         }
@@ -555,9 +877,30 @@ public final class GameboyPerformanceEpochTest {
                 .build();
     }
 
+    private static Gameboy nativeDoubleSpeedSession(
+            byte[] image, PlayerInputSource inputSource) throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
     private static Gameboy fastForwardCgbCompatibilitySession(PlayerInputSource inputSource)
             throws Exception {
         return new Gameboy.GameboyConfiguration(new Rom(validNonColorRom()))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy fastForwardNativeCgbNormalSpeedSession(PlayerInputSource inputSource)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(validNativeColorRom()))
                 .setHardwareProfile(HardwareProfileRegistry.CGB)
                 .setBootstrapMode(Gameboy.BootstrapMode.FAST_FORWARD)
                 .setExecutionMode(ExecutionMode.PERFORMANCE)
@@ -582,6 +925,18 @@ public final class GameboyPerformanceEpochTest {
             byte[] image, PlayerInputSource inputSource, ExecutionMode executionMode)
             throws Exception {
         return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(executionMode)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy nativeCgbNormalSpeedSession(
+            byte[] image, PlayerInputSource inputSource, ExecutionMode executionMode)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(nativeColor(image)))
                 .setHardwareProfile(HardwareProfileRegistry.CGB)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setExecutionMode(executionMode)
@@ -685,6 +1040,42 @@ public final class GameboyPerformanceEpochTest {
                 candidate.captureStateWithoutTimeSource());
     }
 
+    private static void completeOneBlockGdmaPair(
+            Gameboy scalar, Gameboy candidate, String label) {
+        startOneBlockGdma(scalar);
+        startOneBlockGdma(candidate);
+        int guard = 0;
+        while (candidate.getHdma().hasActiveOrPendingTransfer() && guard++ < 256) {
+            assertEquals(label + " frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+        }
+        assertTrue(label + " did not complete", guard < 256);
+        Hdma.HdmaState scalarHdma = (Hdma.HdmaState) scalar.getHdma().captureState();
+        Hdma.HdmaState candidateHdma = (Hdma.HdmaState) candidate.getHdma().captureState();
+        assertFalse(label + " scalar transfer remained active", scalarHdma.transferInProgress());
+        assertFalse(label + " candidate transfer remained active",
+                candidateHdma.transferInProgress());
+        assertFalse(label + " scalar HBlank transfer remained armed",
+                scalarHdma.hblankTransfer());
+        assertFalse(label + " candidate HBlank transfer remained armed",
+                candidateHdma.hblankTransfer());
+        assertEquals(label + " scalar request clock", 0, scalarHdma.hblankRequestTicks());
+        assertEquals(label + " candidate request clock", 0,
+                candidateHdma.hblankRequestTicks());
+        assertDeepStateEquals(label,
+                scalar.captureStateWithoutTimeSource(),
+                candidate.captureStateWithoutTimeSource());
+    }
+
+    private static void startOneBlockGdma(Gameboy gameboy) {
+        var bus = gameboy.getAddressSpace();
+        bus.setByte(0xff51, 0);
+        bus.setByte(0xff52, 0);
+        bus.setByte(0xff53, 0);
+        bus.setByte(0xff54, 0);
+        bus.setByte(0xff55, 0);
+    }
+
     /** Record/array-aware equality for the private immutable component-state graph. */
     private static void assertDeepStateEquals(String path, Object expected, Object actual) {
         if (expected == null || actual == null) {
@@ -755,6 +1146,26 @@ public final class GameboyPerformanceEpochTest {
         return image;
     }
 
+    private static byte[] validNativeColorRom() {
+        byte[] image = validNonColorRom();
+        image[0x143] = (byte) 0x80;
+        updateHeaderChecksum(image);
+        return image;
+    }
+
+    private static byte[] nativeColor(byte[] image) {
+        image[0x143] = (byte) 0x80;
+        return image;
+    }
+
+    private static void updateHeaderChecksum(byte[] image) {
+        int checksum = 0;
+        for (int address = 0x134; address <= 0x14c; address++) {
+            checksum = (checksum - (image[address] & 0xff) - 1) & 0xff;
+        }
+        image[0x14d] = (byte) checksum;
+    }
+
     private static byte[] doubleSpeedLoop() {
         byte[] image = new byte[0x8000];
         image[0x100] = 0x3e; // LD A,1
@@ -781,6 +1192,24 @@ public final class GameboyPerformanceEpochTest {
         image[0x106] = 0x18; // JR 0103
         image[0x107] = (byte) 0xfb;
         image[0x143] = 0x00;
+        return image;
+    }
+
+    private static byte[] nativeCgbExternalClockWramLoop() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x3e; // LD A,80
+        image[0x101] = (byte) 0x80;
+        image[0x102] = (byte) 0xe0; // LDH (FF02),A: active external-clock wait
+        image[0x103] = 0x02;
+        image[0x104] = 0x21; // LD HL,C000
+        image[0x105] = 0x00;
+        image[0x106] = (byte) 0xc0;
+        image[0x107] = 0x7e; // LD A,(HL)
+        image[0x108] = 0x3c; // INC A
+        image[0x109] = 0x77; // LD (HL),A
+        image[0x10a] = 0x18; // JR 0107
+        image[0x10b] = (byte) 0xfb;
+        image[0x143] = (byte) 0x80;
         return image;
     }
 

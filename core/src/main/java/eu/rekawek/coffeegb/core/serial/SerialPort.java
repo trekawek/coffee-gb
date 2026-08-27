@@ -65,19 +65,17 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     public void tick() {
         // Link-port peripherals such as GPS receivers have their own wall clock and keep
         // driving the input pin even when no hardware serial transfer is armed. A built-in
-        // endpoint which advertises a quiet span has explicitly guaranteed that tick(), the
-        // inactive external-transfer callback, and the input pin are inert; use that same
+        // endpoint which advertises the matching quiet span has explicitly guaranteed that its
+        // callbacks and input pin are inert; use that same
         // capability on scalar event ticks instead of identity-checking only NULL_ENDPOINT.
         SerialEndpoint endpoint = serialEndpoint;
-        boolean quietEndpoint = endpoint.canTickPerformanceQuietSpan(1);
+        boolean quietEndpoint = canAdvancePerformanceQuietTransfer(1);
         if (!quietEndpoint && endpoint != SerialEndpoint.NULL_ENDPOINT) {
             endpoint.tick();
         }
         acknowledgeInterruptIfNeeded();
         int speed = speedMode.getSpeedMode();
-        if (quietEndpoint
-                && (sc & 0x80) == 0
-                && haltWakeDelay == 0) {
+        if (quietEndpoint && haltWakeDelay == 0) {
             serialClocks = (serialClocks + speed) & 0xff;
             return;
         }
@@ -89,16 +87,16 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     /**
      * Returns the largest exact PERFORMANCE span for an idle link port.
      *
-     * <p>A quiet endpoint has no wall-clock work and a stopped transfer has no serial edge to
-     * deliver. In that state the only serial state which advances is the free-running 8-bit
-     * phase. Other endpoints, active transfers, HALT wake delay, and debug hooks remain scalar so
-     * endpoint callbacks and trace ordering cannot be observed late.</p>
+     * <p>A quiet endpoint has no wall-clock work. A stopped transfer, or an external-clock
+     * transfer whose endpoint guarantees that no input bit arrives, has no serial edge to
+     * deliver. In those states the only serial state which advances is the free-running 8-bit
+     * phase. Other endpoints, internal-clock transfers, HALT wake delay, and debug hooks remain
+     * scalar so endpoint callbacks and trace ordering cannot be observed late.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0
                 || speedMode.getSpeedMode() != 1
-                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
-                || (sc & 0x80) != 0
+                || !canAdvancePerformanceQuietTransfer(requested)
                 || haltWakeDelay != 0
                 || debugHooks != null) {
             return 0;
@@ -110,8 +108,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     public int performanceSettledHaltSpanLimit(int requested) {
         if (requested <= 0
                 || speedMode.getSpeedMode() != 1
-                || !serialEndpoint.canTickPerformanceQuietSpan(requested)
-                || (sc & 0x80) != 0
+                || !canAdvancePerformanceQuietTransfer(requested)
                 || haltWakeDelay != 0
                 || debugHooks != null) {
             return 0;
@@ -130,9 +127,9 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
     /**
-     * Advances an idle quiet-endpoint serial port without entering its per-clock callback path.
+     * Advances a quiet-endpoint serial port without entering its per-clock callback path.
      * A pending acknowledge is consumed at the same beginning-of-tick boundary as scalar
-     * execution; no active transfer exists in an eligible span, so this cannot create a hidden
+     * execution; no serial edge can land in an eligible span, so this cannot create a hidden
      * shift or completion event.
      *
      * @return false without mutation when the state is not exactly bulk-safe
@@ -151,23 +148,22 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
-        // The packet preflight has already established an idle quiet endpoint and no pending
-        // acknowledge/transfer edge.  Do not repeat that walk on the hot commit path.
+        // The packet preflight has already established a quiet endpoint and no pending
+        // acknowledge/transfer edge. Do not repeat that walk on the hot commit path.
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
     }
 
-    /** Native-CGB double-speed epoch guard; transfers and callbacks remain scalar. */
+    /** Native-CGB double-speed epoch guard; edge-producing transfers remain scalar. */
     public boolean performanceEpochIdle(int requested) {
         return requested > 0
                 && speedMode.getSpeedMode() == 2
-                && serialEndpoint.canTickPerformanceQuietSpan(requested)
-                && (sc & 0x80) == 0
+                && canAdvancePerformanceQuietTransfer(requested)
                 && haltWakeDelay == 0
                 && debugHooks == null;
     }
 
-    /** Applies the preflighted idle serial phase without a per-dot loop. */
+    /** Applies the preflighted quiet serial phase without a per-dot loop. */
     public void tickPerformanceEpochIdle(int ticks) {
         if (ticks <= 0) {
             return;
@@ -177,26 +173,25 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     }
 
 
-    /** Physical-DMG normal-speed epoch guard; transfers and callbacks remain scalar. */
+    /** Physical-DMG normal-speed epoch guard; edge-producing transfers remain scalar. */
     public boolean performancePhysicalDmgEpochIdle(int requested) {
         return performanceNormalSpeedEpochIdle(requested, false);
     }
 
-    /** Normal-speed epoch guard shared by physical DMG and CGB compatibility. */
-    public boolean performanceNormalSpeedEpochIdle(int requested, boolean cgbCompat) {
-        boolean topologyMatches = cgbCompat
-                ? speedMode.isGbc() && speedMode.isDmgCompat()
+    /** Normal-speed epoch guard shared by physical DMG and CGB hardware. */
+    public boolean performanceNormalSpeedEpochIdle(int requested, boolean cgbHardware) {
+        boolean topologyMatches = cgbHardware
+                ? speedMode.isGbc()
                 : !speedMode.isGbc();
         return requested > 0
                 && speedMode.getSpeedMode() == 1
                 && topologyMatches
-                && serialEndpoint.canTickPerformanceQuietSpan(requested)
-                && (sc & 0x80) == 0
+                && canAdvancePerformanceQuietTransfer(requested)
                 && haltWakeDelay == 0
                 && debugHooks == null;
     }
 
-    /** Applies a preflighted physical-DMG idle serial phase at one clock per master tick. */
+    /** Applies a preflighted physical-DMG quiet serial phase at one clock per master tick. */
     public void tickPerformancePhysicalDmgEpochIdle(int ticks) {
         tickPerformanceNormalSpeedEpochIdle(ticks);
     }
@@ -208,6 +203,21 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         }
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
+    }
+
+    /** True when scalar CPU clocks cannot shift a bit or expose an endpoint callback. */
+    private boolean canAdvancePerformanceQuietTransfer(int requested) {
+        if (requested <= 0) {
+            return false;
+        }
+        if ((sc & 0x80) == 0) {
+            return serialEndpoint.canTickPerformanceQuietSpan(requested);
+        }
+        if ((sc & 0x01) != 0) {
+            return false;
+        }
+        return serialEndpoint.canTickPerformanceQuietSpan(requested)
+                && serialEndpoint.performanceExternalClockWaitSpanLimit(requested) >= requested;
     }
 
     /** Naming alias for schedulers which use the GPU's advance-oriented bulk vocabulary. */

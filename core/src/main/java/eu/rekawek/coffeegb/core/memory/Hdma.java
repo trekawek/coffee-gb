@@ -767,23 +767,26 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         return transferInProgress;
     }
 
-    /** Whether an inactive OAM-search packet may advance only the serialized request ages. */
-    public boolean isPerformanceOamSearchPhaseClockStable() {
+    /** Whether an inactive PERFORMANCE packet may advance only the serialized request ages. */
+    public boolean isPerformanceInactiveRequestClockStable() {
         return !transferInProgress
-                && gpuMode == Mode.OamSearch
                 && hblankRequestTicks <= 0
                 && nextHblankRequestTicks <= 0
-                && cpuRequestArbitration == CpuRequestArbitration.NONE;
+                && cpuRequestArbitration == CpuRequestArbitration.NONE
+                && wakeRequestArbitration == WakeRequestArbitration.NONE
+                && !requestOverlappedCpuWrite
+                && !interruptEntryWonArbitration
+                && !cpuRequestAllowsLateInterrupt;
     }
 
     /**
      * Replays the arithmetic part of {@link #advanceHblankRequest()} for a preflighted inactive
-     * OAM-search packet. Zero clocks age once per scalar dot; negative clocks remain invariant.
+     * packet. Zero clocks age once per scalar dot; negative clocks remain invariant.
      */
-    public void advancePerformanceOamSearchPhaseClockTrusted(int ticks) {
-        if (ticks < 0 || !isPerformanceOamSearchPhaseClockStable()) {
+    public void advancePerformanceInactiveRequestClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceInactiveRequestClockStable()) {
             throw new IllegalStateException(
-                    "HDMA request clock is not stable for an OAM-search PERFORMANCE span");
+                    "HDMA request clock is not stable for a PERFORMANCE span");
         }
         if (!cpuHalted && hblankRequestTicks == 0) {
             hblankRequestAge += ticks;
@@ -791,6 +794,36 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         if (nextHblankRequestTicks == 0) {
             nextHblankRequestAge += ticks;
         }
+    }
+
+    /**
+     * Reconciles the final dot after a running CGB epoch retires HALT. The packet initially ages
+     * both inactive zero clocks as running CPU time. Scalar ordering publishes HALT before the
+     * terminal dot's request-clock step, so only the current request age must be undone; the next
+     * request clock ages regardless of HALT and remains untouched.
+     */
+    public void reconcilePerformanceRunningEpochHaltEntryTrusted() {
+        if (!isPerformanceInactiveRequestClockStable() || cpuHalted) {
+            throw new IllegalStateException(
+                    "HDMA request clock is not stable for PERFORMANCE HALT reconciliation");
+        }
+        if (hblankRequestTicks == 0) {
+            hblankRequestAge--;
+        }
+    }
+
+    /** Whether an inactive OAM-search packet may use the generic request-clock transaction. */
+    public boolean isPerformanceOamSearchPhaseClockStable() {
+        return gpuMode == Mode.OamSearch && isPerformanceInactiveRequestClockStable();
+    }
+
+    /** OAM-search compatibility wrapper which retains its mode-specific trusted contract. */
+    public void advancePerformanceOamSearchPhaseClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceOamSearchPhaseClockStable()) {
+            throw new IllegalStateException(
+                    "HDMA request clock is not stable for an OAM-search PERFORMANCE span");
+        }
+        advancePerformanceInactiveRequestClockTrusted(ticks);
     }
 
     /** Captures the retained HDMA latches and current block progress without bus reads. */

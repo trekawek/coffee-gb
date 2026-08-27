@@ -22,6 +22,16 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
         return 0;
     }
 
+    /**
+     * Additional opt-in for omitting {@link #setExternalTransfer(boolean)} with a true argument
+     * while the Game Boy waits for an external serial clock. PERFORMANCE combines this with
+     * {@link #performanceQuietSpanLimit(int)}, so the ordinary quiet-endpoint guarantees still
+     * apply. Endpoints which observe active external-clock waits must retain the default zero.
+     */
+    default int performanceExternalClockWaitSpanLimit(int requested) {
+        return 0;
+    }
+
     /** Returns whether the endpoint is quiet for the requested PERFORMANCE span. */
     default boolean canTickPerformanceQuietSpan(int ticks) {
         return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
@@ -124,6 +134,11 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
 
                 @Override
                 public int performanceQuietSpanLimit(int requested) {
+                    return requested > 0 ? requested : 0;
+                }
+
+                @Override
+                public int performanceExternalClockWaitSpanLimit(int requested) {
                     return requested > 0 ? requested : 0;
                 }
             };

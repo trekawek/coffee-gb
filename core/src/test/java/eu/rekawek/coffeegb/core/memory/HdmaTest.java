@@ -31,6 +31,77 @@ public class HdmaTest {
     }
 
     @Test
+    public void inactiveCompletedGdmaRequestClockBulkMatchesScalarAcrossPpuModes() {
+        Fixture scalar = new Fixture();
+        Fixture bulk = new Fixture();
+        scalar.startTransfer(0x00);
+        bulk.startTransfer(0x00);
+        scalar.tick(38);
+        bulk.tick(38);
+        scalar.hdma.onGpuUpdate(Mode.PixelTransfer);
+        bulk.hdma.onGpuUpdate(Mode.PixelTransfer);
+
+        Hdma.HdmaState completed = hdmaState(bulk);
+        assertEquals(0, completed.hblankRequestTicks());
+        assertFalse(completed.transferInProgress());
+        assertTrue(bulk.hdma.isPerformanceInactiveRequestClockStable());
+        assertFalse("mode-specific wrapper crossed a PPU mode boundary",
+                bulk.hdma.isPerformanceOamSearchPhaseClockStable());
+
+        scalar.advanceHblankRequest(17);
+        bulk.hdma.advancePerformanceInactiveRequestClockTrusted(17);
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals(17, hdmaState(bulk).hblankRequestAge());
+
+        bulk.hdma.onGpuUpdate(Mode.OamSearch);
+        assertTrue(bulk.hdma.isPerformanceOamSearchPhaseClockStable());
+    }
+
+    @Test
+    public void inactiveRequestClockBulkPreservesScalarHaltAsymmetry() {
+        Fixture scalar = new Fixture();
+        Fixture bulk = new Fixture();
+        scalar.startTransfer(0x00);
+        bulk.startTransfer(0x00);
+        scalar.tick(38);
+        bulk.tick(38);
+        scalar.hdma.onCpuHaltState(true);
+        bulk.hdma.onCpuHaltState(true);
+
+        scalar.advanceHblankRequest(11);
+        bulk.hdma.advancePerformanceInactiveRequestClockTrusted(11);
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals("halted current request clock must not age", 0,
+                hdmaState(bulk).hblankRequestAge());
+    }
+
+    @Test
+    public void runningEpochHaltReconciliationExcludesOnlyTheTerminalCurrentAge() {
+        Fixture scalar = new Fixture();
+        Fixture bulk = new Fixture();
+        Hdma.HdmaState clocks = withRequestClockState(
+                hdmaState(scalar), 0, 40, 0, 70);
+        scalar.hdma.restoreState(clocks);
+        bulk.hdma.restoreState(clocks);
+
+        for (int tick = 0; tick < 4; tick++) {
+            scalar.advanceHblankRequest(1);
+        }
+        scalar.hdma.onCpuHaltState(true);
+        scalar.advanceHblankRequest(1);
+
+        bulk.hdma.advancePerformanceInactiveRequestClockTrusted(5);
+        bulk.hdma.reconcilePerformanceRunningEpochHaltEntryTrusted();
+        bulk.hdma.onCpuHaltState(true);
+
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals("terminal HALT dot must not age the current request", 44,
+                hdmaState(bulk).hblankRequestAge());
+        assertEquals("terminal HALT dot must still age the next request", 75,
+                hdmaState(bulk).nextHblankRequestAge());
+    }
+
+    @Test
     public void generalPurposeDmaPaysStartupCostOnlyOnce() {
         Fixture fixture = new Fixture();
         fixture.startTransfer(0x01);
@@ -447,6 +518,32 @@ public class HdmaTest {
                 values[i] = switch (components[i].getName()) {
                     case "interruptEntryWonArbitration" -> interruptOwner;
                     case "cpuRequestAllowsLateInterrupt" -> lateInterrupt;
+                    default -> components[i].getAccessor().invoke(state);
+                };
+            }
+            var constructor = Hdma.HdmaState.class.getDeclaredConstructor(parameterTypes);
+            constructor.setAccessible(true);
+            return (Hdma.HdmaState) constructor.newInstance(values);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private Hdma.HdmaState withRequestClockState(
+            Hdma.HdmaState state, int currentTicks, int currentAge,
+            int nextTicks, int nextAge) {
+        try {
+            RecordComponent[] components = Hdma.HdmaState.class.getRecordComponents();
+            Class<?>[] parameterTypes = Arrays.stream(components)
+                    .map(RecordComponent::getType)
+                    .toArray(Class<?>[]::new);
+            Object[] values = new Object[components.length];
+            for (int i = 0; i < components.length; i++) {
+                values[i] = switch (components[i].getName()) {
+                    case "hblankRequestTicks" -> currentTicks;
+                    case "hblankRequestAge" -> currentAge;
+                    case "nextHblankRequestTicks" -> nextTicks;
+                    case "nextHblankRequestAge" -> nextAge;
                     default -> components[i].getAccessor().invoke(state);
                 };
             }

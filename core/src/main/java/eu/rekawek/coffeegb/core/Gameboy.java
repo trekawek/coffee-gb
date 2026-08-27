@@ -260,7 +260,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private transient IntConsumer performancePhysicalDmgEpochPrefixCommitter;
 
-    private transient IntConsumer performanceCgbCompatibilityEpochPrefixCommitter;
+    private transient IntConsumer performanceCgbNormalSpeedEpochPrefixCommitter;
 
     private enum PerformanceEpochPpuPlan {
         NONE,
@@ -1362,7 +1362,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 || !cpu.performanceNoPendingPpuReadPhase()
                 || dma.isTransferInProgress()
                 || dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
-                || gbc && hdma.hasActiveOrPendingTransfer()
+                || gbc && (hdma.hasActiveOrPendingTransfer()
+                        || !hdma.isPerformanceInactiveRequestClockStable())
                 // This is intentionally the one post-preflight volatile Joypad check.
                 || !joypad.isPerformanceQuietSpanStillEligible()) {
             return 0;
@@ -1393,10 +1394,22 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && isCgbCompatibilityPerformanceTopology();
     }
 
-    /** Fixed four-master-dot CPU epoch topologies; CGB compatibility still owns CGB peripherals. */
+    /** Exact native-color fixed-x1 epoch row: ordinary CGB only. */
+    private boolean isNativeCgbNormalSpeedPerformanceEpochTopology() {
+        return hardwareProfile == HardwareProfileRegistry.CGB
+                && gbc && !speedMode.isDmgCompat() && speedMode.getSpeedMode() == 1;
+    }
+
+    /** Ordinary-CGB fixed-x1 CPU epochs retain the complete CGB peripheral plane. */
+    private boolean isCgbNormalSpeedPerformanceEpochTopology() {
+        return isCgbCompatibilityPerformanceEpochTopology()
+                || isNativeCgbNormalSpeedPerformanceEpochTopology();
+    }
+
+    /** Fixed four-master-dot CPU epoch topologies; CGB software still owns CGB peripherals. */
     private boolean isNormalSpeedPerformanceEpochTopology() {
         return isPhysicalDmgPerformanceEpochTopology()
-                || isCgbCompatibilityPerformanceEpochTopology()
+                || isCgbNormalSpeedPerformanceEpochTopology()
                 || isSgbPerformanceTopology();
     }
 
@@ -1438,6 +1451,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(false)
                 && !hdma.hasActiveOrPendingTransfer()
+                && hdma.isPerformanceInactiveRequestClockStable()
                 && !cartridgeClocked
                 && !slotCartridgeClocked
                 && serialPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS)
@@ -1526,14 +1540,29 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             sound.commitFrameSequencerClock();
             serialPort.onDivReset();
         }
-        hdma.onCpuHaltState(cpu.getState() == Cpu.State.HALTED);
-        if (cpu.hasPendingPeripheralSample()) {
+        boolean halted = cpu.getState() == Cpu.State.HALTED;
+        if (halted) {
+            hdma.reconcilePerformanceRunningEpochHaltEntryTrusted();
+        }
+        hdma.onCpuHaltState(halted);
+        boolean pendingPeripheralSample = cpu.hasPendingPeripheralSample();
+        if (pendingPeripheralSample) {
             // The epoch can retire HALT immediately before the caller's budget ends. Publish
             // the otherwise-inactive OAM-DMA pause latch in the same rare branch which already
             // owns HALT's post-peripheral sample, so ordinary epochs gain no new hot check.
-            if (cpu.getState() == Cpu.State.HALTED && dma.requiresClockTick(true)) {
+            if (halted && dma.requiresClockTick(true)) {
                 dma.tick(true, true);
             }
+        }
+        if (halted) {
+            // Peripheral commits have already published the final GPU dot. Replay the scalar
+            // post-HALT timing seam so HDMA clears haltEnteredThisTick and the CPU observes the
+            // same held-opcode latch at the exact epoch endpoint.
+            hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
+                    gpu.isStatModeLatchRephasedBySpeedSwitch());
+            cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
+        }
+        if (pendingPeripheralSample) {
             cpu.onPeripheralsTicked();
         }
 
@@ -1620,6 +1649,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !hdma.holdsHblankSpeedSwitchTail()
                 && !hdma.pausesOamDmaForSpeedSwitchBurst()
                 && !hdma.requiresCpuHdmaPhaseFlags()
+                && hdma.isPerformanceInactiveRequestClockStable()
                 && !cartridgeClocked
                 && !slotCartridgeClocked;
     }
@@ -1637,6 +1667,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         serialPort.tickPerformanceEpochIdle(ticks);
         infraredPort.tickPerformanceEpochIdle(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
+        hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
 
         switch (ppuPlan) {
             case TRUSTED_RASTER -> {
@@ -1685,19 +1716,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return tryFixedNormalSpeedPerformanceEpoch(remaining);
     }
 
-    /** Fixed-width normal-speed epoch implementation shared by SGB and CGB compatibility. */
+    /** Fixed-width normal-speed epoch implementation shared by SGB and CGB hardware. */
     private int tryFixedNormalSpeedPerformanceEpoch(long remaining) {
-        boolean cgbCompat = isCgbCompatibilityPerformanceEpochTopology();
+        boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
+        boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
-        if (remaining <= 0 || !cpu.performanceNormalSpeedEpochEntryEligible(cgbCompat)
-                || !canStartNormalSpeedPerformanceEpoch(cgbCompat)) {
+        if (remaining <= 0 || !cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware)
+                || !canStartNormalSpeedPerformanceEpoch(cgbHardware)) {
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
-        span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbCompat));
+        span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
         span = Math.min(span, sound.performanceEpochSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
-        if (cgbCompat) {
+        if (cgbHardware) {
             span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, true)
                     ? span : 0);
             span = Math.min(span, infraredPort.performanceSettledHaltSpanLimit(span));
@@ -1706,7 +1738,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     ? span : 0);
         }
 
-        int rasterSpan = cgbCompat
+        int rasterSpan = cgbHardware
                 ? gpu.performanceEpochSpanLimit(span)
                 : gpu.performancePhysicalDmgEpochSpanLimit(span);
         if (rasterSpan <= 0) {
@@ -1728,12 +1760,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochPpuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         performanceEpochPrefixCommitted = 0;
         IntConsumer prefixCommitter;
-        if (cgbCompat) {
-            if (performanceCgbCompatibilityEpochPrefixCommitter == null) {
-                performanceCgbCompatibilityEpochPrefixCommitter =
-                        this::commitCgbCompatibilityPerformanceEpochPrefix;
+        if (cgbHardware) {
+            if (performanceCgbNormalSpeedEpochPrefixCommitter == null) {
+                performanceCgbNormalSpeedEpochPrefixCommitter =
+                        this::commitCgbNormalSpeedPerformanceEpochPrefix;
             }
-            prefixCommitter = performanceCgbCompatibilityEpochPrefixCommitter;
+            prefixCommitter = performanceCgbNormalSpeedEpochPrefixCommitter;
         } else {
             if (performancePhysicalDmgEpochPrefixCommitter == null) {
                 performancePhysicalDmgEpochPrefixCommitter =
@@ -1744,8 +1776,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         cpu.setPerformanceEpochPrefixCommitter(prefixCommitter);
         int elapsed;
         try {
-            elapsed = cgbCompat
-                    ? cpu.runCgbCompatibilityPerformanceEpoch(span)
+            elapsed = cgbHardware
+                    ? nativeCgbNormalSpeed
+                            ? cpu.runNativeCgbNormalSpeedPerformanceEpoch(span)
+                            : cpu.runCgbCompatibilityPerformanceEpoch(span)
                     : sgb
                             ? cpu.runSgbPerformanceEpoch(span)
                             : cpu.runPhysicalDmgPerformanceEpoch(span);
@@ -1757,8 +1791,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int suffix = elapsed - performanceEpochPrefixCommitted;
         if (suffix > 0) {
-            if (cgbCompat) {
-                commitCgbCompatibilityPerformanceEpochPeripherals(suffix);
+            if (cgbHardware) {
+                commitCgbNormalSpeedPerformanceEpochPeripherals(suffix);
             } else {
                 commitPhysicalDmgPerformanceEpochPeripherals(suffix);
             }
@@ -1772,7 +1806,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         Cpu.State finalCpuState = cpu.getState();
         boolean halted = finalCpuState == Cpu.State.HALTED;
-        if (cgbCompat && halted) {
+        if (cgbHardware && halted) {
+            hdma.reconcilePerformanceRunningEpochHaltEntryTrusted();
             hdma.onCpuHaltState(true);
         }
         if (halted || journalReplayed) {
@@ -1789,7 +1824,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 dma.tick(dmaCpuClockPaused, halted);
             }
         }
-        if (cgbCompat && halted) {
+        if (cgbHardware && halted) {
             // The scalar tick publishes the CPU HALT transition before the final GPU/HDMA
             // timing callback.  Epoch peripheral commits necessarily advance the GPU first,
             // so replay that post-GPU publication here to clear haltEnteredThisTick and keep
@@ -1809,7 +1844,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /** Stable normal-speed epoch topology; transient guards are evaluated by the caller. */
-    private boolean canStartNormalSpeedPerformanceEpoch(boolean cgbCompat) {
+    private boolean canStartNormalSpeedPerformanceEpoch(boolean cgbHardware) {
         return !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
@@ -1820,12 +1855,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !dma.requiresClockTick(false)
                 && !cartridgeClocked
                 && !slotCartridgeClocked
-                && (!cgbCompat || (!hdma.hasActiveOrPendingTransfer()
+                && (!cgbHardware || (!hdma.hasActiveOrPendingTransfer()
                         && !hdma.hasPendingHblankTransfer()
                         && !hdma.isHaltRequestLatched()
                         && !hdma.holdsHblankSpeedSwitchTail()
                         && !hdma.pausesOamDmaForSpeedSwitchBurst()
-                        && !hdma.requiresCpuHdmaPhaseFlags()));
+                        && !hdma.requiresCpuHdmaPhaseFlags()
+                        && hdma.isPerformanceInactiveRequestClockStable()));
     }
 
     private void commitPerformanceEpochPrefix(int ticks) {
@@ -1850,6 +1886,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         serialPort.tickPerformanceEpochIdle(ticks);
         infraredPort.tickPerformanceEpochIdle(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
+        hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
 
         switch (performanceEpochPpuPlan) {
             case TRUSTED_RASTER -> {
@@ -1890,11 +1927,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochPrefixCommitted = ticks;
     }
 
-    private void commitCgbCompatibilityPerformanceEpochPrefix(int ticks) {
+    private void commitCgbNormalSpeedPerformanceEpochPrefix(int ticks) {
         if (ticks <= performanceEpochPrefixCommitted) {
             return;
         }
-        commitCgbCompatibilityPerformanceEpochPeripherals(
+        commitCgbNormalSpeedPerformanceEpochPeripherals(
                 ticks - performanceEpochPrefixCommitted);
         performanceEpochPrefixCommitted = ticks;
     }
@@ -1904,13 +1941,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         commitNormalSpeedPerformanceEpochPeripherals(ticks, false);
     }
 
-    /** CGB-compatibility prefix commit through the existing CGB quiet epoch plane. */
-    private void commitCgbCompatibilityPerformanceEpochPeripherals(int ticks) {
+    /** Normal-speed CGB prefix commit through the existing CGB quiet epoch plane. */
+    private void commitCgbNormalSpeedPerformanceEpochPeripherals(int ticks) {
         commitNormalSpeedPerformanceEpochPeripherals(ticks, true);
     }
 
-    /** Shared fixed-x1 epoch peripheral commit; CGB compatibility retains IR/HDMA/CGB PPU state. */
-    private void commitNormalSpeedPerformanceEpochPeripherals(int ticks, boolean cgbCompat) {
+    /** Shared fixed-x1 epoch peripheral commit; CGB hardware retains IR/HDMA/CGB PPU state. */
+    private void commitNormalSpeedPerformanceEpochPeripherals(int ticks, boolean cgbHardware) {
         if (ticks <= 0) {
             return;
         }
@@ -1921,11 +1958,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sound.commitFrameSequencerClock();
         sound.tickPerformanceQuietSpan(ticks);
         serialPort.tickPerformanceNormalSpeedEpochIdle(ticks);
-        if (cgbCompat) {
+        if (cgbHardware) {
             infraredPort.tickPerformanceQuietSpanTrusted(ticks);
         }
         joypad.tickPerformanceQuietSpanTrusted(ticks);
-        if (cgbCompat) {
+        if (cgbHardware) {
+            // Scalar tick() advances the PPU-to-CPU request clocks after input and before GPU.
+            // The preflight admits only inactive countdowns, so their zero-clock ages are the
+            // complete arithmetic transaction skipped by this fixed-x1 packet.
+            hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
             gpu.advancePerformanceEpochQuietSpanTrusted(
                     ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
         } else {
@@ -1934,16 +1975,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         performanceEpochRasterFastTicks += ticks;
-        if (cgbCompat) {
+        if (cgbHardware) {
             hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
                     gpu.isStatModeLatchRephasedBySpeedSwitch());
         }
     }
 
-    /** Selects the normal-speed settled-HALT lane for the current non-native topology. */
+    /** Selects the settled-HALT lane for the current normal-speed topology. */
     private int tryPerformanceSettledHaltSpan(long remaining) {
-        if (isCgbCompatibilityPerformanceTopology()) {
-            return tryPerformanceSettledCgbCompatHaltSpan(remaining);
+        if (isCgbCompatibilityPerformanceTopology()
+                || isNativeCgbNormalSpeedPerformanceEpochTopology()) {
+            return tryPerformanceSettledCgbHaltSpan(remaining);
         }
         if (!gbc) {
             return tryPerformanceSettledDmgHaltSpan(remaining);
@@ -1952,11 +1994,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * Attempts a CGB-compatibility settled-HALT packet. This is deliberately separate from
-     * the physical-DMG packet: normal-speed CGB compatibility still clocks the CGB infrared and
+     * Attempts a normal-speed CGB settled-HALT packet. This is deliberately separate from
+     * the physical-DMG packet: CGB hardware still clocks the CGB infrared and
      * HDMA control planes, and their idle guards must remain part of the proof.
      */
-    private int tryPerformanceSettledCgbCompatHaltSpan(long remaining) {
+    private int tryPerformanceSettledCgbHaltSpan(long remaining) {
         if (remaining <= 0 || !cpu.performanceSettledHaltSpanEligible()) {
             return 0;
         }
@@ -1991,10 +2033,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 || hdma.pausesOamDmaForSpeedSwitchBurst()
                 || hdma.requiresCpuHdmaPhaseFlags()
                 || !joypad.isPerformanceQuietSpanStillEligible()
-                || !canStartCgbCompatSettledHaltSpan()) {
+                || !canStartCgbNormalSpeedSettledHaltSpan()) {
             return 0;
         }
-        tickPerformanceSettledCgbCompatHaltSpan(span, directRasterSpan, steadyRasterSpan);
+        tickPerformanceSettledCgbHaltSpan(span, directRasterSpan, steadyRasterSpan);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
         if (span > performanceBulkMaxTicks) {
@@ -2003,8 +2045,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return span;
     }
 
-    private boolean canStartCgbCompatSettledHaltSpan() {
-        return isCgbCompatibilityPerformanceTopology()
+    private boolean canStartCgbNormalSpeedSettledHaltSpan() {
+        return (isCgbCompatibilityPerformanceTopology()
+                || isNativeCgbNormalSpeedPerformanceEpochTopology())
                 && !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
@@ -2018,11 +2061,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !hdma.isHaltRequestLatched()
                 && !hdma.holdsHblankSpeedSwitchTail()
                 && !hdma.pausesOamDmaForSpeedSwitchBurst()
-                && !hdma.requiresCpuHdmaPhaseFlags();
+                && !hdma.requiresCpuHdmaPhaseFlags()
+                && hdma.isPerformanceInactiveRequestClockStable();
     }
 
-    /** Commits a CGB-compatibility settled-HALT packet with the complete CGB idle plane. */
-    private void tickPerformanceSettledCgbCompatHaltSpan(
+    /** Commits a normal-speed CGB settled-HALT packet with the complete CGB idle plane. */
+    private void tickPerformanceSettledCgbHaltSpan(
             int ticks, boolean directRasterSpan, boolean steadyRasterSpan) {
         if (cartridgeClocked) {
             cartridge.tickPerformanceQuietSpanTrusted(ticks);
@@ -2033,13 +2077,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         timer.tickPerformanceQuietSpanTrusted(ticks);
         sound.tickFrameSequencer(false);
         assert !sound.hasPendingFrameSequencerClock()
-                : "frame sequencer edge crossed a CGB-compatibility settled-HALT span";
+                : "frame sequencer edge crossed a normal-speed CGB settled-HALT span";
         sound.commitFrameSequencerClock();
         sound.tickPerformanceQuietSpan(ticks);
         serialPort.tickPerformanceQuietSpanTrusted(ticks);
         infraredPort.tickPerformanceQuietSpanTrusted(ticks);
         joypad.tickPerformanceQuietSpanTrusted(ticks);
         cpu.advancePerformanceSettledHaltSpanTrusted(ticks);
+        hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
         gpu.advancePerformanceQuietSpanTrusted(ticks, directRasterSpan, steadyRasterSpan);
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         hdma.onGpuTiming(gpu.getLine(), gpu.getTicksInLine(),
@@ -2154,15 +2199,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         // No CPU bus boundary exists inside this span. Advance the free-running phase once;
         // running state, or settled HALT, proves Cpu.onPeripheralsTicked() is a no-op here.
         cpu.advancePerformancePhaseOnlyTrusted(ticks);
+        if (gbc) {
+            hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
+        }
         switch (ppuPlan) {
             case QUIET -> gpu.advancePerformanceQuietSpanTrusted(
                     ticks, directRasterSpan, steadyRasterSpan);
             case PHYSICAL_DMG_MODE2 ->
                     gpu.advancePerformancePhysicalDmgMode2PhaseSpanTrusted(ticks);
-            case CGB_COMPATIBILITY_MODE2 -> {
-                hdma.advancePerformanceOamSearchPhaseClockTrusted(ticks);
-                gpu.advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(ticks);
-            }
+            case CGB_COMPATIBILITY_MODE2 ->
+                    gpu.advancePerformanceCgbCompatibilityMode2PhaseSpanTrusted(ticks);
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         if (gbc) {

@@ -99,21 +99,25 @@ public final class GameboyPlayerInputHubPerformanceTest {
                     PlayerInputSnapshot.released());
             try (Gameboy performance = session(true, ExecutionMode.PERFORMANCE, hub);
                     Gameboy scalar = session(true, ExecutionMode.PERFORMANCE, scalarInput::get)) {
-                // Find a synchronized endpoint where the immediately preceding call is exactly
-                // one all-subsystem packet of the requested 1–3 dots. The scalar oracle follows
-                // the same PERFORMANCE renderer lifecycle but has a custom source, so its
-                // all-subsystem packet horizon is zero.
-                boolean allBulk = false;
-                for (int attempt = 0; attempt < 4_000 && !allBulk; attempt++) {
-                    long before = performance.getPerformanceBulkTicks();
+                // Find a synchronized endpoint where the requested 1–3 dots are covered wholly
+                // by exact scheduler packets. Native CGB normal speed may use either the short
+                // all-subsystem packet or the fixed-x1 running-CPU epoch. The scalar oracle
+                // follows the same PERFORMANCE renderer lifecycle but has a custom source, so
+                // both horizons are zero.
+                boolean allFast = false;
+                for (int attempt = 0; attempt < 4_000 && !allFast; attempt++) {
+                    long bulkBefore = performance.getPerformanceBulkTicks();
+                    long epochBefore = performance.getPerformanceEpochTicks();
                     performance.runTicks(tail);
                     for (int i = 0; i < tail; i++) {
                         scalar.runTicks(1);
                     }
-                    allBulk = performance.getPerformanceBulkTicks() - before == tail;
+                    long fastTicks = performance.getPerformanceBulkTicks() - bulkBefore
+                            + performance.getPerformanceEpochTicks() - epochBefore;
+                    allFast = fastTicks == tail;
                 }
-                assertTrue("CGB setup did not exercise an all-bulk " + tail + "-dot tail",
-                        allBulk);
+                assertTrue("CGB setup did not exercise an all-fast " + tail + "-dot tail",
+                        allFast);
 
                 // Start GDMA immediately after the proven packet tail. The final GPU timing
                 // publication must make FF55 observe the same request state as scalar execution.
@@ -158,14 +162,10 @@ public final class GameboyPlayerInputHubPerformanceTest {
                 assertTrue("stable HALT had no substantial bulk coverage cgb=" + cgb
                                 + " ticks=" + performance.getPerformanceBulkTicks(),
                         performance.getPerformanceBulkTicks() > 1_000);
-                if (cgb) {
-                    assertEquals("CGB settled HALT must retain the ordinary three-dot cap",
-                            0, performance.getPerformanceBulkMaxTicks());
-                } else {
-                    assertTrue("DMG settled HALT never crossed a machine-cycle boundary"
-                                    + " maxSpan=" + performance.getPerformanceBulkMaxTicks(),
-                            performance.getPerformanceBulkMaxTicks() > 3);
-                }
+                assertTrue((cgb ? "CGB" : "DMG")
+                                + " settled HALT never crossed a machine-cycle boundary"
+                                + " maxSpan=" + performance.getPerformanceBulkMaxTicks(),
+                        performance.getPerformanceBulkMaxTicks() > 3);
             }
         }
     }
@@ -428,13 +428,9 @@ public final class GameboyPlayerInputHubPerformanceTest {
                     assertRasterEquivalent(scalar, performance,
                             "random HALT tail cgb=" + cgb + ", chunk=" + chunkIndex);
                 }
-                if (cgb) {
-                    assertEquals("CGB random HALT tails must retain the ordinary three-dot cap",
-                            0, performance.getPerformanceBulkMaxTicks());
-                } else {
-                    assertTrue("DMG random HALT tails never crossed a machine cycle",
-                            performance.getPerformanceBulkMaxTicks() > 3);
-                }
+                assertTrue((cgb ? "CGB" : "DMG")
+                                + " random HALT tails never crossed a machine cycle",
+                        performance.getPerformanceBulkMaxTicks() > 3);
             }
         }
     }

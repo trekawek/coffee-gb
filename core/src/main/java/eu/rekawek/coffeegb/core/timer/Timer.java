@@ -171,13 +171,13 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
     }
 
     /**
-     * Fixed-x1 normal-speed epoch horizon shared by physical DMG and CGB compatibility.
-     * CGB compatibility retains the later-revision +2 DIV/APU frame-sequencer tap, so that
+     * Fixed-x1 normal-speed epoch horizon shared by physical DMG and CGB hardware.
+     * CGB retains the later-revision +2 DIV/APU frame-sequencer tap, so that
      * candidate is stopped before either possible frame-sequencer edge.
      */
-    public int performanceNormalSpeedEpochSpanLimit(int requested, boolean cgbCompat) {
-        boolean topologyMatches = cgbCompat
-                ? speedMode.isGbc() && speedMode.isDmgCompat()
+    public int performanceNormalSpeedEpochSpanLimit(int requested, boolean cgbHardware) {
+        boolean topologyMatches = cgbHardware
+                ? speedMode.isGbc()
                 : !speedMode.isGbc();
         if (requested <= 0 || speedMode.getSpeedMode() != 1 || !topologyMatches
                 || debugHooks != null || divReset || overflow || haltWakeDelay != 0
@@ -189,9 +189,9 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         span = capBeforeMasterTicks(span, clocksToOverflowFallingEdge(), 1);
         span = capBeforeMasterTicks(span, clocksToPendingDividerRipple(), 1);
         span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(0), 1);
-        if (cgbCompat) {
+        if (cgbHardware) {
             // The CGB PSG tap is two CPU clocks ahead of the divider until FF04 is reset.
-            // A compatibility epoch must retain that same edge exclusion as native CGB.
+            // Every normal-speed CGB epoch must retain that edge exclusion.
             span = capBeforeMasterTicks(span, clocksToFrameSequencerEdge(2), 1);
         }
         return Math.max(0, span);
