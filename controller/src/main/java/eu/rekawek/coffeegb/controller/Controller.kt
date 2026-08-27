@@ -58,6 +58,17 @@ interface Controller : AutoCloseable {
 
   class EmulationStoppedEvent : Event
 
+  /**
+   * Synchronous boundary around one near-60-Hz PERFORMANCE controller work cycle. Host
+   * integrations use these singleton events to exclude controller pacing and idle time.
+   */
+  object PerformanceWorkStartedEvent : Event
+
+  object PerformanceWorkCompletedEvent : Event
+
+  /** Cancels a started work cycle which stopped before its complete controller tick budget. */
+  object PerformanceWorkAbortedEvent : Event
+
   data class LoadRomEvent
   @JvmOverloads
   constructor(

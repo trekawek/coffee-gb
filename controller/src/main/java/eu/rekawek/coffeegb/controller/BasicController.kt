@@ -968,34 +968,53 @@ class BasicController private constructor(
     if (gameboy != null && !benchmarkExecutionFrozen
         && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
       relinquishDebugBreakpointPauseOwnership()
-      val exactBenchmarkScenarioFrame = benchmarkGameplayScenarioActive
-      if (exactBenchmarkScenarioFrame) {
-        // Native Display events are emitted synchronously from Gameboy.tick(). The endpoint event
-        // above sets the pause before that call returns, so this loop executes no post-endpoint
-        // tail even when the ordinary PERFORMANCE path would own a frame-sized runTicks batch.
-        emulatedTicks =
-            gameboy.runTicksUntilStop(frameTicks) { benchmarkGameplayScenarioStopRequested }
-      } else if (properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
-          && !benchmarkCoreFrozenGate.getAsBoolean() && !trackDebugHistory && !rewound) {
-        // The physical frame-600 callback is synchronous on this owner thread. Keep the normal
-        // PERFORMANCE epoch/scanline scheduler for the measured window, but stop at the callback
-        // before another scalar hand-off or bulk packet can advance the frozen core.
-        emulatedTicks = gameboy.runMeasuredTicksUntilStop(frameTicks, benchmarkCoreFrozenGate)
-      } else if (!trackDebugHistory && !rewound
-          && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
-        // The core owns the frame-sized loop in ordinary PERFORMANCE mode. Debug/history
-        // paths remain on their per-tick hooks so every observation and checkpoint boundary is
-        // still materialized before the next callback.
-        gameboy.runTicks(frameTicks)
-        emulatedTicks = frameTicks
-      } else {
-        repeat(frameTicks) {
-          if (trackDebugHistory) {
-            tickWithDebugHistory(gameboy, frameTicks)
-          } else {
-            gameboy.tick()
+      val performanceWorkSession =
+          session?.takeIf { gameboy.executionMode == ExecutionMode.PERFORMANCE }
+      performanceWorkSession?.let {
+        postSessionEventSafely(it, Controller.PerformanceWorkStartedEvent)
+      }
+      try {
+        val exactBenchmarkScenarioFrame = benchmarkGameplayScenarioActive
+        if (exactBenchmarkScenarioFrame) {
+          // Native Display events are emitted synchronously from Gameboy.tick(). The endpoint
+          // event above sets the pause before that call returns, so this loop executes no
+          // post-endpoint tail even when the ordinary PERFORMANCE path would own a frame-sized
+          // runTicks batch.
+          emulatedTicks =
+              gameboy.runTicksUntilStop(frameTicks) { benchmarkGameplayScenarioStopRequested }
+        } else if (properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
+            && !benchmarkCoreFrozenGate.getAsBoolean() && !trackDebugHistory && !rewound) {
+          // The physical frame-600 callback is synchronous on this owner thread. Keep the normal
+          // PERFORMANCE epoch/scanline scheduler for the measured window, but stop at the callback
+          // before another scalar hand-off or bulk packet can advance the frozen core.
+          emulatedTicks = gameboy.runMeasuredTicksUntilStop(frameTicks, benchmarkCoreFrozenGate)
+        } else if (!trackDebugHistory && !rewound
+            && gameboy.executionMode == ExecutionMode.PERFORMANCE) {
+          // The core owns the frame-sized loop in ordinary PERFORMANCE mode. Debug/history
+          // paths remain on their per-tick hooks so every observation and checkpoint boundary is
+          // still materialized before the next callback.
+          gameboy.runTicks(frameTicks)
+          emulatedTicks = frameTicks
+        } else {
+          repeat(frameTicks) {
+            if (trackDebugHistory) {
+              tickWithDebugHistory(gameboy, frameTicks)
+            } else {
+              gameboy.tick()
+            }
+            emulatedTicks++
           }
-          emulatedTicks++
+        }
+      } finally {
+        performanceWorkSession?.let {
+          postSessionEventSafely(
+              it,
+              if (emulatedTicks == frameTicks) {
+                Controller.PerformanceWorkCompletedEvent
+              } else {
+                Controller.PerformanceWorkAbortedEvent
+              },
+          )
         }
       }
       emulated = emulatedTicks == frameTicks

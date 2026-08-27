@@ -1980,8 +1980,14 @@ class BasicControllerTest {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    val workStarts = AtomicInteger()
+    val workCompletions = AtomicInteger()
+    val workAborts = AtomicInteger()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<Controller.SessionPlaybackStateEvent>(playback::add)
+    eventBus.register<Controller.PerformanceWorkStartedEvent> { workStarts.incrementAndGet() }
+    eventBus.register<Controller.PerformanceWorkCompletedEvent> { workCompletions.incrementAndGet() }
+    eventBus.register<Controller.PerformanceWorkAbortedEvent> { workAborts.incrementAndGet() }
     val rom = namedRom("BENCHMARK_PRE_ARM_RESUME")
     val properties =
         EmulatorProperties(
@@ -2006,6 +2012,10 @@ class BasicControllerTest {
     try {
       eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
       assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      Thread.sleep(50)
+      assertEquals(0, workStarts.get(), "paused PERFORMANCE session published a work start")
+      assertEquals(0, workCompletions.get(), "paused PERFORMANCE session published a work end")
+      assertEquals(0, workAborts.get(), "paused PERFORMANCE session published a work abort")
       // The benchmark session starts paused so the host can capture its anchor. Before ARM the
       // normal lifecycle command must still release that pause.
       eventBus.post(Controller.ResumeEmulationEvent())
@@ -2013,6 +2023,16 @@ class BasicControllerTest {
           generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
               .first { !it.paused }
       assertFalse(resumed.paused)
+      // Pause at the next safe point so the just-released ordinary batch has a deterministic
+      // terminal edge: every full PERFORMANCE start must complete, never abort.
+      eventBus.post(Controller.PauseEmulationEvent())
+      val pausedAgain =
+          generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
+              .first { it.paused }
+      assertTrue(pausedAgain.paused)
+      assertTrue(workStarts.get() > 0)
+      assertEquals(workStarts.get(), workCompletions.get())
+      assertEquals(0, workAborts.get())
     } finally {
       controller.close()
       properties.close()
@@ -2027,9 +2047,13 @@ class BasicControllerTest {
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
     val boundary = LinkedBlockingQueue<Controller.BenchmarkFrameBoundaryEvent>()
+    val workEvents = LinkedBlockingQueue<String>()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
     eventBus.register<Controller.BenchmarkFrameBoundaryEvent>(boundary::add)
+    eventBus.register<Controller.PerformanceWorkStartedEvent> { workEvents.add("start") }
+    eventBus.register<Controller.PerformanceWorkCompletedEvent> { workEvents.add("complete") }
+    eventBus.register<Controller.PerformanceWorkAbortedEvent> { workEvents.add("abort") }
     val executedTicks = AtomicInteger()
     val boundaryPosted = AtomicInteger()
     val generation = AtomicLong()
@@ -2100,10 +2124,68 @@ class BasicControllerTest {
           boundary.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS),
           "measured batch did not reach the synchronous frame boundary",
       )
+      assertEquals("start", workEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals("abort", workEvents.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       assertEquals(5, executedTicks.get())
       Thread.sleep(100)
       assertEquals(5, executedTicks.get(), "a post-boundary measured tick was executed")
+      assertNull(workEvents.poll(), "frozen measured gate published another work span")
     } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
+  fun accuracyExecutionDoesNotPublishPerformanceWorkSpans() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val workStarts = AtomicInteger()
+    val workCompletions = AtomicInteger()
+    val workAborts = AtomicInteger()
+    val tickEntered = CountDownLatch(1)
+    val releaseTick = CountDownLatch(1)
+    eventBus.register<EmulationStartedEvent>(started::add)
+    eventBus.register<Controller.PerformanceWorkStartedEvent> { workStarts.incrementAndGet() }
+    eventBus.register<Controller.PerformanceWorkCompletedEvent> { workCompletions.incrementAndGet() }
+    eventBus.register<Controller.PerformanceWorkAbortedEvent> { workAborts.incrementAndGet() }
+    val rom = namedRom("ACCURACY_NO_PERFORMANCE_WORK")
+    val properties = testProperties()
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+                  .setExecutionMode(ExecutionMode.ACCURACY)
+          val gameboy =
+              object : Gameboy(config) {
+                private var blocked = false
+
+                override fun tick(): Boolean {
+                  if (!blocked) {
+                    blocked = true
+                    tickEntered.countDown()
+                    releaseTick.await(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                  }
+                  return false
+                }
+              }
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertTrue(tickEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(0, workStarts.get())
+      assertEquals(0, workCompletions.get())
+      assertEquals(0, workAborts.get())
+    } finally {
+      releaseTick.countDown()
       controller.close()
       properties.close()
       eventBus.close()

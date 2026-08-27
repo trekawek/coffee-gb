@@ -101,6 +101,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final DiagnosticsOptions diagnosticsOptions;
     private final AndroidBenchmarkDiagnostics diagnostics;
     private final BenchmarkGameplayScenario benchmarkScenario;
+    /** Adaptive hint session; live mutations stay on synchronous controller callbacks. */
+    private final AndroidPerformanceBoost performanceBoost;
     private final NativeFrameStore frames;
     /** Session timing belongs to the service, not to a short-lived Activity attachment. */
     private final PlayTimeTracker playTime = new PlayTimeTracker();
@@ -176,6 +178,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     AndroidEmulationRuntime(Context context, DiagnosticsOptions options) {
         this.context = Objects.requireNonNull(context, "context").getApplicationContext();
+        performanceBoost = new AndroidPerformanceBoost(this.context);
         diagnosticsOptions = options == null ? DiagnosticsOptions.disabled() : options;
         benchmarkScenario = new BenchmarkGameplayScenario(
                 diagnosticsOptions.benchmarkScenario,
@@ -1465,6 +1468,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 event -> {
                     frames.setHardwareProfile(event.getProfile());
+                    performanceBoost.onHardwareProfile(event.getProfile().clockSpec());
                     AndroidAudioSink activeAudio = audio;
                     if (activeAudio != null) {
                         activeAudio.setClockSpec(event.getProfile().clockSpec());
@@ -1543,6 +1547,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     });
                 },
                 Controller.BenchmarkArmAcknowledgedEvent.class);
+        // BasicController brackets each live PERFORMANCE controller batch. These synchronous
+        // events report its work while excluding TimingTicker pacing.
+        eventBus.register(
+                event -> performanceBoost.onWorkStarted(),
+                Controller.PerformanceWorkStartedEvent.class);
+        eventBus.register(
+                event -> performanceBoost.onWorkCompleted(),
+                Controller.PerformanceWorkCompletedEvent.class);
+        eventBus.register(
+                event -> performanceBoost.onWorkAborted(),
+                Controller.PerformanceWorkAbortedEvent.class);
         // Display events run synchronously on the controller thread. The bounded store must copy
         // their producer-owned arrays before this callback returns; it never touches Android UI.
         // A configured scenario observes only its matching native event, so an SGB transfer DMG
@@ -1594,8 +1609,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         eventBus.register(
                 (Controller.EmulationStartedEvent event) -> {
                     // This callback runs synchronously on the controller thread. Keep the CPU
-                    // sample on that thread instead of the runtime owner executor.
-                    AndroidPerformanceBoost.apply(executionModeForSession());
+                    // sample and adaptive session ownership on that thread instead of the runtime
+                    // owner executor.
+                    ExecutionMode executionMode = executionModeForSession();
+                    performanceBoost.onSessionStarted(executionMode);
+                    AndroidPerformanceBoost.apply(executionMode);
                     submit(() -> {
                     boolean requestedOpen = event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId;
@@ -1685,6 +1703,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 (Controller.EmulationStoppedEvent event) -> {
                     // The BasicController thread survives between sessions; do not let a prior
                     // PERFORMANCE session leave its scheduler hint on an idle/Accuracy session.
+                    performanceBoost.onSessionStopped();
                     AndroidPerformanceBoost.apply(ExecutionMode.ACCURACY);
                     submit(() -> {
                         if (!closed.get()) {
@@ -1726,7 +1745,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 },
                 StateResumeAvailableEvent.class);
         eventBus.register(
-                (Controller.SessionPlaybackStateEvent event) -> submit(() -> {
+                (Controller.SessionPlaybackStateEvent event) -> {
+                    // This authoritative edge is synchronous on the controller thread. Resetting
+                    // here prevents a paused interval from becoming the next reported duration.
+                    performanceBoost.onPlaybackStateChanged(event.getPaused());
+                    submit(() -> {
                     if (activeLayout == null || state.phase() == RuntimeState.Phase.LOADING) {
                         return;
                     }
@@ -1743,7 +1766,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         publish(RuntimeState.Phase.RUNNING, "Game running.", List.of(),
                                 true, false, state.flushPending());
                     }
-                }),
+                    });
+                },
                 Controller.SessionPlaybackStateEvent.class);
         eventBus.register(
                 (Controller.BatteryFlushCompletedEvent event) -> submit(() -> {
@@ -2228,6 +2252,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         camera = null;
         printer = null;
         if (active == null) {
+            performanceBoost.onSessionStopped();
             if (activeAudio != null) {
                 activeAudio.close();
             }
@@ -2247,7 +2272,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return true;
         }
         try {
+            // BasicController.close() joins its timing thread and intentionally suppresses the
+            // ordinary EmulationStoppedEvent. Close the mutable platform session only after that
+            // join, when no work callback can still race this runtime-owner fallback.
             active.close();
+            performanceBoost.onSessionStopped();
             if (activeAudio != null) {
                 activeAudio.close();
             }
@@ -2267,6 +2296,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             stateSaveCompletions.clear();
             return true;
         } catch (RuntimeException failure) {
+            // The synchronized boost owner can be disarmed safely even if controller shutdown
+            // timed out; subsequent synchronous work callbacks observe the cleared session.
+            performanceBoost.onSessionStopped();
             // Retain the controller for an explicit retry; it may still own an unflushed battery.
             controller = active;
             eventBus = activeBus;
