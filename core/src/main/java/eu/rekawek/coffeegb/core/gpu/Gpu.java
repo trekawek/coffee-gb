@@ -1202,6 +1202,39 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Stable native-CGB x1 LCD-off plane. Scalar {@link #tick()} changes only the timing
+     * generation in this state; raster, LY, mode, output-delay, and frozen conflict histories
+     * do not advance. The owner separately fences LCDC/IO writes and the host blank cadence.
+     */
+    public int performanceNativeCgbNormalSpeedLcdOffSpanLimit(int requested) {
+        if (requested <= 0 || !gbc || dmgCompatValue || speedModeValue != 1
+                || lcdEnabled || lcdc.isLcdEnabled() || displayEnabledDelay != 0
+                || firstLine || line != 0 || ticksInLine != 0 || mode != Mode.HBlank
+                || performanceScanlineCursor || steadyTimingCursor
+                || !performanceScanlineEnabled || !performanceScanlineCapable
+                || !bootCompatibilityResolved
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || dma == null || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || hdma == null || hdma.hasActiveOrPendingTransfer()) {
+            return 0;
+        }
+        return requested;
+    }
+
+    /** Advances the inert GPU clock after the owner has preflighted the complete packet. */
+    public void advancePerformanceNativeCgbNormalSpeedLcdOffSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        assert performanceNativeCgbNormalSpeedLcdOffSpanLimit(ticks) >= ticks
+                : "trusted native-CGB x1 LCD-off proof changed before commit";
+        timingGeneration += ticks;
+        cpuLyReadAcrossLineEdge = false;
+    }
+
+    /**
      * Physical-DMG counterpart of {@link #performanceEpochSpanLimit(int)}. The empty output
      * clocks are part of the proof in HBlank/VBlank; IR, HDMA, mode 2 and scalar mode 3 are not.
      */

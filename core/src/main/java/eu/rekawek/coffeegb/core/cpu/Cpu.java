@@ -100,6 +100,9 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private transient int performanceEpochPrefixTicks;
 
+    /** Epoch-local proof that LCD-off CGB VRAM is an unobserved direct memory plane. */
+    private transient boolean performanceEpochLcdOffVramAccess;
+
     private transient DebugCpuAddressSpace debugAddressSpace;
 
     private transient DebugHooks debugHooks;
@@ -342,9 +345,26 @@ public class Cpu implements StatefulComponent<Cpu> {
                 ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, true) : 0;
     }
 
+    /**
+     * Native-CGB x1 epoch while the owner has proven that LCD output and both DMA planes are
+     * inactive. Decoded memory cycles remain fenced except for direct VRAM reads/writes; LCDC,
+     * other IO, OAM, cartridge control, and executable VRAM all retain the scalar boundary.
+     */
+    public int runNativeCgbNormalSpeedLcdOffPerformanceEpoch(int maxMasterTicks) {
+        return !speedMode.isDmgCompat()
+                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, true, true) : 0;
+    }
+
     /** Shared fixed-width normal-speed epoch; topology flags are explicit and allocation-free. */
     private int runPerformanceNormalSpeedEpoch(
             int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles) {
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, cgbHardware, fenceDecodedMemoryCycles, false);
+    }
+
+    private int runPerformanceNormalSpeedEpoch(
+            int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles,
+            boolean allowLcdOffVramAccess) {
         if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbHardware)) {
             return 0;
         }
@@ -362,6 +382,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         performanceEpochElapsed = 0;
         performanceEpochPrefixTicks = 0;
         performanceEpochActive = true;
+        performanceEpochLcdOffVramAccess = allowLcdOffVramAccess;
         bus.resetForEpoch(target);
         addressSpace = bus;
         int elapsed = 0;
@@ -378,7 +399,8 @@ public class Cpu implements StatefulComponent<Cpu> {
                 }
 
                 if (!performanceEpochPrefetchSafe()
-                        || fenceDecodedMemoryCycles && !performanceSgbBoundarySafe()) {
+                        || fenceDecodedMemoryCycles
+                        && !performanceDecodedMemoryBoundarySafe(allowLcdOffVramAccess)) {
                     performanceEpochTerminal = true;
                     break;
                 }
@@ -401,6 +423,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         } finally {
             addressSpace = target;
             performanceEpochActive = false;
+            performanceEpochLcdOffVramAccess = false;
             performanceEpochAccesses += bus.accesses();
             performanceEpochTerminalAccesses += bus.terminalAccesses();
             performanceEpochTicks += elapsed;
@@ -417,19 +440,38 @@ public class Cpu implements StatefulComponent<Cpu> {
      * Operations before the next force-finish marker execute in the same machine-cycle tick;
      * scanning the complete group here prevents a partial CPU tick before scalar fallback.
      */
-    private boolean performanceSgbBoundarySafe() {
+    private boolean performanceDecodedMemoryBoundarySafe(boolean allowLcdOffVramAccess) {
         if (state != State.RUNNING || currentExecutionOps == null) {
             return true;
         }
         for (int i = opIndex; i < currentOpCount; i++) {
             if (currentOpAccessesMemory[i]) {
-                return false;
+                if (!allowLcdOffVramAccess) {
+                    return false;
+                }
+                Integer address = currentExecutionOps[i].resolveMemoryAddress(
+                        registers, operand, opContext);
+                if (address == null || !PerformanceEpochBus.isVideoRam(address)) {
+                    return false;
+                }
             }
             if (currentExecutionOps[i].forceFinishCycle()) {
                 break;
             }
         }
         return true;
+    }
+
+    private boolean isPerformanceEpochSafeRead(int address) {
+        return PerformanceEpochBus.isSafeRead(address)
+                || performanceEpochLcdOffVramAccess
+                && PerformanceEpochBus.isVideoRam(address);
+    }
+
+    private boolean isPerformanceEpochSafeWrite(int address) {
+        return PerformanceEpochBus.isSafeWrite(address)
+                || performanceEpochLcdOffVramAccess
+                && PerformanceEpochBus.isVideoRam(address);
     }
 
     private boolean performanceEpochPrefetchSafe() {
@@ -3625,7 +3667,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         @Override
         public int getByte(int address) {
             accesses++;
-            if (!isSafeRead(address)) {
+            if (!owner.isPerformanceEpochSafeRead(address)) {
                 terminalAccesses++;
                 owner.markPerformanceEpochTerminal();
                 owner.flushPerformanceEpochPrefix();
@@ -3636,7 +3678,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         @Override
         public void setByte(int address, int value) {
             accesses++;
-            if (!isSafeWrite(address)) {
+            if (!owner.isPerformanceEpochSafeWrite(address)) {
                 int a = address & 0xffff;
                 if (!owner.speedMode.isGbc() && a >= 0xfe00 && a <= 0xfeff) {
                     // DMG OAM writes must observe the corruption-suppression latch and access
@@ -3672,6 +3714,11 @@ public class Cpu implements StatefulComponent<Cpu> {
             int a = address & 0xffff;
             return a >= 0xc000 && a <= 0xfdff
                     || a >= 0xff80 && a <= 0xfffd;
+        }
+
+        private static boolean isVideoRam(int address) {
+            int a = address & 0xffff;
+            return a >= 0x8000 && a <= 0x9fff;
         }
     }
 
