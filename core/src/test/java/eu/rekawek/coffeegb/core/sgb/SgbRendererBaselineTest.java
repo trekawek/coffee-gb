@@ -72,8 +72,8 @@ public class SgbRendererBaselineTest {
             int[] actualContinuation = fixture.renderCurrentMask(originalDmg);
             assertArrayEquals(expectedContinuation, actualContinuation);
 
-            // Rendering returns a fresh producer buffer. Mutating a delivered event cannot leak
-            // into the display's retained renderer state or the next frame.
+            // Rendering uses callback-scoped producer buffers. Mutating a delivered event cannot
+            // leak into the display's retained canonical base or the next frame.
             int[] exposed = fixture.lastRawFrame.get();
             exposed[0] ^= 0x00ffffff;
             fixture.background.restoreState(backgroundState);

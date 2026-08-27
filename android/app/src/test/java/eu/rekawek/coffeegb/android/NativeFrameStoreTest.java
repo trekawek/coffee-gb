@@ -12,6 +12,8 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 public class NativeFrameStoreTest {
 
@@ -162,6 +164,84 @@ public class NativeFrameStoreTest {
     }
 
     @Test
+    public void malformedSgbLengthAbortsWritingSlotAndReclaimsPrimarySlot() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            int expected = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
+            assertThrows(IllegalArgumentException.class,
+                    () -> store.publish(new SgbDisplay.SgbFrameReadyEvent(
+                            new int[expected - 1], false)));
+
+            int[] valid = new int[expected];
+            valid[0] = 0x00010203;
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(valid, false));
+            NativeFrameStore.Frame frame = store.takeLatest();
+            assertNotNull(frame);
+            assertSame(store.bufferAt(0), frame.pixels());
+            store.finishDrawing(frame);
+            NativeFrameStore.Snapshot snapshot = requireSnapshot(store);
+            assertEquals(0xff010203, snapshot.pixels()[0]);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void staleReservationCannotPublishOrAbortANewWriter() throws Exception {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            long stale = reserve(store);
+            store.beginBenchmarkEpoch(1L);
+            long current = reserve(store);
+            assertTrue((stale & 3L) != (current & 3L));
+
+            // The old owner is allowed to release its preserved WRITING claim after the epoch
+            // reset. A new writer can then claim the same slot.
+            publish(store, stale);
+            long replacement = reserve(store);
+            assertTrue((stale & 3L) == (replacement & 3L));
+            assertTrue(stale != replacement);
+
+            publish(store, stale);
+            assertNull(store.snapshot());
+            abort(store, stale);
+            assertNull(store.snapshot());
+            publish(store, replacement);
+            assertNotNull(store.snapshot());
+            publish(store, current);
+            assertNotNull(store.snapshot());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void clearInvalidatesAnInFlightReservationBeforeAReplacementPublishes() throws Exception {
+        NativeFrameStore store = new NativeFrameStore();
+        AtomicInteger notifications = new AtomicInteger();
+        NativeFrameStore.Listener listener = notifications::incrementAndGet;
+        store.addListener(listener);
+        try {
+            long stale = reserve(store);
+            store.clear();
+            int afterClear = notifications.get();
+            long current = reserve(store);
+            assertTrue((stale & 3L) != (current & 3L));
+
+            publish(store, stale);
+            assertNull(store.snapshot());
+            assertEquals(afterClear, notifications.get());
+
+            publish(store, current);
+            assertNotNull(store.snapshot());
+            assertEquals(afterClear + 1, notifications.get());
+        } finally {
+            store.removeListener(listener);
+            store.close();
+        }
+    }
+
+    @Test
     public void profileTransitionFromSgbToDmgSurvivesClear() {
         NativeFrameStore store = new NativeFrameStore();
         try {
@@ -228,5 +308,24 @@ public class NativeFrameStoreTest {
         NativeFrameStore.Snapshot frame = store.snapshot();
         assertNotNull(frame);
         return frame;
+    }
+
+    private static long reserve(NativeFrameStore store) throws Exception {
+        var method = NativeFrameStore.class.getDeclaredMethod(
+                "reserve", int.class, int.class);
+        method.setAccessible(true);
+        return (long) method.invoke(store, Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
+    }
+
+    private static void publish(NativeFrameStore store, long claim) throws Exception {
+        var method = NativeFrameStore.class.getDeclaredMethod("publish", long.class);
+        method.setAccessible(true);
+        method.invoke(store, claim);
+    }
+
+    private static void abort(NativeFrameStore store, long claim) throws Exception {
+        var method = NativeFrameStore.class.getDeclaredMethod("abortWriting", long.class);
+        method.setAccessible(true);
+        method.invoke(store, claim);
     }
 }
