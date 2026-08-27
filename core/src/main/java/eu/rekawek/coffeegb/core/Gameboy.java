@@ -1321,11 +1321,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 directRasterSpan = span > 0 && gpu.isPerformanceScanlineCursorActive();
                 steadyRasterSpan = span > 0 && !directRasterSpan
                         && gpu.isPerformanceSteadyCursorActive();
-            } else if (isPhysicalDmgPerformanceEpochTopology()) {
-                // Physical-DMG mode 2 has no quiet-output horizon: the OAM reader itself is
-                // the only PPU work in these one-to-three non-CPU dots.  Keep this explicit
-                // plan separate from the settled quiet path so CGB/compat sessions cannot
-                // accidentally enter the DMG arithmetic lane.
+            } else if (isPhysicalDmgPerformanceEpochTopology()
+                    || isSgbPerformanceTopology()) {
+                // Physical-DMG and SGB mode 2 have no quiet-output horizon: the OAM reader
+                // itself is the only PPU work in these one-to-three non-CPU dots. Keep this
+                // explicit plan separate from the settled quiet path so CGB/compat sessions
+                // cannot accidentally enter the DMG arithmetic lane.
                 int mode2SpanLimit = gpu.performancePhysicalDmgMode2PhaseSpanLimit(span);
                 if (mode2SpanLimit > 0) {
                     span = Math.min(span, mode2SpanLimit);
@@ -1408,7 +1409,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return !cpu.performanceEpochEntryEligible();
     }
 
-    /** Physical DMG/MGB only; its mode-2 phase lane remains intentionally DMG-only. */
+    /** Physical DMG/MGB only; SGB/SGB2 join just the separately guarded mode-2 phase lane. */
     private boolean isPhysicalDmgPerformanceEpochTopology() {
         return hardwareProfile.family() == HardwareProfile.Family.DMG
                 && speedMode.getSpeedMode() == 1;
