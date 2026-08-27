@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.cpu.Cpu;
 import eu.rekawek.coffeegb.core.gpu.Mode;
+import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
@@ -250,18 +251,12 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void unmeasuredNormalSpeedTopologiesStayOutsideFixedEpochLane() throws Exception {
+    public void unrelatedNormalSpeedTopologiesStayOutsideFixedEpochLane() throws Exception {
         byte[] nonColor = dmgRomWramLoop();
         byte[] nativeColor = dmgRomWramLoop();
         nativeColor[0x143] = (byte) 0x80;
         try (Gameboy cgb0 = new Gameboy.GameboyConfiguration(new Rom(nonColor))
                      .setHardwareProfile(HardwareProfileRegistry.CGB0)
-                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-                     .setExecutionMode(ExecutionMode.PERFORMANCE)
-                     .setSupportBatterySave(false)
-                     .build();
-             Gameboy sgb = new Gameboy.GameboyConfiguration(new Rom(nonColor))
-                     .setHardwareProfile(HardwareProfileRegistry.SGB)
                      .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                      .setExecutionMode(ExecutionMode.PERFORMANCE)
                      .setSupportBatterySave(false)
@@ -273,12 +268,40 @@ public final class GameboyPerformanceEpochTest {
                      .setSupportBatterySave(false)
                      .build()) {
             cgb0.runTicks(100_000);
-            sgb.runTicks(100_000);
             nativeSpeed1.runTicks(100_000);
             assertEquals(0L, cgb0.getPerformanceEpochTicks());
-            assertEquals(0L, sgb.getPerformanceEpochTicks());
             assertEquals(0L, nativeSpeed1.getPerformanceEpochTicks());
             assertFalse(nativeSpeed1.getSpeedMode().isDmgCompat());
+        }
+    }
+
+    @Test
+    public void sgbProfilesFencedEpochsMatchScalarAcrossAFrame() throws Exception {
+        byte[] image = dmgRomWramLoop();
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (Gameboy scalar = sgbSession(image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(image, profile, PlayerInputSource.RELEASED)) {
+                long scalarFrames = 0;
+                long candidateFrames = 0;
+                for (int chunk = 0; chunk < 20; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+
+                assertEquals(profile.id() + " frame callbacks", scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " custom-source oracle entered the epoch lane",
+                        0L, scalar.getPerformanceEpochTicks());
+                assertTrue(profile.id() + " did not enter its fenced epoch lane",
+                        candidate.getPerformanceEpochTicks() > 5_000);
+                assertEquals(profile.id() + " crossed an unsafe memory boundary inside an epoch",
+                        0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+                assertEquals(profile.id() + " WRAM loop", scalar.getAddressSpace().getByte(0xc000),
+                        candidate.getAddressSpace().getByte(0xc000));
+                assertDeepStateEquals(profile.id() + " fenced epoch",
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
         }
     }
 
@@ -416,20 +439,12 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void accuracyAndSgbProfilesStayOutsidePhysicalDmgEpoch() throws Exception {
+    public void accuracyStaysOutsidePhysicalDmgEpoch() throws Exception {
         byte[] image = dmgRomWramLoop();
         try (Gameboy accuracy = physicalDmgSession(
-                image, PlayerInputSource.RELEASED, ExecutionMode.ACCURACY);
-             Gameboy sgb = new Gameboy.GameboyConfiguration(new Rom(image))
-                     .setHardwareProfile(HardwareProfileRegistry.SGB)
-                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-                     .setExecutionMode(ExecutionMode.PERFORMANCE)
-                     .setSupportBatterySave(false)
-                     .build()) {
+                image, PlayerInputSource.RELEASED, ExecutionMode.ACCURACY)) {
             accuracy.runTicks(100_000);
-            sgb.runTicks(100_000);
             assertEquals(0L, accuracy.getPerformanceEpochTicks());
-            assertEquals(0L, sgb.getPerformanceEpochTicks());
         }
     }
 
@@ -518,6 +533,18 @@ public final class GameboyPerformanceEpochTest {
                 .setHardwareProfile(HardwareProfileRegistry.CGB)
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setExecutionMode(executionMode)
+                .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy sgbSession(
+            byte[] image, HardwareProfile profile, PlayerInputSource inputSource)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(profile)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
                 .setPlayerInputSource(inputSource)
                 .setSupportBatterySave(false)
                 .build();
