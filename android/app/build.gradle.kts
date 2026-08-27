@@ -197,6 +197,7 @@ dependencies {
   implementation("androidx.camera:camera-core:1.6.1")
   implementation("androidx.camera:camera-lifecycle:1.6.1")
   implementation("androidx.lifecycle:lifecycle-process:2.11.0")
+  implementation("androidx.profileinstaller:profileinstaller:1.4.1")
   testImplementation("junit:junit:4.13.2")
   androidTestImplementation("androidx.test:core:1.7.0")
   androidTestImplementation("androidx.test.ext:junit:1.3.0")
