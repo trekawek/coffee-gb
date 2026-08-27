@@ -5,9 +5,12 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.timer.Timer;
 import org.junit.Test;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -62,6 +65,33 @@ public class SoundPerformanceAudioTest {
         assertEquals(4_194_304L, event.clockSpec().ticksPerSecondNumerator());
         assertEquals(55L, event.clockSpec().ticksPerSecondDenominator());
         assertEquals(1_271 * 2, event.buffer().length);
+    }
+
+    @Test
+    public void sgbPerformanceSourcesEmit1254SamplesPerExactFrame() {
+        for (ClockSpec sourceClock : new ClockSpec[]{ClockSpec.SGB, ClockSpec.SGB2}) {
+            Sound sound = newSound(sourceClock);
+            EventBusImpl eventBus = new EventBusImpl(null, null, false);
+            List<Sound.SoundSampleEvent> events = new ArrayList<>();
+            eventBus.register(events::add, Sound.SoundSampleEvent.class);
+            sound.init(eventBus);
+
+            for (int tick = 0; tick < 70_224; tick++) {
+                sound.play(tick, -tick);
+            }
+
+            assertEquals(1, events.size());
+            Sound.SoundSampleEvent event = events.get(0);
+            assertEquals(1_254, event.clockSpec().controllerTicksPerFrame());
+            assertEquals(new ClockSpec(
+                            sourceClock.ticksPerSecondNumerator(),
+                            sourceClock.ticksPerSecondDenominator() * 56L,
+                            sourceClock.controllerFramesPerSecondNumerator(),
+                            sourceClock.controllerFramesPerSecondDenominator()),
+                    event.clockSpec());
+            assertEquals(1_254 * 2, event.buffer().length);
+            eventBus.close();
+        }
     }
 
     @Test
@@ -139,6 +169,23 @@ public class SoundPerformanceAudioTest {
         assertEquals(1, events.size());
     }
 
+    @Test
+    public void legacySgbDecimationStateIsAcceptedButDropsItsHostAudioPrefix() throws Exception {
+        Sound source = newSound(ClockSpec.SGB);
+        for (int tick = 0; tick < 56; tick++) {
+            source.play(tick, -tick);
+        }
+        var legacyState = withAudioDecimation(source.captureState(), 11);
+
+        Sound restored = newSound(ClockSpec.SGB);
+        restored.restoreState(legacyState);
+
+        assertEquals(0, component(restored.captureState(), "i"));
+        assertEquals(0, component(restored.captureState(), "performanceSamplePhase"));
+        assertEquals(11, component(legacyState, "audioDecimation"));
+        assertEquals(56, component(restored.captureState(), "audioDecimation"));
+    }
+
     private static Sound newSound(ClockSpec sourceClock) {
         return newSound(sourceClock, ExecutionMode.PERFORMANCE);
     }
@@ -147,5 +194,36 @@ public class SoundPerformanceAudioTest {
         SpeedMode speedMode = new SpeedMode(true);
         Timer timer = new Timer(new InterruptManager(true), speedMode);
         return new Sound(timer, speedMode, true, sourceClock, executionMode);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> ComponentState<T> withAudioDecimation(
+            ComponentState<T> state, int decimation) throws Exception {
+        Class<?> type = state.getClass();
+        RecordComponent[] components = type.getRecordComponents();
+        Class<?>[] parameterTypes = new Class<?>[components.length];
+        Object[] values = new Object[components.length];
+        for (int i = 0; i < components.length; i++) {
+            RecordComponent component = components[i];
+            parameterTypes[i] = component.getType();
+            component.getAccessor().setAccessible(true);
+            values[i] = component.getAccessor().invoke(state);
+            if (component.getName().equals("audioDecimation")) {
+                values[i] = decimation;
+            }
+        }
+        Constructor<?> constructor = type.getDeclaredConstructor(parameterTypes);
+        constructor.setAccessible(true);
+        return (ComponentState<T>) constructor.newInstance(values);
+    }
+
+    private static Object component(Object state, String name) throws Exception {
+        for (RecordComponent component : state.getClass().getRecordComponents()) {
+            if (component.getName().equals(name)) {
+                component.getAccessor().setAccessible(true);
+                return component.getAccessor().invoke(state);
+            }
+        }
+        throw new AssertionError("Missing state component: " + name);
     }
 }

@@ -71,18 +71,20 @@ public final class PerformanceSystemMutedAudioCalendarTest {
             sound.tickPerformanceQuietSpan(sourceClock.controllerTicksPerFrame());
 
             assertEquals(70_224L, sound.getPerformanceSystemMutedAudioCalendarSkippedTicks());
-            assertEquals(6_384L,
+            assertEquals(1_254L,
                     sound.getPerformanceSystemMutedAudioCalendarZeroSampleSlots());
             assertEquals(1L, sound.getPerformanceSystemMutedAudioCalendarZeroSampleEvents());
             assertEquals(0L,
                     sound.getPerformanceSystemMutedAudioCalendarDroppedChannelTicks());
             assertEquals(1, events.size());
-            assertEquals(6_384, events.get(0).clockSpec().controllerTicksPerFrame());
-            assertEquals(sourceClock.ticksPerSecondNumerator(),
-                    events.get(0).clockSpec().ticksPerSecondNumerator());
-            assertEquals(sourceClock.ticksPerSecondDenominator() * 11L,
-                    events.get(0).clockSpec().ticksPerSecondDenominator());
-            assertEquals(6_384 * 2, events.get(0).buffer().length);
+            assertEquals(1_254, events.get(0).clockSpec().controllerTicksPerFrame());
+            assertEquals(new ClockSpec(
+                            sourceClock.ticksPerSecondNumerator(),
+                            sourceClock.ticksPerSecondDenominator() * 56L,
+                            sourceClock.controllerFramesPerSecondNumerator(),
+                            sourceClock.controllerFramesPerSecondDenominator()),
+                    events.get(0).clockSpec());
+            assertEquals(1_254 * 2, events.get(0).buffer().length);
             assertAllZero(events.get(0).buffer());
             eventBus.close();
         }
