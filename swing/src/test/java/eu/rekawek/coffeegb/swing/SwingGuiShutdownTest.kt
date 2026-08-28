@@ -20,6 +20,13 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class SwingGuiShutdownTest {
+  @Test
+  fun `ordinary desktop smoke closes but packaged relaunch remains for connection proof`() {
+    assertTrue(desktopStartupSmokeShouldAutoClose(emptyMap()))
+    assertFalse(
+        desktopStartupSmokeShouldAutoClose(
+            mapOf(LOCAL_NETPLAY_RELAUNCH_MARKER_ENV to "request.marker")))
+  }
 
   @Test
   fun `successful settings close finishes suspended window size persistence`() {

@@ -85,6 +85,8 @@ public class NativePackagingScriptTest {
         assertTrue(verifyPs.contains("INSTALLDIR="));
         assertTrue(verifyPs.contains("\"--type\", \"msi\""));
         assertTrue(verifyPs.contains("\"--root\", $Extracted"));
+        assertTrue(verifyPs.contains("\"--root\", $InstalledRoot"));
+        assertTrue(verifyPs.contains("\"--smoke-home\", $InstalledSmokeHome"));
         assertTrue(verifyPs.contains("Assert-OnlyCoffeeGbShortcuts"));
         assertTrue(verifyPs.contains("Coffee GB Console.exe"));
         assertFalse(verifyPs.contains("Get-Command \"7z.exe\""));

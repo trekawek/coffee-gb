@@ -7,6 +7,10 @@ import org.apache.commons.compress.utils.SeekableInMemoryByteChannel;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -54,6 +58,18 @@ public final class NativePackageVerifier {
     private static final int MAX_PROCESS_OUTPUT = 4 * 1024 * 1024;
     private static final int MAX_JSON_DEPTH = 64;
     private static final Duration SMOKE_TIMEOUT = Duration.ofSeconds(45);
+    private static final String LOCAL_NETPLAY_RELAUNCH_MARKER_ENV =
+            "COFFEE_GB_LOCAL_NETPLAY_RELAUNCH_SMOKE_MARKER";
+    private static final String LOCAL_NETPLAY_RELAUNCH_EXPECTED_LAUNCHER_ENV =
+            "COFFEE_GB_LOCAL_NETPLAY_RELAUNCH_EXPECTED_LAUNCHER";
+    private static final String LOCAL_NETPLAY_RELAUNCH_PID_MARKER_ENV =
+            "COFFEE_GB_LOCAL_NETPLAY_RELAUNCH_SMOKE_PID_MARKER";
+    private static final String LOCAL_NETPLAY_RELAUNCH_ENDPOINT_ENV =
+            "COFFEE_GB_LOCAL_NETPLAY_RELAUNCH_SMOKE_ENDPOINT";
+    private static final String DESKTOP_SMOKE_MARKER_ENV =
+            "COFFEE_GB_DESKTOP_SMOKE_MARKER";
+    private static final Pattern LOCAL_NETPLAY_RELAUNCH_PID =
+            Pattern.compile("(?:^|[ ,])pid=([0-9]+)(?:[, ]|$)");
     private static final Set<String> ROM_SUFFIXES = Set.of(".gb", ".gbc", ".rom", ".sgb");
     private static final Set<String> SIGNING_SUFFIXES = Set.of(
             ".p12", ".pfx", ".pem", ".key", ".keystore", ".jks", ".mobileprovision");
@@ -319,6 +335,10 @@ public final class NativePackageVerifier {
                 launcherSmoke,
                 "native-target=" + result.target().id(),
                 "packaged launcher package smoke native target");
+        if (result.target() == NativeTarget.WINDOWS_X86_64) {
+            runPackagedLocalNetplayRelaunchSmoke(
+                    result, home, smokeCaches.localNetplayRelaunch());
+        }
         if (desktopSmokeEnabled(System.getenv())) {
             runDesktopSmoke(result, home, smokeCaches.desktopNormal(), false);
             runDesktopSmoke(result, home, smokeCaches.desktopDebug(), true);
@@ -330,6 +350,7 @@ public final class NativePackageVerifier {
         return new SmokeCacheLayout(
                 Files.createDirectory(home.resolve("direct-runtime-native-cache")),
                 Files.createDirectory(home.resolve("packaged-launcher-native-cache")),
+                Files.createDirectory(home.resolve("local-netplay-relaunch-native-cache")),
                 Files.createDirectory(home.resolve("desktop-normal-native-cache")),
                 Files.createDirectory(home.resolve("desktop-debug-native-cache")));
     }
@@ -337,8 +358,136 @@ public final class NativePackageVerifier {
     record SmokeCacheLayout(
             Path directRuntime,
             Path packagedLauncher,
+            Path localNetplayRelaunch,
             Path desktopNormal,
             Path desktopDebug) {
+    }
+
+    private static void runPackagedLocalNetplayRelaunchSmoke(
+            VerificationResult result, Path home, Path nativeCache)
+            throws IOException, InterruptedException {
+        Path relaunchHome = Files.createDirectory(home.resolve("local-netplay-relaunch-home"));
+        Path requestMarker = home.resolve("local-netplay-relaunch-request.marker");
+        Path pidMarker = home.resolve("local-netplay-relaunch-pid.marker");
+        Path desktopMarker = home.resolve("local-netplay-relaunch-desktop.marker");
+        Path expectedLauncher = result.launcher().toAbsolutePath().normalize();
+        String javaOptions = "-Djava.awt.headless=false -Duser.home=" + relaunchHome
+                + " -Dcoffee-gb.native.cache=" + nativeCache;
+        try (ServerSocket joinProbe = new ServerSocket()) {
+            joinProbe.bind(new InetSocketAddress("127.0.0.1", 0), 1);
+            joinProbe.setSoTimeout((int) SMOKE_TIMEOUT.toMillis());
+            String endpoint = "127.0.0.1:" + joinProbe.getLocalPort();
+            try {
+                run(
+                        List.of(expectedLauncher.toString(), "--package-smoke"),
+                        Map.of(
+                                "_JAVA_OPTIONS", javaOptions,
+                                LOCAL_NETPLAY_RELAUNCH_MARKER_ENV, requestMarker.toString(),
+                                LOCAL_NETPLAY_RELAUNCH_EXPECTED_LAUNCHER_ENV,
+                                        expectedLauncher.toString(),
+                                LOCAL_NETPLAY_RELAUNCH_PID_MARKER_ENV, pidMarker.toString(),
+                                LOCAL_NETPLAY_RELAUNCH_ENDPOINT_ENV, endpoint,
+                                DESKTOP_SMOKE_MARKER_ENV, desktopMarker.toString()));
+
+                awaitRegularFile(pidMarker, "packaged local netplay relaunch PID marker");
+                awaitRegularFile(requestMarker, "packaged local netplay relaunch request marker");
+                awaitRegularFile(desktopMarker, "packaged local netplay relaunch desktop marker");
+                try (Socket connection = acceptLocalNetplayConnection(joinProbe)) {
+                    if (!connection.getInetAddress().isLoopbackAddress()) {
+                        throw new IOException(
+                                "Packaged local netplay child connected from a non-loopback address");
+                    }
+                }
+
+                String evidence = Files.readString(requestMarker, StandardCharsets.UTF_8);
+                requireOutput(
+                        evidence,
+                        "Coffee GB local netplay relaunch OK:",
+                        "packaged local netplay relaunch");
+                requireOutput(evidence, "profile=dmg", "packaged local netplay relaunch profile");
+                requireOutput(
+                        evidence,
+                        "battery-saves=false",
+                        "packaged local netplay relaunch battery policy");
+                requireOutput(
+                        evidence,
+                        "join=" + endpoint,
+                        "packaged local netplay relaunch endpoint");
+                long observedPid = parseEvidencePid(evidence);
+                long startedPid = readPidMarker(pidMarker);
+                if (observedPid != startedPid) {
+                    throw new IOException("Packaged local netplay child PID evidence changed");
+                }
+                String desktopEvidence = Files.readString(desktopMarker, StandardCharsets.UTF_8);
+                requireOutput(
+                        desktopEvidence,
+                        "Coffee GB desktop ready OK:",
+                        "packaged local netplay desktop startup");
+            } finally {
+                terminateTrackedProcess(pidMarker);
+            }
+        }
+    }
+
+    private static Socket acceptLocalNetplayConnection(ServerSocket server) throws IOException {
+        try {
+            return server.accept();
+        } catch (SocketTimeoutException failure) {
+            throw new IOException(
+                    "Packaged local netplay child did not attempt its automatic connection",
+                    failure);
+        }
+    }
+
+    private static void awaitRegularFile(Path marker, String description)
+            throws IOException, InterruptedException {
+        long deadline = System.nanoTime() + SMOKE_TIMEOUT.toNanos();
+        while (!Files.isRegularFile(marker, LinkOption.NOFOLLOW_LINKS)
+                && System.nanoTime() < deadline) {
+            Thread.sleep(25);
+        }
+        requireRegularFile(marker, description);
+    }
+
+    private static long parseEvidencePid(String evidence) throws IOException {
+        var matcher = LOCAL_NETPLAY_RELAUNCH_PID.matcher(evidence);
+        if (!matcher.find()) {
+            throw new IOException("Packaged local netplay relaunch evidence has no child PID");
+        }
+        try {
+            return Long.parseLong(matcher.group(1));
+        } catch (NumberFormatException failure) {
+            throw new IOException(
+                    "Packaged local netplay relaunch evidence has an invalid PID",
+                    failure);
+        }
+    }
+
+    private static long readPidMarker(Path marker) throws IOException {
+        String text = Files.readString(marker, StandardCharsets.UTF_8).strip();
+        try {
+            long pid = Long.parseLong(text);
+            if (pid <= 0) {
+                throw new NumberFormatException("PID must be positive");
+            }
+            return pid;
+        } catch (NumberFormatException failure) {
+            throw new IOException("Packaged local netplay PID marker is invalid", failure);
+        }
+    }
+
+    private static void terminateTrackedProcess(Path pidMarker)
+            throws IOException {
+        if (!Files.isRegularFile(pidMarker, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        ProcessHandle process = ProcessHandle.of(readPidMarker(pidMarker)).orElse(null);
+        if (process == null || !process.isAlive()) {
+            return;
+        }
+        if (!terminateProcessTree(process, Duration.ofSeconds(8))) {
+            throw new IOException("Packaged local netplay child could not be terminated");
+        }
     }
 
     static boolean desktopSmokeEnabled(Map<String, String> environment) {
@@ -1480,7 +1629,7 @@ public final class NativePackageVerifier {
         }
     }
 
-    private static String run(List<String> command, Map<String, String> environment)
+    static String run(List<String> command, Map<String, String> environment)
             throws IOException, InterruptedException {
         ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
         builder.environment().putAll(environment);
@@ -1506,23 +1655,143 @@ public final class NativePackageVerifier {
         }, "coffee-gb-package-smoke-output");
         reader.setDaemon(true);
         reader.start();
-        if (!process.waitFor(SMOKE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-            process.destroyForcibly();
+        Throwable pendingFailure = null;
+        boolean restoreInterrupt = false;
+        try {
+            if (!process.waitFor(SMOKE_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                throw new IOException(command.get(0) + " exceeded "
+                        + SMOKE_TIMEOUT.toSeconds() + " second smoke deadline");
+            }
             reader.join(5_000);
-            throw new IOException(command.get(0) + " exceeded "
-                    + SMOKE_TIMEOUT.toSeconds() + " second smoke deadline");
-        }
-        reader.join(5_000);
-        IOException failure = readFailure.get();
-        if (failure != null) {
+            if (reader.isAlive()) {
+                throw new IOException(command.get(0) + " output reader did not stop");
+            }
+            IOException failure = readFailure.get();
+            if (failure != null) {
+                throw failure;
+            }
+            String captured = output.toString(StandardCharsets.UTF_8);
+            if (process.exitValue() != 0) {
+                throw new IOException(command.get(0) + " exited " + process.exitValue()
+                        + ": " + captured.strip());
+            }
+            return captured;
+        } catch (InterruptedException failure) {
+            pendingFailure = failure;
+            restoreInterrupt = true;
             throw failure;
+        } catch (IOException | RuntimeException | Error failure) {
+            pendingFailure = failure;
+            throw failure;
+        } finally {
+            IOException cleanupFailure = null;
+            if ((process.isAlive() || pendingFailure != null)
+                    && !terminateProcessTree(process.toHandle(), Duration.ofSeconds(8))) {
+                cleanupFailure = new IOException(
+                        "Unable to terminate package smoke process " + process.pid());
+            }
+            if (reader.isAlive()
+                    && !joinThreadUninterruptibly(reader, Duration.ofSeconds(5))) {
+                IOException readerFailure = new IOException(
+                        "Unable to stop package smoke output reader for " + command.get(0));
+                if (cleanupFailure == null) {
+                    cleanupFailure = readerFailure;
+                } else {
+                    cleanupFailure.addSuppressed(readerFailure);
+                }
+            }
+            if (restoreInterrupt) {
+                Thread.currentThread().interrupt();
+            }
+            if (cleanupFailure != null) {
+                if (pendingFailure != null) {
+                    pendingFailure.addSuppressed(cleanupFailure);
+                } else {
+                    throw cleanupFailure;
+                }
+            }
         }
-        String captured = output.toString(StandardCharsets.UTF_8);
-        if (process.exitValue() != 0) {
-            throw new IOException(command.get(0) + " exited " + process.exitValue()
-                    + ": " + captured.strip());
+    }
+
+    /** Bounded process-tree cleanup that completes even if the caller was interrupted. */
+    private static boolean terminateProcessTree(ProcessHandle root, Duration timeout) {
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime() + timeout.toNanos();
+        List<ProcessHandle> descendants = new ArrayList<>(root.descendants().toList());
+        try {
+            for (int index = descendants.size() - 1; index >= 0; index--) {
+                descendants.get(index).destroy();
+            }
+            root.destroy();
+            long gracefulDeadline = Math.min(
+                    deadline,
+                    System.nanoTime() + TimeUnit.SECONDS.toNanos(2));
+            while (processTreeAlive(root, descendants)
+                    && System.nanoTime() < gracefulDeadline) {
+                try {
+                    Thread.sleep(25);
+                } catch (InterruptedException failure) {
+                    interrupted = true;
+                }
+            }
+            root.descendants().forEach(candidate -> {
+                if (!descendants.contains(candidate)) {
+                    descendants.add(candidate);
+                }
+            });
+            if (processTreeAlive(root, descendants)) {
+                for (int index = descendants.size() - 1; index >= 0; index--) {
+                    if (descendants.get(index).isAlive()) {
+                        descendants.get(index).destroyForcibly();
+                    }
+                }
+                if (root.isAlive()) {
+                    root.destroyForcibly();
+                }
+            }
+            while (processTreeAlive(root, descendants) && System.nanoTime() < deadline) {
+                try {
+                    Thread.sleep(25);
+                } catch (InterruptedException failure) {
+                    interrupted = true;
+                }
+            }
+            return !processTreeAlive(root, descendants);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
-        return captured;
+    }
+
+    private static boolean processTreeAlive(
+            ProcessHandle root, List<ProcessHandle> descendants) {
+        return root.isAlive() || descendants.stream().anyMatch(ProcessHandle::isAlive);
+    }
+
+    private static boolean joinThreadUninterruptibly(Thread thread, Duration timeout) {
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime() + timeout.toNanos();
+        try {
+            while (thread.isAlive() && System.nanoTime() < deadline) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    break;
+                }
+                try {
+                    thread.join(Math.max(1, Math.min(
+                            TimeUnit.NANOSECONDS.toMillis(remaining),
+                            100)));
+                } catch (InterruptedException failure) {
+                    interrupted = true;
+                }
+            }
+            return !thread.isAlive();
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     private static void requireOutput(String output, String expected, String description)

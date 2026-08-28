@@ -10,11 +10,18 @@ import org.junit.Test
 class LocalNetplayInstanceLauncherTest {
 
   @Test
-  fun `child processes inherit the host error stream`() {
+  fun `the running desktop test JVM has a reusable launcher`() {
+    assertTrue(localNetplayLauncherPrefix(currentProcessCommand()).orEmpty().isNotEmpty())
+  }
+
+  @Test
+  fun `child processes do not require host console handles or retain unread pipes`() {
+    val builder = localNetplayProcessBuilder(listOf("coffee-gb"))
     assertEquals(
-        ProcessBuilder.Redirect.INHERIT,
-        localNetplayProcessBuilder(listOf("coffee-gb")).redirectError(),
+        ProcessBuilder.Redirect.DISCARD,
+        builder.redirectOutput(),
     )
+    assertEquals(ProcessBuilder.Redirect.DISCARD, builder.redirectError())
   }
 
   @Test
@@ -58,6 +65,53 @@ class LocalNetplayInstanceLauncherTest {
         ),
     )
     assertNull(localNetplayLauncherPrefix(listOf("/usr/bin/java", "old.gb")))
+    assertNull(localNetplayLauncherPrefix(listOf("C:\\Java\\bin\\javaw.exe", "old.gb")))
+  }
+
+  @Test
+  fun `Windows JVM without process arguments is reconstructed from its classpath`() {
+    assertEquals(
+        listOf(
+            "C:\\Java\\bin\\java.exe",
+            "-cp",
+            "swing\\target\\classes;controller\\target\\classes",
+            "eu.rekawek.coffeegb.swing.MainKt",
+        ),
+        currentProcessCommand(
+            packagedLauncher = null,
+            executable = "C:\\Java\\bin\\java.exe",
+            arguments = emptyList(),
+            classPath = "swing\\target\\classes;controller\\target\\classes",
+        ),
+    )
+  }
+
+  @Test
+  fun `installed jpackage launcher takes precedence over its embedded JVM details`() {
+    assertEquals(
+        listOf("C:\\Program Files\\Coffee GB\\Coffee GB.exe"),
+        currentProcessCommand(
+            packagedLauncher = "C:\\Program Files\\Coffee GB\\Coffee GB.exe",
+            executable = "C:\\Program Files\\Coffee GB\\runtime\\bin\\javaw.exe",
+            arguments = emptyList(),
+            classPath = "app\\coffee-gb.jar",
+        ),
+    )
+  }
+
+  @Test
+  fun `custom Java host without desktop main on its system classpath is unavailable`() {
+    for (arguments in listOf(emptyList(), listOf("-jar", "custom-host.jar"))) {
+      assertTrue(
+          currentProcessCommand(
+                  packagedLauncher = null,
+                  executable = "C:\\Java\\bin\\java.exe",
+                  arguments = arguments,
+                  classPath = "maven-embedder.jar",
+                  desktopMainOnSystemClassPath = false,
+              )
+              .isEmpty())
+    }
   }
 
   @Test

@@ -3,6 +3,9 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import java.nio.file.Path
 
+private const val DESKTOP_MAIN_CLASS = "eu.rekawek.coffeegb.swing.MainKt"
+private const val JPACKAGE_APP_PATH_PROPERTY = "jpackage.app-path"
+
 /** Launches sibling desktop processes that use the current executable or Java launcher. */
 internal fun interface LocalNetplayInstanceLauncher {
   fun launch(
@@ -46,7 +49,7 @@ internal data class LocalNetplayInstanceLaunchResult(
  */
 internal class CurrentProcessLocalNetplayInstanceLauncher(
     private val currentCommand: List<String> = currentProcessCommand(),
-    private val startProcess: (List<String>) -> Unit = ::startProcessWithInheritedError,
+    private val startProcess: (List<String>) -> Unit = ::startLocalNetplayProcess,
 ) : LocalNetplayInstanceLauncher {
 
   override fun launch(
@@ -81,16 +84,18 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
 }
 
 /**
- * A child desktop process has no terminal of its own when launched from the netplay window.
- * Keep its diagnostic stream attached to the host process so a rejected checkpoint can be
- * diagnosed without a separate client console.
+ * A packaged GUI process may have no valid console handles, especially when started from the
+ * Windows Start menu. Route child output to the platform null device so relaunch never depends on
+ * inheritable standard streams and an unobserved pipe cannot fill up and stall emulation.
  */
-private fun startProcessWithInheritedError(command: List<String>) {
+private fun startLocalNetplayProcess(command: List<String>) {
   localNetplayProcessBuilder(command).start()
 }
 
 internal fun localNetplayProcessBuilder(command: List<String>): ProcessBuilder =
-    ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.INHERIT)
+    ProcessBuilder(command)
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
 
 /** Builds a fresh Coffee GB command without replaying this process's app arguments. */
 internal fun localNetplayLauncherPrefix(command: List<String>): List<String>? {
@@ -101,19 +106,66 @@ internal fun localNetplayLauncherPrefix(command: List<String>): List<String>? {
   val module = command.indexOfFirst { it == "-m" || it == "--module" }
   if (module >= 0 && module + 1 < command.size) return command.take(module + 2)
 
-  val mainClass = command.indexOf("eu.rekawek.coffeegb.swing.MainKt")
+  val mainClass = command.indexOf(DESKTOP_MAIN_CLASS)
   if (mainClass >= 0) return command.take(mainClass + 1)
 
   val executable = command.first()
-  val executableName = executable.substringAfterLast('/').substringAfterLast('\\').substringBeforeLast('.')
-  if (executableName.equals("java", ignoreCase = true)) {
+  if (isJavaLauncher(executable)) {
     return null
   }
   return listOf(executable)
 }
 
-private fun currentProcessCommand(): List<String> {
+internal fun currentProcessCommand(): List<String> {
   val info = ProcessHandle.current().info()
-  val executable = info.command().orElse(null) ?: return emptyList()
-  return listOf(executable) + info.arguments().orElse(emptyArray()).toList()
+  return currentProcessCommand(
+      packagedLauncher = System.getProperty(JPACKAGE_APP_PATH_PROPERTY),
+      executable = info.command().orElse(null),
+      arguments = info.arguments().orElse(emptyArray()).toList(),
+      classPath = System.getProperty("java.class.path"),
+      desktopMainOnSystemClassPath = desktopMainOnSystemClassPath(),
+  )
+}
+
+/**
+ * Reconstructs a fresh desktop invocation without relying on application arguments being exposed
+ * by [ProcessHandle]. Windows JVMs may report `java.exe`/`javaw.exe` while omitting every argument,
+ * whereas jpackage publishes the exact native launcher through `jpackage.app-path`.
+ */
+internal fun currentProcessCommand(
+    packagedLauncher: String?,
+    executable: String?,
+    arguments: List<String>,
+    classPath: String?,
+    desktopMainOnSystemClassPath: Boolean = true,
+): List<String> {
+  packagedLauncher?.takeIf(String::isNotBlank)?.let { return listOf(it) }
+  val currentExecutable = executable?.takeIf(String::isNotBlank) ?: return emptyList()
+  if (!isJavaLauncher(currentExecutable)) return listOf(currentExecutable)
+
+  if (!desktopMainOnSystemClassPath) return emptyList()
+  localNetplayLauncherPrefix(listOf(currentExecutable) + arguments)?.let { return it }
+  val currentClassPath = classPath?.takeIf(String::isNotBlank) ?: return emptyList()
+  return listOf(currentExecutable, "-cp", currentClassPath, DESKTOP_MAIN_CLASS)
+}
+
+/**
+ * A custom Java host (for example Maven's plugin realm) can load Coffee GB without putting it on
+ * the system class path inherited by a fresh JVM. Only reconstruct a class-path command when the
+ * same system loader that a child JVM will use can resolve the desktop entry point.
+ */
+private fun desktopMainOnSystemClassPath(): Boolean =
+    runCatching {
+          Class.forName(
+              DESKTOP_MAIN_CLASS,
+              false,
+              ClassLoader.getSystemClassLoader(),
+          )
+        }
+        .isSuccess
+
+private fun isJavaLauncher(executable: String): Boolean {
+  val name =
+      executable.substringAfterLast('/').substringAfterLast('\\').substringBeforeLast('.')
+  return name.equals("java", ignoreCase = true) || name.equals("javaw", ignoreCase = true)
 }

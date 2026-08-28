@@ -37,6 +37,7 @@ private sealed class CliCommand {
 }
 
 fun main(args: Array<String>) {
+  validatePackagedLocalNetplayRelaunchChildIfRequested(args)
   val exitCode =
       runCli(
           args,
@@ -44,8 +45,9 @@ fun main(args: Array<String>) {
           System.err,
           applicationVersion(),
           packageSmoke = {
+            launchPackagedLocalNetplayRelaunchChildIfRequested()
             // Exercise the package-native handoff before constructing the synthetic archive and
-            // machine. The smoke is intentionally headless and never reads an external/user ROM.
+            // machine. This in-process leg is headless and never reads an external/user ROM.
             val selection = NativeRuntimeBootstrap.bootstrapFromSystem()
             val nativeTarget =
                 NativeRuntimeBootstrap.requirePackageSmokeSelection(
