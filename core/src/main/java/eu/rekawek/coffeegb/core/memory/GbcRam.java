@@ -41,7 +41,7 @@ public class GbcRam implements AddressSpace, StatefulComponent<GbcRam> {
     public void setByte(int address, int value) {
         if (address == SVBK) {
             if (!isDmgCompat()) {
-                this.svbk = value;
+                this.svbk = value & 0x07;
             }
         } else {
             ram[translate(address)] = value;
@@ -94,7 +94,9 @@ public class GbcRam implements AddressSpace, StatefulComponent<GbcRam> {
             throw new IllegalArgumentException("ComponentState ram length doesn't match");
         }
         System.arraycopy(mem.ram, 0, this.ram, 0, this.ram.length);
-        this.svbk = mem.svbk;
+        // Released portable states may contain the full byte previously retained from FF70.
+        // Only the low three bits are a hardware latch, so canonicalize while restoring them.
+        this.svbk = mem.svbk & 0x07;
     }
 
     public record GbcRamState(int[] ram, int svbk) implements ComponentState<GbcRam> {
