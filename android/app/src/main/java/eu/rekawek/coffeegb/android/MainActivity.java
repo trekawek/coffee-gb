@@ -1724,15 +1724,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    private static Intent openRomIntent() {
-        return new Intent(Intent.ACTION_OPEN_DOCUMENT)
-                .addCategory(Intent.CATEGORY_OPENABLE)
-                .setType("application/octet-stream")
-                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/octet-stream", "application/x-gameboy-rom",
-                        "application/zip", "application/x-zip-compressed"})
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    private Intent openRomIntent() {
+        return RomPickerIntents.create(this);
     }
 
     private static Intent importIntent() {

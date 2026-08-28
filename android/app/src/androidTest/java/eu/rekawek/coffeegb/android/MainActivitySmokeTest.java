@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.app.Instrumentation;
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -37,6 +39,36 @@ import static org.junit.Assert.assertTrue;
 /** Exercises the bound runtime through Activity recreation and a visibility transition. */
 @RunWith(AndroidJUnit4.class)
 public class MainActivitySmokeTest {
+
+    @Test
+    public void romPickerUsesTrustedExtensionFilterWhenTheDeviceProvidesOne() {
+        Intent intent = RomPickerIntents.create(
+                InstrumentationRegistry.getInstrumentation().getTargetContext());
+        if (RomPickerIntents.MIUI_FILTERED_PICKER.equals(intent.getComponent())) {
+            assertEquals(Intent.ACTION_PICK, intent.getAction());
+            assertEquals("all/*", intent.getType());
+            assertArrayEquals(RomPickerIntents.SUPPORTED_EXTENSIONS,
+                    intent.getStringArrayExtra(RomPickerIntents.MIUI_EXTENSION_FILTER));
+        } else {
+            assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.getAction());
+            assertEquals("application/octet-stream", intent.getType());
+            assertNotNull(intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES));
+        }
+    }
+
+    @Test
+    public void transientPickerRomBecomesAReadablePrivateImport() throws Exception {
+        AndroidRomImportStore store = new AndroidRomImportStore(
+                InstrumentationRegistry.getInstrumentation().getTargetContext());
+        Uri imported = store.importDocument(FixtureRomProvider.URI);
+        try {
+            assertEquals("file", imported.getScheme());
+            assertTrue(store.ownsReadable(imported));
+            assertTrue(RomDocumentFilter.accepts(imported.getLastPathSegment()));
+        } finally {
+            store.deleteIfOwned(imported);
+        }
+    }
 
     @Test
     public void freshLaunchShowsLibraryAndRestoresItAfterRecreation() throws Exception {
