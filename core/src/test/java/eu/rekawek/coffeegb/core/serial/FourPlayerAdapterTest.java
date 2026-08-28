@@ -92,16 +92,19 @@ public class FourPlayerAdapterTest {
     }
 
     @Test
-    public void jantakuBoyProfileSeedsAndBridgesItsTwoFfControlPacket() {
+    public void jantakuBoyProfileRelaysTheRequestingSeatsLengthPrefixedBulk() {
         Rig rig = new Rig(true);
 
         enterTransmission(rig, 1);
 
-        assertArrayEquals(new int[]{0xfd, 0xfd, 0xfd, 0xfd},
-                rig.transfer(0, 0, 0, 0));
-        for (int i = 0; i < 3; i++) {
-            assertArrayEquals(new int[]{0xff, 0xff, 0xff, 0xff},
-                    rig.transfer(i < 2 ? 0xff : 0, 0, 0, 0));
+        int[][] request = {
+                {0, 0, 4, 0},
+                {0, 0, 0xff, 0},
+                {0, 0, 0xff, 0},
+                {0, 0, 0, 0}
+        };
+        for (int[] replies : request) {
+            assertArrayEquals(new int[]{0, 0, 0, 0}, rig.transfer(replies));
         }
 
         assertArrayEquals(new int[]{0xfd, 0xfd, 0xfd, 0xfd},
@@ -110,6 +113,16 @@ public class FourPlayerAdapterTest {
             assertArrayEquals(new int[]{0xff, 0xff, 0xff, 0xff},
                     rig.transfer(0, 0, 0, 0));
         }
+        assertArrayEquals(new int[]{4, 4, 4, 4},
+                rig.transfer(0, 0, 0x11, 0));
+        assertArrayEquals(new int[]{0x11, 0x11, 0x11, 0x11},
+                rig.transfer(0, 0, 0x12, 0));
+        assertArrayEquals(new int[]{0x12, 0x12, 0x12, 0x12},
+                rig.transfer(0, 0, 0x13, 0));
+        assertArrayEquals(new int[]{0x13, 0x13, 0x13, 0x13},
+                rig.transfer(0, 0, 0, 0));
+        assertArrayEquals(new int[]{0, 0, 0, 0},
+                rig.transfer(0, 0, 0, 0));
     }
 
     @Test
