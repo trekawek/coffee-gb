@@ -2714,7 +2714,7 @@ class LinkedControllerTest {
       }
       assertEquals(source.captureDetachedState(), targetController.captureDetachedState())
       assertEquals(
-          "9f77aff3c308fcd734755d99cb3efd98b7c25039c354aa313b4e8c8f1b49190b",
+          "c3cf84c93d70b005c51a793165e2ad9995d1af76cde53b7a9e0a14728ad48989",
           sha256Hex(StateCodec.encode(StateCodec.captureVersion2(targetController))),
           "four-player v9 continuation hash",
       )

@@ -29,6 +29,16 @@ public final class FourPlayerAdapter {
 
     private static final int[] JANTAKU_BOY_CONTROL_PACKET = {0xfd, 0xff, 0xff, 0xff};
 
+    private static final int JANTAKU_BULK_IDLE = 0;
+
+    private static final int JANTAKU_BULK_ANNOUNCEMENT = 1;
+
+    private static final int JANTAKU_BULK_LENGTH = 2;
+
+    private static final int JANTAKU_BULK_RELAY = 3;
+
+    private static final int JANTAKU_BULK_REANCHOR = 4;
+
     private final int clockTicksPerBit;
 
     private final int pingByteGapTicks;
@@ -57,6 +67,8 @@ public final class FourPlayerAdapter {
 
     private final int[] consecutiveFf = new int[PLAYER_COUNT];
 
+    private final int[] jantakuPreviousReply = new int[PLAYER_COUNT];
+
     private final int[][] replies = new int[PLAYER_COUNT][16];
 
     private int[] transmissionBuffer = new int[16];
@@ -76,6 +88,20 @@ public final class FourPlayerAdapter {
     private boolean transmissionRequested;
 
     private boolean restartPingRequested;
+
+    private boolean jantakuWakePending;
+
+    /** Length command from the [command, FF, FF, non-FF] request block. */
+    private int jantakuWakeCommand;
+
+    /** Physical seat whose contiguous reply stream supplies the announced bulk. */
+    private int jantakuWakePlayer = -1;
+
+    private int jantakuBulkStage;
+
+    private int jantakuBulkRemaining;
+
+    private int jantakuRelayByte;
 
     public FourPlayerAdapter() {
         this(ClockSpec.LEGACY);
@@ -109,7 +135,8 @@ public final class FourPlayerAdapter {
             case TRANSMISSION_INDICATOR -> 0xcc;
             case PING_INDICATOR -> 0xff;
             case JANTAKU_BOY_CONTROL -> JANTAKU_BOY_CONTROL_PACKET[packetByte];
-            case TRANSMISSION -> transmissionBuffer[packetByte];
+            case TRANSMISSION -> jantakuBulkStage == JANTAKU_BULK_RELAY
+                    ? jantakuRelayByte : transmissionBuffer[packetByte];
         };
     }
 
@@ -168,9 +195,6 @@ public final class FourPlayerAdapter {
             case PING -> finishPingPacket();
             case TRANSMISSION_INDICATOR -> {
                 phase = Phase.TRANSMISSION;
-                if (allPlayersUseJantakuBoyControlPacket() && size == 1) {
-                    transmissionBuffer = Arrays.copyOf(JANTAKU_BOY_CONTROL_PACKET, 16);
-                }
             }
             case TRANSMISSION -> finishTransmissionPacket();
             case PING_INDICATOR -> {
@@ -211,11 +235,21 @@ public final class FourPlayerAdapter {
     }
 
     private void finishTransmissionPacket() {
-        if (restartPingRequested && allPlayersUseJantakuBoyControlPacket() && size == 1) {
-            // This title requires a non-standard control response at this restart boundary.
-            // Preserve the restart packet's framing/timing but return only the detected title's
-            // FD/FF/FF/FF response instead of disconnecting the four linked consoles.
-            phase = Phase.JANTAKU_BOY_CONTROL;
+        boolean jantakuBoy = allPlayersUseJantakuBoyControlPacket() && size == 1;
+        if (jantakuBoy && jantakuBulkStage == JANTAKU_BULK_REANCHOR) {
+            // A length-prefixed bulk shifts the title's four-byte command framing by length mod 4.
+            // End the current adapter packet early and make its next byte slot zero again.
+            transmissionBuffer = new int[16];
+            jantakuBulkStage = JANTAKU_BULK_IDLE;
+            jantakuBulkRemaining = 0;
+            jantakuWakePending = false;
+            jantakuWakePlayer = -1;
+            Arrays.fill(consecutiveFf, 0);
+            Arrays.fill(jantakuPreviousReply, 0);
+            return;
+        }
+        if (restartPingRequested) {
+            phase = Phase.PING_INDICATOR;
             restartPingRequested = false;
             return;
         }
@@ -225,11 +259,21 @@ public final class FourPlayerAdapter {
             // transferred in slots 1..SIZE. The other players' outgoing slots are ignored.
             System.arraycopy(replies[player], 1, nextBuffer, player * size, size);
         }
-        transmissionBuffer = nextBuffer;
-        if (restartPingRequested) {
-            phase = Phase.PING_INDICATOR;
-            restartPingRequested = false;
+        if (jantakuBoy && jantakuBulkStage == JANTAKU_BULK_ANNOUNCEMENT) {
+            // The requester may be any physical seat. The command must nevertheless be the first
+            // byte after the broadcast wake window, where every console reads the bulk length.
+            nextBuffer[0] = jantakuWakeCommand == 0 ? 4 : jantakuWakeCommand;
+            jantakuBulkStage = JANTAKU_BULK_LENGTH;
+        } else if (jantakuBoy && jantakuWakePending
+                && jantakuBulkStage == JANTAKU_BULK_IDLE) {
+            System.arraycopy(JANTAKU_BOY_CONTROL_PACKET, 0, nextBuffer, 0,
+                    JANTAKU_BOY_CONTROL_PACKET.length);
+            jantakuWakePending = false;
+            jantakuBulkStage = JANTAKU_BULK_ANNOUNCEMENT;
+            Arrays.fill(consecutiveFf, 0);
+            Arrays.fill(jantakuPreviousReply, 0);
         }
+        transmissionBuffer = nextBuffer;
     }
 
     private void finishJantakuBoyControlPacket() {
@@ -248,6 +292,34 @@ public final class FourPlayerAdapter {
     }
 
     private void observeReplyByte() {
+        boolean jantakuBoy = allPlayersUseJantakuBoyControlPacket() && size == 1;
+        if (phase == Phase.TRANSMISSION && jantakuBoy) {
+            if (jantakuBulkStage == JANTAKU_BULK_LENGTH && packetByte == 0) {
+                int length = jantakuWakeCommand == 0 ? 4 : jantakuWakeCommand;
+                if (jantakuWakePlayer >= 0 && transferArmed[jantakuWakePlayer]) {
+                    jantakuRelayByte = replies[jantakuWakePlayer][packetByte];
+                }
+                if (length <= 1) {
+                    jantakuBulkStage = JANTAKU_BULK_REANCHOR;
+                } else {
+                    jantakuBulkRemaining = length - 1;
+                    jantakuBulkStage = JANTAKU_BULK_RELAY;
+                }
+                return;
+            }
+            if (jantakuBulkStage == JANTAKU_BULK_RELAY) {
+                // During a bulk, every byte from the requesting seat is broadcast contiguously.
+                // The normal DMG-07 per-seat slot collector would interleave three unrelated
+                // reply streams and corrupt both the payload and the games' command framing.
+                if (jantakuWakePlayer >= 0 && transferArmed[jantakuWakePlayer]) {
+                    jantakuRelayByte = replies[jantakuWakePlayer][packetByte];
+                }
+                if (--jantakuBulkRemaining == 0) {
+                    jantakuBulkStage = JANTAKU_BULK_REANCHOR;
+                }
+                return;
+            }
+        }
         for (int player = 0; player < PLAYER_COUNT; player++) {
             int reply = replies[player][packetByte];
             if (phase == Phase.PING) {
@@ -258,13 +330,42 @@ public final class FourPlayerAdapter {
                     transmissionRequested = true;
                 }
             } else if (phase == Phase.TRANSMISSION) {
-                consecutiveFf[player] = reply == 0xff ? consecutiveFf[player] + 1 : 0;
-                int restartThreshold = allPlayersUseJantakuBoyControlPacket() ? 2 : 3;
-                if (consecutiveFf[player] >= restartThreshold) {
-                    restartPingRequested = true;
+                if (jantakuBoy) {
+                    observeJantakuBoyReply(player, reply, transferArmed[player]);
+                } else {
+                    consecutiveFf[player] = reply == 0xff
+                            ? consecutiveFf[player] + 1 : 0;
+                    if (consecutiveFf[player] >= 3) {
+                        restartPingRequested = true;
+                    }
                 }
             }
         }
+    }
+
+    private void observeJantakuBoyReply(int player, int reply, boolean armed) {
+        if (!armed) {
+            return;
+        }
+        if (jantakuBulkStage != JANTAKU_BULK_IDLE) {
+            return;
+        }
+        if (reply == 0xff) {
+            if (consecutiveFf[player] < 0xff) {
+                consecutiveFf[player]++;
+            }
+            if (player == 0 && consecutiveFf[player] >= 3) {
+                restartPingRequested = true;
+            }
+            return;
+        }
+        if (consecutiveFf[player] == 2) {
+            jantakuWakePending = true;
+            jantakuWakeCommand = jantakuPreviousReply[player];
+            jantakuWakePlayer = player;
+        }
+        consecutiveFf[player] = 0;
+        jantakuPreviousReply[player] = reply;
     }
 
     private AdapterState saveState() {
@@ -273,9 +374,11 @@ public final class FourPlayerAdapter {
             repliesCopy[i] = replies[i].clone();
         }
         return new AdapterState(sb.clone(), transferArmed.clone(), pendingBits.clone(),
-                connected.clone(), consecutiveFf.clone(), repliesCopy,
+                connected.clone(), consecutiveFf.clone(), jantakuPreviousReply.clone(), repliesCopy,
                 transmissionBuffer.clone(), packetByte, bit, ticksUntilBit, rate, size, phase,
-                transmissionRequested, restartPingRequested);
+                transmissionRequested, restartPingRequested, jantakuWakePending,
+                jantakuWakeCommand, jantakuWakePlayer, jantakuBulkStage,
+                jantakuBulkRemaining, jantakuRelayByte);
     }
 
     private void restoreState(AdapterState state) {
@@ -284,6 +387,7 @@ public final class FourPlayerAdapter {
         System.arraycopy(state.pendingBits, 0, pendingBits, 0, PLAYER_COUNT);
         System.arraycopy(state.connected, 0, connected, 0, PLAYER_COUNT);
         System.arraycopy(state.consecutiveFf, 0, consecutiveFf, 0, PLAYER_COUNT);
+        System.arraycopy(state.jantakuPreviousReply, 0, jantakuPreviousReply, 0, PLAYER_COUNT);
         for (int i = 0; i < PLAYER_COUNT; i++) {
             System.arraycopy(state.replies[i], 0, replies[i], 0, replies[i].length);
         }
@@ -296,6 +400,12 @@ public final class FourPlayerAdapter {
         phase = state.phase;
         transmissionRequested = state.transmissionRequested;
         restartPingRequested = state.restartPingRequested;
+        jantakuWakePending = state.jantakuWakePending;
+        jantakuWakeCommand = state.jantakuWakeCommand;
+        jantakuWakePlayer = state.jantakuWakePlayer;
+        jantakuBulkStage = state.jantakuBulkStage;
+        jantakuBulkRemaining = state.jantakuBulkRemaining;
+        jantakuRelayByte = state.jantakuRelayByte;
     }
 
     private enum Phase {
@@ -307,10 +417,14 @@ public final class FourPlayerAdapter {
     }
 
     private record AdapterState(int[] sb, boolean[] transferArmed, int[] pendingBits,
-                                  boolean[] connected, int[] consecutiveFf, int[][] replies,
+                                  boolean[] connected, int[] consecutiveFf,
+                                  int[] jantakuPreviousReply, int[][] replies,
                                   int[] transmissionBuffer, int packetByte, int bit,
                                   int ticksUntilBit, int rate, int size, Phase phase,
-                                  boolean transmissionRequested, boolean restartPingRequested)
+                                  boolean transmissionRequested, boolean restartPingRequested,
+                                  boolean jantakuWakePending, int jantakuWakeCommand,
+                                  int jantakuWakePlayer, int jantakuBulkStage,
+                                  int jantakuBulkRemaining, int jantakuRelayByte)
             implements ComponentState<SerialEndpoint> {
     }
 
@@ -372,6 +486,9 @@ public final class FourPlayerAdapter {
                 observeReplyByte();
                 packetByte++;
                 int packetLength = packetLength();
+                if (jantakuBulkStage == JANTAKU_BULK_REANCHOR) {
+                    packetByte = packetLength;
+                }
                 if (packetByte < packetLength) {
                     ticksUntilBit += byteGapTicks();
                 } else {
