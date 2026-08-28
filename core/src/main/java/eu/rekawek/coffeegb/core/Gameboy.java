@@ -172,6 +172,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final boolean shikinjouLinkRolePatch;
 
+    private final boolean volleyFireLinkRolePatch;
+
     private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
@@ -328,6 +330,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 CartridgeProperties.Feature.REVENGE_GATOR_LINK_ROLE_PATCH);
         shikinjouLinkRolePatch = cartridgeProperties.has(
                 CartridgeProperties.Feature.SHIKINJOU_LINK_ROLE_PATCH);
+        volleyFireLinkRolePatch = cartridgeProperties.has(
+                CartridgeProperties.Feature.VOLLEY_FIRE_LINK_ROLE_PATCH);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -658,6 +662,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         if (shikinjouLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
             cartridge.enableShikinjouSecondaryLinkRole();
+        }
+        if (volleyFireLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
+            cartridge.enableVolleyFireSecondaryLinkRole();
         }
         if (jantakuBoyFourPlayerPatch) {
             serialEndpoint.enableCompatibilityProfile(
