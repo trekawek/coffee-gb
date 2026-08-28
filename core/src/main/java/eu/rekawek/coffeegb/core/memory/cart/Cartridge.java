@@ -34,6 +34,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private final boolean clocked;
 
+    private boolean revengeGatorSecondaryLinkRole;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -179,11 +181,28 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     @Override
     public int getByte(int address) {
+        if (revengeGatorSecondaryLinkRole) {
+            if (address == 0x0214) {
+                return 0x18;
+            }
+            if (address == 0x0215) {
+                return 0x17;
+            }
+        }
         return addressSpace.getByte(address);
+    }
+
+    public void enableRevengeGatorSecondaryLinkRole() {
+        revengeGatorSecondaryLinkRole = true;
     }
 
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
+        // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
+        // Keep execution on the ordinary cartridge read path while that overlay is active.
+        if (revengeGatorSecondaryLinkRole) {
+            return null;
+        }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
             return null;
         }
