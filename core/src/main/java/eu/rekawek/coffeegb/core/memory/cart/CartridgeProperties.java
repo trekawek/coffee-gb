@@ -76,7 +76,8 @@ public final class CartridgeProperties {
         JANTAKU_BOY_FOUR_PLAYER_PATCH,
         REVENGE_GATOR_LINK_ROLE_PATCH,
         SHIKINJOU_LINK_ROLE_PATCH,
-        VOLLEY_FIRE_LINK_ROLE_PATCH
+        VOLLEY_FIRE_LINK_ROLE_PATCH,
+        HARVEST_MOON_LINK_ROLE_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -218,6 +219,9 @@ public final class CartridgeProperties {
             features("Volley Fire deterministic link roles",
                     CartridgeProperties::isVolleyFireLinkRole,
                     Feature.VOLLEY_FIRE_LINK_ROLE_PATCH),
+            features("Harvest Moon GB deterministic link roles",
+                    CartridgeProperties::isHarvestMoonLinkRole,
+                    Feature.HARVEST_MOON_LINK_ROLE_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -910,6 +914,28 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x00
                 && info.byteAt(0x0149) == 0x00
                 && matches(info.data, 0x227e, linkRoleNegotiation);
+    }
+
+    private static boolean isHarvestMoonLinkRole(RomInfo info) {
+        int[] linkRoleNegotiation = {
+                0x06, 0x80, 0x21, 0x06, 0xd6, 0x3e, 0x5e, 0xe0,
+                0x01, 0x77, 0x78, 0xe0, 0x02, 0xc9, 0xaf, 0xe0,
+                0x01, 0xea, 0x06, 0xd6, 0xea, 0x01, 0xd6, 0xc9,
+                0x3e, 0xfe, 0xe0, 0x01, 0x3e, 0x81, 0xe0, 0x02,
+                0xc9
+        };
+        return info.data.length == 0x80000
+                && "HARVEST-MOON GB".equals(info.title())
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0146) == 0x03
+                && info.rawType() == 0x03
+                && info.byteAt(0x0148) == 0x04
+                && info.byteAt(0x0149) == 0x02
+                && matches(info.data, 0x7e750, linkRoleNegotiation);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
