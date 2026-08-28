@@ -363,6 +363,131 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void nativeCgbNormalSpeedMbc3RtcMatchesScalarWithEpochCoverage()
+            throws Exception {
+        byte[] image = nativeMbc3(dmgRomWramLoop());
+        try (Gameboy scalar = nativeCgbNormalSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeCgbNormalSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            for (int chunk = 0; chunk < 20; chunk++) {
+                scalarFrames += scalar.runTicks(5_000);
+                candidateFrames += candidate.runTicks(5_000);
+            }
+
+            assertEquals("native CGB x1 MBC3 frame callbacks", scalarFrames, candidateFrames);
+            assertEquals("custom-source MBC3 oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("native CGB x1 MBC3 loop had no coarse epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000L);
+            assertEquals("native CGB x1 MBC3 epoch plan accounting",
+                    candidate.getPerformanceEpochTicks(),
+                    candidate.getPerformanceEpochRasterFastTicks()
+                            + candidate.getPerformanceEpochMode2BulkTicks());
+            assertDeepStateEquals("native CGB x1 MBC3 RTC oscillator",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedMbc3RtcWritesStayScalarAfterExactClockPrefixes()
+            throws Exception {
+        byte[] image = nativeMbc3(nativeCgbMbc3RtcWriteLoop());
+        try (Gameboy scalar = nativeCgbNormalSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeCgbNormalSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            for (int chunk = 0; chunk < 20; chunk++) {
+                assertEquals("native CGB x1 MBC3 RTC-write frame callback " + chunk,
+                        scalar.runTicks(4_000), candidate.runTicks(4_000));
+                assertDeepStateEquals("native CGB x1 MBC3 RTC-write chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+
+            assertTrue("safe MBC3 instruction prefixes had no native CGB x1 epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 0L);
+            assertEquals("decoded MBC3/RTC access crossed a native CGB x1 epoch",
+                    0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+            assertEquals("latched RTC seconds", 42,
+                    candidate.getAddressSpace().getByte(0xc000));
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedMbc3LcdOffVramAndLcdcHandoffMatchScalar()
+            throws Exception {
+        byte[] image = nativeMbc3(nativeCgbLcdOffVramThenEnable());
+        try (Gameboy scalar = nativeCgbNormalSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeCgbNormalSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            advancePairUntilLcdDisabled(scalar, candidate);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("MBC3 LCD-off blank/VRAM frame callback",
+                    scalar.runTicks(2_000), candidate.runTicks(2_000));
+            int guard = 0;
+            while (!(candidate.getCpu().getState() == Cpu.State.RUNNING
+                    && candidate.getCpu().getDebugOpcode() == 0xe0
+                    && candidate.getCpu().getRegisters().getPC() == 0x0112
+                    && candidate.getCpu().getDebugMachineCycle() == 3)
+                    && guard++ < 12_000) {
+                assertEquals("MBC3 LCDC-enable setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("MBC3 test did not stop before the LCDC-enable write", guard < 12_000);
+            assertFalse(candidate.getGpu().isLcdEnabled());
+            assertTrue("MBC3 VRAM clear had no LCD-off epoch coverage",
+                    candidate.getPerformanceEpochLcdOffTicks() > 0L);
+            assertEquals("MBC3 LCD-off VRAM access reached the terminal bus", 0L,
+                    candidate.getCpu().getPerformanceEpochTerminalAccesses());
+            for (int offset = 0; offset < 0x100; offset++) {
+                assertEquals("MBC3 LCD-off VRAM read/write " + offset, 1,
+                        candidate.getAddressSpace().getByte(0x8000 + offset));
+            }
+            assertDeepStateEquals("MBC3 before LCDC enable",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("MBC3 LCDC-enable boundary frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+            assertEquals("MBC3 decoded LCDC enable crossed the LCD-off epoch", 0L,
+                    candidate.getPerformanceEpochTicks());
+            assertTrue(candidate.getGpu().isLcdEnabled());
+            assertDeepStateEquals("MBC3 after scalar LCDC enable",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void clockedMbc3CgbCompatibilityRemainsOutsideRunningEpoch()
+            throws Exception {
+        byte[] compatibility = mbc3(dmgRomWramLoop());
+        try (Gameboy cgbCompatibility = new Gameboy.GameboyConfiguration(new Rom(compatibility))
+                     .setHardwareProfile(HardwareProfileRegistry.CGB)
+                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                     .setExecutionMode(ExecutionMode.PERFORMANCE)
+                     .setPlayerInputSource(PlayerInputSource.RELEASED)
+                     .setRtcTimeSource(() -> 0L)
+                     .setSupportBatterySave(false)
+                     .build()) {
+            cgbCompatibility.runTicks(100_000);
+
+            assertTrue(cgbCompatibility.getSpeedMode().isDmgCompat());
+            assertEquals("clocked MBC3 entered CGB-compatibility running epoch",
+                    0L, cgbCompatibility.getPerformanceEpochTicks());
+        }
+    }
+
+    @Test
     public void nativeCgbExternalClockWaitMatchesFallbackWithEpochCoverage()
             throws Exception {
         byte[] image = nativeCgbExternalClockWramLoop();
@@ -1111,6 +1236,18 @@ public final class GameboyPerformanceEpochTest {
                 .build();
     }
 
+    private static Gameboy nativeCgbNormalSpeedMbc3Session(
+            byte[] image, PlayerInputSource inputSource) throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(nativeMbc3(image)))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setRtcTimeSource(() -> 0L)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
     private static Gameboy sgbSession(
             byte[] image, HardwareProfile profile, PlayerInputSource inputSource)
             throws Exception {
@@ -1339,6 +1476,16 @@ public final class GameboyPerformanceEpochTest {
         return image;
     }
 
+    private static byte[] mbc3(byte[] image) {
+        image[0x147] = 0x10; // MBC3 + timer + RAM + battery
+        image[0x149] = 0x03; // 32 KiB external RAM
+        return image;
+    }
+
+    private static byte[] nativeMbc3(byte[] image) {
+        return nativeColor(mbc3(image));
+    }
+
     private static void updateHeaderChecksum(byte[] image) {
         int checksum = 0;
         for (int address = 0x134; address <= 0x14c; address++) {
@@ -1440,6 +1587,42 @@ public final class GameboyPerformanceEpochTest {
         image[0x109] = 0x77; // LD (HL),A
         image[0x10a] = 0x18; // JR 0107
         image[0x10b] = (byte) 0xfb;
+        image[0x143] = (byte) 0x80;
+        return image;
+    }
+
+    private static byte[] nativeCgbMbc3RtcWriteLoop() {
+        byte[] image = new byte[0x8000];
+        int pc = 0x100;
+        image[pc++] = 0x3e; // LD A,0A
+        image[pc++] = 0x0a;
+        image[pc++] = (byte) 0xea; // LD (0000),A: enable MBC3 RAM/RTC
+        image[pc++] = 0x00;
+        image[pc++] = 0x00;
+        image[pc++] = 0x3e; // LD A,08
+        image[pc++] = 0x08;
+        image[pc++] = (byte) 0xea; // LD (4000),A: select RTC seconds
+        image[pc++] = 0x00;
+        image[pc++] = 0x40;
+        int loop = pc;
+        image[pc++] = 0x3e; // LD A,2A
+        image[pc++] = 0x2a;
+        image[pc++] = (byte) 0xea; // LD (A000),A: reset seconds and sub-second phase
+        image[pc++] = 0x00;
+        image[pc++] = (byte) 0xa0;
+        image[pc++] = (byte) 0xaf; // XOR A
+        image[pc++] = (byte) 0xea; // LD (6000),A: latch current RTC value
+        image[pc++] = 0x00;
+        image[pc++] = 0x60;
+        image[pc++] = (byte) 0xfa; // LD A,(A000): read latched seconds
+        image[pc++] = 0x00;
+        image[pc++] = (byte) 0xa0;
+        image[pc++] = (byte) 0xea; // LD (C000),A: expose the observed value
+        image[pc++] = 0x00;
+        image[pc++] = (byte) 0xc0;
+        image[pc++] = (byte) 0xc3; // JP loop
+        image[pc++] = (byte) (loop & 0xff);
+        image[pc] = (byte) (loop >>> 8);
         image[0x143] = (byte) 0x80;
         return image;
     }

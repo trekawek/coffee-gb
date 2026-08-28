@@ -1736,6 +1736,13 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
+        if (nativeCgbNormalSpeed && cartridgeClocked) {
+            // Native x1 keeps every decoded mapper/RTC access on the scalar boundary.  A
+            // clocked primary cartridge may therefore join only through its independently
+            // proven arithmetic clock horizon; the conservative MemoryController default
+            // rejects unknown clocked hardware here.
+            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        }
         span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
         span = Math.min(span, nativeCgbNormalSpeed || sgb
                 ? sound.performanceFencedEpochSpanLimit(span)
@@ -1894,7 +1901,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && (lcdEnabled ? !lcdDisabled : nativeCgbNormalSpeed && lcdDisabled)
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(false)
-                && !cartridgeClocked
+                && (!cartridgeClocked || nativeCgbNormalSpeed)
                 && !slotCartridgeClocked
                 && (!cgbHardware || (!hdma.hasActiveOrPendingTransfer()
                         && !hdma.hasPendingHblankTransfer()
@@ -2003,6 +2010,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private void commitNormalSpeedPerformanceEpochPeripherals(int ticks, boolean cgbHardware) {
         if (ticks <= 0) {
             return;
+        }
+        if (cgbHardware && !speedMode.isDmgCompat() && cartridgeClocked) {
+            // Scalar Gameboy.tick() clocks the cartridge before Timer and every other
+            // subsystem.  Prefix flushes and the final suffix both pass through this method,
+            // preserving that ordering before a fenced mapper/RTC boundary returns scalar.
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
         timer.tickPerformanceNormalSpeedEpochTrusted(ticks);
         sound.tickFrameSequencer(false);
