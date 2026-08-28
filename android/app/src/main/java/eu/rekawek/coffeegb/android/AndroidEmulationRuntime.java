@@ -1179,7 +1179,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             audioReady = false;
             boolean flushObserved = activeAudio != null && emptyAudio && !baseline.outputPlaying();
             if (flushObserved) {
-                activeAudio.resume();
+                // The guest intentionally remains paused until ARM, so it cannot produce the
+                // four genuine packets required by ordinary AudioTrack startup. Preserve this
+                // diagnostics-only empty-playing proof through the sink's explicit narrow bypass.
+                activeAudio.resumeEmptyForBenchmarkPreArm();
                 deadlines.schedule(
                         () -> submit(() -> finishBenchmarkScenarioCompletion(
                                 event, completionEpoch, 0, true)),

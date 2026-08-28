@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicLong;
 final class BoundedPcmQueue {
 
     static final int DEFAULT_CAPACITY = 6;
+    private static final ClockSpec[] SUPPORTED_CLOCKS = {
+            ClockSpec.LEGACY, ClockSpec.SGB, ClockSpec.SGB2
+    };
 
     private final StereoPcmConverter converter;
     private final ArrayBlockingQueue<Frame> available;
@@ -54,7 +57,10 @@ final class BoundedPcmQueue {
         converter = new StereoPcmConverter(sampleRate);
         this.capacity = capacity;
         this.frameBytes = frameBytes;
-        sourceSamples = Math.multiplyExact(sourceClock.controllerTicksPerFrame(), 2);
+        // HardwareProfile can arrive immediately before its first PCM event.  Every reserved
+        // source slot therefore covers the largest supported controller packet; changing the
+        // source cadence never has to rebuild the queue or race that first SGB-family packet.
+        sourceSamples = maximumSourceSamplesAcrossProfiles();
         available = new ArrayBlockingQueue<>(capacity);
         queued = new ArrayBlockingQueue<>(capacity);
         for (int index = 0; index < capacity; index++) {
@@ -68,6 +74,15 @@ final class BoundedPcmQueue {
      * ordering without retaining the core's reusable event buffer.
      */
     int offer(Sound.SoundSampleEvent event, int volume, boolean muted) {
+        return offer(event, volume, muted, 0L, 0L);
+    }
+
+    int offer(Sound.SoundSampleEvent event, int volume, boolean muted, long policyGeneration) {
+        return offer(event, volume, muted, policyGeneration, 0L);
+    }
+
+    int offer(Sound.SoundSampleEvent event, int volume, boolean muted, long policyGeneration,
+            long pauseFlushGeneration) {
         Frame frame = available.poll();
         if (frame == null) {
             frame = queued.poll();
@@ -84,11 +99,12 @@ final class BoundedPcmQueue {
         }
         try {
             if (event.buffer().length > frame.source.length) {
-                // A profile change races queue construction only during startup. Drop this
-                // source frame rather than allocate on the controller thread; the runtime's
-                // profile callback requests a bounded queue rebuild before the next event.
+                // Fixed storage covers every supported production profile. Keep a fail-closed
+                // guard for malformed/custom events rather than allocate on the controller.
                 frame.clearSource();
                 frame.accountingBytes = 0;
+                frame.policyGeneration = 0L;
+                frame.pauseFlushGeneration = 0L;
                 available.offer(frame);
                 overruns.incrementAndGet();
                 return 0;
@@ -98,6 +114,8 @@ final class BoundedPcmQueue {
             frame.clockSpec = event.clockSpec();
             frame.volume = volume;
             frame.muted = muted;
+            frame.policyGeneration = policyGeneration;
+            frame.pauseFlushGeneration = pauseFlushGeneration;
             frame.accountingBytes = converter.maximumPcmBytes(
                     event.buffer().length / 2, event.clockSpec());
             frame.length = 0;
@@ -110,6 +128,8 @@ final class BoundedPcmQueue {
         } catch (RuntimeException failure) {
             frame.clearSource();
             frame.accountingBytes = 0;
+            frame.policyGeneration = 0L;
+            frame.pauseFlushGeneration = 0L;
             available.offer(frame);
             throw failure;
         }
@@ -132,6 +152,8 @@ final class BoundedPcmQueue {
             frame.clearSource();
             frame.length = 0;
             frame.accountingBytes = 0;
+            frame.policyGeneration = 0L;
+            frame.pauseFlushGeneration = 0L;
             available.offer(frame);
             throw failure;
         }
@@ -144,6 +166,8 @@ final class BoundedPcmQueue {
         frame.length = 0;
         frame.clearSource();
         frame.accountingBytes = 0;
+        frame.policyGeneration = 0L;
+        frame.pauseFlushGeneration = 0L;
         if (!available.offer(frame)) {
             throw new IllegalStateException("PCM queue released a frame twice");
         }
@@ -195,13 +219,56 @@ final class BoundedPcmQueue {
         return converter.samplePhase();
     }
 
-    private static int maximumFrameBytes(int sampleRate) {
+    static int maximumFrameBytes(int sampleRate) {
         long maximum = 0;
-        for (ClockSpec clock : new ClockSpec[]{ClockSpec.LEGACY, ClockSpec.SGB, ClockSpec.SGB2}) {
+        for (ClockSpec clock : SUPPORTED_CLOCKS) {
             maximum = Math.max(maximum, clock.maximumOutputUnits(
                     clock.controllerTicksPerFrame(), sampleRate));
         }
         return Math.toIntExact(Math.multiplyExact(maximum, 4));
+    }
+
+    /** Lowest PCM-frame total for this many packets, including a profile reset per packet. */
+    static int minimumOutputFramesForPackets(int sampleRate, int packets) {
+        if (sampleRate <= 0 || packets <= 0) {
+            throw new IllegalArgumentException("Sample rate and packet count must be positive");
+        }
+        long minimumPacket = Long.MAX_VALUE;
+        for (ClockSpec clock : SUPPORTED_CLOCKS) {
+            long frames = clock.newTickRateAccumulator(sampleRate)
+                    .advance(clock.controllerTicksPerFrame());
+            minimumPacket = Math.min(minimumPacket, frames);
+        }
+        return Math.toIntExact(Math.multiplyExact(minimumPacket, packets));
+    }
+
+    /** Highest PCM-frame total for this many packets, including arbitrary profile/phase changes. */
+    static int maximumOutputFramesForPackets(int sampleRate, int packets) {
+        if (sampleRate <= 0 || packets <= 0) {
+            throw new IllegalArgumentException("Sample rate and packet count must be positive");
+        }
+        long maximumPacket = 0L;
+        for (ClockSpec clock : SUPPORTED_CLOCKS) {
+            maximumPacket = Math.max(maximumPacket, clock.maximumOutputUnits(
+                    clock.controllerTicksPerFrame(), sampleRate));
+        }
+        return Math.toIntExact(Math.multiplyExact(maximumPacket, packets));
+    }
+
+    private static int maximumSourceSamplesAcrossProfiles() {
+        int maximum = 0;
+        for (ClockSpec clock : SUPPORTED_CLOCKS) {
+            maximum = Math.max(maximum,
+                    Math.multiplyExact(clock.controllerTicksPerFrame(), 2));
+        }
+        return maximum;
+    }
+
+    /** Reconciles the producer's maximum estimate with the converter's exact packet length. */
+    int reconcileAccountingBytes(Frame frame) {
+        int previous = frame.accountingBytes;
+        frame.accountingBytes = frame.length;
+        return frame.length - previous;
     }
 
     static final class Frame {
@@ -212,6 +279,8 @@ final class BoundedPcmQueue {
         private ClockSpec clockSpec;
         private int volume;
         private boolean muted;
+        private long policyGeneration;
+        private long pauseFlushGeneration;
         private int accountingBytes;
 
         private Frame(byte[] bytes, int[] source) {
@@ -229,6 +298,14 @@ final class BoundedPcmQueue {
 
         int accountingBytes() {
             return accountingBytes;
+        }
+
+        long policyGeneration() {
+            return policyGeneration;
+        }
+
+        long pauseFlushGeneration() {
+            return pauseFlushGeneration;
         }
 
         private void clearSource() {

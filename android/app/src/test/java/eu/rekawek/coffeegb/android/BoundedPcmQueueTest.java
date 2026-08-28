@@ -109,15 +109,63 @@ public class BoundedPcmQueueTest {
     }
 
     @Test
-    public void sourceStorageTracksHardwareProfileFrameBudget() {
+    public void everyQueueSourceSlotFitsTheLargestSupportedHardwarePacket() {
         BoundedPcmQueue legacy = new BoundedPcmQueue(44_100, ClockSpec.LEGACY);
+        BoundedPcmQueue sgb = new BoundedPcmQueue(44_100, ClockSpec.SGB);
         BoundedPcmQueue sgb2 = new BoundedPcmQueue(44_100, ClockSpec.SGB2);
 
-        assertEquals(ClockSpec.LEGACY.controllerTicksPerFrame() * 2,
-                legacy.maximumSourceSamples());
-        assertEquals(ClockSpec.SGB2.controllerTicksPerFrame() * 2,
-                sgb2.maximumSourceSamples());
-        assertTrue(sgb2.maximumSourceSamples() > legacy.maximumSourceSamples());
+        int maximum = Math.max(ClockSpec.LEGACY.controllerTicksPerFrame(),
+                Math.max(ClockSpec.SGB.controllerTicksPerFrame(),
+                        ClockSpec.SGB2.controllerTicksPerFrame())) * 2;
+        assertEquals(maximum, legacy.maximumSourceSamples());
+        assertEquals(maximum, sgb.maximumSourceSamples());
+        assertEquals(maximum, sgb2.maximumSourceSamples());
+    }
+
+    @Test
+    public void primerFrameBoundsCoverAllProfilesAndSixSlotsReachConservativeThreshold() {
+        for (int sampleRate : new int[]{44_100, 48_000, 96_000, 192_000}) {
+            int minimumFour = BoundedPcmQueue.minimumOutputFramesForPackets(
+                    sampleRate, AndroidAudioSink.PRIMER_PACKETS);
+            int maximumFour = BoundedPcmQueue.maximumOutputFramesForPackets(
+                    sampleRate, AndroidAudioSink.PRIMER_PACKETS);
+            int minimumSix = BoundedPcmQueue.minimumOutputFramesForPackets(
+                    sampleRate, BoundedPcmQueue.DEFAULT_CAPACITY);
+
+            assertTrue(minimumFour <= maximumFour);
+            assertTrue(maximumFour < minimumSix);
+            assertTrue(minimumFour * 1_000L / sampleRate > 50L);
+        }
+    }
+
+    @Test
+    public void firstSgbPacketFitsAQueueConstructedBeforeItsProfileEvent() throws Exception {
+        BoundedPcmQueue queue = new BoundedPcmQueue(44_100, ClockSpec.LEGACY);
+
+        int accepted = queue.offer(new Sound.SoundSampleEvent(
+                samples(ClockSpec.SGB.controllerTicksPerFrame()), ClockSpec.SGB), 100, false);
+        BoundedPcmQueue.Frame frame = queue.poll(1, TimeUnit.SECONDS);
+
+        assertTrue(accepted > 0);
+        assertNotNull(frame);
+        assertTrue(frame.length() > 0);
+        assertEquals(0L, queue.overruns());
+        queue.release(frame);
+    }
+
+    @Test
+    public void frameCarriesPolicyAndStickyPauseFlushGenerations() throws Exception {
+        BoundedPcmQueue queue = new BoundedPcmQueue(44_100);
+        Sound.SoundSampleEvent event = new Sound.SoundSampleEvent(
+                samples(ClockSpec.LEGACY.controllerTicksPerFrame()), ClockSpec.LEGACY);
+
+        queue.offer(event, 100, false, 7L, 11L);
+        BoundedPcmQueue.Frame frame = queue.poll(1, TimeUnit.SECONDS);
+
+        assertNotNull(frame);
+        assertEquals(7L, frame.policyGeneration());
+        assertEquals(11L, frame.pauseFlushGeneration());
+        queue.release(frame);
     }
 
     @Test
