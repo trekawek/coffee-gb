@@ -170,6 +170,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final boolean revengeGatorLinkRolePatch;
 
+    private final boolean shikinjouLinkRolePatch;
+
     private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
@@ -324,6 +326,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 CartridgeProperties.Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH);
         revengeGatorLinkRolePatch = cartridgeProperties.has(
                 CartridgeProperties.Feature.REVENGE_GATOR_LINK_ROLE_PATCH);
+        shikinjouLinkRolePatch = cartridgeProperties.has(
+                CartridgeProperties.Feature.SHIKINJOU_LINK_ROLE_PATCH);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -651,6 +655,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         sound.init(eventBus);
         if (revengeGatorLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
             cartridge.enableRevengeGatorSecondaryLinkRole();
+        }
+        if (shikinjouLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
+            cartridge.enableShikinjouSecondaryLinkRole();
         }
         if (jantakuBoyFourPlayerPatch) {
             serialEndpoint.enableCompatibilityProfile(
