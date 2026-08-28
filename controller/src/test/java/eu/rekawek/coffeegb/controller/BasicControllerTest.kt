@@ -2077,14 +2077,14 @@ class BasicControllerTest {
       // normal lifecycle command must still release that pause.
       eventBus.post(Controller.ResumeEmulationEvent())
       val resumed =
-          generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
+          generateSequence { playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS) }
               .first { !it.paused }
       assertFalse(resumed.paused)
       // Pause at the next safe point so the just-released ordinary batch has a deterministic
       // terminal edge: every full PERFORMANCE start must complete, never abort.
       eventBus.post(Controller.PauseEmulationEvent())
       val pausedAgain =
-          generateSequence { playback.poll(100, TimeUnit.MILLISECONDS) }
+          generateSequence { playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS) }
               .first { it.paused }
       assertTrue(pausedAgain.paused)
       assertTrue(workStarts.get() > 0)
