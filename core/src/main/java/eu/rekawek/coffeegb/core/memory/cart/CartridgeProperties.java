@@ -75,7 +75,8 @@ public final class CartridgeProperties {
         // Append new features: Feature ordinals are part of the StateFile v1 identity.
         JANTAKU_BOY_FOUR_PLAYER_PATCH,
         REVENGE_GATOR_LINK_ROLE_PATCH,
-        SHIKINJOU_LINK_ROLE_PATCH
+        SHIKINJOU_LINK_ROLE_PATCH,
+        VOLLEY_FIRE_LINK_ROLE_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -214,6 +215,9 @@ public final class CartridgeProperties {
             features("Shikinjou deterministic link roles",
                     CartridgeProperties::isShikinjouLinkRole,
                     Feature.SHIKINJOU_LINK_ROLE_PATCH),
+            features("Volley Fire deterministic link roles",
+                    CartridgeProperties::isVolleyFireLinkRole,
+                    Feature.VOLLEY_FIRE_LINK_ROLE_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -885,6 +889,27 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x01
                 && info.byteAt(0x0149) == 0x00
                 && matches(info.data, 0x22c6, linkRoleNegotiation);
+    }
+
+    private static boolean isVolleyFireLinkRole(RomInfo info) {
+        int[] linkRoleNegotiation = {
+                0xf0, 0x9c, 0xfe, 0x01, 0x20, 0x17, 0xf0, 0x9d,
+                0xb7, 0x28, 0x0e, 0xcd, 0x96, 0x0e, 0x28, 0x09,
+                0xf1, 0x3e, 0x80, 0x1e, 0x00, 0xc7, 0xc3, 0x43,
+                0x21, 0x3e, 0x01, 0xe0, 0x9d
+        };
+        return info.data.length == 0x8000
+                && "VOLLEY FIRE".equals(info.title())
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0146) == 0x00
+                && info.rawType() == 0x00
+                && info.byteAt(0x0148) == 0x00
+                && info.byteAt(0x0149) == 0x00
+                && matches(info.data, 0x227e, linkRoleNegotiation);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

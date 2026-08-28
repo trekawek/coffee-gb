@@ -38,6 +38,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private boolean shikinjouSecondaryLinkRole;
 
+    private boolean volleyFireSecondaryLinkRole;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -202,6 +204,20 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
                 return 0x22;
             }
         }
+        if (volleyFireSecondaryLinkRole) {
+            if (address == 0x2289) {
+                return 0xf1;
+            }
+            if (address == 0x228a) {
+                return 0xc3;
+            }
+            if (address == 0x228b) {
+                return 0x43;
+            }
+            if (address == 0x228c) {
+                return 0x21;
+            }
+        }
         return addressSpace.getByte(address);
     }
 
@@ -213,11 +229,16 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         shikinjouSecondaryLinkRole = true;
     }
 
+    public void enableVolleyFireSecondaryLinkRole() {
+        volleyFireSecondaryLinkRole = true;
+    }
+
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
         // Keep execution on the ordinary cartridge read path while that overlay is active.
-        if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole) {
+        if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole
+                || volleyFireSecondaryLinkRole) {
             return null;
         }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
