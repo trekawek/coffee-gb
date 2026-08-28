@@ -66,6 +66,7 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
             listOf(
                 "--profile=${profile.id()}",
                 "--disable-battery-saves",
+                "--start-muted",
                 "--join-netplay",
                 endpoint.startClientValue,
                 rom.toAbsolutePath().normalize().toString(),

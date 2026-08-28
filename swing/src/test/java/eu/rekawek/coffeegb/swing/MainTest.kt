@@ -40,6 +40,7 @@ class MainTest {
     assertFalse(request.debug)
     assertNull(request.initialRom)
     assertNull(request.joinNetplayHost)
+    assertFalse(request.startMuted)
     assertFalse(request.suppressInitialAutosaveResume)
     assertNull(request.settingsOverrides.hardwareProfile)
     assertNull(request.settingsOverrides.bootstrapMode)
@@ -48,7 +49,7 @@ class MainTest {
 
   @Test
   fun `all launch flags produce one typed process-local request`() {
-    val execution = execute("--debug", "-d", "-b", "-db", "game.gb")
+    val execution = execute("--debug", "-d", "-b", "-db", "--start-muted", "game.gb")
 
     val request = execution.singleLaunch()
     assertEquals(0, execution.exitCode)
@@ -57,6 +58,7 @@ class MainTest {
     assertEquals(HardwareProfileRegistry.DMG, request.settingsOverrides.hardwareProfile)
     assertEquals(BootstrapMode.NORMAL, request.settingsOverrides.bootstrapMode)
     assertEquals(false, request.settingsOverrides.batterySavesEnabled)
+    assertTrue(request.startMuted)
   }
 
   @Test
@@ -150,6 +152,7 @@ class MainTest {
               "-b  --use-bootstrap",
               "-db --disable-battery-saves",
               "--join-netplay HOST",
+              "--start-muted",
               "--debug",
               "-h  --help",
               "--version",
@@ -222,11 +225,19 @@ class MainTest {
                 "Option '--join-netplay' may be specified only once",
             ),
             Failure(
+                arrayOf("--start-muted", "--start-muted"),
+                "Option '--start-muted' may be specified only once",
+            ),
+            Failure(
                 arrayOf("--package-smoke", "game.gb"),
                 "--package-smoke cannot be combined with launch options or a ROM file",
             ),
             Failure(
                 arrayOf("--package-smoke", "--debug"),
+                "--package-smoke cannot be combined with launch options or a ROM file",
+            ),
+            Failure(
+                arrayOf("--package-smoke", "--start-muted"),
                 "--package-smoke cannot be combined with launch options or a ROM file",
             ),
             Failure(arrayOf("one.gb", "two.gb"), "Expected at most one ROM file, received 2"),

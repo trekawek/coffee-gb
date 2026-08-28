@@ -71,6 +71,7 @@ class PackagedLocalNetplayRelaunchSmokeTest {
             arrayOf(
                 "--profile=dmg",
                 "--disable-battery-saves",
+                "--start-muted",
                 "--join-netplay",
                 "127.0.0.1:4567",
                 rom.toString(),
@@ -83,6 +84,7 @@ class PackagedLocalNetplayRelaunchSmokeTest {
     assertTrue(evidence.startsWith("Coffee GB local netplay relaunch OK:"))
     assertTrue(evidence.contains("pid=1234"))
     assertTrue(evidence.contains("profile=dmg"))
+    assertTrue(evidence.contains("audio=muted"))
     assertTrue(evidence.contains("join=127.0.0.1:4567"))
 
     assertFalse(
