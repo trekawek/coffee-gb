@@ -654,14 +654,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (menuController == null || externalSurface.active()) {
             return;
         }
-        if (menuController.visible()) {
-            menuController.hide();
-            return;
-        }
+        boolean wasVisible = menuController.visible();
         AndroidEmulationRuntime active = runtime;
         RuntimeState current = active == null ? observedState : active.state();
+        // Resolve a retained-service transition before interpreting a tap on the automatic
+        // Library root. This turns a just-started session into its pause menu instead of treating
+        // the stale idle menu as something the user merely wants to close.
         applyState(current);
         current = observedState;
+        if (menuController.visible()) {
+            if (wasVisible) {
+                menuController.hide();
+            }
+            return;
+        }
         if (active != null) {
             active.input().releaseAll();
         }
@@ -2598,7 +2604,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (runtime == null || menuController == null || externalSurface.active()) {
             return;
         }
-        if (state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION
+        if (isGamePresentationState(state) && menuController.visible()
+                && menuController.route() == MenuRoute.LIBRARY && !menuPauseOwned) {
+            // A cold Activity starts on Library while the retained service is idle. If a game is
+            // then opened without going through the document-picker callback (for example from an
+            // intent or a recent-game launch), replace that automatic root with the game surface.
+            menuController.hide();
+        }
+        if (!diagnosticsOptions.enabled && isIdlePresentationState(state)
+                && !menuController.visible() && !suspendedMenu.visible()) {
+            // A stopped service has no frame to present. Keep the first user-visible Activity
+            // state useful instead of leaving the LCD aperture empty.
+            menuPauseOwned = false;
+            menuController.show(MenuRoute.LIBRARY);
+        } else if (state.phase() == RuntimeState.Phase.AWAITING_ARCHIVE_SELECTION
                 && !menuController.visible()) {
             menuPauseOwned = false;
             menuController.show(MenuRoute.CHOOSE_ROM);
@@ -2607,6 +2626,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             menuPauseOwned = false;
             menuController.show(MenuRoute.LIBRARY);
         }
+    }
+
+    private static boolean isIdlePresentationState(RuntimeState state) {
+        return state.phase() == RuntimeState.Phase.STOPPED
+                || state.phase() == RuntimeState.Phase.FAILED;
+    }
+
+    private static boolean isGamePresentationState(RuntimeState state) {
+        return state.phase() == RuntimeState.Phase.OPENING
+                || state.phase() == RuntimeState.Phase.LOADING
+                || state.phase() == RuntimeState.Phase.RUNNING
+                || state.phase() == RuntimeState.Phase.PAUSED;
     }
 
     /** Defers a singleTop arm token until the real anchor has completed on the renderer. */

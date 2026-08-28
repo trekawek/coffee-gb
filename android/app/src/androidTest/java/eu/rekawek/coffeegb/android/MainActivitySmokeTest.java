@@ -39,17 +39,24 @@ import static org.junit.Assert.assertTrue;
 public class MainActivitySmokeTest {
 
     @Test
-    public void launchesRecreatesAndBackgroundsWithoutStartingACameraOrGame() {
+    public void freshLaunchShowsLibraryAndRestoresItAfterRecreation() throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitRoute(scenario, MenuRoute.LIBRARY);
+            scenario.onActivity(activity -> assertEquals("Close Coffee GB menu",
+                    menuButton(activity).getContentDescription().toString()));
             scenario.moveToState(Lifecycle.State.CREATED);
             scenario.moveToState(Lifecycle.State.RESUMED);
+            awaitRoute(scenario, MenuRoute.LIBRARY);
             scenario.recreate();
+            awaitRoute(scenario, MenuRoute.LIBRARY);
         }
     }
 
     @Test
-    public void transparentMenuHitTargetHasNoFrameworkVisualsButRemainsAccessibleAndClickable() {
+    public void transparentMenuHitTargetHasNoFrameworkVisualsButRemainsAccessibleAndClickable()
+            throws Exception {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitRoute(scenario, MenuRoute.LIBRARY);
             scenario.onActivity(activity -> {
                 View menu = menuButton(activity);
                 assertTrue(menu.isClickable());
@@ -65,9 +72,46 @@ public class MainActivitySmokeTest {
                 assertFalse(menu.getDefaultFocusHighlightEnabled());
 
                 assertTrue(menu.performClick());
-                assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
+                assertEquals("Open Coffee GB menu", menu.getContentDescription().toString());
                 assertTrue(menu.performClick());
+                assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
             });
+        }
+    }
+
+    @Test
+    public void startingAndRecreatingAnActiveGameShowsTheGameInsteadOfLibrary()
+            throws Exception {
+        AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitRoute(scenario, MenuRoute.LIBRARY);
+            await("runtime binding", () -> {
+                scenario.onActivity(activity -> runtime.set(runtime(activity)));
+                return runtime.get() != null;
+            });
+            runtime.get().openRom(FixtureRomProvider.URI, 0);
+            await("fixture game presentation", () -> {
+                AtomicBoolean gameVisible = new AtomicBoolean();
+                scenario.onActivity(activity -> gameVisible.set(
+                        observedState(activity).phase() == RuntimeState.Phase.RUNNING
+                                && !menuController(activity).visible()));
+                return gameVisible.get();
+            });
+
+            scenario.recreate();
+            await("recreated fixture game presentation", () -> {
+                AtomicBoolean gameVisible = new AtomicBoolean();
+                scenario.onActivity(activity -> gameVisible.set(runtime(activity) != null
+                        && observedState(activity).transferReady()
+                        && !menuController(activity).visible()));
+                return gameVisible.get();
+            });
+        } finally {
+            if (runtime.get() != null) {
+                runtime.get().stop();
+                await("runtime cleanup", () -> runtime.get().state().phase()
+                        == RuntimeState.Phase.STOPPED);
+            }
         }
     }
 
@@ -165,13 +209,12 @@ public class MainActivitySmokeTest {
     }
 
     @Test
-    public void systemBackClosesRootMenuBeforeFinishingActivity() throws IOException {
+    public void systemBackClosesRootMenuBeforeFinishingActivity() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitRoute(scenario, MenuRoute.LIBRARY);
             scenario.onActivity(activity -> {
                 View menu = menuButton(activity);
-                assertEquals("Open Coffee GB menu", menu.getContentDescription().toString());
-                menu.performClick();
                 assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
             });
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
