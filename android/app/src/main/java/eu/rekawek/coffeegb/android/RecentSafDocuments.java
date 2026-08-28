@@ -42,12 +42,14 @@ final class RecentSafDocuments {
     private static final int CAPACITY = 10;
     private static final SecureRandom BENCHMARK_NONCE_RANDOM = new SecureRandom();
 
+    private final Context context;
     private final ContentResolver resolver;
     private final SharedPreferences preferences;
     private final File previewDirectory;
 
     RecentSafDocuments(Context context) {
         Context application = context.getApplicationContext();
+        this.context = application;
         resolver = application.getContentResolver();
         preferences = application.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
         previewDirectory = new File(application.getFilesDir(), "recent-game-previews");
@@ -564,6 +566,13 @@ final class RecentSafDocuments {
     }
 
     private boolean hasPersistedReadPermission(Uri uri) {
+        try {
+            if (new AndroidRomImportStore(context).ownsReadable(uri)) {
+                return true;
+            }
+        } catch (java.io.IOException ignored) {
+            // Continue with Android's persisted document grants.
+        }
         for (android.content.UriPermission permission : resolver.getPersistedUriPermissions()) {
             if (permission.getUri().equals(uri) && permission.isReadPermission()) {
                 return true;

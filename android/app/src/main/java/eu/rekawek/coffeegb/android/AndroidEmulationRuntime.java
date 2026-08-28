@@ -794,10 +794,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     /** Opens a document selected from a menu that may own the current session's pause. */
     void openRom(Uri uri, int resultFlags, boolean releaseMenuPause) {
         Uri checked = Objects.requireNonNull(uri, "uri");
-        submit(() -> {
-            retainReadPermission(checked, resultFlags);
-            openRom(checked, releaseMenuPause);
-        });
+        submit(() -> openSelectedRom(checked, resultFlags, releaseMenuPause));
     }
 
     /** Selects an opaque archive token published through {@link RuntimeState#selections()}. */
@@ -923,7 +920,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             }
             Uri uri = pendingRecents.get((int) token);
             pendingRecents = List.of();
-            openRom(uri, false);
+            openSelectedRom(uri, 0, false);
         });
     }
 
@@ -1802,24 +1799,30 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         controller.startController();
     }
 
-    private void openRom(Uri uri, boolean releaseMenuPause) {
+    private void openSelectedRom(Uri uri, int resultFlags, boolean releaseMenuPause) {
         persistCurrentRecentGame();
         clearPendingSource();
         frames.clear();
         publish(RuntimeState.Phase.OPENING, "Opening selected ROM…", List.of(), false, true, false);
+        Uri durableSource = uri;
+        boolean imported = false;
         try {
-            AndroidRomInput input = new AndroidRomInput(context.getContentResolver(), uri);
+            if (!retainReadPermission(uri, resultFlags)) {
+                durableSource = new AndroidRomImportStore(context).importDocument(uri);
+                imported = true;
+            }
+            AndroidRomInput input = new AndroidRomInput(context.getContentResolver(), durableSource);
             RomSourceSnapshot snapshot = RomSourceSnapshot.open(input);
             if (!snapshot.isArchive() || snapshot.candidates().size() == 1) {
                 activateSnapshot(snapshot,
                         snapshot.isArchive()
                                 ? snapshot.candidates().get(0).token()
                                 : RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN,
-                        uri, releaseMenuPause);
+                        durableSource, releaseMenuPause);
                 return;
             }
             pendingSnapshot = snapshot;
-            pendingSource = uri;
+            pendingSource = durableSource;
             pendingSnapshotReleasesMenuPause = releaseMenuPause;
             List<RuntimeState.Selection> choices = snapshot.candidates().stream()
                     .map(candidate -> new RuntimeState.Selection(candidate.token(), candidate.displayName()))
@@ -1828,7 +1831,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     "Choose ROM from archive.", choices, false, true, false);
         } catch (Exception failure) {
             if (!diagnostics.enabled()) {
-                forgetRevokedPermission(uri);
+                if (imported) {
+                    try {
+                        new AndroidRomImportStore(context).deleteIfOwned(durableSource);
+                    } catch (IOException ignored) {
+                        // The import directory being unavailable already explains this failure.
+                    }
+                } else {
+                    forgetRevokedPermission(uri);
+                }
             }
             publish(RuntimeState.Phase.FAILED,
                     "Coffee GB could not open this document. Check its permission and format.",
@@ -2314,16 +2325,30 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
     }
 
-    private void retainReadPermission(Uri uri, int resultFlags) {
+    private boolean retainReadPermission(Uri uri, int resultFlags) {
+        try {
+            if (new AndroidRomImportStore(context).ownsReadable(uri)) {
+                return true;
+            }
+        } catch (IOException ignored) {
+            // A transient document can still be opened or reported as unavailable below.
+        }
+        for (UriPermission permission : context.getContentResolver().getPersistedUriPermissions()) {
+            if (permission.isReadPermission() && permission.getUri().equals(uri)) {
+                return true;
+            }
+        }
         int read = resultFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION;
         int persistable = resultFlags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
         if (read == 0 || persistable == 0) {
-            return;
+            return false;
         }
         try {
             context.getContentResolver().takePersistableUriPermission(uri, read);
+            return true;
         } catch (SecurityException ignored) {
             // A one-shot provider grant remains usable for this open but is not retained in Recents.
+            return false;
         }
     }
 
@@ -2332,6 +2357,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         new RecentSafDocuments(context).remove(uri);
+        try {
+            new AndroidRomImportStore(context).deleteIfOwned(uri);
+        } catch (IOException ignored) {
+            // There is no app-private import to remove.
+        }
         for (UriPermission permission : context.getContentResolver().getPersistedUriPermissions()) {
             if (permission.getUri().equals(uri) && permission.isReadPermission()) {
                 try {
