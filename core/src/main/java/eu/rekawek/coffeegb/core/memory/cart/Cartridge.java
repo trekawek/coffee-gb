@@ -36,6 +36,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private boolean revengeGatorSecondaryLinkRole;
 
+    private boolean shikinjouSecondaryLinkRole;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -189,6 +191,17 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
                 return 0x17;
             }
         }
+        if (shikinjouSecondaryLinkRole) {
+            if (address == 0x22cb) {
+                return 0xc3;
+            }
+            if (address == 0x22cc) {
+                return 0xf3;
+            }
+            if (address == 0x22cd) {
+                return 0x22;
+            }
+        }
         return addressSpace.getByte(address);
     }
 
@@ -196,11 +209,15 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         revengeGatorSecondaryLinkRole = true;
     }
 
+    public void enableShikinjouSecondaryLinkRole() {
+        shikinjouSecondaryLinkRole = true;
+    }
+
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
         // Keep execution on the ordinary cartridge read path while that overlay is active.
-        if (revengeGatorSecondaryLinkRole) {
+        if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole) {
             return null;
         }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
