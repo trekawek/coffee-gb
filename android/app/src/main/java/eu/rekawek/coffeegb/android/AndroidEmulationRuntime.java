@@ -515,11 +515,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
         submit(() -> {
             String value = Boolean.toString(enabled);
-            if (Objects.equals(properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, null),
-                    value)) {
-                return;
+            if (!Objects.equals(
+                    properties.getProperty(EmulatorProperties.Key.ShowSgbBorder, null), value)) {
+                properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, value);
             }
-            properties.setProperty(EmulatorProperties.Key.ShowSgbBorder, value);
+            // The stored preference and the live machine can legitimately differ after a
+            // profile-constrained session or host reattachment. Reassert the requested value
+            // even when persistence already agrees, otherwise an ON checkbox can leave the
+            // active SGB display producing borderless 160x144 frames indefinitely.
             if (eventBus != null) {
                 eventBus.post(new SgbDisplay.SetSgbBorder(enabled));
             }

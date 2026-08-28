@@ -4517,8 +4517,9 @@ class BasicController private constructor(
           null
         }
 
-    if (properties.overrides.benchmarkPolicyEnabled &&
-        !completeBenchmarkBootstrap(session)) {
+    if ((properties.overrides.benchmarkPolicyEnabled ||
+            session.config.bootstrapMode == Gameboy.BootstrapMode.FAST_FORWARD) &&
+        !completePresentationBootstrap(session)) {
       return
     }
 
@@ -4593,18 +4594,18 @@ class BasicController private constructor(
     postInitialMobileAdapterNetworkStatus()
   }
 
-  /** Completes a requested authentic BIOS handoff while the benchmark anchor remains paused. */
-  private fun completeBenchmarkBootstrap(currentSession: Session): Boolean {
+  /** Completes a requested authentic BIOS handoff before the session becomes presentable. */
+  private fun completePresentationBootstrap(currentSession: Session): Boolean {
     val gameboy = currentSession.gameboy
-    var remaining = BENCHMARK_BOOTSTRAP_MAX_TICKS
+    var remaining = PRESENTATION_BOOTSTRAP_MAX_TICKS
     while (!gameboy.isBootstrapReady()) {
       if (doStop || session !== currentSession) {
         return false
       }
       if (remaining <= 0L) {
-        throw IllegalStateException("Benchmark bootstrap did not reach the cartridge handoff")
+        throw IllegalStateException("Bootstrap did not reach the cartridge handoff")
       }
-      val chunk = minOf(remaining, BENCHMARK_BOOTSTRAP_CHUNK_TICKS.toLong()).toInt()
+      val chunk = minOf(remaining, PRESENTATION_BOOTSTRAP_CHUNK_TICKS.toLong()).toInt()
       val executed = gameboy.runTicksUntilStop(chunk) {
         doStop || session !== currentSession || gameboy.isBootstrapReady()
       }
@@ -4613,7 +4614,7 @@ class BasicController private constructor(
         if (doStop || session !== currentSession) {
           return false
         }
-        throw IllegalStateException("Benchmark bootstrap made no progress")
+        throw IllegalStateException("Bootstrap made no progress")
       }
     }
     return !doStop && session === currentSession
@@ -5462,9 +5463,9 @@ class BasicController private constructor(
 
     const val MAX_DEBUG_COMMANDS_PER_SAFE_POINT = 64
 
-    const val BENCHMARK_BOOTSTRAP_CHUNK_TICKS = 16_384
+    const val PRESENTATION_BOOTSTRAP_CHUNK_TICKS = 16_384
 
-    const val BENCHMARK_BOOTSTRAP_MAX_TICKS = 40_000_000L
+    const val PRESENTATION_BOOTSTRAP_MAX_TICKS = 40_000_000L
 
     const val MAX_DEBUG_CONTROL_EVENTS_PER_SAFE_POINT = 64
 

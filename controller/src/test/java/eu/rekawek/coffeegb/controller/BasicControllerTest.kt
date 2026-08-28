@@ -1896,6 +1896,63 @@ class BasicControllerTest {
   }
 
   @Test
+  fun fastForwardBootstrapCompletesBeforeProfileAndStartedEvents() {
+    val eventBus = EventBusImpl()
+    val started = LinkedBlockingQueue<EmulationStartedEvent>()
+    val profile = LinkedBlockingQueue<HardwareProfileEvent>()
+    val bootstrapCalls = AtomicInteger()
+    val bootstrapReadyAtProfile = AtomicBoolean()
+    eventBus.register<EmulationStartedEvent> {
+      assertTrue(bootstrapReadyAtProfile.get())
+      started.add(it)
+    }
+    eventBus.register<HardwareProfileEvent> {
+      assertTrue(bootstrapCalls.get() > 0)
+      bootstrapReadyAtProfile.set(true)
+      profile.add(it)
+    }
+    val rom = namedRom("FAST_FORWARD_BOOTSTRAP")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(bootstrapMode = BootstrapMode.FAST_FORWARD),
+        )
+    val preparer =
+        SessionPreparer { currentProperties, event ->
+          val config =
+              Controller.createGameboyConfig(currentProperties, Rom(event.rom))
+                  .setBootstrapMode(BootstrapMode.SKIP)
+          val gameboy =
+              object : Gameboy(config) {
+                private var ready = false
+
+                override fun isBootstrapReady(): Boolean = ready
+
+                override fun runTicksUntilStop(ticks: Int, stop: BooleanSupplier): Int {
+                  bootstrapCalls.incrementAndGet()
+                  ready = true
+                  return 1
+                }
+              }
+          config.setBootstrapMode(BootstrapMode.FAST_FORWARD)
+          PreparedSession.Ready(config, gameboy)
+        }
+    val controller = BasicController(eventBus, properties, null, preparer)
+
+    controller.startController()
+    try {
+      eventBus.post(LoadRomEvent(rom = rom, allowAutosaveResume = false))
+      assertNotNull(profile.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(1, bootstrapCalls.get())
+    } finally {
+      controller.close()
+      properties.close()
+      eventBus.close()
+      rom.delete()
+    }
+  }
+
+  @Test
   fun benchmarkBoundaryCarriesPerformanceEpochTelemetry() {
     val eventBus = EventBusImpl()
     val started = LinkedBlockingQueue<EmulationStartedEvent>()

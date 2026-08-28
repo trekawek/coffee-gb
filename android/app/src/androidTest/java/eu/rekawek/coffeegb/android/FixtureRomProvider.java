@@ -27,9 +27,21 @@ public final class FixtureRomProvider extends ContentProvider {
     static final Uri URI = Uri.parse("content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke.gb");
     static final Uri SECOND_URI = Uri.parse(
             "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-cgb.gbc");
+    static final Uri SGB_URI = Uri.parse(
+            "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-sgb.gb");
     private static final String DISPLAY_NAME = "coffee-gb-ci-smoke.gb";
     private static final String SECOND_DISPLAY_NAME = "coffee-gb-ci-smoke-cgb.gbc";
+    private static final String SGB_DISPLAY_NAME = "coffee-gb-ci-smoke-sgb.gb";
     private static final int ROM_SIZE = 0x8000;
+    private static final byte[] NINTENDO_LOGO = {
+            (byte) 0xce, (byte) 0xed, 0x66, 0x66, (byte) 0xcc, 0x0d, 0x00, 0x0b,
+            0x03, 0x73, 0x00, (byte) 0x83, 0x00, 0x0c, 0x00, 0x0d,
+            0x00, 0x08, 0x11, 0x1f, (byte) 0x88, (byte) 0x89, 0x00, 0x0e,
+            (byte) 0xdc, (byte) 0xcc, 0x6e, (byte) 0xe6, (byte) 0xdd, (byte) 0xdd,
+            (byte) 0xd9, (byte) 0x99, (byte) 0xbb, (byte) 0xbb, 0x67, 0x63,
+            0x6e, 0x0e, (byte) 0xec, (byte) 0xcc, (byte) 0xdd, (byte) 0xdc,
+            (byte) 0x99, (byte) 0x9f, (byte) 0xbb, (byte) 0xb9, 0x33, 0x3e,
+    };
 
     @Override
     public boolean onCreate() {
@@ -64,12 +76,11 @@ public final class FixtureRomProvider extends ContentProvider {
                 throw new FileNotFoundException("The CI fixture provider is not initialized");
             }
             File fixture = new File(context.getCacheDir(), displayName(uri));
-            if (!fixture.isFile() || fixture.length() != ROM_SIZE) {
-                try (FileOutputStream output = new FileOutputStream(fixture)) {
-                    output.write(fixtureBytes(
-                            uri.equals(SECOND_URI) ? "CI SMOKE CGB" : "CI SMOKE",
-                            uri.equals(SECOND_URI)));
-                }
+            try (FileOutputStream output = new FileOutputStream(fixture)) {
+                output.write(fixtureBytes(
+                        uri.equals(SECOND_URI) ? "CI SMOKE CGB"
+                                : uri.equals(SGB_URI) ? "CI SMOKE SGB" : "CI SMOKE",
+                        uri.equals(SECOND_URI), uri.equals(SGB_URI)));
             }
             return ParcelFileDescriptor.open(fixture, ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (IOException failure) {
@@ -93,24 +104,27 @@ public final class FixtureRomProvider extends ContentProvider {
     }
 
     private static void assertFixture(Uri uri) {
-        if (!URI.equals(uri) && !SECOND_URI.equals(uri)) {
+        if (!URI.equals(uri) && !SECOND_URI.equals(uri) && !SGB_URI.equals(uri)) {
             throw new IllegalArgumentException("Unknown CI fixture");
         }
     }
 
     private static String displayName(Uri uri) {
         assertFixture(uri);
-        return uri.equals(SECOND_URI) ? SECOND_DISPLAY_NAME : DISPLAY_NAME;
+        return uri.equals(SECOND_URI) ? SECOND_DISPLAY_NAME
+                : uri.equals(SGB_URI) ? SGB_DISPLAY_NAME : DISPLAY_NAME;
     }
 
-    private static byte[] fixtureBytes(String fixtureTitle, boolean cgb) {
+    private static byte[] fixtureBytes(String fixtureTitle, boolean cgb, boolean sgb) {
         byte[] rom = new byte[ROM_SIZE];
         rom[0x0100] = (byte) 0xc3; // JP 0x0150
         rom[0x0101] = 0x50;
         rom[0x0102] = 0x01;
+        System.arraycopy(NINTENDO_LOGO, 0, rom, 0x0104, NINTENDO_LOGO.length);
         byte[] title = fixtureTitle.getBytes(StandardCharsets.US_ASCII);
         System.arraycopy(title, 0, rom, 0x0134, title.length);
         rom[0x0143] = cgb ? (byte) 0x80 : 0x00;
+        rom[0x0146] = sgb ? (byte) 0x03 : 0x00;
         rom[0x0147] = 0x00; // ROM only
         rom[0x0148] = 0x00; // 32 KiB
         rom[0x0149] = 0x00; // no RAM
