@@ -40,6 +40,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private boolean volleyFireSecondaryLinkRole;
 
+    private boolean harvestMoonSecondaryLinkRole;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -218,7 +220,21 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
                 return 0x21;
             }
         }
+        if (harvestMoonSecondaryLinkRole && address == 0x6768
+                && isHarvestMoonLinkTimeoutMapped()) {
+            return 0xc9;
+        }
         return addressSpace.getByte(address);
+    }
+
+    private boolean isHarvestMoonLinkTimeoutMapped() {
+        int[] timeoutRoutine = {0x3e, 0xfe, 0xe0, 0x01, 0x3e, 0x81, 0xe0, 0x02, 0xc9};
+        for (int i = 0; i < timeoutRoutine.length; i++) {
+            if (addressSpace.getByte(0x6768 + i) != timeoutRoutine[i]) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public void enableRevengeGatorSecondaryLinkRole() {
@@ -233,12 +249,16 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         volleyFireSecondaryLinkRole = true;
     }
 
+    public void enableHarvestMoonSecondaryLinkRole() {
+        harvestMoonSecondaryLinkRole = true;
+    }
+
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
         // Keep execution on the ordinary cartridge read path while that overlay is active.
         if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole
-                || volleyFireSecondaryLinkRole) {
+                || volleyFireSecondaryLinkRole || harvestMoonSecondaryLinkRole) {
             return null;
         }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
