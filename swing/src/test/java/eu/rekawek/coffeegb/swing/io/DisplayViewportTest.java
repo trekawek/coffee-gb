@@ -126,7 +126,8 @@ public class DisplayViewportTest {
                 DisplayScaleMode.EXPLICIT_1X,
                 DisplayScaleMode.EXPLICIT_2X,
                 DisplayScaleMode.EXPLICIT_3X,
-                DisplayScaleMode.EXPLICIT_4X
+                DisplayScaleMode.EXPLICIT_4X,
+                DisplayScaleMode.EXPLICIT_5X
         };
         for (DisplayScaleMode mode : modes) {
             DisplayViewport viewport = DisplayViewport.calculate(
@@ -199,8 +200,9 @@ public class DisplayViewportTest {
         assertEquals(DisplayScaleMode.EXPLICIT_2X, DisplayScaleMode.explicit(2));
         assertEquals(DisplayScaleMode.EXPLICIT_3X, DisplayScaleMode.explicit(3));
         assertEquals(DisplayScaleMode.EXPLICIT_4X, DisplayScaleMode.explicit(4));
+        assertEquals(DisplayScaleMode.EXPLICIT_5X, DisplayScaleMode.explicit(5));
         assertThrows(IllegalArgumentException.class, () -> DisplayScaleMode.explicit(0));
-        assertThrows(IllegalArgumentException.class, () -> DisplayScaleMode.explicit(5));
+        assertThrows(IllegalArgumentException.class, () -> DisplayScaleMode.explicit(6));
     }
 
     private static void assertUniformTransform(

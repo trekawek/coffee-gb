@@ -183,4 +183,4 @@ internal fun ApplicationSettings.Display.toRuntimeScaleMode(): DisplayScaleMode 
           DisplayScaleMode.explicit(explicitScale)
     }
 
-private val EXPOSED_WINDOW_SCALES = setOf(1, 2, 4)
+private val EXPOSED_WINDOW_SCALES = (1..5).toSet()

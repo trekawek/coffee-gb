@@ -85,7 +85,7 @@ class ScreenMenuTest {
             val scaleItems = scale.items()
             val rotateItems = rotate.items()
             assertEquals(
-                listOf("1x", "2x", "4x"),
+                listOf("1x", "2x", "3x", "4x", "5x"),
                 scaleItems.map { it.text },
             )
             assertTrue(scaleItems.all { it is JRadioButtonMenuItem })

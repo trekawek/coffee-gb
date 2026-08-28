@@ -583,7 +583,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 9
+    const val CURRENT_SCHEMA_VERSION = 10
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
@@ -600,7 +600,7 @@ data class ApplicationSettings(
     const val MAX_CAMERA_DEVICE_INDEX = 15
     const val MIN_EXPLICIT_DISPLAY_SCALE = 1
     const val DEFAULT_EXPLICIT_DISPLAY_SCALE = 2
-    const val MAX_EXPLICIT_DISPLAY_SCALE = 4
+    const val MAX_EXPLICIT_DISPLAY_SCALE = 5
     const val MIN_LETTERBOX_COLOR = 0x000000
     const val DEFAULT_LETTERBOX_COLOR = 0x000000
     const val MAX_LETTERBOX_COLOR = 0xFFFFFF

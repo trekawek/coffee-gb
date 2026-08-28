@@ -71,6 +71,7 @@ object ApplicationSettingsCodec {
   private val versionEightFixedKeys =
       versionSevenFixedKeys + setOf(DESKTOP_APPEARANCE_KEY, DESKTOP_COMMAND_BAR_VISIBLE_KEY)
   private val versionNineFixedKeys = versionEightFixedKeys + EXECUTION_MODE_KEY
+  private val versionTenFixedKeys = versionNineFixedKeys
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -93,6 +94,7 @@ object ApplicationSettingsCodec {
             version == "6" ||
             version == "7" ||
             version == "8" ||
+            version == "9" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -491,6 +493,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 10 -> versionTenFixedKeys
           sourceVersion >= 9 -> versionNineFixedKeys
           sourceVersion >= 8 -> versionEightFixedKeys
           sourceVersion >= 7 -> versionSevenFixedKeys
@@ -973,7 +976,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionNineFixedKeys ||
+      key in versionTenFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

@@ -263,11 +263,11 @@ class PreferencesDialogTest {
   fun `choosing a display scale propagates one window-size command through the edit`() =
       onEdt {
         val panel = PreferencesPanel(ApplicationSettings())
-        panel.displayEditor.explicitScale.selectedIndex = 2
+        panel.displayEditor.explicitScale.selectedIndex = 4
 
         val edit = panel.validatedEdit()
 
-        assertEquals(4, edit.display.explicitScale)
+        assertEquals(5, edit.display.explicitScale)
         assertTrue(edit.forceWindowSize)
       }
 

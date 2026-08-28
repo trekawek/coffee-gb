@@ -59,26 +59,24 @@ class DisplayPreferencesEditorTest {
         assertTrue(editor.explicitScale.isEnabled)
         assertFalse(editor.windowScaleCommandRequested)
         assertEquals(
-            listOf(1, 2, 4),
+            (1..5).toList(),
             (0 until editor.explicitScale.itemCount)
                 .map(editor.explicitScale::getItemAt)
                 .map { it.scale },
         )
-        // A legacy 3x value is presented as the nearest available command but remains untouched
-        // until that command is actually selected.
         assertEquals(
-            2,
+            3,
             (editor.explicitScale.selectedItem as DisplayPreferencesEditor.ScaleOption).scale,
         )
         assertEquals(initial, editor.validatedDisplay())
 
-        selectScale(editor, 4)
+        selectScale(editor, 5)
         assertTrue(editor.windowScaleCommandRequested)
         assertEquals(
             ApplicationSettings.DisplayScalingMode.EXPLICIT,
             editor.validatedDisplay().scalingMode,
         )
-        assertEquals(4, editor.validatedDisplay().explicitScale)
+        assertEquals(5, editor.validatedDisplay().explicitScale)
       }
 
   @Test

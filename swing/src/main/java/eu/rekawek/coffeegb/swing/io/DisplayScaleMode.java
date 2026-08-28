@@ -17,7 +17,9 @@ public enum DisplayScaleMode {
 
     EXPLICIT_3X(3),
 
-    EXPLICIT_4X(4);
+    EXPLICIT_4X(4),
+
+    EXPLICIT_5X(5);
 
     private final int explicitScale;
 
@@ -42,8 +44,9 @@ public enum DisplayScaleMode {
             case 2 -> EXPLICIT_2X;
             case 3 -> EXPLICIT_3X;
             case 4 -> EXPLICIT_4X;
+            case 5 -> EXPLICIT_5X;
             default -> throw new IllegalArgumentException(
-                    "Explicit display scale must be between 1 and 4");
+                    "Explicit display scale must be between 1 and 5");
         };
     }
 }

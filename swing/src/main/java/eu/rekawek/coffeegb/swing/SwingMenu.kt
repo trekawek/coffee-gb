@@ -864,7 +864,7 @@ internal fun createScreenMenu(
   val scale = JMenu("Scale")
   screenMenu.add(scale)
   val scaleGroup = ButtonGroup()
-  val supportedScales = listOf(1, 2, 4)
+  val supportedScales = (1..5).toList()
   val initialScale = supportedScales.minBy { kotlin.math.abs(it - initial.explicitScale) }
   val scaleItems = mutableMapOf<Int, JRadioButtonMenuItem>()
 

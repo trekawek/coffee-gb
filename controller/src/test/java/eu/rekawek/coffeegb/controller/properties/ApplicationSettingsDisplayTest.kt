@@ -19,12 +19,12 @@ class ApplicationSettingsDisplayTest {
     assertFalse(defaults.fullscreen)
 
     ApplicationSettings.Display(explicitScale = 1, letterboxColor = 0x000000)
-    ApplicationSettings.Display(explicitScale = 4, letterboxColor = 0xFFFFFF)
+    ApplicationSettings.Display(explicitScale = 5, letterboxColor = 0xFFFFFF)
     ApplicationSettings.DisplayScalingMode.entries.forEach { mode ->
       ApplicationSettings.Display(scalingMode = mode)
     }
 
-    listOf(0, 5).forEach { invalidScale ->
+    listOf(0, 6).forEach { invalidScale ->
       assertFailsWith<IllegalArgumentException> {
         ApplicationSettings.Display(explicitScale = invalidScale)
       }
@@ -165,14 +165,14 @@ class ApplicationSettingsDisplayTest {
   }
 
   @Test
-  fun `schema four rejects noncanonical display values and accepts explicit three times`() {
+  fun `schema four rejects noncanonical display values and accepts every added explicit scale`() {
     val validSchema = mapOf(ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "4")
     val invalid =
         listOf(
             mapOf(ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY to "aspect_fit"),
             mapOf(ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY to "FIXED"),
             mapOf("display.scale" to "0"),
-            mapOf("display.scale" to "5"),
+            mapOf("display.scale" to "6"),
             mapOf("display.scale" to "3.0"),
             mapOf(ApplicationSettingsCodec.DISPLAY_LETTERBOX_COLOR_KEY to "#123456"),
             mapOf(ApplicationSettingsCodec.DISPLAY_LETTERBOX_COLOR_KEY to "abcdef"),
@@ -187,14 +187,16 @@ class ApplicationSettingsDisplayTest {
       }
     }
 
-    val explicitThree =
-        ApplicationSettingsCodec.decode(
-            validSchema +
-                mapOf(
-                    ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY to "EXPLICIT",
-                    "display.scale" to "3",
-                ))
-    assertEquals(3, explicitThree.settings.display.explicitScale)
+    listOf(3, 5).forEach { scale ->
+      val decoded =
+          ApplicationSettingsCodec.decode(
+              validSchema +
+                  mapOf(
+                      ApplicationSettingsCodec.DISPLAY_SCALING_MODE_KEY to "EXPLICIT",
+                      "display.scale" to scale.toString(),
+                  ))
+      assertEquals(scale, decoded.settings.display.explicitScale)
+    }
   }
 
   private fun serializeCollisions(values: Map<String, String>): String =

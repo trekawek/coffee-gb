@@ -56,7 +56,7 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   hot-plug, and neutral release; on macOS also record whether compatible system SDL2 is installed.
 - [ ] Confirm audio starts, mute/volume/device selection work, and quit releases the audio device.
 - [ ] Enter and leave fullscreen with both F11 and Escape, resize the window, and verify complete
-  aspect-preserving fit plus the 1×/2×/4× window-size commands on the attached display.
+  aspect-preserving fit plus the 1× through 5× window-size commands on the attached display.
 - [ ] Create battery-backed progress, quit, relaunch, and confirm it persisted. Repeat package
   upgrade/reinstall without losing it.
 - [ ] Save and load a state, verify the thumbnail/metadata where available, and confirm a wrong-ROM
