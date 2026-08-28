@@ -4,11 +4,16 @@ import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
+import android.os.Build;
 
 /** Android framework bridge kept outside the portable DSP and fixed PCM queue. */
 final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
 
     static final class Factory implements AndroidAudioSink.OutputFactory {
+
+        /** Five maximum packets of physical capacity; the start threshold is configured below. */
+        static final int BUFFER_PACKETS = AndroidAudioSink.PRIMER_PACKETS + 1;
+
         @Override
         public AndroidAudioSink.Output open() {
             int nativeRate = AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC);
@@ -31,9 +36,14 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
          * duplicate candidates before any framework call.</p>
          */
         static int[] candidateSampleRates(int nativeRate) {
+            if (nativeRate == 44_100) {
+                return new int[]{44_100, 48_000};
+            }
+            if (nativeRate == 48_000) {
+                return new int[]{48_000, 44_100};
+            }
             boolean hasDistinctPositiveNativeRate = nativeRate > 0
-                    && nativeRate != 48_000
-                    && nativeRate != 44_100;
+                    && nativeRate != 48_000 && nativeRate != 44_100;
             int[] candidates = new int[hasDistinctPositiveNativeRate ? 3 : 2];
             candidates[0] = 48_000;
             candidates[1] = 44_100;
@@ -41,6 +51,49 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
                 candidates[2] = nativeRate;
             }
             return candidates;
+        }
+
+        static int packetBufferBytes(int sampleRate) {
+            return Math.multiplyExact(BUFFER_PACKETS,
+                    BoundedPcmQueue.maximumFrameBytes(sampleRate));
+        }
+
+        static int configuredBufferBytes(int sampleRate, int minimumBufferBytes) {
+            if (minimumBufferBytes <= 0) {
+                throw new IllegalArgumentException("Minimum audio buffer must be positive");
+            }
+            return Math.max(minimumBufferBytes, packetBufferBytes(sampleRate));
+        }
+
+        static boolean hasPacketCapacity(int sampleRate, int configuredBytes, int actualBytes) {
+            int required = packetBufferBytes(sampleRate);
+            return configuredBytes >= required && actualBytes >= required;
+        }
+
+        static boolean hasEffectivePrimerWindow(int sampleRate, int effectiveFrames,
+                int startThresholdFrames) {
+            int minimumEffective = BoundedPcmQueue.maximumOutputFramesForPackets(sampleRate,
+                    AndroidAudioSink.PRIMER_PACKETS);
+            int maximumThreshold = BoundedPcmQueue.minimumOutputFramesForPackets(sampleRate,
+                    BoundedPcmQueue.DEFAULT_CAPACITY);
+            return effectiveFrames >= minimumEffective && startThresholdFrames > 0
+                    && startThresholdFrames <= effectiveFrames
+                    && startThresholdFrames <= maximumThreshold;
+        }
+
+        static int startThresholdFrames(int sdkInt, int reportedFrames, int effectiveFrames) {
+            if (effectiveFrames <= 0) {
+                throw new IllegalArgumentException("Effective audio buffer must be positive");
+            }
+            if (sdkInt < Build.VERSION_CODES.S) {
+                // Pre-S does not expose the device threshold. The documented portable refill is
+                // the entire effective application-write buffer.
+                return effectiveFrames;
+            }
+            if (reportedFrames <= 0 || reportedFrames > effectiveFrames) {
+                throw new IllegalArgumentException("Invalid AudioTrack start threshold");
+            }
+            return reportedFrames;
         }
 
         private static AndroidAudioTrackOutput tryOpen(int sampleRate) {
@@ -54,6 +107,7 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
             }
             AudioTrack track = null;
             try {
+                int configured = configuredBufferBytes(sampleRate, minimum);
                 track = new AudioTrack.Builder()
                         .setAudioAttributes(new AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_GAME)
@@ -64,7 +118,7 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
                                 .setSampleRate(sampleRate)
                                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                                 .build())
-                        .setBufferSizeInBytes(Math.max(minimum, sampleRate * 4 / 100))
+                        .setBufferSizeInBytes(configured)
                         .setTransferMode(AudioTrack.MODE_STREAM)
                         .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
                         .build();
@@ -73,11 +127,31 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
                     return null;
                 }
                 int actualRate = track.getSampleRate();
-                int actualBuffer = Math.max(0, track.getBufferSizeInFrames()) * 4;
-                int configured = Math.max(minimum, sampleRate * 4 / 100);
+                int selectedRate = actualRate > 0 ? actualRate : sampleRate;
+                int capacityFrames = Math.max(0, track.getBufferCapacityInFrames());
+                int capacityBytes = Math.multiplyExact(capacityFrames, 4);
+                if (!hasPacketCapacity(selectedRate, configured, capacityBytes)) {
+                    track.release();
+                    return null;
+                }
+                int requestedEffectiveFrames = Math.max((minimum + 3) / 4,
+                        packetBufferBytes(selectedRate) / 4);
+                int effectiveFrames = track.setBufferSizeInFrames(requestedEffectiveFrames);
+                int desiredThresholdFrames = BoundedPcmQueue.minimumOutputFramesForPackets(
+                        selectedRate, AndroidAudioSink.PRIMER_PACKETS);
+                int reportedThreshold = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                        ? track.setStartThresholdInFrames(desiredThresholdFrames) : effectiveFrames;
+                int selectedStartThresholdFrames = startThresholdFrames(Build.VERSION.SDK_INT,
+                        reportedThreshold, effectiveFrames);
+                if (!hasEffectivePrimerWindow(selectedRate, effectiveFrames,
+                        selectedStartThresholdFrames)) {
+                    track.release();
+                    return null;
+                }
                 return new AndroidAudioTrackOutput(track,
-                        actualRate > 0 ? actualRate : sampleRate,
-                        minimum, configured, actualBuffer);
+                        selectedRate,
+                        minimum, configured, capacityBytes, capacityFrames, effectiveFrames,
+                        selectedStartThresholdFrames);
             } catch (RuntimeException unavailable) {
                 if (track != null) {
                     track.release();
@@ -92,14 +166,21 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
     private final int minimumBufferBytes;
     private final int configuredBufferBytes;
     private final int actualBufferBytes;
+    private final int bufferCapacityFrames;
+    private final int effectiveBufferFrames;
+    private final int startThresholdFrames;
 
     private AndroidAudioTrackOutput(AudioTrack track, int sampleRate, int minimumBufferBytes,
-            int configuredBufferBytes, int actualBufferBytes) {
+            int configuredBufferBytes, int actualBufferBytes, int bufferCapacityFrames,
+            int effectiveBufferFrames, int startThresholdFrames) {
         this.track = track;
         this.sampleRate = sampleRate;
         this.minimumBufferBytes = minimumBufferBytes;
         this.configuredBufferBytes = configuredBufferBytes;
         this.actualBufferBytes = actualBufferBytes;
+        this.bufferCapacityFrames = bufferCapacityFrames;
+        this.effectiveBufferFrames = effectiveBufferFrames;
+        this.startThresholdFrames = startThresholdFrames;
     }
 
     @Override
@@ -111,6 +192,21 @@ final class AndroidAudioTrackOutput implements AndroidAudioSink.Output {
     public AndroidAudioSink.AudioStats audioStats() {
         return new AndroidAudioSink.AudioStats(sampleRate, minimumBufferBytes,
                 configuredBufferBytes, actualBufferBytes);
+    }
+
+    @Override
+    public int bufferCapacityFrames() {
+        return bufferCapacityFrames;
+    }
+
+    @Override
+    public int effectiveBufferFrames() {
+        return effectiveBufferFrames;
+    }
+
+    @Override
+    public int startThresholdFrames() {
+        return startThresholdFrames;
     }
 
     @Override

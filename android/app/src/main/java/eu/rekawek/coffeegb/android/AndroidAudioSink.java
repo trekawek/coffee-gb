@@ -8,6 +8,8 @@ import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.sound.Sound;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -19,8 +21,21 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 final class AndroidAudioSink implements AutoCloseable {
 
+    /** Four real controller packets cover roughly 65-67 ms for every supported clock profile. */
+    static final int PRIMER_PACKETS = 4;
+
     interface OutputFactory {
         Output open();
+    }
+
+    /** Package-private deterministic seam for the queue-swap concurrency test. */
+    interface QueueSwapHook {
+        void beforeRateChangingSwap();
+    }
+
+    /** Package-private deterministic seam for boundary-publication concurrency tests. */
+    interface BoundaryClearHook {
+        void beforeQueuedPcmClear();
     }
 
     record AudioStats(int sampleRate, int minimumBufferBytes, int configuredBufferBytes,
@@ -32,6 +47,21 @@ final class AndroidAudioSink implements AutoCloseable {
 
         default AudioStats audioStats() {
             return new AudioStats(sampleRate(), 0, 0, 0);
+        }
+
+        /** Maximum application-write reservoir in stereo PCM sample frames. */
+        default int bufferCapacityFrames() {
+            return Math.max(0, audioStats().actualBufferBytes() / 4);
+        }
+
+        /** Current application-write reservoir in stereo PCM sample frames. */
+        default int effectiveBufferFrames() {
+            return bufferCapacityFrames();
+        }
+
+        /** Refill level at which a streaming output is expected to restart after underrun. */
+        default int startThresholdFrames() {
+            return effectiveBufferFrames();
         }
 
         /** Playback head in stereo PCM sample frames, or -1 when unavailable. */
@@ -110,6 +140,8 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     private static final long POLL_MILLIS = 20L;
+    /** Shorter than the six-slot source runway, so a dead output cannot force a queue overrun. */
+    private static final long UNDERRUN_STALL_MILLIS = 60L;
     private static final long CLOSE_TIMEOUT_MILLIS = 750L;
 
     private final OutputFactory outputFactory;
@@ -118,6 +150,10 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AndroidBenchmarkDiagnostics diagnostics;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean reopenRequested = new AtomicBoolean();
+    /** Sticky flush command; unlike the paused level, every pause request is observed once. */
+    private final AtomicLong pauseFlushGeneration = new AtomicLong();
+    /** Monotonic fence for PCM rendered with an obsolete mute/volume policy. */
+    private final AtomicLong pcmPolicyGeneration = new AtomicLong();
     private final AtomicLong underruns = new AtomicLong();
     private final AtomicLong restarts = new AtomicLong();
     /** Monotonic identity fence for observational benchmark snapshots. */
@@ -126,15 +162,25 @@ final class AndroidAudioSink implements AutoCloseable {
     private final PcmAccounting pcmAccounting = BuildConfig.DIAGNOSTICS_ENABLED
             ? new DiagnosticPcmAccounting() : NoOpPcmAccounting.INSTANCE;
     private final Object wakeLock = new Object();
+    /** Linearizes play() with pause/policy/reopen boundaries. */
+    private final Object playbackControlLock = new Object();
+    /** Serializes producer offers with a sample-rate-changing queue replacement. */
+    private final Object queueLock = new Object();
+    private final QueueSwapHook queueSwapHook;
+    private final BoundaryClearHook boundaryClearHook;
     private final AudioDeviceCallback deviceCallback = new AudioDeviceCallback() {
         @Override
         public void onAudioDevicesAdded(AudioDeviceInfo[] addedDevices) {
-            requestRouteReopen();
+            if (containsOutputSink(addedDevices)) {
+                requestRouteReopen();
+            }
         }
 
         @Override
         public void onAudioDevicesRemoved(AudioDeviceInfo[] removedDevices) {
-            requestRouteReopen();
+            if (containsOutputSink(removedDevices)) {
+                requestRouteReopen();
+            }
         }
     };
 
@@ -151,6 +197,8 @@ final class AndroidAudioSink implements AutoCloseable {
     private volatile int actualBufferBytes;
     private volatile boolean outputOpen;
     private volatile boolean outputPlaying;
+    /** Diagnostics-only exception for the legacy paused pre-ARM host-output proof. */
+    private final AtomicBoolean benchmarkEmptyPlayRequested = new AtomicBoolean();
     private volatile Output activeOutput;
     private volatile long playbackPositionFrames = -1L;
     private volatile long outputUnderruns = -1L;
@@ -162,26 +210,46 @@ final class AndroidAudioSink implements AutoCloseable {
     AndroidAudioSink(Context context, EventBus eventBus) {
         this(eventBus, new AndroidAudioTrackOutput.Factory(),
                 Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
-                true, null);
+                true, null, null, null);
     }
 
     AndroidAudioSink(Context context, EventBus eventBus,
             AndroidBenchmarkDiagnostics diagnostics) {
         this(eventBus, new AndroidAudioTrackOutput.Factory(),
                 Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
-                true, diagnostics);
+                true, diagnostics, null, null);
     }
 
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory) {
-        this(eventBus, outputFactory, null, true, null);
+        this(eventBus, outputFactory, null, true, null, null, null);
+    }
+
+    /** Benchmark JVM seam; ordinary construction cannot authorize empty AudioTrack playback. */
+    AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory,
+            AndroidBenchmarkDiagnostics diagnostics) {
+        this(eventBus, outputFactory, null, true, diagnostics, null, null);
+    }
+
+    AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, QueueSwapHook queueSwapHook) {
+        this(eventBus, outputFactory, null, true, null,
+                Objects.requireNonNull(queueSwapHook, "queueSwapHook"), null);
+    }
+
+    AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory,
+            QueueSwapHook queueSwapHook, BoundaryClearHook boundaryClearHook) {
+        this(eventBus, outputFactory, null, true, null, queueSwapHook,
+                Objects.requireNonNull(boundaryClearHook, "boundaryClearHook"));
     }
 
     private AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, AudioManager audioManager,
-            boolean enabled, AndroidBenchmarkDiagnostics diagnostics) {
+            boolean enabled, AndroidBenchmarkDiagnostics diagnostics, QueueSwapHook queueSwapHook,
+            BoundaryClearHook boundaryClearHook) {
         this.outputFactory = Objects.requireNonNull(outputFactory, "outputFactory");
         this.audioManager = audioManager;
         this.enabled = enabled;
         this.diagnostics = diagnostics;
+        this.queueSwapHook = queueSwapHook;
+        this.boundaryClearHook = boundaryClearHook;
         EventBus bus = Objects.requireNonNull(eventBus, "eventBus");
         if (enabled) {
             bus.register(this::onSoundSample, Sound.SoundSampleEvent.class);
@@ -190,7 +258,7 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     static AndroidAudioSink disabled(EventBus eventBus) {
-        return new AndroidAudioSink(eventBus, () -> null, null, false, null);
+        return new AndroidAudioSink(eventBus, () -> null, null, false, null, null, null);
     }
 
     void start() {
@@ -210,13 +278,41 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     void pause() {
-        paused = true;
-        clearQueuedPcm();
+        synchronized (playbackControlLock) {
+            paused = true;
+            benchmarkEmptyPlayRequested.set(false);
+            pauseFlushGeneration.incrementAndGet();
+            clearQueuedPcmAtBoundary();
+        }
         wakeConsumer();
     }
 
     void resume() {
-        paused = false;
+        synchronized (playbackControlLock) {
+            if (benchmarkEmptyPlayRequested.getAndSet(false)) {
+                pauseFlushGeneration.incrementAndGet();
+            }
+            paused = false;
+        }
+        wakeConsumer();
+    }
+
+    /**
+     * Preserves the benchmark's existing stopped/empty-to-playing pre-ARM proof while the guest is
+     * paused and cannot produce primer packets.  This is intentionally unavailable to production
+     * playback; all ordinary resume paths wait for the full genuine-PCM primer.
+     */
+    void resumeEmptyForBenchmarkPreArm() {
+        if (diagnostics == null || !diagnostics.enabled()) {
+            throw new IllegalStateException("Empty audio playback is benchmark-only");
+        }
+        synchronized (playbackControlLock) {
+            if (!paused) {
+                throw new IllegalStateException("Benchmark empty playback requires a paused sink");
+            }
+            benchmarkEmptyPlayRequested.set(true);
+            paused = false;
+        }
         wakeConsumer();
     }
 
@@ -269,35 +365,38 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     void setMuted(boolean nextMuted) {
-        muted = nextMuted;
-        clearQueuedPcm();
+        synchronized (playbackControlLock) {
+            if (muted == nextMuted) {
+                return;
+            }
+            muted = nextMuted;
+            pcmPolicyGeneration.incrementAndGet();
+            clearQueuedPcmAtBoundary();
+        }
         wakeConsumer();
     }
 
-    /**
-     * Selects the fixed source-buffer size used by the next audio queue. Profile events arrive
-     * before the first sound event; if the worker already opened its default queue, rebuild it
-     * without ever allocating from the controller callback.
-     */
+    /** Updates source cadence without reopening AudioTrack or rebuilding fixed PCM storage. */
     void setClockSpec(ClockSpec nextClock) {
         ClockSpec checked = Objects.requireNonNull(nextClock, "nextClock");
         if (sourceClock.equals(checked)) {
             return;
         }
         sourceClock = checked;
-        if (running.get()) {
-            reopenRequested.set(true);
-            clearQueuedPcm();
-            wakeConsumer();
-        }
     }
 
     void setVolume(int nextVolume) {
         if (nextVolume < 0 || nextVolume > 100) {
             throw new IllegalArgumentException("Audio volume must be between 0 and 100");
         }
-        volume = nextVolume;
-        clearQueuedPcm();
+        synchronized (playbackControlLock) {
+            if (volume == nextVolume) {
+                return;
+            }
+            volume = nextVolume;
+            pcmPolicyGeneration.incrementAndGet();
+            clearQueuedPcmAtBoundary();
+        }
         wakeConsumer();
     }
 
@@ -337,8 +436,10 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     void requestRouteReopen() {
-        reopenRequested.set(true);
-        clearQueuedPcm();
+        synchronized (playbackControlLock) {
+            benchmarkEmptyPlayRequested.set(false);
+            reopenRequested.set(true);
+        }
         wakeConsumer();
     }
 
@@ -353,8 +454,11 @@ final class AndroidAudioSink implements AutoCloseable {
 
     @Override
     public void close() {
-        if (!running.getAndSet(false)) {
-            return;
+        synchronized (playbackControlLock) {
+            if (!running.getAndSet(false)) {
+                return;
+            }
+            benchmarkEmptyPlayRequested.set(false);
         }
         if (audioManager != null) {
             audioManager.unregisterAudioDeviceCallback(deviceCallback);
@@ -372,43 +476,106 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     private void onSoundSample(Sound.SoundSampleEvent event) {
-        BoundedPcmQueue active = queue;
-        if (!running.get() || active == null || paused) {
-            return;
-        }
-        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-            synchronized (pcmAccounting) {
-                pcmAccounting.input(event.buffer().length / 2L);
-                int bytes = active.offer(event, volume, muted);
-                accountQueueDiscards(active);
-                if (bytes > 0) {
-                    pcmAccounting.enqueued(bytes, bytes / 4L);
-                }
+        long eventPolicyGeneration;
+        long eventPauseFlushGeneration;
+        int eventVolume;
+        boolean eventMuted;
+        synchronized (playbackControlLock) {
+            if (!running.get() || paused) {
+                return;
             }
-        } else {
-            active.offer(event, volume, muted);
+            // The first real packet revokes the diagnostics-only empty-play exception.  Its
+            // sticky boundary makes the worker stop/flush even if it already called play().
+            if (benchmarkEmptyPlayRequested.getAndSet(false)) {
+                pauseFlushGeneration.incrementAndGet();
+            }
+            eventPolicyGeneration = pcmPolicyGeneration.get();
+            eventPauseFlushGeneration = pauseFlushGeneration.get();
+            eventVolume = volume;
+            eventMuted = muted;
         }
-        hasProducedPcm = true;
+        synchronized (queueLock) {
+            BoundedPcmQueue active = queue;
+            if (!running.get() || active == null || paused) {
+                return;
+            }
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                synchronized (pcmAccounting) {
+                    pcmAccounting.input(event.buffer().length / 2L);
+                    int bytes = active.offer(event, eventVolume, eventMuted,
+                            eventPolicyGeneration, eventPauseFlushGeneration);
+                    accountQueueDiscards(active);
+                    if (bytes > 0) {
+                        pcmAccounting.enqueued(bytes, bytes / 4L);
+                    }
+                }
+            } else {
+                active.offer(event, eventVolume, eventMuted, eventPolicyGeneration,
+                        eventPauseFlushGeneration);
+            }
+            hasProducedPcm = true;
+        }
         wakeConsumer();
     }
 
     private void runConsumer() {
+        preferAudioThreadPriority();
         Output output = null;
         BoundedPcmQueue activeQueue = null;
-        boolean outputPaused = false;
+        List<PendingFrame> primerFrames = new ArrayList<>(PRIMER_PACKETS + 1);
+        boolean outputStarted = false;
         boolean outputOpenedOnce = false;
+        UnderrunRecovery underrunRecovery = new UnderrunRecovery();
+        OutputBufferLimits outputBufferLimits = OutputBufferLimits.UNAVAILABLE;
+        long appliedPauseFlushGeneration = pauseFlushGeneration.get();
+        long appliedPcmPolicyGeneration = pcmPolicyGeneration.get();
+        long observedOutputUnderruns = -1L;
+        OutputProgress outputProgress = new OutputProgress();
+        int primerReplayIndex = 0;
+        int primerPackets = 0;
+        int primerBytes = 0;
         try {
             while (running.get()) {
-                if (output == null || reopenRequested.getAndSet(false)) {
+                long requestedPauseFlushGeneration = pauseFlushGeneration.get();
+                long requestedPcmPolicyGeneration = pcmPolicyGeneration.get();
+                if (requestedPauseFlushGeneration != appliedPauseFlushGeneration
+                        || requestedPcmPolicyGeneration != appliedPcmPolicyGeneration) {
+                    appliedPauseFlushGeneration = requestedPauseFlushGeneration;
+                    appliedPcmPolicyGeneration = requestedPcmPolicyGeneration;
+                    if (activeQueue != null) {
+                        discardPrimerFrames(activeQueue, primerFrames);
+                    } else {
+                        primerFrames.clear();
+                    }
+                    primerReplayIndex = 0;
+                    primerPackets = 0;
+                    primerBytes = 0;
+                    outputStarted = false;
+                    underrunRecovery.reset();
+                    if (resetOutputForPcmBoundary(output)) {
+                        outputProgress.resetAfterFlush(output);
+                        observedOutputUnderruns = sampleOutputUnderruns(output,
+                                observedOutputUnderruns);
+                    }
+                    continue;
+                }
+                boolean reopen = reopenRequested.getAndSet(false);
+                if (output == null || reopen) {
                     if (BuildConfig.DIAGNOSTICS_ENABLED && output != null) {
                         outputOpen = false;
                         outputPlaying = false;
                     }
+                    resetPendingFramesForReplacement(primerFrames);
                     release(output);
                     output = openOutput();
                     activeOutput = output;
                     routeGeneration.incrementAndGet();
-                    outputPaused = false;
+                    outputStarted = false;
+                    underrunRecovery.reset();
+                    outputBufferLimits = OutputBufferLimits.UNAVAILABLE;
+                    primerReplayIndex = 0;
+                    primerPackets = 0;
+                    primerBytes = 0;
                     if (output == null) {
                         if (BuildConfig.DIAGNOSTICS_ENABLED) {
                             outputOpen = false;
@@ -417,6 +584,39 @@ final class AndroidAudioSink implements AutoCloseable {
                         awaitWake(POLL_MILLIS);
                         continue;
                     }
+                    int openedSampleRate;
+                    AudioStats outputStats;
+                    try {
+                        openedSampleRate = output.sampleRate();
+                        outputStats = output.audioStats();
+                        outputBufferLimits = readOutputBufferLimits(output);
+                    } catch (RuntimeException unavailable) {
+                        accountRouteFailure();
+                        release(output);
+                        output = null;
+                        activeOutput = null;
+                        routeGeneration.incrementAndGet();
+                        awaitWake(POLL_MILLIS);
+                        continue;
+                    }
+                    if (activeQueue == null || sampleRate != openedSampleRate) {
+                        synchronized (queueLock) {
+                            if (activeQueue != null) {
+                                if (queueSwapHook != null) {
+                                    queueSwapHook.beforeRateChangingSwap();
+                                }
+                                discardPrimerFrames(activeQueue, primerFrames);
+                                clearQueue(activeQueue);
+                            }
+                            activeQueue = new BoundedPcmQueue(openedSampleRate, sourceClock);
+                            queue = activeQueue;
+                        }
+                        routeGeneration.incrementAndGet();
+                    }
+                    sampleRate = openedSampleRate;
+                    minimumBufferBytes = outputStats.minimumBufferBytes();
+                    configuredBufferBytes = outputStats.configuredBufferBytes();
+                    actualBufferBytes = outputStats.actualBufferBytes();
                     if (BuildConfig.DIAGNOSTICS_ENABLED) {
                         outputOpen = true;
                         outputPlaying = false;
@@ -426,62 +626,327 @@ final class AndroidAudioSink implements AutoCloseable {
                     } else {
                         outputOpenedOnce = true;
                     }
-                    ClockSpec queueClock = sourceClock;
-                    int expectedSourceSamples = Math.multiplyExact(
-                            queueClock.controllerTicksPerFrame(), 2);
-                    if (activeQueue == null || sampleRate != output.sampleRate()
-                            || activeQueue.maximumSourceSamples() != expectedSourceSamples) {
-                        if (BuildConfig.DIAGNOSTICS_ENABLED && activeQueue != null) {
-                            clearAndAccount(activeQueue);
-                        } else if (activeQueue != null) {
-                            activeQueue.clear();
-                        }
-                        activeQueue = new BoundedPcmQueue(output.sampleRate(), queueClock);
-                        queue = activeQueue;
-                        routeGeneration.incrementAndGet();
-                    } else {
-                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                            clearAndAccount(activeQueue);
-                        } else {
-                            activeQueue.clear();
-                        }
-                    }
-                    sampleRate = output.sampleRate();
-                    AudioStats outputStats = output.audioStats();
-                    minimumBufferBytes = outputStats.minimumBufferBytes();
-                    configuredBufferBytes = outputStats.configuredBufferBytes();
-                    actualBufferBytes = outputStats.actualBufferBytes();
                     if (diagnostics != null) {
                         diagnostics.audioStats(outputStats);
                     }
-                    hasProducedPcm = false;
-                    if (!paused) {
-                        output.play();
-                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                            outputPlaying = true;
-                        }
-                    }
+                    outputProgress.open(output);
+                    observedOutputUnderruns = sampleOutputUnderruns(output, -1L);
                     continue;
                 }
 
                 if (paused) {
-                    if (!outputPaused) {
-                        output.pause();
-                        output.flush();
-                        outputPaused = true;
-                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                            outputPlaying = false;
-                        }
-                    }
                     awaitWake(POLL_MILLIS);
                     continue;
                 }
-                if (outputPaused) {
-                    output.play();
-                    outputPaused = false;
-                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                        outputPlaying = true;
+
+                if (underrunRecovery.active()) {
+                    if (reopenRequested.get()) {
+                        continue;
                     }
+                    long playedFrames = outputProgress.readPlaybackPosition(output);
+                    if (playedFrames < 0L) {
+                        // Without a trustworthy head, bounded refill progress cannot be proven.
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                        underrunRecovery.reset();
+                        continue;
+                    }
+                    long latestOutputUnderruns = sampleOutputUnderruns(output,
+                            observedOutputUnderruns);
+                    if (hasOutputUnderrunIncreased(observedOutputUnderruns,
+                            latestOutputUnderruns)) {
+                        observedOutputUnderruns = latestOutputUnderruns;
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                            underrunRecovery.reset();
+                        }
+                        continue;
+                    }
+                    observedOutputUnderruns = latestOutputUnderruns;
+                    long bufferedFrames = outputProgress.bufferedFrames(playedFrames);
+                    if (bufferedFrames < 0L) {
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                        underrunRecovery.reset();
+                        continue;
+                    }
+                    underrunRecovery.observeRefillProgress(outputProgress.acceptedFrames(),
+                            bufferedFrames, outputBufferLimits.startThresholdFrames());
+                    if (underrunRecovery.hasRestarted(playedFrames)
+                            && primerFrames.isEmpty()) {
+                        // AudioTrack restarts itself after its data path reaches the threshold.
+                        // Keep every accepted byte in place and resume the ordinary write stream.
+                        underrunRecovery.reset();
+                        continue;
+                    }
+                    int effectiveFrames = outputBufferLimits.effectiveBufferFrames();
+                    if (bufferedFrames >= effectiveFrames) {
+                        if (underrunRecovery.capacityHasStalled(System.nanoTime())) {
+                            // A blocking write beyond known free capacity could deadlock forever.
+                            // Replace only after a full reservoir still produces no head progress.
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                            underrunRecovery.reset();
+                        } else {
+                            awaitWake(POLL_MILLIS);
+                        }
+                        continue;
+                    }
+
+                    underrunRecovery.clearCapacityStall();
+                    PendingFrame pending;
+                    if (!primerFrames.isEmpty()) {
+                        pending = primerFrames.get(0);
+                    } else {
+                        BoundedPcmQueue.Frame frame = activeQueue.poll(
+                                POLL_MILLIS, TimeUnit.MILLISECONDS);
+                        if (frame == null) {
+                            continue;
+                        }
+                        reconcileFrameAccounting(activeQueue, frame);
+                        long latestPauseFlushGeneration = pauseFlushGeneration.get();
+                        long latestPcmPolicyGeneration = pcmPolicyGeneration.get();
+                        if (latestPauseFlushGeneration != appliedPauseFlushGeneration
+                                || latestPcmPolicyGeneration != appliedPcmPolicyGeneration) {
+                            discardPrimerFrames(activeQueue, primerFrames);
+                            if (frameMatchesBoundary(frame, latestPauseFlushGeneration,
+                                    latestPcmPolicyGeneration)) {
+                                primerFrames.add(new PendingFrame(frame));
+                            } else {
+                                discardFrame(activeQueue, frame);
+                            }
+                            appliedPauseFlushGeneration = latestPauseFlushGeneration;
+                            appliedPcmPolicyGeneration = latestPcmPolicyGeneration;
+                            primerReplayIndex = 0;
+                            primerPackets = 0;
+                            primerBytes = 0;
+                            outputStarted = false;
+                            underrunRecovery.reset();
+                            if (resetOutputForPcmBoundary(output)) {
+                                outputProgress.resetAfterFlush(output);
+                                observedOutputUnderruns = sampleOutputUnderruns(output,
+                                        observedOutputUnderruns);
+                            }
+                            continue;
+                        }
+                        if (!frameMatchesBoundary(frame, appliedPauseFlushGeneration,
+                                appliedPcmPolicyGeneration)) {
+                            discardFrame(activeQueue, frame);
+                            continue;
+                        }
+                        pending = new PendingFrame(frame);
+                        primerFrames.add(pending);
+                    }
+                    long freeFrames = effectiveFrames - bufferedFrames;
+                    int writeBudget = (int) Math.min(Integer.MAX_VALUE & ~3L,
+                            Math.multiplyExact(freeFrames, 4L));
+                    WriteResult result = writeFrame(output, pending,
+                            appliedPauseFlushGeneration, appliedPcmPolicyGeneration,
+                            outputProgress, observedOutputUnderruns, false, writeBudget);
+                    latestOutputUnderruns = sampleOutputUnderruns(output,
+                            result.observedOutputUnderruns());
+                    boolean newerOutputUnderrun = hasOutputUnderrunIncreased(
+                            observedOutputUnderruns, latestOutputUnderruns);
+                    observedOutputUnderruns = latestOutputUnderruns;
+                    if (result.outcome() == WriteOutcome.COMPLETE) {
+                        primerFrames.remove(0);
+                        commitFrame(activeQueue, pending.frame());
+                    } else if (result.outcome() == WriteOutcome.OUTPUT_FAILURE) {
+                        accountWriteFailure();
+                        requestRecoveryReopen();
+                        underrunRecovery.reset();
+                    }
+                    if (newerOutputUnderrun
+                            && (result.outcome() == WriteOutcome.COMPLETE
+                                    || result.outcome() == WriteOutcome.CAPACITY_FILLED)
+                            && !rebaseUnderrunRecovery(output, outputProgress,
+                                    outputBufferLimits, underrunRecovery)) {
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                        underrunRecovery.reset();
+                    }
+                    continue;
+                }
+
+                if (!outputStarted && benchmarkEmptyPlayRequested.get()) {
+                    PlayOutcome playOutcome = playOutput(output, appliedPauseFlushGeneration,
+                            appliedPcmPolicyGeneration, true);
+                    if (playOutcome == PlayOutcome.STARTED) {
+                        outputStarted = true;
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            outputPlaying = true;
+                        }
+                    } else if (playOutcome == PlayOutcome.OUTPUT_FAILURE) {
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                    }
+                    continue;
+                }
+
+                if (outputStarted && benchmarkEmptyPlayRequested.get()) {
+                    // The diagnostics pre-ARM proof intentionally runs an empty track. Rebaseline
+                    // its expected counter movement without entering production recovery.
+                    outputProgress.readPlaybackPosition(output);
+                    observedOutputUnderruns = sampleOutputUnderruns(output,
+                            observedOutputUnderruns);
+                } else if (outputStarted) {
+                    // Keep the unsigned playback head extended continuously so a long-running
+                    // output can cross 2^32 frames before an underrun needs refill tracking.
+                    outputProgress.readPlaybackPosition(output);
+                    long latestOutputUnderruns = sampleOutputUnderruns(output,
+                            observedOutputUnderruns);
+                    if (hasOutputUnderrunIncreased(observedOutputUnderruns,
+                            latestOutputUnderruns)) {
+                        observedOutputUnderruns = latestOutputUnderruns;
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                        }
+                        continue;
+                    }
+                    observedOutputUnderruns = latestOutputUnderruns;
+                }
+
+                if (!outputStarted) {
+                    int requiredPrimerFrames = outputBufferLimits.startThresholdFrames();
+                    PendingFrame pending;
+                    if (primerReplayIndex < primerFrames.size()) {
+                        pending = primerFrames.get(primerReplayIndex);
+                    } else {
+                        BoundedPcmQueue.Frame frame = activeQueue.poll(
+                                POLL_MILLIS, TimeUnit.MILLISECONDS);
+                        if (frame == null) {
+                            continue;
+                        }
+                        reconcileFrameAccounting(activeQueue, frame);
+                        long latestPauseFlushGeneration = pauseFlushGeneration.get();
+                        long latestPcmPolicyGeneration = pcmPolicyGeneration.get();
+                        if (latestPauseFlushGeneration != appliedPauseFlushGeneration
+                                || latestPcmPolicyGeneration != appliedPcmPolicyGeneration) {
+                            discardPrimerFrames(activeQueue, primerFrames);
+                            if (frameMatchesBoundary(frame, latestPauseFlushGeneration,
+                                    latestPcmPolicyGeneration)) {
+                                primerFrames.add(new PendingFrame(frame));
+                            } else {
+                                discardFrame(activeQueue, frame);
+                            }
+                            appliedPauseFlushGeneration = latestPauseFlushGeneration;
+                            appliedPcmPolicyGeneration = latestPcmPolicyGeneration;
+                            primerReplayIndex = 0;
+                            primerPackets = 0;
+                            primerBytes = 0;
+                            outputStarted = false;
+                            underrunRecovery.reset();
+                            if (resetOutputForPcmBoundary(output)) {
+                                outputProgress.resetAfterFlush(output);
+                                observedOutputUnderruns = sampleOutputUnderruns(output,
+                                        observedOutputUnderruns);
+                            }
+                            continue;
+                        }
+                        if (!frameMatchesBoundary(frame, appliedPauseFlushGeneration,
+                                appliedPcmPolicyGeneration)) {
+                            discardFrame(activeQueue, frame);
+                            continue;
+                        }
+                        pending = new PendingFrame(frame);
+                        primerFrames.add(pending);
+                    }
+                    BoundedPcmQueue.Frame frame = pending.frame();
+                    int writeStartOffset = pending.writeOffset();
+                    int effectiveBufferBytes = Math.multiplyExact(
+                            outputBufferLimits.effectiveBufferFrames(), 4);
+                    int availableBufferBytes = effectiveBufferBytes - primerBytes;
+                    if (availableBufferBytes <= 0) {
+                        // A stopped streaming track cannot consume more data. If its advertised
+                        // start threshold is still unmet, the output contract is inconsistent.
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                        continue;
+                    }
+                    WriteResult result = writeFrame(output, pending,
+                            appliedPauseFlushGeneration, appliedPcmPolicyGeneration,
+                            outputProgress, observedOutputUnderruns, false,
+                            Math.min(frame.length() - pending.writeOffset(),
+                                    availableBufferBytes));
+                    observedOutputUnderruns = result.observedOutputUnderruns();
+                    if (result.outcome() == WriteOutcome.OUTPUT_FAILURE) {
+                        accountWriteFailure();
+                        requestRecoveryReopen();
+                        continue;
+                    }
+                    if (result.outcome() == WriteOutcome.INTERRUPTED) {
+                        continue;
+                    }
+                    if (result.outcome() == WriteOutcome.OUTPUT_UNDERRUN) {
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                        }
+                        continue;
+                    }
+                    primerBytes += pending.writeOffset() - writeStartOffset;
+                    if (result.outcome() == WriteOutcome.COMPLETE && writeStartOffset == 0) {
+                        primerPackets++;
+                    }
+                    if (result.outcome() == WriteOutcome.COMPLETE) {
+                        primerReplayIndex++;
+                    }
+                    if (primerPackets < PRIMER_PACKETS
+                            || primerBytes / 4 < requiredPrimerFrames) {
+                        continue;
+                    }
+                    PlayOutcome playOutcome = playOutput(output, appliedPauseFlushGeneration,
+                            appliedPcmPolicyGeneration, false);
+                    if (playOutcome == PlayOutcome.STALE_BOUNDARY) {
+                        continue;
+                    }
+                    if (playOutcome == PlayOutcome.OUTPUT_FAILURE) {
+                        accountRouteFailure();
+                        requestRecoveryReopen();
+                        continue;
+                    }
+                    if (playOutcome == PlayOutcome.STARTED) {
+                        outputStarted = true;
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            outputPlaying = true;
+                        }
+                    }
+                    commitCompletedPrimerFrames(activeQueue, primerFrames);
+                    primerReplayIndex = 0;
+                    primerPackets = 0;
+                    primerBytes = 0;
+                    continue;
+                }
+
+                if (!primerFrames.isEmpty()) {
+                    // A pre-S device can require its full effective buffer before the first play,
+                    // leaving an ordered suffix of the threshold-filling packet. Finish that
+                    // suffix after playback has started before polling any later packet.
+                    PendingFrame pending = primerFrames.get(0);
+                    WriteResult result = writeFrame(output, pending,
+                            appliedPauseFlushGeneration, appliedPcmPolicyGeneration,
+                            outputProgress, observedOutputUnderruns, true,
+                            pending.frame().length() - pending.writeOffset());
+                    observedOutputUnderruns = result.observedOutputUnderruns();
+                    if (result.outcome() == WriteOutcome.COMPLETE) {
+                        primerFrames.remove(0);
+                        commitFrame(activeQueue, pending.frame());
+                    } else if (result.outcome() == WriteOutcome.OUTPUT_UNDERRUN) {
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                        }
+                    } else if (result.outcome() == WriteOutcome.OUTPUT_FAILURE) {
+                        accountWriteFailure();
+                        requestRecoveryReopen();
+                    }
+                    continue;
                 }
 
                 BoundedPcmQueue.Frame frame = activeQueue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
@@ -491,49 +956,107 @@ final class AndroidAudioSink implements AutoCloseable {
                     }
                     continue;
                 }
-                try {
-                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                        synchronized (pcmAccounting) {
-                            pcmAccounting.adjustEnqueued(
-                                    frame.length() - frame.accountingBytes(),
-                                    frame.length() / 4L - frame.accountingBytes() / 4L);
-                            accountQueueDiscards(activeQueue);
-                        }
+                reconcileFrameAccounting(activeQueue, frame);
+                long latestPauseFlushGeneration = pauseFlushGeneration.get();
+                long latestPcmPolicyGeneration = pcmPolicyGeneration.get();
+                if (latestPauseFlushGeneration != appliedPauseFlushGeneration
+                        || latestPcmPolicyGeneration != appliedPcmPolicyGeneration) {
+                    discardPrimerFrames(activeQueue, primerFrames);
+                    if (frameMatchesBoundary(frame, latestPauseFlushGeneration,
+                            latestPcmPolicyGeneration)) {
+                        primerFrames.add(new PendingFrame(frame));
+                    } else {
+                        discardFrame(activeQueue, frame);
                     }
-                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                        WriteResult result = writeFullyWithAccounting(output, frame);
-                        synchronized (pcmAccounting) {
-                            if (result.bytesWritten() > 0) {
-                                pcmAccounting.written(result.bytesWritten(),
-                                        result.complete() ? frame.length() / 4L : 0L);
-                            }
-                            if (!result.complete()) {
-                                int discarded = frame.length() - result.bytesWritten();
-                                if (discarded > 0) {
-                                    pcmAccounting.discarded(discarded);
-                                }
-                                pcmAccounting.writeFailure();
-                                reopenRequested.set(true);
-                            }
+                    appliedPauseFlushGeneration = latestPauseFlushGeneration;
+                    appliedPcmPolicyGeneration = latestPcmPolicyGeneration;
+                    primerReplayIndex = 0;
+                    primerPackets = 0;
+                    primerBytes = 0;
+                    outputStarted = false;
+                    underrunRecovery.reset();
+                    if (resetOutputForPcmBoundary(output)) {
+                        outputProgress.resetAfterFlush(output);
+                        observedOutputUnderruns = sampleOutputUnderruns(output,
+                                observedOutputUnderruns);
+                    }
+                    continue;
+                }
+                if (!frameMatchesBoundary(frame, appliedPauseFlushGeneration,
+                        appliedPcmPolicyGeneration)) {
+                    discardFrame(activeQueue, frame);
+                    continue;
+                }
+                PendingFrame pending = new PendingFrame(frame);
+                try {
+                    long latestOutputUnderruns = sampleOutputUnderruns(output,
+                            observedOutputUnderruns);
+                    if (hasOutputUnderrunIncreased(observedOutputUnderruns,
+                            latestOutputUnderruns)) {
+                        observedOutputUnderruns = latestOutputUnderruns;
+                        primerFrames.add(pending);
+                        frame = null;
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
+                        }
+                        continue;
+                    }
+                    observedOutputUnderruns = latestOutputUnderruns;
+                    WriteResult result = writeFrame(output, pending,
+                            appliedPauseFlushGeneration, appliedPcmPolicyGeneration,
+                            outputProgress, observedOutputUnderruns, true,
+                            frame.length() - pending.writeOffset());
+                    observedOutputUnderruns = result.observedOutputUnderruns();
+                    if (result.outcome() == WriteOutcome.COMPLETE) {
+                        commitFrame(activeQueue, frame);
+                        frame = null;
+                    } else if (result.outcome() == WriteOutcome.OUTPUT_UNDERRUN) {
+                        if (pending.writeOffset() < pending.frame().length()) {
+                            primerFrames.add(pending);
+                            frame = null;
+                        } else {
+                            commitFrame(activeQueue, frame);
+                            frame = null;
+                        }
+                        if (!rebaseUnderrunRecovery(output, outputProgress,
+                                outputBufferLimits, underrunRecovery)) {
+                            accountRouteFailure();
+                            requestRecoveryReopen();
                         }
                     } else {
-                        if (!writeFully(output, frame)) {
-                            reopenRequested.set(true);
+                        // Retain the exact converted packet.  A replacement stopped track will
+                        // replay it first, followed by three new ordered packets, before play().
+                        primerFrames.add(pending);
+                        frame = null;
+                        if (result.outcome() == WriteOutcome.OUTPUT_FAILURE) {
+                            accountWriteFailure();
+                            requestRecoveryReopen();
                         }
                     }
                 } finally {
-                    activeQueue.release(frame);
+                    if (frame != null) {
+                        discardFrame(activeQueue, frame);
+                    }
                 }
             }
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
         } finally {
-            if (BuildConfig.DIAGNOSTICS_ENABLED && activeQueue != null) {
-                clearAndAccount(activeQueue);
-            } else if (activeQueue != null) {
-                activeQueue.clear();
+            if (activeQueue != null) {
+                discardPrimerFrames(activeQueue, primerFrames);
+                synchronized (queueLock) {
+                    clearQueue(activeQueue);
+                    if (queue == activeQueue) {
+                        queue = null;
+                    }
+                }
+            } else {
+                synchronized (queueLock) {
+                    queue = null;
+                }
             }
-            queue = null;
             activeOutput = null;
             routeGeneration.incrementAndGet();
             sampleRate = 0;
@@ -601,40 +1124,284 @@ final class AndroidAudioSink implements AutoCloseable {
         }
     }
 
-    private boolean writeFully(Output output, BoundedPcmQueue.Frame frame) {
-        int offset = 0;
-        while (offset < frame.length() && running.get() && !paused) {
-            int written = output.write(frame.bytes(), offset, frame.length() - offset);
-            if (written <= 0) {
-                return false;
-            }
-            offset += written;
+    private static OutputBufferLimits readOutputBufferLimits(Output output) {
+        int capacityFrames = output.bufferCapacityFrames();
+        int effectiveFrames = output.effectiveBufferFrames();
+        int startThresholdFrames = output.startThresholdFrames();
+        if (capacityFrames <= 0 || effectiveFrames <= 0 || effectiveFrames > capacityFrames
+                || startThresholdFrames <= 0 || startThresholdFrames > effectiveFrames) {
+            throw new IllegalStateException("Invalid AudioTrack buffer limits");
         }
-        return offset == frame.length();
+        return new OutputBufferLimits(capacityFrames, effectiveFrames, startThresholdFrames);
     }
 
-    private WriteResult writeFullyWithAccounting(Output output, BoundedPcmQueue.Frame frame) {
-        int offset = 0;
-        while (offset < frame.length() && running.get() && !paused) {
-            int written = output.write(frame.bytes(), offset, frame.length() - offset);
-            if (written <= 0) {
-                return new WriteResult(false, offset);
-            }
-            offset += written;
+    private WriteResult writeFrame(Output output, PendingFrame pending,
+            long expectedPauseFlushGeneration, long expectedPcmPolicyGeneration,
+            OutputProgress outputProgress, long observedOutputUnderruns,
+            boolean monitorOutputUnderruns, int maximumBytes) {
+        BoundedPcmQueue.Frame frame = pending.frame();
+        long latestOutputUnderruns = observedOutputUnderruns;
+        if ((frame.length() & 3) != 0 || (pending.writeOffset() & 3) != 0
+                || maximumBytes < 0 || (maximumBytes & 3) != 0) {
+            return new WriteResult(WriteOutcome.OUTPUT_FAILURE, latestOutputUnderruns);
         }
-        return new WriteResult(offset == frame.length(), offset);
+        int writeBudget = maximumBytes;
+        while (pending.writeOffset() < frame.length()) {
+            if (writeBudget == 0) {
+                return new WriteResult(WriteOutcome.CAPACITY_FILLED, latestOutputUnderruns);
+            }
+            if (!isPlaybackBoundaryCurrent(expectedPauseFlushGeneration,
+                    expectedPcmPolicyGeneration)) {
+                return new WriteResult(WriteOutcome.INTERRUPTED, latestOutputUnderruns);
+            }
+            if (monitorOutputUnderruns) {
+                long sampled = sampleOutputUnderruns(output, latestOutputUnderruns);
+                if (hasOutputUnderrunIncreased(latestOutputUnderruns, sampled)) {
+                    return new WriteResult(WriteOutcome.OUTPUT_UNDERRUN, sampled);
+                }
+                latestOutputUnderruns = sampled;
+            }
+            int remaining = Math.min(frame.length() - pending.writeOffset(), writeBudget);
+            int written;
+            try {
+                written = output.write(frame.bytes(), pending.writeOffset(), remaining);
+            } catch (RuntimeException unavailable) {
+                return new WriteResult(WriteOutcome.OUTPUT_FAILURE, latestOutputUnderruns);
+            }
+            if (written <= 0 || written > remaining || (written & 3) != 0) {
+                return new WriteResult(WriteOutcome.OUTPUT_FAILURE, latestOutputUnderruns);
+            }
+            pending.advance(written);
+            writeBudget -= written;
+            outputProgress.accept(written);
+            if (monitorOutputUnderruns) {
+                long sampled = sampleOutputUnderruns(output, latestOutputUnderruns);
+                if (hasOutputUnderrunIncreased(latestOutputUnderruns, sampled)) {
+                    return new WriteResult(WriteOutcome.OUTPUT_UNDERRUN, sampled);
+                }
+                latestOutputUnderruns = sampled;
+            }
+        }
+        if (!isPlaybackBoundaryCurrent(expectedPauseFlushGeneration,
+                expectedPcmPolicyGeneration)) {
+            return new WriteResult(WriteOutcome.INTERRUPTED, latestOutputUnderruns);
+        }
+        return new WriteResult(WriteOutcome.COMPLETE, latestOutputUnderruns);
+    }
+
+    private boolean isPlaybackBoundaryCurrent(long expectedPauseFlushGeneration,
+            long expectedPcmPolicyGeneration) {
+        return running.get() && !paused && !reopenRequested.get()
+                && pauseFlushGeneration.get() == expectedPauseFlushGeneration
+                && pcmPolicyGeneration.get() == expectedPcmPolicyGeneration;
+    }
+
+    private PlayOutcome playOutput(Output output, long expectedPauseFlushGeneration,
+            long expectedPcmPolicyGeneration, boolean benchmarkEmptyPlay) {
+        synchronized (playbackControlLock) {
+            if (!isPlaybackBoundaryCurrent(expectedPauseFlushGeneration,
+                    expectedPcmPolicyGeneration)
+                    || benchmarkEmptyPlayRequested.get() != benchmarkEmptyPlay) {
+                return PlayOutcome.STALE_BOUNDARY;
+            }
+            try {
+                output.play();
+                return PlayOutcome.STARTED;
+            } catch (RuntimeException unavailable) {
+                return PlayOutcome.OUTPUT_FAILURE;
+            }
+        }
+    }
+
+    private long sampleOutputUnderruns(Output output, long previous) {
+        if (output == null) {
+            return previous;
+        }
+        try {
+            long sampled = output.outputUnderrunCount();
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                outputUnderruns = sampled;
+            }
+            return sampled >= 0L ? sampled : previous;
+        } catch (RuntimeException unavailable) {
+            if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                outputUnderruns = -1L;
+            }
+            return previous;
+        }
+    }
+
+    private static boolean hasOutputUnderrunIncreased(long previous, long latest) {
+        return previous >= 0L && latest > previous;
+    }
+
+    /**
+     * Starts a fresh proof for the latest cumulative underrun observation. The playback head is
+     * deliberately sampled here, after the counter increase has been observed, so progress that
+     * preceded the latest underrun cannot satisfy the new recovery.
+     */
+    private static boolean rebaseUnderrunRecovery(Output output,
+            OutputProgress outputProgress, OutputBufferLimits outputBufferLimits,
+            UnderrunRecovery underrunRecovery) {
+        long playbackHeadFrames = outputProgress.readPlaybackPosition(output);
+        long bufferedFrames = outputProgress.bufferedFrames(playbackHeadFrames);
+        return underrunRecovery.rebase(playbackHeadFrames, outputProgress.acceptedFrames(),
+                bufferedFrames, outputBufferLimits.startThresholdFrames());
+    }
+
+    private void requestRecoveryReopen() {
+        synchronized (playbackControlLock) {
+            benchmarkEmptyPlayRequested.set(false);
+            reopenRequested.set(true);
+        }
+    }
+
+    private static boolean frameMatchesBoundary(BoundedPcmQueue.Frame frame,
+            long pauseGeneration, long policyGeneration) {
+        return frame.pauseFlushGeneration() == pauseGeneration
+                && frame.policyGeneration() == policyGeneration;
+    }
+
+    private void reconcileFrameAccounting(BoundedPcmQueue active,
+            BoundedPcmQueue.Frame frame) {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        synchronized (pcmAccounting) {
+            int delta = active.reconcileAccountingBytes(frame);
+            pcmAccounting.adjustEnqueued(delta, delta / 4L);
+            accountQueueDiscards(active);
+        }
+    }
+
+    private void commitCompletedPrimerFrames(BoundedPcmQueue active,
+            List<PendingFrame> frames) {
+        while (!frames.isEmpty()) {
+            PendingFrame pending = frames.get(0);
+            if (pending.writeOffset() < pending.frame().length()) {
+                return;
+            }
+            frames.remove(0);
+            commitFrame(active, pending.frame());
+        }
+    }
+
+    private void commitFrame(BoundedPcmQueue active, BoundedPcmQueue.Frame frame) {
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                pcmAccounting.written(frame.length(), frame.length() / 4L);
+            }
+        }
+        active.release(frame);
+    }
+
+    private void discardPrimerFrames(BoundedPcmQueue active, List<PendingFrame> frames) {
+        for (PendingFrame pending : frames) {
+            discardFrame(active, pending.frame());
+        }
+        frames.clear();
+    }
+
+    private static void resetPendingFramesForReplacement(List<PendingFrame> frames) {
+        for (PendingFrame frame : frames) {
+            frame.resetForReplacement();
+        }
+    }
+
+    private void discardFrame(BoundedPcmQueue active, BoundedPcmQueue.Frame frame) {
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                pcmAccounting.discarded(frame.accountingBytes());
+            }
+        }
+        active.release(frame);
+    }
+
+    private void accountWriteFailure() {
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                pcmAccounting.writeFailure();
+            }
+        }
+    }
+
+    private void accountRouteFailure() {
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            synchronized (pcmAccounting) {
+                pcmAccounting.routeFailure();
+            }
+        }
+    }
+
+    private boolean resetOutputForPcmBoundary(Output output) {
+        boolean reset = true;
+        if (output != null) {
+            try {
+                output.pause();
+                output.flush();
+            } catch (RuntimeException unavailable) {
+                accountRouteFailure();
+                requestRecoveryReopen();
+                reset = false;
+            }
+        }
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            outputPlaying = false;
+        }
+        return reset;
+    }
+
+    private static void preferAudioThreadPriority() {
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+        } catch (RuntimeException unavailable) {
+            // Some OEM policies can reject priority changes. Audio remains functional.
+        }
+    }
+
+    private static boolean containsOutputSink(AudioDeviceInfo[] devices) {
+        if (devices == null) {
+            return false;
+        }
+        for (AudioDeviceInfo device : devices) {
+            if (device == null) {
+                continue;
+            }
+            try {
+                if (device.isSink()) {
+                    return true;
+                }
+            } catch (RuntimeException unavailable) {
+                // A stale framework descriptor must not force an unrelated route restart.
+            }
+        }
+        return false;
     }
 
     private void clearQueuedPcm() {
-        BoundedPcmQueue active = queue;
-        if (active != null) {
-            if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                clearAndAccount(active);
-            } else {
-                active.clear();
+        synchronized (queueLock) {
+            BoundedPcmQueue active = queue;
+            if (active != null) {
+                clearQueue(active);
             }
+            hasProducedPcm = false;
         }
-        hasProducedPcm = false;
+    }
+
+    /** Called only while playbackControlLock publishes a new pause/policy boundary. */
+    private void clearQueuedPcmAtBoundary() {
+        if (boundaryClearHook != null) {
+            boundaryClearHook.beforeQueuedPcmClear();
+        }
+        clearQueuedPcm();
+    }
+
+    private void clearQueue(BoundedPcmQueue active) {
+        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+            clearAndAccount(active);
+        } else {
+            active.clear();
+        }
     }
 
     private void clearAndAccount(BoundedPcmQueue active) {
@@ -815,6 +1582,219 @@ final class AndroidAudioSink implements AutoCloseable {
                 0L, 0L, 0L, 0L);
     }
 
-    private record WriteResult(boolean complete, int bytesWritten) {
+    /** One converted packet retained across a stopped-state replay or underrun refill. */
+    private static final class PendingFrame {
+        private final BoundedPcmQueue.Frame frame;
+        /** Prefix accepted by the current output (including positive short writes). */
+        private int writeOffset;
+
+        private PendingFrame(BoundedPcmQueue.Frame frame) {
+            this.frame = frame;
+        }
+
+        private BoundedPcmQueue.Frame frame() {
+            return frame;
+        }
+
+        private int writeOffset() {
+            return writeOffset;
+        }
+
+        private void advance(int bytes) {
+            writeOffset = Math.addExact(writeOffset, bytes);
+        }
+
+        private void resetForReplacement() {
+            writeOffset = 0;
+        }
+    }
+
+    private record OutputBufferLimits(int capacityFrames, int effectiveBufferFrames,
+            int startThresholdFrames) {
+        private static final OutputBufferLimits UNAVAILABLE = new OutputBufferLimits(0, 0, 0);
+    }
+
+    /** Worker-local state for one or more coalesced in-place AudioTrack threshold refills. */
+    static final class UnderrunRecovery {
+        private boolean active;
+        private long headAtDetectionFrames = -1L;
+        private long acceptedFramesAtDetection = -1L;
+        private long refillFramesRequired;
+        private long capacityFullSinceNanos = -1L;
+        private boolean refillThresholdReached;
+
+        boolean rebase(long playbackHeadFrames, long acceptedFrames, long bufferedFrames,
+                int startThresholdFrames) {
+            if (playbackHeadFrames < 0L || acceptedFrames < 0L || bufferedFrames < 0L
+                    || startThresholdFrames <= 0) {
+                return false;
+            }
+            active = true;
+            headAtDetectionFrames = playbackHeadFrames;
+            acceptedFramesAtDetection = acceptedFrames;
+            refillFramesRequired = Math.max(0L, startThresholdFrames - bufferedFrames);
+            capacityFullSinceNanos = -1L;
+            refillThresholdReached = false;
+            return true;
+        }
+
+        boolean active() {
+            return active;
+        }
+
+        boolean hasRestarted(long playbackHeadFrames) {
+            return active && refillThresholdReached
+                    && playbackHeadFrames > headAtDetectionFrames;
+        }
+
+        void observeRefillProgress(long acceptedFrames, long bufferedFrames,
+                int startThresholdFrames) {
+            if (active && acceptedFrames >= acceptedFramesAtDetection
+                    && acceptedFrames - acceptedFramesAtDetection >= refillFramesRequired
+                    && bufferedFrames >= startThresholdFrames) {
+                refillThresholdReached = true;
+            }
+        }
+
+        boolean capacityHasStalled(long nowNanos) {
+            if (!refillThresholdReached) {
+                return false;
+            }
+            if (capacityFullSinceNanos < 0L) {
+                capacityFullSinceNanos = nowNanos;
+                return false;
+            }
+            return nowNanos - capacityFullSinceNanos
+                    >= TimeUnit.MILLISECONDS.toNanos(UNDERRUN_STALL_MILLIS);
+        }
+
+        void clearCapacityStall() {
+            capacityFullSinceNanos = -1L;
+        }
+
+        void reset() {
+            active = false;
+            headAtDetectionFrames = -1L;
+            acceptedFramesAtDetection = -1L;
+            refillFramesRequired = 0L;
+            capacityFullSinceNanos = -1L;
+            refillThresholdReached = false;
+        }
+    }
+
+    private record WriteResult(WriteOutcome outcome, long observedOutputUnderruns) {
+    }
+
+    private enum PlayOutcome {
+        STARTED,
+        STALE_BOUNDARY,
+        OUTPUT_FAILURE
+    }
+
+    /**
+     * Per-output accepted-byte ledger and unsigned 32-bit playback-head extension.
+     * The epoch is reset after every flush/reopen, matching AudioTrack's head semantics.
+     */
+    static final class OutputProgress {
+        private static final long UNSIGNED_INT_RANGE = 1L << 32;
+        private static final long UNSIGNED_INT_MASK = UNSIGNED_INT_RANGE - 1L;
+        private static final long WRAP_THRESHOLD = 1L << 31;
+
+        private long previousExtendedPosition = -1L;
+        private long playbackBaseFrames = -1L;
+        private long acceptedBytes;
+
+        void open(Output output) {
+            previousExtendedPosition = -1L;
+            playbackBaseFrames = -1L;
+            acceptedBytes = 0L;
+            long initialPosition = readPlaybackPosition(output);
+            if (initialPosition >= 0L) {
+                playbackBaseFrames = initialPosition;
+            }
+        }
+
+        void resetAfterFlush(Output output) {
+            open(output);
+        }
+
+        void accept(int bytes) {
+            acceptedBytes = Math.addExact(acceptedBytes, bytes);
+        }
+
+        long acceptedFrames() {
+            return (acceptedBytes & 3L) == 0L ? acceptedBytes / 4L : -1L;
+        }
+
+        long readPlaybackPosition(Output output) {
+            if (output == null) {
+                return -1L;
+            }
+            long raw;
+            try {
+                raw = output.playbackPositionFrames();
+            } catch (RuntimeException unavailable) {
+                return -1L;
+            }
+            long extended = extendUnsignedPlaybackPosition(previousExtendedPosition, raw);
+            if (extended >= 0L) {
+                previousExtendedPosition = extended;
+                if (playbackBaseFrames < 0L) {
+                    // A new/just-flushed streaming AudioTrack starts at frame zero. Some routes
+                    // expose the head only after play(), so make that documented epoch explicit.
+                    playbackBaseFrames = 0L;
+                }
+            }
+            return extended;
+        }
+
+        long bufferedFrames(long playedFrames) {
+            if (playbackBaseFrames < 0L || playedFrames < 0L) {
+                return -1L;
+            }
+            if ((acceptedBytes & 3L) != 0L) {
+                return -1L;
+            }
+            long playedSinceOpen = playedFrames - playbackBaseFrames;
+            if (playedSinceOpen < 0L) {
+                return -1L;
+            }
+            long acceptedFrames = acceptedBytes / 4L;
+            return Math.max(0L, acceptedFrames - playedSinceOpen);
+        }
+
+        static long extendUnsignedPlaybackPosition(long previousExtended, long currentRaw) {
+            if (currentRaw < 0L) {
+                return -1L;
+            }
+            // Test outputs may already expose a wider monotonic head. Android's implementation
+            // supplies the documented unsigned 32-bit value.
+            if (currentRaw > UNSIGNED_INT_MASK) {
+                return previousExtended < 0L || currentRaw >= previousExtended
+                        ? currentRaw : -1L;
+            }
+            long normalized = currentRaw & UNSIGNED_INT_MASK;
+            if (previousExtended < 0L) {
+                return normalized;
+            }
+            long previousRaw = previousExtended & UNSIGNED_INT_MASK;
+            long epoch = previousExtended - previousRaw;
+            if (normalized < previousRaw) {
+                if (previousRaw - normalized <= WRAP_THRESHOLD) {
+                    // A small regression within one flush epoch is not a trustworthy drain head.
+                    return -1L;
+                }
+                epoch = Math.addExact(epoch, UNSIGNED_INT_RANGE);
+            }
+            return Math.addExact(epoch, normalized);
+        }
+    }
+
+    private enum WriteOutcome {
+        COMPLETE,
+        CAPACITY_FILLED,
+        INTERRUPTED,
+        OUTPUT_UNDERRUN,
+        OUTPUT_FAILURE
     }
 }
