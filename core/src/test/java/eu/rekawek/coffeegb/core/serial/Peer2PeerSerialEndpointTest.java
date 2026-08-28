@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.core.serial;
 
 import org.junit.Test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -19,5 +20,7 @@ public class Peer2PeerSerialEndpointTest {
 
         assertTrue(first.isConnected());
         assertTrue(second.isConnected());
+        assertEquals(0, first.linkPlayerIndex());
+        assertEquals(1, second.linkPlayerIndex());
     }
 }

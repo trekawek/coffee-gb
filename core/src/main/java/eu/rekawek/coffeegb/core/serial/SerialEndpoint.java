@@ -5,6 +5,11 @@ import eu.rekawek.coffeegb.core.state.StatefulComponent;
 
 public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
 
+    /** Stable zero-based player index for an in-process link, or {@code -1}. */
+    default int linkPlayerIndex() {
+        return -1;
+    }
+
     /** Enables a narrowly detected cartridge compatibility profile for this endpoint. */
     default void enableCompatibilityProfile(SerialCompatibilityProfile profile) {
     }

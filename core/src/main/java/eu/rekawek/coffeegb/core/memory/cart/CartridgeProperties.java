@@ -73,7 +73,8 @@ public final class CartridgeProperties {
         PRESERVE_INVALID_HEADER_CHECKSUM,
         SUPER_FIGHTERS_S_LIVE_PATCH,
         // Append new features: Feature ordinals are part of the StateFile v1 identity.
-        JANTAKU_BOY_FOUR_PLAYER_PATCH
+        JANTAKU_BOY_FOUR_PLAYER_PATCH,
+        REVENGE_GATOR_LINK_ROLE_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -206,6 +207,9 @@ public final class CartridgeProperties {
             features("Jantaku Boy four-player transition workaround",
                     CartridgeProperties::isJantakuBoyFourPlayer,
                     Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH),
+            features("Revenge of the Gator deterministic link roles",
+                    CartridgeProperties::isRevengeGatorLinkRole,
+                    Feature.REVENGE_GATOR_LINK_ROLE_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -830,6 +834,28 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x02
                 && info.byteAt(0x0149) == 0x00
                 && matches(info.data, 0x0395, fourPlayerWait);
+    }
+
+    private static boolean isRevengeGatorLinkRole(RomInfo info) {
+        int[] linkRoleNegotiation = {
+                0x3e, 0x81, 0xe0, 0xc9, 0xcd, 0x7a, 0x02, 0x21,
+                0x88, 0x77, 0x3e, 0x0a, 0xcd, 0xac, 0x02, 0x30,
+                0x30, 0x21, 0x88, 0x77, 0x11, 0x5a, 0xa5, 0x18,
+                0x17, 0x3e, 0x41, 0xe0, 0xc9, 0xcd, 0x7a, 0x02,
+                0x21, 0x77, 0x88, 0x3e, 0x0a, 0xcd, 0xac, 0x02
+        };
+        return info.data.length == 0x10000
+                && "PINBALL".equals(info.title())
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0146) == 0x00
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x01
+                && info.byteAt(0x0149) == 0x00
+                && matches(info.data, 0x0214, linkRoleNegotiation);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

@@ -18,10 +18,19 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
 
     private int bitIndex = 7;
 
+    private int linkPlayerIndex = -1;
+
     /** Pairs two endpoints before session installation; this is not a concurrent hot-plug API. */
     public void init(Peer2PeerSerialEndpoint peer) {
         this.peer = peer;
         peer.peer = this;
+        this.linkPlayerIndex = 0;
+        peer.linkPlayerIndex = 1;
+    }
+
+    @Override
+    public int linkPlayerIndex() {
+        return linkPlayerIndex;
     }
 
     /** True only while this endpoint has a live peer whose traffic must be replayed jointly. */
