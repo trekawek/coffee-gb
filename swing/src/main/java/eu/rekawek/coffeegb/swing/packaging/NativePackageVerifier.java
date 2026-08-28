@@ -411,6 +411,10 @@ public final class NativePackageVerifier {
                         "packaged local netplay relaunch battery policy");
                 requireOutput(
                         evidence,
+                        "audio=muted",
+                        "packaged local netplay relaunch startup audio policy");
+                requireOutput(
+                        evidence,
                         "join=" + endpoint,
                         "packaged local netplay relaunch endpoint");
                 long observedPid = parseEvidencePid(evidence);
@@ -423,6 +427,10 @@ public final class NativePackageVerifier {
                         desktopEvidence,
                         "Coffee GB desktop ready OK:",
                         "packaged local netplay desktop startup");
+                requireOutput(
+                        desktopEvidence,
+                        "muted=true",
+                        "packaged local netplay desktop mute presentation");
             } finally {
                 terminateTrackedProcess(pidMarker);
             }

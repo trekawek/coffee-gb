@@ -5,7 +5,7 @@ import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
 import eu.rekawek.coffeegb.core.memory.Bios
-import eu.rekawek.coffeegb.swing.SwingGui.Companion.run
+import eu.rekawek.coffeegb.swing.SwingGui.Companion.runWithStartupAudio
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.io.File
 import java.io.PrintStream
@@ -21,6 +21,8 @@ internal data class CliLaunchRequest(
     val initialRom: File?,
     /** Validated direct-host endpoint text to join after [initialRom] has opened. */
     val joinNetplayHost: String?,
+    /** Process-local startup policy used by automatically launched netplay clients. */
+    val startMuted: Boolean,
     /** A netplay child receives its authoritative state from the host, never from a local resume. */
     val suppressInitialAutosaveResume: Boolean,
     val settingsOverrides: ApplicationSettingsOverrides,
@@ -59,12 +61,13 @@ fun main(args: Array<String>) {
       ) { request ->
         // SwingGui installs the macOS open-file handler before resolving package natives so an
         // early Finder event cannot be lost during bootstrap.
-        run(
+        runWithStartupAudio(
             request.debug,
             request.initialRom,
             request.settingsOverrides,
             request.joinNetplayHost,
             request.suppressInitialAutosaveResume,
+            request.startMuted,
         )
       }
   if (exitCode != SUCCESS) {
@@ -129,6 +132,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   var forceCgb = false
   var useBootstrap = false
   var disableBatterySaves = false
+  var startMuted = false
   var profileId: String? = null
   var profileOccurrences = 0
   var joinNetplayEndpoint: NetplayV8Endpoint? = null
@@ -205,6 +209,10 @@ private fun parseCli(args: Array<String>): CliCommand {
         if (disableBatterySaves) repeatedOption("--disable-battery-saves")
         disableBatterySaves = true
       }
+      "--start-muted" -> {
+        if (startMuted) repeatedOption("--start-muted")
+        startMuted = true
+      }
       "--profile" -> cliError("--profile requires =<id>")
       "--join-netplay" -> {
         if (joinNetplayEndpoint != null) repeatedOption("--join-netplay")
@@ -241,6 +249,7 @@ private fun parseCli(args: Array<String>): CliCommand {
           forceCgb ||
           useBootstrap ||
           disableBatterySaves ||
+          startMuted ||
           profileId != null ||
           joinNetplayEndpoint != null ||
           positional.isNotEmpty())) {
@@ -271,6 +280,7 @@ private fun parseCli(args: Array<String>): CliCommand {
           debug = debug,
           initialRom = positional.singleOrNull()?.let(::File),
           joinNetplayHost = joinNetplayEndpoint?.startClientValue,
+          startMuted = startMuted,
           suppressInitialAutosaveResume = joinNetplayEndpoint != null,
           settingsOverrides =
               ApplicationSettingsOverrides(
@@ -315,6 +325,7 @@ internal fun printUsage(stream: PrintStream) {
   stream.println("  -b  --use-bootstrap            Run the bundled boot ROM normally")
   stream.println("  -db --disable-battery-saves    Disable battery save reads and writes")
   stream.println("      --join-netplay HOST        Join a netplay host after opening ROM_FILE")
+  stream.println("      --start-muted              Start muted without changing saved audio settings")
   stream.println("      --debug                    Enable debug console")
   stream.println("  -h  --help                     Display this help and exit")
   stream.println("      --version                  Display version and exit")

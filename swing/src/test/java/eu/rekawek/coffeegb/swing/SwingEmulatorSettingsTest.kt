@@ -36,6 +36,44 @@ class SwingEmulatorSettingsTest {
   }
 
   @Test
+  fun `process-local startup mute leaves the persisted audio setting enabled`() {
+    val persisted = ApplicationSettings.Audio(enabled = true)
+
+    val runtime = startupAudioRuntimeConfiguration(
+        persisted.toRuntimeConfiguration(),
+        startMuted = true,
+    )
+
+    assertTrue(runtime.muted())
+    assertTrue(persisted.enabled)
+    assertFalse(persisted.toRuntimeConfiguration().muted())
+  }
+
+  @Test
+  fun `device reconfiguration preserves a process-local mute`() {
+    val current = startupAudioRuntimeConfiguration(
+        ApplicationSettings.Audio(enabled = true, volume = 100).toRuntimeConfiguration(),
+        startMuted = true,
+    )
+    val edited = ApplicationSettings.Audio(enabled = true, volume = 37)
+
+    val runtime = edited.toRuntimeConfigurationPreservingMute(current)
+
+    assertTrue(runtime.muted())
+    assertEquals(37, runtime.masterVolume())
+    assertTrue(edited.enabled)
+  }
+
+  @Test
+  fun `explicit audio enable setting remains authoritative outside preserving reconfiguration`() {
+    val unmuted = ApplicationSettings.Audio(enabled = true).toRuntimeConfiguration()
+    val disabled = ApplicationSettings.Audio(enabled = false)
+
+    assertTrue(disabled.toRuntimeConfiguration().muted())
+    assertFalse(disabled.toRuntimeConfigurationPreservingMute(unmuted).muted())
+  }
+
+  @Test
   fun `gamepad assignments and per-device tuning cross the runtime boundary`() {
     val stableId = "sdl-" + "b".repeat(64)
     val input =

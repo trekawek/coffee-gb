@@ -47,6 +47,7 @@ class LocalNetplayInstanceLauncherTest {
             "/apps/coffee-gb.jar",
             "--profile=cgb",
             "--disable-battery-saves",
+            "--start-muted",
             "--join-netplay",
             "localhost",
             rom.toString(),

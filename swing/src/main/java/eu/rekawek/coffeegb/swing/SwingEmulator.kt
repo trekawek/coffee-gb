@@ -67,6 +67,23 @@ class SwingEmulator(
           AudioSystemSound(configuration, bus, callerId) {}
         },
 ) {
+  /** Adds transient startup policy without changing the published primary constructor ABI. */
+  internal constructor(
+      eventBus: EventBus,
+      console: Console?,
+      properties: EmulatorProperties,
+      mobileAdapterConfigurationProvider: Controller.MobileAdapterConfigurationProvider,
+      mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink,
+      startMuted: Boolean,
+  ) : this(
+      eventBus,
+      console,
+      properties,
+      mobileAdapterConfigurationProvider,
+      mobileAdapterGuestConfigurationSink,
+      startupAudioOutputFactory(startMuted),
+  )
+
   private val display: SwingDisplay
   private val joypad: SwingJoypad
   private val gamepad: SwingGamepad
@@ -297,6 +314,13 @@ class SwingEmulator(
   fun applyDeviceSettings(settings: ApplicationSettings) {
     gamepad.updateConfiguration(settings.toGamepadConfiguration())
     sound.applyConfiguration(settings.audio.toRuntimeConfiguration())
+  }
+
+  /** Reconfigures devices/volume while retaining an explicit transient mute or unmute. */
+  internal fun applyDeviceSettingsPreservingMute(settings: ApplicationSettings) {
+    gamepad.updateConfiguration(settings.toGamepadConfiguration())
+    sound.applyConfiguration(
+        settings.audio.toRuntimeConfigurationPreservingMute(sound.currentConfiguration()))
   }
 
   fun gamepadCatalog(): GamepadCatalog = gamepad.catalog()
@@ -589,3 +613,25 @@ internal fun ApplicationSettings.Audio.toRuntimeConfiguration(): AudioRuntimeCon
         !enabled,
         AudioRuntimeConfiguration.LatencyPreset.valueOf(latency.name),
     )
+
+internal fun startupAudioMuted(audio: ApplicationSettings.Audio, startMuted: Boolean): Boolean =
+    startMuted || !audio.enabled
+
+private fun startupAudioOutputFactory(startMuted: Boolean): SwingAudioOutputFactory =
+    SwingAudioOutputFactory { configuration, eventBus, callerId ->
+      AudioSystemSound(
+          startupAudioRuntimeConfiguration(configuration, startMuted),
+          eventBus,
+          callerId,
+      ) {}
+    }
+
+internal fun startupAudioRuntimeConfiguration(
+    configured: AudioRuntimeConfiguration,
+    startMuted: Boolean,
+): AudioRuntimeConfiguration = configured.withMuted(startMuted || configured.muted())
+
+/** Device, volume, and latency edits must not silently undo a process-local mute. */
+internal fun ApplicationSettings.Audio.toRuntimeConfigurationPreservingMute(
+    current: AudioRuntimeConfiguration,
+): AudioRuntimeConfiguration = toRuntimeConfiguration().withMuted(current.muted())

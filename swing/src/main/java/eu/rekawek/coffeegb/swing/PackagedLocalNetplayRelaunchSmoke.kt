@@ -127,6 +127,9 @@ internal fun validatePackagedLocalNetplayRelaunchChildIfRequested(
   check(request.settingsOverrides.suppressCloseAutosave) {
     "Packaged local netplay child did not suppress close autosave"
   }
+  check(request.startMuted) {
+    "Packaged local netplay child did not retain its process-local mute request"
+  }
   val expectedEndpoint =
       environment[LOCAL_NETPLAY_RELAUNCH_ENDPOINT_ENV]?.takeIf(String::isNotBlank) ?: "localhost"
   check(request.joinNetplayHost == expectedEndpoint && request.suppressInitialAutosaveResume) {
@@ -135,7 +138,7 @@ internal fun validatePackagedLocalNetplayRelaunchChildIfRequested(
 
   val evidence =
       "$RELAUNCH_EVIDENCE_PREFIX pid=$processId, launcher=$actualLauncher, " +
-          "profile=dmg, battery-saves=false, join=$expectedEndpoint\n"
+          "profile=dmg, battery-saves=false, audio=muted, join=$expectedEndpoint\n"
   writeExclusiveText(marker, evidence)
   return true
 }

@@ -82,6 +82,7 @@ class SwingGui private constructor(
     private val initialRom: File?,
     private val initialJoinNetplayHost: String?,
     private val suppressInitialAutosaveResume: Boolean,
+    private val startMuted: Boolean,
     private val properties: EmulatorProperties,
     private val mobileAdapterConfiguration: MobileAdapterConfigurationCoordinator,
     private val mobileAdapterConfigurationUiState: MobileAdapterConfigurationUiState,
@@ -196,6 +197,7 @@ class SwingGui private constructor(
             properties,
             mobileAdapterConfiguration.provider,
             mobileAdapterConfiguration,
+            startMuted = startMuted,
         )
   }
 
@@ -442,7 +444,7 @@ class SwingGui private constructor(
                     properties.updateApplicationSettings { settings ->
                       settings.copy(audio = settings.audio.copy(volume = volume))
                     }
-                    emulator.applyDeviceSettings(properties.applicationSettings)
+                    emulator.applyDeviceSettingsPreservingMute(properties.applicationSettings)
                   }
                   desktopUiCoordinator.audioVolume(volume)
                 },
@@ -461,7 +463,7 @@ class SwingGui private constructor(
                         eventBus = eventBus,
                         displayController = displayController,
                         gamepadCatalog = { emulator.gamepadCatalog().snapshot() },
-                        applyDeviceSettings = emulator::applyDeviceSettings,
+                        applyDeviceSettings = emulator::applyDeviceSettingsPreservingMute,
                         isCameraEnabled = { ::menu.isInitialized && menu.isCameraEnabled() },
                         setCameraEnabled = { enabled ->
                           if (::menu.isInitialized) menu.setCameraEnabled(enabled)
@@ -530,7 +532,10 @@ class SwingGui private constructor(
             DesktopPresentation(
                 commands =
                     DesktopCommandPresentation(
-                        muted = !properties.applicationSettings.audio.enabled,
+                        muted = startupAudioMuted(
+                            properties.applicationSettings.audio,
+                            startMuted,
+                        ),
                         audioVolume = properties.applicationSettings.audio.volume,
                         commandBarVisible =
                             properties.applicationSettings.desktop.commandBarVisible,
@@ -1110,7 +1115,7 @@ class SwingGui private constructor(
         }
     val evidence =
         "Coffee GB desktop ready OK: edt=true, visible=true, displayable=true, menu=true, " +
-            "mobile-adapter=true\n"
+            "mobile-adapter=true, muted=${desktopUiCoordinator.current().commands.muted}\n"
     writeDesktopStartupEvidence(marker, evidence) { failure ->
       if (failure != null) {
         LOG.error("Unable to write desktop startup smoke evidence", failure)
@@ -1159,11 +1164,16 @@ class SwingGui private constructor(
           )
         },
     ) { edit ->
-      val previousAdvanced = properties.applicationSettings.advanced
-      val previousDesktop = properties.applicationSettings.desktop
+      val previous = properties.applicationSettings
       properties.updateApplicationSettings(edit::applyTo)
       val applied = properties.applicationSettings
-      applyPreferencesRuntime(previousAdvanced, previousDesktop, applied, edit)
+      applyPreferencesRuntime(
+          previous.advanced,
+          previous.desktop,
+          previous.audio.enabled,
+          applied,
+          edit,
+      )
     }
     updateRecentRoms()
   }
@@ -1171,6 +1181,7 @@ class SwingGui private constructor(
   private fun applyPreferencesRuntime(
       previousAdvanced: ApplicationSettings.Advanced,
       previousDesktop: ApplicationSettings.Desktop,
+      previousAudioEnabled: Boolean,
       applied: ApplicationSettings,
       edit: PreferencesEdit,
   ) {
@@ -1189,7 +1200,13 @@ class SwingGui private constructor(
       desktopActions.applyShortcuts(
           DesktopShortcutRegistry(DesktopKeyboardKeyAdapter.keyCodes(applied.input.keyboard.values)))
     }
-    applyEffect("audio and game controllers") { emulator.applyDeviceSettings(applied) }
+    applyEffect("audio and game controllers") {
+      if (applied.audio.enabled == previousAudioEnabled) {
+        emulator.applyDeviceSettingsPreservingMute(applied)
+      } else {
+        emulator.applyDeviceSettings(applied)
+      }
+    }
     // Preferences can change the volume outside the portable overlay. Republish the applied
     // value so the overlay's cached command presentation (and its next +/- adjustment) starts
     // from the setting the user just applied.
@@ -1213,8 +1230,10 @@ class SwingGui private constructor(
       }
     }
     desktopUiCoordinator.commandBarVisible(applied.desktop.commandBarVisible)
-    applyEffect("audio mute") {
-      eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
+    if (applied.audio.enabled != previousAudioEnabled) {
+      applyEffect("audio mute") {
+        eventBus.post(Sound.SoundEnabledEvent(applied.audio.enabled))
+      }
     }
     applyEffect("save and rewind settings") {
       eventBus.post(Controller.UpdatedSavesSettingsEvent(applied.saves))
@@ -1259,6 +1278,24 @@ class SwingGui private constructor(
         settingsOverrides: ApplicationSettingsOverrides = ApplicationSettingsOverrides(),
         initialJoinNetplayHost: String? = null,
         suppressInitialAutosaveResume: Boolean = false,
+    ) =
+        runWithStartupAudio(
+            debug,
+            initialRom,
+            settingsOverrides,
+            initialJoinNetplayHost,
+            suppressInitialAutosaveResume,
+            startMuted = false,
+        )
+
+    /** Internal launch path for child-only transient policy; keeps [run]'s published ABI intact. */
+    internal fun runWithStartupAudio(
+        debug: Boolean,
+        initialRom: File?,
+        settingsOverrides: ApplicationSettingsOverrides,
+        initialJoinNetplayHost: String?,
+        suppressInitialAutosaveResume: Boolean,
+        startMuted: Boolean,
     ) {
       val desktopOpenFiles = DesktopOpenFilesBridge()
       prepareDesktopLaunch(
@@ -1304,6 +1341,7 @@ class SwingGui private constructor(
                 initialRom,
                 initialJoinNetplayHost,
                 suppressInitialAutosaveResume,
+                startMuted,
                 properties,
                 mobileAdapterConfiguration,
                 mobileAdapterConfigurationUiState,
