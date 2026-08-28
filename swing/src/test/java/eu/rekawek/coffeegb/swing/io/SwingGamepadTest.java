@@ -128,6 +128,27 @@ public class SwingGamepadTest {
     }
 
     @Test
+    public void shoulderButtonsDriveSeparateAAndBAutofireChannels() {
+        Rig rig = new Rig(mapping(new ControllerProperties.GamepadAssignment(0, ID_A)));
+        FakeDevice device = rig.backend.add(ID_A, "primary");
+        device.buttons.add(GamepadBackend.PadButton.LEFT_SHOULDER);
+        device.buttons.add(GamepadBackend.PadButton.RIGHT_SHOULDER);
+
+        rig.gamepad.pollOnce();
+        assertEquals(Set.of(Button.A, Button.B), rig.hub.sample().buttons(0));
+        rig.autofire.advanceFrame();
+        rig.autofire.advanceFrame();
+        assertTrue(rig.hub.sample().buttons(0).isEmpty());
+
+        device.buttons.add(GamepadBackend.PadButton.A);
+        rig.gamepad.pollOnce();
+        assertEquals(Set.of(Button.A), rig.hub.sample().buttons(0));
+        rig.autofire.advanceFrame();
+        rig.autofire.advanceFrame();
+        assertEquals(Set.of(Button.A, Button.B), rig.hub.sample().buttons(0));
+    }
+
+    @Test
     public void everyControllerIsDiscoveredOncePerConnectionEvenWhenUnassigned() {
         List<GamepadBackend.DeviceInfo> discovered = new ArrayList<>();
         Rig rig = new Rig(
@@ -446,6 +467,7 @@ public class SwingGamepadTest {
         final EventBusImpl bus = new EventBusImpl(null, null, false);
         final PlayerInputHub hub = new PlayerInputHub();
         final DesktopPlayerInput input = new DesktopPlayerInput(hub, bus);
+        final DesktopAutofireInput autofire = new DesktopAutofireInput(input, bus);
         final DesktopTiltInput tiltInput = new DesktopTiltInput(bus);
         final FakeBackend backend = new FakeBackend();
         final SwingGamepad gamepad;
@@ -456,11 +478,13 @@ public class SwingGamepadTest {
 
         Rig(ControllerProperties.PlayerMapping mapping,
             List<GamepadBackend.DeviceInfo> discovered) {
-            gamepad = new SwingGamepad(mapping, input, tiltInput, bus, backend, discovered::add);
+            gamepad = new SwingGamepad(
+                    GamepadConfiguration.from(mapping), input, tiltInput, bus, backend,
+                    autofire, discovered::add);
         }
 
         Rig(GamepadConfiguration configuration) {
-            gamepad = new SwingGamepad(configuration, input, tiltInput, bus, backend);
+            gamepad = new SwingGamepad(configuration, input, tiltInput, bus, backend, autofire);
         }
     }
 

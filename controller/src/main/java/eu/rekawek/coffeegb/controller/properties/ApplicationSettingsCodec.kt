@@ -72,6 +72,7 @@ object ApplicationSettingsCodec {
       versionSevenFixedKeys + setOf(DESKTOP_APPEARANCE_KEY, DESKTOP_COMMAND_BAR_VISIBLE_KEY)
   private val versionNineFixedKeys = versionEightFixedKeys + EXECUTION_MODE_KEY
   private val versionTenFixedKeys = versionNineFixedKeys
+  private val versionElevenFixedKeys = versionTenFixedKeys
 
   fun decode(raw: Map<String, String>): ApplicationSettingsDocument {
     validateStringEntries(raw)
@@ -95,6 +96,7 @@ object ApplicationSettingsCodec {
             version == "7" ||
             version == "8" ||
             version == "9" ||
+            version == "10" ||
             version == SUPPORTED_SCHEMA_VERSION) {
       "Unsupported settings schema $version"
     }
@@ -493,6 +495,7 @@ object ApplicationSettingsCodec {
         if (sourceVersion >= 2) decodeUnknownCollisions(raw) else emptyMap()
     val knownFixedKeys =
         when {
+          sourceVersion >= 11 -> versionElevenFixedKeys
           sourceVersion >= 10 -> versionTenFixedKeys
           sourceVersion >= 9 -> versionNineFixedKeys
           sourceVersion >= 8 -> versionEightFixedKeys
@@ -922,6 +925,13 @@ object ApplicationSettingsCodec {
               "input.p${binding.player + 1}.btn_${binding.button.name.lowercase(Locale.ROOT)}"] =
               key.propertyName
         }
+    input.autofireKeyboard.entries
+        .sortedWith(compareBy({ it.key.player }, { it.key.button.ordinal }))
+        .forEach { (binding, key) ->
+          target[
+              "input.p${binding.player + 1}.autofire_${binding.button.name.lowercase(Locale.ROOT)}"] =
+              key.propertyName
+        }
     input.gamepads.toSortedMap().forEach { (player, selection) ->
       val value =
           when (selection) {
@@ -976,7 +986,7 @@ object ApplicationSettingsCodec {
   }
 
   private fun isReservedCurrentKey(key: String): Boolean =
-      key in versionTenFixedKeys ||
+      key in versionElevenFixedKeys ||
           key.startsWith(PRESERVED_UNKNOWN_COLLISIONS_PREFIX) ||
           isKnownRecentKey(key, supportsCanonicalRecentKeys = true) ||
           isKnownPreviousSaveDirectoryKey(key, supportsPreviousDirectories = true) ||

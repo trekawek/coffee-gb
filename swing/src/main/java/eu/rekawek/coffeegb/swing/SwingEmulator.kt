@@ -19,6 +19,7 @@ import eu.rekawek.coffeegb.swing.io.AudioDeviceSnapshot
 import eu.rekawek.coffeegb.swing.io.AudioOutputStatus
 import eu.rekawek.coffeegb.swing.io.AudioRuntimeConfiguration
 import eu.rekawek.coffeegb.swing.io.AudioSystemSound
+import eu.rekawek.coffeegb.swing.io.DesktopAutofireInput
 import eu.rekawek.coffeegb.swing.io.DesktopPlayerInput
 import eu.rekawek.coffeegb.swing.io.DesktopTiltInput
 import eu.rekawek.coffeegb.swing.io.DisplayScaleMode
@@ -86,6 +87,7 @@ class SwingEmulator(
 
   private val display: SwingDisplay
   private val joypad: SwingJoypad
+  private val autofireInput: DesktopAutofireInput
   private val gamepad: SwingGamepad
   private val gamepadThread: Thread
   private val sound: AudioSystemSound
@@ -127,10 +129,17 @@ class SwingEmulator(
             "main",
         )
     playerInput = DesktopPlayerInput(properties.playerInputSource, eventBus)
+    autofireInput = DesktopAutofireInput(playerInput, eventBus, "main")
     tiltInput = DesktopTiltInput(eventBus)
-    joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput)
-    gamepad = SwingGamepad(properties.playerInputMapping, playerInput, tiltInput, eventBus)
-    gamepad.updateConfiguration(properties.applicationSettings.toGamepadConfiguration())
+    joypad = SwingJoypad(properties.playerInputMapping, eventBus, playerInput, autofireInput)
+    gamepad =
+        SwingGamepad(
+            properties.applicationSettings.toGamepadConfiguration(),
+            playerInput,
+            tiltInput,
+            eventBus,
+            autofireInput,
+        )
     accelerometer = SwingAccelerometer(eventBus, tiltInput, display.preferredSize)
     tiltKeys = SwingTiltKeys(tiltInput)
     printer = SwingPrinter(eventBus)

@@ -20,23 +20,39 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
     private static final int REWIND_KEY = KeyEvent.VK_BACK_SPACE;
 
     private Map<Integer, ControllerProperties.PlayerButton> mapping;
+    private Map<Integer, ControllerProperties.PlayerAutofireButton> autofireMapping;
     private final EventBus eventBus;
     private final DesktopPlayerInput input;
+    private final DesktopAutofireInput autofireInput;
     private final Object[] sourceIdentities = new Object[4];
+    private final Object[] autofireSourceIdentities = new Object[4];
     private final EnumSet<Button>[] pressed;
+    private final EnumSet<Button>[] autofirePressed;
 
     private boolean rewindActive;
 
     @SuppressWarnings("unchecked")
     public SwingJoypad(ControllerProperties.PlayerMapping mapping, EventBus eventBus,
                        DesktopPlayerInput input) {
+        this(mapping, eventBus, input, new DesktopAutofireInput(input, eventBus));
+    }
+
+    @SuppressWarnings("unchecked")
+    public SwingJoypad(ControllerProperties.PlayerMapping mapping, EventBus eventBus,
+                       DesktopPlayerInput input, DesktopAutofireInput autofireInput) {
         this.mapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveMapping(mapping.getKeyboard()));
+        this.autofireMapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveAutofireMapping(
+                mapping.getAutofireKeyboard()));
         this.eventBus = eventBus;
         this.input = input;
+        this.autofireInput = autofireInput;
         this.pressed = new EnumSet[4];
+        this.autofirePressed = new EnumSet[4];
         for (int player = 0; player < 4; player++) {
             sourceIdentities[player] = new Object();
+            autofireSourceIdentities[player] = new Object();
             pressed[player] = EnumSet.noneOf(Button.class);
+            autofirePressed[player] = EnumSet.noneOf(Button.class);
         }
     }
 
@@ -50,6 +66,14 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
         if (binding != null) {
             if (pressed[binding.getPlayer()].add(binding.getButton())) {
                 update(binding.getPlayer());
+            }
+            return;
+        }
+        ControllerProperties.PlayerAutofireButton autofireBinding =
+                autofireMapping.get(e.getKeyCode());
+        if (autofireBinding != null) {
+            if (autofirePressed[autofireBinding.getPlayer()].add(autofireBinding.getButton())) {
+                updateAutofire(autofireBinding.getPlayer());
             }
             return;
         }
@@ -69,6 +93,14 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
             update(binding.getPlayer());
             return;
         }
+        ControllerProperties.PlayerAutofireButton autofireBinding =
+                autofireMapping.get(e.getKeyCode());
+        if (autofireBinding != null
+                && autofirePressed[autofireBinding.getPlayer()].remove(
+                        autofireBinding.getButton())) {
+            updateAutofire(autofireBinding.getPlayer());
+            return;
+        }
         if (e.getKeyCode() == REWIND_KEY) {
             releaseRewind();
         }
@@ -76,7 +108,8 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
 
     /** True when an unmodified key belongs to a configured button or the fallback rewind key. */
     public synchronized boolean handlesKeyCode(int keyCode) {
-        return mapping.containsKey(keyCode) || keyCode == REWIND_KEY;
+        return mapping.containsKey(keyCode) || autofireMapping.containsKey(keyCode)
+                || keyCode == REWIND_KEY;
     }
 
     /** Returns the configured player-one logical key for portable-menu capture, if any. */
@@ -134,16 +167,25 @@ public class SwingJoypad implements KeyListener, WindowFocusListener {
         releaseRewind();
         input.releaseAll();
         this.mapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveMapping(mapping.getKeyboard()));
+        this.autofireMapping = Map.copyOf(DesktopKeyboardKeyAdapter.resolveAutofireMapping(
+                mapping.getAutofireKeyboard()));
     }
 
     private void update(int player) {
         input.update(sourceIdentities[player], player, pressed[player]);
     }
 
+    private void updateAutofire(int player) {
+        autofireInput.update(
+                autofireSourceIdentities[player], player, autofirePressed[player]);
+    }
+
     private void releaseKeyboard() {
         for (int player = 0; player < pressed.length; player++) {
             pressed[player].clear();
             input.disconnect(sourceIdentities[player]);
+            autofirePressed[player].clear();
+            autofireInput.disconnect(autofireSourceIdentities[player]);
         }
     }
 

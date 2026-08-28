@@ -218,8 +218,12 @@ data class ApplicationSettings(
       keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey>,
       gamepads: Map<Int, GamepadSelection>,
       gamepadTunings: Map<String, GamepadTuning> = emptyMap(),
+      autofireKeyboard: Map<ControllerProperties.PlayerAutofireButton, KeyboardKey> = emptyMap(),
   ) {
     val keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey> = immutableMapCopy(keyboard)
+
+    val autofireKeyboard: Map<ControllerProperties.PlayerAutofireButton, KeyboardKey> =
+        immutableMapCopy(autofireKeyboard)
 
     val gamepads: Map<Int, GamepadSelection> = immutableMapCopy(gamepads)
 
@@ -237,6 +241,12 @@ data class ApplicationSettings(
             "Disabled P2 through P4 gamepad selections must be omitted"
           }
       keyboard.keys.forEach { require(it.player in 0..3) }
+      autofireKeyboard.keys.forEach {
+        require(it.player in 0..3)
+        require(it.button == Button.A || it.button == Button.B) {
+          "Autofire keyboard bindings are supported only for A and B"
+        }
+      }
       require(this.gamepadTunings.size <= MAX_GAMEPAD_TUNINGS) {
         "At most $MAX_GAMEPAD_TUNINGS gamepad tuning profiles may be stored"
       }
@@ -261,6 +271,27 @@ data class ApplicationSettings(
             }
           }
 
+      val autofireByKey =
+          linkedMapOf<KeyboardKey, ControllerProperties.PlayerAutofireButton>()
+      autofireKeyboard.entries
+          .sortedWith(
+              compareBy<Map.Entry<ControllerProperties.PlayerAutofireButton, KeyboardKey>>(
+                  { it.key.player }, { it.key.button.ordinal }))
+          .forEach { (binding, key) ->
+            val regular = byKey[key]
+            require(regular == null) {
+              "Key ${key.propertyName} is assigned to both " +
+                  "P${regular!!.player + 1} ${regular.button} and " +
+                  "P${binding.player + 1} ${binding.button} autofire"
+            }
+            val previous = autofireByKey.put(key, binding)
+            require(previous == null) {
+              "Key ${key.propertyName} is assigned to both " +
+                  "P${previous!!.player + 1} ${previous.button} autofire and " +
+                  "P${binding.player + 1} ${binding.button} autofire"
+            }
+          }
+
       val assignments =
           gamepads.entries
               .mapNotNull { (player, selection) ->
@@ -278,27 +309,34 @@ data class ApplicationSettings(
       require(duplicate == null) {
         "Gamepad selector ${duplicate!!.key} is assigned to multiple logical players"
       }
-      return ControllerProperties.PlayerMapping(byKey.toMap(), assignments)
+      return ControllerProperties.PlayerMapping(
+          byKey.toMap(), assignments, autofireByKey.toMap())
     }
 
     fun copy(
         keyboard: Map<ControllerProperties.PlayerButton, KeyboardKey> = this.keyboard,
         gamepads: Map<Int, GamepadSelection> = this.gamepads,
         gamepadTunings: Map<String, GamepadTuning> = this.gamepadTunings,
-    ): Input = Input(keyboard, gamepads, gamepadTunings)
+        autofireKeyboard: Map<ControllerProperties.PlayerAutofireButton, KeyboardKey> =
+            this.autofireKeyboard,
+    ): Input = Input(keyboard, gamepads, gamepadTunings, autofireKeyboard)
 
     override fun equals(other: Any?): Boolean =
         this === other ||
             (other is Input &&
                 keyboard == other.keyboard &&
+                autofireKeyboard == other.autofireKeyboard &&
                 gamepads == other.gamepads &&
                 gamepadTunings == other.gamepadTunings)
 
     override fun hashCode(): Int =
-        31 * (31 * keyboard.hashCode() + gamepads.hashCode()) + gamepadTunings.hashCode()
+        31 *
+            (31 * (31 * keyboard.hashCode() + autofireKeyboard.hashCode()) +
+                gamepads.hashCode()) + gamepadTunings.hashCode()
 
     override fun toString(): String =
-        "Input(keyboard=$keyboard, gamepads=$gamepads, gamepadTunings=$gamepadTunings)"
+        "Input(keyboard=$keyboard, autofireKeyboard=$autofireKeyboard, " +
+            "gamepads=$gamepads, gamepadTunings=$gamepadTunings)"
 
     companion object {
       fun defaults(): Input {
@@ -583,7 +621,7 @@ data class ApplicationSettings(
   }
 
   companion object {
-    const val CURRENT_SCHEMA_VERSION = 10
+    const val CURRENT_SCHEMA_VERSION = 11
     const val MIN_RECENT_FILE_CAPACITY = 0
     const val DEFAULT_RECENT_FILE_CAPACITY = 10
     const val MAX_RECENT_FILE_CAPACITY = 50
