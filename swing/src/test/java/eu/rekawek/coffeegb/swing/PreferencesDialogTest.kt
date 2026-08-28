@@ -137,6 +137,10 @@ class PreferencesDialogTest {
                     fullscreen = true,
                 ),
             keyboard = emptyMap(),
+            autofireKeyboard =
+                mapOf(
+                    ControllerProperties.PlayerAutofireButton(2, Button.B) to
+                        DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_V)),
             gamepads = mapOf(0 to GamepadSelection.Disabled),
             gamepadTunings =
                 mapOf(
@@ -168,6 +172,7 @@ class PreferencesDialogTest {
     assertEquals(2, updated.general.recentFileCapacity)
     assertEquals(RomChangeConfirmationPolicy.NEVER, updated.general.romChangeConfirmationPolicy)
     assertTrue(updated.input.keyboard.isEmpty())
+    assertEquals(edit.autofireKeyboard, updated.input.autofireKeyboard)
     assertEquals(edit.gamepads, updated.input.gamepads)
     assertEquals(edit.gamepadTunings, updated.input.gamepadTunings)
     assertEquals(6, updated.peripherals.cameraDeviceIndex)
@@ -246,6 +251,10 @@ class PreferencesDialogTest {
         assertEquals(listOf("apply", "close"), events)
         assertEquals(ApplicationSettings.DEFAULT_RECENT_FILE_CAPACITY, received?.recentFileCapacity)
         assertEquals(ApplicationSettings.Input.defaults().keyboard, received?.keyboard)
+        assertEquals(
+            ApplicationSettings.Input.defaults().autofireKeyboard,
+            received?.autofireKeyboard,
+        )
         assertEquals(ApplicationSettings.Input.defaults().gamepads, received?.gamepads)
         assertEquals(
             ApplicationSettings.DEFAULT_CAMERA_DEVICE_INDEX,
@@ -308,6 +317,10 @@ class PreferencesDialogTest {
             defaults.input.keyboard +
                 (ControllerProperties.PlayerButton(0, Button.A) to
                     DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_A))
+        val changedAutofireKeyboard =
+            mapOf(
+                ControllerProperties.PlayerAutofireButton(0, Button.A) to
+                    DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_C))
         val initial =
             defaults.copy(
                 general =
@@ -332,6 +345,7 @@ class PreferencesDialogTest {
                 input =
                     defaults.input.copy(
                         keyboard = changedKeyboard,
+                        autofireKeyboard = changedAutofireKeyboard,
                         gamepads = mapOf(0 to GamepadSelection.Disabled),
                         gamepadTunings =
                             mapOf(
@@ -365,6 +379,7 @@ class PreferencesDialogTest {
             restored.confirmationPolicy,
         )
         assertEquals(defaults.input.keyboard, restored.keyboard)
+        assertEquals(defaults.input.autofireKeyboard, restored.autofireKeyboard)
         assertEquals(defaults.input.gamepads, restored.gamepads)
         assertEquals(defaults.input.gamepadTunings, restored.gamepadTunings)
         assertEquals(defaults.display, restored.display)
@@ -1022,6 +1037,7 @@ class PreferencesDialogTest {
         )
         assertTrue(panel.controlsRuntimeGuidance.text.contains("Backspace rewinds"))
         assertTrue(panel.controlsRuntimeGuidance.text.contains("I/J/K/L"))
+        assertTrue(panel.controlsRuntimeGuidance.text.contains("L1/R1"))
         assertEquals(true, panel.controlsRuntimeGuidance.getClientProperty("html.disable"))
         panel.controlsPlayerSelector.selectedIndex = 1
         assertEquals(1, panel.keyboardEditor.selectedPlayer)

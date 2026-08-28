@@ -190,6 +190,8 @@ final class SdlGamepadBackend implements GamepadBackend {
                 case X -> SDL_CONTROLLER_BUTTON_X;
                 case START -> SDL_CONTROLLER_BUTTON_START;
                 case BACK -> SDL_CONTROLLER_BUTTON_BACK;
+                case LEFT_SHOULDER -> SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+                case RIGHT_SHOULDER -> SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
             };
             return SDL_GameControllerGetButton(controller, value) != 0;
         }

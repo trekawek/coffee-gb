@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.controller.properties
 
+import eu.rekawek.coffeegb.core.joypad.Button
 import java.nio.file.Files
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -8,6 +9,55 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class ApplicationSettingsDevicesTest {
+
+  @Test
+  fun `schema ten migrates with no autofire bindings`() {
+    val decoded =
+        ApplicationSettingsCodec.decode(
+            mapOf(ApplicationSettingsCodec.SCHEMA_VERSION_KEY to "10"))
+
+    assertTrue(decoded.settings.input.autofireKeyboard.isEmpty())
+    assertEquals(
+        ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+        ApplicationSettingsCodec.encode(decoded)[ApplicationSettingsCodec.SCHEMA_VERSION_KEY],
+    )
+  }
+
+  @Test
+  fun `separate keyboard autofire bindings round trip and remain immutable`() {
+    val autofire =
+        linkedMapOf(
+            ControllerProperties.PlayerAutofireButton(0, Button.A) to
+                ApplicationSettings.KeyboardKey.parse("VK_C", "test"),
+            ControllerProperties.PlayerAutofireButton(3, Button.B) to
+                ApplicationSettings.KeyboardKey.parse("VK_V", "test"),
+        )
+    val input = ApplicationSettings.Input.defaults().copy(autofireKeyboard = autofire)
+    autofire.clear()
+    val document = ApplicationSettingsDocument(ApplicationSettings(input = input))
+
+    val encoded = ApplicationSettingsCodec.encode(document)
+    assertEquals("VK_C", encoded["input.p1.autofire_a"])
+    assertEquals("VK_V", encoded["input.p4.autofire_b"])
+    val decoded = ApplicationSettingsCodec.decode(encoded)
+    assertEquals(document, decoded)
+    assertEquals(encoded, ApplicationSettingsCodec.encode(decoded))
+    assertFailsWith<UnsupportedOperationException> {
+      @Suppress("UNCHECKED_CAST")
+      (decoded.settings.input.autofireKeyboard as MutableMap<Any?, Any?>).clear()
+    }
+
+    assertFailsWith<IllegalArgumentException> {
+      ApplicationSettingsCodec.decode(
+          mapOf(
+              ApplicationSettingsCodec.SCHEMA_VERSION_KEY to
+                  ApplicationSettings.CURRENT_SCHEMA_VERSION.toString(),
+              "input.p1.btn_a" to "VK_C",
+              "input.p1.autofire_a" to "VK_C",
+              "input.p1.gamepad" to "auto",
+          ))
+    }
+  }
 
   @Test
   fun `audio and gamepad tuning models enforce explicit defaults and bounds`() {

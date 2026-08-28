@@ -28,7 +28,7 @@ class KeyboardMappingEditorTest {
         val actions = descendants(editor).filterIsInstance<AbstractButton>()
         assertTrue(actions.all { !it.accessibleContext.accessibleName.isNullOrBlank() })
         assertTrue(actions.all(Component::isFocusable))
-        assertEquals(8, actions.count { it.text == "Capture" })
+        assertEquals(10, actions.count { it.text == "Capture" })
         assertEquals(1, actions.count { it.text == "Reset keyboard defaults" })
         assertTrue(actions.none { it.text in setOf("Dialog key…", "Clear", "Reset") })
         assertEquals(
@@ -36,7 +36,7 @@ class KeyboardMappingEditorTest {
             button(editor, "Restore all keyboard defaults").text,
         )
         assertEquals(
-            8,
+            10,
             descendants(editor)
                 .mapNotNull { it.accessibleContext.accessibleName }
                 .count { it.startsWith("Current binding for Player ") },
@@ -52,6 +52,8 @@ class KeyboardMappingEditorTest {
                 "Capture Player 1 Start keyboard binding",
                 "Capture Player 1 B keyboard binding",
                 "Capture Player 1 A keyboard binding",
+                "Capture Player 1 B Autofire keyboard binding",
+                "Capture Player 1 A Autofire keyboard binding",
             ),
             descendants(editor)
                 .filterIsInstance<AbstractButton>()
@@ -80,7 +82,46 @@ class KeyboardMappingEditorTest {
           expected.forEach { (button, position) ->
             assertEquals(position, editor.padPosition(player, button))
           }
+          assertEquals(
+              KeyboardMappingEditor.PadPosition(5, 3),
+              editor.autofirePadPosition(player, Button.B),
+          )
+          assertEquals(
+              KeyboardMappingEditor.PadPosition(6, 3),
+              editor.autofirePadPosition(player, Button.A),
+          )
         }
+      }
+
+  @Test
+  fun autofireBindingsCaptureSeparatelyAndSwapConflictsWithRegularBindings() =
+      onEventThread {
+        val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
+
+        assertIs<KeyboardMappingEditor.EditResult.Applied>(
+            editor.editAutofireBinding(0, Button.A, KeyEvent.VK_C))
+        assertEquals(KeyEvent.VK_C, editor.currentAutofireBinding(0, Button.A)?.code)
+
+        assertIs<KeyboardMappingEditor.EditResult.Applied>(
+            editor.editAutofireBinding(1, Button.B, KeyEvent.VK_Q))
+        assertIs<KeyboardMappingEditor.EditResult.Applied>(
+            editor.editAutofireBinding(1, Button.B, KeyEvent.VK_Z))
+        assertEquals(KeyEvent.VK_Z, editor.currentAutofireBinding(1, Button.B)?.code)
+        assertEquals(KeyEvent.VK_Q, editor.currentBinding(0, Button.A)?.code)
+        assertEquals(KeyEvent.VK_C, editor.currentAutofireBinding(0, Button.A)?.code)
+
+        editor.selectPlayer(1)
+        val capture = button(editor, "Capture Player 2 A Autofire keyboard binding")
+        capture.doClick()
+        assertTrue(editor.handleCaptureKey(key(capture, KeyEvent.KEY_PRESSED, KeyEvent.VK_Q)))
+        assertTrue(editor.handleCaptureKey(key(capture, KeyEvent.KEY_RELEASED, KeyEvent.VK_Q)))
+        assertEquals(KeyEvent.VK_Q, editor.currentAutofireBinding(1, Button.A)?.code)
+        assertEquals(
+            KeyEvent.VK_Q,
+            editor.validatedDraft()
+                .autofireKeyboard[ControllerProperties.PlayerAutofireButton(1, Button.A)]
+                ?.code,
+        )
       }
 
   @Test
@@ -138,6 +179,9 @@ class KeyboardMappingEditorTest {
                 ApplicationSettings.Input.defaults().keyboard,
                 gamepads,
                 tunings,
+                mapOf(
+                    ControllerProperties.PlayerAutofireButton(0, Button.A) to
+                        DesktopKeyboardKeyAdapter.fromKeyCode(KeyEvent.VK_C)),
             )
         val editor = KeyboardMappingEditor(initial)
 
@@ -150,12 +194,14 @@ class KeyboardMappingEditorTest {
         assertNull(initial.keyboard[playerButton(1, Button.A)], "the initial value is immutable")
 
         editor.editBinding(1, Button.B, KeyEvent.VK_W)
+        editor.editAutofireBinding(2, Button.B, KeyEvent.VK_R)
         editor.resetToDefaults()
         assertEquals(
             ApplicationSettings.Input(
                 ApplicationSettings.Input.defaults().keyboard,
                 gamepads,
                 tunings,
+                ApplicationSettings.Input.defaults().autofireKeyboard,
             ),
             editor.validatedDraft(),
         )

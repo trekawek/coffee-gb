@@ -21,7 +21,8 @@ interface GamepadBackend extends AutoCloseable {
 
     enum Axis { LEFT_X, LEFT_Y, RIGHT_X, RIGHT_Y }
 
-    enum PadButton { UP, DOWN, LEFT, RIGHT, A, B, X, START, BACK }
+    enum PadButton { UP, DOWN, LEFT, RIGHT, A, B, X, START, BACK,
+        LEFT_SHOULDER, RIGHT_SHOULDER }
 
     interface GamepadDevice extends AutoCloseable {
         String stableId();

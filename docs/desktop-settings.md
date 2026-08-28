@@ -50,7 +50,7 @@ so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `10` |
+| `settings.schemaVersion` | exact supported schema version | `11` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
@@ -87,6 +87,7 @@ so the portable JAR remains compatible during the migration window.
 | `datel.slot.rom` | optional local path | absent |
 | `fullchanger.character` | optional stable menu value | absent |
 | `btn_*`, `input.pN.btn_*` | validated keyboard binding | documented P1 defaults |
+| `input.pN.autofire_a`, `input.pN.autofire_b` | separate validated A/B autofire keyboard binding | unbound |
 | `input.pN.gamepad` | disabled, automatic, or stable SDL device ID | P1 automatic |
 | `input.gamepad.<stable-id>.movementDeadZone` | raw SDL threshold in `0..32766` | `16384` |
 | `input.gamepad.<stable-id>.tiltDeadZone` | raw SDL threshold in `0..32766` | `4096` |
@@ -125,9 +126,11 @@ bootstrap choices; General owns ROM-opening policy, appearance, and command-bar 
 owns sizing, letterboxing, fullscreen, rotation, color, blending, and the Super Game Boy border.
 
 Controls combines keyboard and gamepad subpages for a selected player. Keyboard presents all eight
-buttons like a Game Boy pad; choose **Capture** and press a key, including Enter or Escape. Tab
-remains reserved for focus navigation and Backspace for Rewind. Assigning an occupied key swaps the
-two bindings, or moves it when the destination was unassigned. Gamepad lists up to four logical
+buttons like a Game Boy pad plus separate A and B Autofire controls; choose **Capture** and press a
+key, including Enter or Escape. Tab remains reserved for focus navigation and Backspace for Rewind.
+Assigning an occupied key swaps the two bindings, or moves it when the destination was unassigned.
+Held autofire inputs pulse for two frames down and two frames up, approximately 15 presses per
+second. Gamepad L1 drives A Autofire and R1 drives B Autofire. Gamepad lists up to four logical
 assignments without calling SDL on the EDT, keeps an unavailable configured controller visible,
 prevents duplicate explicit or automatic assignments, and exposes independent movement/tilt dead
 zones and X/Y inversion for each stable device. A mapping change releases held input and waits for

@@ -21,6 +21,25 @@ import org.junit.Test
 class ControllerPropertiesTest {
 
   @Test
+  fun `separate A and B autofire keyboard bindings are accepted`() {
+    val input =
+        ControllerProperties.getInputSettings(
+            Properties().apply {
+              setProperty("input.p1.autofire_a", "VK_C")
+              setProperty("input.p2.autofire_b", "VK_V")
+            })
+
+    assertEquals(
+        key("VK_C"),
+        input.autofireKeyboard[ControllerProperties.PlayerAutofireButton(0, Button.A)],
+    )
+    assertEquals(
+        ControllerProperties.PlayerAutofireButton(1, Button.B),
+        input.toPlayerMapping().autofireKeyboard[key("VK_V")],
+    )
+  }
+
+  @Test
   fun defaultsPreserveLegacyPrimaryKeyboardAndOneAutomaticGamepad() {
     val mapping = ControllerProperties.getPlayerMapping(Properties())
 
@@ -33,6 +52,7 @@ class ControllerPropertiesTest {
         listOf(ControllerProperties.GamepadAssignment(0, "auto")),
         mapping.gamepads,
     )
+    assertTrue(mapping.autofireKeyboard.isEmpty())
     assertEquals(Button.B, mapping.legacyPrimaryKeyboard()[key("VK_X")])
   }
 
@@ -66,6 +86,8 @@ class ControllerPropertiesTest {
             "input.p5.btn_a" to "VK_Q",
             "input.p2.btn_fire" to "VK_Q",
             "input.p2.btn_a" to "NOT_A_KEY",
+            "input.p1.autofire_start" to "VK_C",
+            "input.p5.autofire_a" to "VK_C",
             "input.p2.unknown" to "VK_Q",
             "input.p2.gamepad" to "controller-zero",
         )
@@ -84,6 +106,17 @@ class ControllerPropertiesTest {
           Properties().apply {
             setProperty("input.p1.btn_a", "VK_SEPARATOR")
             setProperty("input.p2.btn_a", "VK_SEPARATER")
+          })
+    }
+    assertFailsWith<IllegalArgumentException>("regular/autofire duplicate") {
+      ControllerProperties.getPlayerMapping(
+          Properties().apply { setProperty("input.p2.autofire_a", "VK_Z") })
+    }
+    assertFailsWith<IllegalArgumentException>("autofire duplicate") {
+      ControllerProperties.getPlayerMapping(
+          Properties().apply {
+            setProperty("input.p2.autofire_a", "VK_C")
+            setProperty("input.p3.autofire_b", "VK_C")
           })
     }
     assertFailsWith<IllegalArgumentException>("legacy/new duplicate") {

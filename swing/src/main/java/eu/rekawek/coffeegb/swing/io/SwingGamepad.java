@@ -37,6 +37,7 @@ public class SwingGamepad implements Runnable {
 
     private final EventBus eventBus;
     private final DesktopPlayerInput input;
+    private final DesktopAutofireInput autofireInput;
     private final DesktopTiltInput tiltInput;
     private final GamepadBackend backend;
     private final Consumer<GamepadBackend.DeviceInfo> discoveryObserver;
@@ -58,26 +59,33 @@ public class SwingGamepad implements Runnable {
     public SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                         DesktopTiltInput tiltInput, EventBus eventBus) {
         this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
-                new SdlGamepadBackend(), ignored -> {});
+                new SdlGamepadBackend(), new DesktopAutofireInput(input, eventBus), ignored -> {});
     }
 
     public SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
                         DesktopTiltInput tiltInput, EventBus eventBus) {
         this(configuration, input, tiltInput, eventBus,
-                new SdlGamepadBackend(), ignored -> {});
+                new SdlGamepadBackend(), new DesktopAutofireInput(input, eventBus), ignored -> {});
+    }
+
+    public SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                        DesktopTiltInput tiltInput, EventBus eventBus,
+                        DesktopAutofireInput autofireInput) {
+        this(configuration, input, tiltInput, eventBus,
+                new SdlGamepadBackend(), autofireInput, ignored -> {});
     }
 
     SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                  DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend) {
         this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
-                backend, ignored -> {});
+                backend, new DesktopAutofireInput(input, eventBus), ignored -> {});
     }
 
     SwingGamepad(ControllerProperties.PlayerMapping mapping, DesktopPlayerInput input,
                  DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
                  Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
         this(GamepadConfiguration.from(mapping), input, tiltInput, eventBus,
-                backend, discoveryObserver);
+                backend, new DesktopAutofireInput(input, eventBus), discoveryObserver);
     }
 
     SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
@@ -87,10 +95,25 @@ public class SwingGamepad implements Runnable {
 
     SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
                  DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
+                 DesktopAutofireInput autofireInput) {
+        this(configuration, input, tiltInput, eventBus, backend, autofireInput, ignored -> {});
+    }
+
+    SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
+                 Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
+        this(configuration, input, tiltInput, eventBus, backend,
+                new DesktopAutofireInput(input, eventBus), discoveryObserver);
+    }
+
+    SwingGamepad(GamepadConfiguration configuration, DesktopPlayerInput input,
+                 DesktopTiltInput tiltInput, EventBus eventBus, GamepadBackend backend,
+                 DesktopAutofireInput autofireInput,
                  Consumer<GamepadBackend.DeviceInfo> discoveryObserver) {
         this.requestedConfiguration = Objects.requireNonNull(configuration, "configuration");
         this.appliedConfiguration = configuration;
         this.input = Objects.requireNonNull(input, "input");
+        this.autofireInput = Objects.requireNonNull(autofireInput, "autofireInput");
         this.tiltInput = Objects.requireNonNull(tiltInput, "tiltInput");
         this.eventBus = Objects.requireNonNull(eventBus, "eventBus");
         this.backend = Objects.requireNonNull(backend, "backend");
@@ -120,6 +143,7 @@ public class SwingGamepad implements Runnable {
         rearmRequested = true;
         rumbleRequested = false;
         input.releaseAll();
+        autofireInput.releaseAll();
         tiltInput.clear(tiltSourceIdentity);
     }
 
@@ -132,6 +156,7 @@ public class SwingGamepad implements Runnable {
         rearmRequested = true;
         rumbleRequested = false;
         input.releaseAll();
+        autofireInput.releaseAll();
         tiltInput.clear(tiltSourceIdentity);
     }
 
@@ -282,6 +307,7 @@ public class SwingGamepad implements Runnable {
                 appliedConfiguration.tuningFor(device.stableId());
         PhysicalState state = PhysicalState.read(device);
         EnumSet<Button> buttons = EnumSet.noneOf(Button.class);
+        EnumSet<Button> autofireButtons = EnumSet.noneOf(Button.class);
         if (activeDevice.waitingForNeutral) {
             if (state.isNeutral(tuning)) {
                 activeDevice.waitingForNeutral = false;
@@ -298,8 +324,11 @@ public class SwingGamepad implements Runnable {
             add(buttons, Button.B, state.buttons.contains(B) || state.buttons.contains(X));
             add(buttons, Button.START, state.buttons.contains(START));
             add(buttons, Button.SELECT, state.buttons.contains(BACK));
+            add(autofireButtons, Button.A, state.buttons.contains(LEFT_SHOULDER));
+            add(autofireButtons, Button.B, state.buttons.contains(RIGHT_SHOULDER));
         }
         input.update(activeDevice.sourceIdentity, player, buttons);
+        autofireInput.update(activeDevice.autofireSourceIdentity, player, autofireButtons);
 
         if (player == 0) {
             if (input.isFocused() && !activeDevice.waitingForNeutral) {
@@ -334,6 +363,7 @@ public class SwingGamepad implements Runnable {
         ActiveDevice removed = active.remove(player);
         if (removed == null) return;
         input.disconnect(removed.sourceIdentity);
+        autofireInput.disconnect(removed.autofireSourceIdentity);
         if (player == 0) {
             if (rumbleActive) removed.device.rumble(false);
             rumbleActive = false;
@@ -433,6 +463,7 @@ public class SwingGamepad implements Runnable {
     private static final class ActiveDevice {
         private final GamepadBackend.GamepadDevice device;
         private final Object sourceIdentity = new Object();
+        private final Object autofireSourceIdentity = new Object();
         private boolean waitingForNeutral;
 
         private ActiveDevice(GamepadBackend.GamepadDevice device, boolean waitingForNeutral) {

@@ -8,6 +8,7 @@ import java.util.Properties
 /** Strict, backward-compatible desktop input property parser. */
 object ControllerProperties {
   private val playerButton = Regex("input\\.p(\\d+)\\.btn_([a-zA-Z_]+)")
+  private val playerAutofireButton = Regex("input\\.p(\\d+)\\.autofire_([a-zA-Z_]+)")
   private val playerGamepad = Regex("input\\.p(\\d+)\\.gamepad")
   private val stableGamepadId = Regex("sdl-[0-9a-f]{64}")
 
@@ -16,6 +17,15 @@ object ControllerProperties {
   data class PlayerButton(val player: Int, val button: Button) {
     init {
       require(player in 0..3) { "Logical player index must be in 0..3" }
+    }
+  }
+
+  data class PlayerAutofireButton(val player: Int, val button: Button) {
+    init {
+      require(player in 0..3) { "Logical player index must be in 0..3" }
+      require(button == Button.A || button == Button.B) {
+        "Autofire is supported only for A and B"
+      }
     }
   }
 
@@ -35,7 +45,13 @@ object ControllerProperties {
   data class PlayerMapping(
       val keyboard: Map<ApplicationSettings.KeyboardKey, PlayerButton>,
       val gamepads: List<GamepadAssignment>,
+      val autofireKeyboard: Map<ApplicationSettings.KeyboardKey, PlayerAutofireButton> = emptyMap(),
   ) {
+    constructor(
+        keyboard: Map<ApplicationSettings.KeyboardKey, PlayerButton>,
+        gamepads: List<GamepadAssignment>,
+    ) : this(keyboard, gamepads, emptyMap())
+
     /** Historical P1 view retained for source compatibility with existing callers. */
     fun legacyPrimaryKeyboard(): Map<ApplicationSettings.KeyboardKey, Button> =
         keyboard.filterValues { it.player == 0 }.mapValues { it.value.button }
@@ -48,6 +64,8 @@ object ControllerProperties {
       legacyDefaults: Boolean = true,
   ): ApplicationSettings.Input {
     val perPlayer =
+        List(4) { EnumMap<Button, ApplicationSettings.KeyboardKey>(Button::class.java) }
+    val perPlayerAutofire =
         List(4) { EnumMap<Button, ApplicationSettings.KeyboardKey>(Button::class.java) }
     if (legacyDefaults) {
       ApplicationSettings.Input.defaultPrimaryKeyboard().forEach { (button, key) ->
@@ -82,6 +100,15 @@ object ControllerProperties {
           }
           require(explicitPlayer.add(player to button)) { "Duplicate mapping property $key" }
           perPlayer[player][button] = parseKey(value, key)
+        }
+        playerAutofireButton.matches(key) -> {
+          val match = checkNotNull(playerAutofireButton.matchEntire(key))
+          val player = parsePlayer(match.groupValues[1], key)
+          val button = parseButton(match.groupValues[2], key)
+          require(button == Button.A || button == Button.B) {
+            "$key autofire button must be A or B"
+          }
+          perPlayerAutofire[player][button] = parseKey(value, key)
         }
         playerGamepad.matches(key) -> {
           val match = checkNotNull(playerGamepad.matchEntire(key))
@@ -120,7 +147,25 @@ object ControllerProperties {
       }
     }
 
-    return ApplicationSettings.Input(keyboard.toMap(), gamepads.toMap()).also { it.toPlayerMapping() }
+    val autofireKeyboard = linkedMapOf<PlayerAutofireButton, ApplicationSettings.KeyboardKey>()
+    perPlayerAutofire.forEachIndexed { player, bindings ->
+      bindings.forEach { (button, key) ->
+        val binding = PlayerAutofireButton(player, button)
+        val previous = usedKeys.put(key, PlayerButton(player, button))
+        require(previous == null) {
+          "Key ${key.propertyName} is assigned to both P${previous!!.player + 1} " +
+              "${previous.button} and P${player + 1} $button autofire"
+        }
+        autofireKeyboard[binding] = key
+      }
+    }
+
+    return ApplicationSettings.Input(
+            keyboard.toMap(),
+            gamepads.toMap(),
+            autofireKeyboard = autofireKeyboard.toMap(),
+        )
+        .also { it.toPlayerMapping() }
   }
 
   fun getControllerMapping(properties: Properties): Map<ApplicationSettings.KeyboardKey, Button> =

@@ -115,6 +115,40 @@ public class SwingJoypadTest {
         assertFalse(joypad.handlesKeyCode(KeyEvent.VK_F12));
     }
 
+    @Test
+    public void configuredAutofireKeyPulsesAndComposesWithTheNormalButton() {
+        Properties properties = new Properties();
+        properties.setProperty("input.p1.autofire_a", "VK_C");
+        EventBusImpl bus = new EventBusImpl(null, null, false);
+        PlayerInputHub hub = new PlayerInputHub();
+        DesktopPlayerInput input = new DesktopPlayerInput(hub, bus);
+        DesktopAutofireInput autofire = new DesktopAutofireInput(input, bus);
+        SwingJoypad joypad = new SwingJoypad(
+                ControllerProperties.INSTANCE.getPlayerMapping(properties), bus, input, autofire);
+
+        joypad.keyPressed(key(KeyEvent.VK_C, KeyEvent.KEY_PRESSED));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+        autofire.advanceFrame();
+        autofire.advanceFrame();
+        assertTrue(hub.sample().buttons(0).isEmpty());
+
+        joypad.keyPressed(key(KeyEvent.VK_Z, KeyEvent.KEY_PRESSED));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+        joypad.keyReleased(key(KeyEvent.VK_Z, KeyEvent.KEY_RELEASED));
+        assertTrue(hub.sample().buttons(0).isEmpty());
+        autofire.advanceFrame();
+        autofire.advanceFrame();
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+
+        joypad.keyReleased(key(KeyEvent.VK_C, KeyEvent.KEY_RELEASED));
+        assertTrue(hub.sample().buttons(0).isEmpty());
+        joypad.keyPressed(key(KeyEvent.VK_C, KeyEvent.KEY_PRESSED));
+        assertEquals(Set.of(Button.A), hub.sample().buttons(0));
+        joypad.windowLostFocus(null);
+        assertTrue(hub.sample().buttons(0).isEmpty());
+        bus.close();
+    }
+
     private static KeyEvent key(int code, int id) {
         return new KeyEvent(new Canvas(), id, 0, 0, code, KeyEvent.CHAR_UNDEFINED);
     }

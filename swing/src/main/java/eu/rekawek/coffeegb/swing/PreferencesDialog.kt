@@ -79,6 +79,11 @@ internal data class PreferencesEdit(
             ControllerProperties.PlayerButton,
             ApplicationSettings.KeyboardKey,
         >,
+    val autofireKeyboard:
+        Map<
+            ControllerProperties.PlayerAutofireButton,
+            ApplicationSettings.KeyboardKey,
+        > = emptyMap(),
     val gamepads: Map<Int, ApplicationSettings.GamepadSelection>,
     val gamepadTunings: Map<String, ApplicationSettings.GamepadTuning>,
     val cameraDeviceIndex: Int,
@@ -93,7 +98,13 @@ internal data class PreferencesEdit(
         recentFileCapacity in
             ApplicationSettings.MIN_RECENT_FILE_CAPACITY..
                 ApplicationSettings.MAX_RECENT_FILE_CAPACITY)
-    ApplicationSettings.Input(keyboard, gamepads, gamepadTunings).toPlayerMapping()
+    ApplicationSettings.Input(
+            keyboard,
+            gamepads,
+            gamepadTunings,
+            autofireKeyboard,
+        )
+        .toPlayerMapping()
   }
 
   fun applyTo(current: ApplicationSettings): ApplicationSettings =
@@ -120,6 +131,7 @@ internal data class PreferencesEdit(
           input =
               current.input.copy(
                   keyboard = keyboard,
+                  autofireKeyboard = autofireKeyboard,
                   gamepads = gamepads,
                   gamepadTunings = gamepadTunings,
               ),
@@ -341,7 +353,8 @@ internal class PreferencesPanel private constructor(
       }
   internal val controlsRuntimeGuidance =
       JTextArea(
-              "Fixed runtime controls: Backspace rewinds; I/J/K/L tilt supported cartridges. " +
+              "Autofire uses separate A/B keyboard bindings or gamepad L1/R1. " +
+                  "Fixed runtime controls: Backspace rewinds; I/J/K/L tilt supported cartridges. " +
                   "Application shortcuts are listed in Help > Keyboard Shortcuts and withdraw " +
                   "when an unmodified key is assigned to gameplay.")
           .apply {
@@ -555,6 +568,7 @@ internal class PreferencesPanel private constructor(
         confirmationPolicy = (confirmationPolicy.selectedItem as ConfirmationOption).policy,
         display = display,
         keyboard = input.keyboard,
+        autofireKeyboard = input.autofireKeyboard,
         gamepads = gamepad.selections,
         gamepadTunings = gamepad.tunings,
         cameraDeviceIndex = peripheralsEditor.validatedPeripherals().cameraDeviceIndex,
@@ -873,6 +887,21 @@ internal class PreferencesPanel private constructor(
             }
           }
         }
+    val autofireKeyboard =
+        buildMap {
+          repeat(4) { player ->
+            listOf(
+                    eu.rekawek.coffeegb.core.joypad.Button.A,
+                    eu.rekawek.coffeegb.core.joypad.Button.B,
+                )
+                .forEach { button ->
+                  put(
+                      ControllerProperties.PlayerAutofireButton(player, button),
+                      keyboardEditor.currentAutofireBinding(player, button),
+                  )
+                }
+          }
+        }
     return PreferencesDraftFingerprint(
         listOf(
             directoryField.text,
@@ -894,6 +923,7 @@ internal class PreferencesPanel private constructor(
             audioEditor.volume.value,
             audioEditor.latency.selectedItem,
             keyboard,
+            autofireKeyboard,
             (0 until CONTROL_PLAYER_COUNT).map(gamepadEditor::selectionForPlayer),
             trackedGamepadTunings.toMap(),
             spinnerText(gamepadEditor.movementDeadZone),

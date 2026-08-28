@@ -81,6 +81,23 @@ public final class DesktopKeyboardKeyAdapter {
         return resolved;
     }
 
+    /** Converts portable A/B autofire bindings just before Swing receives host key events. */
+    public static Map<Integer, ControllerProperties.PlayerAutofireButton> resolveAutofireMapping(
+            Map<ApplicationSettings.KeyboardKey,
+                    ControllerProperties.PlayerAutofireButton> mapping) {
+        Map<Integer, ControllerProperties.PlayerAutofireButton> resolved = new LinkedHashMap<>();
+        mapping.forEach((key, binding) -> {
+            int keyCode = keyCode(key);
+            ControllerProperties.PlayerAutofireButton previous = resolved.put(keyCode, binding);
+            if (previous != null) {
+                throw new IllegalArgumentException(
+                        "Desktop key " + KeyEvent.getKeyText(keyCode)
+                                + " has multiple autofire assignments");
+            }
+        });
+        return resolved;
+    }
+
     private static int getInt(Field field) {
         try {
             return field.getInt(null);

@@ -40,13 +40,22 @@ class KeyboardMappingEditor private constructor(
       defaultInput: ApplicationSettings.Input = ApplicationSettings.Input.defaults(),
   ) : this(initialInput, defaultInput, requireEventDispatchThread())
 
-  data class Binding(val player: Int, val button: Button) {
+  data class Binding(
+      val player: Int,
+      val button: Button,
+      val autofire: Boolean = false,
+  ) {
     init {
       require(player in 0..3) { "Logical player index must be in 0..3" }
+      require(!autofire || button == Button.A || button == Button.B) {
+        "Autofire is supported only for A and B"
+      }
     }
 
     val displayName: String
-      get() = "Player ${player + 1} ${button.keyboardEditorDisplayName()}"
+      get() =
+          "Player ${player + 1} ${button.keyboardEditorDisplayName()}" +
+              if (autofire) " Autofire" else ""
   }
 
   sealed interface EditResult {
@@ -74,15 +83,22 @@ class KeyboardMappingEditor private constructor(
       val card: JPanel,
   )
 
+  private data class Control(val button: Button, val autofire: Boolean = false) {
+    val displayName: String
+      get() = button.keyboardEditorDisplayName() + if (autofire) " Autofire" else ""
+  }
+
   internal data class PadPosition(val column: Int, val row: Int)
 
   private val keyboard =
       initialInput.keyboard.toMutableMap().also { initialInput.toPlayerMapping() }
+  private val autofireKeyboard = initialInput.autofireKeyboard.toMutableMap()
   private val gamepads = initialInput.gamepads.toMap()
   private val gamepadTunings = initialInput.gamepadTunings.toMap()
   private val defaultKeyboard =
       defaultInput.keyboard.toMap().also { defaultInput.toPlayerMapping() }
-  private val rows = linkedMapOf<Button, Row>()
+  private val defaultAutofireKeyboard = defaultInput.autofireKeyboard.toMap()
+  private val rows = linkedMapOf<Control, Row>()
   private val status = JLabel("Choose Capture, then press one key.")
   private var selectedPlayerIndex = 0
 
@@ -157,9 +173,13 @@ class KeyboardMappingEditor private constructor(
    */
   fun validatedDraft(): ApplicationSettings.Input {
     requireEventDispatchThread()
-    return ApplicationSettings.Input(keyboard.toMap(), gamepads, gamepadTunings).also {
-      it.toPlayerMapping()
-    }
+    return ApplicationSettings.Input(
+            keyboard.toMap(),
+            gamepads,
+            gamepadTunings,
+            autofireKeyboard.toMap(),
+        )
+        .also { it.toPlayerMapping() }
   }
 
   fun currentBinding(
@@ -168,6 +188,14 @@ class KeyboardMappingEditor private constructor(
   ): ApplicationSettings.KeyboardKey? {
     requireEventDispatchThread()
     return keyboard[ControllerProperties.PlayerButton(player, button)]
+  }
+
+  fun currentAutofireBinding(
+      player: Int,
+      button: Button,
+  ): ApplicationSettings.KeyboardKey? {
+    requireEventDispatchThread()
+    return autofireKeyboard[ControllerProperties.PlayerAutofireButton(player, button)]
   }
 
   /** Selects the player represented by the reusable pad controls. */
@@ -196,9 +224,19 @@ class KeyboardMappingEditor private constructor(
       player: Int,
       button: Button,
       keyCode: Int,
+  ): EditResult = editBinding(Binding(player, button), keyCode)
+
+  fun editAutofireBinding(
+      player: Int,
+      button: Button,
+      keyCode: Int,
+  ): EditResult = editBinding(Binding(player, button, autofire = true), keyCode)
+
+  private fun editBinding(
+      binding: Binding,
+      keyCode: Int,
   ): EditResult {
     requireEventDispatchThread()
-    val binding = Binding(player, button)
     if (keyCode in UNAVAILABLE_GAMEPLAY_KEYS) {
       return EditResult.Reserved(binding, keyCode).also {
         showStatus(
@@ -217,19 +255,18 @@ class KeyboardMappingEditor private constructor(
             showStatus("That key cannot be stored as a keyboard binding.")
           }
         }
-    val target = binding.toPlayerButton()
-    val previousTargetKey = keyboard[target]
+    val previousTargetKey = keyFor(binding)
     val conflict =
-        keyboard.entries.firstOrNull { (candidate, candidateKey) ->
-          candidate != target && candidateKey == key
+        bindingEntries().firstOrNull { (candidate, candidateKey) ->
+          candidate != binding && candidateKey == key
         }
     if (conflict != null) {
-      val existing = conflict.key.toBinding()
-      keyboard.remove(conflict.key)
+      val existing = conflict.first
+      removeBinding(existing)
       if (previousTargetKey != null) {
-        keyboard[conflict.key] = previousTargetKey
+        putBinding(existing, previousTargetKey)
       }
-      keyboard[target] = key
+      putBinding(binding, key)
       refreshRows()
       showStatus(
           buildString {
@@ -241,7 +278,7 @@ class KeyboardMappingEditor private constructor(
       return EditResult.Applied(binding, key)
     }
 
-    keyboard[target] = key
+    putBinding(binding, key)
     refreshRows()
     showStatus("${binding.displayName} is now ${key.displayName()}.")
     return EditResult.Applied(binding, key)
@@ -252,6 +289,8 @@ class KeyboardMappingEditor private constructor(
     cancelCapture()
     keyboard.clear()
     keyboard.putAll(defaultKeyboard)
+    autofireKeyboard.clear()
+    autofireKeyboard.putAll(defaultAutofireKeyboard)
     refreshRows()
     showStatus("Keyboard mappings restored to defaults.")
   }
@@ -286,7 +325,20 @@ class KeyboardMappingEditor private constructor(
   ): PadPosition {
     requireEventDispatchThread()
     require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
-    val card = checkNotNull(rows[button]).card
+    val card = checkNotNull(rows[Control(button)]).card
+    val layout = card.parent.layout as GridBagLayout
+    val constraints = layout.getConstraints(card)
+    return PadPosition(constraints.gridx, constraints.gridy)
+  }
+
+  internal fun autofirePadPosition(
+      player: Int,
+      button: Button,
+  ): PadPosition {
+    requireEventDispatchThread()
+    require(player in 0 until PLAYER_COUNT) { "Logical player index must be in 0..3" }
+    require(button == Button.A || button == Button.B) { "Autofire is supported only for A and B" }
+    val card = checkNotNull(rows[Control(button, autofire = true)]).card
     val layout = card.parent.layout as GridBagLayout
     val constraints = layout.getConstraints(card)
     return PadPosition(constraints.gridx, constraints.gridy)
@@ -334,22 +386,14 @@ class KeyboardMappingEditor private constructor(
           pendingModifier = event.keyCode
           true
         } else {
-          editBinding(
-              capture.binding.player,
-              capture.binding.button,
-              event.keyCode,
-          )
+          editBinding(capture.binding, event.keyCode)
           finishCapture(event.keyCode)
           true
         }
       }
       KeyEvent.KEY_RELEASED -> {
         if (pendingModifier == event.keyCode) {
-          editBinding(
-              capture.binding.player,
-              capture.binding.button,
-              event.keyCode,
-          )
+          editBinding(capture.binding, event.keyCode)
           finishCapture()
           true
         } else {
@@ -364,22 +408,22 @@ class KeyboardMappingEditor private constructor(
     val panel = JPanel(GridBagLayout())
     panel.accessibleContext.accessibleName = "Selected player keyboard mappings"
     panel.accessibleContext.accessibleDescription =
-        "A Game Boy-shaped arrangement of the eight keyboard bindings for the selected player."
+        "A Game Boy-shaped arrangement of keyboard and A/B autofire bindings for the selected player."
     panel.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
 
-    PAD_FOCUS_ORDER.forEach { button ->
+    CONTROL_FOCUS_ORDER.forEach { control ->
       val bindingLabel =
           JLabel("", SwingConstants.CENTER).apply {
             getAccessibleContext().accessibleName = "Current binding"
           }
       val capture =
           actionButton("Capture", "Capture keyboard binding") {
-            startCapture(Binding(selectedPlayerIndex, button))
+            startCapture(Binding(selectedPlayerIndex, control.button, control.autofire))
           }
       val card =
           JPanel(BorderLayout(4, 4)).apply {
             getAccessibleContext().accessibleName = "Keyboard mapping controls"
-            border = BorderFactory.createTitledBorder(button.keyboardEditorDisplayName())
+            border = BorderFactory.createTitledBorder(control.displayName)
             add(
                 JLabel("Current key", SwingConstants.CENTER).apply {
                   labelFor = capture
@@ -390,9 +434,9 @@ class KeyboardMappingEditor private constructor(
             add(bindingLabel, BorderLayout.CENTER)
             add(capture, BorderLayout.SOUTH)
           }
-      rows[button] = Row(bindingLabel, capture, card)
+      rows[control] = Row(bindingLabel, capture, card)
 
-      val position = PAD_POSITIONS.getValue(button)
+      val position = PAD_POSITIONS.getValue(control)
       panel.add(
           card,
           GridBagConstraints().apply {
@@ -454,9 +498,9 @@ class KeyboardMappingEditor private constructor(
   }
 
   private fun refreshRows() {
-    rows.forEach { (button, row) ->
-      val binding = Binding(selectedPlayerIndex, button)
-      val key = keyboard[binding.toPlayerButton()]
+    rows.forEach { (control, row) ->
+      val binding = Binding(selectedPlayerIndex, control.button, control.autofire)
+      val key = keyFor(binding)
       row.currentBinding.text = key?.displayName() ?: "Unassigned"
       row.currentBinding.accessibleContext.accessibleName =
           "Current binding for ${binding.displayName}"
@@ -496,9 +540,36 @@ class KeyboardMappingEditor private constructor(
     }
   }
 
-  private fun Binding.toPlayerButton() = ControllerProperties.PlayerButton(player, button)
+  private fun keyFor(binding: Binding): ApplicationSettings.KeyboardKey? =
+      if (binding.autofire) {
+        autofireKeyboard[ControllerProperties.PlayerAutofireButton(binding.player, binding.button)]
+      } else {
+        keyboard[ControllerProperties.PlayerButton(binding.player, binding.button)]
+      }
 
-  private fun ControllerProperties.PlayerButton.toBinding() = Binding(player, button)
+  private fun putBinding(binding: Binding, key: ApplicationSettings.KeyboardKey) {
+    if (binding.autofire) {
+      autofireKeyboard[
+          ControllerProperties.PlayerAutofireButton(binding.player, binding.button)] = key
+    } else {
+      keyboard[ControllerProperties.PlayerButton(binding.player, binding.button)] = key
+    }
+  }
+
+  private fun removeBinding(binding: Binding) {
+    if (binding.autofire) {
+      autofireKeyboard.remove(
+          ControllerProperties.PlayerAutofireButton(binding.player, binding.button))
+    } else {
+      keyboard.remove(ControllerProperties.PlayerButton(binding.player, binding.button))
+    }
+  }
+
+  private fun bindingEntries(): List<Pair<Binding, ApplicationSettings.KeyboardKey>> =
+      keyboard.map { (binding, key) -> Binding(binding.player, binding.button) to key } +
+          autofireKeyboard.map { (binding, key) ->
+            Binding(binding.player, binding.button, autofire = true) to key
+          }
 
   private fun ApplicationSettings.KeyboardKey.displayName(): String =
       KeyEvent.getKeyText(DesktopKeyboardKeyAdapter.keyCode(this))
@@ -508,28 +579,32 @@ class KeyboardMappingEditor private constructor(
     const val PAD_COLUMN_COUNT = 7
     const val PAD_ROW_COUNT = 4
 
-    val PAD_FOCUS_ORDER =
+    val CONTROL_FOCUS_ORDER =
         listOf(
-            Button.UP,
-            Button.LEFT,
-            Button.RIGHT,
-            Button.DOWN,
-            Button.SELECT,
-            Button.START,
-            Button.B,
-            Button.A,
+            Control(Button.UP),
+            Control(Button.LEFT),
+            Control(Button.RIGHT),
+            Control(Button.DOWN),
+            Control(Button.SELECT),
+            Control(Button.START),
+            Control(Button.B),
+            Control(Button.A),
+            Control(Button.B, autofire = true),
+            Control(Button.A, autofire = true),
         )
 
     val PAD_POSITIONS =
         mapOf(
-            Button.UP to PadPosition(1, 0),
-            Button.LEFT to PadPosition(0, 1),
-            Button.RIGHT to PadPosition(2, 1),
-            Button.DOWN to PadPosition(1, 2),
-            Button.SELECT to PadPosition(3, 3),
-            Button.START to PadPosition(4, 3),
-            Button.B to PadPosition(5, 2),
-            Button.A to PadPosition(6, 1),
+            Control(Button.UP) to PadPosition(1, 0),
+            Control(Button.LEFT) to PadPosition(0, 1),
+            Control(Button.RIGHT) to PadPosition(2, 1),
+            Control(Button.DOWN) to PadPosition(1, 2),
+            Control(Button.SELECT) to PadPosition(3, 3),
+            Control(Button.START) to PadPosition(4, 3),
+            Control(Button.B) to PadPosition(5, 2),
+            Control(Button.A) to PadPosition(6, 1),
+            Control(Button.B, autofire = true) to PadPosition(5, 3),
+            Control(Button.A, autofire = true) to PadPosition(6, 3),
         )
 
     val UNAVAILABLE_GAMEPLAY_KEYS =
