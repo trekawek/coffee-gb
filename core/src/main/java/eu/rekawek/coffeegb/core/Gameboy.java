@@ -176,6 +176,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final boolean harvestMoonLinkRolePatch;
 
+    private final boolean ikariYousai2LinkRolePatch;
+
     private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
@@ -342,6 +344,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 CartridgeProperties.Feature.VOLLEY_FIRE_LINK_ROLE_PATCH);
         harvestMoonLinkRolePatch = cartridgeProperties.has(
                 CartridgeProperties.Feature.HARVEST_MOON_LINK_ROLE_PATCH);
+        ikariYousai2LinkRolePatch = cartridgeProperties.has(
+                CartridgeProperties.Feature.IKARI_YOUSAI_2_LINK_ROLE_PATCH);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -678,6 +682,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         if (harvestMoonLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
             cartridge.enableHarvestMoonSecondaryLinkRole();
+        }
+        if (ikariYousai2LinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
+            cartridge.enableIkariYousai2SecondaryLinkRole();
         }
         if (jantakuBoyFourPlayerPatch) {
             serialEndpoint.enableCompatibilityProfile(

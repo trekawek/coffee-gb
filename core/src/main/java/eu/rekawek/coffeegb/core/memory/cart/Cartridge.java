@@ -42,6 +42,8 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private boolean harvestMoonSecondaryLinkRole;
 
+    private boolean ikariYousai2SecondaryLinkRole;
+
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -224,6 +226,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
                 && isHarvestMoonLinkTimeoutMapped()) {
             return 0xc9;
         }
+        if (ikariYousai2SecondaryLinkRole && (address == 0x08fd || address == 0x08fe)) {
+            return 0x00;
+        }
         return addressSpace.getByte(address);
     }
 
@@ -253,12 +258,17 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         harvestMoonSecondaryLinkRole = true;
     }
 
+    public void enableIkariYousai2SecondaryLinkRole() {
+        ikariYousai2SecondaryLinkRole = true;
+    }
+
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
         // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
         // Keep execution on the ordinary cartridge read path while that overlay is active.
         if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole
-                || volleyFireSecondaryLinkRole || harvestMoonSecondaryLinkRole) {
+                || volleyFireSecondaryLinkRole || harvestMoonSecondaryLinkRole
+                || ikariYousai2SecondaryLinkRole) {
             return null;
         }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {

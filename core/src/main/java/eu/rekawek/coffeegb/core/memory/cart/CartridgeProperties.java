@@ -77,7 +77,8 @@ public final class CartridgeProperties {
         REVENGE_GATOR_LINK_ROLE_PATCH,
         SHIKINJOU_LINK_ROLE_PATCH,
         VOLLEY_FIRE_LINK_ROLE_PATCH,
-        HARVEST_MOON_LINK_ROLE_PATCH
+        HARVEST_MOON_LINK_ROLE_PATCH,
+        IKARI_YOUSAI_2_LINK_ROLE_PATCH
     }
 
     private static final int[] NINTENDO_LOGO = {
@@ -222,6 +223,9 @@ public final class CartridgeProperties {
             features("Harvest Moon GB deterministic link roles",
                     CartridgeProperties::isHarvestMoonLinkRole,
                     Feature.HARVEST_MOON_LINK_ROLE_PATCH),
+            features("Ikari no Yousai 2 deterministic link roles",
+                    CartridgeProperties::isIkariYousai2LinkRole,
+                    Feature.IKARI_YOUSAI_2_LINK_ROLE_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -936,6 +940,32 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x04
                 && info.byteAt(0x0149) == 0x02
                 && matches(info.data, 0x7e750, linkRoleNegotiation);
+    }
+
+    private static boolean isIkariYousai2LinkRole(RomInfo info) {
+        int[] linkRoleNegotiation = {
+                0x7e, 0xcb, 0x47, 0x28, 0x08, 0xf0, 0x01, 0xfe,
+                0x25, 0x28, 0x0c, 0x18, 0x13, 0xcb, 0x7f, 0x20,
+                0x0f, 0xf0, 0x01, 0xfe, 0x4a, 0x20, 0x09, 0x7e,
+                0xe6, 0x01, 0xe0, 0xd2, 0xaf, 0xe0, 0x01, 0xc9,
+                0x3e, 0xff, 0xe0, 0xd2, 0xcb, 0xbe, 0xf0, 0xd4,
+                0x3c, 0xe0, 0xd4, 0xe6, 0x03, 0x20, 0x0c, 0xf0,
+                0x04, 0xcb, 0x47, 0x20, 0x06, 0x36, 0x00, 0x3e,
+                0x25, 0x18, 0x04, 0x36, 0x01, 0x3e, 0x4a, 0xe0,
+                0x01, 0xcb, 0xfe, 0xc9
+        };
+        return info.data.length == 0x20000
+                && "FORTIFIED ZONE2".equals(info.title())
+                && info.byteAt(0x0100) == 0x00
+                && info.byteAt(0x0101) == 0xc3
+                && info.byteAt(0x0102) == 0x50
+                && info.byteAt(0x0103) == 0x01
+                && info.byteAt(0x0143) == 0x00
+                && info.byteAt(0x0146) == 0x00
+                && info.rawType() == 0x01
+                && info.byteAt(0x0148) == 0x02
+                && info.byteAt(0x0149) == 0x00
+                && matches(info.data, 0x08ca, linkRoleNegotiation);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {
