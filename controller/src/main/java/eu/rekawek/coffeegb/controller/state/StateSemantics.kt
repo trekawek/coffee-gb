@@ -301,8 +301,9 @@ internal object StateSemantics {
             it.nonNegative("ticksSinceDivReset")
           })
       put("eu.rekawek.coffeegb.core.memory.GbcRam\$GbcRamState",
-          constrained("The CGB work-RAM bank selector is a three-bit register.") {
-            it.range("svbk", 0, 7)
+          constrained(
+              "Legacy snapshots may retain unused bits of the byte-sized CGB work-RAM bank register.") {
+            it.range("svbk", 0, 0xff)
           })
       put("eu.rekawek.coffeegb.core.memory.UndocumentedGbcRegisters\$UndocumentedGbcRegistersState",
           constrained("The FF6C compatibility register is byte-sized.") { it.range("xff6c", 0, 0xff) })
