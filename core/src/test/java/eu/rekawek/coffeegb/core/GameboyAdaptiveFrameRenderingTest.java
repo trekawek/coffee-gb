@@ -7,9 +7,12 @@ import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
+import eu.rekawek.coffeegb.core.sound.Sound;
 import org.junit.Test;
 
 import java.io.IOException;
+import java.lang.reflect.Array;
+import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -132,18 +135,121 @@ public class GameboyAdaptiveFrameRenderingTest {
     }
 
     @Test
-    public void superGameBoyOutputIsNeverSuppressed() throws Exception {
-        try (EventBus eventBus = new EventBusImpl(); Gameboy gameboy = newSgbGameboy()) {
-            AtomicInteger published = new AtomicInteger();
-            eventBus.register(e -> published.incrementAndGet(), SgbDisplay.SgbFrameReadyEvent.class);
-            gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+    public void superGameBoyKeepsEveryTransferFrameButMayShedFinalHostPresentation()
+            throws Exception {
+        try (EventBus referenceBus = new EventBusImpl();
+             EventBus pacedBus = new EventBusImpl();
+             Gameboy reference = newSgbGameboy();
+             Gameboy paced = newSgbGameboy()) {
+            AtomicInteger dmgTransfers = new AtomicInteger();
+            AtomicInteger sgbPresentations = new AtomicInteger();
+            List<int[]> referenceAudio = new ArrayList<>();
+            List<int[]> pacedAudio = new ArrayList<>();
+            pacedBus.register(e -> dmgTransfers.incrementAndGet(), Display.DmgFrameReadyEvent.class);
+            pacedBus.register(
+                    e -> sgbPresentations.incrementAndGet(), SgbDisplay.SgbFrameReadyEvent.class);
+            referenceBus.register(e -> referenceAudio.add(e.buffer().clone()),
+                    Sound.SoundSampleEvent.class);
+            pacedBus.register(e -> pacedAudio.add(e.buffer().clone()),
+                    Sound.SoundSampleEvent.class);
+            reference.init(referenceBus, SerialEndpoint.NULL_ENDPOINT, null);
+            paced.init(pacedBus, SerialEndpoint.NULL_ENDPOINT, null);
 
-            gameboy.requestFrameRenderSuppression(true);
-            runToNextFrame(gameboy);
-            runToNextFrame(gameboy);
-            runToNextFrame(gameboy);
+            paced.requestFrameRenderSuppression(true);
+            for (int frame = 0; frame < 4; frame++) {
+                runToNextFrame(reference, paced);
+            }
 
-            assertEquals("SGB DMG pixels remain emulated transfer input", 3, published.get());
+            assertEquals("SGB DMG pixels remain emulated transfer input", 4, dmgTransfers.get());
+            assertEquals("sustained debt still presents every other final SGB frame",
+                    2, sgbPresentations.get());
+            assertAudioEquals(referenceAudio, pacedAudio);
+            assertDeepStateEquals("suppressed SGB host output", reference.captureStateWithoutTimeSource(),
+                    paced.captureStateWithoutTimeSource());
+
+            paced.requestFrameRenderSuppression(false);
+            runToNextFrame(reference, paced);
+            runToNextFrame(reference, paced);
+            assertEquals(6, dmgTransfers.get());
+            assertEquals("presentation resumes after the physical handoff", 4,
+                    sgbPresentations.get());
+            assertAudioEquals(referenceAudio, pacedAudio);
+            assertDeepStateEquals("resumed SGB host output", reference.captureStateWithoutTimeSource(),
+                    paced.captureStateWithoutTimeSource());
+
+            var visibleState = paced.captureState();
+            paced.requestFrameRenderSuppression(true);
+            runToNextFrame(paced);
+            assertFalse(paced.isCurrentVisibleFrameFullyRendering());
+            paced.restoreStateSilently(visibleState);
+            assertFalse("silent rollback preserves the derived SGB pacing gate",
+                    paced.isCurrentVisibleFrameFullyRendering());
+            paced.restoreState(visibleState);
+            assertTrue("manual restore clears the derived SGB pacing gate",
+                    paced.isCurrentVisibleFrameFullyRendering());
+
+            paced.requestFrameRenderSuppression(true);
+            runToNextFrame(paced);
+            assertFalse(paced.isCurrentVisibleFrameFullyRendering());
+            paced.resumeFullFrameRenderingAfterRewindRestore();
+            assertTrue("rewind restore immediately clears the derived SGB host gate",
+                    paced.isCurrentVisibleFrameFullyRendering());
+        }
+    }
+
+    private static void assertAudioEquals(List<int[]> expected, List<int[]> actual) {
+        assertEquals(expected.size(), actual.size());
+        for (int i = 0; i < expected.size(); i++) {
+            assertArrayEquals("audio event " + i, expected.get(i), actual.get(i));
+        }
+    }
+
+    private static void assertDeepStateEquals(String path, Object expected, Object actual)
+            throws Exception {
+        if (expected == null || actual == null) {
+            if (expected != actual) {
+                throw new AssertionError(path + " expected=" + expected + " actual=" + actual);
+            }
+            return;
+        }
+        if (!expected.getClass().equals(actual.getClass())) {
+            throw new AssertionError(path + " type expected=" + expected.getClass()
+                    + " actual=" + actual.getClass());
+        }
+        Class<?> type = expected.getClass();
+        if (type.isArray()) {
+            int length = Array.getLength(expected);
+            if (length != Array.getLength(actual)) {
+                throw new AssertionError(path + " array length");
+            }
+            for (int i = 0; i < length; i++) {
+                assertDeepStateEquals(path + '[' + i + ']', Array.get(expected, i),
+                        Array.get(actual, i));
+            }
+            return;
+        }
+        if (expected instanceof List<?> expectedList) {
+            List<?> actualList = (List<?>) actual;
+            if (expectedList.size() != actualList.size()) {
+                throw new AssertionError(path + " list size");
+            }
+            for (int i = 0; i < expectedList.size(); i++) {
+                assertDeepStateEquals(path + '[' + i + ']', expectedList.get(i),
+                        actualList.get(i));
+            }
+            return;
+        }
+        if (!type.isRecord()) {
+            if (!expected.equals(actual)) {
+                throw new AssertionError(path + " expected=" + expected + " actual=" + actual);
+            }
+            return;
+        }
+        for (RecordComponent component : type.getRecordComponents()) {
+            component.getAccessor().setAccessible(true);
+            assertDeepStateEquals(path + '.' + component.getName(),
+                    component.getAccessor().invoke(expected),
+                    component.getAccessor().invoke(actual));
         }
     }
 

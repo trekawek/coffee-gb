@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static eu.rekawek.coffeegb.core.sgb.SuperGameboy.SGB_DISPLAY_HEIGHT;
@@ -138,6 +139,62 @@ public class SgbDisplayPerformanceTest {
             assertArrayEquals(first.get(), next.get());
             assertTrue(first.get()[borderIndex] != 0x13572468);
             assertTrue(first.get()[centerIndex] != 0x24681357);
+        } finally {
+            eventBus.close();
+            sgbBus.close();
+        }
+    }
+
+    @Test
+    public void hostSuppressionRetainsBorderUpdatesAndMaskTransitions() throws IOException {
+        EventBusImpl eventBus = new EventBusImpl(null, "sgb-suppression", false);
+        EventBusImpl sgbBus = new EventBusImpl(null, "sgb-suppression-commands", false);
+        SgbDisplay display = new SgbDisplay(testRom(), sgbBus, true, true);
+        display.init(eventBus);
+        AtomicReference<int[]> rendered = new AtomicReference<>();
+        AtomicInteger presentations = new AtomicInteger();
+        eventBus.register(event -> {
+            rendered.set(event.buffer().clone());
+            presentations.incrementAndGet();
+        }, SgbDisplay.SgbFrameReadyEvent.class);
+        int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        int[] mask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        Arrays.fill(mask, 1);
+        try {
+            int[] firstBorder = new int[mask.length];
+            Arrays.fill(firstBorder, 0x001f);
+            eventBus.post(new Background.SgbBackgroundReadyEvent(firstBorder, mask));
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals(1, presentations.get());
+            int firstPixel = rendered.get()[0];
+
+            display.requestFrameRenderSuppression(true);
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals(2, presentations.get());
+
+            int[] secondBorder = new int[mask.length];
+            Arrays.fill(secondBorder, 0x7c00);
+            eventBus.post(new Background.SgbBackgroundReadyEvent(secondBorder, mask));
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals("derived presentation is omitted, not the committed border update",
+                    2, presentations.get());
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals(3, presentations.get());
+            assertTrue(firstPixel != rendered.get()[0]);
+
+            int[] freezePacket = commandPacket(0x17);
+            freezePacket[1] = 1;
+            sgbBus.post(Commands.toCommand(freezePacket));
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals("MASK_EN freeze remains authoritative", 3,
+                    presentations.get());
+
+            int[] cancelPacket = commandPacket(0x17);
+            cancelPacket[1] = 0;
+            sgbBus.post(Commands.toCommand(cancelPacket));
+            eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+            assertEquals("cancel resumes at the next presentation-eligible physical edge", 4,
+                    presentations.get());
         } finally {
             eventBus.close();
             sgbBus.close();

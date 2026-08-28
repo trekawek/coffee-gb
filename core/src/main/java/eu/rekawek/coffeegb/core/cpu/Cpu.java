@@ -312,7 +312,8 @@ public class Cpu implements StatefulComponent<Cpu> {
      * @return master ticks consumed by the CPU epoch
      */
     public int runPhysicalDmgPerformanceEpoch(int maxMasterTicks) {
-        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false, false);
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, false, false, false, false, false);
     }
 
     /**
@@ -322,7 +323,8 @@ public class Cpu implements StatefulComponent<Cpu> {
      * may remain inside the epoch.
      */
     public int runSgbPerformanceEpoch(int maxMasterTicks) {
-        return runPerformanceNormalSpeedEpoch(maxMasterTicks, false, true);
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, false, true, false, false, false);
     }
 
     /**
@@ -332,17 +334,20 @@ public class Cpu implements StatefulComponent<Cpu> {
      */
     public int runCgbCompatibilityPerformanceEpoch(int maxMasterTicks) {
         return speedMode.isDmgCompat()
-                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, false) : 0;
+                ? runPerformanceNormalSpeedEpoch(
+                        maxMasterTicks, true, false, false, false, false) : 0;
     }
 
     /**
      * Fixed four-master-dot epoch for native CGB software which remains at normal speed.
-     * Decoded memory boundaries stay scalar so CPU-visible peripheral writes retain their
-     * position before the owner ticks Sound and the remaining peripherals.
+     * Address-known ROM reads and work/high-RAM accesses may remain inside the epoch.
+     * CPU-visible peripheral, mapper, cartridge-RAM, and RTC accesses stay scalar so they
+     * retain their position before the owner ticks Sound and the remaining peripherals.
      */
     public int runNativeCgbNormalSpeedPerformanceEpoch(int maxMasterTicks) {
         return !speedMode.isDmgCompat()
-                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, true) : 0;
+                ? runPerformanceNormalSpeedEpoch(
+                        maxMasterTicks, true, true, true, false, true) : 0;
     }
 
     /**
@@ -352,20 +357,17 @@ public class Cpu implements StatefulComponent<Cpu> {
      */
     public int runNativeCgbNormalSpeedLcdOffPerformanceEpoch(int maxMasterTicks) {
         return !speedMode.isDmgCompat()
-                ? runPerformanceNormalSpeedEpoch(maxMasterTicks, true, true, true) : 0;
+                ? runPerformanceNormalSpeedEpoch(
+                        maxMasterTicks, true, true, true, true, true) : 0;
     }
 
     /** Shared fixed-width normal-speed epoch; topology flags are explicit and allocation-free. */
     private int runPerformanceNormalSpeedEpoch(
-            int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles) {
-        return runPerformanceNormalSpeedEpoch(
-                maxMasterTicks, cgbHardware, fenceDecodedMemoryCycles, false);
-    }
-
-    private int runPerformanceNormalSpeedEpoch(
             int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles,
-            boolean allowLcdOffVramAccess) {
-        if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(cgbHardware)) {
+            boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess,
+            boolean allowImeDisabledRawPendingInterrupt) {
+        if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(
+                cgbHardware, allowImeDisabledRawPendingInterrupt)) {
             return 0;
         }
         int requested = Math.min(maxMasterTicks, PERFORMANCE_EPOCH_MAX_TICKS);
@@ -399,8 +401,12 @@ public class Cpu implements StatefulComponent<Cpu> {
                 }
 
                 if (!performanceEpochPrefetchSafe()
+                        || allowImeDisabledRawPendingInterrupt
+                        && hasImeDisabledRawPendingInterrupt()
+                        && performanceNextBoundaryFetchesHalt()
                         || fenceDecodedMemoryCycles
-                        && !performanceDecodedMemoryBoundarySafe(allowLcdOffVramAccess)) {
+                        && !performanceDecodedMemoryBoundarySafe(
+                        allowResolvedSafeDecodedAccess, allowLcdOffVramAccess)) {
                     performanceEpochTerminal = true;
                     break;
                 }
@@ -436,22 +442,33 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
-     * Rejects an SGB epoch before a CPU boundary which can reach a data-memory operation.
-     * Operations before the next force-finish marker execute in the same machine-cycle tick;
-     * scanning the complete group here prevents a partial CPU tick before scalar fallback.
+     * Rejects a fenced epoch before a CPU boundary which can reach an unsafe data-memory
+     * operation. Operations before the next force-finish marker execute in the same
+     * machine-cycle tick, so the complete group is classified before any part may run.
      */
-    private boolean performanceDecodedMemoryBoundarySafe(boolean allowLcdOffVramAccess) {
+    private boolean performanceDecodedMemoryBoundarySafe(
+            boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess) {
         if (state != State.RUNNING || currentExecutionOps == null) {
             return true;
         }
         for (int i = opIndex; i < currentOpCount; i++) {
+            Op op = currentExecutionOps[i];
+            if (allowResolvedSafeDecodedAccess
+                    && op.causesOemBug(registers, opContext) != null) {
+                return false;
+            }
             if (currentOpAccessesMemory[i]) {
-                if (!allowLcdOffVramAccess) {
+                if (!allowResolvedSafeDecodedAccess) {
                     return false;
                 }
-                Integer address = currentExecutionOps[i].resolveMemoryAddress(
-                        registers, operand, opContext);
-                if (address == null || !PerformanceEpochBus.isVideoRam(address)) {
+                Integer address = op.resolveMemoryAddress(registers, operand, opContext);
+                if (address == null) {
+                    if (!op.isInternalMemoryCycle()) {
+                        return false;
+                    }
+                } else if (currentOpWritesMemory[i]
+                        ? !isPerformanceEpochSafeWrite(address, allowLcdOffVramAccess)
+                        : !isPerformanceEpochSafeRead(address, allowLcdOffVramAccess)) {
                     return false;
                 }
             }
@@ -462,16 +479,24 @@ public class Cpu implements StatefulComponent<Cpu> {
         return true;
     }
 
-    private boolean isPerformanceEpochSafeRead(int address) {
+    private static boolean isPerformanceEpochSafeRead(
+            int address, boolean allowLcdOffVramAccess) {
         return PerformanceEpochBus.isSafeRead(address)
-                || performanceEpochLcdOffVramAccess
-                && PerformanceEpochBus.isVideoRam(address);
+                || allowLcdOffVramAccess && PerformanceEpochBus.isVideoRam(address);
+    }
+
+    private static boolean isPerformanceEpochSafeWrite(
+            int address, boolean allowLcdOffVramAccess) {
+        return PerformanceEpochBus.isSafeWrite(address)
+                || allowLcdOffVramAccess && PerformanceEpochBus.isVideoRam(address);
+    }
+
+    private boolean isPerformanceEpochSafeRead(int address) {
+        return isPerformanceEpochSafeRead(address, performanceEpochLcdOffVramAccess);
     }
 
     private boolean isPerformanceEpochSafeWrite(int address) {
-        return PerformanceEpochBus.isSafeWrite(address)
-                || performanceEpochLcdOffVramAccess
-                && PerformanceEpochBus.isVideoRam(address);
+        return isPerformanceEpochSafeWrite(address, performanceEpochLcdOffVramAccess);
     }
 
     private boolean performanceEpochPrefetchSafe() {
@@ -492,6 +517,20 @@ public class Cpu implements StatefulComponent<Cpu> {
                     || PerformanceEpochBus.isSafeRead(registers.getPC());
             default -> true;
         };
+    }
+
+    /**
+     * HALT with IME clear and an enabled stored request owns the HALT-bug latch race. The
+     * native-CGB x1 epoch may run ordinary code under that masked request, but it leaves the
+     * fetch boundary itself untouched when the next opcode is HALT.
+     */
+    private boolean performanceNextBoundaryFetchesHalt() {
+        return state == State.OPCODE && readInstructionByte(registers.getPC()) == 0x76;
+    }
+
+    private boolean hasImeDisabledRawPendingInterrupt() {
+        return !interruptManager.isIme()
+                && interruptManager.hasRawPendingEnabledInterrupt();
     }
 
     /** Cheap state-only entrance check used before the owner walks peripheral horizons. */
@@ -532,11 +571,17 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Cheap state-only entrance check for native CGB software at the normal clock. */
     public boolean performanceNativeCgbNormalSpeedEpochEntryEligible() {
-        return performanceNormalSpeedEpochEntryEligible(true) && !speedMode.isDmgCompat();
+        return !speedMode.isDmgCompat()
+                && performanceNormalSpeedEpochEntryEligible(true, true);
     }
 
     /** Shared state-only entrance check for the fixed-width normal-speed epoch. */
     public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbHardware) {
+        return performanceNormalSpeedEpochEntryEligible(cgbHardware, false);
+    }
+
+    private boolean performanceNormalSpeedEpochEntryEligible(
+            boolean cgbHardware, boolean allowImeDisabledRawPendingInterrupt) {
         boolean topologyMatches = cgbHardware
                 ? speedMode.isGbc()
                 : !speedMode.isGbc();
@@ -547,7 +592,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2
                 || state == State.IRQ_JUMP
                 || state == State.EXT_OPCODE && opcode1 == 0x10
-                || state != State.OPCODE && opcode1 == 0xd9
+                || performanceInterruptTransitionInFlight()
                 || clockCycle < 0 || clockCycle > 3
                 || haltBugMode || haltEntrySampleTicks != 0
                 || phasedPpuInputHigh || fastPhasedPpuDispatch
@@ -556,10 +601,21 @@ public class Cpu implements StatefulComponent<Cpu> {
                 || interruptManager.hasPendingCpuReadPhase()
                 || interruptManager.hasPpuTickSignals()
                 || interruptManager.isInterruptEnablePending()
-                || interruptManager.hasRawPendingEnabledInterrupt()) {
+                || interruptManager.hasRawPendingEnabledInterrupt()
+                        && (!allowImeDisabledRawPendingInterrupt
+                        || interruptManager.isIme())) {
             return false;
         }
         return speedMode.getSpeedMode() == 1 && topologyMatches;
+    }
+
+    /** Keeps delayed-enable and low-power control instructions on their scalar seams. */
+    private boolean performanceInterruptTransitionInFlight() {
+        if (state == State.OPCODE) {
+            return false;
+        }
+        return opcode1 == 0xfb || opcode1 == 0xd9
+                || opcode1 == 0x76 || opcode1 == 0x10;
     }
 
     private boolean isPerformanceEpochLifecycleState() {
@@ -759,6 +815,26 @@ public class Cpu implements StatefulComponent<Cpu> {
      */
     public boolean performanceNoPendingPpuReadPhase() {
         return getStatReadPhaseFlags() == 0
+                && !interruptManager.hasPendingCpuReadPhase();
+    }
+
+    /**
+     * Native-CGB x1 phase packets may carry only the durable ordinary HALT-wake marker. Its
+     * optional one-cycle qualifier is meaningful only together with the ordinary marker;
+     * synchronous/asynchronous entry phases and every pending IF/STAT read aperture stay scalar.
+     */
+    public boolean performanceNativeCgbNormalSpeedNoPendingPpuReadPhase() {
+        if (!speedMode.isGbc() || speedMode.isDmgCompat()
+                || speedMode.getSpeedMode() != 1) {
+            return false;
+        }
+        int flags = getStatReadPhaseFlags();
+        int allowed = STAT_READ_PHASE_ORDINARY_HALT_WAKE
+                | STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE;
+        boolean flagsValid = (flags & ~allowed) == 0
+                && ((flags & STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE) == 0
+                || (flags & STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0);
+        return flagsValid
                 && !interruptManager.hasPendingCpuReadPhase();
     }
 

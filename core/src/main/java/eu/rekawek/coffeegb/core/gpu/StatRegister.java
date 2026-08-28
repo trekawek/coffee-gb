@@ -1117,20 +1117,7 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
 
     /** Native owner-side copy of the packed CPU phase bookkeeping. */
     private void captureNativeCgbPerformanceReadPhasePrepared(int statReadPhaseFlags) {
-        boolean ordinaryHaltWakePhase = (statReadPhaseFlags
-                & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0;
-        if (ordinaryHaltWakePhase && !previousOrdinaryHaltWakePhase) {
-            ordinaryHaltWakeStatClock = lycIrqClock;
-        }
-        previousOrdinaryHaltWakePhase = ordinaryHaltWakePhase;
-        boolean recentOrdinaryHaltWakePhase = ordinaryHaltWakePhase
-                && ordinaryHaltWakeStatClock != NO_LYC_IRQ_EVENT
-                && lycIrqClock - ordinaryHaltWakeStatClock
-                <= ORDINARY_HALT_WAKE_STAT_HOLD_TICKS;
-        statReadPhaseFlags &= ~STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
-        if (recentOrdinaryHaltWakePhase) {
-            statReadPhaseFlags |= STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
-        }
+        statReadPhaseFlags = captureDurableCpuStatReadPhase(statReadPhaseFlags);
         cpuStatReadPhaseFlags = statReadPhaseFlags;
         cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
     }
@@ -1213,6 +1200,28 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     private void captureCpuStatReadPhasePrepared(int statReadPhaseFlags) {
         boolean ordinaryHaltWakePhase = (statReadPhaseFlags
                 & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0;
+        gpu.captureCpuLyReadPhase(ordinaryHaltWakePhase
+                && isMode1InterruptSourceOnly());
+        statReadPhaseFlags = captureDurableCpuStatReadPhase(statReadPhaseFlags);
+        cpuStatReadPhaseFlags = statReadPhaseFlags;
+        cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
+    }
+
+    /**
+     * Captures the persistent ordinary-HALT-wake edge for a proven no-CPU-read packet. The
+     * packet has no FF41/FF44 callback, so it deliberately does not publish a transient STAT
+     * mode override or LY read latch. Callers invoke this exactly once before advancing the
+     * first positive peripheral prefix.
+     */
+    public void capturePerformanceNoCpuReadPhaseTrusted(int statReadPhaseFlags) {
+        captureDurableCpuStatReadPhase(statReadPhaseFlags);
+        clearCpuStatReadPhase();
+    }
+
+    /** Updates the memento-backed ordinary/recent window and returns its packed read view. */
+    private int captureDurableCpuStatReadPhase(int statReadPhaseFlags) {
+        boolean ordinaryHaltWakePhase = (statReadPhaseFlags
+                & Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE) != 0;
         if (ordinaryHaltWakePhase && !previousOrdinaryHaltWakePhase) {
             ordinaryHaltWakeStatClock = lycIrqClock;
         }
@@ -1221,14 +1230,11 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
                 && ordinaryHaltWakeStatClock != NO_LYC_IRQ_EVENT
                 && lycIrqClock - ordinaryHaltWakeStatClock
                 <= ORDINARY_HALT_WAKE_STAT_HOLD_TICKS;
-        gpu.captureCpuLyReadPhase(ordinaryHaltWakePhase
-                && isMode1InterruptSourceOnly());
         statReadPhaseFlags &= ~STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
         if (recentOrdinaryHaltWakePhase) {
             statReadPhaseFlags |= STAT_READ_PHASE_RECENT_ORDINARY_HALT_WAKE;
         }
-        cpuStatReadPhaseFlags = statReadPhaseFlags;
-        cpuStatModeOverride = CPU_STAT_MODE_UNRESOLVED;
+        return statReadPhaseFlags;
     }
 
     /** Captures PPU edges visible to this tick's CPU IF read before IF itself settles. */

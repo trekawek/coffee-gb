@@ -255,6 +255,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Native-CGB x1 epoch ticks committed while the LCD was stably disabled. */
     private transient long performanceEpochLcdOffTicks;
 
+    /** CPU/STAT phase frozen at the entrance of the current fixed-x1 CPU epoch. */
+    private transient int performanceEpochEntryStatReadPhaseFlags;
+
+    /** Whether the first positive peripheral prefix captured the frozen CPU/STAT phase. */
+    private transient boolean performanceEpochEntryStatReadPhaseCaptured;
+
     /** Raster transaction selected before the CPU observes its frozen peripheral view. */
     private transient PerformanceEpochPpuPlan performanceEpochPpuPlan =
             PerformanceEpochPpuPlan.NONE;
@@ -1294,6 +1300,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * materialization and the PERFORMANCE scanline-enable lifecycle.
      */
     private int tryPerformancePhaseOnlySpan(long remaining, int cpuSpanLimit) {
+        boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
+        // Most rejected Crystal dots are CPU-state/STAT-phase misses. Keep those allocation-free
+        // predicates ahead of the timer/audio/raster horizon walks; the identical checks remain
+        // adjacent to commit below so a future volatile input cannot turn this into a lease.
+        if (cpuSpanLimit <= 0
+                || !cpu.performancePhaseOnlySpanEligible()
+                || !(nativeCgbNormalSpeed
+                        ? cpu.performanceNativeCgbNormalSpeedNoPendingPpuReadPhase()
+                        : cpu.performanceNoPendingPpuReadPhase())) {
+            return 0;
+        }
         // SGB's JOYP packet receiver has no tick-driven state. When its cached input
         // eligibility is false, the span cannot commit anyway; reject before walking the
         // relatively expensive timer/PPU/STAT horizons. Stable SGB sessions remain eligible
@@ -1382,11 +1399,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (remaining < span) {
             span = (int) remaining;
         }
+        int entryStatReadPhaseFlags = cpu.getStatReadPhaseFlags();
         if (span <= 0
                 || warmResetRequested
                 || speedSwitchTailTicks != 0
                 || !cpu.performancePhaseOnlySpanEligible()
-                || !cpu.performanceNoPendingPpuReadPhase()
+                || !(nativeCgbNormalSpeed
+                        ? cpu.performanceNativeCgbNormalSpeedNoPendingPpuReadPhase()
+                        : cpu.performanceNoPendingPpuReadPhase())
                 || dma.isTransferInProgress()
                 || dma.requiresClockTick(cpu.getState() == Cpu.State.HALTED)
                 || gbc && (hdma.hasActiveOrPendingTransfer()
@@ -1395,7 +1415,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 || !joypad.isPerformanceQuietSpanStillEligible()) {
             return 0;
         }
-        tickPerformanceQuietSpan(span, ppuPlan, directRasterSpan, steadyRasterSpan);
+        tickPerformanceQuietSpan(span, ppuPlan, directRasterSpan, steadyRasterSpan,
+                entryStatReadPhaseFlags);
         performanceBulkSpanCount++;
         performanceBulkTicks += span;
         return span;
@@ -1751,7 +1772,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
         boolean lcdOffEpoch = nativeCgbNormalSpeed && !gpu.isLcdEnabled();
-        if (remaining <= 0 || !cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware)
+        boolean cpuEntryEligible = nativeCgbNormalSpeed
+                ? cpu.performanceNativeCgbNormalSpeedEpochEntryEligible()
+                : cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
+        if (remaining <= 0 || !cpuEntryEligible
                 || !canStartNormalSpeedPerformanceEpoch(
                         cgbHardware, nativeCgbNormalSpeed)) {
             return 0;
@@ -1824,6 +1848,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && gpu.isPerformanceSteadyCursorActive();
         performanceEpochPpuPlan = ppuPlan;
         performanceEpochPrefixCommitted = 0;
+        performanceEpochEntryStatReadPhaseFlags = cpu.getStatReadPhaseFlags();
+        performanceEpochEntryStatReadPhaseCaptured = false;
         IntConsumer prefixCommitter;
         if (cgbHardware) {
             if (performanceCgbNormalSpeedEpochPrefixCommitter == null) {
@@ -2032,6 +2058,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (ticks <= 0) {
             return;
         }
+        capturePerformanceEpochEntryStatReadPhase();
         if (cgbHardware && !speedMode.isDmgCompat() && cartridgeClocked) {
             // Scalar Gameboy.tick() clocks the cartridge before Timer and every other
             // subsystem.  Prefix flushes and the final suffix both pass through this method,
@@ -2299,13 +2326,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private void tickPerformanceQuietSpan(int ticks, boolean directRasterSpan,
                                           boolean steadyRasterSpan) {
         tickPerformanceQuietSpan(
-                ticks, PerformancePhasePpuPlan.QUIET, directRasterSpan, steadyRasterSpan);
+                ticks, PerformancePhasePpuPlan.QUIET, directRasterSpan, steadyRasterSpan,
+                cpu.getStatReadPhaseFlags());
     }
 
     /** Advances the non-CPU-bus peripherals for one explicit phase-only PPU plan. */
     private void tickPerformanceQuietSpan(
             int ticks, PerformancePhasePpuPlan ppuPlan,
-            boolean directRasterSpan, boolean steadyRasterSpan) {
+            boolean directRasterSpan, boolean steadyRasterSpan,
+            int entryStatReadPhaseFlags) {
+        statRegister.capturePerformanceNoCpuReadPhaseTrusted(entryStatReadPhaseFlags);
         if (cartridgeClocked) {
             cartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
@@ -2351,6 +2381,16 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     gpu.isStatModeLatchRephasedBySpeedSwitch());
             cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
         }
+    }
+
+    /** Captures the epoch's old-state CPU/STAT input at its first positive commit only. */
+    private void capturePerformanceEpochEntryStatReadPhase() {
+        if (performanceEpochEntryStatReadPhaseCaptured) {
+            return;
+        }
+        statRegister.capturePerformanceNoCpuReadPhaseTrusted(
+                performanceEpochEntryStatReadPhaseFlags);
+        performanceEpochEntryStatReadPhaseCaptured = true;
     }
 
     /** Resets the session-only PERFORMANCE bulk counters at benchmark arm. */
@@ -3016,12 +3056,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * Requests that a future visible frame omit host presentation work.
      *
      * <p>This is a host-only pacing control. The request is latched only when the PPU reaches
-     * VBlank, is ignored for Super Game Boy profiles (their DMG pixels feed emulated SGB
-     * transfers), and never becomes serialized machine state.</p>
+     * VBlank and never becomes serialized machine state. Super Game Boy profiles always retain
+     * the complete DMG frame for emulated transfers; only their derived final host composite may
+     * be omitted.</p>
      */
     public void requestFrameRenderSuppression(boolean suppress) {
-        requestedFrameRenderSuppression = suppress
-                && !hardwareProfile.capabilities().superGameboyCommands();
+        if (hardwareProfile.capabilities().superGameboyCommands()) {
+            // SGB commands and VRAM transfers consume the complete DMG frame. Keep that emulated
+            // input live and shed only SgbDisplay's derived host composite when pacing is behind.
+            requestedFrameRenderSuppression = false;
+            sgbDisplay.requestFrameRenderSuppression(suppress);
+        } else {
+            requestedFrameRenderSuppression = suppress;
+        }
     }
 
     /**
@@ -3031,7 +3078,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * not part of serialized machine state.</p>
      */
     public boolean isCurrentVisibleFrameFullyRendering() {
-        return !frameRenderSuppressed;
+        return !frameRenderSuppressed && sgbDisplay.isCurrentFrameRendering();
     }
 
     /**
@@ -3045,6 +3092,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         requestedFrameRenderSuppression = false;
         frameRenderSuppressed = false;
         gpu.setRenderOutput(true);
+        sgbDisplay.resetFrameRenderSuppression();
     }
 
     public Sound getSound() {
@@ -3526,6 +3574,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (hardwareProfile.capabilities().superGameboyCommands()) {
             frameRenderSuppressed = false;
             gpu.setRenderOutput(true);
+            sgbDisplay.resetFrameRenderSuppression();
             return;
         }
         frameRenderSuppressed = true;
