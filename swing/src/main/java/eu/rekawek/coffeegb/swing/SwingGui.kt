@@ -1088,6 +1088,7 @@ class SwingGui private constructor(
    */
   private fun requestDesktopStartupSmokeIfConfigured() {
     val markerText = System.getenv(DESKTOP_SMOKE_MARKER_ENV)?.takeIf(String::isNotBlank) ?: return
+    val closeAfterEvidence = desktopStartupSmokeShouldAutoClose(System.getenv())
     check(SwingUtilities.isEventDispatchThread()) {
       "Desktop startup smoke readiness must be observed on the Event Dispatch Thread"
     }
@@ -1115,7 +1116,9 @@ class SwingGui private constructor(
         LOG.error("Unable to write desktop startup smoke evidence", failure)
         exitProcess(1)
       }
-      SwingUtilities.invokeLater(::requestAutomatedClose)
+      if (closeAfterEvidence) {
+        SwingUtilities.invokeLater(::requestAutomatedClose)
+      }
     }
   }
 
@@ -1380,6 +1383,10 @@ internal fun shouldApplyRomLifecycleEvent(
     } else {
       ownsVisibleRequest(openRequestId)
     }
+
+/** The relaunch verifier retains the packaged child until its automatic TCP join is observed. */
+internal fun desktopStartupSmokeShouldAutoClose(environment: Map<String, String>): Boolean =
+    environment[LOCAL_NETPLAY_RELAUNCH_MARKER_ENV].isNullOrBlank()
 
 internal data class DesktopLoadingUiState(
     val title: String,

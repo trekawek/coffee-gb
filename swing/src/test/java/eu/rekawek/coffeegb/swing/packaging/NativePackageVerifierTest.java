@@ -19,6 +19,9 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
@@ -58,6 +61,7 @@ public class NativePackageVerifierTest {
         List<Path> paths = List.of(
                 caches.directRuntime(),
                 caches.packagedLauncher(),
+                caches.localNetplayRelaunch(),
                 caches.desktopNormal(),
                 caches.desktopDebug());
         assertEquals(paths.size(), new HashSet<>(paths).size());
@@ -71,6 +75,56 @@ public class NativePackageVerifierTest {
         try (Stream<Path> launcherContents = Files.list(caches.packagedLauncher())) {
             assertEquals(0, launcherContents.count());
         }
+    }
+
+    @Test
+    public void interruptedPackageRunTerminatesItsDirectProcessAndPreservesInterruption()
+            throws Exception {
+        Path childMarker = temporaryFolder.newFile("interrupted-child.pid").toPath();
+        Files.delete(childMarker);
+        String javaName = System.getProperty("os.name").startsWith("Windows")
+                ? "java.exe"
+                : "java";
+        String java = Path.of(System.getProperty("java.home"), "bin", javaName).toString();
+        String testClasses = Path.of(
+                        InterruptedRunChild.class.getProtectionDomain()
+                                .getCodeSource()
+                                .getLocation()
+                                .toURI())
+                .toString();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        AtomicBoolean interruptedAtExit = new AtomicBoolean();
+        Thread verifier = new Thread(() -> {
+            try {
+                NativePackageVerifier.run(
+                        List.of(
+                                java,
+                                "-cp",
+                                testClasses,
+                                InterruptedRunChild.class.getName(),
+                                childMarker.toString()),
+                        Map.of());
+            } catch (Throwable problem) {
+                failure.set(problem);
+                interruptedAtExit.set(Thread.currentThread().isInterrupted());
+            }
+        }, "interrupted-native-package-verifier-test");
+        verifier.start();
+
+        long markerDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (!Files.isRegularFile(childMarker) && System.nanoTime() < markerDeadline) {
+            Thread.sleep(10);
+        }
+        assertTrue("Child PID marker was not written", Files.isRegularFile(childMarker));
+        long childPid = Long.parseLong(Files.readString(childMarker));
+
+        verifier.interrupt();
+        verifier.join(TimeUnit.SECONDS.toMillis(15));
+
+        assertFalse("Interrupted verifier thread survived cleanup", verifier.isAlive());
+        assertTrue(failure.get() instanceof InterruptedException);
+        assertTrue("Interrupted status was not restored", interruptedAtExit.get());
+        assertFalse(ProcessHandle.of(childPid).map(ProcessHandle::isAlive).orElse(false));
     }
 
     @Test
@@ -737,6 +791,19 @@ public class NativePackageVerifierTest {
     }
 
     private record PayloadLayout(Path payload, Path appDirectory, Path runtime) {
+    }
+
+    public static final class InterruptedRunChild {
+        private InterruptedRunChild() {
+        }
+
+        public static void main(String[] args) throws Exception {
+            Files.writeString(
+                    Path.of(args[0]),
+                    Long.toString(ProcessHandle.current().pid()),
+                    StandardOpenOption.CREATE_NEW);
+            Thread.sleep(TimeUnit.MINUTES.toMillis(1));
+        }
     }
 
     private static void writeChecksums(Path dist) throws Exception {

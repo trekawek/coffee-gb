@@ -18,9 +18,10 @@ $BuildRoot = if ([System.IO.Path]::IsPathRooted($BuildRoot)) {
 $Dist = Join-Path $BuildRoot "dist"
 $Extracted = Join-Path $BuildRoot "extracted-installer"
 $InstalledRoot = Join-Path $BuildRoot "installed-msi"
-$SmokeHome = Join-Path $BuildRoot "unpacked-smoke-home"
+$ExtractedSmokeHome = Join-Path $BuildRoot "extracted-smoke-home"
+$InstalledSmokeHome = Join-Path $BuildRoot "installed-smoke-home"
 
-foreach ($Path in @($Extracted, $InstalledRoot)) {
+foreach ($Path in @($Extracted, $InstalledRoot, $ExtractedSmokeHome, $InstalledSmokeHome)) {
     if (Test-Path -LiteralPath $Path) {
         throw "MSI verification output already exists: $Path"
     }
@@ -170,7 +171,7 @@ $Arguments = @(
     "--source-legal", (Join-Path $RepositoryRoot "packaging/resources/legal"),
     "--dist", $Dist,
     "--run-smoke",
-    "--smoke-home", $SmokeHome
+    "--smoke-home", $ExtractedSmokeHome
 )
 & java @Arguments
 if ($LASTEXITCODE -ne 0) {
@@ -197,6 +198,25 @@ try {
     }
     Assert-NoRomAssociations $InstalledRoot
     Assert-OnlyCoffeeGbShortcuts $InstalledRoot
+
+    $InstalledArguments = @(
+        "-cp", $AppJars[0].FullName,
+        "eu.rekawek.coffeegb.swing.packaging.NativePackageVerifier",
+        "verify",
+        "--target", $Target,
+        "--type", "msi",
+        "--root", $InstalledRoot,
+        "--source-app-jar", $AppJars[0].FullName,
+        "--source-sbom", $Sboms[0].FullName,
+        "--source-legal", (Join-Path $RepositoryRoot "packaging/resources/legal"),
+        "--dist", $Dist,
+        "--run-smoke",
+        "--smoke-home", $InstalledSmokeHome
+    )
+    & java @InstalledArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Installed MSI verification failed with exit code $LASTEXITCODE"
+    }
 } finally {
     if ($Installed) {
         Invoke-Msi -Operation "MSI uninstall" -Arguments @(
