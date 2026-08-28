@@ -50,12 +50,12 @@ so the portable JAR remains compatible during the migration window.
 
 | Key | Typed value | Built-in default |
 | --- | --- | --- |
-| `settings.schemaVersion` | exact supported schema version | `8` |
+| `settings.schemaVersion` | exact supported schema version | `10` |
 | `system.dmgGames` | explicit stable profile or absent/Auto | Auto (`sgb`) |
 | `system.cgbGames` | explicit stable profile or absent/Auto | Auto (`cgb`) |
 | `system.bootstrapMode` | `SKIP`, `FAST_FORWARD`, or `NORMAL` | `SKIP` |
 | `display.scalingMode` | `INTEGER_FIT`, `ASPECT_FIT`, or `EXPLICIT` | `EXPLICIT` |
-| `display.scale` | explicit integer scale in `1..4` | `2` |
+| `display.scale` | explicit integer scale in `1..5` | `2` |
 | `display.letterboxColor` | six uppercase RGB hexadecimal digits | `000000` |
 | `display.fullscreen` | boolean | `false` |
 | `display.rotation` | `0`, `90`, `180`, or `270` degrees | `0` |
@@ -167,11 +167,11 @@ geometry; an enabled SGB border uses its native 256×224 geometry. Rotation is i
 viewport fitting, and both axes always use the same scale.
 
 The renderer always uses the largest uniform scale that fits the available component, so resizing
-never crops the image or distorts its aspect ratio. The 1×, 2×, and 4× commands are convenient
+never crops the image or distorts its aspect ratio. The 1× through 5× commands are convenient
 window-size commands: choosing one repacks the window to that native-size multiple while windowed.
 Afterward the window remains freely resizable and the renderer continues to fit its complete frame.
-Persisted 3×, integer-fit, and aspect-fit settings remain readable for compatibility, use the same
-always-fit renderer immediately, and normalize to the nearest exposed window size when edited.
+Persisted integer-fit and aspect-fit settings remain readable for compatibility and use the same
+always-fit renderer immediately.
 
 Unused space is letterboxed or pillarboxed with the configured RGB color. The viewport uses
 half-open geometry and conservative paint bounds, so odd device-pixel margins put the extra pixel

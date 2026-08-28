@@ -51,7 +51,7 @@ internal class DisplayPreferencesEditor private constructor(
         selectedItem = scaleOption(initial.explicitScale)
         getAccessibleContext().accessibleName = "Window scale"
         getAccessibleContext().accessibleDescription =
-            "Resize the window to one, two, or four times. The picture still fits the window when resized."
+            "Resize the window from one to five times. The picture still fits the window when resized."
       }
   internal var windowScaleCommandRequested = false
     private set
@@ -262,7 +262,7 @@ internal class DisplayPreferencesEditor private constructor(
 
   private companion object {
     const val COLOR_ERROR = "Enter a color in #RRGGBB form."
-    val SCALES = listOf(1, 2, 4).map(::ScaleOption)
+    val SCALES = (1..5).map(::ScaleOption)
     val ROTATIONS = ApplicationSettings.Rotation.entries.map(::RotationOption)
 
     fun scaleOption(scale: Int): ScaleOption =

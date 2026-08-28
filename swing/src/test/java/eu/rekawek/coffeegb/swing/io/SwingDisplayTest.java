@@ -503,6 +503,26 @@ public class SwingDisplayTest {
     }
 
     @Test
+    public void explicitWindowSizeCommandPublishesASmallerPreferredSize() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "test", false);
+        SwingDisplay display = newDisplay(eventBus);
+        AtomicReference<Dimension> latestSize = new AtomicReference<>();
+        eventBus.register(event -> latestSize.set(event.preferredSize()),
+                SwingDisplay.DisplaySizeUpdatedEvent.class);
+
+        eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.EXPLICIT_4X, true));
+        flushEdt();
+        assertEquals(new Dimension(640, 576), latestSize.get());
+        assertEquals(new Dimension(640, 576), onEdt(display::getPreferredSize));
+
+        eventBus.post(new SwingDisplay.SetScaleModeEvent(DisplayScaleMode.EXPLICIT_2X, true));
+        flushEdt();
+        assertEquals(new Dimension(320, 288), latestSize.get());
+        assertEquals(new Dimension(320, 288), onEdt(display::getPreferredSize));
+        eventBus.close();
+    }
+
+    @Test
     public void displaySizeEventDefensivelyCopiesItsDimension() {
         Dimension original = new Dimension(320, 288);
         SwingDisplay.DisplaySizeUpdatedEvent event =
