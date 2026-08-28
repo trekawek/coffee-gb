@@ -274,6 +274,12 @@ public class OpcodeBuilder  {
                     }
 
                     @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return (registers.getSP() - 1) & 0xffff;
+                    }
+
+                    @Override
                     public int execute(
                             Registers registers, AddressSpace addressSpace, int[] args, int context) {
                         registers.setSP(dec.apply(registers.getFlags(), registers.getSP()));
@@ -296,6 +302,12 @@ public class OpcodeBuilder  {
                     @Override
                     public boolean writesMemory() {
                         return true;
+                    }
+
+                    @Override
+                    public Integer resolveMemoryAddress(
+                            Registers registers, int[] args, int context) {
+                        return (registers.getSP() - 1) & 0xffff;
                     }
 
                     @Override
@@ -592,6 +604,11 @@ public class OpcodeBuilder  {
                     }
 
                     @Override
+                    public boolean isInternalMemoryCycle() {
+                        return true;
+                    }
+
+                    @Override
                     public String toString() {
                         return "wait cycle";
                     }
@@ -608,6 +625,11 @@ public class OpcodeBuilder  {
                 new Op() {
                     @Override
                     public boolean readsMemory() {
+                        return true;
+                    }
+
+                    @Override
+                    public boolean isInternalMemoryCycle() {
                         return true;
                     }
 

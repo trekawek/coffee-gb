@@ -488,6 +488,261 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void nativeCgbNormalSpeedRunsOrdinaryCodeUnderImeDisabledRawPendingInterrupt()
+            throws Exception {
+        ParityMemory directMemory = new ParityMemory();
+        ParityMemory scalarMemory = new ParityMemory();
+        InterruptManager directInterrupts = new InterruptManager(true);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        directInterrupts.setByte(0xffff, 1);
+        scalarInterrupts.setByte(0xffff, 1);
+        directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        scalarInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                new SpeedMode(true), new Display(false));
+        Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                new SpeedMode(true), new Display(false));
+
+        assertTrue(direct.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        int elapsed = direct.runNativeCgbNormalSpeedPerformanceEpoch(54);
+        assertEquals(54, elapsed);
+        for (int tick = 0; tick < elapsed; tick++) {
+            scalar.tick();
+        }
+
+        assertDeepEquals("cpu", scalar.captureState(), direct.captureState());
+        assertDeepEquals("interrupts", scalarInterrupts.captureState(),
+                directInterrupts.captureState());
+        assertArrayEquals(scalarMemory.bytes, directMemory.bytes);
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedMaskedInterruptKeepsImeAndControlSeamsScalar() {
+        CountingMemory imeMemory = new CountingMemory();
+        imeMemory.bytes[0] = 0x00;
+        InterruptManager imeInterrupts = pendingVBlank();
+        imeInterrupts.enableInterrupts(false);
+        Cpu ime = normalSpeedNativeCpu(imeMemory, imeInterrupts);
+        assertFalse("IME=1 must retain interrupt dispatch",
+                ime.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        assertEquals(0, ime.runNativeCgbNormalSpeedPerformanceEpoch(54));
+
+        CountingMemory eiMemory = new CountingMemory();
+        eiMemory.bytes[0] = (byte) 0xfb; // EI
+        InterruptManager eiInterrupts = new InterruptManager(true);
+        Cpu ei = normalSpeedNativeCpu(eiMemory, eiInterrupts);
+        for (int tick = 0; tick < 4; tick++) {
+            ei.tick();
+        }
+        eiInterrupts.setByte(0xffff, 1);
+        eiInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        assertFalse("delayed EI must remain scalar",
+                ei.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        assertEquals(0, ei.runNativeCgbNormalSpeedPerformanceEpoch(54));
+
+        CountingMemory retiMemory = new CountingMemory();
+        retiMemory.bytes[0] = (byte) 0xd9; // RETI
+        Cpu reti = normalSpeedNativeCpu(retiMemory, pendingVBlank());
+        assertEquals(4, reti.runNativeCgbNormalSpeedPerformanceEpoch(4));
+        assertTrue(reti.getState() != Cpu.State.OPCODE);
+        assertEquals("in-flight RETI must remain scalar", 0,
+                reti.runNativeCgbNormalSpeedPerformanceEpoch(54));
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedFencesHaltAndIoUnderImeDisabledRawPendingInterrupt()
+            throws Exception {
+        CountingMemory haltMemory = new CountingMemory();
+        haltMemory.bytes[0] = 0x76; // HALT
+        InterruptManager haltInterrupts = new InterruptManager(true);
+        Cpu halt = normalSpeedNativeCpu(haltMemory, haltInterrupts);
+        for (int tick = 0; tick < 3; tick++) {
+            halt.tick();
+        }
+        haltInterrupts.setByte(0xffff, 1);
+        haltInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        assertTrue(halt.performanceNativeCgbNormalSpeedEpochEntryEligible());
+        var haltState = halt.captureState();
+        var haltInterruptState = haltInterrupts.captureState();
+        assertEquals("HALT-bug decode must stay on the zero-dot scalar boundary", 0,
+                halt.runNativeCgbNormalSpeedPerformanceEpoch(54));
+        assertDeepEquals("zero-dot HALT CPU", haltState, halt.captureState());
+        assertDeepEquals("zero-dot HALT interrupts", haltInterruptState,
+                haltInterrupts.captureState());
+        assertEquals(0, halt.getRegisters().getPC());
+
+        CountingMemory ioMemory = new CountingMemory();
+        ioMemory.bytes[0] = (byte) 0xf0; // LDH A,(FF44)
+        ioMemory.bytes[1] = 0x44;
+        ioMemory.bytes[0xff44] = 0x66;
+        Cpu io = normalSpeedNativeCpu(ioMemory, pendingVBlank());
+        int elapsed = io.runNativeCgbNormalSpeedPerformanceEpoch(54);
+        assertTrue("safe prefix made no progress", elapsed > 0);
+        assertEquals("epoch crossed the FF44 read", 0, ioMemory.reads[0xff44]);
+        assertEquals(0, io.getRegisters().getA());
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedSafeDecodedStackAndIndirectOpsMatchScalar()
+            throws Exception {
+        String[] labels = {"CALL WRAM", "RET WRAM", "PUSH WRAM", "POP HRAM",
+                "RST WRAM", "CB (HL) HRAM"};
+        int[][] programs = {
+                {0xcd, 0x00, 0x02}, {0xc9}, {0xc5}, {0xc1}, {0xc7}, {0xcb, 0x46}
+        };
+        int[] expectedSp = {0xc0fe, 0xc102, 0xc0fe, 0xff82, 0xc0fe, 0xc100};
+
+        for (int index = 0; index < labels.length; index++) {
+            CpuPair pair = newNativeNormalSpeedPair(programs[index]);
+            pair.direct.getRegisters().setSP(index == 3 ? 0xff80 : 0xc100);
+            pair.scalar.getRegisters().setSP(index == 3 ? 0xff80 : 0xc100);
+            pair.direct.getRegisters().setBC(0x1234);
+            pair.scalar.getRegisters().setBC(0x1234);
+            if (index == 1) {
+                setPairByte(pair, 0xc100, 0x00);
+                setPairByte(pair, 0xc101, 0x02);
+            } else if (index == 3) {
+                setPairByte(pair, 0xff80, 0x34);
+                setPairByte(pair, 0xff81, 0x12);
+            } else if (index == 5) {
+                pair.direct.getRegisters().setHL(0xff80);
+                pair.scalar.getRegisters().setHL(0xff80);
+                setPairByte(pair, 0xff80, 0x01);
+            }
+
+            int elapsed = runNativeNormalSpeedPair(pair, 54);
+
+            assertTrue(labels[index] + " made no epoch progress", elapsed > 0);
+            assertEquals(labels[index] + " SP", expectedSp[index],
+                    pair.direct.getRegisters().getSP());
+            assertEquals(labels[index] + " reached a terminal access", 0L,
+                    pair.direct.getPerformanceEpochTerminalAccesses());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedStopsBetweenSafeAndUnsafeStackBytes()
+            throws Exception {
+        CpuPair pair = newNativeNormalSpeedPair(0xc1); // POP BC
+        pair.direct.getRegisters().setSP(0xfffd);
+        pair.scalar.getRegisters().setSP(0xfffd);
+        setPairByte(pair, 0xfffd, 0x34);
+        setPairByte(pair, 0xfffe, 0x12);
+
+        int elapsed = runNativeNormalSpeedPair(pair, 54);
+
+        assertTrue(elapsed > 0);
+        assertEquals("safe low byte was not consumed", 0xfffe,
+                pair.direct.getRegisters().getSP());
+        assertEquals("unsafe FFFE byte was read", 0xfffd,
+                pair.directMemory.lastReadAddress);
+        assertEquals("preview fence delegated an unsafe access", 0L,
+                pair.direct.getPerformanceEpochTerminalAccesses());
+        assertEquals(Cpu.State.RUNNING, pair.direct.getState());
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedLcdOnUnsafePlanesStayBeforeTheBusBoundary()
+            throws Exception {
+        String[] labels = {"VRAM", "OAM", "cartridge RAM", "RTC window", "IO", "IE"};
+        int[] addresses = {0x8000, 0xfe00, 0xa000, 0xa001, 0xff44, 0xffff};
+        for (int index = 0; index < addresses.length; index++) {
+            CpuPair pair = newNativeNormalSpeedPair(0x7e); // LD A,(HL)
+            pair.direct.getRegisters().setHL(addresses[index]);
+            pair.scalar.getRegisters().setHL(addresses[index]);
+            setPairByte(pair, addresses[index], 0x66);
+
+            int elapsed = runNativeNormalSpeedPair(pair, 54);
+
+            assertTrue(labels[index] + " prefix made no progress", elapsed > 0);
+            assertTrue(labels[index] + " crossed the decoded read",
+                    pair.directMemory.lastReadAddress != addresses[index]);
+            assertEquals(labels[index] + " changed A", 0,
+                    pair.direct.getRegisters().getA());
+            assertEquals(labels[index] + " delegated a terminal read", 0L,
+                    pair.direct.getPerformanceEpochTerminalAccesses());
+        }
+
+        CpuPair mapper = newNativeNormalSpeedPair(0xea, 0x00, 0x20); // LD (2000),A
+        mapper.direct.getRegisters().setA(0x02);
+        mapper.scalar.getRegisters().setA(0x02);
+        int elapsed = runNativeNormalSpeedPair(mapper, 54);
+        assertTrue("mapper-control prefix made no progress", elapsed > 0);
+        assertEquals("mapper-control write crossed the decoded fence", 0,
+                mapper.directMemory.writes);
+        assertEquals("mapper-control fence delegated a terminal write", 0L,
+                mapper.direct.getPerformanceEpochTerminalAccesses());
+    }
+
+    @Test
+    public void nativeCgbPhasePacketRejectsAnInterruptMicrostateWithoutAdvancing() {
+        CountingMemory memory = new CountingMemory();
+        InterruptManager interrupts = pendingVBlank();
+        interrupts.enableInterrupts(false);
+        Cpu cpu = normalSpeedNativeCpu(memory, interrupts);
+        for (int tick = 0; tick < 4; tick++) {
+            cpu.tick();
+        }
+        Cpu.State irqState = cpu.getState();
+
+        assertTrue(irqState == Cpu.State.IRQ_WAIT_1 || irqState == Cpu.State.IRQ_WAIT_2
+                || irqState == Cpu.State.IRQ_PUSH_1);
+        assertEquals(3, cpu.performancePhaseOnlySpanLimit());
+        assertFalse(cpu.performancePhaseOnlySpanEligible());
+        assertFalse(cpu.advancePerformancePhaseOnly(3));
+        assertEquals("rejected phase packet changed the IRQ microstate",
+                irqState, cpu.getState());
+        assertEquals("rejected phase packet changed the CPU clock", 0,
+                cpu.getDebugMachineCycle());
+    }
+
+    private static InterruptManager pendingVBlank() {
+        InterruptManager interrupts = new InterruptManager(true);
+        interrupts.setByte(0xffff, 1);
+        interrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        return interrupts;
+    }
+
+    private static Cpu normalSpeedNativeCpu(
+            AddressSpace memory, InterruptManager interrupts) {
+        return new Cpu(memory, interrupts, null,
+                new SpeedMode(true), new Display(false));
+    }
+
+    private static CpuPair newNativeNormalSpeedPair(int... program) {
+        ParityMemory directMemory = new ParityMemory();
+        for (int offset = 0; offset < program.length; offset++) {
+            directMemory.bytes[0x0100 + offset] = (byte) program[offset];
+        }
+        ParityMemory scalarMemory = new ParityMemory();
+        System.arraycopy(directMemory.bytes, 0, scalarMemory.bytes, 0,
+                directMemory.bytes.length);
+        InterruptManager directInterrupts = new InterruptManager(true);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        Cpu direct = normalSpeedNativeCpu(directMemory, directInterrupts);
+        Cpu scalar = normalSpeedNativeCpu(scalarMemory, scalarInterrupts);
+        direct.getRegisters().setPC(0x0100);
+        scalar.restoreState(direct.captureState());
+        scalarInterrupts.restoreState(directInterrupts.captureState());
+        return new CpuPair(direct, scalar, directInterrupts, scalarInterrupts,
+                directMemory, scalarMemory);
+    }
+
+    private static void setPairByte(CpuPair pair, int address, int value) {
+        pair.directMemory.bytes[address & 0xffff] = (byte) value;
+        pair.scalarMemory.bytes[address & 0xffff] = (byte) value;
+    }
+
+    private static int runNativeNormalSpeedPair(CpuPair pair, int budget) throws Exception {
+        int elapsed = pair.direct.runNativeCgbNormalSpeedPerformanceEpoch(budget);
+        for (int tick = 0; tick < elapsed; tick++) {
+            pair.scalar.tick();
+        }
+        assertCpuPairEquals(pair);
+        return elapsed;
+    }
+
+    @Test
     public void directBaseOpcodesMatchScalarPipelineForRandomizedState() throws Exception {
         Random random = new Random(0x5a17a9e1L);
         for (int opcode = 0; opcode < 0x100; opcode++) {

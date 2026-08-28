@@ -31,6 +31,15 @@ public interface Op  {
     }
 
     /**
+     * Whether a memory-timed operation is an internal CPU cycle rather than an
+     * access to the external address space. Internal cycles deliberately have no
+     * address for {@link #resolveMemoryAddress(Registers, int[], int)} to return.
+     */
+    default boolean isInternalMemoryCycle() {
+        return false;
+    }
+
+    /**
      * Previews a side-effect-free context-producing operation. This is kept
      * deliberately opt-in so speculative CPU timing checks never execute ALU,
      * register-write, interrupt, or memory operations.

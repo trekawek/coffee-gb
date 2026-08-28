@@ -967,6 +967,65 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void trustedNoReadCaptureTracksOrdinaryWakeEdgeExpiryAndRearm()
+            throws Exception {
+        Fixture fixture = new Fixture(true);
+        fixture.advanceTo(1, 3);
+        int ordinary = Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE;
+
+        long firstClock = longField(fixture.stat, "lycIrqClock");
+        fixture.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals(firstClock, longField(fixture.stat, "ordinaryHaltWakeStatClock"));
+
+        for (int tick = 0; tick < 456; tick++) {
+            fixture.tick();
+        }
+        fixture.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("continuous ordinary wake must not rearm at the 456-dot limit",
+                firstClock, longField(fixture.stat, "ordinaryHaltWakeStatClock"));
+        fixture.tick();
+        fixture.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("expired continuous wake must remain anchored to its first edge",
+                firstClock, longField(fixture.stat, "ordinaryHaltWakeStatClock"));
+
+        fixture.stat.capturePerformanceNoCpuReadPhaseTrusted(0);
+        fixture.tick();
+        long rearmClock = longField(fixture.stat, "lycIrqClock");
+        fixture.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("false-to-true ordinary wake must rearm",
+                rearmClock, longField(fixture.stat, "ordinaryHaltWakeStatClock"));
+
+        Fixture restored = new Fixture(true);
+        restored.stat.restoreState(fixture.stat.captureState());
+        assertEquals(fixture.stat.captureState(), restored.stat.captureState());
+    }
+
+    @Test
+    public void trustedNoReadCaptureDoesNotPublishFf41OrFf44ReadApertures() {
+        int ordinary = Cpu.STAT_READ_PHASE_ORDINARY_HALT_WAKE;
+
+        Fixture dot78 = new Fixture(true);
+        dot78.advanceTo(1, 78);
+        dot78.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("no-read dot-78 packet published the old mode-2 mux",
+                Mode.PixelTransfer.ordinal(), dot78.readStatMode());
+
+        Fixture dot454 = new Fixture(true);
+        dot454.stat.setByte(StatRegister.ADDRESS, 0x20);
+        dot454.advanceTo(1, 454);
+        dot454.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("no-read dot-454 packet published the old HBlank mux",
+                Mode.OamSearch.ordinal(), dot454.readStatMode());
+
+        Fixture vblankLy = new Fixture(true);
+        vblankLy.advanceTo(144, 450);
+        assertEquals(144, vblankLy.readLy());
+        vblankLy.stat.capturePerformanceNoCpuReadPhaseTrusted(ordinary);
+        assertEquals("no-read VBlank packet published an FF44 line-edge sample",
+                144, vblankLy.readLy());
+    }
+
+    @Test
     public void cgbFrameStartCpuBusRetainsOamSearchModeAtDot78() {
         Fixture fixture = new Fixture(true);
         fixture.advanceTo(1, 0);

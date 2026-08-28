@@ -86,6 +86,15 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     private final transient ThreadLocal<RenderLeasePool> renderLeasePool;
 
     /**
+     * Host-only pacing gate for the expensive final SGB composite. The DMG frame event still
+     * reaches every emulated SGB transfer/background consumer; only the derived presentation
+     * event may be omitted while the controller repays pacing debt.
+     */
+    private transient volatile boolean requestedFrameRenderSuppression;
+
+    private transient boolean frameRenderSuppressed;
+
+    /**
      * PAL_PRI controls whether later game palette commands reclaim a palette selected in the
      * SNES firmware UI. Coffee GB has no SNES palette-selection UI, so game palettes are always
      * active; retaining this bit is still required for deterministic state and future adapters.
@@ -293,24 +302,55 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
     }
 
     private void onDmgFrame(DmgFrameReadyEvent dmgFrameReadyEvent) {
-        if (screenMask == GameboyScreenMask.FREEZE) {
-            return;
-        }
-        boolean includeBorder = sgbBorder;
-        RenderLeasePool pool = renderLeasePool.get();
-        RenderLease lease = pool.acquire(includeBorder);
         try {
-            int[] result = lease.frame;
-            int[] base = canonicalBase(includeBorder);
-            if (includeBorder) {
-                System.arraycopy(base, 0, result, 0, base.length);
+            if (screenMask == GameboyScreenMask.FREEZE || frameRenderSuppressed) {
+                return;
             }
-            renderCenter(result, base, dmgFrameReadyEvent.pixels(), includeBorder);
-            // The leased array remains valid through every synchronous subscriber callback. It is
-            // returned to this depth-specific pool only after the complete post has unwound.
-            eventBus.post(new SgbFrameReadyEvent(result, includeBorder));
+            boolean includeBorder = sgbBorder;
+            RenderLeasePool pool = renderLeasePool.get();
+            RenderLease lease = pool.acquire(includeBorder);
+            try {
+                int[] result = lease.frame;
+                int[] base = canonicalBase(includeBorder);
+                if (includeBorder) {
+                    System.arraycopy(base, 0, result, 0, base.length);
+                }
+                renderCenter(result, base, dmgFrameReadyEvent.pixels(), includeBorder);
+                // The leased array remains valid through every synchronous subscriber callback.
+                // It is returned to this depth-specific pool only after the complete post unwinds.
+                eventBus.post(new SgbFrameReadyEvent(result, includeBorder));
+            } finally {
+                pool.release(lease);
+            }
         } finally {
-            pool.release(lease);
+            latchFrameRenderSuppression();
+        }
+    }
+
+    /** Requests host presentation shedding without suppressing emulated DMG/SGB transfer input. */
+    public void requestFrameRenderSuppression(boolean suppress) {
+        if (sgb) {
+            requestedFrameRenderSuppression = suppress;
+        }
+    }
+
+    /** Whether the current physical SGB frame is eligible for host presentation/rewind capture. */
+    public boolean isCurrentFrameRendering() {
+        return !frameRenderSuppressed;
+    }
+
+    /** A visible restore starts from the existing complete SGB transfer path with no host debt. */
+    public void resetFrameRenderSuppression() {
+        requestedFrameRenderSuppression = false;
+        frameRenderSuppressed = false;
+    }
+
+    /** Applies the latest host request at the physical DMG frame edge, capped at one skipped frame. */
+    private void latchFrameRenderSuppression() {
+        if (!requestedFrameRenderSuppression) {
+            frameRenderSuppressed = false;
+        } else {
+            frameRenderSuppressed = !frameRenderSuppressed;
         }
     }
 

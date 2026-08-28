@@ -393,6 +393,45 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void nativeCgbNormalSpeedMbc3RtcMatchesScalarUnderImeDisabledRawPendingInterrupt()
+            throws Exception {
+        byte[] image = nativeMbc3(dmgRomWramLoop());
+        try (Gameboy scalar = nativeCgbNormalSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeCgbNormalSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            for (Gameboy gameboy : new Gameboy[] {scalar, candidate}) {
+                gameboy.getAddressSpace().setByte(0xffff, 0x01);
+                gameboy.getAddressSpace().setByte(0xff0f,
+                        gameboy.getAddressSpace().getByte(0xff0f) | 0x01);
+            }
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            long scalarFrames = 0;
+            long candidateFrames = 0;
+            for (int chunk = 0; chunk < 20; chunk++) {
+                scalarFrames += scalar.runTicks(4_000);
+                candidateFrames += candidate.runTicks(4_000);
+                assertDeepStateEquals("native CGB x1 masked MBC3 chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+
+            assertEquals("native CGB x1 masked MBC3 frame callbacks",
+                    scalarFrames, candidateFrames);
+            assertEquals("custom-source masked oracle unexpectedly entered the epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("masked MBC3 loop had no native CGB x1 epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000L);
+            assertEquals("raw pending IF/IE was not retained", 0x01,
+                    candidate.getAddressSpace().getByte(0xffff) & 0x01);
+            assertEquals("raw pending IF was not retained", 0x01,
+                    candidate.getAddressSpace().getByte(0xff0f) & 0x01);
+        }
+    }
+
+    @Test
     public void nativeCgbNormalSpeedMbc3RtcWritesStayScalarAfterExactClockPrefixes()
             throws Exception {
         byte[] image = nativeMbc3(nativeCgbMbc3RtcWriteLoop());
@@ -1023,6 +1062,70 @@ public final class GameboyPerformanceEpochTest {
                     scalar.runTicks(1), candidate.runTicks(1));
             assertEquals(Mode.PixelTransfer, candidate.getGpu().getMode());
             assertDeepStateEquals("native CGB x1 scalar dot-80 handoff",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void nativeCgbNormalSpeedOrdinaryHaltWakeUsesMaskedEpochAndPhasePackets()
+            throws Exception {
+        byte[] image = nativeColor(dmgRomWramLoop());
+        image[0x200] = 0x76; // HALT
+        image[0x201] = 0x00; // NOP stream after the ordinary IME=0 wake
+        try (Gameboy scalar = nativeCgbNormalSpeedSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = nativeCgbNormalSpeedSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            int guard = 0;
+            while (!(candidate.getGpu().isPerformanceScanlineCursorActive()
+                    && candidate.getGpu().getTicksInLine() >= 100
+                    && candidate.getGpu().getTicksInLine() <= 180
+                    && candidate.getCpu().getState() == Cpu.State.OPCODE
+                    && candidate.getCpu().getDebugMachineCycle() == 0)
+                    && guard++ < 200_000) {
+                assertEquals("ordinary-wake setup frame callback",
+                        scalar.runTicks(1), candidate.runTicks(1));
+            }
+            assertTrue("ordinary-wake setup did not reach a stable epoch point",
+                    guard < 200_000);
+            scalar.getCpu().getRegisters().setPC(0x0200);
+            candidate.getCpu().getRegisters().setPC(0x0200);
+
+            assertEquals("HALT entry frame callback",
+                    scalar.runTicks(8), candidate.runTicks(8));
+            assertEquals(Cpu.State.HALTED, scalar.getCpu().getState());
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertDeepStateEquals("settled HALT before ordinary wake",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            for (Gameboy gameboy : new Gameboy[] {scalar, candidate}) {
+                gameboy.getAddressSpace().setByte(0xffff, 0x01);
+                gameboy.getAddressSpace().setByte(0xff0f,
+                        gameboy.getAddressSpace().getByte(0xff0f) | 0x01);
+                gameboy.resetPerformanceBulkCounters();
+            }
+
+            assertEquals("ordinary-wake frame callback",
+                    scalar.runTicks(2_000), candidate.runTicks(2_000));
+            assertTrue("fixture did not retain the ordinary HALT-wake phase",
+                    candidate.getCpu().isOrdinaryHaltWakeStatPhase());
+            assertTrue("IME=0 raw pending code had no epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 0L);
+            assertTrue("ordinary HALT-wake phase had no short packet coverage",
+                    candidate.getPerformanceBulkTicks() > 0L);
+            assertDeepStateEquals("ordinary wake before restore",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+
+            var scalarCheckpoint = scalar.captureState();
+            var candidateCheckpoint = candidate.captureState();
+            scalar.restoreState(scalarCheckpoint);
+            candidate.restoreState(candidateCheckpoint);
+            assertEquals("ordinary-wake restored frame callback",
+                    scalar.runTicks(2_000), candidate.runTicks(2_000));
+            assertDeepStateEquals("ordinary wake after restore",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
         }
