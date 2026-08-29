@@ -7,6 +7,7 @@ import eu.rekawek.coffeegb.controller.Controller.LoadRomFailedEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingCancelledEvent
 import eu.rekawek.coffeegb.controller.Controller.RomLoadingEvent
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.link.LinkMode
 import eu.rekawek.coffeegb.controller.mobile.config.MobileAdapterConfigurationStore
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettingsOverrides
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
