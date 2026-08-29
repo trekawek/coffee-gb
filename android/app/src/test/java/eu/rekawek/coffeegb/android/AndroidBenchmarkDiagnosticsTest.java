@@ -219,6 +219,58 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(speedRecord.contains("benchmark_audio_dropped_channel_ticks=0"));
     }
 
+    @Test
+    public void readySixHundredEmitsTerminalAudioProofBeforePresentationFinalization()
+            throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        List<String> records = new ArrayList<>();
+        AndroidBenchmarkDiagnostics diagnostics = newDiagnostics(records);
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION);
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+        assertTrue(diagnostics.armBenchmark(SESSION, 42L, TOKEN, readyAudioBaseline()));
+        for (int frame = 1; frame <= 600; frame++) {
+            diagnostics.frameReady();
+        }
+
+        // The JVM fixture has no real sink; install the already-frozen boundary snapshot through
+        // the existing test seam so this exercises the same post-freeze path as the APK.
+        java.lang.reflect.Field terminalStats = AndroidBenchmarkDiagnostics.class
+                .getDeclaredField("audioTerminalStats");
+        terminalStats.setAccessible(true);
+        terminalStats.set(diagnostics, terminalAudioStats());
+        diagnostics.benchmarkFrameBoundary(
+                new Controller.BenchmarkFrameBoundaryEvent(600L, false, false, 1));
+
+        assertEquals(600L, diagnostics.readyFramesForTesting());
+        assertEquals(0L, diagnostics.submittedFramesForTesting());
+        assertEquals("CORE_FROZEN", diagnostics.phaseForTesting());
+        assertFalse(diagnostics.finalResultEmittedForTesting());
+        String speedRecord = records.stream()
+                .filter(line -> line.startsWith("event=speed_sample"))
+                .findFirst()
+                .orElseThrow();
+        for (String field : new String[]{
+                "audio_terminal_active=true", "audio_terminal_output_playing=true",
+                "audio_terminal_overruns=0", "audio_terminal_underruns=0",
+                "audio_terminal_track_underruns=0", "audio_terminal_restarts=0",
+                "audio_terminal_write_failures=0", "audio_terminal_route_failures=0",
+                "audio_terminal_output_identity=1", "audio_terminal_queue_identity=1",
+                "audio_arm_overruns=0", "audio_arm_underruns=0",
+                "audio_arm_track_underruns=0", "audio_arm_restarts=0",
+                "audio_arm_write_failures=0", "audio_arm_route_failures=0",
+                "audio_arm_output_identity=1", "audio_arm_queue_identity=1"}) {
+            assertTrue("missing " + field, speedRecord.contains(field));
+        }
+        assertTrue(speedRecord.getBytes(StandardCharsets.UTF_8).length
+                <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        assertTrue(records.stream().noneMatch(line -> line.startsWith("event=final_result")));
+    }
+
     private static AndroidBenchmarkDiagnostics armedDiagnostics(long generation) {
         AndroidBenchmarkDiagnostics diagnostics = newDiagnostics();
         diagnostics.sessionLaunch();
@@ -600,6 +652,14 @@ public class AndroidBenchmarkDiagnosticsTest {
                 999_999_999L, 999_999_999L, 0, 15, true, 6, 999_999_999);
     }
 
+    private static AndroidAudioSink.Stats terminalAudioStats() {
+        return new AndroidAudioSink.Stats(
+                48_000, 0L, 0L, 0L, 0L, false, true,
+                1_024, 2_048, 2_048, 1L, 4L, 16L, 4L, 16L, 4L,
+                0L, 0L, 0L, 0L, 0, true, true, false, 100, 0L, 10L,
+                1, 15, false, 6, 2_048, 1L, 1L);
+    }
+
     private static AndroidAudioSink.AudioBaseline audioBaseline(
             long pendingBytes, long queuedBytes, boolean outputPlaying) {
         return new AndroidAudioSink.AudioBaseline(
@@ -619,6 +679,17 @@ public class AndroidBenchmarkDiagnosticsTest {
             // Android's JVM stub Log throws without a device/Robolectric.  The benchmark variant
             // still exercises the real compile-time diagnostics branch with this bounded sink.
         }, () -> now.addAndGet(1_000_000L));
+    }
+
+    private static AndroidBenchmarkDiagnostics newDiagnostics(List<String> records) {
+        DiagnosticsOptions options = DiagnosticsOptions.parseValues(
+                true, "dmg", true, "presentation", true, true, false,
+                "ignored-build", "pair-0001", "block-0001", 0,
+                "parent", "parent", "ignored-device", "thermal", true,
+                "workload-0001", 60);
+        AtomicLong now = new AtomicLong();
+        return new AndroidBenchmarkDiagnostics(null, options, records::add,
+                () -> now.addAndGet(1_000_000L));
     }
 
     private static AndroidBenchmarkDiagnostics scriptedDiagnostics(List<String> records) {

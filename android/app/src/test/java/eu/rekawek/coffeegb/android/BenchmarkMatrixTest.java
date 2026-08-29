@@ -442,6 +442,34 @@ public class BenchmarkMatrixTest {
     }
 
     @Test
+    public void validatesTerminalAudioProofAsAnAtomicArmToBoundarySnapshot() {
+        List<String> valid = new ArrayList<>(syntheticSummaryLog(61.0, 62.0));
+        valid.add("event=speed_sample frame=600 effective_gbc=false"
+                + " effective_dmg_compat=false speed_mode_final=1"
+                + " speed_mode_sample=frame_600"
+                + terminalAudioProof());
+        BenchmarkMatrix.Report accepted = parse(valid);
+        assertTrue(accepted.errors().toString(), accepted.valid());
+
+        List<String> incomplete = new ArrayList<>(valid);
+        int speedIndex = incomplete.size() - 1;
+        incomplete.set(speedIndex,
+                incomplete.get(speedIndex).replace(" audio_arm_queue_identity=12", ""));
+        BenchmarkMatrix.Report incompleteReport = parse(incomplete);
+        assertFalse(incompleteReport.valid());
+        assertContains(incompleteReport.errors(), "terminal audio proof must be all-or-none");
+
+        List<String> negative = new ArrayList<>(valid);
+        negative.set(speedIndex,
+                negative.get(speedIndex).replace("audio_terminal_underruns=0",
+                        "audio_terminal_underruns=-1"));
+        BenchmarkMatrix.Report negativeReport = parse(negative);
+        assertFalse(negativeReport.valid());
+        assertContains(negativeReport.errors(),
+                "terminal audio value must be nonnegative audio_terminal_underruns");
+    }
+
+    @Test
     public void acceptsReadyOnlyFrameSinkContractButDoesNotUseItForVisibleGate() {
         List<String> sink = toSinkSummaryLog(syntheticSummaryLog(61.0, 62.0));
 
@@ -1480,6 +1508,18 @@ public class BenchmarkMatrixTest {
                 + " power_save_end=false stay_awake_end=true stay_on_plugged_mask_end=1"
                 + " thread_priority_end=0 app_importance_end=100 system_load_end_milli=100"
                 + " cpu_count_end=8 memory_available_end_bytes=1000000000";
+    }
+
+    private static String terminalAudioProof() {
+        return " audio_terminal_active=true audio_terminal_output_playing=true"
+                + " audio_terminal_overruns=0 audio_terminal_underruns=0"
+                + " audio_terminal_track_underruns=0 audio_terminal_restarts=0"
+                + " audio_terminal_write_failures=0 audio_terminal_route_failures=0"
+                + " audio_terminal_output_identity=11 audio_terminal_queue_identity=12"
+                + " audio_arm_overruns=0 audio_arm_underruns=0"
+                + " audio_arm_track_underruns=0 audio_arm_restarts=0"
+                + " audio_arm_write_failures=0 audio_arm_route_failures=0"
+                + " audio_arm_output_identity=11 audio_arm_queue_identity=12";
     }
 
     private static String audioStartEvidence() {
