@@ -16,6 +16,7 @@ import org.junit.Test;
 import java.lang.reflect.Array;
 import java.lang.reflect.RecordComponent;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -972,6 +973,59 @@ public final class GameboyPerformanceEpochTest {
                 assertEquals(profile.id() + " multiplayer terminal CPU access", 0L,
                         candidate.getCpu().getPerformanceEpochTerminalAccesses());
                 assertDeepStateEquals(profile.id() + " multiplayer quiet interval",
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+        }
+    }
+
+    @Test
+    public void sgbProfilesMultiplayerReleasedHubMatchesForcedScalarAroundMltReq()
+            throws Exception {
+        byte[] image = dmgRomWramLoop();
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            PlayerInputHub hub = new PlayerInputHub();
+            try (PlayerInputHub.SourceHandle ignored = hub.openSource(0);
+                 Gameboy scalar = sgbSession(image, profile, hub::sample);
+                 Gameboy candidate = sgbSession(image, profile, hub)) {
+                // PlayerInputHub rebuilds an equal but non-identical empty snapshot, matching the
+                // Android controller path rather than the RELEASED singleton source.
+                ignored.update(Set.of());
+                postMltReq(scalar, 1);
+                postMltReq(candidate, 1);
+
+                long scalarFrames = 0;
+                long candidateFrames = 0;
+                for (int chunk = 0; chunk < 4; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+                assertEquals(profile.id() + " Hub MLT_REQ(1) frame callbacks",
+                        scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " Hub forced-scalar oracle entered an epoch",
+                        0L, scalar.getPerformanceEpochTicks());
+                assertTrue(profile.id() + " released Hub MLT_REQ(1) had no epoch coverage",
+                        candidate.getPerformanceEpochTicks() > 0L);
+                assertTrue(profile.id() + " released Hub MLT_REQ(1) had no bulk coverage",
+                        candidate.getPerformanceBulkTicks() > 0L);
+                assertEquals(profile.id() + " released Hub crossed a terminal CPU access", 0L,
+                        candidate.getCpu().getPerformanceEpochTerminalAccesses());
+
+                postMltReq(scalar, 0);
+                postMltReq(candidate, 0);
+                for (int chunk = 0; chunk < 4; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+
+                assertEquals(profile.id() + " released Hub multiplayer frame callbacks",
+                        scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " released Hub final player count", 1,
+                        candidate.getSgbMultiplayerStatus().playerCount());
+                assertEquals(profile.id() + " released Hub terminal CPU access", 0L,
+                        candidate.getCpu().getPerformanceEpochTerminalAccesses());
+                assertDeepStateEquals(profile.id() + " released Hub multiplayer interval",
                         scalar.captureStateWithoutTimeSource(),
                         candidate.captureStateWithoutTimeSource());
             }

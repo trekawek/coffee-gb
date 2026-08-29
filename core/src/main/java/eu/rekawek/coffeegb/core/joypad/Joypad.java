@@ -289,10 +289,11 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
      *
      * <p>The released default source cannot produce a poll or a physical transition, and a
      * settled four-sample receiver has no electrical edge to process.  Only the free-running
-     * BOGA clock phase changes, so it can be advanced arithmetically.  Custom sources,
-     * debug/timeline observers, and any pending input mutation stay on the scalar path.  The
-     * SGB packet receiver is clocked by CPU writes to JOYP, not by this free-running tick, so it
-     * remains unchanged inside a preflighted no-bus span.</p>
+     * BOGA clock phase changes, so it can be advanced arithmetically.  The SGB multiplayer
+     * extension admits only a released {@link PlayerInputHub} snapshot; custom sources, held
+     * Hub input, debug/timeline observers, and any pending input mutation stay on the scalar
+     * path.  The SGB packet receiver is clocked by CPU writes to JOYP, not by this free-running
+     * tick, so it remains unchanged inside a preflighted no-bus span.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0 || inputChangedSinceLastTick
@@ -563,8 +564,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (!isSgb || players == 0) {
             return;
         }
-        performanceSpanFastPathEligible = playerInputSource == PlayerInputSource.RELEASED
-                && sampledInput == PlayerInputSnapshot.RELEASED
+        boolean releasedDefault = playerInputSource == PlayerInputSource.RELEASED
+                && sampledInput == PlayerInputSnapshot.RELEASED;
+        boolean releasedHub = playerInputSource instanceof PlayerInputHub
+                && playerInputHubFastPathEligible
+                && sampledInput.equals(PlayerInputSnapshot.RELEASED);
+        performanceSpanFastPathEligible = (releasedDefault || releasedHub)
                 && !inputChangedSinceLastTick
                 && buttons.isEmpty()
                 && debugHooks == null

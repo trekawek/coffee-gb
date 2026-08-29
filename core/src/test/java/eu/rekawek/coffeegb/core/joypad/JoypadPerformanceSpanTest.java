@@ -13,6 +13,8 @@ import java.util.Random;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 public class JoypadPerformanceSpanTest {
@@ -206,6 +208,104 @@ public class JoypadPerformanceSpanTest {
     }
 
     @Test
+    public void sgbMultiplayerReleasedHubUsesValueEqualityAndStopsBeforePoll() {
+        for (int players = 1; players <= 3; players++) {
+            PlayerInputHub hub = new PlayerInputHub();
+            PlayerInputHub.SourceHandle source = hub.openSource(0);
+            source.update(java.util.Set.of());
+            try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder(hub)) {
+                Joypad joypad = fixture.joypad();
+                fixture.sendCommand(0x11, 1, players);
+                assertEquals("players=" + players + " must remain scalar immediately after MLT_REQ",
+                        0, joypad.performanceQuietSpanLimit(54));
+                settleSgbPerformanceSpan(joypad);
+
+                assertEquals(PlayerInputSnapshot.RELEASED, joypad.getSampledInput());
+                assertNotSame("the hub must exercise the equal-but-distinct release case",
+                        PlayerInputSnapshot.RELEASED, joypad.getSampledInput());
+
+                // Walk every persisted poll residue. Query every scheduler budget at each
+                // residue and prove that neither the normal nor HALT horizon can include the
+                // next post-increment hub poll.
+                for (int residueCount = 0; residueCount < Joypad.PLAYER_INPUT_HUB_POLL_TICKS;
+                        residueCount++) {
+                    int residue = (int) (tick(joypad.captureState())
+                            & (Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1L));
+                    int distance = (1 - residue)
+                            & (Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1);
+                    if (distance == 0) {
+                        distance = Joypad.PLAYER_INPUT_HUB_POLL_TICKS;
+                    }
+                    int pollHorizon = distance - 1;
+                    for (int budget = 1; budget <= 54; budget++) {
+                        assertEquals("players=" + players + ", residue=" + residue
+                                        + ", budget=" + budget + " quiet horizon",
+                                Math.min(Math.min(budget, 3), pollHorizon),
+                                joypad.performanceQuietSpanLimit(budget));
+                        assertEquals("players=" + players + ", residue=" + residue
+                                        + ", budget=" + budget + " HALT horizon",
+                                Math.min(budget, pollHorizon),
+                                joypad.performanceSettledHaltSpanLimit(budget));
+                    }
+                    joypad.tick();
+                }
+            }
+        }
+    }
+
+    @Test
+    public void sgbMultiplayerHeldHubInputStaysScalarUntilPollAndReleaseReestablishes() {
+        PlayerInputHub hub = new PlayerInputHub();
+        PlayerInputHub.SourceHandle source = hub.openSource(0);
+        source.update(java.util.Set.of());
+        try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder(hub)) {
+            Joypad joypad = fixture.joypad();
+            fixture.sendCommand(0x11, 1, 1);
+            settleSgbPerformanceSpan(joypad);
+            PlayerInputSnapshot released = joypad.getSampledInput();
+            assertTrue(joypad.performanceQuietSpanLimit(54) > 0);
+
+            source.update(java.util.Set.of(Button.A));
+            PlayerInputSnapshot held = hub.sample();
+            assertNotSame(released, held);
+            int distance = hubPollDistance(joypad);
+            for (int tick = 0; tick < distance - 1; tick++) {
+                joypad.tick();
+            }
+            assertSame("a live Hub mutation is invisible before its poll",
+                    released, joypad.getSampledInput());
+
+            joypad.tick();
+            assertSame(held, joypad.getSampledInput());
+            assertEquals("held Hub input must not enter the SGB performance path", 0,
+                    joypad.performanceQuietSpanLimit(54));
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+            for (int tick = 0; tick < 4 * Joypad.JOYP_CLOCK_TICKS + 2; tick++) {
+                joypad.tick();
+            }
+            assertEquals("settled held Hub input must remain scalar", 0,
+                    joypad.performanceSettledHaltSpanLimit(54));
+
+            source.update(java.util.Set.of());
+            PlayerInputSnapshot releasedAgain = hub.sample();
+            distance = hubPollDistance(joypad);
+            for (int tick = 0; tick < distance - 1; tick++) {
+                joypad.tick();
+            }
+            assertSame("release is also invisible before its poll", held,
+                    joypad.getSampledInput());
+            joypad.tick();
+            assertSame(releasedAgain, joypad.getSampledInput());
+            for (int tick = 0; tick < 4 * Joypad.JOYP_CLOCK_TICKS + 2; tick++) {
+                joypad.tick();
+            }
+            assertEquals(PlayerInputSnapshot.RELEASED, joypad.getSampledInput());
+            assertTrue("released equal-but-distinct Hub input did not re-establish eligibility",
+                    joypad.performanceQuietSpanLimit(54) > 0);
+        }
+    }
+
+    @Test
     public void sgbMultiplayerReleasedTrustedSpansMatchScalarForEveryBudget() {
         for (int players = 1; players <= 3; players++) {
             try (EventBusImpl scalarBus = new EventBusImpl(null, null, false);
@@ -335,6 +435,13 @@ public class JoypadPerformanceSpanTest {
             }
         }
         throw new AssertionError("SGB multiplayer input filter did not settle");
+    }
+
+    private static int hubPollDistance(Joypad joypad) {
+        int residue = (int) (tick(joypad.captureState())
+                & (Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1L));
+        int distance = (1 - residue) & (Joypad.PLAYER_INPUT_HUB_POLL_TICKS - 1);
+        return distance == 0 ? Joypad.PLAYER_INPUT_HUB_POLL_TICKS : distance;
     }
 
     private static int settledHistory(int inputLines) {
