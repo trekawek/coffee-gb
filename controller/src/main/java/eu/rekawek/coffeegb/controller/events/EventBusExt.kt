@@ -18,17 +18,6 @@ fun funnel(from: EventBus, to: EventBus, eventTypes: Set<KClass<out Event>>) {
   eventTypes.forEach { et -> from.register({ event -> to.post(event) }, et.java) }
 }
 
-/**
- * An owning event funnel whose selected event classes can be silenced for one synchronous scope.
- * Suppression is nestable and is always released when [suppressForwarding] returns or throws.
- */
-interface SuppressibleEventFunnel : EventBus {
-  fun <T> suppressForwarding(
-      eventTypes: Set<KClass<out Event>>,
-      action: () -> T,
-  ): T
-}
-
 private val PRESENTATION_EVENT_TYPES: Set<KClass<out Event>> =
     setOf(
         Display.DmgFrameReadyEvent::class,
