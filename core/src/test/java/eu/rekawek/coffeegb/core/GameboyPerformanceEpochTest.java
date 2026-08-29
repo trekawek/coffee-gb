@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.cpu.Cpu;
+import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
@@ -9,6 +10,7 @@ import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot;
 import eu.rekawek.coffeegb.core.joypad.PlayerInputSource;
 import eu.rekawek.coffeegb.core.memory.Hdma;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
+import eu.rekawek.coffeegb.core.sgb.Commands;
 import org.junit.Test;
 
 import java.lang.reflect.Array;
@@ -893,6 +895,52 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void sgbProfilesMultiplayerQuietIntervalMatchesScalarAroundMltReq()
+            throws Exception {
+        byte[] image = dmgRomWramLoop();
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (Gameboy scalar = sgbSession(image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(image, profile, PlayerInputSource.RELEASED)) {
+                postMltReq(scalar, 1);
+                postMltReq(candidate, 1);
+                assertEquals(profile.id() + " MLT_REQ(1) player count", 2,
+                        candidate.getSgbMultiplayerStatus().playerCount());
+
+                long scalarFrames = 0;
+                long candidateFrames = 0;
+                for (int chunk = 0; chunk < 4; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+                assertTrue(profile.id() + " MLT_REQ(1) had no epoch coverage",
+                        candidate.getPerformanceEpochTicks() > 0L);
+                assertTrue(profile.id() + " MLT_REQ(1) had no quiet bulk coverage",
+                        candidate.getPerformanceBulkTicks() > 0L);
+                assertEquals(profile.id() + " MLT_REQ(1) crossed a terminal CPU access", 0L,
+                        candidate.getCpu().getPerformanceEpochTerminalAccesses());
+
+                postMltReq(scalar, 0);
+                postMltReq(candidate, 0);
+                for (int chunk = 0; chunk < 4; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+
+                assertEquals(profile.id() + " multiplayer frame callbacks",
+                        scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " MLT_REQ(0) player count", 1,
+                        candidate.getSgbMultiplayerStatus().playerCount());
+                assertEquals(profile.id() + " multiplayer terminal CPU access", 0L,
+                        candidate.getCpu().getPerformanceEpochTerminalAccesses());
+                assertDeepStateEquals(profile.id() + " multiplayer quiet interval",
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+        }
+    }
+
+    @Test
     public void physicalDmgRomWramLoopMatchesLegacySchedulerWithEpochCoverage()
             throws Exception {
         byte[] image = dmgRomWramLoop();
@@ -1392,6 +1440,16 @@ public final class GameboyPerformanceEpochTest {
                 .setPlayerInputSource(inputSource)
                 .setSupportBatterySave(false)
                 .build();
+    }
+
+    private static void postMltReq(Gameboy gameboy, int players) throws Exception {
+        int[] packet = new int[Commands.PACKET_SIZE];
+        packet[0] = 0x11 * 8 + 1;
+        packet[1] = players;
+        var field = Gameboy.class.getDeclaredField("sgbBus");
+        field.setAccessible(true);
+        EventBus sgbBus = (EventBus) field.get(gameboy);
+        sgbBus.post(Commands.toCommand(packet));
     }
 
     private static void assertPhysicalDmgOamLoopMatchesScalar(

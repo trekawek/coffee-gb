@@ -5,6 +5,8 @@ import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.sgb.Commands;
+import eu.rekawek.coffeegb.core.sgb.SgbPacketTestBuilder;
+import eu.rekawek.coffeegb.core.state.ComponentState;
 import org.junit.Test;
 
 import java.util.Random;
@@ -137,6 +139,151 @@ public class JoypadPerformanceSpanTest {
         }
     }
 
+    @Test
+    public void sgbMultiplayerReleasedInputSettlesForControlsAndPlayerIds() {
+        int[][] cases = {{1, 0}, {1, 1}, {2, 0}, {3, 0}, {3, 1}, {3, 2}, {3, 3}};
+        for (int[] testCase : cases) {
+            int players = testCase[0];
+            int currentPlayer = testCase[1];
+            try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
+                Joypad joypad = fixture.joypad();
+                fixture.sendCommand(0x11, 1, players);
+                for (int player = 0; player < currentPlayer; player++) {
+                    selectNextPlayer(joypad);
+                }
+
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " must remain scalar immediately after MLT_REQ",
+                        0, joypad.performanceQuietSpanLimit(54));
+                settleSgbPerformanceSpan(joypad);
+
+                int expectedLines = 0x0f - currentPlayer;
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " filtered lines", expectedLines,
+                        filteredInputLines(joypad.captureState()));
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " input history", settledHistory(expectedLines),
+                        inputHistory(joypad.captureState()));
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " player ID", 0x0f - currentPlayer,
+                        joypad.getByte(0xff00) & 0x0f);
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " quiet horizon", 3,
+                        joypad.performanceQuietSpanLimit(54));
+                assertEquals("players=" + players + ", player=" + currentPlayer
+                                + " halt horizon", 54,
+                        joypad.performanceSettledHaltSpanLimit(54));
+            }
+        }
+    }
+
+    @Test
+    public void sgbMultiplayerReleasedInputSettlesForNonIdSelectors() {
+        for (int selector : new int[]{0x00, 0x10, 0x20, 0x30}) {
+            try (SgbPacketTestBuilder fixture = new SgbPacketTestBuilder()) {
+                Joypad joypad = fixture.joypad();
+                fixture.sendCommand(0x11, 1, 1);
+                selectNextPlayer(joypad);
+                writeSelector(joypad, selector);
+
+                assertEquals("selector 0x" + Integer.toHexString(selector)
+                                + " must remain scalar immediately after the write",
+                        0, joypad.performanceQuietSpanLimit(54));
+                settleSgbPerformanceSpan(joypad);
+
+                int expectedLines = selector == 0x30 ? 0x0e : 0x0f;
+                assertEquals("selector 0x" + Integer.toHexString(selector)
+                                + " filtered lines", expectedLines,
+                        filteredInputLines(joypad.captureState()));
+                assertEquals("selector 0x" + Integer.toHexString(selector)
+                                + " input history", settledHistory(expectedLines),
+                        inputHistory(joypad.captureState()));
+                assertEquals("selector 0x" + Integer.toHexString(selector)
+                                + " quiet horizon", 3,
+                        joypad.performanceQuietSpanLimit(54));
+            }
+        }
+    }
+
+    @Test
+    public void sgbMultiplayerReleasedTrustedSpansMatchScalarForEveryBudget() {
+        for (int players = 1; players <= 3; players++) {
+            try (EventBusImpl scalarBus = new EventBusImpl(null, null, false);
+                 EventBusImpl bulkBus = new EventBusImpl(null, null, false)) {
+                InterruptManager scalarInterrupts = new InterruptManager(false);
+                InterruptManager bulkInterrupts = new InterruptManager(false);
+                Joypad scalar = new Joypad(scalarInterrupts, scalarBus, true);
+                Joypad bulk = new Joypad(bulkInterrupts, bulkBus, true);
+                scalarBus.post(mltReq(players));
+                bulkBus.post(mltReq(players));
+                settleSgbPerformancePair(scalar, bulk);
+
+                for (int budget = 1; budget <= 54; budget++) {
+                    int span = bulk.performanceQuietSpanLimit(budget);
+                    assertEquals("players=" + players + ", budget=" + budget
+                                    + " quiet horizon", Math.min(budget, 3), span);
+                    for (int tick = 0; tick < span; tick++) {
+                        scalar.tick();
+                    }
+                    bulk.tickPerformanceQuietSpanTrusted(span);
+                    assertEquivalent(scalar, bulk);
+                    assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
+                    assertEquals("players=" + players + ", budget=" + budget
+                                    + " tick", tick(scalar.captureState()),
+                            tick(bulk.captureState()));
+                    assertEquals("players=" + players + ", budget=" + budget
+                                    + " input history", inputHistory(scalar.captureState()),
+                            inputHistory(bulk.captureState()));
+                    assertEquals("players=" + players + ", budget=" + budget
+                                    + " filtered lines", filteredInputLines(scalar.captureState()),
+                            filteredInputLines(bulk.captureState()));
+                }
+            }
+        }
+    }
+
+    @Test
+    public void sgbMultiplayerQuietEligibilityRevokesOnStateAndObserverChanges() {
+        try (EventBusImpl sgbBus = new EventBusImpl(null, null, false)) {
+            Joypad joypad = new Joypad(new InterruptManager(false), sgbBus, true);
+            sgbBus.post(mltReq(1));
+            settleSgbPerformanceSpan(joypad);
+            ComponentState<Joypad> settled = joypad.captureState();
+            assertTrue(joypad.isPerformanceQuietSpanStillEligible());
+
+            joypad.setByte(0xff00, 0x10);
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+            assertEquals(0, joypad.performanceQuietSpanLimit(54));
+
+            joypad.restoreState(settled);
+            assertFalse("restore must invalidate the derived eligibility",
+                    joypad.isPerformanceQuietSpanStillEligible());
+            settleSgbPerformanceSpan(joypad);
+
+            joypad.setPressedButtons(java.util.Set.of(Button.A));
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+            joypad.setPressedButtons(java.util.Set.of());
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+
+            InputTimelineObserver observer = (phase, player, mask, changed) -> {
+            };
+            assertTrue(joypad.attachInputTimelineObserver(observer));
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+            assertEquals(0, joypad.performanceQuietSpanLimit(54));
+            assertTrue(joypad.detachInputTimelineObserver(observer));
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+
+            joypad.setDebugHooks(new TestDebugHooks());
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+            joypad.setDebugHooks(null);
+            assertFalse(joypad.isPerformanceQuietSpanStillEligible());
+
+            sgbBus.post(mltReq(3));
+            assertFalse("MLT_REQ must revoke the settled multiplayer span",
+                    joypad.isPerformanceQuietSpanStillEligible());
+        }
+    }
+
     private static Commands.MltReqCmd mltReq(int players) {
         int[] packet = new int[Commands.PACKET_SIZE];
         packet[0] = 0x11 * 8 + 1;
@@ -161,6 +308,65 @@ public class JoypadPerformanceSpanTest {
 
     private static void writeSelector(Joypad joypad, int selector) {
         joypad.setByte(0xff00, selector);
+    }
+
+    private static void selectNextPlayer(Joypad joypad) {
+        writeSelector(joypad, 0x10);
+        writeSelector(joypad, 0x30);
+    }
+
+    private static void settleSgbPerformanceSpan(Joypad joypad) {
+        for (int ticks = 0; ticks < 4 * Joypad.JOYP_CLOCK_TICKS + 2; ticks++) {
+            joypad.tick();
+            if (joypad.performanceQuietSpanLimit(54) > 0) {
+                return;
+            }
+        }
+        throw new AssertionError("SGB multiplayer input filter did not settle");
+    }
+
+    private static void settleSgbPerformancePair(Joypad scalar, Joypad bulk) {
+        for (int ticks = 0; ticks < 4 * Joypad.JOYP_CLOCK_TICKS + 2; ticks++) {
+            scalar.tick();
+            bulk.tick();
+            if (bulk.performanceQuietSpanLimit(54) > 0) {
+                assertEquals(scalar.getByte(0xff00), bulk.getByte(0xff00));
+                return;
+            }
+        }
+        throw new AssertionError("SGB multiplayer input filter did not settle");
+    }
+
+    private static int settledHistory(int inputLines) {
+        int history = 0;
+        for (int line = 0; line < 4; line++) {
+            if ((inputLines & 1 << line) == 0) {
+                history |= 0x0f << (line * 4);
+            }
+        }
+        return history;
+    }
+
+    private static long tick(ComponentState<Joypad> state) {
+        return (long) stateField(state, "tick");
+    }
+
+    private static int inputHistory(ComponentState<Joypad> state) {
+        return (int) stateField(state, "inputHistory");
+    }
+
+    private static int filteredInputLines(ComponentState<Joypad> state) {
+        return (int) stateField(state, "filteredInputLines");
+    }
+
+    private static Object stateField(ComponentState<Joypad> state, String name) {
+        try {
+            var accessor = state.getClass().getDeclaredMethod(name);
+            accessor.setAccessible(true);
+            return accessor.invoke(state);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Joypad checkpoint has no " + name + " state", e);
+        }
     }
 
     @Test
