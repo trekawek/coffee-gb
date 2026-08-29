@@ -100,7 +100,28 @@ final class AndroidAudioSink implements AutoCloseable {
                  boolean outputOpen, boolean outputPlaying, boolean muted, int volume,
                  long routeFailures, long playbackPositionFrames, int systemVolume,
                  int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
-                 int maximumFrameBytes) {
+                 int maximumFrameBytes, long outputIdentity, long queueIdentity) {
+        /** Source-compatible constructor retained for existing benchmark fixtures. */
+        Stats(int sampleRate, long overruns, long underruns, long outputUnderruns,
+                long restarts, boolean paused,
+                boolean active, int minimumBufferBytes, int configuredBufferBytes,
+                int actualBufferBytes, long pcmInputEvents, long pcmInputFrames,
+                long pcmEnqueuedBytes, long pcmEnqueuedFrames, long pcmWrittenBytes,
+                long pcmWrittenFrames, long writeFailures, long pcmDiscardedBytes,
+                long pcmPendingBytes, long pcmQueuedBytes, int queuedFrames,
+                boolean outputOpen, boolean outputPlaying, boolean muted, int volume,
+                long routeFailures, long playbackPositionFrames, int systemVolume,
+                int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
+                int maximumFrameBytes) {
+            this(sampleRate, overruns, underruns, outputUnderruns, restarts, paused, active,
+                    minimumBufferBytes, configuredBufferBytes, actualBufferBytes,
+                    pcmInputEvents, pcmInputFrames, pcmEnqueuedBytes, pcmEnqueuedFrames,
+                    pcmWrittenBytes, pcmWrittenFrames, writeFailures, pcmDiscardedBytes,
+                    pcmPendingBytes, pcmQueuedBytes, queuedFrames, outputOpen, outputPlaying,
+                    muted, volume, routeFailures, playbackPositionFrames, systemVolume,
+                    systemVolumeMax, systemMusicMuted, queueCapacityFrames, maximumFrameBytes,
+                    0L, 0L);
+        }
     }
 
     /** Absolute audio counters captured at the host ARM boundary; no queue mutation occurs. */
@@ -416,8 +437,13 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     private Stats diagnosticStats(BoundedPcmQueue active) {
-        updatePlaybackEvidence(activeOutput);
+        Output output = activeOutput;
+        updatePlaybackEvidence(output);
         PcmSnapshot snapshot = pcmAccounting.snapshot();
+        long outputIdentity = output == null ? 0L
+                : Integer.toUnsignedLong(System.identityHashCode(output));
+        long queueIdentity = active == null ? 0L
+                : Integer.toUnsignedLong(System.identityHashCode(active));
         return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
                 outputUnderruns, restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
                 actualBufferBytes, snapshot.inputEvents(), snapshot.inputFrames(),
@@ -427,7 +453,7 @@ final class AndroidAudioSink implements AutoCloseable {
                 active == null ? 0 : active.queuedFrames(), outputOpen, outputPlaying, muted,
                 volume, snapshot.routeFailures(), playbackPositionFrames, systemVolume,
                 systemVolumeMax, systemMusicMuted, active == null ? 0 : active.capacityFrames(),
-                active == null ? 0 : active.maximumFrameBytes());
+                active == null ? 0 : active.maximumFrameBytes(), outputIdentity, queueIdentity);
     }
 
     AudioStats audioStats() {

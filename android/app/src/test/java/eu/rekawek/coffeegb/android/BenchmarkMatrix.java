@@ -225,6 +225,27 @@ public final class BenchmarkMatrix {
             "benchmark_audio_apu_reads", "benchmark_audio_apu_writes",
             "benchmark_audio_frame_sequencer_commits",
             "benchmark_audio_dropped_channel_ticks");
+    private static final List<String> TERMINAL_AUDIO_PROOF_FIELDS = List.of(
+            "audio_terminal_active", "audio_terminal_output_playing",
+            "audio_terminal_overruns", "audio_terminal_underruns",
+            "audio_terminal_track_underruns", "audio_terminal_restarts",
+            "audio_terminal_write_failures", "audio_terminal_route_failures",
+            "audio_terminal_output_identity", "audio_terminal_queue_identity",
+            "audio_arm_overruns", "audio_arm_underruns",
+            "audio_arm_track_underruns", "audio_arm_restarts",
+            "audio_arm_write_failures", "audio_arm_route_failures",
+            "audio_arm_output_identity", "audio_arm_queue_identity");
+    private static final Set<String> TERMINAL_AUDIO_BOOLEAN_FIELDS = Set.of(
+            "audio_terminal_active", "audio_terminal_output_playing");
+    private static final Set<String> TERMINAL_AUDIO_NUMERIC_FIELDS = Set.of(
+            "audio_terminal_overruns", "audio_terminal_underruns",
+            "audio_terminal_track_underruns", "audio_terminal_restarts",
+            "audio_terminal_write_failures", "audio_terminal_route_failures",
+            "audio_terminal_output_identity", "audio_terminal_queue_identity",
+            "audio_arm_overruns", "audio_arm_underruns",
+            "audio_arm_track_underruns", "audio_arm_restarts",
+            "audio_arm_write_failures", "audio_arm_route_failures",
+            "audio_arm_output_identity", "audio_arm_queue_identity");
     private static final List<Row> REQUIRED_ROWS = List.of(
             Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE,
             Row.CGB_DMG_COMPAT, Row.SGB, Row.SGB2);
@@ -893,7 +914,8 @@ public final class BenchmarkMatrix {
                 || key.equals("audio_focus_granted")
                 || key.equals("benchmark_audio_requested")
                 || key.equals("benchmark_audio_active_at_boundary")
-                || key.equals("benchmark_audio_disabled_after");
+                || key.equals("benchmark_audio_disabled_after")
+                || TERMINAL_AUDIO_BOOLEAN_FIELDS.contains(key);
     }
 
     private static boolean isFloatingField(String key) {
@@ -935,7 +957,8 @@ public final class BenchmarkMatrix {
                 || key.equals("audio_start_system_volume")
                 || key.equals("audio_start_system_volume_max")
                 || key.equals("audio_start_output_identity")
-                || key.equals("audio_start_queue_identity");
+                || key.equals("audio_start_queue_identity")
+                || TERMINAL_AUDIO_NUMERIC_FIELDS.contains(key);
     }
 
     private static void integerValue(String value, int lineNumber, List<String> errors,
@@ -990,7 +1013,16 @@ public final class BenchmarkMatrix {
                     "benchmark_audio_zero_sample_slots", "benchmark_audio_zero_sample_events",
                     "benchmark_audio_max_debt", "benchmark_audio_apu_reads",
                     "benchmark_audio_apu_writes", "benchmark_audio_frame_sequencer_commits",
-                    "benchmark_audio_dropped_channel_ticks");
+                    "benchmark_audio_dropped_channel_ticks",
+                    "audio_terminal_active", "audio_terminal_output_playing",
+                    "audio_terminal_overruns", "audio_terminal_underruns",
+                    "audio_terminal_track_underruns", "audio_terminal_restarts",
+                    "audio_terminal_write_failures", "audio_terminal_route_failures",
+                    "audio_terminal_output_identity", "audio_terminal_queue_identity",
+                    "audio_arm_overruns", "audio_arm_underruns",
+                    "audio_arm_track_underruns", "audio_arm_restarts",
+                    "audio_arm_write_failures", "audio_arm_route_failures",
+                    "audio_arm_output_identity", "audio_arm_queue_identity");
             case "first_frame" -> Set.of("event", "frame", "wall_ns", "since_launch_ms",
                     "prep_to_frame_ms");
             case "frames" -> Set.of("event", "frame", "ready_count", "submitted_count",
@@ -1006,6 +1038,7 @@ public final class BenchmarkMatrix {
     /** Current speed samples carry the complete audio-policy proof as one atomic schema. */
     private static void validateSpeedSampleSchema(Map<String, String> fields, int lineNumber,
             List<String> errors) {
+        validateTerminalAudioSchema(fields, lineNumber, errors);
         if (!fields.containsKey("benchmark_audio_policy")) {
             return; // pre-policy diagnostic fixtures
         }
@@ -1057,6 +1090,39 @@ public final class BenchmarkMatrix {
                         .equals(fields.get("benchmark_audio_skipped_ticks")))) {
             errors.add("line " + lineNumber
                     + ": relaxed speed_sample dropped ticks must equal positive skipped ticks");
+        }
+    }
+
+    /** Terminal audio evidence is useful only as a complete arm-to-boundary snapshot. */
+    private static void validateTerminalAudioSchema(Map<String, String> fields, int lineNumber,
+            List<String> errors) {
+        boolean present = TERMINAL_AUDIO_PROOF_FIELDS.stream().anyMatch(fields::containsKey);
+        if (!present) {
+            return;
+        }
+        if (!fields.keySet().containsAll(TERMINAL_AUDIO_PROOF_FIELDS)) {
+            errors.add("line " + lineNumber
+                    + ": terminal audio proof must be all-or-none");
+        }
+        for (String key : TERMINAL_AUDIO_BOOLEAN_FIELDS) {
+            String value = fields.get(key);
+            if (value != null && !("true".equals(value) || "false".equals(value))) {
+                errors.add("line " + lineNumber + ": terminal audio boolean is invalid " + key);
+            }
+        }
+        for (String key : TERMINAL_AUDIO_NUMERIC_FIELDS) {
+            String value = fields.get(key);
+            if (value == null) {
+                continue;
+            }
+            try {
+                if (Long.parseLong(value) < 0L) {
+                    errors.add("line " + lineNumber
+                            + ": terminal audio value must be nonnegative " + key);
+                }
+            } catch (NumberFormatException ignored) {
+                // validateFieldValue already reports the bounded integer error.
+            }
         }
     }
 

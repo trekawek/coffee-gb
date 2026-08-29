@@ -679,7 +679,8 @@ final class AndroidBenchmarkDiagnostics {
                 + " benchmark_audio_frame_sequencer_commits="
                 + event.getBenchmarkAudioFrameSequencerCommits()
                 + " benchmark_audio_dropped_channel_ticks="
-                + event.getBenchmarkAudioDroppedChannelTicks());
+                + event.getBenchmarkAudioDroppedChannelTicks()
+                + terminalAudioEvidenceFields());
         if (phase == Phase.ARMED) {
             phase = Phase.CORE_FROZEN;
         }
@@ -1115,10 +1116,12 @@ final class AndroidBenchmarkDiagnostics {
             // The renderer intentionally waits before posting the SF drain.  Freeze the audio
             // evidence now so that that delay (and any AudioTrack empty-poll underrun) cannot
             // contaminate the emulated 600-frame measurement window.
-            AndroidAudioSink.AudioBaseline terminalBaseline = systemAudioCheckpointBaselineLocked();
-            audioTerminalOutputIdentity = terminalBaseline.outputIdentity();
-            audioTerminalQueueIdentity = terminalBaseline.queueIdentity();
             audioTerminalStats = audioSink == null ? null : audioSink.stats();
+            AndroidAudioSink.AudioBaseline terminalBaseline = systemAudioCheckpointBaselineLocked();
+            audioTerminalOutputIdentity = audioTerminalStats == null
+                    ? terminalBaseline.outputIdentity() : audioTerminalStats.outputIdentity();
+            audioTerminalQueueIdentity = audioTerminalStats == null
+                    ? terminalBaseline.queueIdentity() : audioTerminalStats.queueIdentity();
             // Freeze diagnostics immediately. The controller boundary event freezes the core
             // before its next chunk; submissions already in flight remain countable.
             phase = Phase.CORE_FROZEN;
@@ -1403,6 +1406,38 @@ final class AndroidBenchmarkDiagnostics {
                 + " system_load_end_milli=" + environment.systemLoadMilli
                 + " cpu_count_end=" + environment.cpuCount
                 + " memory_available_end_bytes=" + environment.memoryAvailableBytes;
+    }
+
+    /**
+     * Compact frame-600 audio proof.  The terminal values come only from the frozen Stats
+     * captured at the physical boundary; ARM values are the matching immutable baseline used by
+     * the run's conservation ledger.  Omit the complete block when no terminal Stats exists so
+     * callers cannot mistake a partial snapshot for evidence.
+     */
+    private String terminalAudioEvidenceFields() {
+        AndroidAudioSink.Stats terminal = audioTerminalStats;
+        if (terminal == null) {
+            return "";
+        }
+        AndroidAudioSink.AudioBaseline arm = audioBaseline;
+        return " audio_terminal_active=" + terminal.active()
+                + " audio_terminal_output_playing=" + terminal.outputPlaying()
+                + " audio_terminal_overruns=" + terminal.overruns()
+                + " audio_terminal_underruns=" + terminal.underruns()
+                + " audio_terminal_track_underruns=" + terminal.outputUnderruns()
+                + " audio_terminal_restarts=" + terminal.restarts()
+                + " audio_terminal_write_failures=" + terminal.writeFailures()
+                + " audio_terminal_route_failures=" + terminal.routeFailures()
+                + " audio_terminal_output_identity=" + terminal.outputIdentity()
+                + " audio_terminal_queue_identity=" + terminal.queueIdentity()
+                + " audio_arm_overruns=" + arm.overruns()
+                + " audio_arm_underruns=" + arm.underruns()
+                + " audio_arm_track_underruns=" + arm.outputUnderruns()
+                + " audio_arm_restarts=" + arm.restarts()
+                + " audio_arm_write_failures=" + arm.writeFailures()
+                + " audio_arm_route_failures=" + arm.routeFailures()
+                + " audio_arm_output_identity=" + arm.outputIdentity()
+                + " audio_arm_queue_identity=" + arm.queueIdentity();
     }
 
     private String audioEvidenceFields() {
