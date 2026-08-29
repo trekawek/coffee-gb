@@ -11,6 +11,7 @@ import org.junit.rules.TemporaryFolder;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -798,10 +799,17 @@ public class NativePackageVerifierTest {
         }
 
         public static void main(String[] args) throws Exception {
+            Path marker = Path.of(args[0]);
+            Path pendingMarker = marker.resolveSibling(marker.getFileName() + ".pending");
             Files.writeString(
-                    Path.of(args[0]),
+                    pendingMarker,
                     Long.toString(ProcessHandle.current().pid()),
                     StandardOpenOption.CREATE_NEW);
+            try {
+                Files.move(pendingMarker, marker, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(pendingMarker, marker);
+            }
             Thread.sleep(TimeUnit.MINUTES.toMillis(1));
         }
     }
