@@ -895,6 +895,44 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void sgbRasterHorizonReuseMatchesScalarAtRasterPhasesAndBudgets()
+            throws Exception {
+        int[] budgets = {1, 3, 7, 17, 54};
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            for (SgbRasterPhase phase : SgbRasterPhase.values()) {
+                for (int budget : budgets) {
+                    try (Gameboy scalar = sgbSession(
+                            dmgRomWramLoop(), profile, PlayerInputSnapshot::released);
+                         Gameboy candidate = sgbSession(
+                                 dmgRomWramLoop(), profile, PlayerInputSource.RELEASED)) {
+                        scalar.getGpu().setPerformanceScanlineEnabled(true);
+                        candidate.getGpu().setPerformanceScanlineEnabled(true);
+                        advanceSgbPairToRasterPhase(scalar, candidate, phase);
+                        int rasterHorizon = candidate.getGpu()
+                                .performancePhysicalDmgEpochSpanLimit(54);
+                        assertTrue(profile.id() + " " + phase + " has no raster horizon",
+                                rasterHorizon > 0);
+                        assertEquals(profile.id() + " " + phase + " horizon budget " + budget,
+                                Math.min(budget, rasterHorizon),
+                                candidate.getGpu().performancePhysicalDmgEpochSpanLimit(budget));
+
+                        assertEquals(profile.id() + " " + phase + " frame callbacks " + budget,
+                                runScalarTicks(scalar, budget), candidate.runTicks(budget));
+                        assertDeepStateEquals(profile.id() + " " + phase + " budget " + budget,
+                                scalar.captureStateWithoutTimeSource(),
+                                candidate.captureStateWithoutTimeSource());
+                        if (budget == 54) {
+                            assertTrue(profile.id() + " " + phase + " did not use an SGB epoch",
+                                    candidate.getPerformanceEpochTicks() > 0L);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     public void sgbProfilesMultiplayerQuietIntervalMatchesScalarAroundMltReq()
             throws Exception {
         byte[] image = dmgRomWramLoop();
@@ -970,6 +1008,47 @@ public final class GameboyPerformanceEpochTest {
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
         }
+    }
+
+    private enum SgbRasterPhase {
+        DIRECT,
+        HBLANK,
+        VBLANK
+    }
+
+    private static void advanceSgbPairToRasterPhase(
+            Gameboy scalar, Gameboy candidate, SgbRasterPhase phase) {
+        int guard = 0;
+        while (!isSgbRasterPhase(candidate, phase) && guard++ < 456 * 160) {
+            assertEquals("SGB " + phase + " setup frame callback",
+                    scalar.tick(), candidate.tick());
+        }
+        assertTrue("SGB setup did not reach " + phase, guard < 456 * 160);
+        assertDeepStateEquals("SGB " + phase + " setup",
+                scalar.captureStateWithoutTimeSource(),
+                candidate.captureStateWithoutTimeSource());
+    }
+
+    private static boolean isSgbRasterPhase(Gameboy gameboy, SgbRasterPhase phase) {
+        if (gameboy.getGpu().performancePhysicalDmgEpochSpanLimit(1) <= 0) {
+            return false;
+        }
+        return switch (phase) {
+            case DIRECT -> gameboy.getGpu().getMode() == Mode.PixelTransfer
+                    && gameboy.getGpu().isPerformanceScanlineCursorActive();
+            case HBLANK -> gameboy.getGpu().getMode() == Mode.HBlank;
+            case VBLANK -> gameboy.getGpu().getMode() == Mode.VBlank;
+        };
+    }
+
+    private static int runScalarTicks(Gameboy gameboy, int ticks) {
+        int frames = 0;
+        for (int i = 0; i < ticks; i++) {
+            if (gameboy.tick()) {
+                frames++;
+            }
+        }
+        return frames;
     }
 
     @Test

@@ -1774,14 +1774,25 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int requested = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
-        if (gpu.performancePhysicalDmgEpochSpanLimit(requested) <= 0) {
+        int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
+        if (rasterSpan <= 0) {
             return 0;
         }
-        return tryFixedNormalSpeedPerformanceEpoch(remaining);
+        return tryFixedNormalSpeedPerformanceEpoch(remaining, rasterSpan);
     }
 
     /** Fixed-width normal-speed epoch implementation shared by SGB and CGB hardware. */
     private int tryFixedNormalSpeedPerformanceEpoch(long remaining) {
+        return tryFixedNormalSpeedPerformanceEpoch(remaining, 0);
+    }
+
+    /**
+     * Fixed-width normal-speed epoch preflight with an optional already-proven SGB raster span.
+     * The SGB caller queries its pure raster horizon before this preflight; the other component
+     * horizons can only shorten {@code span}, so re-querying the same GPU state is redundant.
+     */
+    private int tryFixedNormalSpeedPerformanceEpoch(
+            long remaining, int precomputedSgbRasterSpan) {
         boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
@@ -1839,13 +1850,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 ppuPlan = PerformanceEpochPpuPlan.MODE2_BULK;
             }
         } else {
-            int rasterSpan = cgbHardware
-                    ? gpu.performanceEpochSpanLimit(span)
-                    : gpu.performancePhysicalDmgEpochSpanLimit(span);
-            if (rasterSpan <= 0) {
+            if (sgb && precomputedSgbRasterSpan > 0) {
+                span = Math.min(span, precomputedSgbRasterSpan);
+            } else {
+                int rasterSpan = cgbHardware
+                        ? gpu.performanceEpochSpanLimit(span)
+                        : gpu.performancePhysicalDmgEpochSpanLimit(span);
+                if (rasterSpan <= 0) {
+                    return 0;
+                }
+                span = Math.min(span, rasterSpan);
+            }
+            if (span <= 0) {
                 return 0;
             }
-            span = Math.min(span, rasterSpan);
             ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         }
         span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
