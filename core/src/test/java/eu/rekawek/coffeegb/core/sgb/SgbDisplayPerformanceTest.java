@@ -36,6 +36,7 @@ public class SgbDisplayPerformanceTest {
                     new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
             assertNull(privateField("borderedBase").get(display));
             assertNull(privateField("centerBase").get(display));
+            assertNull(privateField("borderFadeCache").get(display));
             assertNull(privateField("renderLeasePool").get(display));
         } finally {
             eventBus.close();
@@ -43,7 +44,7 @@ public class SgbDisplayPerformanceTest {
     }
 
     @Test
-    public void reusesPrimaryGeometryBuffersForStableGeometry() throws IOException {
+    public void reusesPrimaryGeometryBuffersForStableGeometry() throws Exception {
         EventBusImpl eventBus = new EventBusImpl(null, "sgb-render", false);
         SgbDisplay display = new SgbDisplay(testRom(), eventBus, true, false);
         display.init(eventBus);
@@ -55,10 +56,121 @@ public class SgbDisplayPerformanceTest {
             int[] first = frame.get();
             eventBus.post(new Display.DmgFrameReadyEvent(dmg));
 
+            assertEquals(0x8000, ((int[]) privateField("borderFadeCache").get(display)).length);
             assertSame(first, frame.get());
             assertEquals(Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT, first.length);
         } finally {
             eventBus.close();
+        }
+    }
+
+    @Test
+    public void exhaustiveRgb555FadeCacheMatchesScalarForBothGeometries() throws IOException {
+        EventBusImpl eventBus = new EventBusImpl(null, "sgb-fade-cache", false);
+        EventBusImpl sgbBus = new EventBusImpl(null, "sgb-fade-cache-commands", false);
+        SgbDisplay display = new SgbDisplay(testRom(), sgbBus, true, true);
+        display.init(eventBus);
+        AtomicReference<int[]> rendered = new AtomicReference<>();
+        eventBus.register(event -> rendered.set(event.buffer().clone()),
+                SgbDisplay.SgbFrameReadyEvent.class);
+        int[] mask = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        Arrays.fill(mask, 1);
+        int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+        try {
+            int[] allColors = new int[mask.length];
+            for (int i = 0; i < allColors.length; i++) {
+                int color = i & 0x7fff;
+                allColors[i] = color | ((i & 1) == 0 ? 0x80000000 : 0x40000000);
+            }
+            eventBus.post(new Background.SgbBackgroundReadyEvent(allColors, mask));
+            for (int fade : new int[]{0, 1, 7, 30, 31, 32}) {
+                eventBus.post(new Background.SgbBackgroundFadeEvent(fade));
+                eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+                assertFadedBorderMatches(rendered.get(), allColors, fade, true);
+            }
+            for (int fade : new int[]{-1, 33}) {
+                eventBus.post(new Background.SgbBackgroundFadeEvent(fade));
+                eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+                assertFadedBorderMatches(rendered.get(), allColors, fade, true);
+            }
+
+            eventBus.post(new SgbDisplay.SetSgbBorder(false));
+            for (int slice = 0; slice < 2; slice++) {
+                int[] centerColors = new int[mask.length];
+                for (int y = 40; y < 40 + Display.DISPLAY_HEIGHT; y++) {
+                    for (int x = 48; x < 48 + Display.DISPLAY_WIDTH; x++) {
+                        int color = slice * Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT
+                                + (x - 48) + (y - 40) * Display.DISPLAY_WIDTH;
+                        color &= 0x7fff;
+                        centerColors[x + y * SGB_DISPLAY_WIDTH] = color
+                                | ((color & 1) == 0 ? 0x80000000 : 0x40000000);
+                    }
+                }
+                eventBus.post(new Background.SgbBackgroundReadyEvent(centerColors, mask));
+                for (int fade : new int[]{0, 1, 7, 30, 31, 32}) {
+                    eventBus.post(new Background.SgbBackgroundFadeEvent(fade));
+                    eventBus.post(new Display.DmgFrameReadyEvent(dmg));
+                    assertFadedBorderMatches(rendered.get(), centerColors, fade, false);
+                }
+            }
+        } finally {
+            eventBus.close();
+            sgbBus.close();
+        }
+    }
+
+    @Test
+    public void fadeCacheSurvivesRestoreAndNestedBorrowedPublication() throws Exception {
+        EventBusImpl eventBus = new EventBusImpl(null, "sgb-fade-cache-restore", false);
+        EventBusImpl sgbBus = new EventBusImpl(null, "sgb-fade-cache-restore-commands", false);
+        SgbDisplay display = new SgbDisplay(testRom(), sgbBus, true, true);
+        display.init(eventBus);
+        AtomicReference<int[]> rendered = new AtomicReference<>();
+        AtomicReference<int[]> nested = new AtomicReference<>();
+        AtomicReference<int[]> outerSnapshot = new AtomicReference<>();
+        AtomicBoolean insideOuter = new AtomicBoolean();
+        AtomicBoolean nestedOnce = new AtomicBoolean();
+        eventBus.register(event -> {
+            if (insideOuter.get()) {
+                nested.set(event.buffer().clone());
+                return;
+            }
+            rendered.set(event.buffer().clone());
+            if (nestedOnce.compareAndSet(false, true)) {
+                outerSnapshot.set(event.buffer().clone());
+                insideOuter.set(true);
+                eventBus.post(new Display.DmgFrameReadyEvent(
+                        new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+                insideOuter.set(false);
+                assertArrayEquals(outerSnapshot.get(), event.buffer());
+            }
+        }, SgbDisplay.SgbFrameReadyEvent.class);
+        int[] border = new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT];
+        int[] mask = new int[border.length];
+        Arrays.fill(border, 0x7fff | 0x80000000);
+        Arrays.fill(mask, 1);
+        try {
+            eventBus.post(new Background.SgbBackgroundReadyEvent(border, mask));
+            eventBus.post(new Background.SgbBackgroundFadeEvent(7));
+            eventBus.post(new Display.DmgFrameReadyEvent(
+                    new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+            int[] cache = (int[]) privateField("borderFadeCache").get(display);
+            int[] cacheSnapshot = cache.clone();
+            var state = display.captureState();
+
+            eventBus.post(new Background.SgbBackgroundFadeEvent(31));
+            display.restoreState(state);
+            eventBus.post(new Display.DmgFrameReadyEvent(
+                    new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+
+            assertSame(cache, privateField("borderFadeCache").get(display));
+            assertTrue(nested.get() != null);
+            assertArrayEquals(cacheSnapshot, cache);
+            assertEquals(Display.GbcFrameReadyEvent.translateGbcRgb(scalarFade(0x7fff, 7)),
+                    rendered.get()[0]);
+        } finally {
+            eventBus.close();
+            sgbBus.close();
         }
     }
 
@@ -347,6 +459,31 @@ public class SgbDisplayPerformanceTest {
             }
         }
         return result;
+    }
+
+    private static void assertFadedBorderMatches(int[] actual, int[] source, int fade,
+                                                 boolean includeBorder) {
+        int width = includeBorder ? SGB_DISPLAY_WIDTH : Display.DISPLAY_WIDTH;
+        int height = includeBorder ? SGB_DISPLAY_HEIGHT : Display.DISPLAY_HEIGHT;
+        int offsetX = includeBorder ? 0 : 48;
+        int offsetY = includeBorder ? 0 : 40;
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int sourceIndex = (x + offsetX) + (y + offsetY) * SGB_DISPLAY_WIDTH;
+                int expected = Display.GbcFrameReadyEvent.translateGbcRgb(
+                        scalarFade(source[sourceIndex], fade));
+                assertEquals("pixel " + x + "," + y + " fade=" + fade
+                                + " includeBorder=" + includeBorder,
+                        expected, actual[x + y * width]);
+            }
+        }
+    }
+
+    private static int scalarFade(int color, int fade) {
+        int red = Math.max(0, (color & 0x1f) - fade);
+        int green = Math.max(0, ((color >> 5) & 0x1f) - fade);
+        int blue = Math.max(0, ((color >> 10) & 0x1f) - fade);
+        return red | (green << 5) | (blue << 10);
     }
 
     private static void setLittleEndian16(int[] target, int offset, int value) {
