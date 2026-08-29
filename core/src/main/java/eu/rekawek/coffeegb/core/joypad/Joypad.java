@@ -314,6 +314,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             return Math.min(Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN),
                     (int) Math.max(0, distance - 1));
         }
+        if (isSgb && players > 0) {
+            return Math.min(requested, PERFORMANCE_MAX_QUIET_SPAN);
+        }
         return 0;
     }
 
@@ -337,6 +340,9 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 distance = PLAYER_INPUT_HUB_POLL_TICKS;
             }
             return (int) Math.min((long) requested, Math.max(0, distance - 1));
+        }
+        if (isSgb && players > 0) {
+            return requested;
         }
         return 0;
     }
@@ -431,14 +437,12 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
             }
         }
         if (!isJoypadClockRising()) {
-            refreshReleasedInputFastPathEligibility();
-            refreshPlayerInputHubFastPathEligibility(inputLines);
+            refreshInputFastPathEligibility(inputLines);
             return;
         }
         if (inputHistory == SETTLED_HISTORY[inputLines]
                 && filteredInputLines == inputLines) {
-            refreshReleasedInputFastPathEligibility();
-            refreshPlayerInputHubFastPathEligibility(inputLines);
+            refreshInputFastPathEligibility(inputLines);
             return;
         }
         boolean oldInterruptLine = joypadInterruptLine(inputHistory);
@@ -462,8 +466,7 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
         if (!oldInterruptLine && interruptLine) {
             interruptManager.requestInterrupt(InterruptManager.InterruptType.P10_13);
         }
-        refreshReleasedInputFastPathEligibility();
-        refreshPlayerInputHubFastPathEligibility(inputLines);
+        refreshInputFastPathEligibility(inputLines);
     }
 
     private boolean isJoypadClockRising() {
@@ -548,6 +551,26 @@ public class Joypad implements AddressSpace, StatefulComponent<Joypad> {
                 && buttons.isEmpty()
                 && inputTimelineObserver == null
                 && debugHooks == null;
+    }
+
+    private void refreshInputFastPathEligibility(int inputLines) {
+        refreshReleasedInputFastPathEligibility();
+        refreshPlayerInputHubFastPathEligibility(inputLines);
+        refreshSgbPerformanceSpanFastPathEligibility(inputLines);
+    }
+
+    private void refreshSgbPerformanceSpanFastPathEligibility(int inputLines) {
+        if (!isSgb || players == 0) {
+            return;
+        }
+        performanceSpanFastPathEligible = playerInputSource == PlayerInputSource.RELEASED
+                && sampledInput == PlayerInputSnapshot.RELEASED
+                && !inputChangedSinceLastTick
+                && buttons.isEmpty()
+                && debugHooks == null
+                && inputTimelineObserver == null
+                && inputHistory == SETTLED_HISTORY[inputLines]
+                && filteredInputLines == inputLines;
     }
 
     private static int[] createSettledHistory() {
