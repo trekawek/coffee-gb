@@ -12,6 +12,27 @@ import static org.junit.Assert.assertTrue;
 public class SerialPortTest {
 
     @Test
+    public void transferRoleQueriesUseRawScControlBits() {
+        SerialPort serialPort = new SerialPort(
+                new InterruptManager(false), false, new SpeedMode(false));
+
+        assertFalse(serialPort.isInternalClockTransferActive());
+        assertFalse(serialPort.isExternalClockTransferActive());
+
+        serialPort.setByte(0xff02, 0x81);
+        assertTrue(serialPort.isInternalClockTransferActive());
+        assertFalse(serialPort.isExternalClockTransferActive());
+
+        serialPort.setByte(0xff02, 0x80);
+        assertFalse(serialPort.isInternalClockTransferActive());
+        assertTrue(serialPort.isExternalClockTransferActive());
+
+        serialPort.setByte(0xff02, 0x01);
+        assertFalse(serialPort.isInternalClockTransferActive());
+        assertFalse(serialPort.isExternalClockTransferActive());
+    }
+
+    @Test
     public void dmgCompatibilityUsesDmgScReadMask() {
         SpeedMode speedMode = new SpeedMode(true);
         InterruptManager interruptManager = new InterruptManager(true);

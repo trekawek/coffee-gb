@@ -62,6 +62,27 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         this.serialEndpoint = serialEndpoint;
     }
 
+    /** True when the raw SC register has armed a transfer using this port's clock. */
+    public boolean isInternalClockTransferActive() {
+        return (sc & 0x81) == 0x81;
+    }
+
+    /** True when the raw SC register has armed a transfer waiting for the peer's clock. */
+    public boolean isExternalClockTransferActive() {
+        return (sc & 0x81) == 0x80;
+    }
+
+    /** Allocation-free scalar comparison for the owning Gameboy's link timing check. */
+    public boolean hasSameTimingState(SerialPort other) {
+        return other != null
+                && sb == other.sb
+                && sc == other.sc
+                && serialClocks == other.serialClocks
+                && serialClockSignal == other.serialClockSignal
+                && receivedBits == other.receivedBits
+                && haltWakeDelay == other.haltWakeDelay;
+    }
+
     public void tick() {
         // Link-port peripherals such as GPS receivers have their own wall clock and keep
         // driving the input pin even when no hardware serial transfer is armed. A built-in

@@ -74,6 +74,7 @@ public final class CartridgeProperties {
         SUPER_FIGHTERS_S_LIVE_PATCH,
         // Append new features: Feature ordinals are part of the StateFile v1 identity.
         JANTAKU_BOY_FOUR_PLAYER_PATCH,
+        // Reserved obsolete identities retained for StateFile v1 ordinal compatibility.
         REVENGE_GATOR_LINK_ROLE_PATCH,
         SHIKINJOU_LINK_ROLE_PATCH,
         VOLLEY_FIRE_LINK_ROLE_PATCH,
@@ -211,21 +212,6 @@ public final class CartridgeProperties {
             features("Jantaku Boy four-player transition workaround",
                     CartridgeProperties::isJantakuBoyFourPlayer,
                     Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH),
-            features("Revenge of the Gator deterministic link roles",
-                    CartridgeProperties::isRevengeGatorLinkRole,
-                    Feature.REVENGE_GATOR_LINK_ROLE_PATCH),
-            features("Shikinjou deterministic link roles",
-                    CartridgeProperties::isShikinjouLinkRole,
-                    Feature.SHIKINJOU_LINK_ROLE_PATCH),
-            features("Volley Fire deterministic link roles",
-                    CartridgeProperties::isVolleyFireLinkRole,
-                    Feature.VOLLEY_FIRE_LINK_ROLE_PATCH),
-            features("Harvest Moon GB deterministic link roles",
-                    CartridgeProperties::isHarvestMoonLinkRole,
-                    Feature.HARVEST_MOON_LINK_ROLE_PATCH),
-            features("Ikari no Yousai 2 deterministic link roles",
-                    CartridgeProperties::isIkariYousai2LinkRole,
-                    Feature.IKARI_YOUSAI_2_LINK_ROLE_PATCH),
             features("MBC1 multicart", CartridgeProperties::isMbc1Multicart,
                     Feature.MBC1_MULTICART),
             features("Hong Kong Pokemon Red", CartridgeProperties::isHongKongPokemonRed,
@@ -850,122 +836,6 @@ public final class CartridgeProperties {
                 && info.byteAt(0x0148) == 0x02
                 && info.byteAt(0x0149) == 0x00
                 && matches(info.data, 0x0395, fourPlayerWait);
-    }
-
-    private static boolean isRevengeGatorLinkRole(RomInfo info) {
-        int[] linkRoleNegotiation = {
-                0x3e, 0x81, 0xe0, 0xc9, 0xcd, 0x7a, 0x02, 0x21,
-                0x88, 0x77, 0x3e, 0x0a, 0xcd, 0xac, 0x02, 0x30,
-                0x30, 0x21, 0x88, 0x77, 0x11, 0x5a, 0xa5, 0x18,
-                0x17, 0x3e, 0x41, 0xe0, 0xc9, 0xcd, 0x7a, 0x02,
-                0x21, 0x77, 0x88, 0x3e, 0x0a, 0xcd, 0xac, 0x02
-        };
-        return info.data.length == 0x10000
-                && "PINBALL".equals(info.title())
-                && info.byteAt(0x0100) == 0x00
-                && info.byteAt(0x0101) == 0xc3
-                && info.byteAt(0x0102) == 0x50
-                && info.byteAt(0x0103) == 0x01
-                && info.byteAt(0x0143) == 0x00
-                && info.byteAt(0x0146) == 0x00
-                && info.rawType() == 0x01
-                && info.byteAt(0x0148) == 0x01
-                && info.byteAt(0x0149) == 0x00
-                && matches(info.data, 0x0214, linkRoleNegotiation);
-    }
-
-    private static boolean isShikinjouLinkRole(RomInfo info) {
-        int[] linkRoleNegotiation = {
-                0xc5, 0x3e, 0x01, 0xe0, 0x90, 0x3e, 0x54, 0xea,
-                0xa1, 0xc0, 0xe0, 0x95, 0x3e, 0x01, 0xe0, 0x91,
-                0xcd, 0x2e, 0x23, 0xcd, 0x4e, 0x23, 0xf0, 0x92,
-                0xa7, 0x20, 0xfb, 0xfa, 0xa4, 0xc0, 0xfe, 0xff,
-                0x28, 0x44, 0xfe, 0xaa, 0x20, 0x07, 0x3e, 0x01,
-                0xcd, 0xed, 0x23, 0x18, 0x2e, 0x3e, 0xaa, 0xea,
-                0xa1, 0xc0, 0xe0, 0x95, 0xaf, 0xe0, 0x91, 0xea,
-                0xa4, 0xc0
-        };
-        return info.data.length == 0x10000
-                && "SHIKINJYO".equals(info.title())
-                && info.byteAt(0x0100) == 0x00
-                && info.byteAt(0x0101) == 0xc3
-                && info.byteAt(0x0102) == 0x50
-                && info.byteAt(0x0103) == 0x01
-                && info.byteAt(0x0143) == 0x00
-                && info.byteAt(0x0146) == 0x00
-                && info.rawType() == 0x01
-                && info.byteAt(0x0148) == 0x01
-                && info.byteAt(0x0149) == 0x00
-                && matches(info.data, 0x22c6, linkRoleNegotiation);
-    }
-
-    private static boolean isVolleyFireLinkRole(RomInfo info) {
-        int[] linkRoleNegotiation = {
-                0xf0, 0x9c, 0xfe, 0x01, 0x20, 0x17, 0xf0, 0x9d,
-                0xb7, 0x28, 0x0e, 0xcd, 0x96, 0x0e, 0x28, 0x09,
-                0xf1, 0x3e, 0x80, 0x1e, 0x00, 0xc7, 0xc3, 0x43,
-                0x21, 0x3e, 0x01, 0xe0, 0x9d
-        };
-        return info.data.length == 0x8000
-                && "VOLLEY FIRE".equals(info.title())
-                && info.byteAt(0x0100) == 0x00
-                && info.byteAt(0x0101) == 0xc3
-                && info.byteAt(0x0102) == 0x50
-                && info.byteAt(0x0103) == 0x01
-                && info.byteAt(0x0143) == 0x00
-                && info.byteAt(0x0146) == 0x00
-                && info.rawType() == 0x00
-                && info.byteAt(0x0148) == 0x00
-                && info.byteAt(0x0149) == 0x00
-                && matches(info.data, 0x227e, linkRoleNegotiation);
-    }
-
-    private static boolean isHarvestMoonLinkRole(RomInfo info) {
-        int[] linkRoleNegotiation = {
-                0x06, 0x80, 0x21, 0x06, 0xd6, 0x3e, 0x5e, 0xe0,
-                0x01, 0x77, 0x78, 0xe0, 0x02, 0xc9, 0xaf, 0xe0,
-                0x01, 0xea, 0x06, 0xd6, 0xea, 0x01, 0xd6, 0xc9,
-                0x3e, 0xfe, 0xe0, 0x01, 0x3e, 0x81, 0xe0, 0x02,
-                0xc9
-        };
-        return info.data.length == 0x80000
-                && "HARVEST-MOON GB".equals(info.title())
-                && info.byteAt(0x0100) == 0x00
-                && info.byteAt(0x0101) == 0xc3
-                && info.byteAt(0x0102) == 0x50
-                && info.byteAt(0x0103) == 0x01
-                && info.byteAt(0x0143) == 0x00
-                && info.byteAt(0x0146) == 0x03
-                && info.rawType() == 0x03
-                && info.byteAt(0x0148) == 0x04
-                && info.byteAt(0x0149) == 0x02
-                && matches(info.data, 0x7e750, linkRoleNegotiation);
-    }
-
-    private static boolean isIkariYousai2LinkRole(RomInfo info) {
-        int[] linkRoleNegotiation = {
-                0x7e, 0xcb, 0x47, 0x28, 0x08, 0xf0, 0x01, 0xfe,
-                0x25, 0x28, 0x0c, 0x18, 0x13, 0xcb, 0x7f, 0x20,
-                0x0f, 0xf0, 0x01, 0xfe, 0x4a, 0x20, 0x09, 0x7e,
-                0xe6, 0x01, 0xe0, 0xd2, 0xaf, 0xe0, 0x01, 0xc9,
-                0x3e, 0xff, 0xe0, 0xd2, 0xcb, 0xbe, 0xf0, 0xd4,
-                0x3c, 0xe0, 0xd4, 0xe6, 0x03, 0x20, 0x0c, 0xf0,
-                0x04, 0xcb, 0x47, 0x20, 0x06, 0x36, 0x00, 0x3e,
-                0x25, 0x18, 0x04, 0x36, 0x01, 0x3e, 0x4a, 0xe0,
-                0x01, 0xcb, 0xfe, 0xc9
-        };
-        return info.data.length == 0x20000
-                && "FORTIFIED ZONE2".equals(info.title())
-                && info.byteAt(0x0100) == 0x00
-                && info.byteAt(0x0101) == 0xc3
-                && info.byteAt(0x0102) == 0x50
-                && info.byteAt(0x0103) == 0x01
-                && info.byteAt(0x0143) == 0x00
-                && info.byteAt(0x0146) == 0x00
-                && info.rawType() == 0x01
-                && info.byteAt(0x0148) == 0x02
-                && info.byteAt(0x0149) == 0x00
-                && matches(info.data, 0x08ca, linkRoleNegotiation);
     }
 
     private static boolean isMbc1Multicart(RomInfo info) {

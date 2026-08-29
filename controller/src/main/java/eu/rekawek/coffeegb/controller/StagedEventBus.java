@@ -1,9 +1,12 @@
 package eu.rekawek.coffeegb.controller;
 
+import eu.rekawek.coffeegb.controller.events.SuppressibleEventFunnel;
 import eu.rekawek.coffeegb.core.events.Event;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.events.Subscriber;
 import eu.rekawek.coffeegb.core.events.SynchronousBorrowedEvent;
+import kotlin.jvm.functions.Function0;
+import kotlin.reflect.KClass;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -20,7 +24,7 @@ import java.util.concurrent.TimeUnit;
  * so lifecycle and input events for the old session cannot mutate the candidate. Candidate-origin
  * events are retained in a small bounded queue and published only after activation.
  */
-final class StagedEventBus implements EventBus {
+final class StagedEventBus implements SuppressibleEventFunnel {
 
     private static final Logger LOG = LoggerFactory.getLogger(StagedEventBus.class);
     private static final int MAX_STAGED_POSTS = 256;
@@ -137,6 +141,23 @@ final class StagedEventBus implements EventBus {
             }
             return delegate.fork(callerId);
         }
+    }
+
+    @Override
+    public <T> T suppressForwarding(
+            Set<? extends KClass<? extends Event>> eventTypes,
+            Function0<? extends T> action) {
+        synchronized (lock) {
+            ensureOpen();
+            if (state != State.ACTIVE) {
+                throw new IllegalStateException(
+                        "A staged session cannot suppress forwarding before activation");
+            }
+        }
+        if (delegate instanceof SuppressibleEventFunnel suppressible) {
+            return suppressible.suppressForwarding(eventTypes, action);
+        }
+        return action.invoke();
     }
 
     @Override

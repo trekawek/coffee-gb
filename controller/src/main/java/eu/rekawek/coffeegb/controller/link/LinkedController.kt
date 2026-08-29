@@ -1138,9 +1138,7 @@ class LinkedController(
           !timingTicker.disabled && timingTicker.hasPacingDebt,
       )
     }
-    repeat(clockSpec.controllerTicksPerFrame()) {
-      sessions.forEach { it?.gameboy?.tick() }
-    }
+    LinkedFrameStepper.advanceFrame(mode, sessions, clockSpec)
     timingTicker.runFrame(clockSpec)
 
     frame++

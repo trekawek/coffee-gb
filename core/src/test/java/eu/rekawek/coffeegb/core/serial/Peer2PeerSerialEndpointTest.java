@@ -23,4 +23,22 @@ public class Peer2PeerSerialEndpointTest {
         assertEquals(0, first.linkPlayerIndex());
         assertEquals(1, second.linkPlayerIndex());
     }
+
+    @Test
+    public void transferStateComparisonTracksOnlyBitProducingState() {
+        Peer2PeerSerialEndpoint first = new Peer2PeerSerialEndpoint();
+        Peer2PeerSerialEndpoint second = new Peer2PeerSerialEndpoint();
+        first.init(second);
+
+        assertTrue(first.hasSameTransferState(second));
+        assertFalse(first.hasSameTransferState(null));
+
+        first.setSb(0x5a);
+        assertFalse(first.hasSameTransferState(second));
+        second.setSb(0x5a);
+        assertTrue(first.hasSameTransferState(second));
+
+        first.sendBit();
+        assertFalse(first.hasSameTransferState(second));
+    }
 }
