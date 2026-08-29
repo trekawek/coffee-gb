@@ -3005,6 +3005,54 @@ public class Cpu implements StatefulComponent<Cpu> {
         return registers;
     }
 
+    /**
+     * Compares the complete scalar execution cursor and architectural registers used by the
+     * owner-level link timing check. This deliberately observes the live fields directly: the
+     * portable CPU state owns an operand array, whose ordinary record equality is referential.
+     */
+    public boolean hasSameExecutionPhase(Cpu other) {
+        if (other == null) {
+            return false;
+        }
+        Registers a = registers;
+        Registers b = other.registers;
+        return a.getAF() == b.getAF()
+                && a.getBC() == b.getBC()
+                && a.getDE() == b.getDE()
+                && a.getHL() == b.getHL()
+                && a.getSP() == b.getSP()
+                && a.getPC() == b.getPC()
+                && opcode1 == other.opcode1
+                && opcode2 == other.opcode2
+                && operand[0] == other.operand[0]
+                && operand[1] == other.operand[1]
+                && operandIndex == other.operandIndex
+                && opIndex == other.opIndex
+                && state == other.state
+                && opContext == other.opContext
+                && interruptFlag == other.interruptFlag
+                && interruptEnabled == other.interruptEnabled
+                && requestedIrq == other.requestedIrq
+                && clockCycle == other.clockCycle
+                && haltBugMode == other.haltBugMode
+                && haltEntrySampleTicks == other.haltEntrySampleTicks
+                && synchronousHaltEntryStatPhase == other.synchronousHaltEntryStatPhase
+                && asynchronousHaltEntryStatPhase == other.asynchronousHaltEntryStatPhase
+                && ordinaryHaltWakeStatPhase == other.ordinaryHaltWakeStatPhase
+                && haltedCpuCycles == other.haltedCpuCycles
+                && hdmaOpcodePrefetched == other.hdmaOpcodePrefetched
+                && hdmaArbitrationOpcode == other.hdmaArbitrationOpcode
+                && hdmaArbitrationOpcodeValid == other.hdmaArbitrationOpcodeValid
+                && haltPrefetchedOpcode == other.haltPrefetchedOpcode
+                && haltOpcodePrefetchValid == other.haltOpcodePrefetchValid
+                && speedSwitchPaddingOpcode == other.speedSwitchPaddingOpcode
+                && speedSwitchPaddingReplayValid == other.speedSwitchPaddingReplayValid
+                && speedSwitchTicks == other.speedSwitchTicks
+                && phasedPpuInputHigh == other.phasedPpuInputHigh
+                && fastPhasedPpuDispatch == other.fastPhasedPpuDispatch
+                && stopFrameBlankRequested == other.stopFrameBlankRequested;
+    }
+
     void clearState() {
         opcode1 = 0;
         opcode2 = 0;

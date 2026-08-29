@@ -38,6 +38,14 @@ public class Peer2PeerSerialEndpoint implements SerialEndpoint, StatefulComponen
         return peer != null;
     }
 
+    /** Allocation-free comparison of the endpoint fields that affect the next linked bit. */
+    public boolean hasSameTransferState(Peer2PeerSerialEndpoint other) {
+        return other != null
+                && sb == other.sb
+                && bitsReceived.get() == other.bitsReceived.get()
+                && bitIndex == other.bitIndex;
+    }
+
     /** An unconnected cable is stably high and has no peer work; a connected cable stays scalar. */
     @Override
     public int performanceQuietSpanLimit(int requested) {

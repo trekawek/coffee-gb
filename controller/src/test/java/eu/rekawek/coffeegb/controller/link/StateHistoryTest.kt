@@ -12,10 +12,83 @@ import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Test
 
 class StateHistoryTest {
+
+  @Test
+  fun replayResolvesMirroredSerialRolesWithTheSameDeterministicPhaseEscape() {
+    fun replay(): Pair<List<Gameboy.GameboyConfiguration>, StateHistory.State> {
+      val configs = List(2) { StateCodecTestSupport.configuration() }
+      val links = StateHistory.createLinks(LinkMode.NORMAL)
+      val sessions =
+          configs.mapIndexed { player, config ->
+            Session(
+                config,
+                EventBusImpl(null, null, false),
+                null,
+                links.serial[player],
+                links.infrared[player],
+            )
+          }
+      val baseStates =
+          try {
+            sessions.forEach { session ->
+              session.gameboy.addressSpace.setByte(0xff01, 0x5a)
+              session.gameboy.addressSpace.setByte(0xff02, 0x81)
+            }
+            sessions.map(Session::captureDetachedState)
+          } finally {
+            sessions.reversed().forEach(Session::close)
+          }
+
+      val noInput = Input(emptyList(), emptyList())
+      val history = StateHistory(LinkMode.NORMAL)
+      history.addState(
+          0,
+          listOf(noInput, noInput),
+          baseStates,
+          listOf(emptySet(), emptySet()),
+      )
+      history.addSecondaryInput(0, 0, noInput)
+      assertTrue(history.merge(configs))
+      return configs to history.getHead()
+    }
+
+    val (configs, firstReplay) = replay()
+    val (_, secondReplay) = replay()
+    assertEquals(firstReplay, secondReplay, "rollback replay must reproduce the phase escape")
+
+    val replayStates = firstReplay.sessionStates.map(::assertNotNull)
+    val links = StateHistory.createLinks(LinkMode.NORMAL)
+    val sessions =
+        configs.mapIndexed { player, config ->
+          Session(
+              config.forRestore(),
+              EventBusImpl(null, null, false),
+              null,
+              links.serial[player],
+              links.infrared[player],
+          )
+        }
+    try {
+      sessions.forEachIndexed { player, session ->
+        session.restoreDetachedState(replayStates[player])
+      }
+      val firstDivider =
+          sessions[0].gameboy.captureDebugSnapshot(0, 0, 0, 0, 0, false).timer.dividerCounter
+      val secondDivider =
+          sessions[1].gameboy.captureDebugSnapshot(0, 0, 0, 0, 0, false).timer.dividerCounter
+      assertEquals(
+          (13 * sessions[0].gameboy.clockSpec.controllerTicksPerFrame()) and 0xffff,
+          (secondDivider - firstDivider) and 0xffff,
+      )
+    } finally {
+      sessions.reversed().forEach(Session::close)
+    }
+  }
 
   @Test
   fun laterEarlierPlayerPacketCanRebaseFromRetainedHistory() {

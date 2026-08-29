@@ -34,16 +34,6 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private final boolean clocked;
 
-    private boolean revengeGatorSecondaryLinkRole;
-
-    private boolean shikinjouSecondaryLinkRole;
-
-    private boolean volleyFireSecondaryLinkRole;
-
-    private boolean harvestMoonSecondaryLinkRole;
-
-    private boolean ikariYousai2SecondaryLinkRole;
-
     public Cartridge(Rom rom, boolean supportBatterySaves) {
         this(rom, supportBatterySaves && canPersist(rom, null)
                         ? createBattery(rom, null) : Battery.NULL_BATTERY,
@@ -189,88 +179,41 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     @Override
     public int getByte(int address) {
-        if (revengeGatorSecondaryLinkRole) {
-            if (address == 0x0214) {
-                return 0x18;
-            }
-            if (address == 0x0215) {
-                return 0x17;
-            }
-        }
-        if (shikinjouSecondaryLinkRole) {
-            if (address == 0x22cb) {
-                return 0xc3;
-            }
-            if (address == 0x22cc) {
-                return 0xf3;
-            }
-            if (address == 0x22cd) {
-                return 0x22;
-            }
-        }
-        if (volleyFireSecondaryLinkRole) {
-            if (address == 0x2289) {
-                return 0xf1;
-            }
-            if (address == 0x228a) {
-                return 0xc3;
-            }
-            if (address == 0x228b) {
-                return 0x43;
-            }
-            if (address == 0x228c) {
-                return 0x21;
-            }
-        }
-        if (harvestMoonSecondaryLinkRole && address == 0x6768
-                && isHarvestMoonLinkTimeoutMapped()) {
-            return 0xc9;
-        }
-        if (ikariYousai2SecondaryLinkRole && (address == 0x08fd || address == 0x08fe)) {
-            return 0x00;
-        }
         return addressSpace.getByte(address);
     }
 
-    private boolean isHarvestMoonLinkTimeoutMapped() {
-        int[] timeoutRoutine = {0x3e, 0xfe, 0xe0, 0x01, 0x3e, 0x81, 0xe0, 0x02, 0xc9};
-        for (int i = 0; i < timeoutRoutine.length; i++) {
-            if (addressSpace.getByte(0x6768 + i) != timeoutRoutine[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
+    /** @deprecated Link roles are now resolved generically without modifying the ROM view. */
+    @Deprecated(forRemoval = true)
     public void enableRevengeGatorSecondaryLinkRole() {
-        revengeGatorSecondaryLinkRole = true;
+        // Binary-compatibility shim for the removed title-specific overlay.
     }
 
+    /** @deprecated Link roles are now resolved generically without modifying the ROM view. */
+    @Deprecated(forRemoval = true)
     public void enableShikinjouSecondaryLinkRole() {
-        shikinjouSecondaryLinkRole = true;
+        // Binary-compatibility shim for the removed title-specific overlay.
     }
 
+    /** @deprecated Link roles are now resolved generically without modifying the ROM view. */
+    @Deprecated(forRemoval = true)
     public void enableVolleyFireSecondaryLinkRole() {
-        volleyFireSecondaryLinkRole = true;
+        // Binary-compatibility shim for the removed title-specific overlay.
     }
 
+    /** @deprecated Link roles are now resolved generically without modifying the ROM view. */
+    @Deprecated(forRemoval = true)
     public void enableHarvestMoonSecondaryLinkRole() {
-        harvestMoonSecondaryLinkRole = true;
+        // Binary-compatibility shim for the removed title-specific overlay.
     }
 
+    /** @deprecated Link roles are now resolved generically without modifying the ROM view. */
+    @Deprecated(forRemoval = true)
     public void enableIkariYousai2SecondaryLinkRole() {
-        ikariYousai2SecondaryLinkRole = true;
+        // Binary-compatibility shim for the removed title-specific overlay.
     }
 
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
-        // The role-selecting branch is a CPU-view overlay, not a mutation of the loaded image.
-        // Keep execution on the ordinary cartridge read path while that overlay is active.
-        if (revengeGatorSecondaryLinkRole || shikinjouSecondaryLinkRole
-                || volleyFireSecondaryLinkRole || harvestMoonSecondaryLinkRole
-                || ikariYousai2SecondaryLinkRole) {
-            return null;
-        }
         if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
             return null;
         }

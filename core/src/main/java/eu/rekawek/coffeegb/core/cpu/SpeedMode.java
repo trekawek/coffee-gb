@@ -113,6 +113,16 @@ public class SpeedMode implements AddressSpace, StatefulComponent<SpeedMode> {
         return gbc;
     }
 
+    /** Allocation-free scalar comparison for the owning Gameboy's link timing check. */
+    public boolean hasSameTimingState(SpeedMode other) {
+        return other != null
+                && gbc == other.gbc
+                && allowLegacySpeedSwitch == other.allowLegacySpeedSwitch
+                && currentSpeed == other.currentSpeed
+                && prepareSpeedSwitch == other.prepareSpeedSwitch
+                && dmgCompat == other.dmgCompat;
+    }
+
     @Override
     public ComponentState<SpeedMode> captureState() {
         return new SpeedModeState(currentSpeed, prepareSpeedSwitch, dmgCompat);

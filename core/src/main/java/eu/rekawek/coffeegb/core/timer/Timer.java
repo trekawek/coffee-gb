@@ -84,6 +84,24 @@ public class Timer implements AddressSpace, StatefulComponent<Timer> {
         return tima;
     }
 
+    /** Allocation-free scalar comparison for the owning Gameboy's link timing check. */
+    public boolean hasSameTimingState(Timer other) {
+        return other != null
+                && div == other.div
+                && tac == other.tac
+                && tma == other.tma
+                && tima == other.tima
+                && previousBit == other.previousBit
+                && overflow == other.overflow
+                && ticksSinceOverflow == other.ticksSinceOverflow
+                && divReset == other.divReset
+                && haltWakeDelay == other.haltWakeDelay
+                && ticksSinceDivReset == other.ticksSinceDivReset
+                && haltBugDivRipplePending == other.haltBugDivRipplePending
+                && haltBugDivRippleVisible == other.haltBugDivRippleVisible
+                && suppressNextInterruptRequest == other.suppressNextInterruptRequest;
+    }
+
     public int getDebugTma() {
         return tma;
     }

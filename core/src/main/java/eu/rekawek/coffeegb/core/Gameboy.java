@@ -168,16 +168,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private final boolean jantakuBoyFourPlayerPatch;
 
-    private final boolean revengeGatorLinkRolePatch;
-
-    private final boolean shikinjouLinkRolePatch;
-
-    private final boolean volleyFireLinkRolePatch;
-
-    private final boolean harvestMoonLinkRolePatch;
-
-    private final boolean ikariYousai2LinkRolePatch;
-
     private transient EventBus hostEventBus = EventBus.NULL_EVENT_BUS;
 
     private final Joypad joypad;
@@ -336,16 +326,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 CartridgeProperties.Feature.CLEAR_CGB_BOOT_OAM_SHADOW);
         jantakuBoyFourPlayerPatch = cartridgeProperties.has(
                 CartridgeProperties.Feature.JANTAKU_BOY_FOUR_PLAYER_PATCH);
-        revengeGatorLinkRolePatch = cartridgeProperties.has(
-                CartridgeProperties.Feature.REVENGE_GATOR_LINK_ROLE_PATCH);
-        shikinjouLinkRolePatch = cartridgeProperties.has(
-                CartridgeProperties.Feature.SHIKINJOU_LINK_ROLE_PATCH);
-        volleyFireLinkRolePatch = cartridgeProperties.has(
-                CartridgeProperties.Feature.VOLLEY_FIRE_LINK_ROLE_PATCH);
-        harvestMoonLinkRolePatch = cartridgeProperties.has(
-                CartridgeProperties.Feature.HARVEST_MOON_LINK_ROLE_PATCH);
-        ikariYousai2LinkRolePatch = cartridgeProperties.has(
-                CartridgeProperties.Feature.IKARI_YOUSAI_2_LINK_ROLE_PATCH);
 
         boolean legacySpeedSwitchRequired = cartridgeProperties.has(
                 CartridgeProperties.Feature.LEGACY_SPEED_SWITCH);
@@ -671,21 +651,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         joypad.init(eventBus);
         display.init(eventBus);
         sound.init(eventBus);
-        if (revengeGatorLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
-            cartridge.enableRevengeGatorSecondaryLinkRole();
-        }
-        if (shikinjouLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
-            cartridge.enableShikinjouSecondaryLinkRole();
-        }
-        if (volleyFireLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
-            cartridge.enableVolleyFireSecondaryLinkRole();
-        }
-        if (harvestMoonLinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
-            cartridge.enableHarvestMoonSecondaryLinkRole();
-        }
-        if (ikariYousai2LinkRolePatch && serialEndpoint.linkPlayerIndex() == 1) {
-            cartridge.enableIkariYousai2SecondaryLinkRole();
-        }
         if (jantakuBoyFourPlayerPatch) {
             serialEndpoint.enableCompatibilityProfile(
                     SerialCompatibilityProfile.JANTAKU_BOY_FOUR_PLAYER_CONTROL_PACKET);
@@ -716,6 +681,41 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     public void setSerialEndpoint(SerialEndpoint serialEndpoint) {
         serialPort.init(serialEndpoint);
         infraredPort.setSerialEndpoint(serialEndpoint);
+    }
+
+    /** True when this machine has an armed serial transfer driven by its own clock. */
+    public boolean isInternalClockTransferActive() {
+        return serialPort.isInternalClockTransferActive();
+    }
+
+    /** True when this machine has an armed serial transfer waiting for its peer's clock. */
+    public boolean isExternalClockTransferActive() {
+        return serialPort.isExternalClockTransferActive();
+    }
+
+    /**
+     * Conservatively identifies machines whose independent clocks and current execution cursors
+     * are indistinguishable for link-role arbitration. The comparison is observational only and
+     * intentionally excludes endpoint, presentation, and portable-state allocation details.
+     */
+    public boolean hasSameLinkTimingPhase(Gameboy other) {
+        if (other == null || hardwareProfile != other.hardwareProfile
+                || !clockSpec.hasCompatibleClockIdentity(other.clockSpec)) {
+            return false;
+        }
+        return cpu.hasSameExecutionPhase(other.cpu)
+                && speedMode.hasSameTimingState(other.speedMode)
+                && timer.hasSameTimingState(other.timer)
+                && serialPort.hasSameTimingState(other.serialPort)
+                && gpu.isLcdEnabled() == other.gpu.isLcdEnabled()
+                && gpu.isFirstLine() == other.gpu.isFirstLine()
+                && gpu.getLine() == other.gpu.getLine()
+                && gpu.getTicksInLine() == other.gpu.getTicksInLine()
+                && gpu.getMode() == other.gpu.getMode()
+                && lcdDisabled == other.lcdDisabled
+                && lcdOffTicks == other.lcdOffTicks
+                && speedSwitchTailTicks == other.speedSwitchTailTicks
+                && speedSwitchClockPhaseShifted == other.speedSwitchClockPhaseShifted;
     }
 
     public void run() {

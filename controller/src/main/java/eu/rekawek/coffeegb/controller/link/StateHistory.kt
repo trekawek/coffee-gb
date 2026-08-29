@@ -142,7 +142,7 @@ class StateHistory(private val mode: LinkMode = LinkMode.NORMAL) {
         for (player in sessions.indices) {
           inputs[player].send(sessions[player]?.eventBus ?: continue)
         }
-        repeat(clockSpec.controllerTicksPerFrame()) { sessions.forEach { it?.gameboy?.tick() } }
+        LinkedFrameStepper.advanceFrame(mode, sessions, clockSpec)
       }
     }
 
