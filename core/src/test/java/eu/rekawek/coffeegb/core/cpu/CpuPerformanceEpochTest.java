@@ -16,7 +16,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-/** Contract tests for the allocation-free native-CGB and physical-DMG CPU bus fences. */
+/** Contract tests for the allocation-free native-CGB, SGB, and physical-DMG CPU bus fences. */
 public final class CpuPerformanceEpochTest {
 
     @Test
@@ -140,6 +140,79 @@ public final class CpuPerformanceEpochTest {
                 assertCpuPairEquals(pair);
             }
         }
+    }
+
+    @Test
+    public void sgbEpochSafeDecodedStackAndIndirectOpsMatchScalar() throws Exception {
+        String[] labels = {"CALL WRAM", "RET WRAM", "PUSH WRAM", "POP HRAM",
+                "RST WRAM", "CB (HL) HRAM"};
+        int[][] programs = {
+                {0xcd, 0x00, 0x02}, {0xc9}, {0xc5}, {0xc1}, {0xc7}, {0xcb, 0x46}
+        };
+        int[] expectedSp = {0xc0fe, 0xc102, 0xc0fe, 0xff82, 0xc0fe, 0xc100};
+
+        for (int index = 0; index < labels.length; index++) {
+            CpuPair pair = newSgbPair(programs[index]);
+            pair.direct.getRegisters().setSP(index == 3 ? 0xff80 : 0xc100);
+            pair.scalar.getRegisters().setSP(index == 3 ? 0xff80 : 0xc100);
+            pair.direct.getRegisters().setBC(0x1234);
+            pair.scalar.getRegisters().setBC(0x1234);
+            if (index == 1) {
+                setPairByte(pair, 0xc100, 0x00);
+                setPairByte(pair, 0xc101, 0x02);
+            } else if (index == 3) {
+                setPairByte(pair, 0xff80, 0x34);
+                setPairByte(pair, 0xff81, 0x12);
+            } else if (index == 5) {
+                pair.direct.getRegisters().setHL(0xff80);
+                pair.scalar.getRegisters().setHL(0xff80);
+                setPairByte(pair, 0xff80, 0x01);
+            }
+
+            int elapsed = pair.direct.runSgbPerformanceEpoch(54);
+            for (int tick = 0; tick < elapsed; tick++) {
+                pair.scalar.tick();
+            }
+
+            assertTrue(labels[index] + " made no epoch progress", elapsed > 0);
+            assertEquals(labels[index] + " SP", expectedSp[index],
+                    pair.direct.getRegisters().getSP());
+            assertEquals(labels[index] + " reached a terminal access", 0L,
+                    pair.direct.getPerformanceEpochTerminalAccesses());
+            assertCpuPairEquals(pair);
+        }
+    }
+
+    @Test
+    public void sgbEpochFencesJoypadReadAndWriteBeforeTheBus() throws Exception {
+        CpuPair read = newSgbPair(0xf2); // LD A,(FF00+C)
+        read.direct.getRegisters().setC(0x00);
+        read.scalar.getRegisters().setC(0x00);
+        int readElapsed = read.direct.runSgbPerformanceEpoch(54);
+        for (int tick = 0; tick < readElapsed; tick++) {
+            read.scalar.tick();
+        }
+        assertTrue("JOYP read made no safe prefix progress", readElapsed > 0);
+        assertTrue("SGB epoch read the fenced JOYP boundary",
+                read.directMemory.lastReadAddress != 0xff00);
+        assertEquals("JOYP read delegated a terminal access", 0L,
+                read.direct.getPerformanceEpochTerminalAccesses());
+        assertCpuPairEquals(read);
+
+        CpuPair write = newSgbPair(0xe2); // LD (FF00+C),A
+        write.direct.getRegisters().setA(0x30);
+        write.scalar.getRegisters().setA(0x30);
+        write.direct.getRegisters().setC(0x00);
+        write.scalar.getRegisters().setC(0x00);
+        int writeElapsed = write.direct.runSgbPerformanceEpoch(54);
+        for (int tick = 0; tick < writeElapsed; tick++) {
+            write.scalar.tick();
+        }
+        assertTrue("JOYP write made no safe prefix progress", writeElapsed > 0);
+        assertEquals("JOYP write crossed the decoded fence", 0, write.directMemory.writes);
+        assertEquals("JOYP write delegated a terminal access", 0L,
+                write.direct.getPerformanceEpochTerminalAccesses());
+        assertCpuPairEquals(write);
     }
 
     @Test
@@ -721,6 +794,27 @@ public final class CpuPerformanceEpochTest {
         InterruptManager scalarInterrupts = new InterruptManager(true);
         Cpu direct = normalSpeedNativeCpu(directMemory, directInterrupts);
         Cpu scalar = normalSpeedNativeCpu(scalarMemory, scalarInterrupts);
+        direct.getRegisters().setPC(0x0100);
+        scalar.restoreState(direct.captureState());
+        scalarInterrupts.restoreState(directInterrupts.captureState());
+        return new CpuPair(direct, scalar, directInterrupts, scalarInterrupts,
+                directMemory, scalarMemory);
+    }
+
+    private static CpuPair newSgbPair(int... program) {
+        ParityMemory directMemory = new ParityMemory();
+        for (int offset = 0; offset < program.length; offset++) {
+            directMemory.bytes[0x0100 + offset] = (byte) program[offset];
+        }
+        ParityMemory scalarMemory = new ParityMemory();
+        System.arraycopy(directMemory.bytes, 0, scalarMemory.bytes, 0,
+                directMemory.bytes.length);
+        InterruptManager directInterrupts = new InterruptManager(false);
+        InterruptManager scalarInterrupts = new InterruptManager(false);
+        Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                new SpeedMode(false), new Display(false));
+        Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                new SpeedMode(false), new Display(false));
         direct.getRegisters().setPC(0x0100);
         scalar.restoreState(direct.captureState());
         scalarInterrupts.restoreState(directInterrupts.captureState());

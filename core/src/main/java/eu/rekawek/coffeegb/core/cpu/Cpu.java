@@ -319,12 +319,13 @@ public class Cpu implements StatefulComponent<Cpu> {
     /**
      * Fixed-width SGB/SGB2 epoch which leaves observable memory-mapped accesses to the scalar
      * scheduler. SGB JOYP writes and APU/PPU/DMA accesses are visible during their CPU tick, so
-     * they cannot use the physical-DMG deferred journal ordering. Safe direct-whole accesses
-     * may remain inside the epoch.
+     * they cannot use the physical-DMG deferred journal ordering. Safe direct-whole and
+     * resolved-safe decoded ROM/WRAM/echo/HRAM accesses may remain inside the epoch; unsafe
+     * observed accesses stay scalar.
      */
     public int runSgbPerformanceEpoch(int maxMasterTicks) {
         return runPerformanceNormalSpeedEpoch(
-                maxMasterTicks, false, true, false, false, false);
+                maxMasterTicks, false, true, true, false, false);
     }
 
     /**

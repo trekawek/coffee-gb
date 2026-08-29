@@ -862,6 +862,37 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
+    public void sgbProfilesSafeDecodedStackAndIndirectOpsMatchScalar() throws Exception {
+        byte[] image = dmgRomSafeDecodedStackLoop();
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (Gameboy scalar = sgbSession(image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(image, profile, PlayerInputSource.RELEASED)) {
+                long scalarFrames = 0;
+                long candidateFrames = 0;
+                for (int chunk = 0; chunk < 20; chunk++) {
+                    scalarFrames += scalar.runTicks(5_000);
+                    candidateFrames += candidate.runTicks(5_000);
+                }
+
+                assertEquals(profile.id() + " safe stack frame callbacks",
+                        scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " safe stack custom-source oracle entered the epoch lane",
+                        0L, scalar.getPerformanceEpochTicks());
+                assertTrue(profile.id() + " safe stack loop had no coarse epoch coverage",
+                        candidate.getPerformanceEpochTicks() > 0L);
+                assertEquals(profile.id() + " safe stack crossed an unsafe boundary",
+                        0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+                assertEquals(profile.id() + " safe WRAM result", 1,
+                        candidate.getAddressSpace().getByte(0xc000));
+                assertDeepStateEquals(profile.id() + " safe stack epoch",
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+        }
+    }
+
+    @Test
     public void physicalDmgRomWramLoopMatchesLegacySchedulerWithEpochCoverage()
             throws Exception {
         byte[] image = dmgRomWramLoop();
@@ -1672,6 +1703,30 @@ public final class GameboyPerformanceEpochTest {
         image[0x105] = 0x77; // LD (HL),A
         image[0x106] = 0x18; // JR 0103
         image[0x107] = (byte) 0xfb;
+        image[0x143] = 0x00;
+        return image;
+    }
+
+    private static byte[] dmgRomSafeDecodedStackLoop() {
+        byte[] image = new byte[0x8000];
+        image[0x100] = 0x31; // LD SP,C100
+        image[0x101] = 0x00;
+        image[0x102] = (byte) 0xc1;
+        image[0x103] = 0x21; // LD HL,C000
+        image[0x104] = 0x00;
+        image[0x105] = (byte) 0xc0;
+        image[0x106] = 0x36; // LD (HL),01
+        image[0x107] = 0x01;
+        image[0x108] = (byte) 0xcd; // CALL 0110
+        image[0x109] = 0x10;
+        image[0x10a] = 0x01;
+        image[0x10b] = 0x18; // JR 0108
+        image[0x10c] = (byte) 0xfb;
+        image[0x110] = (byte) 0xc5; // PUSH BC
+        image[0x111] = (byte) 0xc1; // POP BC
+        image[0x112] = (byte) 0xcb; // BIT 0,(HL)
+        image[0x113] = 0x46;
+        image[0x114] = (byte) 0xc9; // RET
         image[0x143] = 0x00;
         return image;
     }
