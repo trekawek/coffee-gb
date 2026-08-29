@@ -191,7 +191,7 @@ public class AndroidBenchmarkDiagnosticsTest {
         diagnostics.benchmarkFrameBoundary(
                 new Controller.BenchmarkFrameBoundaryEvent(
                         600L, true, true, 1, 12L, 345L,
-                        67L, 8_901L, 64, 7_654L, 4_321L, 4_000L));
+                        67L, 8_901L, 64, 7_654L, 4_321L, 4_000L, 4_444L));
         for (int submission = 1; submission <= 600; submission++) {
             diagnostics.frameSubmitted(submission);
         }
@@ -215,6 +215,7 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(speedRecord.contains("performance_epoch_raster_fast_ticks=7654"));
         assertTrue(speedRecord.contains("performance_epoch_mode2_replay_ticks=4321"));
         assertTrue(speedRecord.contains("performance_epoch_mode2_bulk_ticks=4000"));
+        assertTrue(speedRecord.contains("performance_epoch_lcd_off_ticks=4444"));
         assertTrue(speedRecord.contains("benchmark_audio_dropped_channel_ticks=0"));
     }
 
@@ -536,6 +537,7 @@ public class AndroidBenchmarkDiagnosticsTest {
                 600L, true, false, 2, 9_999_999L, 999_999_999L,
                 999_999_999L, Long.MAX_VALUE, Integer.MAX_VALUE,
                 Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE,
+                4_444L,
                 "silent-pcm-relaxed-apu-v1", true, true, true,
                 999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L,
                 999_999_999L, 999_999_999L, 999_999_999L, 999_999_999L));

@@ -246,7 +246,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     /** Subset of mode-2 epoch ticks committed by the allocation-free OAM transaction. */
     private transient long performanceEpochMode2BulkTicks;
 
-    /** Native-CGB x1 epoch ticks committed while the LCD was stably disabled. */
+    /** Fixed-x1 epoch ticks committed while the LCD was stably disabled. */
     private transient long performanceEpochLcdOffTicks;
 
     /** CPU/STAT phase frozen at the entrance of the current fixed-x1 CPU epoch. */
@@ -1259,9 +1259,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /**
      * Fixed-x1 normal-speed coarse scheduler. Trusted rendered raster spans may join every
-     * supported CPU epoch; native CGB x1 may also use the exact mode-2 OAM transaction. STAT
-     * and line edges, DMA, IRQ boundaries, and every rejected topology retain the established
-     * normal-speed PERFORMANCE scheduler.
+     * supported CPU epoch; native CGB x1 may also use the exact mode-2 OAM transaction, and a
+     * proven LCD-off state may use its frozen timing plane. STAT and line edges, DMA, IRQ
+     * boundaries, and every rejected topology retain the established normal-speed scheduler.
      */
     private long runNormalSpeedPerformanceTicks(long ticks) {
         gpu.setPerformanceScanlineEnabled(true);
@@ -1766,12 +1766,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /**
      * SGB/SGB2 running-CPU lane. The direct scanline horizon is cheap to reject while the PPU
-     * is in mode 2 or a scalar mode-3 line, so those dots retain the existing scheduler without
-     * walking the timer/audio/serial/CPU epoch preflight.
+     * is in mode 2 or a scalar mode-3 line, while LCD-off state enters the fixed preflight
+     * directly because its PPU horizon is the frozen LCD-off plane.
      */
     private int trySgbPerformanceEpoch(long remaining) {
         if (remaining <= 0) {
             return 0;
+        }
+        if (!gpu.isLcdEnabled()) {
+            return tryFixedNormalSpeedPerformanceEpoch(remaining, 0);
         }
         int requested = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
         int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
@@ -1796,13 +1799,15 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
-        boolean lcdOffEpoch = nativeCgbNormalSpeed && !gpu.isLcdEnabled();
+        boolean physicalDmgLcdOffEpoch = !cgbHardware && !gpu.isLcdEnabled();
+        boolean lcdOffEpoch = physicalDmgLcdOffEpoch
+                || nativeCgbNormalSpeed && !gpu.isLcdEnabled();
         boolean cpuEntryEligible = nativeCgbNormalSpeed
                 ? cpu.performanceNativeCgbNormalSpeedEpochEntryEligible()
                 : cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
         if (remaining <= 0 || !cpuEntryEligible
                 || !canStartNormalSpeedPerformanceEpoch(
-                        cgbHardware, nativeCgbNormalSpeed)) {
+                        cgbHardware, nativeCgbNormalSpeed, lcdOffEpoch)) {
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
@@ -1814,7 +1819,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
         }
         span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
-        span = Math.min(span, nativeCgbNormalSpeed || sgb
+        span = Math.min(span, nativeCgbNormalSpeed || sgb || physicalDmgLcdOffEpoch
                 ? sound.performanceFencedEpochSpanLimit(span)
                 : sound.performanceEpochSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
@@ -1830,8 +1835,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         PerformanceEpochPpuPlan ppuPlan;
         if (lcdOffEpoch) {
             span = Math.min(span, performanceLcdOffEpochSpanLimit(span));
-            span = Math.min(span,
-                    gpu.performanceNativeCgbNormalSpeedLcdOffSpanLimit(span));
+            span = Math.min(span, nativeCgbNormalSpeed
+                    ? gpu.performanceNativeCgbNormalSpeedLcdOffSpanLimit(span)
+                    : gpu.performancePhysicalDmgNormalSpeedLcdOffSpanLimit(span));
             if (span <= 0) {
                 return 0;
             }
@@ -1905,7 +1911,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                                     ? cpu.runNativeCgbNormalSpeedLcdOffPerformanceEpoch(span)
                                     : cpu.runNativeCgbNormalSpeedPerformanceEpoch(span)
                             : cpu.runCgbCompatibilityPerformanceEpoch(span)
-                    : sgb
+                    : physicalDmgLcdOffEpoch
+                            ? cpu.runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(span)
+                            : sgb
                             ? cpu.runSgbPerformanceEpoch(span)
                             : cpu.runPhysicalDmgPerformanceEpoch(span);
         } finally {
@@ -1970,14 +1978,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Stable normal-speed epoch topology; transient guards are evaluated by the caller. */
     private boolean canStartNormalSpeedPerformanceEpoch(
-            boolean cgbHardware, boolean nativeCgbNormalSpeed) {
+            boolean cgbHardware, boolean nativeCgbNormalSpeed, boolean lcdOffEpoch) {
         boolean lcdEnabled = gpu.isLcdEnabled();
         return !warmResetRequested
                 && speedSwitchTailTicks == 0
                 && !debugHistoryReplay
                 && debugInstrumentation == null
                 && !debugRetirementTrackingActive
-                && (lcdEnabled ? !lcdDisabled : nativeCgbNormalSpeed && lcdDisabled)
+                && (lcdEnabled ? !lcdDisabled : lcdOffEpoch && lcdDisabled)
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(false)
                 && (!cartridgeClocked || nativeCgbNormalSpeed)
@@ -2132,9 +2140,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         "normal-speed CGB epoch has no PPU plan");
             }
         } else {
-            gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
-                    ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
-            performanceEpochRasterFastTicks += ticks;
+            switch (performanceEpochPpuPlan) {
+                case TRUSTED_RASTER -> {
+                    gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
+                            ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
+                    performanceEpochRasterFastTicks += ticks;
+                }
+                case LCD_OFF -> {
+                    gpu.advancePerformancePhysicalDmgNormalSpeedLcdOffSpanTrusted(ticks);
+                    performanceEpochLcdOffTicks += ticks;
+                }
+                default -> throw new IllegalStateException(
+                        "physical-DMG epoch has no PPU plan");
+            }
         }
         statRegister.tickPerformanceQuietSpanTrusted(ticks);
         if (cgbHardware) {

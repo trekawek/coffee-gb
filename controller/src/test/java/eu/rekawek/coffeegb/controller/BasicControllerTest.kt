@@ -1991,6 +1991,8 @@ class BasicControllerTest {
                 override fun getPerformanceEpochMode2ReplayTicks() = 77L
 
                 override fun getPerformanceEpochMode2BulkTicks() = 70L
+
+                override fun getPerformanceEpochLcdOffTicks() = 71L
               }
           PreparedSession.Ready(config, gameboy)
         }
@@ -2018,6 +2020,7 @@ class BasicControllerTest {
       assertEquals(66L, boundary.performanceEpochRasterFastTicks)
       assertEquals(77L, boundary.performanceEpochMode2ReplayTicks)
       assertEquals(70L, boundary.performanceEpochMode2BulkTicks)
+      assertEquals(71L, boundary.performanceEpochLcdOffTicks)
 
       val fourArgument = Controller.BenchmarkFrameBoundaryEvent(600L, false, false, 1)
       val sixArgument =

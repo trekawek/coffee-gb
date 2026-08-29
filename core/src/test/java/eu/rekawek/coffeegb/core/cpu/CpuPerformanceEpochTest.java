@@ -98,6 +98,41 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void physicalDmgLcdOffEpochAllowsDecodedVramAtEveryPhaseAndBudget()
+            throws Exception {
+        for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
+            for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {
+                CpuPair pair = newSgbPair(
+                        0x21, 0x00, 0x80, // LD HL,8000
+                        0x7e,             // LD A,(HL)
+                        0x3c,             // INC A
+                        0x77,             // LD (HL),A
+                        0x18, 0xfb);      // JR 0103
+                setPairByte(pair, 0x8000, 0x23);
+
+                for (int tick = 0; tick < entryPhase; tick++) {
+                    pair.direct.tick();
+                    pair.scalar.tick();
+                }
+
+                assertEquals("physical-DMG LCD-off VRAM phase " + entryPhase
+                                + " budget " + budget,
+                        budget,
+                        pair.direct.runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(budget));
+                for (int tick = 0; tick < budget; tick++) {
+                    pair.scalar.tick();
+                }
+
+                assertFalse("LCD-off VRAM epoch deferred a memory access",
+                        pair.direct.hasPerformanceEpochJournal());
+                assertEquals("LCD-off VRAM epoch crossed a terminal boundary", 0L,
+                        pair.direct.getPerformanceEpochTerminalAccesses());
+                assertCpuPairEquals(pair);
+            }
+        }
+    }
+
+    @Test
     public void sgbEpochStopsBeforeUnsafeIoAtEveryPhaseAndBudget() throws Exception {
         for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
             for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {

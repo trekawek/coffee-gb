@@ -362,6 +362,17 @@ public class Cpu implements StatefulComponent<Cpu> {
                         maxMasterTicks, true, true, true, true, true) : 0;
     }
 
+    /**
+     * Physical-DMG/SGB x1 epoch while the owner has proven that LCD output is stably disabled.
+     * Resolved-safe ROM/WRAM/echo/HRAM and LCD-off VRAM cycles may stay in the epoch; LCDC,
+     * other IO, mapper/cartridge state, OAM, executable VRAM, interrupts, and unresolved cycles
+     * retain their scalar boundaries.
+     */
+    public int runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, false, true, true, true, false);
+    }
+
     /** Shared fixed-width normal-speed epoch; topology flags are explicit and allocation-free. */
     private int runPerformanceNormalSpeedEpoch(
             int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles,
