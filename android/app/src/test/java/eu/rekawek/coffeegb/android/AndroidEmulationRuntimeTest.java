@@ -113,6 +113,43 @@ public class AndroidEmulationRuntimeTest {
     }
 
     @Test
+    public void canonicalNoScenarioBenchmarkUsesTheEmptyPlayingAudioPreArm() {
+        assertTrue(AndroidEmulationRuntime.benchmarkNoScenarioAudioPreArmRequired(
+                true, true, DiagnosticsOptions.BenchmarkScenario.NONE,
+                DiagnosticsOptions.AudioPolicy.CANONICAL));
+        assertFalse(AndroidEmulationRuntime.benchmarkNoScenarioAudioPreArmRequired(
+                true, false, DiagnosticsOptions.BenchmarkScenario.NONE,
+                DiagnosticsOptions.AudioPolicy.CANONICAL));
+        assertFalse(AndroidEmulationRuntime.benchmarkNoScenarioAudioPreArmRequired(
+                true, true, DiagnosticsOptions.BenchmarkScenario.DMG_ACTION_V1,
+                DiagnosticsOptions.AudioPolicy.CANONICAL));
+        assertFalse(AndroidEmulationRuntime.benchmarkNoScenarioAudioPreArmRequired(
+                true, true, DiagnosticsOptions.BenchmarkScenario.NONE,
+                DiagnosticsOptions.AudioPolicy.SILENT_PCM_V1));
+        assertFalse(AndroidEmulationRuntime.benchmarkNoScenarioAudioPreArmRequired(
+                false, true, DiagnosticsOptions.BenchmarkScenario.NONE,
+                DiagnosticsOptions.AudioPolicy.CANONICAL));
+    }
+
+    @Test
+    public void noScenarioAudioPreArmPollRejectsCloseVisibilityReplacementAndStaleSession() {
+        // A no-scenario poll represents its session generation in both session slots; this is the
+        // same generation substitution used by the runtime's shared audio barrier.
+        assertTrue(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, true, 4L, 4L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                true, true, 4L, 4L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, false, 4L, 4L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, true, 4L, 5L, 21L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, true, 4L, 4L, 20L, 21L, 21L, 21L));
+        assertFalse(AndroidEmulationRuntime.benchmarkCompletionPollMayTouchAudio(
+                false, true, 4L, 4L, 21L, 21L, 21L, 22L));
+    }
+
+    @Test
     public void visibilityPauseWinsWhenItRacesAnInFlightAudioResumePoll() throws Exception {
         AndroidEmulationRuntime.BenchmarkAudioLifecycleGate gate =
                 new AndroidEmulationRuntime.BenchmarkAudioLifecycleGate();
