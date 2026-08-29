@@ -329,6 +329,15 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
+     * Fixed-width physical-DMG/SGB mode-2 epoch. The CPU bus fences are identical to the SGB
+     * running epoch; only the owner-selected PPU plan permits the non-CPU OAM-search dots.
+     */
+    public int runPhysicalDmgMode2PerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, false, true, true, false, false);
+    }
+
+    /**
      * Fixed four-master-dot epoch for ordinary CGB hardware in DMG compatibility mode.
      * The CPU bus and machine-cycle timing are the same normal-speed width as physical DMG,
      * while the owner supplies the CGB-only peripheral/PPU plane around this transaction.

@@ -133,6 +133,100 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void physicalDmgMode2EpochAllowsSafeDecodedMemoryAtEveryPhaseAndBudget()
+            throws Exception {
+        int[] safeAddresses = {0xc000, 0xe000, 0xff80};
+        for (int safeAddress : safeAddresses) {
+            for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
+                for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {
+                    CpuPair pair = newSgbPair(
+                            0x21, safeAddress & 0xff, safeAddress >>> 8,
+                            0x7e,             // LD A,(HL)
+                            0x3c,             // INC A
+                            0x77,             // LD (HL),A
+                            0x18, 0xfb);      // JR 0103
+                    setPairByte(pair, safeAddress, 0x23);
+
+                    for (int tick = 0; tick < entryPhase; tick++) {
+                        pair.direct.tick();
+                        pair.scalar.tick();
+                    }
+
+                    assertEquals("physical-DMG mode-2 safe address 0x"
+                                    + Integer.toHexString(safeAddress) + " phase "
+                                    + entryPhase + " budget " + budget,
+                            budget,
+                            pair.direct.runPhysicalDmgMode2PerformanceEpoch(budget));
+                    for (int tick = 0; tick < budget; tick++) {
+                        pair.scalar.tick();
+                    }
+
+                    assertFalse("mode-2 safe decoded work was journaled",
+                            pair.direct.hasPerformanceEpochJournal());
+                    assertEquals("mode-2 safe decoded work crossed a terminal boundary", 0L,
+                            pair.direct.getPerformanceEpochTerminalAccesses());
+                    assertCpuPairEquals(pair);
+                }
+            }
+        }
+    }
+
+    @Test
+    public void physicalDmgMode2EpochFencesUnsafeDecodedMemoryAndMapperWrites()
+            throws Exception {
+        String[] labels = {"VRAM", "OAM", "unusable", "cart RAM", "JOYP", "LCDC", "IF", "IE"};
+        int[] addresses = {0x8000, 0xfe00, 0xfea0, 0xa000, 0xff00, 0xff40, 0xff0f, 0xffff};
+        for (int index = 0; index < addresses.length; index++) {
+            CpuPair pair = newSgbPair(0x7e); // LD A,(HL)
+            pair.direct.getRegisters().setHL(addresses[index]);
+            pair.scalar.getRegisters().setHL(addresses[index]);
+            setPairByte(pair, addresses[index], 0x66);
+
+            int elapsed = pair.direct.runPhysicalDmgMode2PerformanceEpoch(54);
+
+            assertTrue(labels[index] + " mode-2 prefix made no progress", elapsed > 0);
+            assertTrue(labels[index] + " read crossed the decoded fence",
+                    pair.directMemory.lastReadAddress != addresses[index]);
+            assertEquals(labels[index] + " delegated a terminal read", 0L,
+                    pair.direct.getPerformanceEpochTerminalAccesses());
+            for (int tick = 0; tick < elapsed; tick++) {
+                pair.scalar.tick();
+            }
+            assertCpuPairEquals(pair);
+        }
+
+        CpuPair vramWrite = newSgbPair(0x77); // LD (HL),A
+        vramWrite.direct.getRegisters().setHL(0x8000);
+        vramWrite.scalar.getRegisters().setHL(0x8000);
+        vramWrite.direct.getRegisters().setA(0x42);
+        vramWrite.scalar.getRegisters().setA(0x42);
+        int elapsed = vramWrite.direct.runPhysicalDmgMode2PerformanceEpoch(54);
+        assertTrue("VRAM write made no safe prefix progress", elapsed > 0);
+        assertTrue("VRAM write crossed the decoded fence",
+                vramWrite.directMemory.lastWriteAddress != 0x8000);
+        assertEquals("VRAM write delegated a terminal access", 0L,
+                vramWrite.direct.getPerformanceEpochTerminalAccesses());
+        for (int tick = 0; tick < elapsed; tick++) {
+            vramWrite.scalar.tick();
+        }
+        assertCpuPairEquals(vramWrite);
+
+        CpuPair mapper = newSgbPair(0xea, 0x00, 0x20); // LD (2000),A
+        mapper.direct.getRegisters().setA(0x02);
+        mapper.scalar.getRegisters().setA(0x02);
+        elapsed = mapper.direct.runPhysicalDmgMode2PerformanceEpoch(54);
+        assertTrue("mapper write made no safe prefix progress", elapsed > 0);
+        assertTrue("mapper write crossed the decoded fence",
+                mapper.directMemory.lastWriteAddress != 0x2000);
+        assertEquals("mapper write delegated a terminal access", 0L,
+                mapper.direct.getPerformanceEpochTerminalAccesses());
+        for (int tick = 0; tick < elapsed; tick++) {
+            mapper.scalar.tick();
+        }
+        assertCpuPairEquals(mapper);
+    }
+
+    @Test
     public void sgbEpochStopsBeforeUnsafeIoAtEveryPhaseAndBudget() throws Exception {
         for (int entryPhase = 0; entryPhase < 4; entryPhase++) {
             for (int budget = 1; budget <= Cpu.PERFORMANCE_EPOCH_MAX_TICKS; budget++) {

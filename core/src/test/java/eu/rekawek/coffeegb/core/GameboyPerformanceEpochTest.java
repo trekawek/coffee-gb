@@ -994,8 +994,9 @@ public final class GameboyPerformanceEpochTest {
                 }
                 assertTrue(profile.id() + " MLT_REQ(1) had no epoch coverage",
                         candidate.getPerformanceEpochTicks() > 0L);
-                assertTrue(profile.id() + " MLT_REQ(1) had no quiet bulk coverage",
-                        candidate.getPerformanceBulkTicks() > 0L);
+                assertTrue(profile.id() + " MLT_REQ(1) had no bulk coverage",
+                        candidate.getPerformanceBulkTicks()
+                                + candidate.getPerformanceEpochMode2BulkTicks() > 0L);
                 assertEquals(profile.id() + " MLT_REQ(1) crossed a terminal CPU access", 0L,
                         candidate.getCpu().getPerformanceEpochTerminalAccesses());
 
@@ -1048,7 +1049,8 @@ public final class GameboyPerformanceEpochTest {
                 assertTrue(profile.id() + " released Hub MLT_REQ(1) had no epoch coverage",
                         candidate.getPerformanceEpochTicks() > 0L);
                 assertTrue(profile.id() + " released Hub MLT_REQ(1) had no bulk coverage",
-                        candidate.getPerformanceBulkTicks() > 0L);
+                        candidate.getPerformanceBulkTicks()
+                                + candidate.getPerformanceEpochMode2BulkTicks() > 0L);
                 assertEquals(profile.id() + " released Hub crossed a terminal CPU access", 0L,
                         candidate.getCpu().getPerformanceEpochTerminalAccesses());
 
@@ -1092,10 +1094,13 @@ public final class GameboyPerformanceEpochTest {
                     0L, scalar.getPerformanceEpochTicks());
             assertTrue("physical-DMG ROM/WRAM loop had no coarse coverage",
                     candidate.getPerformanceEpochTicks() > 10_000);
-            assertEquals("physical DMG used a non-raster epoch plan",
+            assertEquals("physical DMG epoch plan accounting",
                     candidate.getPerformanceEpochTicks(),
-                    candidate.getPerformanceEpochRasterFastTicks());
-            assertEquals(0L, candidate.getPerformanceEpochMode2ReplayTicks());
+                    candidate.getPerformanceEpochRasterFastTicks()
+                            + candidate.getPerformanceEpochMode2ReplayTicks());
+            assertEquals("physical DMG mode-2 bulk accounting",
+                    candidate.getPerformanceEpochMode2ReplayTicks(),
+                    candidate.getPerformanceEpochMode2BulkTicks());
             assertEquals(scalar.getAddressSpace().getByte(0xc000),
                     candidate.getAddressSpace().getByte(0xc000));
             assertDeepStateEquals("physical-DMG ROM/WRAM loop",
