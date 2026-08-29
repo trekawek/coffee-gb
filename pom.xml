@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>eu.rekawek.coffeegb</groupId>
     <artifactId>coffee-gb</artifactId>
-    <version>2.0.6</version>
+    <version>2.0.7-SNAPSHOT</version>
     <packaging>pom</packaging>
     <url>https://github.com/trekawek/coffee-gb</url>
     <name>coffee-gb</name>
@@ -24,12 +24,12 @@
         <connection>scm:git:https://github.com/trekawek/coffee-gb.git</connection>
         <developerConnection>scm:git:https://github.com/trekawek/coffee-gb.git</developerConnection>
         <url>https://github.com/trekawek/coffee-gb</url>
-        <tag>coffee-gb-2.0.6</tag>
+        <tag>HEAD</tag>
     </scm>
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- Release preparation updates this value; archive plugins use it for reproducible bytes. -->
-        <project.build.outputTimestamp>2026-08-29T06:20:31Z</project.build.outputTimestamp>
+        <project.build.outputTimestamp>2026-08-29T06:32:06Z</project.build.outputTimestamp>
         <kotlin.version>2.4.0</kotlin.version>
         <skipTests>false</skipTests>
         <skip.unit.tests>${skipTests}</skip.unit.tests>
