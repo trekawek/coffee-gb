@@ -1376,7 +1376,15 @@ internal fun netplaySummary(presentation: NetplayUiPresentation): String {
   val role =
       when (presentation.state.role) {
         NetplayRole.HOST -> "Host"
-        NetplayRole.CLIENT -> "Client"
+        NetplayRole.CLIENT ->
+            if (
+                presentation.state.mode == LinkMode.FOUR_PLAYER_ADAPTER &&
+                    presentation.state.localPlayer != null
+            ) {
+              "Client ${presentation.state.localPlayer + 1}"
+            } else {
+              "Client"
+            }
         null -> null
       }
   return if (role == null) "Netplay: $phase" else "Netplay: $role — $phase"

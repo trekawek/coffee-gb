@@ -32,7 +32,7 @@ class NetplayFooterSummaryTest {
                 ))),
     )
     assertEquals(
-        "Netplay: Client — Active",
+        "Netplay: Client 4 — Active",
         netplaySummary(
             presentNetplay(
                 NetplayUiState(
