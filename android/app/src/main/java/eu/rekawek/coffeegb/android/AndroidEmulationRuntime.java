@@ -1144,32 +1144,52 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
      * Waits outside the controller thread for a two-phase audio barrier. First the paused sink
      * must report an empty queue and a stopped output, proving the scenario PCM was flushed. Then
      * the output is resumed while the guest remains paused, and readiness requires the clean,
-     * playing baseline that the benchmark matrix records at ARM.
+     * playing baseline that the benchmark matrix records at ARM. The no-scenario canonical
+     * benchmark uses this exact transaction with scenario completion omitted.
      */
     private void finishBenchmarkScenarioCompletion(
             Controller.BenchmarkGameplayScenarioCompletedEvent event, long completionEpoch,
             int attempt,
             boolean audioResumeRequested) {
-        benchmarkAudioLifecycle.run(() -> finishBenchmarkScenarioCompletionLocked(
-                event, completionEpoch, attempt, audioResumeRequested));
+        finishBenchmarkAudioPreArm(
+                new BenchmarkAudioPreArm(event.getSessionGeneration(), completionEpoch, true,
+                        event.getCompleted(), event.getCompletedFrames(), event.getExpectedFrames()),
+                attempt, audioResumeRequested);
+    }
+
+    private void startBenchmarkScenarioCompletion(
+            Controller.BenchmarkGameplayScenarioCompletedEvent event) {
+        benchmarkAudioLifecycle.run(() -> {
+            long completionEpoch = ++benchmarkScenarioCompletionEpoch;
+            finishBenchmarkScenarioCompletion(event, completionEpoch, 0, false);
+        });
     }
 
     /** Runs under {@link #benchmarkAudioLifecycle}; never call this method directly. */
-    private void finishBenchmarkScenarioCompletionLocked(
-            Controller.BenchmarkGameplayScenarioCompletedEvent event, long completionEpoch,
-            int attempt,
-            boolean audioResumeRequested) {
-        if (closed.get() || !benchmarkCompletionPollMayTouchAudio(
-                diagnostics.benchmarkPreArmValid(event.getSessionGeneration()),
-                completionEpoch, benchmarkScenarioCompletionEpoch,
-                event.getSessionGeneration(), activeSessionGeneration,
-                benchmarkScenario.sessionGeneration(), state.sessionGeneration())) {
+    private void finishBenchmarkAudioPreArm(
+            BenchmarkAudioPreArm preArm, int attempt, boolean audioResumeRequested) {
+        benchmarkAudioLifecycle.run(() -> finishBenchmarkAudioPreArmLocked(
+                preArm, attempt, audioResumeRequested));
+    }
+
+    /** Runs under {@link #benchmarkAudioLifecycle}; never call this method directly. */
+    private void finishBenchmarkAudioPreArmLocked(
+            BenchmarkAudioPreArm preArm, int attempt, boolean audioResumeRequested) {
+        long scenarioSessionGeneration = preArm.scenario()
+                ? benchmarkScenario.sessionGeneration() : preArm.sessionGeneration();
+        if (closed.get() || preArm.scenario() != benchmarkScenario.enabled()
+                || !benchmarkCompletionPollMayTouchAudio(
+                        closed.get(),
+                        diagnostics.benchmarkPreArmValid(preArm.sessionGeneration()),
+                        preArm.completionEpoch(), benchmarkScenarioCompletionEpoch,
+                        preArm.sessionGeneration(), activeSessionGeneration,
+                        scenarioSessionGeneration, state.sessionGeneration())) {
             return;
         }
         AndroidAudioSink activeAudio = audio;
         AndroidAudioSink.AudioBaseline baseline = activeAudio == null
                 ? AndroidAudioSink.AudioBaseline.unavailable() : activeAudio.benchmarkBaseline();
-        boolean sourceClosed = input.benchmarkScenarioSourceClosed();
+        boolean sourceClosed = !preArm.scenario() || input.benchmarkScenarioSourceClosed();
         boolean emptyAudio = !diagnosticsOptions.audioOutput
                 || baseline.pendingBytes() == 0L && baseline.queuedBytes() == 0L;
         boolean audioReady;
@@ -1183,39 +1203,91 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 // four genuine packets required by ordinary AudioTrack startup. Preserve this
                 // diagnostics-only empty-playing proof through the sink's explicit narrow bypass.
                 activeAudio.resumeEmptyForBenchmarkPreArm();
-                deadlines.schedule(
-                        () -> submit(() -> finishBenchmarkScenarioCompletion(
-                                event, completionEpoch, 0, true)),
-                        BENCHMARK_AUDIO_DRAIN_POLL_MILLIS,
-                        TimeUnit.MILLISECONDS);
+                scheduleBenchmarkAudioPreArm(preArm, 0, true);
                 return;
             }
         } else {
             audioReady = activeAudio != null && emptyAudio && baseline.outputPlaying();
         }
         if ((!audioReady || !sourceClosed) && attempt < BENCHMARK_AUDIO_DRAIN_MAX_POLLS) {
-            deadlines.schedule(
-                    () -> submit(() -> finishBenchmarkScenarioCompletion(
-                            event, completionEpoch, attempt + 1, audioResumeRequested)),
-                    BENCHMARK_AUDIO_DRAIN_POLL_MILLIS,
-                    TimeUnit.MILLISECONDS);
+            scheduleBenchmarkAudioPreArm(preArm, attempt + 1, audioResumeRequested);
             return;
         }
-        boolean completed = event.getCompleted() && audioReady && sourceClosed
-                && event.getCompletedFrames() == event.getExpectedFrames();
-        diagnostics.benchmarkScenarioCompleted(
-                event.getSessionGeneration(), event.getCompletedFrames(), event.getExpectedFrames(),
-                completed, sourceClosed, audioReady);
+        boolean completed = audioReady && sourceClosed
+                && (!preArm.scenario() || preArm.scenarioCompleted()
+                && preArm.completedFrames() == preArm.expectedFrames());
+        if (preArm.scenario()) {
+            diagnostics.benchmarkScenarioCompleted(
+                    preArm.sessionGeneration(), preArm.completedFrames(), preArm.expectedFrames(),
+                    completed, sourceClosed, audioReady);
+        }
         if (!completed) {
             return;
         }
-        benchmarkScenario.markPreconditionReady();
-        diagnostics.emulationStarted(event.getSessionGeneration());
+        if (preArm.scenario()) {
+            benchmarkScenario.markPreconditionReady();
+        }
+        diagnostics.emulationStarted(preArm.sessionGeneration());
         RuntimeState current = state;
-        if (current.sessionGeneration() == event.getSessionGeneration()) {
+        if (current.sessionGeneration() == preArm.sessionGeneration()) {
             publish(RuntimeState.Phase.PAUSED, "Benchmark preconditioning complete.", List.of(),
                     true, true, current.flushPending());
         }
+    }
+
+    private boolean scheduleBenchmarkAudioPreArm(
+            BenchmarkAudioPreArm preArm, int attempt, boolean audioResumeRequested) {
+        try {
+            deadlines.schedule(
+                    () -> submit(() -> finishBenchmarkAudioPreArm(
+                            preArm, attempt, audioResumeRequested)),
+                    BENCHMARK_AUDIO_DRAIN_POLL_MILLIS,
+                    TimeUnit.MILLISECONDS);
+            return true;
+        } catch (RejectedExecutionException ignored) {
+            // close() owns the terminal lifecycle boundary; its closed/generation fences reject
+            // this transaction and no audio resume is permitted after the deadline executor ends.
+            return false;
+        }
+    }
+
+    /** Starts the same empty-playing barrier for canonical no-scenario benchmark sessions. */
+    private boolean startBenchmarkNoScenarioAudioPreArm(long sessionGeneration) {
+        final boolean[] started = {false};
+        benchmarkAudioLifecycle.run(() -> {
+            if (!benchmarkNoScenarioAudioSessionMatches(sessionGeneration)) {
+                return;
+            }
+            AndroidAudioSink activeAudio = audio;
+            if (activeAudio == null) {
+                return;
+            }
+            // Canonical no-scenario sessions have no controller scenario endpoint to pause the
+            // producer. Establish the same stopped/empty boundary before the shared poll starts.
+            activeAudio.pause();
+            BenchmarkAudioPreArm preArm = new BenchmarkAudioPreArm(
+                    sessionGeneration, ++benchmarkScenarioCompletionEpoch,
+                    false, true, 0, 0);
+            started[0] = scheduleBenchmarkAudioPreArm(preArm, 0, false);
+        });
+        return started[0];
+    }
+
+    private boolean benchmarkNoScenarioAudioSessionMatches(long sessionGeneration) {
+        return !closed.get() && benchmarkNoScenarioAudioPreArmRequired(
+                diagnostics.enabled(), diagnosticsOptions.audioOutput,
+                diagnosticsOptions.benchmarkScenario, diagnosticsOptions.audioPolicy)
+                && sessionGeneration > 0L && sessionGeneration == activeSessionGeneration
+                && diagnostics.benchmarkPreArmValid(sessionGeneration);
+    }
+
+    static boolean benchmarkNoScenarioAudioPreArmRequired(
+            boolean diagnosticsEnabled, boolean audioOutput,
+            DiagnosticsOptions.BenchmarkScenario scenario,
+            DiagnosticsOptions.AudioPolicy audioPolicy) {
+        return diagnosticsEnabled && audioOutput
+                && scenario == DiagnosticsOptions.BenchmarkScenario.NONE
+                && audioPolicy == DiagnosticsOptions.AudioPolicy.CANONICAL;
     }
 
     /** Stops one session and recreates its controller shell for a later load without leaks. */
@@ -1382,6 +1454,12 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
+        }
+        if (diagnostics.enabled()) {
+            // Invalidate the pre-ARM transaction before shutting down its deadline executor. The
+            // lifecycle gate makes close serialize with a poll that is already inspecting or
+            // resuming the sink, while the closed flag rejects every later queued callback.
+            benchmarkAudioLifecycle.run(() -> invalidateBenchmarkSessionLocked(false));
         }
         observers.clear();
         observerRegistrations.clear();
@@ -1589,14 +1667,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     }
                     // Stop accepting PCM and clear the bounded queue before any host anchor can
                     // be requested. The owner waits for an in-flight write to leave accounting.
-                    AndroidAudioSink activeAudio = audio;
-                    if (activeAudio != null) {
-                        activeAudio.pause();
-                    }
-                    input.endBenchmarkScenario();
-                    submit(() -> {
-                        long completionEpoch = ++benchmarkScenarioCompletionEpoch;
-                        finishBenchmarkScenarioCompletion(event, completionEpoch, 0, false);
+                    benchmarkAudioLifecycle.run(() -> {
+                        AndroidAudioSink activeAudio = audio;
+                        if (activeAudio != null) {
+                            activeAudio.pause();
+                        }
+                        input.endBenchmarkScenario();
+                        submit(() -> startBenchmarkScenarioCompletion(event));
                     });
                 },
                 Controller.BenchmarkGameplayScenarioCompletedEvent.class);
@@ -1671,6 +1748,17 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                                     activeSessionGeneration,
                                     benchmarkScenario.endpointFrameForTesting()));
                             eventBus.post(new Controller.ResumeEmulationEvent());
+                        } else if (benchmarkNoScenarioAudioPreArmRequired(
+                                diagnostics.enabled(), diagnosticsOptions.audioOutput,
+                                diagnosticsOptions.benchmarkScenario,
+                                diagnosticsOptions.audioPolicy)) {
+                            if (!startBenchmarkNoScenarioAudioPreArm(activeSessionGeneration)) {
+                                invalidateBenchmarkSession(false);
+                                publish(RuntimeState.Phase.FAILED,
+                                        "Benchmark audio output could not be prepared.",
+                                        List.of(), false, true, false);
+                                return;
+                            }
                         } else {
                             diagnostics.emulationStarted(activeSessionGeneration);
                         }
@@ -2202,8 +2290,20 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (!diagnostics.enabled()) {
             return true;
         }
+        final boolean[] result = {false};
+        benchmarkAudioLifecycle.run(() -> result[0] =
+                invalidateBenchmarkSessionLocked(prepareScenarioSource));
+        return result[0];
+    }
+
+    /** Runs under {@link #benchmarkAudioLifecycle}; never call this method directly. */
+    private boolean invalidateBenchmarkSessionLocked(boolean prepareScenarioSource) {
         pendingBenchmarkArm = null;
         benchmarkScenarioCompletionEpoch++;
+        AndroidAudioSink activeAudio = audio;
+        if (activeAudio != null) {
+            activeAudio.pause();
+        }
         benchmarkScenario.resetSession();
         diagnostics.invalidateSession();
         input.resetBenchmarkSession();
@@ -2239,7 +2339,18 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             long completionEpoch, long activeCompletionEpoch,
             long eventSessionGeneration, long activeSessionGeneration,
             long scenarioSessionGeneration, long presentedSessionGeneration) {
-        return preArmValid && benchmarkCompletionPollMatches(
+        return benchmarkCompletionPollMayTouchAudio(false, preArmValid,
+                completionEpoch, activeCompletionEpoch, eventSessionGeneration,
+                activeSessionGeneration, scenarioSessionGeneration, presentedSessionGeneration);
+    }
+
+    /** Adds the terminal runtime fence used when close races a queued benchmark audio poll. */
+    static boolean benchmarkCompletionPollMayTouchAudio(
+            boolean closed, boolean preArmValid,
+            long completionEpoch, long activeCompletionEpoch,
+            long eventSessionGeneration, long activeSessionGeneration,
+            long scenarioSessionGeneration, long presentedSessionGeneration) {
+        return !closed && preArmValid && benchmarkCompletionPollMatches(
                 completionEpoch, activeCompletionEpoch,
                 eventSessionGeneration, activeSessionGeneration,
                 scenarioSessionGeneration, presentedSessionGeneration);
@@ -2712,6 +2823,15 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     && generation == event.getGeneration()
                     && token.equals(event.getToken());
         }
+    }
+
+    private record BenchmarkAudioPreArm(
+            long sessionGeneration,
+            long completionEpoch,
+            boolean scenario,
+            boolean scenarioCompleted,
+            int completedFrames,
+            int expectedFrames) {
     }
 
     /** Tiny testable monitor shared by the main-thread hide path and owner-thread audio polls. */
