@@ -843,18 +843,6 @@ class SwingGui private constructor(
     desktopUiCoordinator.commandBarVisible(visible)
   }
 
-  private fun netplaySummary(presentation: NetplayUiPresentation): String =
-      when (presentation.state.phase) {
-        NetplayPhase.DISCONNECTED -> "Netplay: Off"
-        NetplayPhase.STARTING_HOST -> "Netplay: Starting"
-        NetplayPhase.WAITING_FOR_PEERS -> "Netplay: Hosting"
-        NetplayPhase.CONNECTING -> "Netplay: Connecting"
-        NetplayPhase.NEGOTIATING -> "Netplay: Synchronizing"
-        NetplayPhase.ACTIVE -> "Netplay: Active"
-        NetplayPhase.STOPPING -> "Netplay: Stopping"
-        NetplayPhase.FAILED -> "Netplay: Failed"
-      }
-
   private fun confirmNetplayPeripheralHandoff(
       selection: Controller.SerialPeripheralSelection,
   ): Boolean =
@@ -1372,6 +1360,27 @@ internal fun ApplicationSettings.Appearance.toDesktopAppearance(): DesktopAppear
       ApplicationSettings.Appearance.DARK -> DesktopAppearance.DARK
       ApplicationSettings.Appearance.SYSTEM -> DesktopAppearance.SYSTEM
     }
+
+internal fun netplaySummary(presentation: NetplayUiPresentation): String {
+  val phase =
+      when (presentation.state.phase) {
+        NetplayPhase.DISCONNECTED -> "Off"
+        NetplayPhase.STARTING_HOST -> "Starting"
+        NetplayPhase.WAITING_FOR_PEERS -> "Hosting"
+        NetplayPhase.CONNECTING -> "Connecting"
+        NetplayPhase.NEGOTIATING -> "Synchronizing"
+        NetplayPhase.ACTIVE -> "Active"
+        NetplayPhase.STOPPING -> "Stopping"
+        NetplayPhase.FAILED -> "Failed"
+      }
+  val role =
+      when (presentation.state.role) {
+        NetplayRole.HOST -> "Host"
+        NetplayRole.CLIENT -> "Client"
+        null -> null
+      }
+  return if (role == null) "Netplay: $phase" else "Netplay: $role — $phase"
+}
 
 internal fun DesktopPreferencesCategory.toPreferencesCategory(): PreferencesCategory =
     when (this) {
