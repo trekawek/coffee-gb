@@ -1235,6 +1235,43 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
     }
 
     /**
+     * Stable physical-DMG/SGB x1 LCD-off plane. LCD-off freezes the DMG LCDC/register conflict
+     * histories and leaves VRAM accessible to the CPU, so those histories and the last VRAM-write
+     * age deliberately do not participate in this proof. The owner still fences LCDC/IO/OAM,
+     * DMA, and every host blank-boundary tick before entering the inert PPU clock.
+     */
+    public int performancePhysicalDmgNormalSpeedLcdOffSpanLimit(int requested) {
+        if (requested <= 0 || gbc || speedModeValue != 1
+                || lcdEnabled || lcdc.isLcdEnabled() || displayEnabledDelay != 0
+                || firstLine || line != 0 || ticksInLine != 0 || mode != Mode.HBlank
+                || performanceScanlineCursor || steadyTimingCursor
+                || !performanceScanlineEnabled || !performanceScanlineCapable
+                || !bootCompatibilityResolved
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || dma == null || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()) {
+            return 0;
+        }
+        return requested;
+    }
+
+    /** Advances the frozen physical-DMG/SGB LCD-off clock after a complete owner preflight. */
+    public void advancePerformancePhysicalDmgNormalSpeedLcdOffSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        assert performancePhysicalDmgNormalSpeedLcdOffSpanLimit(ticks) >= ticks
+                : "trusted physical-DMG x1 LCD-off proof changed before commit";
+        timingGeneration += ticks;
+        cpuLyReadAcrossLineEdge = false;
+        directOamReadCorruptionThisTick = false;
+        suppressNextDirectOamReadCorruption = false;
+        directOamWriteCorruptionThisTick = false;
+        suppressNextDirectOamWriteCorruption = false;
+    }
+
+    /**
      * Physical-DMG counterpart of {@link #performanceEpochSpanLimit(int)}. The empty output
      * clocks are part of the proof in HBlank/VBlank; IR, HDMA, mode 2 and scalar mode 3 are not.
      */

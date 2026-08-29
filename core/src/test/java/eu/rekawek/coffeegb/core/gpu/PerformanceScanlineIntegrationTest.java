@@ -352,6 +352,35 @@ public final class PerformanceScanlineIntegrationTest {
     }
 
     @Test
+    public void physicalDmgLcdOffHorizonFreezesUnsettledConflictHistory() throws Exception {
+        try (Gameboy scalar = session(false); Gameboy candidate = session(false)) {
+            int lcdc = scalar.getGpu().getByte(0xff40);
+            // Toggle real DMG LCDC conflict-mixed bits before disabling the LCD. The LCD-off
+            // proof intentionally does not wait for those histories to drain; they are frozen.
+            scalar.getGpu().setByte(0xff40, lcdc ^ 0x14);
+            candidate.getGpu().setByte(0xff40, lcdc ^ 0x14);
+            scalar.getGpu().setByte(0xff40, 0x00);
+            candidate.getGpu().setByte(0xff40, 0x00);
+            candidate.getGpu().setPerformanceScanlineEnabled(true);
+
+            assertDeepStateEquals("LCD-off state", scalar.getGpu().captureState(),
+                    candidate.getGpu().captureState());
+            assertTrue("physical-DMG LCD-off horizon rejected frozen history",
+                    candidate.getGpu().performancePhysicalDmgNormalSpeedLcdOffSpanLimit(54) > 0);
+            long generation = candidate.getGpu().getTimingGeneration();
+            candidate.getGpu().advancePerformancePhysicalDmgNormalSpeedLcdOffSpanTrusted(54);
+            for (int tick = 0; tick < 54; tick++) {
+                scalar.getGpu().tick();
+            }
+
+            assertEquals("LCD-off timing generation", generation + 54,
+                    candidate.getGpu().getTimingGeneration());
+            assertDeepStateEquals("LCD-off trusted advancement changed frozen PPU state",
+                    scalar.getGpu().captureState(), candidate.getGpu().captureState());
+        }
+    }
+
+    @Test
     public void cgbLcdcSizeAndTileHistoryFailClosedUntilNineDotsDrain() throws Exception {
         try (Gameboy gameboy = nativeCgbSession()) {
             settleNativeDoubleSpeed(gameboy);

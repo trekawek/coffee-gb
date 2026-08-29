@@ -22,7 +22,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/** Focused native-CGB and CGB-compatibility coverage for the coarse PERFORMANCE epoch entrance. */
+/** Focused fixed-x1 CGB, physical-DMG, and SGB coverage for the coarse PERFORMANCE epoch. */
 public final class GameboyPerformanceEpochTest {
 
     @Test
@@ -683,6 +683,46 @@ public final class GameboyPerformanceEpochTest {
             assertDeepStateEquals("after scalar LCDC enable",
                     scalar.captureStateWithoutTimeSource(),
                     candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void physicalDmgAndSgbNormalSpeedLcdOffVramEpochsMatchScalar()
+            throws Exception {
+        byte[] image = physicalDmgLcdOffVramThenEnable();
+        try (Gameboy scalar = physicalDmgSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = physicalDmgSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            assertLcdOffVramAndLcdcEnableMatchesScalar(scalar, candidate, "physical DMG");
+        }
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (Gameboy scalar = sgbSession(
+                    image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(
+                         image, profile, PlayerInputSource.RELEASED)) {
+                assertLcdOffVramAndLcdcEnableMatchesScalar(scalar, candidate, profile.id());
+            }
+        }
+    }
+
+    @Test
+    public void physicalDmgAndSgbNormalSpeedLcdOffBlankBoundariesMatchScalarDeepState()
+            throws Exception {
+        byte[] image = physicalDmgLcdOffVramLoop();
+        try (Gameboy scalar = physicalDmgSession(
+                image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
+             Gameboy candidate = physicalDmgSession(
+                     image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
+            assertLcdOffBlankBoundariesMatchScalar(scalar, candidate, "physical DMG");
+        }
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            try (Gameboy scalar = sgbSession(image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(image, profile, PlayerInputSource.RELEASED)) {
+                assertLcdOffBlankBoundariesMatchScalar(scalar, candidate, profile.id());
+            }
         }
     }
 
@@ -1710,6 +1750,82 @@ public final class GameboyPerformanceEpochTest {
                 candidate.captureStateWithoutTimeSource());
     }
 
+    private static void assertLcdOffVramAndLcdcEnableMatchesScalar(
+            Gameboy scalar, Gameboy candidate, String label) {
+        advancePairUntilLcdDisabled(scalar, candidate);
+        scalar.resetPerformanceBulkCounters();
+        candidate.resetPerformanceBulkCounters();
+
+        assertEquals(label + " LCD-off frame callback",
+                scalar.runTicks(2_000), candidate.runTicks(2_000));
+        int guard = 0;
+        while (!(candidate.getCpu().getState() == Cpu.State.RUNNING
+                && candidate.getCpu().getDebugOpcode() == 0xe0
+                && candidate.getCpu().getRegisters().getPC() == 0x0112
+                && candidate.getCpu().getDebugMachineCycle() == 3)
+                && guard++ < 12_000) {
+            assertEquals(label + " LCDC-enable setup frame callback",
+                    scalar.runTicks(1), candidate.runTicks(1));
+        }
+        assertTrue(label + " did not stop before the LCDC-enable write", guard < 12_000);
+        assertFalse(candidate.getGpu().isLcdEnabled());
+        assertTrue(label + " had no LCD-off epoch coverage",
+                candidate.getPerformanceEpochLcdOffTicks() > 0L);
+        assertEquals(label + " LCD-off epoch reached a terminal CPU access", 0L,
+                candidate.getCpu().getPerformanceEpochTerminalAccesses());
+        assertDeepStateEquals(label + " before LCDC enable",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+
+        scalar.resetPerformanceBulkCounters();
+        candidate.resetPerformanceBulkCounters();
+        assertEquals(label + " LCDC-enable boundary frame callback",
+                scalar.runTicks(1), candidate.runTicks(1));
+        assertEquals(label + " decoded LCDC enable crossed the LCD-off epoch", 0L,
+                candidate.getPerformanceEpochTicks());
+        assertEquals(label + " LCDC-enable tick was counted as LCD-off epoch", 0L,
+                candidate.getPerformanceEpochLcdOffTicks());
+        assertTrue(label + " LCDC enable did not take effect", candidate.getGpu().isLcdEnabled());
+        assertDeepStateEquals(label + " after scalar LCDC enable",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+    }
+
+    private static void assertLcdOffBlankBoundariesMatchScalar(
+            Gameboy scalar, Gameboy candidate, String label) {
+        advancePairUntilLcdDisabled(scalar, candidate);
+        scalar.resetPerformanceBulkCounters();
+        candidate.resetPerformanceBulkCounters();
+
+        int beforeInitialBlank = Gameboy.LCD_OFF_BLANK_DELAY - 2;
+        assertEquals(label + " LCD-off pre-blank frame callback", 0,
+                scalar.runTicks(beforeInitialBlank));
+        assertEquals(label + " LCD-off epoch crossed initial blank boundary", 0,
+                candidate.runTicks(beforeInitialBlank));
+        assertDeepStateEquals(label + " before initial LCD-off blank",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+
+        assertEquals(label + " scalar initial LCD-off blank", 1, scalar.runTicks(1));
+        assertEquals(label + " candidate initial LCD-off blank", 1, candidate.runTicks(1));
+        assertDeepStateEquals(label + " after initial LCD-off blank",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+
+        int beforeRecurringBlank = candidate.getClockSpec().controllerTicksPerFrame() - 1;
+        assertEquals(label + " LCD-off pre-refresh frame callback", 0,
+                scalar.runTicks(beforeRecurringBlank));
+        assertEquals(label + " LCD-off epoch crossed refresh blank boundary", 0,
+                candidate.runTicks(beforeRecurringBlank));
+        assertDeepStateEquals(label + " before recurring LCD-off blank",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+
+        assertEquals(label + " scalar recurring LCD-off blank", 1, scalar.runTicks(1));
+        assertEquals(label + " candidate recurring LCD-off blank", 1, candidate.runTicks(1));
+        assertTrue(label + " stable LCD-off loop had no epoch coverage",
+                candidate.getPerformanceEpochLcdOffTicks() > 50_000L);
+        assertEquals(label + " LCD-off VRAM accesses reached the terminal bus", 0L,
+                candidate.getCpu().getPerformanceEpochTerminalAccesses());
+        assertDeepStateEquals(label + " after recurring LCD-off blank",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+    }
+
     private static void startOneBlockGdma(Gameboy gameboy) {
         var bus = gameboy.getAddressSpace();
         bus.setByte(0xff51, 0);
@@ -1995,6 +2111,12 @@ public final class GameboyPerformanceEpochTest {
         return image;
     }
 
+    private static byte[] physicalDmgLcdOffVramLoop() {
+        byte[] image = nativeCgbLcdOffVramLoop();
+        image[0x143] = 0;
+        return image;
+    }
+
     private static byte[] nativeCgbLcdOffVramThenEnable() {
         byte[] image = new byte[0x8000];
         int pc = 0x100;
@@ -2021,6 +2143,12 @@ public final class GameboyPerformanceEpochTest {
         image[pc++] = 0x12;
         image[pc] = 0x01;
         image[0x143] = (byte) 0x80;
+        return image;
+    }
+
+    private static byte[] physicalDmgLcdOffVramThenEnable() {
+        byte[] image = nativeCgbLcdOffVramThenEnable();
+        image[0x143] = 0;
         return image;
     }
 

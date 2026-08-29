@@ -412,7 +412,8 @@ public class BenchmarkMatrixTest {
                         + " performance_epoch_ticks=8901 performance_epoch_max_ticks=64"
                         + " performance_epoch_raster_fast_ticks=7654"
                         + " performance_epoch_mode2_replay_ticks=4321"
-                        + " performance_epoch_mode2_bulk_ticks=4000");
+                        + " performance_epoch_mode2_bulk_ticks=4000"
+                        + " performance_epoch_lcd_off_ticks=4444");
         BenchmarkMatrix.Report accepted = parse(valid);
         assertTrue(accepted.errors().toString(), accepted.valid());
 
@@ -430,7 +431,8 @@ public class BenchmarkMatrixTest {
                 "performance_epoch_max_ticks",
                 "performance_epoch_raster_fast_ticks",
                 "performance_epoch_mode2_replay_ticks",
-                "performance_epoch_mode2_bulk_ticks")) {
+                "performance_epoch_mode2_bulk_ticks",
+                "performance_epoch_lcd_off_ticks")) {
             List<String> malformedEpoch = replaceFirstLineKey(
                     valid, "event=speed_sample", "", key, "not-a-number");
             BenchmarkMatrix.Report rejectedEpoch = parse(malformedEpoch);

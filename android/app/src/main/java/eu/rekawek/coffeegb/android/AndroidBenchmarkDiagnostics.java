@@ -660,6 +660,8 @@ final class AndroidBenchmarkDiagnostics {
                 + event.getPerformanceEpochMode2ReplayTicks()
                 + " performance_epoch_mode2_bulk_ticks="
                 + event.getPerformanceEpochMode2BulkTicks()
+                + " performance_epoch_lcd_off_ticks="
+                + event.getPerformanceEpochLcdOffTicks()
                 + " benchmark_audio_policy=" + event.getBenchmarkAudioPolicy()
                 + " benchmark_audio_requested=" + event.getBenchmarkAudioRequested()
                 + " benchmark_audio_active_at_boundary="

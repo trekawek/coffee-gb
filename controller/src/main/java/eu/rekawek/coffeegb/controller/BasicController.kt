@@ -1106,6 +1106,7 @@ class BasicController private constructor(
             currentSession.gameboy.getPerformanceEpochRasterFastTicks(),
             currentSession.gameboy.getPerformanceEpochMode2ReplayTicks(),
             currentSession.gameboy.getPerformanceEpochMode2BulkTicks(),
+            currentSession.gameboy.getPerformanceEpochLcdOffTicks(),
             policy,
             audioRequestedAtBoundary,
             activeAtBoundary,

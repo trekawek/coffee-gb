@@ -323,6 +323,7 @@ interface Controller : AutoCloseable {
       val performanceEpochRasterFastTicks: Long = 0L,
       val performanceEpochMode2ReplayTicks: Long = 0L,
       val performanceEpochMode2BulkTicks: Long = 0L,
+      val performanceEpochLcdOffTicks: Long = 0L,
       /** Host-only benchmark audio policy requested for this measured generation. */
       val benchmarkAudioPolicy: String = "canonical",
       val benchmarkAudioRequested: Boolean = false,
@@ -346,7 +347,7 @@ interface Controller : AutoCloseable {
     ) : this(
         frame, effectiveGbc, effectiveDmgCompat, speedMode,
         0L, 0L, 0L, 0L, 0, 0L, 0L, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        0L, "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
     /** Java/source compatibility for callers that supply the original bulk telemetry pair. */
@@ -360,7 +361,7 @@ interface Controller : AutoCloseable {
     ) : this(
         frame, effectiveGbc, effectiveDmgCompat, speedMode,
         performanceBulkSpans, performanceBulkTicks, 0L, 0L, 0, 0L, 0L, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        0L, "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
     /** Java/source compatibility for callers that predate the mode-2 bulk subset metric. */
@@ -381,7 +382,7 @@ interface Controller : AutoCloseable {
         performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
         performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
         performanceEpochMode2ReplayTicks, 0L,
-        "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+        0L, "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
     /** Java/source compatibility for callers that supplied the complete pre-policy telemetry. */
@@ -403,6 +404,30 @@ interface Controller : AutoCloseable {
         performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
         performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
         performanceEpochMode2ReplayTicks, performanceEpochMode2BulkTicks,
+        0L, "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+    )
+
+    /** Java/source compatibility constructor including fixed-x1 LCD-off epoch telemetry. */
+    constructor(
+        frame: Long,
+        effectiveGbc: Boolean,
+        effectiveDmgCompat: Boolean,
+        speedMode: Int,
+        performanceBulkSpans: Long,
+        performanceBulkTicks: Long,
+        performanceEpochCount: Long,
+        performanceEpochTicks: Long,
+        performanceEpochMaxTicks: Int,
+        performanceEpochRasterFastTicks: Long,
+        performanceEpochMode2ReplayTicks: Long,
+        performanceEpochMode2BulkTicks: Long,
+        performanceEpochLcdOffTicks: Long,
+    ) : this(
+        frame, effectiveGbc, effectiveDmgCompat, speedMode,
+        performanceBulkSpans, performanceBulkTicks, performanceEpochCount,
+        performanceEpochTicks, performanceEpochMaxTicks, performanceEpochRasterFastTicks,
+        performanceEpochMode2ReplayTicks, performanceEpochMode2BulkTicks,
+        performanceEpochLcdOffTicks,
         "canonical", false, false, false, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
     )
 
@@ -422,6 +447,9 @@ interface Controller : AutoCloseable {
       }
       require(performanceEpochMode2BulkTicks >= 0L) {
         "Benchmark epoch mode-2 bulk tick count must be non-negative"
+      }
+      require(performanceEpochLcdOffTicks >= 0L) {
+        "Benchmark epoch LCD-off tick count must be non-negative"
       }
       require(benchmarkAudioPolicy == "canonical" || benchmarkAudioPolicy == "silent-pcm-v1"
           || benchmarkAudioPolicy == "silent-pcm-relaxed-apu-v1") {
