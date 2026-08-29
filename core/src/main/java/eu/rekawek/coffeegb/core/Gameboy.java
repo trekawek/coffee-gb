@@ -275,6 +275,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         NONE,
         TRUSTED_RASTER,
         MODE2_BULK,
+        PHYSICAL_DMG_MODE2_BULK,
         MODE2_REPLAY,
         LCD_OFF
     }
@@ -1774,28 +1775,38 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         if (!gpu.isLcdEnabled()) {
-            return tryFixedNormalSpeedPerformanceEpoch(remaining, 0);
+            return tryFixedNormalSpeedPerformanceEpoch(
+                    remaining, PerformanceEpochPpuPlan.NONE, 0);
         }
         int requested = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
         int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
-        if (rasterSpan <= 0) {
+        if (rasterSpan > 0) {
+            return tryFixedNormalSpeedPerformanceEpoch(
+                    remaining, PerformanceEpochPpuPlan.TRUSTED_RASTER, rasterSpan);
+        }
+        int mode2Span = gpu.performancePhysicalDmgMode2PhaseSpanLimit(requested);
+        if (mode2Span <= 0) {
             return 0;
         }
-        return tryFixedNormalSpeedPerformanceEpoch(remaining, rasterSpan);
+        return tryFixedNormalSpeedPerformanceEpoch(
+                remaining, PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK, mode2Span);
     }
 
     /** Fixed-width normal-speed epoch implementation shared by SGB and CGB hardware. */
     private int tryFixedNormalSpeedPerformanceEpoch(long remaining) {
-        return tryFixedNormalSpeedPerformanceEpoch(remaining, 0);
+        return tryFixedNormalSpeedPerformanceEpoch(
+                remaining, PerformanceEpochPpuPlan.NONE, 0);
     }
 
     /**
-     * Fixed-width normal-speed epoch preflight with an optional already-proven SGB raster span.
-     * The SGB caller queries its pure raster horizon before this preflight; the other component
-     * horizons can only shorten {@code span}, so re-querying the same GPU state is redundant.
+     * Fixed-width normal-speed epoch preflight with an optional already-proven physical-DMG PPU
+     * plan. The SGB caller queries its pure raster/mode-2 horizon before this preflight; the
+     * other component horizons can only shorten {@code span}, so re-querying the same GPU state
+     * is redundant.
      */
     private int tryFixedNormalSpeedPerformanceEpoch(
-            long remaining, int precomputedSgbRasterSpan) {
+            long remaining, PerformanceEpochPpuPlan precomputedPpuPlan,
+            int precomputedPpuSpan) {
         boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
@@ -1856,21 +1867,30 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 ppuPlan = PerformanceEpochPpuPlan.MODE2_BULK;
             }
         } else {
-            if (sgb && precomputedSgbRasterSpan > 0) {
-                span = Math.min(span, precomputedSgbRasterSpan);
+            if (precomputedPpuPlan != PerformanceEpochPpuPlan.NONE) {
+                span = Math.min(span, precomputedPpuSpan);
+                ppuPlan = precomputedPpuPlan;
             } else {
                 int rasterSpan = cgbHardware
                         ? gpu.performanceEpochSpanLimit(span)
                         : gpu.performancePhysicalDmgEpochSpanLimit(span);
-                if (rasterSpan <= 0) {
+                if (rasterSpan > 0) {
+                    span = Math.min(span, rasterSpan);
+                    ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
+                } else if (!cgbHardware) {
+                    int mode2Span = gpu.performancePhysicalDmgMode2PhaseSpanLimit(span);
+                    if (mode2Span <= 0) {
+                        return 0;
+                    }
+                    span = Math.min(span, mode2Span);
+                    ppuPlan = PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK;
+                } else {
                     return 0;
                 }
-                span = Math.min(span, rasterSpan);
             }
             if (span <= 0) {
                 return 0;
             }
-            ppuPlan = PerformanceEpochPpuPlan.TRUSTED_RASTER;
         }
         span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
         if (span <= 0) {
@@ -1913,6 +1933,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                             : cpu.runCgbCompatibilityPerformanceEpoch(span)
                     : physicalDmgLcdOffEpoch
                             ? cpu.runPhysicalDmgNormalSpeedLcdOffPerformanceEpoch(span)
+                            : performanceEpochPpuPlan
+                                    == PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK
+                            ? cpu.runPhysicalDmgMode2PerformanceEpoch(span)
                             : sgb
                             ? cpu.runSgbPerformanceEpoch(span)
                             : cpu.runPhysicalDmgPerformanceEpoch(span);
@@ -2149,6 +2172,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 case LCD_OFF -> {
                     gpu.advancePerformancePhysicalDmgNormalSpeedLcdOffSpanTrusted(ticks);
                     performanceEpochLcdOffTicks += ticks;
+                }
+                case PHYSICAL_DMG_MODE2_BULK -> {
+                    gpu.advancePerformancePhysicalDmgMode2PhaseSpanTrusted(ticks);
+                    performanceEpochMode2ReplayTicks += ticks;
+                    performanceEpochMode2BulkTicks += ticks;
                 }
                 default -> throw new IllegalStateException(
                         "physical-DMG epoch has no PPU plan");

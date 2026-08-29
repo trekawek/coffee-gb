@@ -147,6 +147,50 @@ public final class GameboyPerformanceMode2PhaseTest {
     }
 
     @Test
+    public void sgbAndSgb2RunningMode2EpochMatchesScalarAcrossDotsAndBudgets()
+            throws Exception {
+        int[] dots = {0, 1, 2, 3, 12, 13, 20, 54, 76, 78};
+        int[] budgets = {1, 3, 7, 17, 54, 55, 79, 80, 127};
+        for (HardwareProfile profile : new HardwareProfile[] {
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            boolean sawMode2Epoch = false;
+            for (int dot : dots) {
+                for (int requested : budgets) {
+                    try (Gameboy scalar = session(profile, SCALAR_INPUT,
+                            ExecutionMode.PERFORMANCE, false);
+                         Gameboy candidate = session(profile, PlayerInputSource.RELEASED,
+                                 ExecutionMode.PERFORMANCE, false)) {
+                        reachMode2Start(scalar, candidate, dot, false);
+                        scalar.getGpu().setPerformanceScanlineEnabled(true);
+                        candidate.getGpu().setPerformanceScanlineEnabled(true);
+                        candidate.resetPerformanceBulkCounters();
+
+                        long scalarFrames = 0;
+                        for (int tick = 0; tick < requested; tick++) {
+                            if (scalar.tick()) {
+                                scalarFrames++;
+                            }
+                        }
+                        assertEquals(profile.id() + " running mode-2 frame callbacks dot="
+                                        + dot + " requested=" + requested,
+                                scalarFrames, candidate.runTicks(requested));
+                        assertEquals(profile.id() + " running mode-2 terminal access dot="
+                                        + dot + " requested=" + requested,
+                                0L, candidate.getCpu().getPerformanceEpochTerminalAccesses());
+                        sawMode2Epoch |= candidate.getPerformanceEpochMode2BulkTicks() > 0L;
+                        assertDeepStateEquals(profile.id() + " running mode-2 dot=" + dot
+                                        + " requested=" + requested,
+                                scalar.captureStateWithoutTimeSource(),
+                                candidate.captureStateWithoutTimeSource());
+                    }
+                }
+            }
+            assertTrue(profile.id() + " did not enter a running mode-2 CPU epoch",
+                    sawMode2Epoch);
+        }
+    }
+
+    @Test
     public void cgbCompatibilityMode2LeavesDot79To80Scalar() throws Exception {
         assertMode2LeavesDot79To80Scalar(HardwareProfileRegistry.CGB);
     }
