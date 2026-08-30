@@ -461,12 +461,12 @@ public class BenchmarkMatrixTest {
 
         List<String> negative = new ArrayList<>(valid);
         negative.set(speedIndex,
-                negative.get(speedIndex).replace("audio_terminal_underruns=0",
-                        "audio_terminal_underruns=-1"));
+                negative.get(speedIndex).replace("audio_terminal_queue_empty_polls=1",
+                        "audio_terminal_queue_empty_polls=-1"));
         BenchmarkMatrix.Report negativeReport = parse(negative);
         assertFalse(negativeReport.valid());
         assertContains(negativeReport.errors(),
-                "terminal audio value must be nonnegative audio_terminal_underruns");
+                "terminal audio value must be nonnegative audio_terminal_queue_empty_polls");
     }
 
     @Test
@@ -969,6 +969,29 @@ public class BenchmarkMatrixTest {
                 BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
         assertFalse(deniedFocusReport.accepted());
         assertContains(deniedFocusReport.errors(), "intrinsic audio output evidence");
+    }
+
+    @Test
+    public void realtimeAcceptanceAllowsSafeQueueEmptyPollsAndRejectsRiskAttribution() {
+        List<String> safePolls = replaceFirstKey(syntheticSummaryLog(61.0, 62.0),
+                "audio_queue_empty_polls", "5");
+        BenchmarkMatrix.Report safeReport = parse(safePolls, 31L,
+                BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+        assertTrue(safeReport.errors().toString(), safeReport.accepted());
+
+        for (String probe : List.of("1,1,0,0,2048,960", "1,0,1,0,2048,960",
+                "1,0,0,1,2048,960")) {
+            List<String> unsafe = replaceFirstKey(safePolls, "audio_queue_probe", probe);
+            BenchmarkMatrix.Report unsafeReport = parse(unsafe, 31L,
+                    BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+            assertTrue(probe + ": " + unsafeReport.errors(), unsafeReport.valid());
+            assertFalse(probe, unsafeReport.accepted());
+        }
+        List<String> trackUnderrun = replaceFirstKey(safePolls, "audio_track_underruns", "1");
+        BenchmarkMatrix.Report trackUnderrunReport = parse(trackUnderrun, 31L,
+                BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+        assertTrue(trackUnderrunReport.errors().toString(), trackUnderrunReport.valid());
+        assertFalse(trackUnderrunReport.accepted());
     }
 
     @Test
@@ -1512,13 +1535,25 @@ public class BenchmarkMatrixTest {
 
     private static String terminalAudioProof() {
         return " audio_terminal_active=true audio_terminal_output_playing=true"
-                + " audio_terminal_overruns=0 audio_terminal_underruns=0"
+                + " audio_terminal_overruns=0 audio_terminal_queue_empty_polls=1"
+                + " audio_terminal_queue_empty_episodes=1"
+                + " audio_terminal_queue_empty_low_runway_polls=0"
+                + " audio_terminal_queue_empty_unknown_runway_polls=0"
+                + " audio_terminal_queue_empty_track_underrun_edges=0"
                 + " audio_terminal_track_underruns=0 audio_terminal_restarts=0"
                 + " audio_terminal_write_failures=0 audio_terminal_route_failures=0"
+                + " audio_terminal_effective_buffer_frames=2048"
+                + " audio_terminal_output_start_threshold_frames=960"
                 + " audio_terminal_output_identity=11 audio_terminal_queue_identity=12"
-                + " audio_arm_overruns=0 audio_arm_underruns=0"
+                + " audio_arm_overruns=0 audio_arm_queue_empty_polls=0"
+                + " audio_arm_queue_empty_episodes=0"
+                + " audio_arm_queue_empty_low_runway_polls=0"
+                + " audio_arm_queue_empty_unknown_runway_polls=0"
+                + " audio_arm_queue_empty_track_underrun_edges=0"
                 + " audio_arm_track_underruns=0 audio_arm_restarts=0"
                 + " audio_arm_write_failures=0 audio_arm_route_failures=0"
+                + " audio_arm_effective_buffer_frames=2048"
+                + " audio_arm_output_start_threshold_frames=960"
                 + " audio_arm_output_identity=11 audio_arm_queue_identity=12";
     }
 
@@ -1529,11 +1564,14 @@ public class BenchmarkMatrixTest {
                 + " audio_start_write_failures=0 audio_start_discarded_bytes=0"
                 + " audio_start_pending_bytes=0 audio_start_queued_bytes=0"
                 + " audio_start_playback_position_frames=1 audio_start_overruns=0"
-                + " audio_start_underruns=0 audio_start_track_underruns=0"
+                + " audio_start_queue_empty_polls=0"
+                + " audio_start_queue_probe=0,0,0,0,2048,960"
+                + " audio_start_track_underruns=0"
                 + " audio_start_restarts=0 audio_start_route_failures=0"
                 + " audio_start_output_open=true audio_start_output_playing=true"
                 + " audio_start_sample_rate=48000 audio_start_queue_capacity_frames=6"
-                + " audio_start_max_frame_bytes=1000000";
+                + " audio_start_max_frame_bytes=1000000"
+                + " audio_start_output_identity=11 audio_start_queue_identity=12";
     }
 
     private static String audioEvidence(String row, double fps) {
@@ -1550,10 +1588,10 @@ public class BenchmarkMatrixTest {
         long writtenFrames = enqueuedFrames - 1L;
         long enqueuedBytes = enqueuedFrames * 4L;
         long writtenBytes = writtenFrames * 4L;
-        return "audio_active=true audio_sample_rate=48000 audio_overruns=0 audio_underruns=0"
+        return "audio_active=true audio_sample_rate=48000 audio_overruns=0"
+                + " audio_queue_empty_polls=1 audio_queue_probe=1,0,0,0,2048,960"
                 + " audio_track_underruns=0"
-                + " audio_restarts=0 audio_paused=false audio_min_buffer_bytes=1024"
-                + " audio_configured_buffer_bytes=2048 audio_actual_buffer_bytes=2048"
+                + " audio_restarts=0 audio_paused=false audio_buffer_bytes=1024,2048,2048"
                 + " audio_pcm_input_events=" + inputEvents
                 + " audio_pcm_input_frames=41943000"
                 + " audio_pcm_enqueued_bytes=" + enqueuedBytes
@@ -1567,7 +1605,7 @@ public class BenchmarkMatrixTest {
                 + " audio_playback_position_frames=100 audio_system_volume=10"
                 + " audio_system_volume_max=15 audio_system_music_muted=false"
                 + " audio_queue_capacity_frames=6 audio_max_frame_bytes=1000000"
-                + " " + audioStartEvidence()
+                + " audio_output_identity=11 audio_queue_identity=12"
                 + " audio_focus_granted=true audio_focus_start_loss_count=0"
                 + " audio_focus_loss_count=0";
     }
@@ -1617,8 +1655,7 @@ public class BenchmarkMatrixTest {
                         + " audio_start_muted=false audio_start_volume=100"
                         + " audio_start_system_volume=0 audio_start_system_volume_max=15"
                         + " audio_start_system_music_muted=true audio_start_queued_frames=0"
-                        + " audio_start_reopen_pending=false"
-                        + " audio_start_output_identity=11 audio_start_queue_identity=12";
+                        + " audio_start_reopen_pending=false";
                 line = line.replace("audio_start_input_events=0", "audio_start_input_events=1")
                         .replace("audio_start_input_frames=0", "audio_start_input_frames=1")
                         .replace("audio_start_written_bytes=0", "audio_start_written_bytes=4")
@@ -1642,8 +1679,7 @@ public class BenchmarkMatrixTest {
                         + " benchmark_audio_apu_reads=0 benchmark_audio_apu_writes=0"
                         + " benchmark_audio_frame_sequencer_commits=1"
                         + " benchmark_audio_dropped_channel_ticks=0"
-                        + " system_audio_sample_count=12 system_audio_bad_count=0"
-                        + " audio_output_identity=11 audio_queue_identity=12";
+                        + " system_audio_sample_count=12 system_audio_bad_count=0";
             }
             result.add(line);
         }

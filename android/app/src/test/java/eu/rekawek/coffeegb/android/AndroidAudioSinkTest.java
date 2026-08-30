@@ -426,6 +426,92 @@ public class AndroidAudioSinkTest {
     }
 
     @Test
+    public void queueEmptyRunwayThresholdUsesCeilingAtSupportedRates() {
+        assertEquals(882, AndroidAudioSink.pcmQueueEmptyRunwayThresholdFrames(44_100));
+        assertTrue(AndroidAudioSink.isPcmQueueEmptyLowRunway(881L, 44_100));
+        assertFalse(AndroidAudioSink.isPcmQueueEmptyLowRunway(882L, 44_100));
+
+        assertEquals(960, AndroidAudioSink.pcmQueueEmptyRunwayThresholdFrames(48_000));
+        assertTrue(AndroidAudioSink.isPcmQueueEmptyLowRunway(959L, 48_000));
+        assertFalse(AndroidAudioSink.isPcmQueueEmptyLowRunway(960L, 48_000));
+    }
+
+    @Test
+    public void safeFixedHeadQueueTimeoutsDoNotClaimOutputFailure() throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        FakeFactory factory = new FakeFactory();
+        factory.nextInitialPlaybackHeadFrames = 0L;
+        AndroidAudioSink sink = new AndroidAudioSink(events, factory);
+        sink.start();
+        try {
+            await("audio output", () -> sink.stats().sampleRate() == SAMPLE_RATE);
+            post(events, packets(ClockSpec.LEGACY, 4, 100));
+            FakeOutput output = factory.current();
+            await("primed playback", () -> output.playCalls == 1);
+            await("two safe queue-empty polls", () -> sink.stats().pcmQueueEmptyPolls() >= 2L);
+
+            AndroidAudioSink.Stats stats = sink.stats();
+            assertTrue(stats.pcmQueueEmptyPolls() >= 2L);
+            assertEquals(1L, stats.pcmQueueEmptyEpisodes());
+            assertEquals(0L, stats.pcmQueueEmptyLowRunwayPolls());
+            assertEquals(0L, stats.pcmQueueEmptyUnknownRunwayPolls());
+            assertEquals(0L, stats.pcmQueueEmptyTrackUnderrunEdges());
+            assertEquals(0L, stats.outputUnderruns());
+            assertEquals(0L, stats.overruns());
+            assertEquals(0L, stats.restarts());
+            assertEquals(0L, stats.writeFailures());
+            assertEquals(0L, stats.routeFailures());
+            assertEquals(0, output.flushCalls);
+            assertEquals(1, factory.opens.get());
+            assertEquals(output.effectiveBufferFrames(), stats.effectiveBufferFrames());
+            assertEquals(output.startThresholdFrames(), stats.outputStartThresholdFrames());
+        } finally {
+            sink.close();
+        }
+    }
+
+    @Test
+    public void consecutiveQueueTimeoutsShareEpisodeAndSuccessfulPacketStartsAnother()
+            throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        FakeFactory factory = new FakeFactory();
+        factory.nextInitialPlaybackHeadFrames = 0L;
+        AndroidAudioSink sink = new AndroidAudioSink(events, factory);
+        sink.start();
+        try {
+            await("audio output", () -> sink.stats().sampleRate() == SAMPLE_RATE);
+            List<Sound.SoundSampleEvent> primer = packets(ClockSpec.LEGACY, 4, 100);
+            post(events, primer);
+            FakeOutput output = factory.current();
+            await("primed playback", () -> output.playCalls == 1);
+            await("first timeout episode", () -> sink.stats().pcmQueueEmptyPolls() >= 2L);
+            AndroidAudioSink.Stats first = sink.stats();
+            assertEquals(1L, first.pcmQueueEmptyEpisodes());
+
+            int acceptedBefore = output.acceptedLength();
+            events.post(packet(ClockSpec.LEGACY, 900));
+            await("successful packet after timeout", () -> output.acceptedLength() > acceptedBefore);
+            await("second timeout episode",
+                    () -> sink.stats().pcmQueueEmptyEpisodes() == 2L);
+            assertTrue(sink.stats().pcmQueueEmptyPolls() > first.pcmQueueEmptyPolls());
+        } finally {
+            sink.close();
+        }
+    }
+
+    @Test
+    public void unavailableAndRegressingPlaybackHeadsAttributeUnknownRunway() throws Exception {
+        assertUnknownRunwayAttribution(true, false);
+        assertUnknownRunwayAttribution(false, true);
+    }
+
+    @Test
     public void advancingHeadCannotEndRecoveryBeforeLatestRefillThresholdIsRebuilt() {
         AndroidAudioSink.UnderrunRecovery recovery = new AndroidAudioSink.UnderrunRecovery();
         assertTrue(recovery.rebase(100L, 1_000L, 100L, 400));
@@ -897,6 +983,34 @@ public class AndroidAudioSinkTest {
         return combined;
     }
 
+    private static void assertUnknownRunwayAttribution(boolean unavailable, boolean regressing)
+            throws Exception {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        FakeFactory factory = new FakeFactory();
+        factory.nextPlaybackHeadUnavailable = unavailable;
+        factory.nextPlaybackHeadRegressing = regressing;
+        AndroidAudioSink sink = new AndroidAudioSink(events, factory);
+        sink.start();
+        try {
+            await("audio output", () -> sink.stats().sampleRate() == SAMPLE_RATE);
+            post(events, packets(ClockSpec.LEGACY, 4, 100));
+            await("primed playback", () -> factory.current().playCalls == 1);
+            await("unknown queue-empty runway",
+                    () -> sink.stats().pcmQueueEmptyUnknownRunwayPolls() > 0L);
+            AndroidAudioSink.Stats stats = sink.stats();
+            assertTrue(stats.pcmQueueEmptyPolls() > 0L);
+            assertTrue(stats.pcmQueueEmptyUnknownRunwayPolls() > 0L);
+            assertEquals(0L, stats.pcmQueueEmptyLowRunwayPolls());
+            assertEquals(0L, stats.pcmQueueEmptyTrackUnderrunEdges());
+            assertEquals(0L, stats.outputUnderruns());
+        } finally {
+            sink.close();
+        }
+    }
+
     private static void post(EventBusImpl events, List<Sound.SoundSampleEvent> packets) {
         for (Sound.SoundSampleEvent packet : packets) {
             events.post(packet);
@@ -930,6 +1044,8 @@ public class AndroidAudioSinkTest {
         private volatile int nextStartThresholdFrames;
         private volatile long nextInitialPlaybackHeadFrames = -1L;
         private volatile int nextUnavailablePlaybackHeadReads;
+        private volatile boolean nextPlaybackHeadUnavailable;
+        private volatile boolean nextPlaybackHeadRegressing;
         private volatile FailurePoint firstOutputFailure = FailurePoint.NONE;
 
         @Override
@@ -937,7 +1053,8 @@ public class AndroidAudioSinkTest {
             int identity = opens.incrementAndGet();
             FakeOutput output = new FakeOutput(this, identity, nextSampleRate,
                     nextEffectiveBufferFrames, nextStartThresholdFrames,
-                    nextInitialPlaybackHeadFrames, nextUnavailablePlaybackHeadReads);
+                    nextInitialPlaybackHeadFrames, nextUnavailablePlaybackHeadReads,
+                    nextPlaybackHeadUnavailable, nextPlaybackHeadRegressing);
             output.writeLimit = writeLimit;
             output.blockFirstWrite = blockFirstWrite && identity == 1;
             if (identity == 1) {
@@ -1005,11 +1122,15 @@ public class AndroidAudioSinkTest {
         private volatile long recoveryAcceptedBaseFrames;
         private volatile long recoveryHeadFrames;
         private int unavailablePlaybackHeadReads;
+        private final boolean playbackHeadUnavailable;
+        private final boolean playbackHeadRegressing;
+        private long playbackHeadReads;
         private volatile FailurePoint armedFailure = FailurePoint.NONE;
 
         private FakeOutput(FakeFactory owner, int identity, int sampleRate,
                 int configuredEffectiveFrames, int configuredStartThresholdFrames,
-                long initialPlaybackHeadFrames, int unavailablePlaybackHeadReads) {
+                long initialPlaybackHeadFrames, int unavailablePlaybackHeadReads,
+                boolean playbackHeadUnavailable, boolean playbackHeadRegressing) {
             this.owner = owner;
             this.identity = identity;
             this.sampleRate = sampleRate;
@@ -1029,6 +1150,8 @@ public class AndroidAudioSinkTest {
             }
             manualPlaybackHeadFrames = initialPlaybackHeadFrames;
             this.unavailablePlaybackHeadReads = unavailablePlaybackHeadReads;
+            this.playbackHeadUnavailable = playbackHeadUnavailable;
+            this.playbackHeadRegressing = playbackHeadRegressing;
         }
 
         private void armBlockedWrite() {
@@ -1082,6 +1205,12 @@ public class AndroidAudioSinkTest {
 
         @Override
         public synchronized long playbackPositionFrames() {
+            if (playbackHeadUnavailable) {
+                return -1L;
+            }
+            if (playbackHeadRegressing) {
+                return (playbackHeadReads++ & 1L) == 0L ? 100L : 101L;
+            }
             if (unavailablePlaybackHeadReads > 0) {
                 unavailablePlaybackHeadReads--;
                 return -1L;

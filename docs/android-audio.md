@@ -71,10 +71,10 @@ are committed as they enter the playing output, so even an OEM-large effective r
 tie up the fixed source slots. A missing, invalid, or
 persistently non-progressing playback head uses the same fail-safe. As with a physical route loss,
 that exceptional replacement can have a discontinuity because the failed output cannot prove what
-reached the speaker. Statistics
-include producer overruns, consumer underruns, and successful output restarts for diagnostics and
-test probes. Closing the session unregisters the route callback and releases the output on that
-same consumer thread.
+reached the speaker. Statistics include producer overruns, PCM queue-empty polls with runway
+attribution, authoritative `AudioTrack` underruns, and successful output restarts for diagnostics
+and test probes. Closing the session unregisters the route callback and releases the output on
+that same consumer thread.
 
 The benchmark APK has one deliberately narrow exception: its established pre-ARM proof must move
 an empty `AudioTrack` from stopped to playing while the emulated guest remains paused and cannot
