@@ -90,7 +90,7 @@ final class AndroidAudioSink implements AutoCloseable {
         void release();
     }
 
-    record Stats(int sampleRate, long overruns, long underruns, long outputUnderruns,
+    record Stats(int sampleRate, long overruns, long pcmQueueEmptyPolls, long outputUnderruns,
                  long restarts, boolean paused,
                  boolean active, int minimumBufferBytes, int configuredBufferBytes,
                  int actualBufferBytes, long pcmInputEvents, long pcmInputFrames,
@@ -100,9 +100,36 @@ final class AndroidAudioSink implements AutoCloseable {
                  boolean outputOpen, boolean outputPlaying, boolean muted, int volume,
                  long routeFailures, long playbackPositionFrames, int systemVolume,
                  int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
-                 int maximumFrameBytes, long outputIdentity, long queueIdentity) {
+                 int maximumFrameBytes, long outputIdentity, long queueIdentity,
+                 long pcmQueueEmptyEpisodes, long pcmQueueEmptyLowRunwayPolls,
+                 long pcmQueueEmptyUnknownRunwayPolls, long pcmQueueEmptyTrackUnderrunEdges,
+                 int effectiveBufferFrames, int outputStartThresholdFrames) {
         /** Source-compatible constructor retained for existing benchmark fixtures. */
-        Stats(int sampleRate, long overruns, long underruns, long outputUnderruns,
+        Stats(int sampleRate, long overruns, long pcmQueueEmptyPolls, long outputUnderruns,
+                long restarts, boolean paused,
+                boolean active, int minimumBufferBytes, int configuredBufferBytes,
+                int actualBufferBytes, long pcmInputEvents, long pcmInputFrames,
+                long pcmEnqueuedBytes, long pcmEnqueuedFrames, long pcmWrittenBytes,
+                long pcmWrittenFrames, long writeFailures, long pcmDiscardedBytes,
+                long pcmPendingBytes, long pcmQueuedBytes, int queuedFrames,
+                boolean outputOpen, boolean outputPlaying, boolean muted, int volume,
+                long routeFailures, long playbackPositionFrames, int systemVolume,
+                int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
+                int maximumFrameBytes, long outputIdentity, long queueIdentity) {
+            this(sampleRate, overruns, pcmQueueEmptyPolls, outputUnderruns, restarts, paused,
+                    active, minimumBufferBytes, configuredBufferBytes, actualBufferBytes,
+                    pcmInputEvents, pcmInputFrames, pcmEnqueuedBytes, pcmEnqueuedFrames,
+                    pcmWrittenBytes, pcmWrittenFrames, writeFailures, pcmDiscardedBytes,
+                    pcmPendingBytes, pcmQueuedBytes, queuedFrames, outputOpen, outputPlaying,
+                    muted, volume, routeFailures, playbackPositionFrames, systemVolume,
+                    systemVolumeMax, systemMusicMuted, queueCapacityFrames, maximumFrameBytes,
+                    outputIdentity, queueIdentity, 0L, 0L, 0L, 0L,
+                    actualBufferBytes > 0 ? actualBufferBytes / 4 : 0,
+                    actualBufferBytes > 0 ? actualBufferBytes / 4 : 0);
+        }
+
+        /** Source-compatible constructor retained for existing benchmark fixtures. */
+        Stats(int sampleRate, long overruns, long pcmQueueEmptyPolls, long outputUnderruns,
                 long restarts, boolean paused,
                 boolean active, int minimumBufferBytes, int configuredBufferBytes,
                 int actualBufferBytes, long pcmInputEvents, long pcmInputFrames,
@@ -113,7 +140,7 @@ final class AndroidAudioSink implements AutoCloseable {
                 long routeFailures, long playbackPositionFrames, int systemVolume,
                 int systemVolumeMax, boolean systemMusicMuted, int queueCapacityFrames,
                 int maximumFrameBytes) {
-            this(sampleRate, overruns, underruns, outputUnderruns, restarts, paused, active,
+            this(sampleRate, overruns, pcmQueueEmptyPolls, outputUnderruns, restarts, paused, active,
                     minimumBufferBytes, configuredBufferBytes, actualBufferBytes,
                     pcmInputEvents, pcmInputFrames, pcmEnqueuedBytes, pcmEnqueuedFrames,
                     pcmWrittenBytes, pcmWrittenFrames, writeFailures, pcmDiscardedBytes,
@@ -128,25 +155,55 @@ final class AndroidAudioSink implements AutoCloseable {
     record AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
                          long writtenBytes, long writtenFrames, long writeFailures,
                          long discardedBytes, long pendingBytes, long queuedBytes,
-                         long playbackPositionFrames, long overruns, long underruns,
+                         long playbackPositionFrames, long overruns, long pcmQueueEmptyPolls,
                          long outputUnderruns, long restarts,
                          long routeFailures, boolean outputOpen, boolean outputPlaying,
                          int sampleRate, int queueCapacityFrames, int maximumFrameBytes,
                          boolean active, boolean paused, boolean muted, int volume,
                          int systemVolume, int systemVolumeMax, boolean systemMusicMuted,
                          int queuedFrames, boolean reopenPending, long outputIdentity,
-                         long queueIdentity) {
+                         long queueIdentity, long pcmQueueEmptyEpisodes,
+                         long pcmQueueEmptyLowRunwayPolls,
+                         long pcmQueueEmptyUnknownRunwayPolls,
+                         long pcmQueueEmptyTrackUnderrunEdges, int effectiveBufferFrames,
+                         int outputStartThresholdFrames) {
         /** Source-compatible constructor retained for existing benchmark fixtures. */
         AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
                 long writtenBytes, long writtenFrames, long writeFailures,
                 long discardedBytes, long pendingBytes, long queuedBytes,
-                long playbackPositionFrames, long overruns, long underruns,
+                long playbackPositionFrames, long overruns, long pcmQueueEmptyPolls,
+                long outputUnderruns, long restarts, long routeFailures,
+                boolean outputOpen, boolean outputPlaying, int sampleRate,
+                int queueCapacityFrames, int maximumFrameBytes, boolean active, boolean paused,
+                boolean muted, int volume, int systemVolume, int systemVolumeMax,
+                boolean systemMusicMuted, int queuedFrames, boolean reopenPending,
+                long outputIdentity, long queueIdentity) {
+            this(inputEvents, inputFrames, enqueuedBytes, enqueuedFrames, writtenBytes,
+                    writtenFrames, writeFailures, discardedBytes, pendingBytes, queuedBytes,
+                    playbackPositionFrames, overruns, pcmQueueEmptyPolls, outputUnderruns,
+                    restarts, routeFailures, outputOpen, outputPlaying, sampleRate,
+                    queueCapacityFrames, maximumFrameBytes, active, paused, muted, volume,
+                    systemVolume, systemVolumeMax, systemMusicMuted, queuedFrames, reopenPending,
+                    outputIdentity, queueIdentity,
+                    pcmQueueEmptyPolls < 0L ? -1L : 0L,
+                    pcmQueueEmptyPolls < 0L ? -1L : 0L,
+                    pcmQueueEmptyPolls < 0L ? -1L : 0L,
+                    pcmQueueEmptyPolls < 0L ? -1L : 0L,
+                    sampleRate > 0 && queueCapacityFrames > 0 ? queueCapacityFrames : -1,
+                    sampleRate > 0 && queueCapacityFrames > 0 ? queueCapacityFrames : -1);
+        }
+
+        /** Source-compatible constructor retained for existing benchmark fixtures. */
+        AudioBaseline(long inputEvents, long inputFrames, long enqueuedBytes, long enqueuedFrames,
+                long writtenBytes, long writtenFrames, long writeFailures,
+                long discardedBytes, long pendingBytes, long queuedBytes,
+                long playbackPositionFrames, long overruns, long pcmQueueEmptyPolls,
                 long outputUnderruns, long restarts, long routeFailures,
                 boolean outputOpen, boolean outputPlaying, int sampleRate,
                 int queueCapacityFrames, int maximumFrameBytes) {
             this(inputEvents, inputFrames, enqueuedBytes, enqueuedFrames, writtenBytes,
                     writtenFrames, writeFailures, discardedBytes, pendingBytes, queuedBytes,
-                    playbackPositionFrames, overruns, underruns, outputUnderruns, restarts,
+                    playbackPositionFrames, overruns, pcmQueueEmptyPolls, outputUnderruns, restarts,
                     routeFailures, outputOpen, outputPlaying, sampleRate, queueCapacityFrames,
                     maximumFrameBytes, outputOpen, false, false, 100, 1, 1, false,
                     queuedBytes > 0L ? 1 : 0, false, outputOpen ? 1L : 0L,
@@ -175,7 +232,7 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AtomicLong pauseFlushGeneration = new AtomicLong();
     /** Monotonic fence for PCM rendered with an obsolete mute/volume policy. */
     private final AtomicLong pcmPolicyGeneration = new AtomicLong();
-    private final AtomicLong underruns = new AtomicLong();
+    private final AtomicLong pcmQueueEmptyPolls = new AtomicLong();
     private final AtomicLong restarts = new AtomicLong();
     /** Monotonic identity fence for observational benchmark snapshots. */
     private final AtomicLong routeGeneration = new AtomicLong();
@@ -223,6 +280,8 @@ final class AndroidAudioSink implements AutoCloseable {
     private volatile Output activeOutput;
     private volatile long playbackPositionFrames = -1L;
     private volatile long outputUnderruns = -1L;
+    private volatile int effectiveBufferFrames;
+    private volatile int outputStartThresholdFrames;
     private volatile int systemVolume = -1;
     private volatile int systemVolumeMax = -1;
     private volatile boolean systemMusicMuted = true;
@@ -362,13 +421,18 @@ final class AndroidAudioSink implements AutoCloseable {
                         snapshot.writtenFrames(), snapshot.writeFailures(), snapshot.discardedBytes(),
                         snapshot.pendingBytes(), active == null ? 0L : active.queuedBytes(),
                         playbackPositionFrames, active == null ? 0L : active.overruns(),
-                        underruns.get(), outputUnderruns, restarts.get(), snapshot.routeFailures(),
+                        pcmQueueEmptyPolls.get(), outputUnderruns, restarts.get(),
+                        snapshot.routeFailures(),
                         baselineOutputOpen, baselineOutputPlaying, sampleRate,
                         active == null ? 0 : active.capacityFrames(),
                         active == null ? 0 : active.maximumFrameBytes(), running.get(), paused, muted,
                         volume, systemVolume, systemVolumeMax, systemMusicMuted,
                         active == null ? 0 : active.queuedFrames(), baselineReopenPending,
-                        outputIdentity, queueIdentity);
+                        outputIdentity, queueIdentity, snapshot.pcmQueueEmptyEpisodes(),
+                        snapshot.pcmQueueEmptyLowRunwayPolls(),
+                        snapshot.pcmQueueEmptyUnknownRunwayPolls(),
+                        snapshot.pcmQueueEmptyTrackUnderrunEdges(), effectiveBufferFrames,
+                        outputStartThresholdFrames);
                 if (routeGeneration.get() != generation
                         || activeOutput != output || queue != active
                         || outputOpen != baselineOutputOpen
@@ -428,7 +492,8 @@ final class AndroidAudioSink implements AutoCloseable {
                 return diagnosticStats(active);
             }
         }
-        return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
+        return new Stats(sampleRate, active == null ? 0 : active.overruns(),
+                pcmQueueEmptyPolls.get(),
                 -1L, restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
                 actualBufferBytes, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
                 active == null ? 0 : active.queuedFrames(), false, false, muted, volume, 0L,
@@ -444,7 +509,8 @@ final class AndroidAudioSink implements AutoCloseable {
                 : Integer.toUnsignedLong(System.identityHashCode(output));
         long queueIdentity = active == null ? 0L
                 : Integer.toUnsignedLong(System.identityHashCode(active));
-        return new Stats(sampleRate, active == null ? 0 : active.overruns(), underruns.get(),
+        return new Stats(sampleRate, active == null ? 0 : active.overruns(),
+                pcmQueueEmptyPolls.get(),
                 outputUnderruns, restarts.get(), paused, running.get(), minimumBufferBytes, configuredBufferBytes,
                 actualBufferBytes, snapshot.inputEvents(), snapshot.inputFrames(),
                 snapshot.enqueuedBytes(), snapshot.enqueuedFrames(), snapshot.writtenBytes(),
@@ -453,7 +519,11 @@ final class AndroidAudioSink implements AutoCloseable {
                 active == null ? 0 : active.queuedFrames(), outputOpen, outputPlaying, muted,
                 volume, snapshot.routeFailures(), playbackPositionFrames, systemVolume,
                 systemVolumeMax, systemMusicMuted, active == null ? 0 : active.capacityFrames(),
-                active == null ? 0 : active.maximumFrameBytes(), outputIdentity, queueIdentity);
+                active == null ? 0 : active.maximumFrameBytes(), outputIdentity, queueIdentity,
+                snapshot.pcmQueueEmptyEpisodes(), snapshot.pcmQueueEmptyLowRunwayPolls(),
+                snapshot.pcmQueueEmptyUnknownRunwayPolls(),
+                snapshot.pcmQueueEmptyTrackUnderrunEdges(), effectiveBufferFrames,
+                outputStartThresholdFrames);
     }
 
     AudioStats audioStats() {
@@ -560,6 +630,7 @@ final class AndroidAudioSink implements AutoCloseable {
         int primerReplayIndex = 0;
         int primerPackets = 0;
         int primerBytes = 0;
+        boolean pcmQueueEmptyEpisodeActive = false;
         try {
             while (running.get()) {
                 long requestedPauseFlushGeneration = pauseFlushGeneration.get();
@@ -577,6 +648,9 @@ final class AndroidAudioSink implements AutoCloseable {
                     primerPackets = 0;
                     primerBytes = 0;
                     outputStarted = false;
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        pcmQueueEmptyEpisodeActive = false;
+                    }
                     underrunRecovery.reset();
                     if (resetOutputForPcmBoundary(output)) {
                         outputProgress.resetAfterFlush(output);
@@ -597,8 +671,15 @@ final class AndroidAudioSink implements AutoCloseable {
                     activeOutput = output;
                     routeGeneration.incrementAndGet();
                     outputStarted = false;
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        pcmQueueEmptyEpisodeActive = false;
+                    }
                     underrunRecovery.reset();
                     outputBufferLimits = OutputBufferLimits.UNAVAILABLE;
+                    if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                        effectiveBufferFrames = 0;
+                        outputStartThresholdFrames = 0;
+                    }
                     primerReplayIndex = 0;
                     primerPackets = 0;
                     primerBytes = 0;
@@ -646,6 +727,8 @@ final class AndroidAudioSink implements AutoCloseable {
                     if (BuildConfig.DIAGNOSTICS_ENABLED) {
                         outputOpen = true;
                         outputPlaying = false;
+                        effectiveBufferFrames = outputBufferLimits.effectiveBufferFrames();
+                        outputStartThresholdFrames = outputBufferLimits.startThresholdFrames();
                     }
                     if (outputOpenedOnce) {
                         restarts.incrementAndGet();
@@ -730,6 +813,9 @@ final class AndroidAudioSink implements AutoCloseable {
                                 POLL_MILLIS, TimeUnit.MILLISECONDS);
                         if (frame == null) {
                             continue;
+                        }
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            pcmQueueEmptyEpisodeActive = false;
                         }
                         reconcileFrameAccounting(activeQueue, frame);
                         long latestPauseFlushGeneration = pauseFlushGeneration.get();
@@ -846,6 +932,9 @@ final class AndroidAudioSink implements AutoCloseable {
                                 POLL_MILLIS, TimeUnit.MILLISECONDS);
                         if (frame == null) {
                             continue;
+                        }
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            pcmQueueEmptyEpisodeActive = false;
                         }
                         reconcileFrameAccounting(activeQueue, frame);
                         long latestPauseFlushGeneration = pauseFlushGeneration.get();
@@ -978,9 +1067,31 @@ final class AndroidAudioSink implements AutoCloseable {
                 BoundedPcmQueue.Frame frame = activeQueue.poll(POLL_MILLIS, TimeUnit.MILLISECONDS);
                 if (frame == null) {
                     if (hasProducedPcm) {
-                        underruns.incrementAndGet();
+                        if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                            long playedFrames = outputProgress.readPlaybackPosition(output);
+                            long bufferedFrames = outputProgress.bufferedFrames(playedFrames);
+                            int runwayFrames = pcmQueueEmptyRunwayThresholdFrames(sampleRate);
+                            boolean unknownRunway = bufferedFrames < 0L || runwayFrames <= 0;
+                            boolean lowRunway = isPcmQueueEmptyLowRunway(
+                                    bufferedFrames, sampleRate);
+                            long attributedOutputUnderruns = sampleOutputUnderruns(output,
+                                    observedOutputUnderruns);
+                            boolean trackUnderrunEdge = hasOutputUnderrunIncreased(
+                                    observedOutputUnderruns, attributedOutputUnderruns);
+                            synchronized (pcmAccounting) {
+                                pcmQueueEmptyPolls.incrementAndGet();
+                                pcmAccounting.queueEmpty(!pcmQueueEmptyEpisodeActive,
+                                        lowRunway, unknownRunway, trackUnderrunEdge);
+                            }
+                            pcmQueueEmptyEpisodeActive = true;
+                        } else {
+                            pcmQueueEmptyPolls.incrementAndGet();
+                        }
                     }
                     continue;
+                }
+                if (BuildConfig.DIAGNOSTICS_ENABLED) {
+                    pcmQueueEmptyEpisodeActive = false;
                 }
                 reconcileFrameAccounting(activeQueue, frame);
                 long latestPauseFlushGeneration = pauseFlushGeneration.get();
@@ -1093,6 +1204,8 @@ final class AndroidAudioSink implements AutoCloseable {
             if (BuildConfig.DIAGNOSTICS_ENABLED) {
                 outputOpen = false;
                 outputPlaying = false;
+                effectiveBufferFrames = 0;
+                outputStartThresholdFrames = 0;
             }
             release(output);
         }
@@ -1159,6 +1272,19 @@ final class AndroidAudioSink implements AutoCloseable {
             throw new IllegalStateException("Invalid AudioTrack buffer limits");
         }
         return new OutputBufferLimits(capacityFrames, effectiveFrames, startThresholdFrames);
+    }
+
+    static int pcmQueueEmptyRunwayThresholdFrames(int sampleRate) {
+        if (sampleRate <= 0) {
+            return 0;
+        }
+        return (int) (((long) sampleRate * POLL_MILLIS + 999L) / 1_000L);
+    }
+
+    static boolean isPcmQueueEmptyLowRunway(long bufferedFrames, int sampleRate) {
+        int thresholdFrames = pcmQueueEmptyRunwayThresholdFrames(sampleRate);
+        return bufferedFrames >= 0L && thresholdFrames > 0
+                && bufferedFrames < thresholdFrames;
     }
 
     private WriteResult writeFrame(Output output, PendingFrame pending,
@@ -1496,6 +1622,9 @@ final class AndroidAudioSink implements AutoCloseable {
 
         void routeFailure();
 
+        void queueEmpty(boolean newEpisode, boolean lowRunway, boolean unknownRunway,
+                boolean trackUnderrunEdge);
+
         PcmSnapshot snapshot();
     }
 
@@ -1532,6 +1661,11 @@ final class AndroidAudioSink implements AutoCloseable {
         }
 
         @Override
+        public void queueEmpty(boolean newEpisode, boolean lowRunway, boolean unknownRunway,
+                boolean trackUnderrunEdge) {
+        }
+
+        @Override
         public PcmSnapshot snapshot() {
             return PcmSnapshot.EMPTY;
         }
@@ -1549,6 +1683,10 @@ final class AndroidAudioSink implements AutoCloseable {
         private long discardedBytes;
         private long pendingBytes;
         private long routeFailures;
+        private long pcmQueueEmptyEpisodes;
+        private long pcmQueueEmptyLowRunwayPolls;
+        private long pcmQueueEmptyUnknownRunwayPolls;
+        private long pcmQueueEmptyTrackUnderrunEdges;
 
         @Override
         public void input(long frames) {
@@ -1594,18 +1732,38 @@ final class AndroidAudioSink implements AutoCloseable {
         }
 
         @Override
+        public void queueEmpty(boolean newEpisode, boolean lowRunway, boolean unknownRunway,
+                boolean trackUnderrunEdge) {
+            if (newEpisode) {
+                pcmQueueEmptyEpisodes++;
+            }
+            if (lowRunway) {
+                pcmQueueEmptyLowRunwayPolls++;
+            }
+            if (unknownRunway) {
+                pcmQueueEmptyUnknownRunwayPolls++;
+            }
+            if (trackUnderrunEdge) {
+                pcmQueueEmptyTrackUnderrunEdges++;
+            }
+        }
+
+        @Override
         public PcmSnapshot snapshot() {
             return new PcmSnapshot(inputEvents, inputFrames, enqueuedBytes, enqueuedFrames,
                     writtenBytes, writtenFrames, writeFailures, discardedBytes, pendingBytes,
-                    routeFailures);
+                    routeFailures, pcmQueueEmptyEpisodes, pcmQueueEmptyLowRunwayPolls,
+                    pcmQueueEmptyUnknownRunwayPolls, pcmQueueEmptyTrackUnderrunEdges);
         }
     }
 
     private record PcmSnapshot(long inputEvents, long inputFrames, long enqueuedBytes,
             long enqueuedFrames, long writtenBytes, long writtenFrames, long writeFailures,
-            long discardedBytes, long pendingBytes, long routeFailures) {
+            long discardedBytes, long pendingBytes, long routeFailures,
+            long pcmQueueEmptyEpisodes, long pcmQueueEmptyLowRunwayPolls,
+            long pcmQueueEmptyUnknownRunwayPolls, long pcmQueueEmptyTrackUnderrunEdges) {
         private static final PcmSnapshot EMPTY = new PcmSnapshot(0L, 0L, 0L, 0L, 0L, 0L,
-                0L, 0L, 0L, 0L);
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
     }
 
     /** One converted packet retained across a stopped-state replay or underrun refill. */

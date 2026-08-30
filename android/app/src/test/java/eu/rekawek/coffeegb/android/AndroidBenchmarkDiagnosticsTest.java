@@ -256,13 +256,25 @@ public class AndroidBenchmarkDiagnosticsTest {
                 .orElseThrow();
         for (String field : new String[]{
                 "audio_terminal_active=true", "audio_terminal_output_playing=true",
-                "audio_terminal_overruns=0", "audio_terminal_underruns=0",
+                "audio_terminal_overruns=0", "audio_terminal_queue_empty_polls=0",
+                "audio_terminal_queue_empty_episodes=0",
+                "audio_terminal_queue_empty_low_runway_polls=0",
+                "audio_terminal_queue_empty_unknown_runway_polls=0",
+                "audio_terminal_queue_empty_track_underrun_edges=0",
                 "audio_terminal_track_underruns=0", "audio_terminal_restarts=0",
                 "audio_terminal_write_failures=0", "audio_terminal_route_failures=0",
+                "audio_terminal_effective_buffer_frames=512",
+                "audio_terminal_output_start_threshold_frames=512",
                 "audio_terminal_output_identity=1", "audio_terminal_queue_identity=1",
-                "audio_arm_overruns=0", "audio_arm_underruns=0",
+                "audio_arm_overruns=0", "audio_arm_queue_empty_polls=0",
+                "audio_arm_queue_empty_episodes=0",
+                "audio_arm_queue_empty_low_runway_polls=0",
+                "audio_arm_queue_empty_unknown_runway_polls=0",
+                "audio_arm_queue_empty_track_underrun_edges=0",
                 "audio_arm_track_underruns=0", "audio_arm_restarts=0",
                 "audio_arm_write_failures=0", "audio_arm_route_failures=0",
+                "audio_arm_effective_buffer_frames=4800",
+                "audio_arm_output_start_threshold_frames=4800",
                 "audio_arm_output_identity=1", "audio_arm_queue_identity=1"}) {
             assertTrue("missing " + field, speedRecord.contains(field));
         }

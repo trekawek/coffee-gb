@@ -113,7 +113,8 @@ public final class BenchmarkMatrix {
             "audio_start_written_frames", "audio_start_write_failures",
             "audio_start_discarded_bytes", "audio_start_pending_bytes",
             "audio_start_queued_bytes", "audio_start_playback_position_frames",
-            "audio_start_overruns", "audio_start_underruns", "audio_start_track_underruns",
+            "audio_start_overruns", "audio_start_queue_empty_polls",
+            "audio_start_queue_probe", "audio_start_track_underruns",
             "audio_start_restarts",
             "audio_start_route_failures",
             "audio_start_output_open", "audio_start_output_playing", "audio_start_sample_rate",
@@ -158,8 +159,10 @@ public final class BenchmarkMatrix {
             "display_state_start", "display_state_end", "interactive_start", "interactive_end",
             "plugged_start", "plugged_end", "power_save_start", "power_save_end",
             "stay_awake_start", "stay_awake_end", "audio_active", "audio_sample_rate",
-            "audio_overruns", "audio_underruns", "audio_track_underruns", "audio_restarts", "audio_paused",
-            "audio_min_buffer_bytes", "audio_configured_buffer_bytes", "audio_actual_buffer_bytes",
+            "audio_overruns", "audio_queue_empty_polls", "audio_queue_probe",
+            "audio_track_underruns",
+            "audio_restarts", "audio_paused",
+            "audio_buffer_bytes",
             "audio_pcm_input_events", "audio_pcm_input_frames", "audio_pcm_enqueued_bytes",
             "audio_pcm_enqueued_frames", "audio_pcm_written_bytes", "audio_pcm_written_frames",
             "audio_write_failures", "audio_pcm_discarded_bytes", "audio_pcm_pending_bytes",
@@ -167,7 +170,8 @@ public final class BenchmarkMatrix {
             "audio_output_open", "audio_output_playing", "audio_muted", "audio_volume",
             "audio_route_failures", "audio_playback_position_frames", "audio_system_volume",
             "audio_system_volume_max", "audio_system_music_muted", "audio_queue_capacity_frames",
-            "audio_max_frame_bytes", "audio_output_identity", "audio_queue_identity",
+            "audio_max_frame_bytes", "audio_output_identity",
+            "audio_queue_identity",
             "benchmark_audio_policy", "benchmark_audio_requested",
             "benchmark_audio_active_at_boundary", "benchmark_audio_disabled_after",
             "benchmark_audio_flags", "benchmark_audio_calendar",
@@ -181,7 +185,8 @@ public final class BenchmarkMatrix {
             "audio_start_written_frames", "audio_start_write_failures",
             "audio_start_discarded_bytes", "audio_start_pending_bytes",
             "audio_start_queued_bytes", "audio_start_playback_position_frames",
-            "audio_start_overruns", "audio_start_underruns", "audio_start_track_underruns",
+            "audio_start_overruns", "audio_start_queue_empty_polls",
+            "audio_start_queue_probe", "audio_start_track_underruns",
             "audio_start_restarts",
             "audio_start_route_failures",
             "audio_start_output_open", "audio_start_output_playing", "audio_start_sample_rate",
@@ -227,24 +232,45 @@ public final class BenchmarkMatrix {
             "benchmark_audio_dropped_channel_ticks");
     private static final List<String> TERMINAL_AUDIO_PROOF_FIELDS = List.of(
             "audio_terminal_active", "audio_terminal_output_playing",
-            "audio_terminal_overruns", "audio_terminal_underruns",
+            "audio_terminal_overruns", "audio_terminal_queue_empty_polls",
+            "audio_terminal_queue_empty_episodes",
+            "audio_terminal_queue_empty_low_runway_polls",
+            "audio_terminal_queue_empty_unknown_runway_polls",
+            "audio_terminal_queue_empty_track_underrun_edges",
             "audio_terminal_track_underruns", "audio_terminal_restarts",
             "audio_terminal_write_failures", "audio_terminal_route_failures",
+            "audio_terminal_effective_buffer_frames",
+            "audio_terminal_output_start_threshold_frames",
             "audio_terminal_output_identity", "audio_terminal_queue_identity",
-            "audio_arm_overruns", "audio_arm_underruns",
+            "audio_arm_overruns", "audio_arm_queue_empty_polls",
+            "audio_arm_queue_empty_episodes", "audio_arm_queue_empty_low_runway_polls",
+            "audio_arm_queue_empty_unknown_runway_polls",
+            "audio_arm_queue_empty_track_underrun_edges",
             "audio_arm_track_underruns", "audio_arm_restarts",
             "audio_arm_write_failures", "audio_arm_route_failures",
+            "audio_arm_effective_buffer_frames",
+            "audio_arm_output_start_threshold_frames",
             "audio_arm_output_identity", "audio_arm_queue_identity");
     private static final Set<String> TERMINAL_AUDIO_BOOLEAN_FIELDS = Set.of(
             "audio_terminal_active", "audio_terminal_output_playing");
     private static final Set<String> TERMINAL_AUDIO_NUMERIC_FIELDS = Set.of(
-            "audio_terminal_overruns", "audio_terminal_underruns",
+            "audio_terminal_overruns", "audio_terminal_queue_empty_polls",
+            "audio_terminal_queue_empty_episodes",
+            "audio_terminal_queue_empty_low_runway_polls",
+            "audio_terminal_queue_empty_unknown_runway_polls",
+            "audio_terminal_queue_empty_track_underrun_edges",
             "audio_terminal_track_underruns", "audio_terminal_restarts",
             "audio_terminal_write_failures", "audio_terminal_route_failures",
+            "audio_terminal_effective_buffer_frames",
+            "audio_terminal_output_start_threshold_frames",
             "audio_terminal_output_identity", "audio_terminal_queue_identity",
-            "audio_arm_overruns", "audio_arm_underruns",
+            "audio_arm_overruns", "audio_arm_queue_empty_polls",
+            "audio_arm_queue_empty_episodes", "audio_arm_queue_empty_low_runway_polls",
+            "audio_arm_queue_empty_unknown_runway_polls",
+            "audio_arm_queue_empty_track_underrun_edges",
             "audio_arm_track_underruns", "audio_arm_restarts",
             "audio_arm_write_failures", "audio_arm_route_failures",
+            "audio_arm_effective_buffer_frames", "audio_arm_output_start_threshold_frames",
             "audio_arm_output_identity", "audio_arm_queue_identity");
     private static final List<Row> REQUIRED_ROWS = List.of(
             Row.DMG, Row.MGB, Row.CGB_NATIVE, Row.CGB0_NATIVE,
@@ -859,6 +885,18 @@ public final class BenchmarkMatrix {
             }
             return;
         }
+        if ("audio_queue_probe".equals(key) || "audio_start_queue_probe".equals(key)) {
+            if (!value.matches("-?[0-9]+(,-?[0-9]+){5}")) {
+                errors.add("line " + lineNumber + ": invalid compact " + key);
+            }
+            return;
+        }
+        if ("audio_buffer_bytes".equals(key)) {
+            if (!value.matches("[0-9]+(,[0-9]+){2}")) {
+                errors.add("line " + lineNumber + ": invalid compact audio_buffer_bytes");
+            }
+            return;
+        }
         if ("measurement".equals(key)) {
             if (!"surfaceflinger_timestats".equals(value)) {
                 errors.add("line " + lineNumber + ": invalid compositor measurement");
@@ -1015,13 +1053,25 @@ public final class BenchmarkMatrix {
                     "benchmark_audio_apu_writes", "benchmark_audio_frame_sequencer_commits",
                     "benchmark_audio_dropped_channel_ticks",
                     "audio_terminal_active", "audio_terminal_output_playing",
-                    "audio_terminal_overruns", "audio_terminal_underruns",
+                    "audio_terminal_overruns", "audio_terminal_queue_empty_polls",
+                    "audio_terminal_queue_empty_episodes",
+                    "audio_terminal_queue_empty_low_runway_polls",
+                    "audio_terminal_queue_empty_unknown_runway_polls",
+                    "audio_terminal_queue_empty_track_underrun_edges",
                     "audio_terminal_track_underruns", "audio_terminal_restarts",
                     "audio_terminal_write_failures", "audio_terminal_route_failures",
+                    "audio_terminal_effective_buffer_frames",
+                    "audio_terminal_output_start_threshold_frames",
                     "audio_terminal_output_identity", "audio_terminal_queue_identity",
-                    "audio_arm_overruns", "audio_arm_underruns",
+                    "audio_arm_overruns", "audio_arm_queue_empty_polls",
+                    "audio_arm_queue_empty_episodes",
+                    "audio_arm_queue_empty_low_runway_polls",
+                    "audio_arm_queue_empty_unknown_runway_polls",
+                    "audio_arm_queue_empty_track_underrun_edges",
                     "audio_arm_track_underruns", "audio_arm_restarts",
                     "audio_arm_write_failures", "audio_arm_route_failures",
+                    "audio_arm_effective_buffer_frames",
+                    "audio_arm_output_start_threshold_frames",
                     "audio_arm_output_identity", "audio_arm_queue_identity");
             case "first_frame" -> Set.of("event", "frame", "wall_ns", "since_launch_ms",
                     "prep_to_frame_ms");
@@ -2833,6 +2883,9 @@ public final class BenchmarkMatrix {
             List<String> errors, AudioStartFields inheritedStart) {
         AudioStartFields inlineStart = parseMatrixAudioStart(fields, lineNumber, errors);
         AudioStartFields start = inlineStart == null ? inheritedStart : inlineStart;
+        long[] queueProbe = compactLongTuple(fields, "audio_queue_probe", 6, lineNumber, errors);
+        long[] bufferBytes = compactLongTuple(fields, "audio_buffer_bytes", 3, lineNumber,
+                errors);
         boolean expandedProofPresent = EXPANDED_AUDIO_PROOF_FIELDS.stream()
                 .anyMatch(fields::containsKey);
         if (expandedProofPresent && !fields.keySet().containsAll(EXPANDED_AUDIO_PROOF_FIELDS)) {
@@ -2867,13 +2920,17 @@ public final class BenchmarkMatrix {
                 strictBoolean(fields, "audio_active", lineNumber, errors),
                 integer(fields, "audio_sample_rate", lineNumber, errors),
                 longValue(fields, "audio_overruns", lineNumber, errors),
-                longValue(fields, "audio_underruns", lineNumber, errors),
+                longValue(fields, "audio_queue_empty_polls", lineNumber, errors),
+                queueProbe[0],
+                queueProbe[1],
+                queueProbe[2],
+                queueProbe[3],
                 longValue(fields, "audio_track_underruns", lineNumber, errors),
                 longValue(fields, "audio_restarts", lineNumber, errors),
                 strictBoolean(fields, "audio_paused", lineNumber, errors),
-                integer(fields, "audio_min_buffer_bytes", lineNumber, errors),
-                integer(fields, "audio_configured_buffer_bytes", lineNumber, errors),
-                integer(fields, "audio_actual_buffer_bytes", lineNumber, errors),
+                compactInteger(bufferBytes[0], "audio_buffer_bytes[0]", lineNumber, errors),
+                compactInteger(bufferBytes[1], "audio_buffer_bytes[1]", lineNumber, errors),
+                compactInteger(bufferBytes[2], "audio_buffer_bytes[2]", lineNumber, errors),
                 longValue(fields, "audio_pcm_input_events", lineNumber, errors),
                 longValue(fields, "audio_pcm_input_frames", lineNumber, errors),
                 longValue(fields, "audio_pcm_enqueued_bytes", lineNumber, errors),
@@ -2896,6 +2953,8 @@ public final class BenchmarkMatrix {
                 strictBoolean(fields, "audio_system_music_muted", lineNumber, errors),
                 integer(fields, "audio_queue_capacity_frames", lineNumber, errors),
                 integer(fields, "audio_max_frame_bytes", lineNumber, errors),
+                compactInteger(queueProbe[4], "audio_queue_probe[4]", lineNumber, errors),
+                compactInteger(queueProbe[5], "audio_queue_probe[5]", lineNumber, errors),
                 optionalLong(fields, "audio_output_identity"),
                 optionalLong(fields, "audio_queue_identity"),
                 start == null ? -1L : start.inputEvents,
@@ -2910,7 +2969,11 @@ public final class BenchmarkMatrix {
                 start == null ? -1L : start.queuedBytes,
                 start == null ? -1L : start.playbackPositionFrames,
                 start == null ? -1L : start.overruns,
-                start == null ? -1L : start.underruns,
+                start == null ? -1L : start.queueEmptyPolls,
+                start == null ? -1L : start.queueEmptyEpisodes,
+                start == null ? -1L : start.queueEmptyLowRunwayPolls,
+                start == null ? -1L : start.queueEmptyUnknownRunwayPolls,
+                start == null ? -1L : start.queueEmptyTrackUnderrunEdges,
                 start == null ? -1L : start.outputUnderruns,
                 start == null ? -1L : start.restarts,
                 start == null ? -1L : start.routeFailures,
@@ -2919,6 +2982,8 @@ public final class BenchmarkMatrix {
                 start == null ? -1 : start.sampleRate,
                 start == null ? -1 : start.queueCapacityFrames,
                 start == null ? -1 : start.maximumFrameBytes,
+                start == null ? -1 : start.effectiveBufferFrames,
+                start == null ? -1 : start.outputThresholdFrames,
                 start == null ? null : start.active,
                 start == null ? null : start.paused,
                 start == null ? null : start.muted,
@@ -3009,6 +3074,8 @@ public final class BenchmarkMatrix {
         if (!fields.keySet().stream().anyMatch(key -> key.startsWith("audio_start_"))) {
             return null;
         }
+        long[] queueProbe = compactLongTuple(fields, "audio_start_queue_probe", 6, lineNumber,
+                errors);
         return new AudioStartFields(
                 longValue(fields, "audio_start_input_events", lineNumber, errors),
                 longValue(fields, "audio_start_input_frames", lineNumber, errors),
@@ -3022,7 +3089,11 @@ public final class BenchmarkMatrix {
                 longValue(fields, "audio_start_queued_bytes", lineNumber, errors),
                 longValue(fields, "audio_start_playback_position_frames", lineNumber, errors),
                 longValue(fields, "audio_start_overruns", lineNumber, errors),
-                longValue(fields, "audio_start_underruns", lineNumber, errors),
+                longValue(fields, "audio_start_queue_empty_polls", lineNumber, errors),
+                queueProbe[0],
+                queueProbe[1],
+                queueProbe[2],
+                queueProbe[3],
                 longValue(fields, "audio_start_track_underruns", lineNumber, errors),
                 longValue(fields, "audio_start_restarts", lineNumber, errors),
                 longValue(fields, "audio_start_route_failures", lineNumber, errors),
@@ -3031,6 +3102,8 @@ public final class BenchmarkMatrix {
                 integer(fields, "audio_start_sample_rate", lineNumber, errors),
                 integer(fields, "audio_start_queue_capacity_frames", lineNumber, errors),
                 integer(fields, "audio_start_max_frame_bytes", lineNumber, errors),
+                compactInteger(queueProbe[4], "audio_start_queue_probe[4]", lineNumber, errors),
+                compactInteger(queueProbe[5], "audio_start_queue_probe[5]", lineNumber, errors),
                 fields.containsKey("audio_start_active")
                         ? strictBoolean(fields, "audio_start_active", lineNumber, errors) : null,
                 fields.containsKey("audio_start_paused")
@@ -3059,10 +3132,14 @@ public final class BenchmarkMatrix {
                 audio.startEnqueuedFrames, audio.startWrittenBytes, audio.startWrittenFrames,
                 audio.startWriteFailures, audio.startDiscardedBytes, audio.startPendingBytes,
                 audio.startQueuedBytes, audio.startPlaybackPositionFrames, audio.startOverruns,
-                audio.startUnderruns, audio.startOutputUnderruns, audio.startRestarts,
+                audio.startQueueEmptyPolls, audio.startQueueEmptyEpisodes,
+                audio.startQueueEmptyLowRunwayPolls, audio.startQueueEmptyUnknownRunwayPolls,
+                audio.startQueueEmptyTrackUnderrunEdges, audio.startOutputUnderruns,
+                audio.startRestarts,
                 audio.startRouteFailures, audio.startOutputOpen, audio.startOutputPlaying,
                 audio.startSampleRate, audio.startQueueCapacityFrames,
-                audio.startMaximumFrameBytes, audio.startActive, audio.startPaused,
+                audio.startMaximumFrameBytes, audio.startEffectiveBufferFrames,
+                audio.startOutputThresholdFrames, audio.startActive, audio.startPaused,
                 audio.startMuted, audio.startVolume, audio.startSystemVolume,
                 audio.startSystemVolumeMax, audio.startSystemMusicMuted, audio.startQueuedFrames,
                 audio.startReopenPending, audio.startOutputIdentity, audio.startQueueIdentity);
@@ -3266,7 +3343,10 @@ public final class BenchmarkMatrix {
                 audio.startEnqueuedBytes, audio.startEnqueuedFrames, audio.startWrittenBytes,
                 audio.startWrittenFrames, audio.startWriteFailures, audio.startDiscardedBytes,
                 audio.startPendingBytes, audio.startQueuedBytes,
-                audio.startPlaybackPositionFrames, audio.startOverruns, audio.startUnderruns,
+                audio.startPlaybackPositionFrames, audio.startOverruns,
+                audio.startQueueEmptyPolls, audio.startQueueEmptyEpisodes,
+                audio.startQueueEmptyLowRunwayPolls, audio.startQueueEmptyUnknownRunwayPolls,
+                audio.startQueueEmptyTrackUnderrunEdges,
                 audio.startOutputUnderruns,
                 audio.startRestarts,
                 audio.startRouteFailures};
@@ -3278,7 +3358,9 @@ public final class BenchmarkMatrix {
         long[] ends = {audio.inputEvents, audio.inputFrames, audio.enqueuedBytes,
                 audio.enqueuedFrames, audio.writtenBytes, audio.writtenFrames,
                 audio.writeFailures, audio.discardedBytes, audio.pendingBytes,
-                audio.queuedBytes, audio.playbackPositionFrames, audio.underruns,
+                audio.queuedBytes, audio.playbackPositionFrames, audio.queueEmptyPolls,
+                audio.queueEmptyEpisodes, audio.queueEmptyLowRunwayPolls,
+                audio.queueEmptyUnknownRunwayPolls, audio.queueEmptyTrackUnderrunEdges,
                 audio.outputUnderruns,
                 audio.overruns, audio.restarts, audio.routeFailures};
         for (long end : ends) {
@@ -3299,7 +3381,14 @@ public final class BenchmarkMatrix {
         long playbackAdvance = audio.playbackPositionFrames
                 - audio.startPlaybackPositionFrames;
         long overruns = audio.overruns - audio.startOverruns;
-        long underruns = audio.underruns - audio.startUnderruns;
+        long queueEmptyPolls = audio.queueEmptyPolls - audio.startQueueEmptyPolls;
+        long queueEmptyEpisodes = audio.queueEmptyEpisodes - audio.startQueueEmptyEpisodes;
+        long queueEmptyLowRunwayPolls = audio.queueEmptyLowRunwayPolls
+                - audio.startQueueEmptyLowRunwayPolls;
+        long queueEmptyUnknownRunwayPolls = audio.queueEmptyUnknownRunwayPolls
+                - audio.startQueueEmptyUnknownRunwayPolls;
+        long queueEmptyTrackUnderrunEdges = audio.queueEmptyTrackUnderrunEdges
+                - audio.startQueueEmptyTrackUnderrunEdges;
         long outputUnderruns = audio.outputUnderruns - audio.startOutputUnderruns;
         long focusLosses = audio.focusLossCount - audio.focusStartLossCount;
         long restarts = audio.restarts - audio.startRestarts;
@@ -3308,9 +3397,18 @@ public final class BenchmarkMatrix {
                 || enqueuedFrames < 0L || writtenBytes < 0L || writtenFrames < 0L
                 || writeFailures < 0L || discardedBytes < 0L || pendingBytes < 0L
                 || queuedBytes < 0L || playbackAdvance <= 0L || overruns < 0L
-                || underruns < 0L || outputUnderruns < 0L || audio.focusStartLossCount < 0L
+                || queueEmptyPolls < 0L || queueEmptyEpisodes < 0L
+                || queueEmptyLowRunwayPolls < 0L || queueEmptyUnknownRunwayPolls < 0L
+                || queueEmptyTrackUnderrunEdges < 0L || outputUnderruns < 0L
+                || audio.focusStartLossCount < 0L
                 || audio.focusLossCount < 0L || focusLosses < 0L
                 || restarts < 0L || routeFailures < 0L) {
+            return false;
+        }
+        if (queueEmptyEpisodes > queueEmptyPolls
+                || queueEmptyLowRunwayPolls > queueEmptyPolls
+                || queueEmptyUnknownRunwayPolls > queueEmptyPolls - queueEmptyLowRunwayPolls
+                || queueEmptyTrackUnderrunEdges > queueEmptyPolls) {
             return false;
         }
         // Sound events follow the emulated tick lattice, not wall time.  A slow Accuracy run can
@@ -3412,8 +3510,13 @@ public final class BenchmarkMatrix {
                 && audio.startWrittenFrames > 0L;
         return policyProof && silentBaseline
                 && audio.sampleRate > 0 && audio.startSampleRate == audio.sampleRate
-                && (!requireRealtime || (overruns == 0L && underruns == 0L
-                && outputUnderruns == 0L && restarts == 0L))
+                && (!requireRealtime || (overruns == 0L
+                && queueEmptyLowRunwayPolls == 0L && queueEmptyUnknownRunwayPolls == 0L
+                && queueEmptyTrackUnderrunEdges == 0L
+                && outputUnderruns == 0L && restarts == 0L
+                && audio.audioOutputIdentity > 0L && audio.audioQueueIdentity > 0L
+                && audio.audioOutputIdentity == audio.startOutputIdentity
+                && audio.audioQueueIdentity == audio.startQueueIdentity))
                 && writeFailures == 0L && discardedBytes == 0L && routeFailures == 0L
                 && Boolean.FALSE.equals(audio.paused)
                 && Boolean.TRUE.equals(audio.startOutputOpen)
@@ -3435,6 +3538,15 @@ public final class BenchmarkMatrix {
                 && audio.playbackPositionFrames > audio.startPlaybackPositionFrames
                 && audio.minimumBufferBytes > 0 && audio.configuredBufferBytes > 0
                 && audio.actualBufferBytes > 0 && audio.routeFailures == 0L
+                && audio.effectiveBufferFrames > 0
+                && audio.outputStartThresholdFrames > 0
+                && audio.outputStartThresholdFrames <= audio.effectiveBufferFrames
+                && audio.startEffectiveBufferFrames > 0
+                && audio.startOutputThresholdFrames > 0
+                && audio.startOutputThresholdFrames <= audio.startEffectiveBufferFrames
+                && (!requireRealtime
+                        || audio.effectiveBufferFrames == audio.startEffectiveBufferFrames
+                        && audio.outputStartThresholdFrames == audio.startOutputThresholdFrames)
                 && inputFrames > 0L && enqueuedBytes > 0L && enqueuedFrames > 0L
                 && writtenBytes > 0L && writtenFrames > 0L && inputFrames >= enqueuedFrames
                 && enqueuedBytes == enqueuedFrames * 4L
@@ -3498,6 +3610,40 @@ public final class BenchmarkMatrix {
             errors.add("line " + lineNumber + ": invalid long " + key);
             return -1L;
         }
+    }
+
+    private static long[] compactLongTuple(Map<String, String> fields, String key, int width,
+            int lineNumber, List<String> errors) {
+        long[] result = new long[width];
+        Arrays.fill(result, -1L);
+        String value = fields.get(key);
+        if (value == null) {
+            errors.add("line " + lineNumber + ": missing compact " + key);
+            return result;
+        }
+        String[] parts = value.split(",", -1);
+        if (parts.length != width) {
+            errors.add("line " + lineNumber + ": compact " + key + " has wrong width");
+            return result;
+        }
+        for (int index = 0; index < width; index++) {
+            try {
+                result[index] = Long.parseLong(parts[index]);
+            } catch (NumberFormatException malformed) {
+                errors.add("line " + lineNumber + ": invalid compact " + key);
+                return result;
+            }
+        }
+        return result;
+    }
+
+    private static int compactInteger(long value, String key, int lineNumber,
+            List<String> errors) {
+        if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+            errors.add("line " + lineNumber + ": invalid integer " + key);
+            return -1;
+        }
+        return (int) value;
     }
 
     private static long optionalLong(Map<String, String> fields, String key) {
@@ -3809,7 +3955,9 @@ public final class BenchmarkMatrix {
             int rowOrder, Side runSide, long sessionGeneration, int ordinal) {
     }
 
-    private record AudioFields(Boolean active, int sampleRate, long overruns, long underruns,
+    private record AudioFields(Boolean active, int sampleRate, long overruns,
+            long queueEmptyPolls, long queueEmptyEpisodes, long queueEmptyLowRunwayPolls,
+            long queueEmptyUnknownRunwayPolls, long queueEmptyTrackUnderrunEdges,
             long outputUnderruns,
             long restarts, Boolean paused, int minimumBufferBytes, int configuredBufferBytes,
             int actualBufferBytes, long inputEvents, long inputFrames, long enqueuedBytes,
@@ -3818,16 +3966,20 @@ public final class BenchmarkMatrix {
             Boolean outputOpen, Boolean outputPlaying, Boolean muted, int volume,
             long routeFailures, long playbackPositionFrames, int systemVolume,
             int systemVolumeMax, Boolean systemMusicMuted, int queueCapacityFrames,
-            int maximumFrameBytes, long audioOutputIdentity, long audioQueueIdentity,
+            int maximumFrameBytes, int effectiveBufferFrames, int outputStartThresholdFrames,
+            long audioOutputIdentity, long audioQueueIdentity,
             long startInputEvents, long startInputFrames,
                 long startEnqueuedBytes,
                 long startEnqueuedFrames, long startWrittenBytes, long startWrittenFrames,
                 long startWriteFailures, long startDiscardedBytes, long startPendingBytes,
                 long startQueuedBytes, long startPlaybackPositionFrames, long startOverruns,
-                long startUnderruns, long startOutputUnderruns,
+                long startQueueEmptyPolls, long startQueueEmptyEpisodes,
+                long startQueueEmptyLowRunwayPolls, long startQueueEmptyUnknownRunwayPolls,
+                long startQueueEmptyTrackUnderrunEdges, long startOutputUnderruns,
                 long startRestarts, long startRouteFailures, Boolean startOutputOpen,
                 Boolean startOutputPlaying, int startSampleRate, int startQueueCapacityFrames,
-                int startMaximumFrameBytes, Boolean startActive, Boolean startPaused,
+                int startMaximumFrameBytes, int startEffectiveBufferFrames,
+                int startOutputThresholdFrames, Boolean startActive, Boolean startPaused,
                 Boolean startMuted, int startVolume, int startSystemVolume,
                 int startSystemVolumeMax, Boolean startSystemMusicMuted, int startQueuedFrames,
                 Boolean startReopenPending, long startOutputIdentity, long startQueueIdentity,
@@ -3844,9 +3996,12 @@ public final class BenchmarkMatrix {
     private record AudioStartFields(long inputEvents, long inputFrames, long enqueuedBytes,
             long enqueuedFrames, long writtenBytes, long writtenFrames, long writeFailures,
             long discardedBytes, long pendingBytes, long queuedBytes, long playbackPositionFrames,
-            long overruns, long underruns, long outputUnderruns, long restarts,
+            long overruns, long queueEmptyPolls, long queueEmptyEpisodes,
+            long queueEmptyLowRunwayPolls, long queueEmptyUnknownRunwayPolls,
+            long queueEmptyTrackUnderrunEdges, long outputUnderruns, long restarts,
             long routeFailures, Boolean outputOpen, Boolean outputPlaying, int sampleRate,
-            int queueCapacityFrames, int maximumFrameBytes, Boolean active, Boolean paused,
+            int queueCapacityFrames, int maximumFrameBytes, int effectiveBufferFrames,
+            int outputThresholdFrames, Boolean active, Boolean paused,
             Boolean muted, int volume, int systemVolume, int systemVolumeMax,
             Boolean systemMusicMuted, int queuedFrames, Boolean reopenPending,
             long outputIdentity, long queueIdentity) {

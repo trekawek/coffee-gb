@@ -440,6 +440,9 @@ final class AndroidBenchmarkDiagnostics {
                 && baseline.sampleRate() > 0
                 && baseline.queueCapacityFrames() > 0
                 && baseline.maximumFrameBytes() > 0
+                && baseline.effectiveBufferFrames() > 0
+                && baseline.outputStartThresholdFrames() > 0
+                && baseline.outputStartThresholdFrames() <= baseline.effectiveBufferFrames()
                 && baseline.playbackPositionFrames() >= 0L
                 && baseline.inputEvents() > 0L
                 && baseline.inputFrames() > 0L
@@ -1423,19 +1426,39 @@ final class AndroidBenchmarkDiagnostics {
         return " audio_terminal_active=" + terminal.active()
                 + " audio_terminal_output_playing=" + terminal.outputPlaying()
                 + " audio_terminal_overruns=" + terminal.overruns()
-                + " audio_terminal_underruns=" + terminal.underruns()
+                + " audio_terminal_queue_empty_polls=" + terminal.pcmQueueEmptyPolls()
+                + " audio_terminal_queue_empty_episodes=" + terminal.pcmQueueEmptyEpisodes()
+                + " audio_terminal_queue_empty_low_runway_polls="
+                        + terminal.pcmQueueEmptyLowRunwayPolls()
+                + " audio_terminal_queue_empty_unknown_runway_polls="
+                        + terminal.pcmQueueEmptyUnknownRunwayPolls()
+                + " audio_terminal_queue_empty_track_underrun_edges="
+                        + terminal.pcmQueueEmptyTrackUnderrunEdges()
                 + " audio_terminal_track_underruns=" + terminal.outputUnderruns()
                 + " audio_terminal_restarts=" + terminal.restarts()
                 + " audio_terminal_write_failures=" + terminal.writeFailures()
                 + " audio_terminal_route_failures=" + terminal.routeFailures()
+                + " audio_terminal_effective_buffer_frames=" + terminal.effectiveBufferFrames()
+                + " audio_terminal_output_start_threshold_frames="
+                        + terminal.outputStartThresholdFrames()
                 + " audio_terminal_output_identity=" + terminal.outputIdentity()
                 + " audio_terminal_queue_identity=" + terminal.queueIdentity()
                 + " audio_arm_overruns=" + arm.overruns()
-                + " audio_arm_underruns=" + arm.underruns()
+                + " audio_arm_queue_empty_polls=" + arm.pcmQueueEmptyPolls()
+                + " audio_arm_queue_empty_episodes=" + arm.pcmQueueEmptyEpisodes()
+                + " audio_arm_queue_empty_low_runway_polls="
+                        + arm.pcmQueueEmptyLowRunwayPolls()
+                + " audio_arm_queue_empty_unknown_runway_polls="
+                        + arm.pcmQueueEmptyUnknownRunwayPolls()
+                + " audio_arm_queue_empty_track_underrun_edges="
+                        + arm.pcmQueueEmptyTrackUnderrunEdges()
                 + " audio_arm_track_underruns=" + arm.outputUnderruns()
                 + " audio_arm_restarts=" + arm.restarts()
                 + " audio_arm_write_failures=" + arm.writeFailures()
                 + " audio_arm_route_failures=" + arm.routeFailures()
+                + " audio_arm_effective_buffer_frames=" + arm.effectiveBufferFrames()
+                + " audio_arm_output_start_threshold_frames="
+                        + arm.outputStartThresholdFrames()
                 + " audio_arm_output_identity=" + arm.outputIdentity()
                 + " audio_arm_queue_identity=" + arm.queueIdentity();
     }
@@ -1445,9 +1468,9 @@ final class AndroidBenchmarkDiagnostics {
                 ? audioTerminalStats : (audioSink == null ? null : audioSink.stats());
         if (stats == null) {
             return "audio_active=false audio_sample_rate=0 audio_overruns=-1"
-                    + " audio_underruns=-1 audio_track_underruns=-1 audio_restarts=-1 audio_paused=true"
-                    + " audio_min_buffer_bytes=0 audio_configured_buffer_bytes=0"
-                    + " audio_actual_buffer_bytes=0 audio_pcm_input_events=0"
+                    + " audio_queue_empty_polls=-1 audio_queue_probe=-1,-1,-1,-1,0,0"
+                    + " audio_track_underruns=-1 audio_restarts=-1 audio_paused=true"
+                    + " audio_buffer_bytes=0,0,0 audio_pcm_input_events=0"
                     + " audio_pcm_input_frames=0 audio_pcm_enqueued_bytes=0"
                     + " audio_pcm_enqueued_frames=0 audio_pcm_written_bytes=0"
                     + " audio_pcm_written_frames=0 audio_write_failures=-1"
@@ -1467,13 +1490,18 @@ final class AndroidBenchmarkDiagnostics {
         return "audio_active=" + stats.active()
                 + " audio_sample_rate=" + stats.sampleRate()
                 + " audio_overruns=" + stats.overruns()
-                + " audio_underruns=" + stats.underruns()
+                + " audio_queue_empty_polls=" + stats.pcmQueueEmptyPolls()
+                + " audio_queue_probe=" + stats.pcmQueueEmptyEpisodes() + ","
+                        + stats.pcmQueueEmptyLowRunwayPolls() + ","
+                        + stats.pcmQueueEmptyUnknownRunwayPolls() + ","
+                        + stats.pcmQueueEmptyTrackUnderrunEdges() + ","
+                        + stats.effectiveBufferFrames() + ","
+                        + stats.outputStartThresholdFrames()
                 + " audio_track_underruns=" + stats.outputUnderruns()
                 + " audio_restarts=" + stats.restarts()
                 + " audio_paused=" + stats.paused()
-                + " audio_min_buffer_bytes=" + stats.minimumBufferBytes()
-                + " audio_configured_buffer_bytes=" + stats.configuredBufferBytes()
-                + " audio_actual_buffer_bytes=" + stats.actualBufferBytes()
+                + " audio_buffer_bytes=" + stats.minimumBufferBytes() + ","
+                        + stats.configuredBufferBytes() + "," + stats.actualBufferBytes()
                 + " audio_pcm_input_events=" + stats.pcmInputEvents()
                 + " audio_pcm_input_frames=" + stats.pcmInputFrames()
                 + " audio_pcm_enqueued_bytes=" + stats.pcmEnqueuedBytes()
@@ -1537,7 +1565,13 @@ final class AndroidBenchmarkDiagnostics {
                 + " audio_start_queued_bytes=" + baseline.queuedBytes()
                 + " audio_start_playback_position_frames=" + baseline.playbackPositionFrames()
                 + " audio_start_overruns=" + baseline.overruns()
-                + " audio_start_underruns=" + baseline.underruns()
+                + " audio_start_queue_empty_polls=" + baseline.pcmQueueEmptyPolls()
+                + " audio_start_queue_probe=" + baseline.pcmQueueEmptyEpisodes() + ","
+                        + baseline.pcmQueueEmptyLowRunwayPolls() + ","
+                        + baseline.pcmQueueEmptyUnknownRunwayPolls() + ","
+                        + baseline.pcmQueueEmptyTrackUnderrunEdges() + ","
+                        + baseline.effectiveBufferFrames() + ","
+                        + baseline.outputStartThresholdFrames()
                 + " audio_start_track_underruns=" + baseline.outputUnderruns()
                 + " audio_start_restarts=" + baseline.restarts()
                 + " audio_start_route_failures=" + baseline.routeFailures()
