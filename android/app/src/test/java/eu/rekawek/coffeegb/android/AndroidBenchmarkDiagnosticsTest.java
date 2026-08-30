@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.controller.Controller;
+import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry;
 import org.junit.Test;
 
@@ -24,6 +25,48 @@ public class AndroidBenchmarkDiagnosticsTest {
 
     private static final String TOKEN = "benchmark-token-0001";
     private static final long SESSION = 7L;
+
+    @Test
+    public void physicalBoundariesEmitCompactCumulativeAudioTimingProbe() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        List<String> records = new ArrayList<>();
+        AndroidBenchmarkDiagnostics diagnostics = newDiagnostics(records);
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION);
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+        long generation = 91L;
+        assertTrue(diagnostics.armBenchmark(
+                SESSION, generation, TOKEN, readyAudioBaseline()));
+        AndroidAudioSink sink = new AndroidAudioSink(
+                new EventBusImpl(null, null, false), () -> null);
+        assertEquals(1L, sink.resetTimingProbeForBenchmark());
+        diagnostics.setAudioSink(sink);
+
+        diagnostics.benchmarkPhysicalFrameBoundary(
+                new Controller.BenchmarkPhysicalFrameBoundaryEvent(61L, generation));
+        for (long frame = 60L; frame <= 600L; frame += 60L) {
+            diagnostics.benchmarkPhysicalFrameBoundary(
+                    new Controller.BenchmarkPhysicalFrameBoundaryEvent(frame, generation));
+        }
+
+        List<String> probes = records.stream()
+                .filter(line -> line.startsWith("event=audio_timing_probe"))
+                .toList();
+        assertEquals(10, probes.size());
+        for (int index = 0; index < probes.size(); index++) {
+            String record = probes.get(index);
+            assertTrue(record.contains("frame=" + ((index + 1) * 60)));
+            assertTrue(record.contains("probe_generation=1"));
+            assertTrue(record.contains("audio_timing=0,0,0,0,0,0,0,0,0,0,0,0,0,0"));
+            assertTrue(record.contains("audio_underrun_attribution=0,0,0,0,0,0,0"));
+            assertTrue(record.getBytes(StandardCharsets.UTF_8).length
+                    <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        }
+    }
 
     @Test
     public void benchmarkAnchorMustCompleteBeforeArmAcknowledgement() {

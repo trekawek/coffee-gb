@@ -235,12 +235,16 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         return state;
     }
 
-    /** Called synchronously by NativeFrameStore on the controller thread at physical ready #600. */
-    private void postBenchmarkPhysicalBoundary(long generation) {
-        if (!diagnostics.enabled() || eventBus == null || generation <= 0L) {
+    /** Called synchronously by NativeFrameStore at each 60-frame physical probe boundary. */
+    private void postBenchmarkPhysicalBoundary(long frame, long generation) {
+        if (!diagnostics.enabled() || eventBus == null || frame <= 0L || generation <= 0L) {
             return;
         }
-        eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
+        Controller.BenchmarkPhysicalFrameBoundaryEvent event =
+                new Controller.BenchmarkPhysicalFrameBoundaryEvent(frame, generation);
+        // Snapshot before frame 600 synchronously freezes/finalizes through BasicController.
+        diagnostics.benchmarkPhysicalFrameBoundary(event);
+        eventBus.post(event);
     }
 
     /** Revokes one silent-PCM generation on the first bad read-only system-audio sample. */
@@ -1600,6 +1604,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                         // acknowledgement is the authority boundary, so capture a fresh sink
                         // baseline here while the lifecycle gate excludes drain/focus races.
                         AndroidAudioSink activeAudio = audio;
+                        if (activeAudio != null) {
+                            // Diagnostic generation isolation only: do not flush, reopen, pause,
+                            // or otherwise perturb the already-proven output/queue state.
+                            activeAudio.resetTimingProbeForBenchmark();
+                        }
                         AndroidAudioSink.AudioBaseline freshBaseline = activeAudio == null
                                 ? AndroidAudioSink.AudioBaseline.unavailable()
                                 : activeAudio.benchmarkBaseline();

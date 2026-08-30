@@ -268,6 +268,14 @@ if [ "$sub" = am ]; then
       }
       matrix_record="I/CoffeeGbBench: event=matrix_run build_profile=benchmark artifact_id=$artifact pair_id=$pair matrix_block=$block row_order=$order run_side=$side first_side=$first session_generation=$session_generation benchmark_generation=$generation benchmark_token=$arm workload_nonce=app-owned-test-nonce-0001 warmup=true input_contract=$scenario scenario_session_generation=$scenario_generation scenario_completed=$scenario_completed scenario_completed_frames=$scenario_frames scenario_expected_frames=$scenario_frames scenario_source_closed=$scenario_source_closed scenario_audio_drained=$scenario_audio_drained execution_mode=$execution thermal_window=m2 audio=on render=presentation availability=available requested_hardware=$profile benchmark_audio_policy=$audio_policy surface_vote_hz=$launch_rate display_target_hz=$launch_rate surface_content_rate_millihz=$content_rate profile=$profile effective_gbc=$gbc effective_dmg_compat=$compat effective_mode=$effective device_id=3333333333333333333333333333333333333333333333333333333333333333 audio_start_pending_bytes=$audio_start_pending audio_start_queued_bytes=$audio_start_queued audio_start_output_playing=$audio_start_playing audio_start_queue_empty_polls=0 audio_start_queue_probe=0,0,0,0,2048,960 audio_start_active=true audio_start_paused=false audio_start_muted=false audio_start_volume=100 audio_start_system_volume=$audio_start_system_volume audio_start_system_volume_max=15 audio_start_system_music_muted=$audio_start_system_music_muted audio_start_queued_frames=0 audio_start_reopen_pending=false audio_start_output_identity=1 audio_start_queue_identity=1"
       printf '%s\n' "$matrix_record" >>"$log"
+      probe_frame=60
+      while [ "$probe_frame" -le 600 ]; do
+        probe_intervals=$((probe_frame - 1))
+        printf 'I/CoffeeGbBench: event=audio_timing_probe artifact_id=%s pair_id=%s matrix_block=%s row_order=%s run_side=%s benchmark_generation=%s frame=%s probe_generation=1 audio_timing=%s,17000,0,0,100,500,0,0,0,100,100,100,0,1000 audio_underrun_attribution=0,0,0,0,0,0,0\n' \
+          "$artifact" "$pair" "$block" "$order" "$side" "$generation" \
+          "$probe_frame" "$probe_intervals" >>"$log"
+        probe_frame=$((probe_frame + 60))
+      done
       audio_system_volume=10
       audio_system_music_muted=false
       benchmark_audio_requested=false
