@@ -719,6 +719,164 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void sgbIdleEpochRunsOrdinaryCodeUnderImeDisabledRawPpuInterrupts()
+            throws Exception {
+        for (InterruptManager.InterruptType type : new InterruptManager.InterruptType[]{
+                InterruptManager.InterruptType.VBlank,
+                InterruptManager.InterruptType.LCDC}) {
+            CpuPair pair = newSgbPair(0x00); // NOP stream
+            int mask = 1 << type.ordinal();
+            pair.directInterrupts.setByte(0xffff, mask);
+            pair.scalarInterrupts.setByte(0xffff, mask);
+            pair.directInterrupts.requestInterrupt(type);
+            pair.scalarInterrupts.requestInterrupt(type);
+
+            assertTrue(type + " masked SGB entry was not admitted",
+                    pair.direct.performanceSgbIdleEpochEntryEligible());
+            int elapsed = pair.direct.runSgbIdlePerformanceEpoch(54);
+            assertEquals(type + " masked SGB epoch width", 54, elapsed);
+            for (int tick = 0; tick < elapsed; tick++) {
+                pair.scalar.tick();
+            }
+            assertCpuPairStateEquals(pair);
+        }
+    }
+
+    @Test
+    public void sgbIdleEpochKeepsImeAndLifecycleInterruptSeamsScalar()
+            throws Exception {
+        CpuPair ime = newSgbPair(0x00);
+        ime.directInterrupts.setByte(0xffff, 1);
+        ime.scalarInterrupts.setByte(0xffff, 1);
+        ime.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        ime.scalarInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        ime.directInterrupts.enableInterrupts(false);
+        ime.scalarInterrupts.enableInterrupts(false);
+        assertFalse("IME=1 SGB idle entry must retain interrupt dispatch",
+                ime.direct.performanceSgbIdleEpochEntryEligible());
+        assertEquals(0, ime.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(ime);
+
+        CpuPair ei = newSgbPair(0xfb); // EI
+        for (int tick = 0; tick < 4; tick++) {
+            ei.direct.tick();
+            ei.scalar.tick();
+        }
+        ei.directInterrupts.setByte(0xffff, 1);
+        ei.scalarInterrupts.setByte(0xffff, 1);
+        ei.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        ei.scalarInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        assertFalse("pending EI must stay on the scalar seam",
+                ei.direct.performanceSgbIdleEpochEntryEligible());
+        assertEquals(0, ei.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(ei);
+
+        CpuPair halt = newSgbPair(0x76, 0x00); // HALT followed by NOP
+        for (int tick = 0; tick < 3; tick++) {
+            halt.direct.tick();
+            halt.scalar.tick();
+        }
+        halt.directInterrupts.setByte(0xffff, 1);
+        halt.scalarInterrupts.setByte(0xffff, 1);
+        halt.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        halt.scalarInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        assertTrue("IME=0 HALT entry should pass the raw-pending admission check",
+                halt.direct.performanceSgbIdleEpochEntryEligible());
+        assertEquals("HALT-bug decode must stay scalar", 0,
+                halt.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(halt);
+
+        CpuPair stop = newSgbPair(0x10, 0x00); // STOP plus padding
+        assertEquals(4, stop.direct.runSgbIdlePerformanceEpoch(4));
+        for (int tick = 0; tick < 4; tick++) {
+            stop.scalar.tick();
+        }
+        assertTrue("STOP did not leave its pending padding on the scalar seam",
+                stop.direct.getState() != Cpu.State.OPCODE);
+        assertEquals(0, stop.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(stop);
+
+        CpuPair reti = newSgbPair(0xd9); // RETI
+        assertEquals(4, reti.direct.runSgbIdlePerformanceEpoch(4));
+        for (int tick = 0; tick < 4; tick++) {
+            reti.scalar.tick();
+        }
+        assertTrue("RETI did not leave its pending retirement on the scalar seam",
+                reti.direct.getState() != Cpu.State.OPCODE);
+        assertEquals(0, reti.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(reti);
+
+        CpuPair di = newSgbPair(0xf3, 0x00); // DI followed by NOP
+        int diElapsed = di.direct.runSgbIdlePerformanceEpoch(54);
+        assertEquals("DI must finish at the scalar seam", 4, diElapsed);
+        for (int tick = 0; tick < diElapsed; tick++) {
+            di.scalar.tick();
+        }
+        assertCpuPairStateEquals(di);
+
+        CpuPair interrupt = newSgbPair(0x00);
+        interrupt.directInterrupts.setByte(0xffff, 1);
+        interrupt.scalarInterrupts.setByte(0xffff, 1);
+        interrupt.directInterrupts.enableInterrupts(false);
+        interrupt.scalarInterrupts.enableInterrupts(false);
+        interrupt.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        interrupt.scalarInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
+        for (int tick = 0; tick < 4; tick++) {
+            interrupt.direct.tick();
+            interrupt.scalar.tick();
+        }
+        assertTrue("SGB interrupt did not reach a microstate",
+                interrupt.direct.getState() == Cpu.State.IRQ_WAIT_1
+                        || interrupt.direct.getState() == Cpu.State.IRQ_WAIT_2
+                        || interrupt.direct.getState() == Cpu.State.IRQ_PUSH_1);
+        assertFalse("interrupt microstate must stay on the scalar seam",
+                interrupt.direct.performanceSgbIdleEpochEntryEligible());
+        assertEquals(0, interrupt.direct.runSgbIdlePerformanceEpoch(54));
+        assertCpuPairStateEquals(interrupt);
+    }
+
+    @Test
+    public void sgbIdleEpochFencesUnsafeMemoryAndIoAtTheScalarHandoff()
+            throws Exception {
+        String[] labels = {"VRAM", "OAM", "JOYP", "LCDC", "IE"};
+        int[] addresses = {0x8000, 0xfe00, 0xff00, 0xff40, 0xffff};
+        for (int index = 0; index < addresses.length; index++) {
+            CpuPair pair = newSgbPair(0x7e); // LD A,(HL)
+            pair.direct.getRegisters().setHL(addresses[index]);
+            pair.scalar.getRegisters().setHL(addresses[index]);
+            setPairByte(pair, addresses[index], 0x66);
+
+            int elapsed = pair.direct.runSgbIdlePerformanceEpoch(54);
+
+            assertTrue(labels[index] + " prefix made no progress", elapsed > 0);
+            assertTrue(labels[index] + " crossed the decoded read",
+                    pair.directMemory.lastReadAddress != addresses[index]);
+            assertEquals(labels[index] + " delegated a terminal read", 0L,
+                    pair.direct.getPerformanceEpochTerminalAccesses());
+            for (int tick = 0; tick < elapsed; tick++) {
+                pair.scalar.tick();
+            }
+            assertCpuPairEquals(pair);
+        }
+
+        CpuPair vramWrite = newSgbPair(0x77); // LD (HL),A
+        vramWrite.direct.getRegisters().setHL(0x8000);
+        vramWrite.scalar.getRegisters().setHL(0x8000);
+        vramWrite.direct.getRegisters().setA(0x42);
+        vramWrite.scalar.getRegisters().setA(0x42);
+        int elapsed = vramWrite.direct.runSgbIdlePerformanceEpoch(54);
+        assertTrue("VRAM write prefix made no progress", elapsed > 0);
+        assertEquals("VRAM write crossed the decoded fence", 0,
+                vramWrite.directMemory.writes);
+        assertEquals("VRAM write delegated a terminal write", 0L,
+                vramWrite.direct.getPerformanceEpochTerminalAccesses());
+        for (int tick = 0; tick < elapsed; tick++) {
+            vramWrite.scalar.tick();
+        }
+        assertCpuPairEquals(vramWrite);
+    }
+
+    @Test
     public void nativeCgbNormalSpeedMaskedInterruptKeepsImeAndControlSeamsScalar() {
         CountingMemory imeMemory = new CountingMemory();
         imeMemory.bytes[0] = 0x00;
@@ -1256,16 +1414,20 @@ public final class CpuPerformanceEpochTest {
     }
 
     private static void assertCpuPairEquals(CpuPair pair) throws Exception {
-        assertDeepEquals("cpu", pair.scalar.captureState(), pair.direct.captureState());
-        assertDeepEquals("interrupts", pair.scalarInterrupts.captureState(),
-                pair.directInterrupts.captureState());
-        assertArrayEquals("memory", pair.scalarMemory.bytes, pair.directMemory.bytes);
+        assertCpuPairStateEquals(pair);
         assertEquals("read count", pair.scalarMemory.reads, pair.directMemory.reads);
         assertEquals("last read", pair.scalarMemory.lastReadAddress,
                 pair.directMemory.lastReadAddress);
         assertEquals("write count", pair.scalarMemory.writes, pair.directMemory.writes);
         assertEquals("last write", pair.scalarMemory.lastWriteAddress,
                 pair.directMemory.lastWriteAddress);
+    }
+
+    private static void assertCpuPairStateEquals(CpuPair pair) throws Exception {
+        assertDeepEquals("cpu", pair.scalar.captureState(), pair.direct.captureState());
+        assertDeepEquals("interrupts", pair.scalarInterrupts.captureState(),
+                pair.directInterrupts.captureState());
+        assertArrayEquals("memory", pair.scalarMemory.bytes, pair.directMemory.bytes);
     }
 
     private static void assertDeepEquals(String path, Object expected, Object actual)

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.cpu.Cpu;
+import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
@@ -967,6 +968,50 @@ public final class GameboyPerformanceEpochTest {
                             assertTrue(profile.id() + " " + phase + " did not use an SGB epoch",
                                     candidate.getPerformanceEpochTicks() > 0L);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void sgbIdleEpochAdmitsImeDisabledRawVblankAndLcdcAtBlankPhases()
+            throws Exception {
+        for (HardwareProfile profile : new HardwareProfile[]{
+                HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
+            for (SgbRasterPhase phase : new SgbRasterPhase[]{
+                    SgbRasterPhase.HBLANK, SgbRasterPhase.VBLANK}) {
+                for (InterruptManager.InterruptType type : new InterruptManager.InterruptType[]{
+                        InterruptManager.InterruptType.VBlank,
+                        InterruptManager.InterruptType.LCDC}) {
+                    try (Gameboy scalar = sgbSession(
+                            dmgRomWramLoop(), profile, PlayerInputSnapshot::released);
+                         Gameboy candidate = sgbSession(
+                                 dmgRomWramLoop(), profile, PlayerInputSource.RELEASED)) {
+                        scalar.getGpu().setPerformanceScanlineEnabled(true);
+                        candidate.getGpu().setPerformanceScanlineEnabled(true);
+                        advanceSgbPairToRasterPhase(scalar, candidate, phase);
+
+                        int mask = 1 << type.ordinal();
+                        for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
+                            gameboy.getAddressSpace().setByte(0xffff, mask);
+                            gameboy.getAddressSpace().setByte(0xff0f,
+                                    gameboy.getAddressSpace().getByte(0xff0f) | mask);
+                        }
+                        assertTrue(profile.id() + " " + phase + " " + type
+                                        + " did not admit the masked idle epoch",
+                                candidate.getCpu().performanceSgbIdleEpochEntryEligible());
+
+                        int scalarFrames = runScalarTicks(scalar, 54);
+                        int candidateFrames = candidate.runTicks(54);
+                        assertEquals(profile.id() + " " + phase + " " + type
+                                        + " frame callbacks", scalarFrames, candidateFrames);
+                        assertTrue(profile.id() + " " + phase + " " + type
+                                        + " had no idle epoch coverage",
+                                candidate.getPerformanceEpochTicks() > 0L);
+                        assertDeepStateEquals(profile.id() + " " + phase + " " + type,
+                                scalar.captureStateWithoutTimeSource(),
+                                candidate.captureStateWithoutTimeSource());
                     }
                 }
             }

@@ -273,6 +273,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private enum PerformanceEpochPpuPlan {
         NONE,
+        SGB_IDLE,
         TRUSTED_RASTER,
         MODE2_BULK,
         PHYSICAL_DMG_MODE2_BULK,
@@ -1735,6 +1736,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
 
         switch (ppuPlan) {
+            case SGB_IDLE -> throw new IllegalStateException(
+                    "native-CGB settled-HALT span has an SGB PPU plan");
             case TRUSTED_RASTER -> {
                 gpu.advancePerformanceEpochQuietSpanTrusted(ticks, directRaster, steadyRaster);
                 statRegister.tickPerformanceQuietSpanTrusted(ticks);
@@ -1757,7 +1760,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         cpu.latchHdmaHaltOpcode(hdma.isHaltRequestLatched());
     }
 
-    /** Routes the fixed-x1 epoch through the SGB raster gate before generic preflight. */
+    /** Routes the fixed-x1 epoch through the SGB PPU plan before generic preflight. */
     private int tryNormalSpeedPerformanceEpoch(long remaining) {
         if (isSgbPerformanceTopology()) {
             return trySgbPerformanceEpoch(remaining);
@@ -1766,9 +1769,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     }
 
     /**
-     * SGB/SGB2 running-CPU lane. The direct scanline horizon is cheap to reject while the PPU
-     * is in mode 2 or a scalar mode-3 line, while LCD-off state enters the fixed preflight
-     * directly because its PPU horizon is the frozen LCD-off plane.
+     * SGB/SGB2 running-CPU lane. HBlank/VBlank uses the output-idle epoch, mode 3 uses the
+     * direct raster epoch, and mode 2 uses the existing physical-DMG OAM phase plan. LCD-off
+     * state enters the fixed preflight directly because its PPU horizon is the frozen plane.
      */
     private int trySgbPerformanceEpoch(long remaining) {
         if (remaining <= 0) {
@@ -1779,8 +1782,20 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     remaining, PerformanceEpochPpuPlan.NONE, 0);
         }
         int requested = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
-        int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
-        if (rasterSpan > 0) {
+        Mode mode = gpu.getMode();
+        if (mode == Mode.HBlank || mode == Mode.VBlank) {
+            int idleSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
+            if (idleSpan <= 0) {
+                return 0;
+            }
+            return tryFixedNormalSpeedPerformanceEpoch(
+                    remaining, PerformanceEpochPpuPlan.SGB_IDLE, idleSpan);
+        }
+        if (mode == Mode.PixelTransfer) {
+            int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
+            if (rasterSpan <= 0) {
+                return 0;
+            }
             return tryFixedNormalSpeedPerformanceEpoch(
                     remaining, PerformanceEpochPpuPlan.TRUSTED_RASTER, rasterSpan);
         }
@@ -1810,12 +1825,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
+        boolean sgbIdle = precomputedPpuPlan == PerformanceEpochPpuPlan.SGB_IDLE;
         boolean physicalDmgLcdOffEpoch = !cgbHardware && !gpu.isLcdEnabled();
         boolean lcdOffEpoch = physicalDmgLcdOffEpoch
                 || nativeCgbNormalSpeed && !gpu.isLcdEnabled();
-        boolean cpuEntryEligible = nativeCgbNormalSpeed
-                ? cpu.performanceNativeCgbNormalSpeedEpochEntryEligible()
-                : cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
+        boolean cpuEntryEligible;
+        if (sgbIdle) {
+            cpuEntryEligible = cpu.performanceSgbIdleEpochEntryEligible();
+        } else if (nativeCgbNormalSpeed) {
+            cpuEntryEligible = cpu.performanceNativeCgbNormalSpeedEpochEntryEligible();
+        } else {
+            cpuEntryEligible = cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
+        }
         if (remaining <= 0 || !cpuEntryEligible
                 || !canStartNormalSpeedPerformanceEpoch(
                         cgbHardware, nativeCgbNormalSpeed, lcdOffEpoch)) {
@@ -1937,7 +1958,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                                     == PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK
                             ? cpu.runPhysicalDmgMode2PerformanceEpoch(span)
                             : sgb
-                            ? cpu.runSgbPerformanceEpoch(span)
+                            ? performanceEpochPpuPlan == PerformanceEpochPpuPlan.SGB_IDLE
+                                    ? cpu.runSgbIdlePerformanceEpoch(span)
+                                    : cpu.runSgbPerformanceEpoch(span)
                             : cpu.runPhysicalDmgPerformanceEpoch(span);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
@@ -2059,6 +2082,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
 
         switch (performanceEpochPpuPlan) {
+            case SGB_IDLE -> throw new IllegalStateException(
+                    "native-CGB epoch has an SGB PPU plan");
             case TRUSTED_RASTER -> {
                 gpu.advancePerformanceEpochQuietSpanTrusted(
                         ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
@@ -2145,6 +2170,8 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             // complete arithmetic transaction skipped by this fixed-x1 packet.
             hdma.advancePerformanceInactiveRequestClockTrusted(ticks);
             switch (performanceEpochPpuPlan) {
+                case SGB_IDLE -> throw new IllegalStateException(
+                        "normal-speed CGB epoch has an SGB PPU plan");
                 case TRUSTED_RASTER -> {
                     gpu.advancePerformanceEpochQuietSpanTrusted(
                             ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);
@@ -2164,6 +2191,10 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             }
         } else {
             switch (performanceEpochPpuPlan) {
+                case SGB_IDLE -> {
+                    gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(ticks, false, false);
+                    performanceEpochRasterFastTicks += ticks;
+                }
                 case TRUSTED_RASTER -> {
                     gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
                             ticks, performanceEpochDirectRaster, performanceEpochSteadyRaster);

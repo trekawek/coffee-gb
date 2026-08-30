@@ -60,9 +60,6 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
 
     private final int[] centerBase;
 
-    /** Derived RGB cache for the immutable SGB border palette, keyed by raw RGB555. */
-    private final int[] borderFadeCache;
-
     private final int[][] palettes = new int[4][4];
 
     private final int[][] systemPalettes = new int[512][4];
@@ -110,7 +107,6 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         this.sgbBus = sgbBus;
         borderedBase = sgb ? new int[SGB_DISPLAY_WIDTH * SGB_DISPLAY_HEIGHT] : null;
         centerBase = sgb ? new int[DISPLAY_WIDTH * DISPLAY_HEIGHT] : null;
-        borderFadeCache = sgb ? new int[0x8000] : null;
         renderLeasePool = sgb ? ThreadLocal.withInitial(RenderLeasePool::new) : null;
         predefinedPalette = DefinedPalettes.getPalette(rom.getTitle().trim());
     }
@@ -380,31 +376,14 @@ public class SgbDisplay implements StatefulComponent<SgbDisplay> {
         int height = includeBorder ? SGB_DISPLAY_HEIGHT : DISPLAY_HEIGHT;
         int sourceOffsetX = includeBorder ? 0 : DMG_WINDOW_X;
         int sourceOffsetY = includeBorder ? 0 : DMG_WINDOW_Y;
-        boolean cacheableFade = borderFade >= 0 && borderFade <= 32;
-        int fadeMarker = cacheableFade
-                ? (Math.min(borderFade, 31) + 1) << 24 : 0;
         for (int y = 0; y < height; y++) {
             int sourceRow = (y + sourceOffsetY) * SGB_DISPLAY_WIDTH + sourceOffsetX;
             int targetRow = y * width;
             for (int x = 0; x < width; x++) {
                 int source = sourceRow + x;
-                if (sgbMask[source] == 0) {
-                    target[targetRow + x] = 0;
-                    continue;
-                }
-                int color = sgbBuffer[source];
-                if (!cacheableFade) {
-                    target[targetRow + x] =
-                            translateGbcRgb(fadeBorderColor(color, borderFade));
-                    continue;
-                }
-                int cacheIndex = color & 0x7fff;
-                int cached = borderFadeCache[cacheIndex];
-                if ((cached & 0xff000000) != fadeMarker) {
-                    cached = fadeMarker | translateGbcRgb(fadeBorderColor(color, borderFade));
-                    borderFadeCache[cacheIndex] = cached;
-                }
-                target[targetRow + x] = cached & 0x00ffffff;
+                target[targetRow + x] = sgbMask[source] == 0
+                        ? 0
+                        : translateGbcRgb(fadeBorderColor(sgbBuffer[source], borderFade));
             }
         }
     }
