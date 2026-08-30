@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.controller.link
 
 import eu.rekawek.coffeegb.controller.Session
 import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
+import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
@@ -38,7 +39,7 @@ class LinkedFrameStepperTest {
   }
 
   @Test
-  fun mirroredExternalListenersReceiveABoundedP1ElectionLead() {
+  fun mirroredDmgExternalListenersReceiveABoundedP1ElectionLead() {
     PairFixture().use { fixture ->
       fixture.armBoth(0x80)
 
@@ -52,6 +53,46 @@ class LinkedFrameStepperTest {
           expectedLead.toInt() and 0xffff,
           dividerDelta(fixture.first, fixture.second),
       )
+      assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+    }
+  }
+
+  @Test
+  fun mirroredCgbNormalExternalListenersKeepTheBoundedP1ElectionLead() {
+    PairFixture(GameboyType.CGB).use { fixture ->
+      fixture.armBoth(0x80)
+
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.EXTERNAL_CLOCK_DEADLOCK,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+
+      val expectedLead = 2L * fixture.clockSpec.controllerTicksPerFrame()
+      assertEquals(
+          expectedLead.toInt() and 0xffff,
+          dividerDelta(fixture.first, fixture.second),
+      )
+      assertFalse(fixture.first.gameboy.isFastSerialClockSelectedForActiveTransfer)
+      assertFalse(fixture.second.gameboy.isFastSerialClockSelectedForActiveTransfer)
+      assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+    }
+  }
+
+  @Test
+  fun mirroredCgbFastExternalListenersReceiveOnlyASingleTickP1PhaseLead() {
+    PairFixture(GameboyType.CGB).use { fixture ->
+      fixture.armBoth(0x82)
+
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.EXTERNAL_CLOCK_DEADLOCK,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+
+      assertEquals(1, dividerDelta(fixture.first, fixture.second))
+      assertTrue(fixture.first.gameboy.isExternalClockTransferActive)
+      assertTrue(fixture.second.gameboy.isExternalClockTransferActive)
+      assertTrue(fixture.first.gameboy.isFastSerialClockSelectedForActiveTransfer)
+      assertTrue(fixture.second.gameboy.isFastSerialClockSelectedForActiveTransfer)
       assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
     }
   }
@@ -82,7 +123,7 @@ class LinkedFrameStepperTest {
     return (aheadDivider - behindDivider) and 0xffff
   }
 
-  private class PairFixture : AutoCloseable {
+  private class PairFixture(hardware: GameboyType = GameboyType.DMG) : AutoCloseable {
     val firstEndpoint = Peer2PeerSerialEndpoint()
     val secondEndpoint = Peer2PeerSerialEndpoint()
     val first: Session
@@ -92,8 +133,16 @@ class LinkedFrameStepperTest {
 
     init {
       firstEndpoint.init(secondEndpoint)
-      val firstConfig = StateCodecTestSupport.configuration()
-      val secondConfig = StateCodecTestSupport.configuration()
+      val firstConfig =
+          StateCodecTestSupport.configuration(
+              bytes = StateCodecTestSupport.rom(cgb = hardware == GameboyType.CGB),
+              hardware = hardware,
+          )
+      val secondConfig =
+          StateCodecTestSupport.configuration(
+              bytes = StateCodecTestSupport.rom(cgb = hardware == GameboyType.CGB),
+              hardware = hardware,
+          )
       first = Session(firstConfig, EventBusImpl(null, null, false), null, firstEndpoint)
       second = Session(secondConfig, EventBusImpl(null, null, false), null, secondEndpoint)
       sessions = listOf(first, second)

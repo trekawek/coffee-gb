@@ -21,9 +21,13 @@ internal object LinkedFrameStepper {
   // a slow mirrored master-selection loop about 217 ms of independent machine time.
   private const val INTERNAL_COLLISION_ESCAPE_FRAMES = 13
 
-  // External listeners need a shorter election window: P1 either reaches its internal-clock
-  // fallback within this interval or resumes lockstep with enough phase separation to do so first.
+  // DMG-speed listeners need enough independent execution to reach their timeout fallback.
   private const val EXTERNAL_ELECTION_ESCAPE_FRAMES = 2
+
+  // A native-CGB fast byte is far shorter than a controller frame. A single T-cycle gives later
+  // role election a deterministic order without running a valid passive listener thousands of
+  // byte periods ahead of an input-driven peer.
+  private const val FAST_EXTERNAL_ELECTION_PHASE_TICKS = 1L
 
   fun advanceFrame(
       mode: LinkMode,
@@ -77,10 +81,14 @@ internal object LinkedFrameStepper {
       }
       bothExternal -> {
         val limit =
-            Math.multiplyExact(
-                clockSpec.controllerTicksPerFrame().toLong(),
-                EXTERNAL_ELECTION_ESCAPE_FRAMES.toLong(),
-            )
+            if (first.gameboy.isFastSerialClockSelectedForActiveTransfer) {
+              FAST_EXTERNAL_ELECTION_PHASE_TICKS
+            } else {
+              Math.multiplyExact(
+                  clockSpec.controllerTicksPerFrame().toLong(),
+                  EXTERNAL_ELECTION_ESCAPE_FRAMES.toLong(),
+              )
+            }
         val ticks =
             advanceUnilaterally(first, limit) {
               first.gameboy.isInternalClockTransferActive

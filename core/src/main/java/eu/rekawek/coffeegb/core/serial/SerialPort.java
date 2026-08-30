@@ -72,6 +72,11 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         return (sc & 0x81) == 0x80;
     }
 
+    /** True when an active native-CGB transfer has the fast-clock selector bit set. */
+    public boolean isFastClockSelectedForActiveTransfer() {
+        return (sc & 0x80) != 0 && isColorMode() && (sc & 0x02) != 0;
+    }
+
     /** Allocation-free scalar comparison for the owning Gameboy's link timing check. */
     public boolean hasSameTimingState(SerialPort other) {
         return other != null
