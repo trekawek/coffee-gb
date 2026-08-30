@@ -204,7 +204,9 @@ and replay/netplay mismatch tests. Compare controller overhead with the setting 
 effective mode, including a visible deoptimization-to-Accuracy indication when applicable.
 
 **Acceptance:** UI selection affects the next session only; benchmark logs identify the effective
-mode and all seven hardware rows independently; no Android/Swing class is referenced by core.
+mode and all seven hardware rows independently; a missing Android frontend preference selects
+Performance while desktop retains the controller's Accuracy default; no Android/Swing class is
+referenced by core.
 
 **Tests/measurement:** Swing preference/session test, Android option/diagnostic unit test, headless
 smoke test, and one visible phone run in each mode with audio on.

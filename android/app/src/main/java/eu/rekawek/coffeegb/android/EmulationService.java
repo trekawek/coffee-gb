@@ -27,7 +27,7 @@ public final class EmulationService extends Service implements AudioManager.OnAu
 
     public static void start(Context context) {
         start(context, DiagnosticsOptions.executionModeValue(
-                ExecutionMode.ACCURACY));
+                ExecutionMode.PERFORMANCE));
     }
 
     /** Starts an ordinary session with the persisted frontend-selected core strategy. */

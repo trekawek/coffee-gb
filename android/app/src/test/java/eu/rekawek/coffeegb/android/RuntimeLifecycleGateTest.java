@@ -22,6 +22,10 @@ public class RuntimeLifecycleGateTest {
             }
 
             @Override
+            public void resumeOutputs() {
+            }
+
+            @Override
             public void requestBatteryFlush() {
                 flushes.incrementAndGet();
             }
@@ -55,6 +59,10 @@ public class RuntimeLifecycleGateTest {
             }
 
             @Override
+            public void resumeOutputs() {
+            }
+
+            @Override
             public void requestBatteryFlush() {
                 calls.incrementAndGet();
             }
@@ -80,6 +88,10 @@ public class RuntimeLifecycleGateTest {
             }
 
             @Override
+            public void resumeOutputs() {
+            }
+
+            @Override
             public void requestBatteryFlush() {
                 flushes.incrementAndGet();
             }
@@ -97,5 +109,94 @@ public class RuntimeLifecycleGateTest {
         assertFalse(gate.active());
         assertEquals(10, pauses.get());
         assertEquals(10, flushes.get());
+    }
+
+    @Test
+    public void foregroundActivationResumesOutputsAfterAFirstRomPickerRoundTrip() {
+        RuntimeLifecycleGate gate = new RuntimeLifecycleGate();
+        AtomicInteger pauses = new AtomicInteger();
+        AtomicInteger resumes = new AtomicInteger();
+        AtomicInteger flushes = new AtomicInteger();
+        RuntimeLifecycleGate.SessionCommands session = new RuntimeLifecycleGate.SessionCommands() {
+            @Override
+            public void pause() {
+                pauses.incrementAndGet();
+            }
+
+            @Override
+            public void resumeOutputs() {
+                resumes.incrementAndGet();
+            }
+
+            @Override
+            public void requestBatteryFlush() {
+                flushes.incrementAndGet();
+            }
+        };
+
+        gate.background(session);
+        gate.foregrounded();
+        gate.activated(session);
+
+        assertEquals(0, pauses.get());
+        assertEquals(1, resumes.get());
+        assertEquals(0, flushes.get());
+    }
+
+    @Test
+    public void ordinaryForegroundActivationLeavesAlreadyRunningOutputsAlone() {
+        RuntimeLifecycleGate gate = new RuntimeLifecycleGate();
+        AtomicInteger calls = new AtomicInteger();
+        RuntimeLifecycleGate.SessionCommands session = new RuntimeLifecycleGate.SessionCommands() {
+            @Override
+            public void pause() {
+                calls.incrementAndGet();
+            }
+
+            @Override
+            public void resumeOutputs() {
+                calls.incrementAndGet();
+            }
+
+            @Override
+            public void requestBatteryFlush() {
+                calls.incrementAndGet();
+            }
+        };
+
+        gate.activated(session);
+
+        assertEquals(0, calls.get());
+    }
+
+    @Test
+    public void backgroundActivationKeepsNewSessionOutputsPaused() {
+        RuntimeLifecycleGate gate = new RuntimeLifecycleGate();
+        AtomicInteger pauses = new AtomicInteger();
+        AtomicInteger resumes = new AtomicInteger();
+        AtomicInteger flushes = new AtomicInteger();
+        RuntimeLifecycleGate.SessionCommands session = new RuntimeLifecycleGate.SessionCommands() {
+            @Override
+            public void pause() {
+                pauses.incrementAndGet();
+            }
+
+            @Override
+            public void resumeOutputs() {
+                resumes.incrementAndGet();
+            }
+
+            @Override
+            public void requestBatteryFlush() {
+                flushes.incrementAndGet();
+            }
+        };
+
+        gate.background(session);
+        gate.activated(session);
+
+        assertEquals(1, pauses.get());
+        assertEquals(0, resumes.get());
+        assertEquals(1, flushes.get());
     }
 }

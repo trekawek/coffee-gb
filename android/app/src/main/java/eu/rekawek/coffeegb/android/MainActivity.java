@@ -179,6 +179,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String PREF_SYSTEM_CGB = "system.cgbGames";
     private static final String PREF_SYSTEM_BOOTSTRAP = "system.bootstrap";
     private static final String PREF_EXECUTION_MODE = "execution.mode";
+    private static final String DEFAULT_EXECUTION_MODE = "performance";
     private static final String PREF_DISPLAY_BORDER = "display.sgbBorder";
     private static final String PREF_DISPLAY_COLORS = "display.dmgColors";
     private static final String PREF_CAMERA_SELECTION = "devices.camera.selection";
@@ -2463,10 +2464,10 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         };
     }
 
-    /** Reads the persisted core strategy; malformed/legacy values safely select Accuracy. */
+    /** Reads the persisted core strategy; a new Android install starts in Performance mode. */
     private static String executionMode(SharedPreferences preferences) {
         return DiagnosticsOptions.executionModeValue(DiagnosticsOptions.parseExecutionMode(
-                preferences.getString(PREF_EXECUTION_MODE, "accuracy")));
+                preferences.getString(PREF_EXECUTION_MODE, DEFAULT_EXECUTION_MODE)));
     }
 
     private static void applySystemSettings(AndroidEmulationRuntime runtime,

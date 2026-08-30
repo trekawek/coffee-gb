@@ -12,6 +12,8 @@ final class RuntimeLifecycleGate {
     interface SessionCommands {
         void pause();
 
+        void resumeOutputs();
+
         void requestBatteryFlush();
     }
 
@@ -19,19 +21,29 @@ final class RuntimeLifecycleGate {
     private boolean background;
     private boolean hostPauseRequested;
     private boolean flushRequested;
+    /** Host outputs were paused before there was a session for the controller to pause. */
+    private boolean resumeOutputsOnActivation;
 
     void activated(SessionCommands commands) {
         active = true;
         hostPauseRequested = false;
         flushRequested = false;
         if (background) {
+            resumeOutputsOnActivation = false;
             background(commands);
+        } else if (resumeOutputsOnActivation) {
+            // A document picker can pause host outputs before the first session exists. Starting
+            // that session in the foreground must reactivate those outputs without manufacturing
+            // a controller resume edge for a machine that is already running.
+            resumeOutputsOnActivation = false;
+            commands.resumeOutputs();
         }
     }
 
     void background(SessionCommands commands) {
         background = true;
         if (!active) {
+            resumeOutputsOnActivation = true;
             return;
         }
         if (!hostPauseRequested) {
@@ -46,6 +58,7 @@ final class RuntimeLifecycleGate {
 
     void resumedByUser() {
         background = false;
+        resumeOutputsOnActivation = false;
         if (active) {
             hostPauseRequested = false;
         }
@@ -65,6 +78,7 @@ final class RuntimeLifecycleGate {
         background = false;
         hostPauseRequested = false;
         flushRequested = false;
+        resumeOutputsOnActivation = false;
     }
 
     boolean active() {

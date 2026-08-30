@@ -48,7 +48,7 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec settingsPage() {
-        return settingsPage("accuracy");
+        return settingsPage("performance");
     }
 
     static MenuPageSpec settingsPage(String executionMode) {
