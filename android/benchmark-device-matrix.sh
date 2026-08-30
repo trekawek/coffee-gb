@@ -587,6 +587,17 @@ verify_installed_profile() {
   ' "$tmp_dir/package-dump"; then
     fatal "installed benchmark package is missing or debuggable"
   fi
+  if ! awk '
+    {
+      line=$0
+      gsub(/[][]/, " ", line)
+      fields=split(line, token, /[[:space:]]+/)
+      for (i = 1; i <= fields; i++) if (token[i] == "status=speed-profile") found=1
+    }
+    END { exit(found ? 0 : 1) }
+  ' "$tmp_dir/package-dump"; then
+    fatal "installed benchmark package is not ART-compiled with status=speed-profile"
+  fi
 }
 
 resolve_layer() {

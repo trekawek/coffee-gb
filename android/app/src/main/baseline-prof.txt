@@ -1,1 +1,8 @@
 HPLeu/rekawek/coffeegb/core/Gameboy;->**(**)**
+HPLeu/rekawek/coffeegb/core/cpu/Cpu;->**(**)**
+HPLeu/rekawek/coffeegb/core/cpu/Cpu$PerformanceEpochBus;->**(**)**
+HPLeu/rekawek/coffeegb/core/gpu/Gpu;->**(**)**
+HPLeu/rekawek/coffeegb/core/gpu/StatRegister;->**(**)**
+HPLeu/rekawek/coffeegb/core/sound/Sound;->**(**)**
+HPLeu/rekawek/coffeegb/core/timer/Timer;->**(**)**
+HPLeu/rekawek/coffeegb/core/serial/SerialPort;->**(**)**

@@ -10,6 +10,24 @@ plugins {
 
 val coffeeGbVersion = gradle.extra["coffeeGbVersion"] as String
 
+private val requiredBaselineProfileClassNames = listOf(
+    "eu.rekawek.coffeegb.core.Gameboy",
+    "eu.rekawek.coffeegb.core.cpu.Cpu",
+    "eu.rekawek.coffeegb.core.cpu.Cpu\$PerformanceEpochBus",
+    "eu.rekawek.coffeegb.core.gpu.Gpu",
+    "eu.rekawek.coffeegb.core.gpu.StatRegister",
+    "eu.rekawek.coffeegb.core.sound.Sound",
+    "eu.rekawek.coffeegb.core.timer.Timer",
+    "eu.rekawek.coffeegb.core.serial.SerialPort",
+)
+private val expectedBaselineProfileRules = requiredBaselineProfileClassNames.map { className ->
+  "HPL${className.replace('.', '/')};->**(**)**"
+}
+private val packagedBaselineProfileEntries = listOf(
+    "assets/dexopt/baseline.prof",
+    "assets/dexopt/baseline.profm",
+)
+
 private val forbiddenSourceReferences = linkedMapOf(
     "java.awt." to "java.awt",
     "javax.swing." to "javax.swing",
@@ -78,6 +96,20 @@ private val releaseStableStateClassNames = listOf(
     "eu.rekawek.coffeegb.core.genie.Genie\$GenieMemento",
     "eu.rekawek.coffeegb.core.genie.GameGeniePatch",
 )
+
+private fun r8ClassMappings(mappingFile: File): Map<String, String> =
+    mappingFile.useLines { lines ->
+      lines.mapNotNull { line ->
+        if (line.isBlank() || line.first().isWhitespace() || !line.endsWith(':')) {
+          return@mapNotNull null
+        }
+        val separator = line.indexOf(" -> ")
+        if (separator < 0) {
+          return@mapNotNull null
+        }
+        line.substring(0, separator) to line.substring(separator + 4, line.length - 1)
+      }.toMap()
+    }
 
 private fun portabilityViolations(sourceFiles: Collection<File>, classpath: Collection<File>): List<String> {
   val violations = mutableListOf<String>()
@@ -211,6 +243,20 @@ val debugRuntimeClasspath = providers.provider {
 }
 val coreLibraryDesugaringClasspath = providers.provider {
   configurations.getByName("coreLibraryDesugaring")
+}
+val baselineProfileSource = layout.projectDirectory.file("src/main/baseline-prof.txt")
+val verifyBaselineProfileSource = tasks.register("verifyBaselineProfileSource") {
+  group = "verification"
+  description = "Requires the exact reviewed HP-only Android baseline profile."
+  inputs.file(baselineProfileSource)
+  doLast {
+    val expected = expectedBaselineProfileRules.joinToString(separator = "\n", postfix = "\n")
+    val actual = baselineProfileSource.asFile.readText()
+    check(actual == expected) {
+      "src/main/baseline-prof.txt must contain exactly the eight unique reviewed HP rules " +
+          "in order, with no S flags."
+    }
+  }
 }
 val verifyAndroidPortability = tasks.register("verifyAndroidPortability") {
   group = "verification"
@@ -354,11 +400,12 @@ val verifyDebugApkContents = tasks.register("verifyDebugApkContents") {
 }
 
 tasks.named("preBuild") {
-  dependsOn(verifyAndroidPortability, reportAndroidDependencyGraph, reportAndroidLicenseInventory)
+  dependsOn(verifyBaselineProfileSource, verifyAndroidPortability, reportAndroidDependencyGraph,
+      reportAndroidLicenseInventory)
 }
 tasks.named("check") {
-  dependsOn(verifyAndroidPortability, verifyPortabilityFixture, reportAndroidDependencyGraph,
-      reportAndroidLicenseInventory, verifyDebugApkContents)
+  dependsOn(verifyBaselineProfileSource, verifyAndroidPortability, verifyPortabilityFixture,
+      reportAndroidDependencyGraph, reportAndroidLicenseInventory, verifyDebugApkContents)
 }
 
 androidComponents {
@@ -371,6 +418,72 @@ androidComponents {
     // non-deprecated component capability is HasUnitTestBuilder; use it explicitly so Kotlin DSL
     // resolution does not select the ambiguous VariantBuilder property.
     (variantBuilder as com.android.build.api.variant.HasUnitTestBuilder).enableUnitTest = true
+  }
+  listOf("release", "benchmark").forEach { buildType ->
+    onVariants(selector().withBuildType(buildType)) { variant ->
+      val apkDirectory = variant.artifacts.get(SingleArtifact.APK)
+      val mapping = variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE)
+      val builtArtifactsLoader = variant.artifacts.getBuiltArtifactsLoader()
+      val taskSuffix = variant.name.substring(0, 1).uppercase() + variant.name.substring(1)
+      val verifyPackagedProfile = tasks.register(
+          "verify${taskSuffix}BaselineProfilePackaging"
+      ) {
+        group = "verification"
+        description = "Verifies $buildType APK baseline profiles and profiled R8 classes."
+        dependsOn(verifyBaselineProfileSource)
+        inputs.dir(apkDirectory)
+        inputs.file(mapping)
+        doLast {
+          val builtArtifacts = checkNotNull(builtArtifactsLoader.load(apkDirectory.get())) {
+            "AGP did not publish $buildType APK metadata."
+          }
+          check(builtArtifacts.elements.isNotEmpty()) {
+            "AGP published no $buildType APKs to verify."
+          }
+          val classMappings = r8ClassMappings(mapping.get().asFile)
+          val missingMappings = requiredBaselineProfileClassNames.filterNot(
+              classMappings::containsKey
+          )
+          check(missingMappings.isEmpty()) {
+            "$buildType R8 mapping omitted baseline-profile classes: $missingMappings"
+          }
+          builtArtifacts.elements.forEach { element ->
+            val apk = file(element.outputFile)
+            check(apk.isFile) { "$buildType APK is missing: ${apk.absolutePath}" }
+            ZipFile(apk).use { archive ->
+              packagedBaselineProfileEntries.forEach { entryName ->
+                val entry = archive.getEntry(entryName)
+                check(entry != null && !entry.isDirectory && entry.size > 0L) {
+                  "${apk.name} is missing non-empty $entryName"
+                }
+              }
+              val dexPayloads = archive.entries().asSequence()
+                  .filter { entry ->
+                    !entry.isDirectory && entry.name.matches(Regex("classes[0-9]*\\.dex"))
+                  }
+                  .map { entry ->
+                    String(archive.getInputStream(entry).readBytes(), StandardCharsets.ISO_8859_1)
+                  }
+                  .toList()
+              check(dexPayloads.isNotEmpty()) { "${apk.name} contains no DEX payload." }
+              requiredBaselineProfileClassNames.forEach { originalName ->
+                val mappedName = classMappings.getValue(originalName)
+                val descriptor = "L${mappedName.replace('.', '/')};"
+                check(dexPayloads.any { payload -> payload.contains(descriptor) }) {
+                  "${apk.name} DEX omitted profiled class $originalName ($descriptor)."
+                }
+              }
+            }
+          }
+        }
+      }
+      tasks.named("check") { dependsOn(verifyPackagedProfile) }
+      tasks.configureEach {
+        if (name == "assemble$taskSuffix") {
+          finalizedBy(verifyPackagedProfile)
+        }
+      }
+    }
   }
   onVariants(selector().withBuildType("debug")) { variant ->
     val mergedManifest = variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)

@@ -4,10 +4,8 @@ import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.sound.Sound;
 import eu.rekawek.coffeegb.core.sound.StereoPcmConverter;
 
-import java.util.Objects;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -29,9 +27,6 @@ final class BoundedPcmQueue {
     private final int capacity;
     private final int frameBytes;
     private final int sourceSamples;
-    private final NanoClock nanoClock;
-    private final TimingProbe timingProbe;
-    private final AtomicInteger workerPhase;
     private final AtomicLong overruns = new AtomicLong();
     /** Benchmark-only discard ledger; release keeps the pre-existing overrun counter only. */
     private final DiscardAccounting discardAccounting = BuildConfig.DIAGNOSTICS_ENABLED
@@ -50,12 +45,6 @@ final class BoundedPcmQueue {
     }
 
     BoundedPcmQueue(int sampleRate, int capacity, int frameBytes, ClockSpec sourceClock) {
-        this(sampleRate, capacity, frameBytes, sourceClock, NanoClock.SYSTEM,
-                NoOpTimingProbe.INSTANCE, null);
-    }
-
-    BoundedPcmQueue(int sampleRate, int capacity, int frameBytes, ClockSpec sourceClock,
-            NanoClock nanoClock, TimingProbe timingProbe, AtomicInteger workerPhase) {
         if (capacity < 2) {
             throw new IllegalArgumentException("PCM queue needs at least two frames");
         }
@@ -66,9 +55,6 @@ final class BoundedPcmQueue {
             throw new NullPointerException("sourceClock");
         }
         converter = new StereoPcmConverter(sampleRate);
-        this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
-        this.timingProbe = Objects.requireNonNull(timingProbe, "timingProbe");
-        this.workerPhase = workerPhase;
         this.capacity = capacity;
         this.frameBytes = frameBytes;
         // HardwareProfile can arrive immediately before its first PCM event.  Every reserved
@@ -97,12 +83,6 @@ final class BoundedPcmQueue {
 
     int offer(Sound.SoundSampleEvent event, int volume, boolean muted, long policyGeneration,
             long pauseFlushGeneration) {
-        return offer(event, volume, muted, policyGeneration, pauseFlushGeneration,
-                -1L, 0L);
-    }
-
-    int offer(Sound.SoundSampleEvent event, int volume, boolean muted, long policyGeneration,
-            long pauseFlushGeneration, long eventNanos, long timingGeneration) {
         Frame frame = available.poll();
         if (frame == null) {
             frame = queued.poll();
@@ -117,9 +97,6 @@ final class BoundedPcmQueue {
             }
             frame.accountingBytes = 0;
         }
-        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-            frame.resetTiming();
-        }
         try {
             if (event.buffer().length > frame.source.length) {
                 // Fixed storage covers every supported production profile. Keep a fail-closed
@@ -128,9 +105,6 @@ final class BoundedPcmQueue {
                 frame.accountingBytes = 0;
                 frame.policyGeneration = 0L;
                 frame.pauseFlushGeneration = 0L;
-                if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                    frame.resetTiming();
-                }
                 available.offer(frame);
                 overruns.incrementAndGet();
                 return 0;
@@ -145,16 +119,6 @@ final class BoundedPcmQueue {
             frame.accountingBytes = converter.maximumPcmBytes(
                     event.buffer().length / 2, event.clockSpec());
             frame.length = 0;
-            if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                frame.timingGeneration = timingGeneration;
-                frame.eventNanos = eventNanos;
-                frame.publishNanos = nanoClock.nanoTime();
-                frame.publicationWorkerPhase = workerPhase == null
-                        ? AndroidAudioSink.WORKER_PHASE_CONTROL_OR_RECOVERY : workerPhase.get();
-                // Account before making the pooled slot visible to the consumer; otherwise a
-                // very fast dequeue/release could reset its metadata before this producer reads it.
-                timingProbe.published(frame, event.clockSpec(), event.buffer().length / 2);
-            }
             if (!queued.offer(frame)) {
                 throw new IllegalStateException("PCM queue lost its reserved frame slot");
             }
@@ -166,40 +130,20 @@ final class BoundedPcmQueue {
             frame.accountingBytes = 0;
             frame.policyGeneration = 0L;
             frame.pauseFlushGeneration = 0L;
-            if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                frame.resetTiming();
-            }
             available.offer(frame);
             throw failure;
         }
     }
 
     Frame poll(long timeout, TimeUnit unit) throws InterruptedException {
-        Frame frame;
-        if (BuildConfig.DIAGNOSTICS_ENABLED && workerPhase != null) {
-            workerPhase.set(AndroidAudioSink.WORKER_PHASE_POLL);
-            try {
-                frame = queued.poll(timeout, unit);
-            } finally {
-                workerPhase.set(AndroidAudioSink.WORKER_PHASE_CONTROL_OR_RECOVERY);
-            }
-        } else {
-            frame = queued.poll(timeout, unit);
-        }
+        Frame frame = queued.poll(timeout, unit);
         if (frame == null) {
             return null;
-        }
-        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-            frame.dequeueNanos = nanoClock.nanoTime();
         }
         try {
             frame.length = converter.render(frame.source, frame.sourceLength, frame.clockSpec,
                     frame.volume, frame.muted, frame.bytes);
             frame.clearSource();
-            if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                frame.pcmReadyNanos = nanoClock.nanoTime();
-                timingProbe.ready(frame);
-            }
             return frame;
         } catch (RuntimeException failure) {
             if (BuildConfig.DIAGNOSTICS_ENABLED) {
@@ -210,9 +154,6 @@ final class BoundedPcmQueue {
             frame.accountingBytes = 0;
             frame.policyGeneration = 0L;
             frame.pauseFlushGeneration = 0L;
-            if (BuildConfig.DIAGNOSTICS_ENABLED) {
-                frame.resetTiming();
-            }
             available.offer(frame);
             throw failure;
         }
@@ -227,9 +168,6 @@ final class BoundedPcmQueue {
         frame.accountingBytes = 0;
         frame.policyGeneration = 0L;
         frame.pauseFlushGeneration = 0L;
-        if (BuildConfig.DIAGNOSTICS_ENABLED) {
-            frame.resetTiming();
-        }
         if (!available.offer(frame)) {
             throw new IllegalStateException("PCM queue released a frame twice");
         }
@@ -344,14 +282,6 @@ final class BoundedPcmQueue {
         private long policyGeneration;
         private long pauseFlushGeneration;
         private int accountingBytes;
-        private long timingGeneration;
-        private long eventNanos = -1L;
-        private long publishNanos = -1L;
-        private long dequeueNanos = -1L;
-        private long pcmReadyNanos = -1L;
-        private long firstWriteNanos = -1L;
-        private long writeCompleteNanos = -1L;
-        private int publicationWorkerPhase = AndroidAudioSink.WORKER_PHASE_CONTROL_OR_RECOVERY;
 
         private Frame(byte[] bytes, int[] source) {
             this.bytes = bytes;
@@ -378,80 +308,11 @@ final class BoundedPcmQueue {
             return pauseFlushGeneration;
         }
 
-        long timingGeneration() {
-            return timingGeneration;
-        }
-
-        long eventNanos() {
-            return eventNanos;
-        }
-
-        long publishNanos() {
-            return publishNanos;
-        }
-
-        long dequeueNanos() {
-            return dequeueNanos;
-        }
-
-        long pcmReadyNanos() {
-            return pcmReadyNanos;
-        }
-
-        long firstWriteNanos() {
-            return firstWriteNanos;
-        }
-
-        void setFirstWriteNanos(long firstWriteNanos) {
-            this.firstWriteNanos = firstWriteNanos;
-        }
-
-        long writeCompleteNanos() {
-            return writeCompleteNanos;
-        }
-
-        void setWriteCompleteNanos(long writeCompleteNanos) {
-            this.writeCompleteNanos = writeCompleteNanos;
-        }
-
-        int publicationWorkerPhase() {
-            return publicationWorkerPhase;
-        }
-
         private void clearSource() {
             sourceLength = 0;
             clockSpec = null;
             volume = 0;
             muted = false;
-        }
-
-        private void resetTiming() {
-            timingGeneration = 0L;
-            eventNanos = -1L;
-            publishNanos = -1L;
-            dequeueNanos = -1L;
-            pcmReadyNanos = -1L;
-            firstWriteNanos = -1L;
-            writeCompleteNanos = -1L;
-            publicationWorkerPhase = AndroidAudioSink.WORKER_PHASE_CONTROL_OR_RECOVERY;
-        }
-    }
-
-    interface TimingProbe {
-        void published(Frame frame, ClockSpec sourceClock, int sourceTicks);
-
-        void ready(Frame frame);
-    }
-
-    private enum NoOpTimingProbe implements TimingProbe {
-        INSTANCE;
-
-        @Override
-        public void published(Frame frame, ClockSpec sourceClock, int sourceTicks) {
-        }
-
-        @Override
-        public void ready(Frame frame) {
         }
     }
 

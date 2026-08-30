@@ -72,7 +72,7 @@ public final class BenchmarkMatrix {
     private static final Pattern SAFE_TOKEN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final Set<String> INTERESTING_EVENTS = Set.of(
             "scenario_complete", "matrix_run", "frame_ready", "frame_submitted", "final_result",
-            "compositor_result", "audio_timing_probe");
+            "compositor_result");
     private static final Set<String> BENIGN_EVENTS = Set.of(
             "session_launch", "rom_open_start", "recent_missing", "hardware_profile",
             "emulation_started", "warmup_complete", "benchmark_arm",
@@ -135,10 +135,6 @@ public final class BenchmarkMatrix {
     private static final Set<String> FRAME_SUBMITTED_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "submission_id", "submission_ns");
-    private static final Set<String> AUDIO_TIMING_PROBE_FIELDS = Set.of(
-            "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
-            "benchmark_generation", "frame", "probe_generation", "audio_timing",
-            "audio_underrun_attribution");
     private static final Set<String> FINAL_FIELDS = Set.of(
             "event", "artifact_id", "pair_id", "matrix_block", "row_order", "run_side",
             "session_generation", "benchmark_generation",
@@ -401,8 +397,6 @@ public final class BenchmarkMatrix {
                     addFrame(fields, lineNumber + 1, runs, true, errors);
                 } else if ("frame_submitted".equals(event)) {
                     addFrame(fields, lineNumber + 1, runs, false, errors);
-                } else if ("audio_timing_probe".equals(event)) {
-                    addAudioTimingProbe(fields, lineNumber + 1, runs, errors);
                 } else if ("final_result".equals(event)) {
                     addFinal(fields, lineNumber + 1, runs, errors);
                 } else if ("compositor_result".equals(event)) {
@@ -903,19 +897,6 @@ public final class BenchmarkMatrix {
             }
             return;
         }
-        if ("audio_timing".equals(key)) {
-            if (!value.matches("[0-9]+(,[0-9]+){13}")) {
-                errors.add("line " + lineNumber + ": invalid compact audio_timing");
-            }
-            return;
-        }
-        if ("audio_underrun_attribution".equals(key)) {
-            if (!value.matches("[0-9]+(,[0-9]+){6}")) {
-                errors.add("line " + lineNumber
-                        + ": invalid compact audio_underrun_attribution");
-            }
-            return;
-        }
         if ("measurement".equals(key)) {
             if (!"surfaceflinger_timestats".equals(value)) {
                 errors.add("line " + lineNumber + ": invalid compositor measurement");
@@ -1033,7 +1014,6 @@ public final class BenchmarkMatrix {
             case "matrix_run" -> MATRIX_FIELDS;
             case "frame_ready" -> FRAME_READY_FIELDS;
             case "frame_submitted" -> FRAME_SUBMITTED_FIELDS;
-            case "audio_timing_probe" -> AUDIO_TIMING_PROBE_FIELDS;
             case "final_result" -> FINAL_FIELDS;
             case "compositor_result" -> COMPOSITOR_FIELDS;
             case "session_launch" -> Set.of("event", "launch_ns", "hardware",
@@ -1481,72 +1461,6 @@ public final class BenchmarkMatrix {
             run.submissionNanos.add(timestamp);
         }
         run.frameOrdinals.add(lineNumber);
-    }
-
-    private static void addAudioTimingProbe(Map<String, String> fields, int lineNumber,
-            Map<String, RunBuilder> runs, List<String> errors) {
-        RunBuilder run = findRun(fields, lineNumber, runs, errors);
-        if (run == null) {
-            return;
-        }
-        long benchmarkGeneration = longValue(
-                fields, "benchmark_generation", lineNumber, errors);
-        int frame = integer(fields, "frame", lineNumber, errors);
-        long probeGeneration = longValue(fields, "probe_generation", lineNumber, errors);
-        long[] timing = compactLongTuple(fields, "audio_timing", 14, lineNumber, errors);
-        long[] underrun = compactLongTuple(
-                fields, "audio_underrun_attribution", 7, lineNumber, errors);
-        if (benchmarkGeneration != run.benchmarkGeneration) {
-            errors.add("line " + lineNumber + ": audio timing benchmark generation changed");
-        }
-        if (probeGeneration <= 0L) {
-            errors.add("line " + lineNumber + ": audio timing probe generation is invalid");
-        }
-        if (frame <= 0 || frame > REQUIRED_FRAME_COUNT || frame % 60 != 0) {
-            errors.add("line " + lineNumber + ": audio timing frame is outside 60..600 cadence");
-            return;
-        }
-        if (!allNonnegative(timing) || !allNonnegative(underrun)) {
-            errors.add("line " + lineNumber + ": audio timing counters must be nonnegative");
-        }
-        if (timing[3] > timing[0]) {
-            errors.add("line " + lineNumber
-                    + ": producer 20ms gaps exceed producer intervals");
-        }
-        long attributed = addWithoutOverflow(underrun[1], underrun[2], underrun[3], underrun[4]);
-        if (attributed < 0L || attributed != underrun[0]) {
-            errors.add("line " + lineNumber
-                    + ": audio underrun attribution does not conserve occurrence delta");
-        }
-        int slot = frame / 60 - 1;
-        if (run.audioTimingProbes[slot] != null) {
-            errors.add("line " + lineNumber + ": duplicate audio timing frame " + frame);
-            return;
-        }
-        run.audioTimingProbes[slot] = new AudioTimingProbe(
-                probeGeneration, timing, underrun, lineNumber);
-        run.frameOrdinals.add(lineNumber);
-    }
-
-    private static boolean allNonnegative(long[] values) {
-        for (long value : values) {
-            if (value < 0L) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static long addWithoutOverflow(long... values) {
-        long total = 0L;
-        try {
-            for (long value : values) {
-                total = Math.addExact(total, value);
-            }
-            return total;
-        } catch (ArithmeticException overflow) {
-            return -1L;
-        }
     }
 
     private static void addFinal(Map<String, String> fields, int lineNumber,
@@ -2379,7 +2293,6 @@ public final class BenchmarkMatrix {
             errors.add(run.key + " is missing final_result");
             return;
         }
-        validateAudioTimingProbes(run, errors);
         FinalFields result = run.finalFields;
         if (!run.artifactId.equals(result.artifactId)
                 || run.sessionGeneration != result.sessionGeneration
@@ -2528,39 +2441,6 @@ public final class BenchmarkMatrix {
                 errors.add(run.key + " reports an inexact interval FPS");
             }
         }
-    }
-
-    private static void validateAudioTimingProbes(RunBuilder run, List<String> errors) {
-        AudioTimingProbe previous = null;
-        for (int slot = 0; slot < run.audioTimingProbes.length; slot++) {
-            AudioTimingProbe current = run.audioTimingProbes[slot];
-            if (current == null) {
-                errors.add(run.key + " is missing audio timing frame " + ((slot + 1) * 60));
-                continue;
-            }
-            if (previous != null) {
-                if (current.probeGeneration != previous.probeGeneration) {
-                    errors.add(run.key + " audio timing probe generation changed");
-                }
-                if (!cumulative(previous.timing, current.timing)
-                        || !cumulative(previous.underrun, current.underrun)) {
-                    errors.add(run.key + " audio timing counters regressed");
-                }
-            }
-            previous = current;
-        }
-    }
-
-    private static boolean cumulative(long[] previous, long[] current) {
-        if (previous.length != current.length) {
-            return false;
-        }
-        for (int index = 0; index < previous.length; index++) {
-            if (current[index] < previous[index]) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static void validateSystemAudioProof(RunBuilder run, FinalFields result,
@@ -3971,7 +3851,6 @@ public final class BenchmarkMatrix {
         final List<Long> submissionIds = new ArrayList<>();
         final List<Long> submissionNanos = new ArrayList<>();
         final List<Integer> frameOrdinals = new ArrayList<>();
-        final AudioTimingProbe[] audioTimingProbes = new AudioTimingProbe[10];
         int finalOrdinal = -1;
         FinalFields finalFields;
         CompositorFields compositor;
@@ -4126,10 +4005,6 @@ public final class BenchmarkMatrix {
             Boolean muted, int volume, int systemVolume, int systemVolumeMax,
             Boolean systemMusicMuted, int queuedFrames, Boolean reopenPending,
             long outputIdentity, long queueIdentity) {
-    }
-
-    private record AudioTimingProbe(long probeGeneration, long[] timing, long[] underrun,
-            int ordinal) {
     }
 
     private record CompositorFields(String artifactId, String deviceId, long benchmarkGeneration,
