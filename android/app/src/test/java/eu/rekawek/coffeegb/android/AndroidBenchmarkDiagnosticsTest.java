@@ -66,7 +66,7 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertFalse(diagnostics.acceptsFrameEpoch(24L));
 
         for (int frame = 1; frame < 600; frame++) {
-            assertFalse(diagnostics.frameReady());
+            assertEquals(frame % 60 == 0, diagnostics.frameReady());
         }
         assertTrue(diagnostics.frameReady());
         assertEquals(600L, diagnostics.readyFramesForTesting());
@@ -102,7 +102,7 @@ public class AndroidBenchmarkDiagnosticsTest {
             // The remaining boundaries are delivered by the synchronous Display seam.  The
             // store's epoch above proves the renderer callback is linked to this arm generation.
             for (int frame = 2; frame <= 600; frame++) {
-                assertEquals(frame == 600, diagnostics.frameReady());
+                assertEquals(frame % 60 == 0, diagnostics.frameReady());
             }
         } finally {
             frames.close();
@@ -271,6 +271,45 @@ public class AndroidBenchmarkDiagnosticsTest {
         assertTrue(records.stream().noneMatch(line -> line.startsWith("event=final_result")));
     }
 
+    @Test
+    public void sgbEpochProbeEmitsCumulative180To240AttributionWithoutFinalizing() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED) {
+            return;
+        }
+        List<String> records = new ArrayList<>();
+        AndroidBenchmarkDiagnostics diagnostics = newDiagnostics(records);
+        diagnostics.sessionLaunch();
+        diagnostics.beginSession(SESSION);
+        diagnostics.emulationStarted(SESSION);
+        diagnostics.benchmarkAnchorPosted(SESSION, true);
+        diagnostics.audioFocusResult(true);
+        assertTrue(diagnostics.armBenchmark(SESSION, 43L, TOKEN, readyAudioBaseline()));
+
+        diagnostics.sgbEpochProbe(sgbProbe(
+                180L, 18_000L, 10_000L, 7_000L, 1_000L,
+                4_000L, 5_000L, 3_000L, 2_000L, 1_000L));
+        diagnostics.sgbEpochProbe(sgbProbe(
+                240L, 24_000L, 13_000L, 9_000L, 2_000L,
+                5_000L, 7_000L, 4_000L, 3_000L, 1_000L));
+
+        List<String> probes = records.stream()
+                .filter(line -> line.startsWith("event=sgb_epoch_probe"))
+                .toList();
+        assertEquals(2, probes.size());
+        assertTrue(probes.get(0).contains("frame=180 total_ticks=18000"));
+        assertTrue(probes.get(1).contains("frame=240 total_ticks=24000"));
+        assertTrue(probes.get(1).contains("sgb_idle_offered_ticks=7000"));
+        assertTrue(probes.get(1).contains("sgb_idle_committed_ticks=4000"));
+        assertTrue(probes.get(1).contains("reject_cpu_raw_ime_false_ticks=2000"));
+        for (String probe : probes) {
+            assertTrue(probe.getBytes(StandardCharsets.UTF_8).length
+                    <= AndroidBenchmarkDiagnostics.MAX_LOG_RECORD_BYTES);
+        }
+        assertEquals("ARMED", diagnostics.phaseForTesting());
+        assertTrue(records.stream().noneMatch(line -> line.startsWith("event=speed_sample")));
+        assertTrue(records.stream().noneMatch(line -> line.startsWith("event=final_result")));
+    }
+
     private static AndroidBenchmarkDiagnostics armedDiagnostics(long generation) {
         AndroidBenchmarkDiagnostics diagnostics = newDiagnostics();
         diagnostics.sessionLaunch();
@@ -282,6 +321,20 @@ public class AndroidBenchmarkDiagnosticsTest {
                 SESSION, generation, TOKEN, readyAudioBaseline()));
         assertEquals(generation, diagnostics.benchmarkGeneration());
         return diagnostics;
+    }
+
+    private static Controller.BenchmarkSgbEpochProbeEvent sgbProbe(
+            long frame, long total, long epoch, long bulk, long scalar,
+            long raster, long offered, long idle, long mode2, long lcdOff) {
+        return new Controller.BenchmarkSgbEpochProbeEvent(
+                frame,
+                total, total, epoch, bulk, scalar,
+                raster, offered, idle, mode2, lcdOff,
+                scalar, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, scalar, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,
+                0L, 0L, 0L, 0L, 0L, 0L);
     }
 
     @Test

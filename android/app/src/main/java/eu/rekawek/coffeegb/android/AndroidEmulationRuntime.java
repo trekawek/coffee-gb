@@ -235,12 +235,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         return state;
     }
 
-    /** Called synchronously by NativeFrameStore on the controller thread at physical ready #600. */
-    private void postBenchmarkPhysicalBoundary(long generation) {
+    /** Called synchronously at physical ready checkpoints; only #600 freezes the controller. */
+    private void postBenchmarkPhysicalBoundary(long frame) {
+        long generation = diagnostics.benchmarkGeneration();
         if (!diagnostics.enabled() || eventBus == null || generation <= 0L) {
             return;
         }
-        eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, generation));
+        eventBus.post(new Controller.BenchmarkPhysicalFrameBoundaryEvent(frame, generation));
     }
 
     /** Revokes one silent-PCM generation on the first bad read-only system-audio sample. */
@@ -1557,6 +1558,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     diagnostics.hardwareProfile(event);
                 },
                 Controller.HardwareProfileEvent.class);
+        eventBus.register(
+                event -> diagnostics.sgbEpochProbe(event),
+                Controller.BenchmarkSgbEpochProbeEvent.class);
         eventBus.register(
                 event -> diagnostics.benchmarkFrameBoundary(event),
                 Controller.BenchmarkFrameBoundaryEvent.class);

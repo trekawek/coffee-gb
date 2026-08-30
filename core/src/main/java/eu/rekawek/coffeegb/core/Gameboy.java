@@ -86,6 +86,77 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     private static final Logger LOG = LoggerFactory.getLogger(Gameboy.class);
 
+    /** Fixed-array indexes for the temporary SGB scalar-fallback probe. */
+    public static final int PERFORMANCE_SGB_MODE_HBLANK = 0;
+
+    public static final int PERFORMANCE_SGB_MODE_VBLANK = 1;
+
+    public static final int PERFORMANCE_SGB_MODE_2 = 2;
+
+    public static final int PERFORMANCE_SGB_MODE_3 = 3;
+
+    public static final int PERFORMANCE_SGB_MODE_OTHER = 4;
+
+    private static final int PERFORMANCE_SGB_MODE_COUNT = 5;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_COMMON = 0;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_HBLANK_LINE = 1;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_TIMING_OUTPUT = 2;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_VISIBLE_OUTPUT = 3;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_LINE_EDGE = 4;
+
+    public static final int PERFORMANCE_SGB_REJECT_GPU_OTHER = 5;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_LIFECYCLE = 6;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_IRQ = 7;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_CONTROL = 8;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_PPU_PHASE = 9;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_PENDING_EI = 10;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_RAW_IME_TRUE = 11;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_RAW_IME_FALSE = 12;
+
+    public static final int PERFORMANCE_SGB_REJECT_CPU_OTHER = 13;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_OWNER_DMA = 14;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_TIMER = 15;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_SOUND = 16;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_JOYPAD = 17;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_SERIAL = 18;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_STAT = 19;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_FINAL_GUARD = 20;
+
+    public static final int PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER = 21;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_PREFETCH = 22;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_DECODED_READ = 23;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_DECODED_WRITE = 24;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_CONTROL = 25;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_LIFECYCLE = 26;
+
+    public static final int PERFORMANCE_SGB_REJECT_EXEC_OTHER = 27;
+
+    private static final int PERFORMANCE_SGB_REJECTION_COUNT = 28;
+
     /** @deprecated Use the owning Gameboy's {@link #getClockSpec()}. */
     @Deprecated
     public static final int TICKS_PER_SEC = 4_194_304;
@@ -248,6 +319,30 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     /** Fixed-x1 epoch ticks committed while the LCD was stably disabled. */
     private transient long performanceEpochLcdOffTicks;
+
+    /** Fixed-x1 SGB/SGB2 epoch ticks committed in HBlank or VBlank. */
+    private transient long performanceEpochSgbIdleTicks;
+
+    /** Sum of positive GPU HBlank/VBlank horizons offered to strict SGB CPU preflight. */
+    private transient long performanceSgbIdleOfferedTicks;
+
+    /** Independent measured SGB scheduler total for epoch/bulk/scalar conservation. */
+    private transient long performanceSgbProbeTotalTicks;
+
+    private transient long performanceSgbScalarFallbackTicks;
+
+    private final transient long[] performanceSgbScalarModeTicks =
+            new long[PERFORMANCE_SGB_MODE_COUNT];
+
+    private final transient long[] performanceSgbScalarRejectionTicks =
+            new long[PERFORMANCE_SGB_REJECTION_COUNT];
+
+    /** First rejection selected by the current SGB epoch attempt. */
+    private transient int performanceSgbCurrentRejection =
+            PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
+
+    /** Execution seam carried across phase-only dots until its scalar owner tick. */
+    private transient int performanceSgbPendingExecutionRejection = -1;
 
     /** CPU/STAT phase frozen at the entrance of the current fixed-x1 CPU epoch. */
     private transient int performanceEpochEntryStatReadPhaseFlags;
@@ -1098,12 +1193,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     && isNormalSpeedPerformanceEpochTopology()) {
                 int committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
+                    recordPerformanceSgbCommittedTicks(committed);
                     remaining -= committed;
                     continue;
                 }
                 if (cpu.getState() == Cpu.State.HALTED) {
                     committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
+                        recordPerformanceSgbCommittedTicks(committed);
                         remaining -= committed;
                         continue;
                     }
@@ -1111,12 +1208,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
                 int phaseSpan = tryPerformancePhaseOnlySpan(remaining, cpuSpanLimit);
                 if (phaseSpan > 0) {
+                    recordPerformanceSgbCommittedTicks(phaseSpan);
                     remaining -= phaseSpan;
                     continue;
                 }
                 if (stop.getAsBoolean()) {
                     break;
                 }
+                recordPerformanceSgbScalarFallbackTick();
                 tick();
                 remaining--;
                 if (stop.getAsBoolean()) {
@@ -1273,6 +1372,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             while (remaining > 0 && isNormalSpeedPerformanceEpochTopology()) {
                 int committed = tryNormalSpeedPerformanceEpoch(remaining);
                 if (committed > 0) {
+                    recordPerformanceSgbCommittedTicks(committed);
                     remaining -= committed;
                     continue;
                 }
@@ -1282,6 +1382,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 if (cpu.getState() == Cpu.State.HALTED) {
                     committed = tryPerformanceSettledHaltSpan(remaining);
                     if (committed > 0) {
+                        recordPerformanceSgbCommittedTicks(committed);
                         remaining -= committed;
                         continue;
                     }
@@ -1292,10 +1393,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 int cpuSpanLimit = cpu.performancePhaseOnlySpanLimit();
                 int phaseSpan = tryPerformancePhaseOnlySpan(remaining, cpuSpanLimit);
                 if (phaseSpan > 0) {
+                    recordPerformanceSgbCommittedTicks(phaseSpan);
                     remaining -= phaseSpan;
                     continue;
                 }
 
+                recordPerformanceSgbScalarFallbackTick();
                 if (tick()) {
                     frameEvents++;
                 }
@@ -1774,6 +1877,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * state enters the fixed preflight directly because its PPU horizon is the frozen plane.
      */
     private int trySgbPerformanceEpoch(long remaining) {
+        performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
         if (remaining <= 0) {
             return 0;
         }
@@ -1786,14 +1890,19 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         if (mode == Mode.HBlank || mode == Mode.VBlank) {
             int idleSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
             if (idleSpan <= 0) {
+                performanceSgbCurrentRejection = mapPerformanceSgbGpuRejection(
+                        gpu.performancePhysicalDmgEpochRejectionCode(requested));
                 return 0;
             }
+            performanceSgbIdleOfferedTicks += idleSpan;
             return tryFixedNormalSpeedPerformanceEpoch(
                     remaining, PerformanceEpochPpuPlan.SGB_IDLE, idleSpan);
         }
         if (mode == Mode.PixelTransfer) {
             int rasterSpan = gpu.performancePhysicalDmgEpochSpanLimit(requested);
             if (rasterSpan <= 0) {
+                performanceSgbCurrentRejection = mapPerformanceSgbGpuRejection(
+                        gpu.performancePhysicalDmgEpochRejectionCode(requested));
                 return 0;
             }
             return tryFixedNormalSpeedPerformanceEpoch(
@@ -1801,6 +1910,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         int mode2Span = gpu.performancePhysicalDmgMode2PhaseSpanLimit(requested);
         if (mode2Span <= 0) {
+            performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_GPU_OTHER;
             return 0;
         }
         return tryFixedNormalSpeedPerformanceEpoch(
@@ -1825,21 +1935,31 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         boolean cgbHardware = isCgbNormalSpeedPerformanceEpochTopology();
         boolean nativeCgbNormalSpeed = isNativeCgbNormalSpeedPerformanceEpochTopology();
         boolean sgb = isSgbPerformanceTopology();
-        boolean sgbIdle = precomputedPpuPlan == PerformanceEpochPpuPlan.SGB_IDLE;
         boolean physicalDmgLcdOffEpoch = !cgbHardware && !gpu.isLcdEnabled();
         boolean lcdOffEpoch = physicalDmgLcdOffEpoch
                 || nativeCgbNormalSpeed && !gpu.isLcdEnabled();
-        boolean cpuEntryEligible;
-        if (sgbIdle) {
-            cpuEntryEligible = cpu.performanceSgbIdleEpochEntryEligible();
-        } else if (nativeCgbNormalSpeed) {
-            cpuEntryEligible = cpu.performanceNativeCgbNormalSpeedEpochEntryEligible();
-        } else {
-            cpuEntryEligible = cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
+        boolean cpuEntryEligible = nativeCgbNormalSpeed
+                ? cpu.performanceNativeCgbNormalSpeedEpochEntryEligible()
+                : cpu.performanceNormalSpeedEpochEntryEligible(cgbHardware);
+        if (remaining <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
+            }
+            return 0;
         }
-        if (remaining <= 0 || !cpuEntryEligible
-                || !canStartNormalSpeedPerformanceEpoch(
-                        cgbHardware, nativeCgbNormalSpeed, lcdOffEpoch)) {
+        if (!cpuEntryEligible) {
+            if (sgb) {
+                performanceSgbCurrentRejection = mapPerformanceSgbCpuEntryRejection(
+                        cpu.performanceNormalSpeedEpochEntryRejectionCode(false));
+            }
+            return 0;
+        }
+        if (!canStartNormalSpeedPerformanceEpoch(
+                cgbHardware, nativeCgbNormalSpeed, lcdOffEpoch)) {
+            if (sgb) {
+                performanceSgbCurrentRejection =
+                        PERFORMANCE_SGB_REJECT_PREFLIGHT_OWNER_DMA;
+            }
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
@@ -1851,10 +1971,28 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
         }
         span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
+        if (span <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_TIMER;
+            }
+            return 0;
+        }
         span = Math.min(span, nativeCgbNormalSpeed || sgb || physicalDmgLcdOffEpoch
                 ? sound.performanceFencedEpochSpanLimit(span)
                 : sound.performanceEpochSpanLimit(span));
+        if (span <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_SOUND;
+            }
+            return 0;
+        }
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
+        if (span <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_JOYPAD;
+            }
+            return 0;
+        }
         if (cgbHardware) {
             span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, true)
                     ? span : 0);
@@ -1862,6 +2000,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         } else {
             span = Math.min(span, serialPort.performanceNormalSpeedEpochIdle(span, false)
                     ? span : 0);
+        }
+        if (span <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_SERIAL;
+            }
+            return 0;
         }
 
         PerformanceEpochPpuPlan ppuPlan;
@@ -1871,6 +2015,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                     ? gpu.performanceNativeCgbNormalSpeedLcdOffSpanLimit(span)
                     : gpu.performancePhysicalDmgNormalSpeedLcdOffSpanLimit(span));
             if (span <= 0) {
+                if (sgb) {
+                    performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_GPU_COMMON;
+                }
                 return 0;
             }
             ppuPlan = PerformanceEpochPpuPlan.LCD_OFF;
@@ -1901,6 +2048,9 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 } else if (!cgbHardware) {
                     int mode2Span = gpu.performancePhysicalDmgMode2PhaseSpanLimit(span);
                     if (mode2Span <= 0) {
+                        if (sgb) {
+                            performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_GPU_OTHER;
+                        }
                         return 0;
                     }
                     span = Math.min(span, mode2Span);
@@ -1915,10 +2065,17 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         }
         span = Math.min(span, statRegister.performanceSettledHaltSpanLimit(span));
         if (span <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_STAT;
+            }
             return 0;
         }
 
         if (warmResetRequested || !joypad.isPerformanceQuietSpanStillEligible()) {
+            if (sgb) {
+                performanceSgbCurrentRejection =
+                        PERFORMANCE_SGB_REJECT_PREFLIGHT_FINAL_GUARD;
+            }
             return 0;
         }
 
@@ -1958,14 +2115,28 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                                     == PerformanceEpochPpuPlan.PHYSICAL_DMG_MODE2_BULK
                             ? cpu.runPhysicalDmgMode2PerformanceEpoch(span)
                             : sgb
-                            ? performanceEpochPpuPlan == PerformanceEpochPpuPlan.SGB_IDLE
-                                    ? cpu.runSgbIdlePerformanceEpoch(span)
-                                    : cpu.runSgbPerformanceEpoch(span)
+                            ? cpu.runSgbPerformanceEpoch(span)
                             : cpu.runPhysicalDmgPerformanceEpoch(span);
         } finally {
             cpu.setPerformanceEpochPrefixCommitter(null);
         }
+        if (sgb) {
+            int executionRejection = mapPerformanceSgbCpuExecutionRejection(
+                    cpu.getPerformanceEpochLastExitCode());
+            if (cpu.getPerformanceEpochLastExitCode() != Cpu.PERFORMANCE_EXEC_EXIT_NONE
+                    || elapsed < span) {
+                if (performanceSgbPendingExecutionRejection < 0) {
+                    performanceSgbPendingExecutionRejection = executionRejection;
+                }
+            } else {
+                performanceSgbPendingExecutionRejection = -1;
+            }
+        }
         if (elapsed <= 0) {
+            if (sgb) {
+                performanceSgbCurrentRejection = mapPerformanceSgbCpuExecutionRejection(
+                        cpu.getPerformanceEpochLastExitCode());
+            }
             return 0;
         }
         int suffix = elapsed - performanceEpochPrefixCommitted;
@@ -2043,6 +2214,90 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                         && !hdma.pausesOamDmaForSpeedSwitchBurst()
                         && !hdma.requiresCpuHdmaPhaseFlags()
                         && hdma.isPerformanceInactiveRequestClockStable()));
+    }
+
+    private static int mapPerformanceSgbGpuRejection(int code) {
+        return switch (code) {
+            case Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_COMMON_GUARD ->
+                    PERFORMANCE_SGB_REJECT_GPU_COMMON;
+            case Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_HBLANK_LINE ->
+                    PERFORMANCE_SGB_REJECT_GPU_HBLANK_LINE;
+            case Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_TIMING_OUTPUT ->
+                    PERFORMANCE_SGB_REJECT_GPU_TIMING_OUTPUT;
+            case Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_VISIBLE_OUTPUT ->
+                    PERFORMANCE_SGB_REJECT_GPU_VISIBLE_OUTPUT;
+            case Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_LINE_EDGE ->
+                    PERFORMANCE_SGB_REJECT_GPU_LINE_EDGE;
+            default -> PERFORMANCE_SGB_REJECT_GPU_OTHER;
+        };
+    }
+
+    private static int mapPerformanceSgbCpuEntryRejection(int code) {
+        return switch (code) {
+            case Cpu.PERFORMANCE_ENTRY_REJECT_LIFECYCLE ->
+                    PERFORMANCE_SGB_REJECT_CPU_LIFECYCLE;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_IRQ_MICROSTATE ->
+                    PERFORMANCE_SGB_REJECT_CPU_IRQ;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_CONTROL_TRANSITION ->
+                    PERFORMANCE_SGB_REJECT_CPU_CONTROL;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_PPU_PHASE ->
+                    PERFORMANCE_SGB_REJECT_CPU_PPU_PHASE;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_PENDING_EI ->
+                    PERFORMANCE_SGB_REJECT_CPU_PENDING_EI;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_TRUE ->
+                    PERFORMANCE_SGB_REJECT_CPU_RAW_IME_TRUE;
+            case Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE ->
+                    PERFORMANCE_SGB_REJECT_CPU_RAW_IME_FALSE;
+            default -> PERFORMANCE_SGB_REJECT_CPU_OTHER;
+        };
+    }
+
+    private static int mapPerformanceSgbCpuExecutionRejection(int code) {
+        return switch (code) {
+            case Cpu.PERFORMANCE_EXEC_EXIT_PREFETCH ->
+                    PERFORMANCE_SGB_REJECT_EXEC_PREFETCH;
+            case Cpu.PERFORMANCE_EXEC_EXIT_DECODED_READ ->
+                    PERFORMANCE_SGB_REJECT_EXEC_DECODED_READ;
+            case Cpu.PERFORMANCE_EXEC_EXIT_DECODED_WRITE ->
+                    PERFORMANCE_SGB_REJECT_EXEC_DECODED_WRITE;
+            case Cpu.PERFORMANCE_EXEC_EXIT_CONTROL ->
+                    PERFORMANCE_SGB_REJECT_EXEC_CONTROL;
+            case Cpu.PERFORMANCE_EXEC_EXIT_LIFECYCLE ->
+                    PERFORMANCE_SGB_REJECT_EXEC_LIFECYCLE;
+            default -> PERFORMANCE_SGB_REJECT_EXEC_OTHER;
+        };
+    }
+
+    /** Adds one non-scalar scheduler packet to the independent SGB conservation total. */
+    private void recordPerformanceSgbCommittedTicks(int ticks) {
+        if (ticks > 0 && isSgbPerformanceTopology()) {
+            performanceSgbProbeTotalTicks += ticks;
+        }
+    }
+
+    /** Charges the exact scalar owner tick before it can synchronously publish a probe frame. */
+    private void recordPerformanceSgbScalarFallbackTick() {
+        if (!isSgbPerformanceTopology()) {
+            return;
+        }
+        performanceSgbProbeTotalTicks++;
+        performanceSgbScalarFallbackTicks++;
+        int modeIndex = switch (gpu.getMode()) {
+            case HBlank -> PERFORMANCE_SGB_MODE_HBLANK;
+            case VBlank -> PERFORMANCE_SGB_MODE_VBLANK;
+            case OamSearch -> PERFORMANCE_SGB_MODE_2;
+            case PixelTransfer -> PERFORMANCE_SGB_MODE_3;
+        };
+        performanceSgbScalarModeTicks[modeIndex]++;
+        int rejection = performanceSgbPendingExecutionRejection >= 0
+                ? performanceSgbPendingExecutionRejection
+                : performanceSgbCurrentRejection;
+        if (rejection < 0 || rejection >= PERFORMANCE_SGB_REJECTION_COUNT) {
+            rejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
+        }
+        performanceSgbScalarRejectionTicks[rejection]++;
+        performanceSgbPendingExecutionRejection = -1;
+        performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
     }
 
     /** Leaves the exact host blank publication/reset tick on the scalar owner. */
@@ -2193,7 +2448,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             switch (performanceEpochPpuPlan) {
                 case SGB_IDLE -> {
                     gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(ticks, false, false);
-                    performanceEpochRasterFastTicks += ticks;
+                    performanceEpochSgbIdleTicks += ticks;
                 }
                 case TRUSTED_RASTER -> {
                     gpu.advancePhysicalDmgPerformanceEpochQuietSpanTrusted(
@@ -2514,6 +2769,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         performanceEpochMode2ReplayTicks = 0L;
         performanceEpochMode2BulkTicks = 0L;
         performanceEpochLcdOffTicks = 0L;
+        performanceEpochSgbIdleTicks = 0L;
+        performanceSgbIdleOfferedTicks = 0L;
+        performanceSgbProbeTotalTicks = 0L;
+        performanceSgbScalarFallbackTicks = 0L;
+        for (int i = 0; i < performanceSgbScalarModeTicks.length; i++) {
+            performanceSgbScalarModeTicks[i] = 0L;
+        }
+        for (int i = 0; i < performanceSgbScalarRejectionTicks.length; i++) {
+            performanceSgbScalarRejectionTicks[i] = 0L;
+        }
+        performanceSgbCurrentRejection = PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER;
+        performanceSgbPendingExecutionRejection = -1;
         performanceEpochPpuPlan = PerformanceEpochPpuPlan.NONE;
         cpu.resetPerformanceEpochTelemetry();
     }
@@ -2559,6 +2826,37 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
 
     public long getPerformanceEpochLcdOffTicks() {
         return performanceEpochLcdOffTicks;
+    }
+
+    public long getPerformanceEpochSgbIdleTicks() {
+        return performanceEpochSgbIdleTicks;
+    }
+
+    public long getPerformanceSgbIdleOfferedTicks() {
+        return performanceSgbIdleOfferedTicks;
+    }
+
+    public long getPerformanceSgbProbeTotalTicks() {
+        return performanceSgbProbeTotalTicks;
+    }
+
+    public long getPerformanceSgbScalarFallbackTicks() {
+        return performanceSgbScalarFallbackTicks;
+    }
+
+    public long getPerformanceSgbScalarModeTicks(int modeCode) {
+        if (modeCode < 0 || modeCode >= performanceSgbScalarModeTicks.length) {
+            throw new IllegalArgumentException("Unknown SGB scalar mode code: " + modeCode);
+        }
+        return performanceSgbScalarModeTicks[modeCode];
+    }
+
+    public long getPerformanceSgbScalarRejectionTicks(int rejectionCode) {
+        if (rejectionCode < 0 || rejectionCode >= performanceSgbScalarRejectionTicks.length) {
+            throw new IllegalArgumentException(
+                    "Unknown SGB scalar rejection code: " + rejectionCode);
+        }
+        return performanceSgbScalarRejectionTicks[rejectionCode];
     }
 
     private Mode tickSubsystems() {

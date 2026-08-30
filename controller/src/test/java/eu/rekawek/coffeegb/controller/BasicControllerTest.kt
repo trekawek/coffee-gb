@@ -1958,9 +1958,11 @@ class BasicControllerTest {
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val acknowledged = LinkedBlockingQueue<Controller.BenchmarkArmAcknowledgedEvent>()
     val boundaries = LinkedBlockingQueue<Controller.BenchmarkFrameBoundaryEvent>()
+    val probes = LinkedBlockingQueue<Controller.BenchmarkSgbEpochProbeEvent>()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<Controller.BenchmarkArmAcknowledgedEvent>(acknowledged::add)
     eventBus.register<Controller.BenchmarkFrameBoundaryEvent>(boundaries::add)
+    eventBus.register<Controller.BenchmarkSgbEpochProbeEvent>(probes::add)
     val rom = namedRom("BENCHMARK_EPOCH")
     val properties =
         EmulatorProperties(
@@ -1974,6 +1976,7 @@ class BasicControllerTest {
               Controller.createGameboyConfig(currentProperties, Rom(event.rom))
                   .setBootstrapMode(BootstrapMode.SKIP)
                   .setExecutionMode(ExecutionMode.PERFORMANCE)
+                  .setHardwareProfile(HardwareProfileRegistry.SGB)
           val gameboy =
               object : Gameboy(config) {
                 override fun getPerformanceBulkSpanCount() = 11L
@@ -1993,6 +1996,20 @@ class BasicControllerTest {
                 override fun getPerformanceEpochMode2BulkTicks() = 70L
 
                 override fun getPerformanceEpochLcdOffTicks() = 71L
+
+                override fun getPerformanceEpochSgbIdleTicks() = 72L
+
+                override fun getPerformanceSgbIdleOfferedTicks() = 73L
+
+                override fun getPerformanceSgbProbeTotalTicks() = 88L
+
+                override fun getPerformanceSgbScalarFallbackTicks() = 99L
+
+                override fun getPerformanceSgbScalarModeTicks(modeCode: Int) =
+                    100L + modeCode
+
+                override fun getPerformanceSgbScalarRejectionTicks(rejectionCode: Int) =
+                    200L + rejectionCode
               }
           PreparedSession.Ready(config, gameboy)
         }
@@ -2009,9 +2026,22 @@ class BasicControllerTest {
           Controller.BenchmarkArmEvent(benchmarkGeneration, token, sessionGeneration))
       assertNotNull(acknowledged.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
       eventBus.post(
+          Controller.BenchmarkPhysicalFrameBoundaryEvent(60L, benchmarkGeneration))
+      val probe60 = assertNotNull(probes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(60L, probe60.frame)
+      assertEquals(88L, probe60.totalTicks)
+      assertEquals(72L, probe60.sgbIdleCommittedTicks)
+      assertEquals(73L, probe60.sgbIdleOfferedTicks)
+      assertEquals(100L, probe60.scalarModeHblankTicks)
+      assertEquals(200L, probe60.rejectGpuCommonTicks)
+      assertTrue(boundaries.isEmpty(), "frame 60 unexpectedly entered terminal finalization")
+
+      eventBus.post(
           Controller.BenchmarkPhysicalFrameBoundaryEvent(600L, benchmarkGeneration))
 
       val boundary = assertNotNull(boundaries.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      val probe600 = assertNotNull(probes.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(600L, probe600.frame)
       assertEquals(11L, boundary.performanceBulkSpans)
       assertEquals(22L, boundary.performanceBulkTicks)
       assertEquals(33L, boundary.performanceEpochCount)

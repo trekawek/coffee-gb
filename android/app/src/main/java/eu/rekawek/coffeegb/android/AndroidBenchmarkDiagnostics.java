@@ -304,6 +304,11 @@ final class AndroidBenchmarkDiagnostics {
         return benchmarkGeneration;
     }
 
+    /** Current arm-relative physical frame count for synchronous boundary publication. */
+    synchronized long readyFrames() {
+        return readyFrames;
+    }
+
     synchronized boolean acceptsFrameEpoch(long generation) {
         return enabled && measurementArmed && benchmarkGeneration == generation;
     }
@@ -606,6 +611,60 @@ final class AndroidBenchmarkDiagnostics {
 
     synchronized int systemAudioLastFrameForTesting() {
         return systemAudioLastFrame;
+    }
+
+    /** Records one cumulative temporary SGB scheduler attribution checkpoint. */
+    synchronized void sgbEpochProbe(Controller.BenchmarkSgbEpochProbeEvent event) {
+        if (!enabled || event == null || !measurementArmed
+                || (phase != Phase.ARMED && phase != Phase.CORE_FROZEN)) {
+            return;
+        }
+        record("event=sgb_epoch_probe frame=" + event.getFrame()
+                + " total_ticks=" + event.getTotalTicks()
+                + " expected_ticks=" + event.getExpectedTicks()
+                + " epoch_ticks=" + event.getEpochTicks()
+                + " bulk_ticks=" + event.getBulkTicks()
+                + " scalar_fallback_ticks=" + event.getScalarFallbackTicks()
+                + " epoch_raster_ticks=" + event.getEpochRasterTicks()
+                + " sgb_idle_offered_ticks=" + event.getSgbIdleOfferedTicks()
+                + " sgb_idle_committed_ticks=" + event.getSgbIdleCommittedTicks()
+                + " epoch_mode2_bulk_ticks=" + event.getEpochMode2BulkTicks()
+                + " epoch_lcd_off_ticks=" + event.getEpochLcdOffTicks()
+                + " scalar_mode_hblank_ticks=" + event.getScalarModeHblankTicks()
+                + " scalar_mode_vblank_ticks=" + event.getScalarModeVblankTicks()
+                + " scalar_mode2_ticks=" + event.getScalarMode2Ticks()
+                + " scalar_mode3_ticks=" + event.getScalarMode3Ticks()
+                + " scalar_mode_other_ticks=" + event.getScalarModeOtherTicks()
+                + " reject_gpu_common_ticks=" + event.getRejectGpuCommonTicks()
+                + " reject_gpu_hblank_line_ticks=" + event.getRejectGpuHblankLineTicks()
+                + " reject_gpu_timing_output_ticks=" + event.getRejectGpuTimingOutputTicks()
+                + " reject_gpu_visible_output_ticks=" + event.getRejectGpuVisibleOutputTicks()
+                + " reject_gpu_line_edge_ticks=" + event.getRejectGpuLineEdgeTicks()
+                + " reject_gpu_other_ticks=" + event.getRejectGpuOtherTicks()
+                + " reject_cpu_lifecycle_ticks=" + event.getRejectCpuLifecycleTicks()
+                + " reject_cpu_irq_ticks=" + event.getRejectCpuIrqTicks()
+                + " reject_cpu_control_ticks=" + event.getRejectCpuControlTicks()
+                + " reject_cpu_ppu_phase_ticks=" + event.getRejectCpuPpuPhaseTicks()
+                + " reject_cpu_pending_ei_ticks=" + event.getRejectCpuPendingEiTicks()
+                + " reject_cpu_raw_ime_true_ticks=" + event.getRejectCpuRawImeTrueTicks()
+                + " reject_cpu_raw_ime_false_ticks=" + event.getRejectCpuRawImeFalseTicks()
+                + " reject_cpu_other_ticks=" + event.getRejectCpuOtherTicks()
+                + " reject_preflight_owner_dma_ticks="
+                + event.getRejectPreflightOwnerDmaTicks()
+                + " reject_preflight_timer_ticks=" + event.getRejectPreflightTimerTicks()
+                + " reject_preflight_sound_ticks=" + event.getRejectPreflightSoundTicks()
+                + " reject_preflight_joypad_ticks=" + event.getRejectPreflightJoypadTicks()
+                + " reject_preflight_serial_ticks=" + event.getRejectPreflightSerialTicks()
+                + " reject_preflight_stat_ticks=" + event.getRejectPreflightStatTicks()
+                + " reject_preflight_final_guard_ticks="
+                + event.getRejectPreflightFinalGuardTicks()
+                + " reject_preflight_other_ticks=" + event.getRejectPreflightOtherTicks()
+                + " reject_exec_prefetch_ticks=" + event.getRejectExecPrefetchTicks()
+                + " reject_exec_decoded_read_ticks=" + event.getRejectExecDecodedReadTicks()
+                + " reject_exec_decoded_write_ticks=" + event.getRejectExecDecodedWriteTicks()
+                + " reject_exec_control_ticks=" + event.getRejectExecControlTicks()
+                + " reject_exec_lifecycle_ticks=" + event.getRejectExecLifecycleTicks()
+                + " reject_exec_other_ticks=" + event.getRejectExecOtherTicks());
     }
 
     synchronized void benchmarkFrameBoundary(Controller.BenchmarkFrameBoundaryEvent event) {
@@ -1102,6 +1161,7 @@ final class AndroidBenchmarkDiagnostics {
                     + " since_launch_ms=" + elapsedMillis(current, launchNanos)
                     + " prep_to_frame_ms=" + elapsedMillis(current, preparationNanos));
         }
+        boolean probeBoundary = false;
         if (count % INTERVAL_FRAMES == 0L && count <= FINAL_FRAME) {
             if (options.audioPolicy.isSilent()) {
                 AndroidAudioSink.AudioBaseline checkpoint = systemAudioCheckpointBaselineLocked();
@@ -1111,6 +1171,7 @@ final class AndroidBenchmarkDiagnostics {
                 }
             }
             interval(current, count);
+            probeBoundary = true;
         }
         if (count == FINAL_FRAME) {
             // The renderer intentionally waits before posting the SF drain.  Freeze the audio
@@ -1127,7 +1188,7 @@ final class AndroidBenchmarkDiagnostics {
             phase = Phase.CORE_FROZEN;
             return true;
         }
-        return false;
+        return probeBoundary;
     }
 
     /** Compatibility alias for callers from the pre-M2 diagnostics seam. */

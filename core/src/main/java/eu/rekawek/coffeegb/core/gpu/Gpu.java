@@ -31,6 +31,21 @@ import static eu.rekawek.coffeegb.core.gpu.GpuRegister.*;
 
 public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
 
+    /** Side-effect-free physical-DMG/SGB epoch horizon classifier codes. */
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_NONE = 0;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_COMMON_GUARD = 1;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_HBLANK_LINE = 2;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_TIMING_OUTPUT = 3;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_VISIBLE_OUTPUT = 4;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_LINE_EDGE = 5;
+
+    public static final int PERFORMANCE_PHYSICAL_DMG_REJECT_OTHER = 6;
+
     private static final int LCDC_ADDRESS = 0xff40;
 
     private static final int LAST_STANDARD_REGISTER_ADDRESS = 0xff4b;
@@ -1276,30 +1291,14 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
      * clocks are part of the proof in HBlank/VBlank; IR, HDMA, mode 2 and scalar mode 3 are not.
      */
     public int performancePhysicalDmgEpochSpanLimit(int requested) {
-        if (requested <= 0 || !lcdEnabled || dma == null || dma.isTransferInProgress()
-                || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()) {
-            return 0;
-        }
-        if (!performanceScanlineEnabled || !performanceScanlineCapable
-                || performanceObservationBlocked || mutablePpuStateExposed
-                || debugHooks != null || !pendingPpuWrites.isEmpty()
-                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
-                || !lcdc.isPerformanceQuietSpanFixedPoint()
-                || !bootCompatibilityResolved) {
+        if (performancePhysicalDmgEpochRejectionCode(requested)
+                != PERFORMANCE_PHYSICAL_DMG_REJECT_NONE) {
             return 0;
         }
         int limit;
         if (mode == Mode.PixelTransfer) {
-            if (!performanceScanlineCursor
-                    || ticksInLine + 1 >= performanceScanlineEndTick) {
-                return 0;
-            }
             limit = performanceScanlineEndTick - ticksInLine - 1;
         } else if (mode == Mode.HBlank || mode == Mode.VBlank) {
-            if (mode == Mode.HBlank && !performanceScanlineLine
-                    || !isPerformanceDmgIdleOutput()) {
-                return 0;
-            }
             int lineLength = firstLine ? 455 : 456;
             limit = Math.max(0, lineLength - ticksInLine - 1);
             if (mode == Mode.VBlank && line == 153) {
@@ -1309,6 +1308,51 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return 0;
         }
         return Math.min(requested, Math.max(0, limit));
+    }
+
+    /**
+     * Returns the first pure rejection reason for
+     * {@link #performancePhysicalDmgEpochSpanLimit(int)} without changing PPU state.
+     */
+    public int performancePhysicalDmgEpochRejectionCode(int requested) {
+        if (requested <= 0 || !lcdEnabled || dma == null || dma.isTransferInProgress()
+                || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()
+                || !performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
+                || !bootCompatibilityResolved) {
+            return PERFORMANCE_PHYSICAL_DMG_REJECT_COMMON_GUARD;
+        }
+        if (mode == Mode.PixelTransfer) {
+            if (!performanceScanlineCursor) {
+                return PERFORMANCE_PHYSICAL_DMG_REJECT_OTHER;
+            }
+            return ticksInLine + 1 >= performanceScanlineEndTick
+                    ? PERFORMANCE_PHYSICAL_DMG_REJECT_LINE_EDGE
+                    : PERFORMANCE_PHYSICAL_DMG_REJECT_NONE;
+        }
+        if (mode == Mode.HBlank || mode == Mode.VBlank) {
+            if (mode == Mode.HBlank && !performanceScanlineLine) {
+                return PERFORMANCE_PHYSICAL_DMG_REJECT_HBLANK_LINE;
+            }
+            if (!pixelTransferPhase.isPerformanceDmgIdleOutput()) {
+                return PERFORMANCE_PHYSICAL_DMG_REJECT_TIMING_OUTPUT;
+            }
+            if (!pixelMachine.isPerformanceDmgIdleOutput()) {
+                return PERFORMANCE_PHYSICAL_DMG_REJECT_VISIBLE_OUTPUT;
+            }
+            int lineLength = firstLine ? 455 : 456;
+            int limit = Math.max(0, lineLength - ticksInLine - 1);
+            if (mode == Mode.VBlank && line == 153) {
+                limit = Math.min(limit, 454 - ticksInLine);
+            }
+            return limit <= 0
+                    ? PERFORMANCE_PHYSICAL_DMG_REJECT_LINE_EDGE
+                    : PERFORMANCE_PHYSICAL_DMG_REJECT_NONE;
+        }
+        return PERFORMANCE_PHYSICAL_DMG_REJECT_OTHER;
     }
 
     /**

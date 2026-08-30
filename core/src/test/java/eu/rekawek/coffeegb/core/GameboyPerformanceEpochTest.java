@@ -1,7 +1,6 @@
 package eu.rekawek.coffeegb.core;
 
 import eu.rekawek.coffeegb.core.cpu.Cpu;
-import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.events.EventBus;
 import eu.rekawek.coffeegb.core.gpu.Mode;
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile;
@@ -967,6 +966,21 @@ public final class GameboyPerformanceEpochTest {
                         if (budget == 54) {
                             assertTrue(profile.id() + " " + phase + " did not use an SGB epoch",
                                     candidate.getPerformanceEpochTicks() > 0L);
+                            if (phase == SgbRasterPhase.DIRECT) {
+                                assertTrue(profile.id() + " direct ticks were not raster-accounted",
+                                        candidate.getPerformanceEpochRasterFastTicks() > 0L);
+                                assertEquals(profile.id() + " direct ticks entered SGB idle", 0L,
+                                        candidate.getPerformanceEpochSgbIdleTicks());
+                            } else {
+                                assertTrue(profile.id() + " " + phase
+                                                + " ticks were not SGB-idle-accounted",
+                                        candidate.getPerformanceEpochSgbIdleTicks() > 0L);
+                                assertEquals(profile.id() + " " + phase
+                                                + " ticks leaked into raster accounting", 0L,
+                                        candidate.getPerformanceEpochRasterFastTicks());
+                            }
+                            assertSgbProbeConservation(
+                                    profile.id() + " " + phase, candidate, budget);
                         }
                     }
                 }
@@ -975,45 +989,43 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void sgbIdleEpochAdmitsImeDisabledRawVblankAndLcdcAtBlankPhases()
+    public void sgbProbeConservesTicksAndAttributesStrictMaskedInterruptFallback()
             throws Exception {
         for (HardwareProfile profile : new HardwareProfile[]{
                 HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
-            for (SgbRasterPhase phase : new SgbRasterPhase[]{
-                    SgbRasterPhase.HBLANK, SgbRasterPhase.VBLANK}) {
-                for (InterruptManager.InterruptType type : new InterruptManager.InterruptType[]{
-                        InterruptManager.InterruptType.VBlank,
-                        InterruptManager.InterruptType.LCDC}) {
-                    try (Gameboy scalar = sgbSession(
-                            dmgRomWramLoop(), profile, PlayerInputSnapshot::released);
-                         Gameboy candidate = sgbSession(
-                                 dmgRomWramLoop(), profile, PlayerInputSource.RELEASED)) {
-                        scalar.getGpu().setPerformanceScanlineEnabled(true);
-                        candidate.getGpu().setPerformanceScanlineEnabled(true);
-                        advanceSgbPairToRasterPhase(scalar, candidate, phase);
+            try (Gameboy scalar = sgbSession(
+                    dmgRomWramLoop(), profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = sgbSession(
+                         dmgRomWramLoop(), profile, PlayerInputSource.RELEASED)) {
+                scalar.getGpu().setPerformanceScanlineEnabled(true);
+                candidate.getGpu().setPerformanceScanlineEnabled(true);
+                advanceSgbPairToRasterPhase(scalar, candidate, SgbRasterPhase.HBLANK);
+                candidate.resetPerformanceBulkCounters();
 
-                        int mask = 1 << type.ordinal();
-                        for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
-                            gameboy.getAddressSpace().setByte(0xffff, mask);
-                            gameboy.getAddressSpace().setByte(0xff0f,
-                                    gameboy.getAddressSpace().getByte(0xff0f) | mask);
-                        }
-                        assertTrue(profile.id() + " " + phase + " " + type
-                                        + " did not admit the masked idle epoch",
-                                candidate.getCpu().performanceSgbIdleEpochEntryEligible());
-
-                        int scalarFrames = runScalarTicks(scalar, 54);
-                        int candidateFrames = candidate.runTicks(54);
-                        assertEquals(profile.id() + " " + phase + " " + type
-                                        + " frame callbacks", scalarFrames, candidateFrames);
-                        assertTrue(profile.id() + " " + phase + " " + type
-                                        + " had no idle epoch coverage",
-                                candidate.getPerformanceEpochTicks() > 0L);
-                        assertDeepStateEquals(profile.id() + " " + phase + " " + type,
-                                scalar.captureStateWithoutTimeSource(),
-                                candidate.captureStateWithoutTimeSource());
-                    }
+                for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
+                    gameboy.getAddressSpace().setByte(0xffff, 1);
+                    gameboy.getAddressSpace().setByte(0xff0f,
+                            gameboy.getAddressSpace().getByte(0xff0f) | 1);
                 }
+                assertEquals(Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE,
+                        candidate.getCpu()
+                                .performanceNormalSpeedEpochEntryRejectionCode(false));
+
+                int scalarFrames = runScalarTicks(scalar, 54);
+                int candidateFrames = candidate.runTicks(54);
+
+                assertEquals(profile.id() + " frame callbacks", scalarFrames, candidateFrames);
+                assertEquals(profile.id() + " strict masked SGB idle commit", 0L,
+                        candidate.getPerformanceEpochSgbIdleTicks());
+                assertTrue(profile.id() + " offered no SGB idle opportunity",
+                        candidate.getPerformanceSgbIdleOfferedTicks() > 0L);
+                assertTrue(profile.id() + " did not attribute masked scalar ownership",
+                        candidate.getPerformanceSgbScalarRejectionTicks(
+                                Gameboy.PERFORMANCE_SGB_REJECT_CPU_RAW_IME_FALSE) > 0L);
+                assertSgbProbeConservation(profile.id(), candidate, 54L);
+                assertDeepStateEquals(profile.id() + " strict masked fallback",
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
             }
         }
     }
@@ -1193,6 +1205,36 @@ public final class GameboyPerformanceEpochTest {
             }
         }
         return frames;
+    }
+
+    private static void assertSgbProbeConservation(
+            String label, Gameboy gameboy, long expectedTicks) {
+        assertEquals(label + " independent total", expectedTicks,
+                gameboy.getPerformanceSgbProbeTotalTicks());
+        assertEquals(label + " scheduler conservation", expectedTicks,
+                gameboy.getPerformanceEpochTicks()
+                        + gameboy.getPerformanceBulkTicks()
+                        + gameboy.getPerformanceSgbScalarFallbackTicks());
+        assertEquals(label + " epoch plan conservation",
+                gameboy.getPerformanceEpochTicks(),
+                gameboy.getPerformanceEpochRasterFastTicks()
+                        + gameboy.getPerformanceEpochSgbIdleTicks()
+                        + gameboy.getPerformanceEpochMode2BulkTicks()
+                        + gameboy.getPerformanceEpochLcdOffTicks());
+        long scalarModes = 0L;
+        for (int code = Gameboy.PERFORMANCE_SGB_MODE_HBLANK;
+             code <= Gameboy.PERFORMANCE_SGB_MODE_OTHER; code++) {
+            scalarModes += gameboy.getPerformanceSgbScalarModeTicks(code);
+        }
+        assertEquals(label + " scalar mode conservation",
+                gameboy.getPerformanceSgbScalarFallbackTicks(), scalarModes);
+        long rejections = 0L;
+        for (int code = Gameboy.PERFORMANCE_SGB_REJECT_GPU_COMMON;
+             code <= Gameboy.PERFORMANCE_SGB_REJECT_EXEC_OTHER; code++) {
+            rejections += gameboy.getPerformanceSgbScalarRejectionTicks(code);
+        }
+        assertEquals(label + " rejection conservation",
+                gameboy.getPerformanceSgbScalarFallbackTicks(), rejections);
     }
 
     @Test

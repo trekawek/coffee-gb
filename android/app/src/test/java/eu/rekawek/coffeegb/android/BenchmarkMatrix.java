@@ -77,8 +77,27 @@ public final class BenchmarkMatrix {
             "session_launch", "rom_open_start", "recent_missing", "hardware_profile",
             "emulation_started", "warmup_complete", "benchmark_arm",
             "benchmark_arm_rejected", "benchmark_anchor", "benchmark_invalidated",
-            "speed_sample", "first_frame", "frames",
+            "speed_sample", "sgb_epoch_probe", "first_frame", "frames",
             "audio_output");
+    private static final Set<String> SGB_EPOCH_PROBE_FIELDS = Set.of(
+            "event", "frame", "total_ticks", "expected_ticks", "epoch_ticks", "bulk_ticks",
+            "scalar_fallback_ticks", "epoch_raster_ticks", "sgb_idle_offered_ticks",
+            "sgb_idle_committed_ticks", "epoch_mode2_bulk_ticks", "epoch_lcd_off_ticks",
+            "scalar_mode_hblank_ticks", "scalar_mode_vblank_ticks", "scalar_mode2_ticks",
+            "scalar_mode3_ticks", "scalar_mode_other_ticks", "reject_gpu_common_ticks",
+            "reject_gpu_hblank_line_ticks", "reject_gpu_timing_output_ticks",
+            "reject_gpu_visible_output_ticks", "reject_gpu_line_edge_ticks",
+            "reject_gpu_other_ticks", "reject_cpu_lifecycle_ticks", "reject_cpu_irq_ticks",
+            "reject_cpu_control_ticks", "reject_cpu_ppu_phase_ticks",
+            "reject_cpu_pending_ei_ticks", "reject_cpu_raw_ime_true_ticks",
+            "reject_cpu_raw_ime_false_ticks", "reject_cpu_other_ticks",
+            "reject_preflight_owner_dma_ticks", "reject_preflight_timer_ticks",
+            "reject_preflight_sound_ticks", "reject_preflight_joypad_ticks",
+            "reject_preflight_serial_ticks", "reject_preflight_stat_ticks",
+            "reject_preflight_final_guard_ticks", "reject_preflight_other_ticks",
+            "reject_exec_prefetch_ticks", "reject_exec_decoded_read_ticks",
+            "reject_exec_decoded_write_ticks", "reject_exec_control_ticks",
+            "reject_exec_lifecycle_ticks", "reject_exec_other_ticks");
     private static final Set<String> INPUT_CONTRACTS = Set.of(
             "none", "dmg-action-v1", "cgb-action-v1");
     private static final Set<String> ENVIRONMENT_START_FIELDS = Set.of(
@@ -377,6 +396,8 @@ public final class BenchmarkMatrix {
                     addCompositor(fields, lineNumber + 1, runs, errors);
                 } else if ("speed_sample".equals(event)) {
                     validateSpeedSampleSchema(fields, lineNumber + 1, errors);
+                } else if ("sgb_epoch_probe".equals(event)) {
+                    validateSgbEpochProbeSchema(fields, lineNumber + 1, errors);
                 }
             }
         }
@@ -1000,6 +1021,7 @@ public final class BenchmarkMatrix {
             case "benchmark_invalidated" -> Set.of(
                     "event", "artifact_id", "pair_id", "matrix_block", "row_order",
                     "run_side", "session_generation", "phase", "reason");
+            case "sgb_epoch_probe" -> SGB_EPOCH_PROBE_FIELDS;
             case "speed_sample" -> Set.of("event", "frame", "effective_gbc",
                     "effective_dmg_compat", "speed_mode_final", "speed_mode_sample",
                     "performance_bulk_spans", "performance_bulk_ticks",
@@ -1033,6 +1055,102 @@ public final class BenchmarkMatrix {
                     "configured_buffer_bytes", "actual_buffer_bytes");
             default -> Set.of("event");
         };
+    }
+
+    /** The temporary probe is useful only when every cumulative conservation bucket is present. */
+    private static void validateSgbEpochProbeSchema(Map<String, String> fields, int lineNumber,
+            List<String> errors) {
+        if (!fields.keySet().containsAll(SGB_EPOCH_PROBE_FIELDS)) {
+            errors.add("line " + lineNumber + ": SGB epoch probe must be all-or-none");
+            return;
+        }
+        long frame = probeValue(fields, "frame", lineNumber, errors);
+        if (frame < 60L || frame > 600L || frame % 60L != 0L) {
+            errors.add("line " + lineNumber + ": invalid SGB epoch probe frame");
+        }
+        for (String key : SGB_EPOCH_PROBE_FIELDS) {
+            if (!"event".equals(key) && !"frame".equals(key)) {
+                probeValue(fields, key, lineNumber, errors);
+            }
+        }
+        long total = parsedProbeValue(fields, "total_ticks");
+        long expected = parsedProbeValue(fields, "expected_ticks");
+        long epoch = parsedProbeValue(fields, "epoch_ticks");
+        long bulk = parsedProbeValue(fields, "bulk_ticks");
+        long scalar = parsedProbeValue(fields, "scalar_fallback_ticks");
+        if (total < 0L || expected < 0L || epoch < 0L || bulk < 0L || scalar < 0L) {
+            return;
+        }
+        if (total != expected) {
+            errors.add("line " + lineNumber + ": SGB epoch probe total does not match frame ticks");
+        }
+        if (total != probeSum(lineNumber, errors, epoch, bulk, scalar)) {
+            errors.add("line " + lineNumber + ": SGB epoch/bulk/scalar ticks do not conserve");
+        }
+        if (epoch != probeSum(lineNumber, errors,
+                parsedProbeValue(fields, "epoch_raster_ticks"),
+                parsedProbeValue(fields, "sgb_idle_committed_ticks"),
+                parsedProbeValue(fields, "epoch_mode2_bulk_ticks"),
+                parsedProbeValue(fields, "epoch_lcd_off_ticks"))) {
+            errors.add("line " + lineNumber + ": SGB epoch plan ticks do not conserve");
+        }
+        if (scalar != probeSum(lineNumber, errors,
+                parsedProbeValue(fields, "scalar_mode_hblank_ticks"),
+                parsedProbeValue(fields, "scalar_mode_vblank_ticks"),
+                parsedProbeValue(fields, "scalar_mode2_ticks"),
+                parsedProbeValue(fields, "scalar_mode3_ticks"),
+                parsedProbeValue(fields, "scalar_mode_other_ticks"))) {
+            errors.add("line " + lineNumber + ": SGB scalar mode ticks do not conserve");
+        }
+        long rejectionTicks = 0L;
+        try {
+            for (String key : SGB_EPOCH_PROBE_FIELDS) {
+                if (key.startsWith("reject_")) {
+                    rejectionTicks = Math.addExact(rejectionTicks, parsedProbeValue(fields, key));
+                }
+            }
+        } catch (ArithmeticException overflow) {
+            errors.add("line " + lineNumber + ": SGB rejection tick sum overflow");
+            rejectionTicks = Long.MIN_VALUE;
+        }
+        if (scalar != rejectionTicks) {
+            errors.add("line " + lineNumber + ": SGB rejection ticks do not conserve");
+        }
+        long offered = parsedProbeValue(fields, "sgb_idle_offered_ticks");
+        long committed = parsedProbeValue(fields, "sgb_idle_committed_ticks");
+        if (offered >= 0L && committed >= 0L && offered < committed) {
+            errors.add("line " + lineNumber + ": SGB idle committed ticks exceed offered ticks");
+        }
+    }
+
+    private static long probeValue(Map<String, String> fields, String key, int lineNumber,
+            List<String> errors) {
+        long value = parsedProbeValue(fields, key);
+        if (value < 0L) {
+            errors.add("line " + lineNumber + ": invalid nonnegative SGB probe field " + key);
+        }
+        return value;
+    }
+
+    private static long parsedProbeValue(Map<String, String> fields, String key) {
+        try {
+            return Long.parseLong(fields.get(key));
+        } catch (RuntimeException malformed) {
+            return -1L;
+        }
+    }
+
+    private static long probeSum(int lineNumber, List<String> errors, long... values) {
+        long sum = 0L;
+        try {
+            for (long value : values) {
+                sum = Math.addExact(sum, value);
+            }
+            return sum;
+        } catch (ArithmeticException overflow) {
+            errors.add("line " + lineNumber + ": SGB probe tick sum overflow");
+            return Long.MIN_VALUE;
+        }
     }
 
     /** Current speed samples carry the complete audio-policy proof as one atomic schema. */

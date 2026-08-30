@@ -278,10 +278,16 @@ public final class PerformanceScanlineIntegrationTest {
                 scalar.runTicks(1);
             }
             assertTrue("scalar setup did not reach HBlank", guard < 2_000);
-            scalar.getGpu().setPerformanceObservationBlocked(false);
             scalar.getGpu().setPerformanceScanlineEnabled(true);
+            assertEquals("observation guard classifier",
+                    Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_COMMON_GUARD,
+                    scalar.getGpu().performancePhysicalDmgEpochRejectionCode(1));
+            scalar.getGpu().setPerformanceObservationBlocked(false);
             assertEquals("scalar PixelTransfer output tail was bulk-skipped", 0,
                     scalar.getGpu().performanceQuietSpanLimit());
+            assertEquals("non-direct HBlank classifier",
+                    Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_HBLANK_LINE,
+                    scalar.getGpu().performancePhysicalDmgEpochRejectionCode(1));
         }
 
         try (Gameboy direct = session(false)) {
@@ -339,6 +345,9 @@ public final class PerformanceScanlineIntegrationTest {
             for (int dot = 0; dot < 79; dot++) {
                 assertTrue("physical-DMG VBlank dot " + dot,
                         gameboy.getGpu().performancePhysicalDmgEpochSpanLimit(1) > 0);
+                assertEquals("physical-DMG VBlank classifier dot " + dot,
+                        Gpu.PERFORMANCE_PHYSICAL_DMG_REJECT_NONE,
+                        gameboy.getGpu().performancePhysicalDmgEpochRejectionCode(1));
                 assertTrue("generic VBlank dot " + dot,
                         gameboy.getGpu().performanceQuietSpanLimit() > 0);
                 gameboy.tick();
