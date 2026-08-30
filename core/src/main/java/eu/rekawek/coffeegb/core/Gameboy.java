@@ -698,6 +698,11 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
         return serialPort.isExternalClockTransferActive();
     }
 
+    /** True when an active native-CGB serial transfer has the fast-clock selector bit set. */
+    public boolean isFastSerialClockSelectedForActiveTransfer() {
+        return serialPort.isFastClockSelectedForActiveTransfer();
+    }
+
     /**
      * Conservatively identifies machines whose independent clocks and current execution cursors
      * are indistinguishable for link-role arbitration. The comparison is observational only and

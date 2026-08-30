@@ -53,6 +53,27 @@ public class SerialPortTest {
     }
 
     @Test
+    public void fastClockSelectorQueryRequiresAnActiveNativeCgbTransfer() {
+        SpeedMode speedMode = new SpeedMode(true);
+        SerialPort cgb = new SerialPort(new InterruptManager(true), true, speedMode);
+
+        cgb.setByte(0xff02, 0x02);
+        assertFalse(cgb.isFastClockSelectedForActiveTransfer());
+        cgb.setByte(0xff02, 0x80);
+        assertFalse(cgb.isFastClockSelectedForActiveTransfer());
+        cgb.setByte(0xff02, 0x82);
+        assertTrue(cgb.isFastClockSelectedForActiveTransfer());
+
+        speedMode.setDmgCompat(true);
+        assertFalse(cgb.isFastClockSelectedForActiveTransfer());
+
+        SerialPort dmg = new SerialPort(
+                new InterruptManager(false), false, new SpeedMode(false));
+        dmg.setByte(0xff02, 0x82);
+        assertFalse(dmg.isFastClockSelectedForActiveTransfer());
+    }
+
+    @Test
     public void switchingFromExternalClockDoesNotReplayAnOldDividerEdge() {
         SpeedMode speedMode = new SpeedMode(false);
         InterruptManager interruptManager = new InterruptManager(false);
