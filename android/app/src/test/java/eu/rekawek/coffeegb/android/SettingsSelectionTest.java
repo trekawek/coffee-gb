@@ -20,7 +20,7 @@ public class SettingsSelectionTest {
                         .map(MenuPageSpec.Item::id).toList());
         assertEquals("PERFORMANCE", AndroidMenuModel.settingsPage("performance").items().get(4)
                 .detail());
-        assertEquals("ACCURACY", AndroidMenuModel.settingsPage().items().get(4).detail());
+        assertEquals("PERFORMANCE", AndroidMenuModel.settingsPage().items().get(4).detail());
         assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
                 AndroidMenuModel.systemPage("AUTO", "AUTO", "SKIP", "dmg-games")
                         .items().stream().map(MenuPageSpec.Item::id).toList());

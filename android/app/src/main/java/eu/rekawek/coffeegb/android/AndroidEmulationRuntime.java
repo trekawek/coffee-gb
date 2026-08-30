@@ -1059,6 +1059,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     }
 
     private void resumeSession() {
+        resumeHostOutputs();
+        lifecycle.resumedByUser();
+        eventBus.post(new Controller.ResumeEmulationEvent());
+    }
+
+    /** Resumes Android-owned outputs without changing the portable controller playback state. */
+    private void resumeHostOutputs() {
         AndroidAudioSink activeAudio = audio;
         if (activeAudio != null) {
             activeAudio.resume();
@@ -1075,8 +1082,6 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (activeCamera != null) {
             activeCamera.resume();
         }
-        lifecycle.resumedByUser();
-        eventBus.post(new Controller.ResumeEmulationEvent());
     }
 
     /**
@@ -2170,6 +2175,13 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             @Override
             public void pause() {
                 eventBus.post(new Controller.PauseEmulationEvent());
+            }
+
+            @Override
+            public void resumeOutputs() {
+                if (!diagnostics.enabled()) {
+                    resumeHostOutputs();
+                }
             }
 
             @Override
