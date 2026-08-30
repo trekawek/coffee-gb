@@ -329,6 +329,17 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
+     * Fixed-width SGB/SGB2 epoch for HBlank/VBlank output-idle spans. The CPU admission proof
+     * matches the native-CGB normal-speed lane, including ordinary code under an IME-disabled
+     * raw pending interrupt; the PPU owner still fences all decoded memory and every VRAM/IO
+     * access.
+     */
+    public int runSgbIdlePerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceNormalSpeedEpoch(
+                maxMasterTicks, false, true, true, false, true);
+    }
+
+    /**
      * Fixed-width physical-DMG/SGB mode-2 epoch. The CPU bus fences are identical to the SGB
      * running epoch; only the owner-selected PPU plan permits the non-CPU OAM-search dots.
      */
@@ -541,8 +552,8 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
-     * HALT with IME clear and an enabled stored request owns the HALT-bug latch race. The
-     * native-CGB x1 epoch may run ordinary code under that masked request, but it leaves the
+     * HALT with IME clear and an enabled stored request owns the HALT-bug latch race. A
+     * normal-speed epoch may run ordinary code under that masked request, but it leaves the
      * fetch boundary itself untouched when the next opcode is HALT.
      */
     private boolean performanceNextBoundaryFetchesHalt() {
@@ -596,6 +607,11 @@ public class Cpu implements StatefulComponent<Cpu> {
                 && performanceNormalSpeedEpochEntryEligible(true, true);
     }
 
+    /** Cheap state-only entrance check for the SGB/SGB2 HBlank/VBlank epoch. */
+    public boolean performanceSgbIdleEpochEntryEligible() {
+        return performanceNormalSpeedEpochEntryEligible(false, true);
+    }
+
     /** Shared state-only entrance check for the fixed-width normal-speed epoch. */
     public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbHardware) {
         return performanceNormalSpeedEpochEntryEligible(cgbHardware, false);
@@ -635,7 +651,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         if (state == State.OPCODE) {
             return false;
         }
-        return opcode1 == 0xfb || opcode1 == 0xd9
+        return opcode1 == 0xf3 || opcode1 == 0xfb || opcode1 == 0xd9
                 || opcode1 == 0x76 || opcode1 == 0x10;
     }
 
