@@ -10,7 +10,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArraySet;
-import java.util.function.LongConsumer;
 
 /**
  * Bounded native-frame hand-off between the controller event thread and an Android renderer.
@@ -36,6 +35,11 @@ final class NativeFrameStore implements AutoCloseable {
         void onFrameAvailable();
     }
 
+    @FunctionalInterface
+    interface BenchmarkBoundary {
+        void accept(long frame, long generation);
+    }
+
     private enum SlotState {
         FREE,
         WRITING,
@@ -46,7 +50,7 @@ final class NativeFrameStore implements AutoCloseable {
     private final Slot[] slots = new Slot[SLOT_COUNT];
     private final CopyOnWriteArraySet<Listener> listeners = new CopyOnWriteArraySet<>();
     private final AndroidBenchmarkDiagnostics diagnostics;
-    private final LongConsumer benchmarkBoundary;
+    private final BenchmarkBoundary benchmarkBoundary;
 
     private long nextSequence;
     private long nextReservationToken;
@@ -66,7 +70,7 @@ final class NativeFrameStore implements AutoCloseable {
         this(diagnostics, null);
     }
 
-    NativeFrameStore(AndroidBenchmarkDiagnostics diagnostics, LongConsumer benchmarkBoundary) {
+    NativeFrameStore(AndroidBenchmarkDiagnostics diagnostics, BenchmarkBoundary benchmarkBoundary) {
         this.diagnostics = diagnostics;
         this.benchmarkBoundary = benchmarkBoundary;
         for (int index = 0; index < slots.length; index++) {
@@ -465,9 +469,9 @@ final class NativeFrameStore implements AutoCloseable {
         if (diagnostics == null) {
             return;
         }
-        boolean boundary = diagnostics.frameReady();
-        if (boundary && benchmarkBoundary != null) {
-            benchmarkBoundary.accept(diagnostics.benchmarkGeneration());
+        long boundary = diagnostics.frameReadyBoundary();
+        if (boundary > 0L && benchmarkBoundary != null) {
+            benchmarkBoundary.accept(boundary, diagnostics.benchmarkGeneration());
         }
     }
 

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -218,6 +219,9 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     private static final long POLL_MILLIS = 20L;
+    static final int WORKER_PHASE_CONTROL_OR_RECOVERY = 0;
+    static final int WORKER_PHASE_POLL = 1;
+    static final int WORKER_PHASE_WRITE = 2;
     /** Shorter than the six-slot source runway, so a dead output cannot force a queue overrun. */
     private static final long UNDERRUN_STALL_MILLIS = 60L;
     private static final long CLOSE_TIMEOUT_MILLIS = 750L;
@@ -226,6 +230,7 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AudioManager audioManager;
     private final boolean enabled;
     private final AndroidBenchmarkDiagnostics diagnostics;
+    private final NanoClock nanoClock;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean reopenRequested = new AtomicBoolean();
     /** Sticky flush command; unlike the paused level, every pause request is observed once. */
@@ -236,6 +241,12 @@ final class AndroidAudioSink implements AutoCloseable {
     private final AtomicLong restarts = new AtomicLong();
     /** Monotonic identity fence for observational benchmark snapshots. */
     private final AtomicLong routeGeneration = new AtomicLong();
+    /** Publication observes this primitive state without touching worker control flow. */
+    private final AtomicInteger workerPhase = new AtomicInteger(
+            WORKER_PHASE_CONTROL_OR_RECOVERY);
+    /** Benchmark-only timing state; release R8 removes this and every guarded update. */
+    private final AndroidAudioTimingProbe timingProbe = BuildConfig.DIAGNOSTICS_ENABLED
+            ? new AndroidAudioTimingProbe() : null;
     /** Benchmark-only ledger.  Release R8 removes its implementation and all guarded call sites. */
     private final PcmAccounting pcmAccounting = BuildConfig.DIAGNOSTICS_ENABLED
             ? new DiagnosticPcmAccounting() : NoOpPcmAccounting.INSTANCE;
@@ -290,44 +301,51 @@ final class AndroidAudioSink implements AutoCloseable {
     AndroidAudioSink(Context context, EventBus eventBus) {
         this(eventBus, new AndroidAudioTrackOutput.Factory(),
                 Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
-                true, null, null, null);
+                true, null, null, null, NanoClock.SYSTEM);
     }
 
     AndroidAudioSink(Context context, EventBus eventBus,
             AndroidBenchmarkDiagnostics diagnostics) {
         this(eventBus, new AndroidAudioTrackOutput.Factory(),
                 Objects.requireNonNull(context, "context").getSystemService(AudioManager.class),
-                true, diagnostics, null, null);
+                true, diagnostics, null, null, NanoClock.SYSTEM);
     }
 
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory) {
-        this(eventBus, outputFactory, null, true, null, null, null);
+        this(eventBus, outputFactory, null, true, null, null, null, NanoClock.SYSTEM);
     }
 
     /** Benchmark JVM seam; ordinary construction cannot authorize empty AudioTrack playback. */
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory,
             AndroidBenchmarkDiagnostics diagnostics) {
-        this(eventBus, outputFactory, null, true, diagnostics, null, null);
+        this(eventBus, outputFactory, null, true, diagnostics, null, null, NanoClock.SYSTEM);
+    }
+
+    /** Benchmark JVM seam for deterministic timing attribution without changing audio clocks. */
+    AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory,
+            AndroidBenchmarkDiagnostics diagnostics, NanoClock nanoClock) {
+        this(eventBus, outputFactory, null, true, diagnostics, null, null, nanoClock);
     }
 
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, QueueSwapHook queueSwapHook) {
         this(eventBus, outputFactory, null, true, null,
-                Objects.requireNonNull(queueSwapHook, "queueSwapHook"), null);
+                Objects.requireNonNull(queueSwapHook, "queueSwapHook"), null, NanoClock.SYSTEM);
     }
 
     AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory,
             QueueSwapHook queueSwapHook, BoundaryClearHook boundaryClearHook) {
         this(eventBus, outputFactory, null, true, null, queueSwapHook,
-                Objects.requireNonNull(boundaryClearHook, "boundaryClearHook"));
+                Objects.requireNonNull(boundaryClearHook, "boundaryClearHook"), NanoClock.SYSTEM);
     }
 
     private AndroidAudioSink(EventBus eventBus, OutputFactory outputFactory, AudioManager audioManager,
             boolean enabled, AndroidBenchmarkDiagnostics diagnostics, QueueSwapHook queueSwapHook,
-            BoundaryClearHook boundaryClearHook) {
+            BoundaryClearHook boundaryClearHook, NanoClock nanoClock) {
         this.outputFactory = Objects.requireNonNull(outputFactory, "outputFactory");
         this.audioManager = audioManager;
         this.enabled = enabled;
         this.diagnostics = diagnostics;
+        this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
         this.queueSwapHook = queueSwapHook;
         this.boundaryClearHook = boundaryClearHook;
         EventBus bus = Objects.requireNonNull(eventBus, "eventBus");
@@ -338,7 +356,8 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     static AndroidAudioSink disabled(EventBus eventBus) {
-        return new AndroidAudioSink(eventBus, () -> null, null, false, null, null, null);
+        return new AndroidAudioSink(eventBus, () -> null, null, false, null, null, null,
+                NanoClock.SYSTEM);
     }
 
     void start() {
@@ -447,6 +466,32 @@ final class AndroidAudioSink implements AutoCloseable {
             // observational ARM read. Fail closed instead of publishing a mixed-session proof.
             return AudioBaseline.unavailable();
         }
+    }
+
+    /** Starts one benchmark timing generation without touching queued PCM or AudioTrack state. */
+    long resetTimingProbeForBenchmark() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED || timingProbe == null) {
+            return 0L;
+        }
+        Output output = activeOutput;
+        long identity = output == null ? 0L
+                : Integer.toUnsignedLong(System.identityHashCode(output));
+        long sampledUnderruns = -1L;
+        if (output != null) {
+            try {
+                sampledUnderruns = output.outputUnderrunCount();
+            } catch (RuntimeException unavailable) {
+                // The probe remains generation-isolated and establishes its baseline later.
+            }
+        }
+        return timingProbe.reset(identity, sampledUnderruns);
+    }
+
+    AndroidAudioTimingProbe.Snapshot timingProbeSnapshot() {
+        if (!BuildConfig.DIAGNOSTICS_ENABLED || timingProbe == null) {
+            return AndroidAudioTimingProbe.Snapshot.unavailable();
+        }
+        return timingProbe.snapshot();
     }
 
     void setMuted(boolean nextMuted) {
@@ -572,6 +617,12 @@ final class AndroidAudioSink implements AutoCloseable {
     }
 
     private void onSoundSample(Sound.SoundSampleEvent event) {
+        long eventNanos = -1L;
+        long eventTimingGeneration = 0L;
+        if (BuildConfig.DIAGNOSTICS_ENABLED && timingProbe != null) {
+            eventNanos = nanoClock.nanoTime();
+            eventTimingGeneration = timingProbe.generation();
+        }
         long eventPolicyGeneration;
         long eventPauseFlushGeneration;
         int eventVolume;
@@ -599,7 +650,8 @@ final class AndroidAudioSink implements AutoCloseable {
                 synchronized (pcmAccounting) {
                     pcmAccounting.input(event.buffer().length / 2L);
                     int bytes = active.offer(event, eventVolume, eventMuted,
-                            eventPolicyGeneration, eventPauseFlushGeneration);
+                            eventPolicyGeneration, eventPauseFlushGeneration,
+                            eventNanos, eventTimingGeneration);
                     accountQueueDiscards(active);
                     if (bytes > 0) {
                         pcmAccounting.enqueued(bytes, bytes / 4L);
@@ -715,7 +767,12 @@ final class AndroidAudioSink implements AutoCloseable {
                                 discardPrimerFrames(activeQueue, primerFrames);
                                 clearQueue(activeQueue);
                             }
-                            activeQueue = new BoundedPcmQueue(openedSampleRate, sourceClock);
+                            activeQueue = BuildConfig.DIAGNOSTICS_ENABLED && timingProbe != null
+                                    ? new BoundedPcmQueue(openedSampleRate,
+                                            BoundedPcmQueue.DEFAULT_CAPACITY,
+                                            BoundedPcmQueue.maximumFrameBytes(openedSampleRate),
+                                            sourceClock, nanoClock, timingProbe, workerPhase)
+                                    : new BoundedPcmQueue(openedSampleRate, sourceClock);
                             queue = activeQueue;
                         }
                         routeGeneration.incrementAndGet();
@@ -1315,10 +1372,23 @@ final class AndroidAudioSink implements AutoCloseable {
             }
             int remaining = Math.min(frame.length() - pending.writeOffset(), writeBudget);
             int written;
+            long writeStartNanos = -1L;
+            long writeEndNanos = -1L;
+            if (BuildConfig.DIAGNOSTICS_ENABLED && timingProbe != null) {
+                workerPhase.set(WORKER_PHASE_WRITE);
+                writeStartNanos = nanoClock.nanoTime();
+                timingProbe.writeStarted(frame, writeStartNanos);
+            }
             try {
                 written = output.write(frame.bytes(), pending.writeOffset(), remaining);
             } catch (RuntimeException unavailable) {
                 return new WriteResult(WriteOutcome.OUTPUT_FAILURE, latestOutputUnderruns);
+            } finally {
+                if (BuildConfig.DIAGNOSTICS_ENABLED && timingProbe != null) {
+                    writeEndNanos = nanoClock.nanoTime();
+                    workerPhase.set(WORKER_PHASE_CONTROL_OR_RECOVERY);
+                    timingProbe.writeCall(frame, writeStartNanos, writeEndNanos);
+                }
             }
             if (written <= 0 || written > remaining || (written & 3) != 0) {
                 return new WriteResult(WriteOutcome.OUTPUT_FAILURE, latestOutputUnderruns);
@@ -1326,6 +1396,10 @@ final class AndroidAudioSink implements AutoCloseable {
             pending.advance(written);
             writeBudget -= written;
             outputProgress.accept(written);
+            if (BuildConfig.DIAGNOSTICS_ENABLED && timingProbe != null
+                    && pending.writeOffset() == frame.length()) {
+                timingProbe.writeComplete(frame, writeEndNanos);
+            }
             if (monitorOutputUnderruns) {
                 long sampled = sampleOutputUnderruns(output, latestOutputUnderruns);
                 if (hasOutputUnderrunIncreased(latestOutputUnderruns, sampled)) {
@@ -1373,6 +1447,12 @@ final class AndroidAudioSink implements AutoCloseable {
             long sampled = output.outputUnderrunCount();
             if (BuildConfig.DIAGNOSTICS_ENABLED) {
                 outputUnderruns = sampled;
+                if (timingProbe != null && sampled >= 0L) {
+                    BoundedPcmQueue active = queue;
+                    timingProbe.outputUnderruns(
+                            Integer.toUnsignedLong(System.identityHashCode(output)), sampled,
+                            nanoClock.nanoTime(), active == null ? 0 : active.queuedFrames());
+                }
             }
             return sampled >= 0L ? sampled : previous;
         } catch (RuntimeException unavailable) {

@@ -86,7 +86,8 @@ public class BenchmarkMatrixTest {
 
         assertTrue(report.errors().toString(), report.accepted());
         assertEquals(7 * BenchmarkMatrix.MIN_PAIRS * 2 * 3
-                + 5 * BenchmarkMatrix.MIN_PAIRS * 2, log.size());
+                + 5 * BenchmarkMatrix.MIN_PAIRS * 2
+                + 7 * BenchmarkMatrix.MIN_PAIRS * 2 * 10, log.size());
     }
 
     @Test
@@ -995,6 +996,36 @@ public class BenchmarkMatrixTest {
     }
 
     @Test
+    public void audioTimingProbeIsRequiredAndFailsClosedOnMalformedOrUnconservedTuples() {
+        List<String> complete = syntheticSummaryLog(61.0, 62.0);
+        assertTrue(parse(complete, 43L, BenchmarkMatrix.BOOTSTRAP_RESAMPLES).accepted());
+
+        ArrayList<String> missing = new ArrayList<>(complete);
+        missing.removeIf(line -> line.startsWith("event=audio_timing_probe")
+                && line.contains("frame=60 ") && line.contains("pair_id=p00-dmg ")
+                && line.contains("run_side=parent "));
+        BenchmarkMatrix.Report missingReport = parse(
+                missing, 43L, BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+        assertFalse(missingReport.accepted());
+        assertContains(missingReport.errors(), "is missing audio timing frame 60");
+
+        List<String> malformed = replaceFirstKey(
+                complete, "audio_timing", "1,2,3");
+        BenchmarkMatrix.Report malformedReport = parse(
+                malformed, 43L, BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+        assertFalse(malformedReport.valid());
+        assertContains(malformedReport.errors(), "invalid compact audio_timing");
+
+        List<String> unconserved = replaceFirstKey(
+                complete, "audio_underrun_attribution", "7,1,1,1,1,0,0");
+        BenchmarkMatrix.Report unconservedReport = parse(
+                unconserved, 43L, BenchmarkMatrix.BOOTSTRAP_RESAMPLES);
+        assertFalse(unconservedReport.valid());
+        assertContains(unconservedReport.errors(),
+                "audio underrun attribution does not conserve occurrence delta");
+    }
+
+    @Test
     public void rejectsFirstSideLiesAndObservedRowOrderLies() {
         List<String> firstSideLie = new ArrayList<>();
         for (String line : syntheticSummaryLog(61.0, 62.0)) {
@@ -1297,6 +1328,10 @@ public class BenchmarkMatrixTest {
                         + ("sgb".equals(row) ? 120 : 60) + " surface_content_rate_millihz="
                         + contentRateMillihz(row) + " " + clockEvidence(row) + " "
                 + environmentStart() + " " + audioStartEvidence());
+        for (int frame = 60; frame <= BenchmarkMatrix.REQUIRED_FRAME_COUNT; frame += 60) {
+            lines.add(audioTimingProbeEvidence(artifact, pairId, block, rowOrder, side,
+                    generationFor(baseNanos, side), frame));
+        }
         lines.add(String.format(Locale.ROOT,
                 "event=final_result build_profile=benchmark artifact_id=%s pair_id=%s matrix_block=%s row_order=%d "
                         + "run_side=%s session_generation=%d benchmark_generation=%d workload_nonce=%s warmup=on input_contract=%s %s drain_success=true "
@@ -1375,6 +1410,10 @@ public class BenchmarkMatrixTest {
                     + " matrix_block=" + block + " row_order=" + rowOrder
                     + " run_side=" + side + " submission_id=" + frame
                     + " submission_ns=" + timestamp);
+            if (frame % 60 == 0) {
+                lines.add(audioTimingProbeEvidence(artifact, pairId, block, rowOrder, side,
+                        generationFor(baseNanos, side), frame));
+            }
         }
         double intervalFps = BenchmarkMatrix.intervalFps(ready);
         lines.add(String.format(Locale.ROOT,
@@ -1416,6 +1455,17 @@ public class BenchmarkMatrixTest {
 
     private static String blockName(int pair) {
         return BLOCK_NAMES[pair];
+    }
+
+    private static String audioTimingProbeEvidence(String artifact, String pairId, String block,
+            int rowOrder, String side, long benchmarkGeneration, int frame) {
+        return "event=audio_timing_probe artifact_id=" + artifact + " pair_id=" + pairId
+                + " matrix_block=" + block + " row_order=" + rowOrder
+                + " run_side=" + side + " benchmark_generation=" + benchmarkGeneration
+                + " frame=" + frame + " probe_generation=1"
+                + " audio_timing=" + (frame - 1)
+                        + ",17000,0,0,100,500,0,0,0,100,100,100,0,1000"
+                + " audio_underrun_attribution=0,0,0,0,0,0,0";
     }
 
     private static long generationFor(long baseNanos, String side) {
