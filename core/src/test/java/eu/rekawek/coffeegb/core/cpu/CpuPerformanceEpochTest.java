@@ -719,12 +719,10 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
-    public void strictSgbEntryClassifiesAndRejectsRawPendingInterrupts() {
+    public void strictSgbEntryRejectsRawPendingInterrupts() {
         CpuPair masked = newSgbPair(0x00);
         masked.directInterrupts.setByte(0xffff, 1);
         masked.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
-        assertEquals(Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE,
-                masked.direct.performanceNormalSpeedEpochEntryRejectionCode(false));
         assertFalse(masked.direct.performanceNormalSpeedEpochEntryEligible(false));
         assertEquals(0, masked.direct.runSgbPerformanceEpoch(54));
 
@@ -732,45 +730,20 @@ public final class CpuPerformanceEpochTest {
         enabled.directInterrupts.setByte(0xffff, 1);
         enabled.directInterrupts.enableInterrupts(false);
         enabled.directInterrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
-        assertEquals(Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_TRUE,
-                enabled.direct.performanceNormalSpeedEpochEntryRejectionCode(false));
         assertFalse(enabled.direct.performanceNormalSpeedEpochEntryEligible(false));
         assertEquals(0, enabled.direct.runSgbPerformanceEpoch(54));
     }
 
     @Test
-    public void strictSgbEpochRetainsDiFenceAndClassifiesExecutionHandoffs()
+    public void strictSgbEpochRetainsDiFence()
             throws Exception {
         CpuPair di = newSgbPair(0xf3, 0x00);
         int elapsed = di.direct.runSgbPerformanceEpoch(54);
         assertEquals("DI must finish at the epoch seam", 4, elapsed);
-        assertEquals(Cpu.PERFORMANCE_EXEC_EXIT_CONTROL,
-                di.direct.getPerformanceEpochLastExitCode());
         for (int tick = 0; tick < elapsed; tick++) {
             di.scalar.tick();
         }
         assertCpuPairStateEquals(di);
-
-        CpuPair decodedRead = newSgbPair(0x7e); // LD A,(HL)
-        decodedRead.direct.getRegisters().setHL(0xff00);
-        elapsed = decodedRead.direct.runSgbPerformanceEpoch(54);
-        assertTrue(elapsed > 0);
-        assertEquals(Cpu.PERFORMANCE_EXEC_EXIT_DECODED_READ,
-                decodedRead.direct.getPerformanceEpochLastExitCode());
-
-        CpuPair decodedWrite = newSgbPair(0x77); // LD (HL),A
-        decodedWrite.direct.getRegisters().setHL(0x8000);
-        elapsed = decodedWrite.direct.runSgbPerformanceEpoch(54);
-        assertTrue(elapsed > 0);
-        assertEquals(Cpu.PERFORMANCE_EXEC_EXIT_DECODED_WRITE,
-                decodedWrite.direct.getPerformanceEpochLastExitCode());
-
-        CpuPair prefetch = newSgbPair(0x00);
-        prefetch.direct.getRegisters().setPC(0x8000);
-        elapsed = prefetch.direct.runSgbPerformanceEpoch(54);
-        assertTrue(elapsed > 0);
-        assertEquals(Cpu.PERFORMANCE_EXEC_EXIT_PREFETCH,
-                prefetch.direct.getPerformanceEpochLastExitCode());
     }
 
     @Test

@@ -467,7 +467,7 @@ final class NativeFrameStore implements AutoCloseable {
         }
         boolean boundary = diagnostics.frameReady();
         if (boundary && benchmarkBoundary != null) {
-            benchmarkBoundary.accept(diagnostics.readyFrames());
+            benchmarkBoundary.accept(diagnostics.benchmarkGeneration());
         }
     }
 

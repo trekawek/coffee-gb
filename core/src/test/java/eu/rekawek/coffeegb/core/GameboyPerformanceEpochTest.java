@@ -20,6 +20,7 @@ import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 /** Focused fixed-x1 CGB, physical-DMG, and SGB coverage for the coarse PERFORMANCE epoch. */
@@ -694,7 +695,8 @@ public final class GameboyPerformanceEpochTest {
                 image, PlayerInputSnapshot::released, ExecutionMode.PERFORMANCE);
              Gameboy candidate = physicalDmgSession(
                      image, PlayerInputSource.RELEASED, ExecutionMode.PERFORMANCE)) {
-            assertLcdOffVramAndLcdcEnableMatchesScalar(scalar, candidate, "physical DMG");
+            assertLcdOffVramAndLcdcEnableMatchesScalar(
+                    scalar, candidate, "physical DMG", false);
         }
         for (HardwareProfile profile : new HardwareProfile[]{
                 HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
@@ -702,7 +704,8 @@ public final class GameboyPerformanceEpochTest {
                     image, profile, PlayerInputSnapshot::released);
                  Gameboy candidate = sgbSession(
                          image, profile, PlayerInputSource.RELEASED)) {
-                assertLcdOffVramAndLcdcEnableMatchesScalar(scalar, candidate, profile.id());
+                assertLcdOffVramAndLcdcEnableMatchesScalar(
+                        scalar, candidate, profile.id(), true);
             }
         }
     }
@@ -979,8 +982,6 @@ public final class GameboyPerformanceEpochTest {
                                                 + " ticks leaked into raster accounting", 0L,
                                         candidate.getPerformanceEpochRasterFastTicks());
                             }
-                            assertSgbProbeConservation(
-                                    profile.id() + " " + phase, candidate, budget);
                         }
                     }
                 }
@@ -989,7 +990,7 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void sgbProbeConservesTicksAndAttributesStrictMaskedInterruptFallback()
+    public void sgbStrictMaskedInterruptFallbackMatchesScalar()
             throws Exception {
         for (HardwareProfile profile : new HardwareProfile[]{
                 HardwareProfileRegistry.SGB, HardwareProfileRegistry.SGB2}) {
@@ -1007,9 +1008,8 @@ public final class GameboyPerformanceEpochTest {
                     gameboy.getAddressSpace().setByte(0xff0f,
                             gameboy.getAddressSpace().getByte(0xff0f) | 1);
                 }
-                assertEquals(Cpu.PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE,
-                        candidate.getCpu()
-                                .performanceNormalSpeedEpochEntryRejectionCode(false));
+                assertFalse(profile.id() + " admitted a masked SGB interrupt",
+                        candidate.getCpu().performanceNormalSpeedEpochEntryEligible(false));
 
                 int scalarFrames = runScalarTicks(scalar, 54);
                 int candidateFrames = candidate.runTicks(54);
@@ -1017,12 +1017,6 @@ public final class GameboyPerformanceEpochTest {
                 assertEquals(profile.id() + " frame callbacks", scalarFrames, candidateFrames);
                 assertEquals(profile.id() + " strict masked SGB idle commit", 0L,
                         candidate.getPerformanceEpochSgbIdleTicks());
-                assertTrue(profile.id() + " offered no SGB idle opportunity",
-                        candidate.getPerformanceSgbIdleOfferedTicks() > 0L);
-                assertTrue(profile.id() + " did not attribute masked scalar ownership",
-                        candidate.getPerformanceSgbScalarRejectionTicks(
-                                Gameboy.PERFORMANCE_SGB_REJECT_CPU_RAW_IME_FALSE) > 0L);
-                assertSgbProbeConservation(profile.id(), candidate, 54L);
                 assertDeepStateEquals(profile.id() + " strict masked fallback",
                         scalar.captureStateWithoutTimeSource(),
                         candidate.captureStateWithoutTimeSource());
@@ -1205,36 +1199,6 @@ public final class GameboyPerformanceEpochTest {
             }
         }
         return frames;
-    }
-
-    private static void assertSgbProbeConservation(
-            String label, Gameboy gameboy, long expectedTicks) {
-        assertEquals(label + " independent total", expectedTicks,
-                gameboy.getPerformanceSgbProbeTotalTicks());
-        assertEquals(label + " scheduler conservation", expectedTicks,
-                gameboy.getPerformanceEpochTicks()
-                        + gameboy.getPerformanceBulkTicks()
-                        + gameboy.getPerformanceSgbScalarFallbackTicks());
-        assertEquals(label + " epoch plan conservation",
-                gameboy.getPerformanceEpochTicks(),
-                gameboy.getPerformanceEpochRasterFastTicks()
-                        + gameboy.getPerformanceEpochSgbIdleTicks()
-                        + gameboy.getPerformanceEpochMode2BulkTicks()
-                        + gameboy.getPerformanceEpochLcdOffTicks());
-        long scalarModes = 0L;
-        for (int code = Gameboy.PERFORMANCE_SGB_MODE_HBLANK;
-             code <= Gameboy.PERFORMANCE_SGB_MODE_OTHER; code++) {
-            scalarModes += gameboy.getPerformanceSgbScalarModeTicks(code);
-        }
-        assertEquals(label + " scalar mode conservation",
-                gameboy.getPerformanceSgbScalarFallbackTicks(), scalarModes);
-        long rejections = 0L;
-        for (int code = Gameboy.PERFORMANCE_SGB_REJECT_GPU_COMMON;
-             code <= Gameboy.PERFORMANCE_SGB_REJECT_EXEC_OTHER; code++) {
-            rejections += gameboy.getPerformanceSgbScalarRejectionTicks(code);
-        }
-        assertEquals(label + " rejection conservation",
-                gameboy.getPerformanceSgbScalarFallbackTicks(), rejections);
     }
 
     @Test
@@ -1843,13 +1807,29 @@ public final class GameboyPerformanceEpochTest {
     }
 
     private static void assertLcdOffVramAndLcdcEnableMatchesScalar(
-            Gameboy scalar, Gameboy candidate, String label) {
+            Gameboy scalar, Gameboy candidate, String label, boolean sgb) {
         advancePairUntilLcdDisabled(scalar, candidate);
+        for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
+            gameboy.getAddressSpace().setByte(0xff41, 0x40);
+            gameboy.getAddressSpace().setByte(0xff45, 1);
+        }
         scalar.resetPerformanceBulkCounters();
         candidate.resetPerformanceBulkCounters();
 
         assertEquals(label + " LCD-off frame callback",
                 scalar.runTicks(2_000), candidate.runTicks(2_000));
+        var scalarCheckpoint = scalar.captureStateWithoutTimeSource();
+        var candidateCheckpoint = candidate.captureStateWithoutTimeSource();
+        assertEquals(label + " uninterrupted memento continuation",
+                scalar.runTicks(257), candidate.runTicks(257));
+        assertDeepStateEquals(label + " uninterrupted memento state",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+        scalar.restoreStateSilently(scalarCheckpoint);
+        candidate.restoreStateSilently(candidateCheckpoint);
+        assertEquals(label + " restored memento continuation",
+                scalar.runTicks(257), candidate.runTicks(257));
+        assertDeepStateEquals(label + " restored memento state",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
         int guard = 0;
         while (!(candidate.getCpu().getState() == Cpu.State.RUNNING
                 && candidate.getCpu().getDebugOpcode() == 0xe0
@@ -1863,6 +1843,10 @@ public final class GameboyPerformanceEpochTest {
         assertFalse(candidate.getGpu().isLcdEnabled());
         assertTrue(label + " had no LCD-off epoch coverage",
                 candidate.getPerformanceEpochLcdOffTicks() > 0L);
+        if (sgb) {
+            assertTrue(label + " did not continue LCD-off epochs past the inert LYC deadline",
+                    candidate.getPerformanceEpochLcdOffTicks() > 1_000L);
+        }
         assertEquals(label + " LCD-off epoch reached a terminal CPU access", 0L,
                 candidate.getCpu().getPerformanceEpochTerminalAccesses());
         assertDeepStateEquals(label + " before LCDC enable",
@@ -1878,6 +1862,16 @@ public final class GameboyPerformanceEpochTest {
                 candidate.getPerformanceEpochLcdOffTicks());
         assertTrue(label + " LCDC enable did not take effect", candidate.getGpu().isLcdEnabled());
         assertDeepStateEquals(label + " after scalar LCDC enable",
+                scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
+
+        for (Gameboy gameboy : new Gameboy[]{scalar, candidate}) {
+            gameboy.getAddressSpace().setByte(0xff0f, 0);
+        }
+        assertEquals(label + " post-enable STAT/LYC frame callback",
+                scalar.runTicks(470), candidate.runTicks(470));
+        assertNotEquals(label + " next STAT/LYC event did not publish", 0,
+                candidate.getAddressSpace().getByte(0xff0f) & 0x02);
+        assertDeepStateEquals(label + " after post-enable STAT/LYC event",
                 scalar.captureStateWithoutTimeSource(), candidate.captureStateWithoutTimeSource());
     }
 

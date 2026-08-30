@@ -1044,17 +1044,10 @@ class BasicController private constructor(
   ) {
     if (!properties.overrides.benchmarkPolicyEnabled || !benchmarkArmed
         || benchmarkCoreFrozenGate.getAsBoolean()
-        || event.frame !in 60L..600L || event.frame % 60L != 0L
-        || event.generation != benchmarkGeneration) {
+        || event.frame != 600L || event.generation != benchmarkGeneration) {
       return
     }
     val currentSession = session ?: return
-    if (currentSession.config.hardwareProfile.capabilities().superGameboyCommands()) {
-      postBenchmarkSgbEpochProbe(currentSession, event.frame)
-    }
-    if (event.frame != 600L) {
-      return
-    }
     val speedMode = currentSession.gameboy.getSpeedMode()
     val gpu = currentSession.gameboy.getGpu()
     val sound = currentSession.gameboy.sound
@@ -1129,88 +1122,6 @@ class BasicController private constructor(
         ),
     )
     setPaused(true)
-  }
-
-  /** Publishes one immutable primitive snapshot; all scalar accounting stays in core arrays. */
-  private fun postBenchmarkSgbEpochProbe(currentSession: Session, frame: Long) {
-    val gameboy = currentSession.gameboy
-    postSessionEventSafely(
-        currentSession,
-        Controller.BenchmarkSgbEpochProbeEvent(
-            frame,
-            gameboy.performanceSgbProbeTotalTicks,
-            Math.multiplyExact(frame, gameboy.clockSpec.controllerTicksPerFrame().toLong()),
-            gameboy.performanceEpochTicks,
-            gameboy.performanceBulkTicks,
-            gameboy.performanceSgbScalarFallbackTicks,
-            gameboy.performanceEpochRasterFastTicks,
-            gameboy.performanceSgbIdleOfferedTicks,
-            gameboy.performanceEpochSgbIdleTicks,
-            gameboy.performanceEpochMode2BulkTicks,
-            gameboy.performanceEpochLcdOffTicks,
-            gameboy.getPerformanceSgbScalarModeTicks(Gameboy.PERFORMANCE_SGB_MODE_HBLANK),
-            gameboy.getPerformanceSgbScalarModeTicks(Gameboy.PERFORMANCE_SGB_MODE_VBLANK),
-            gameboy.getPerformanceSgbScalarModeTicks(Gameboy.PERFORMANCE_SGB_MODE_2),
-            gameboy.getPerformanceSgbScalarModeTicks(Gameboy.PERFORMANCE_SGB_MODE_3),
-            gameboy.getPerformanceSgbScalarModeTicks(Gameboy.PERFORMANCE_SGB_MODE_OTHER),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_COMMON),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_HBLANK_LINE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_TIMING_OUTPUT),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_VISIBLE_OUTPUT),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_LINE_EDGE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_GPU_OTHER),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_LIFECYCLE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_IRQ),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_CONTROL),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_PPU_PHASE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_PENDING_EI),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_RAW_IME_TRUE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_RAW_IME_FALSE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_CPU_OTHER),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_OWNER_DMA),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_TIMER),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_SOUND),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_JOYPAD),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_SERIAL),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_STAT),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_FINAL_GUARD),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_PREFLIGHT_OTHER),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_PREFETCH),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_DECODED_READ),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_DECODED_WRITE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_CONTROL),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_LIFECYCLE),
-            gameboy.getPerformanceSgbScalarRejectionTicks(
-                Gameboy.PERFORMANCE_SGB_REJECT_EXEC_OTHER),
-        ),
-    )
   }
 
   private fun runDebugContinuation() {

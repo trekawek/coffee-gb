@@ -442,37 +442,6 @@ public class BenchmarkMatrixTest {
     }
 
     @Test
-    public void validatesAtomicSgbEpochProbeConservation() {
-        List<String> valid = new ArrayList<>(syntheticSummaryLog(61.0, 62.0));
-        valid.add(sgbEpochProbeLine());
-        BenchmarkMatrix.Report accepted = parse(valid);
-        assertTrue(accepted.errors().toString(), accepted.valid());
-
-        List<String> missing = new ArrayList<>(valid);
-        int probeIndex = missing.size() - 1;
-        missing.set(probeIndex,
-                missing.get(probeIndex).replace(" reject_exec_other_ticks=0", ""));
-        BenchmarkMatrix.Report missingReport = parse(missing);
-        assertFalse(missingReport.valid());
-        assertContains(missingReport.errors(), "SGB epoch probe must be all-or-none");
-
-        List<String> badTotal = new ArrayList<>(valid);
-        badTotal.set(probeIndex,
-                badTotal.get(probeIndex).replace("total_ticks=18000", "total_ticks=18001"));
-        BenchmarkMatrix.Report totalReport = parse(badTotal);
-        assertFalse(totalReport.valid());
-        assertContains(totalReport.errors(), "SGB epoch probe total does not match frame ticks");
-
-        List<String> badRejection = new ArrayList<>(valid);
-        badRejection.set(probeIndex, badRejection.get(probeIndex).replace(
-                "reject_cpu_raw_ime_false_ticks=1000",
-                "reject_cpu_raw_ime_false_ticks=999"));
-        BenchmarkMatrix.Report rejectionReport = parse(badRejection);
-        assertFalse(rejectionReport.valid());
-        assertContains(rejectionReport.errors(), "SGB rejection ticks do not conserve");
-    }
-
-    @Test
     public void validatesTerminalAudioProofAsAnAtomicArmToBoundarySnapshot() {
         List<String> valid = new ArrayList<>(syntheticSummaryLog(61.0, 62.0));
         valid.add("event=speed_sample frame=600 effective_gbc=false"
@@ -1539,30 +1508,6 @@ public class BenchmarkMatrixTest {
                 + " power_save_end=false stay_awake_end=true stay_on_plugged_mask_end=1"
                 + " thread_priority_end=0 app_importance_end=100 system_load_end_milli=100"
                 + " cpu_count_end=8 memory_available_end_bytes=1000000000";
-    }
-
-    private static String sgbEpochProbeLine() {
-        return "event=sgb_epoch_probe frame=180 total_ticks=18000 expected_ticks=18000"
-                + " epoch_ticks=10000 bulk_ticks=7000 scalar_fallback_ticks=1000"
-                + " epoch_raster_ticks=4000 sgb_idle_offered_ticks=5000"
-                + " sgb_idle_committed_ticks=3000 epoch_mode2_bulk_ticks=2000"
-                + " epoch_lcd_off_ticks=1000 scalar_mode_hblank_ticks=1000"
-                + " scalar_mode_vblank_ticks=0 scalar_mode2_ticks=0 scalar_mode3_ticks=0"
-                + " scalar_mode_other_ticks=0 reject_gpu_common_ticks=0"
-                + " reject_gpu_hblank_line_ticks=0 reject_gpu_timing_output_ticks=0"
-                + " reject_gpu_visible_output_ticks=0 reject_gpu_line_edge_ticks=0"
-                + " reject_gpu_other_ticks=0 reject_cpu_lifecycle_ticks=0"
-                + " reject_cpu_irq_ticks=0 reject_cpu_control_ticks=0"
-                + " reject_cpu_ppu_phase_ticks=0 reject_cpu_pending_ei_ticks=0"
-                + " reject_cpu_raw_ime_true_ticks=0 reject_cpu_raw_ime_false_ticks=1000"
-                + " reject_cpu_other_ticks=0 reject_preflight_owner_dma_ticks=0"
-                + " reject_preflight_timer_ticks=0 reject_preflight_sound_ticks=0"
-                + " reject_preflight_joypad_ticks=0 reject_preflight_serial_ticks=0"
-                + " reject_preflight_stat_ticks=0 reject_preflight_final_guard_ticks=0"
-                + " reject_preflight_other_ticks=0 reject_exec_prefetch_ticks=0"
-                + " reject_exec_decoded_read_ticks=0 reject_exec_decoded_write_ticks=0"
-                + " reject_exec_control_ticks=0 reject_exec_lifecycle_ticks=0"
-                + " reject_exec_other_ticks=0";
     }
 
     private static String terminalAudioProof() {
