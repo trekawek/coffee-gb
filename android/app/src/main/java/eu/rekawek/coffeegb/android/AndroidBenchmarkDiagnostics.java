@@ -611,47 +611,6 @@ final class AndroidBenchmarkDiagnostics {
         return systemAudioLastFrame;
     }
 
-    /** Emits one cumulative, generation-bound host-audio timing snapshot every 60 frames. */
-    synchronized void benchmarkPhysicalFrameBoundary(
-            Controller.BenchmarkPhysicalFrameBoundaryEvent event) {
-        if (!enabled || event == null || !measurementArmed
-                || event.getGeneration() != benchmarkGeneration
-                || event.getFrame() <= 0L || event.getFrame() > FINAL_FRAME
-                || event.getFrame() % INTERVAL_FRAMES != 0L || audioSink == null) {
-            return;
-        }
-        AndroidAudioTimingProbe.Snapshot probe = audioSink.timingProbeSnapshot();
-        record("event=audio_timing_probe artifact_id=" + artifactId
-                + " pair_id=" + options.pairId
-                + " matrix_block=" + options.matrixBlock
-                + " row_order=" + options.rowOrder
-                + " run_side=" + options.runSide.externalValue()
-                + " benchmark_generation=" + benchmarkGeneration
-                + " frame=" + event.getFrame()
-                + " probe_generation=" + probe.generation()
-                + " audio_timing=" + probe.producerIntervals() + ","
-                        + probe.producerMaxGapUs() + ","
-                        + probe.sourceCadenceDebtPeakUs() + ","
-                        + probe.producerGaps20Millis() + ","
-                        + probe.eventToPublishMaxUs() + ","
-                        + probe.publishToDequeuePollMaxUs() + ","
-                        + probe.publishToDequeueWriteMaxUs() + ","
-                        + probe.publishToDequeueOtherMaxUs() + ","
-                        + probe.publishToDequeue20Millis() + ","
-                        + probe.dequeueToReadyMaxUs() + ","
-                        + probe.readyToFirstWriteMaxUs() + ","
-                        + probe.writeCallMaxUs() + ","
-                        + probe.writeCalls20Millis() + ","
-                        + probe.publishToWriteCompleteMaxUs()
-                + " audio_underrun_attribution=" + probe.outputUnderrunDelta() + ","
-                        + probe.underrunQueueNonempty() + ","
-                        + probe.underrunProducerSilence20Millis() + ","
-                        + probe.underrunAfterWrite20Millis() + ","
-                        + probe.underrunUnclassified() + ","
-                        + probe.underrunMaxProducerSilenceUs() + ","
-                        + probe.underrunMaxQueuedFrames());
-    }
-
     synchronized void benchmarkFrameBoundary(Controller.BenchmarkFrameBoundaryEvent event) {
         if (!enabled || event == null || event.getFrame() != FINAL_FRAME) {
             return;
@@ -1121,13 +1080,8 @@ final class AndroidBenchmarkDiagnostics {
 
     /** Counts one core frame-ready event after SGB transfer filtering. */
     synchronized boolean frameReady() {
-        return frameReadyBoundary() == FINAL_FRAME;
-    }
-
-    /** Returns each cumulative 60-frame physical boundary, or zero outside the probe cadence. */
-    synchronized long frameReadyBoundary() {
         if (!enabled || !emulationStarted || !measurementArmed) {
-            return 0L;
+            return false;
         }
         if (phase != Phase.ARMED) {
             // A physical frame after the arm-relative 600th boundary is an invalid producer
@@ -1135,7 +1089,7 @@ final class AndroidBenchmarkDiagnostics {
             if (phase == Phase.CORE_FROZEN || phase == Phase.SUBMISSIONS_COMPLETE) {
                 corruptFrames++;
             }
-            return 0L;
+            return false;
         }
         long count = ++readyFrames;
         long current = monotonicNanos.getAsLong();
@@ -1156,7 +1110,7 @@ final class AndroidBenchmarkDiagnostics {
                 AndroidAudioSink.AudioBaseline checkpoint = systemAudioCheckpointBaselineLocked();
                 sampleSystemAudioLocked((int) count, checkpoint);
                 if (systemAudioBadLatched) {
-                    return 0L;
+                    return false;
                 }
             }
             interval(current, count);
@@ -1174,9 +1128,9 @@ final class AndroidBenchmarkDiagnostics {
             // Freeze diagnostics immediately. The controller boundary event freezes the core
             // before its next chunk; submissions already in flight remain countable.
             phase = Phase.CORE_FROZEN;
-            return FINAL_FRAME;
+            return true;
         }
-        return count % INTERVAL_FRAMES == 0L && count <= FINAL_FRAME ? count : 0L;
+        return false;
     }
 
     /** Compatibility alias for callers from the pre-M2 diagnostics seam. */
