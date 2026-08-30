@@ -228,6 +228,95 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void performanceSgbLcdOffSpanRejectsEveryLiveStatPublicationPlane()
+            throws Exception {
+        Fixture settled = settledDmgLcdOffFixture();
+        assertEquals(0, settled.stat.performanceSgbLcdOffSpanLimit(0));
+
+        Fixture lcdOn = new Fixture(false);
+        lcdOn.tick();
+        assertTrue(lcdOn.gpu.isLcdEnabled());
+        assertEquals(0, lcdOn.stat.performanceSgbLcdOffSpanLimit(54));
+
+        Fixture cgb = new Fixture(true);
+        cgb.gpu.setByte(0xff40, 0);
+        cgb.tick();
+        assertFalse(cgb.gpu.isLcdEnabled());
+        assertEquals(0, cgb.stat.performanceSgbLcdOffSpanLimit(54));
+
+        Fixture dirty = new Fixture(false);
+        dirty.gpu.setByte(0xff40, 0);
+        assertFalse(dirty.gpu.isLcdEnabled());
+        assertEquals(0, dirty.stat.performanceSgbLcdOffSpanLimit(54));
+
+        for (String field : new String[]{
+                "pendingModeIrqStatClock",
+                "pendingModeIrqLycClock",
+                "pendingMode0IrqStatClock",
+                "pendingMode0IrqLycClock",
+                "pendingCgbMode2PublicationClock",
+                "pendingLycWriteIrq",
+                "pendingLycComparatorIrq"}) {
+            Fixture pending = settledDmgLcdOffFixture();
+            setLongField(pending.stat, field, longField(pending.stat, "lycIrqClock"));
+            assertEquals(field, 0, pending.stat.performanceSgbLcdOffSpanLimit(54));
+        }
+
+        Fixture pendingMode0 = settledDmgLcdOffFixture();
+        setBooleanField(pendingMode0.stat, "pendingCgbMode0Interrupt", true);
+        assertEquals(0, pendingMode0.stat.performanceSgbLcdOffSpanLimit(54));
+
+        Fixture signalled = settledDmgLcdOffFixture();
+        signalled.interrupts.requestInterrupt(LCDC);
+        signalled.interrupts.clearInterrupt(LCDC);
+        assertTrue(signalled.interrupts.hasPpuTickSignals());
+        assertEquals(0, signalled.stat.performanceSgbLcdOffSpanLimit(54));
+    }
+
+    @Test
+    public void performanceSgbLcdOffSpanIgnoresEveryNextLycDeadlinePosition()
+            throws Exception {
+        String[] labels = {"ahead", "next", "equal", "expired one", "expired many"};
+        long[] offsets = {100, 1, 0, -1, -1_000};
+        for (int i = 0; i < offsets.length; i++) {
+            Fixture fixture = settledDmgLcdOffFixture();
+            long clock = longField(fixture.stat, "lycIrqClock");
+            setLongField(fixture.stat, "nextLycIrqEvent", clock + offsets[i]);
+
+            assertEquals(labels[i], 54, fixture.stat.performanceSgbLcdOffSpanLimit(54));
+            if (offsets[i] <= 1) {
+                assertEquals(labels[i] + " remains fenced by the generic path", 0,
+                        fixture.stat.performanceSettledHaltSpanLimit(54));
+            }
+        }
+    }
+
+    @Test(timeout = 5_000)
+    public void performanceSgbLcdOffSpanRejectsAllLcdOnModeAndLineBoundaries() {
+        Fixture fixture = new Fixture(false);
+        fixture.advanceToHBlank();
+        assertEquals("mode 0", 0, fixture.stat.performanceSgbLcdOffSpanLimit(54));
+
+        int[][] boundaries = {
+                {0, 447}, {0, 448}, {0, 451}, {0, 452}, {0, 454}, {0, 455},
+                {1, 447}, {1, 448}, {1, 451}, {1, 452}, {1, 454}, {1, 455},
+                {143, 447}, {143, 448}, {143, 451}, {143, 452}, {143, 454}, {143, 455},
+                {144, 0}, {144, 4}, {144, 8}, {144, 447}, {144, 448}, {144, 451},
+                {144, 452}, {144, 454}, {144, 455},
+                {152, 451}, {152, 452}, {152, 454}, {152, 455},
+                {153, 0}, {153, 3}, {153, 4}, {153, 6}, {153, 8}, {153, 447},
+                {153, 448}, {153, 451}, {153, 452}, {153, 454}, {153, 455}
+        };
+        for (int[] boundary : boundaries) {
+            fixture.advanceTo(boundary[0], boundary[1]);
+            assertTrue("LCD unexpectedly off at " + boundary[0] + ":" + boundary[1],
+                    fixture.gpu.isLcdEnabled());
+            assertEquals(boundary[0] + ":" + boundary[1], 0,
+                    fixture.stat.performanceSgbLcdOffSpanLimit(54));
+        }
+    }
+
+    @Test
     public void hblankEnableMasksStatWriteGlitchAtOamBoundary() {
         Fixture fixture = new Fixture();
         fixture.advanceToHBlank();
@@ -2968,6 +3057,29 @@ public class StatRegisterTest {
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);
         }
+    }
+
+    private static void setLongField(StatRegister stat, String name, long value)
+            throws Exception {
+        Field field = StatRegister.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.setLong(stat, value);
+    }
+
+    private static void setBooleanField(StatRegister stat, String name, boolean value)
+            throws Exception {
+        Field field = StatRegister.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.setBoolean(stat, value);
+    }
+
+    private static Fixture settledDmgLcdOffFixture() {
+        Fixture fixture = new Fixture(false);
+        fixture.gpu.setByte(0xff40, 0);
+        fixture.tick();
+        assertFalse(fixture.gpu.isLcdEnabled());
+        assertEquals(54, fixture.stat.performanceSgbLcdOffSpanLimit(54));
+        return fixture;
     }
 
     private static Fixture quietFixture() {

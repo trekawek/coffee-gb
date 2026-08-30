@@ -992,6 +992,27 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
         return Math.max(0, limit);
     }
 
+    /**
+     * Returns the full SGB/SGB2 LCD-off span when STAT has no live publication residue.
+     * The LCD-off DMG comparator is frozen, so {@code nextLycIrqEvent} is deliberately not
+     * consulted here; only pending writes, captures, and PPU-to-CPU signals can still publish.
+     */
+    public int performanceSgbLcdOffSpanLimit(int requested) {
+        if (requested <= 0 || gbc || gpu.isLcdEnabled() || statEvaluationDirty
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode0Interrupt
+                || pendingLycWriteIrq != NO_LYC_IRQ_EVENT
+                || pendingLycComparatorIrq != NO_LYC_IRQ_EVENT
+                || interruptManager.hasPpuTickSignals()) {
+            return 0;
+        }
+        return requested;
+    }
+
     /** Advances the invariant STAT clock for a span whose CPU bus is known to be idle. */
     public boolean tickPerformanceQuietSpan(int ticks) {
         // The caller preflights the GPU checkpoint before advancing the raster counters. At

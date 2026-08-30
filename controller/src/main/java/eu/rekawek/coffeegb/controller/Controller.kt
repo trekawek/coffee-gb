@@ -578,67 +578,13 @@ interface Controller : AutoCloseable {
 
   /**
    * Synchronous physical Display publication boundary from the Android frame hand-off.  This is
-   * distinct from the controller/audio cadence: 60-frame checkpoints carry benchmark probes,
-   * while the 600th event is the exact display frame that must freeze the core.
+   * distinct from the controller/audio cadence: the 600th event is the exact display frame that
+   * must freeze the core before another physical frame can be produced.
    */
   data class BenchmarkPhysicalFrameBoundaryEvent(val frame: Long, val generation: Long) : Event {
     init {
       require(frame > 0L) { "Benchmark physical frame must be positive" }
       require(generation > 0L) { "Benchmark generation must be positive" }
-    }
-  }
-
-  /** Cumulative temporary SGB epoch attribution sampled at a physical 60-frame boundary. */
-  data class BenchmarkSgbEpochProbeEvent(
-      val frame: Long,
-      val totalTicks: Long,
-      val expectedTicks: Long,
-      val epochTicks: Long,
-      val bulkTicks: Long,
-      val scalarFallbackTicks: Long,
-      val epochRasterTicks: Long,
-      val sgbIdleOfferedTicks: Long,
-      val sgbIdleCommittedTicks: Long,
-      val epochMode2BulkTicks: Long,
-      val epochLcdOffTicks: Long,
-      val scalarModeHblankTicks: Long,
-      val scalarModeVblankTicks: Long,
-      val scalarMode2Ticks: Long,
-      val scalarMode3Ticks: Long,
-      val scalarModeOtherTicks: Long,
-      val rejectGpuCommonTicks: Long,
-      val rejectGpuHblankLineTicks: Long,
-      val rejectGpuTimingOutputTicks: Long,
-      val rejectGpuVisibleOutputTicks: Long,
-      val rejectGpuLineEdgeTicks: Long,
-      val rejectGpuOtherTicks: Long,
-      val rejectCpuLifecycleTicks: Long,
-      val rejectCpuIrqTicks: Long,
-      val rejectCpuControlTicks: Long,
-      val rejectCpuPpuPhaseTicks: Long,
-      val rejectCpuPendingEiTicks: Long,
-      val rejectCpuRawImeTrueTicks: Long,
-      val rejectCpuRawImeFalseTicks: Long,
-      val rejectCpuOtherTicks: Long,
-      val rejectPreflightOwnerDmaTicks: Long,
-      val rejectPreflightTimerTicks: Long,
-      val rejectPreflightSoundTicks: Long,
-      val rejectPreflightJoypadTicks: Long,
-      val rejectPreflightSerialTicks: Long,
-      val rejectPreflightStatTicks: Long,
-      val rejectPreflightFinalGuardTicks: Long,
-      val rejectPreflightOtherTicks: Long,
-      val rejectExecPrefetchTicks: Long,
-      val rejectExecDecodedReadTicks: Long,
-      val rejectExecDecodedWriteTicks: Long,
-      val rejectExecControlTicks: Long,
-      val rejectExecLifecycleTicks: Long,
-      val rejectExecOtherTicks: Long,
-  ) : Event {
-    init {
-      require(frame in 60L..600L && frame % 60L == 0L) {
-        "SGB epoch probe frame must be a 60-frame checkpoint"
-      }
     }
   }
 

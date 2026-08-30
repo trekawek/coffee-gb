@@ -24,40 +24,6 @@ public class Cpu implements StatefulComponent<Cpu> {
     /** Maximum bounded PERFORMANCE epoch in master ticks. */
     public static final int PERFORMANCE_EPOCH_MAX_TICKS = 54;
 
-    /** Allocation-free normal-speed epoch entrance classifier codes. */
-    public static final int PERFORMANCE_ENTRY_REJECT_NONE = 0;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_LIFECYCLE = 1;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_IRQ_MICROSTATE = 2;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_CONTROL_TRANSITION = 3;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_PPU_PHASE = 4;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_PENDING_EI = 5;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_TRUE = 6;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE = 7;
-
-    public static final int PERFORMANCE_ENTRY_REJECT_OTHER = 8;
-
-    /** Allocation-free normal-speed epoch execution exit classifier codes. */
-    public static final int PERFORMANCE_EXEC_EXIT_NONE = 0;
-
-    public static final int PERFORMANCE_EXEC_EXIT_PREFETCH = 1;
-
-    public static final int PERFORMANCE_EXEC_EXIT_DECODED_READ = 2;
-
-    public static final int PERFORMANCE_EXEC_EXIT_DECODED_WRITE = 3;
-
-    public static final int PERFORMANCE_EXEC_EXIT_CONTROL = 4;
-
-    public static final int PERFORMANCE_EXEC_EXIT_LIFECYCLE = 5;
-
-    public static final int PERFORMANCE_EXEC_EXIT_OTHER = 6;
-
     private static final int FLAG_Z = 0x80;
 
     private static final int FLAG_N = 0x40;
@@ -133,9 +99,6 @@ public class Cpu implements StatefulComponent<Cpu> {
     private transient int performanceEpochElapsed;
 
     private transient int performanceEpochPrefixTicks;
-
-    /** Last bounded CPU-epoch exit reason; diagnostic only and absent from machine state. */
-    private transient int performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_OTHER;
 
     /** Epoch-local proof that LCD-off CGB VRAM is an unobserved direct memory plane. */
     private transient boolean performanceEpochLcdOffVramAccess;
@@ -424,7 +387,6 @@ public class Cpu implements StatefulComponent<Cpu> {
             int maxMasterTicks, boolean cgbHardware, boolean fenceDecodedMemoryCycles,
             boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess,
             boolean allowImeDisabledRawPendingInterrupt) {
-        performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_OTHER;
         if (maxMasterTicks <= 0 || !performanceNormalSpeedEpochEntryEligible(
                 cgbHardware, allowImeDisabledRawPendingInterrupt)) {
             return 0;
@@ -446,7 +408,6 @@ public class Cpu implements StatefulComponent<Cpu> {
         performanceEpochLcdOffVramAccess = allowLcdOffVramAccess;
         bus.resetForEpoch(target);
         addressSpace = bus;
-        performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_NONE;
         int elapsed = 0;
         try {
             while (elapsed < requested) {
@@ -460,26 +421,15 @@ public class Cpu implements StatefulComponent<Cpu> {
                     }
                 }
 
-                if (!performanceEpochPrefetchSafe()) {
-                    performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_PREFETCH;
-                    performanceEpochTerminal = true;
-                    break;
-                }
-                if (allowImeDisabledRawPendingInterrupt
+                if (!performanceEpochPrefetchSafe()
+                        || allowImeDisabledRawPendingInterrupt
                         && hasImeDisabledRawPendingInterrupt()
-                        && performanceNextBoundaryFetchesHalt()) {
-                    performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_CONTROL;
+                        && performanceNextBoundaryFetchesHalt()
+                        || fenceDecodedMemoryCycles
+                        && !performanceDecodedMemoryBoundarySafe(
+                        allowResolvedSafeDecodedAccess, allowLcdOffVramAccess)) {
                     performanceEpochTerminal = true;
                     break;
-                }
-                if (fenceDecodedMemoryCycles) {
-                    int decodedExit = performanceDecodedMemoryBoundaryExitCode(
-                            allowResolvedSafeDecodedAccess, allowLcdOffVramAccess);
-                    if (decodedExit != PERFORMANCE_EXEC_EXIT_NONE) {
-                        performanceEpochLastExitCode = decodedExit;
-                        performanceEpochTerminal = true;
-                        break;
-                    }
                 }
 
                 State stateBeforeTick = state;
@@ -491,12 +441,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 if (stateBeforeTick == State.OPCODE
                         && (opcode1 == 0x10 || opcode1 == 0x76
                         || opcode1 == 0xf3 || opcode1 == 0xfb || opcode1 == 0xd9)) {
-                    performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_CONTROL;
                     performanceEpochTerminal = true;
-                }
-                if (isPerformanceEpochLifecycleState()
-                        && performanceEpochLastExitCode == PERFORMANCE_EXEC_EXIT_NONE) {
-                    performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_LIFECYCLE;
                 }
                 if (performanceEpochTerminal || isPerformanceEpochLifecycleState()) {
                     break;
@@ -522,43 +467,37 @@ public class Cpu implements StatefulComponent<Cpu> {
      * operation. Operations before the next force-finish marker execute in the same
      * machine-cycle tick, so the complete group is classified before any part may run.
      */
-    private int performanceDecodedMemoryBoundaryExitCode(
+    private boolean performanceDecodedMemoryBoundarySafe(
             boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess) {
         if (state != State.RUNNING || currentExecutionOps == null) {
-            return PERFORMANCE_EXEC_EXIT_NONE;
+            return true;
         }
         for (int i = opIndex; i < currentOpCount; i++) {
             Op op = currentExecutionOps[i];
             if (allowResolvedSafeDecodedAccess
                     && op.causesOemBug(registers, opContext) != null) {
-                return PERFORMANCE_EXEC_EXIT_OTHER;
+                return false;
             }
             if (currentOpAccessesMemory[i]) {
                 if (!allowResolvedSafeDecodedAccess) {
-                    return currentOpWritesMemory[i]
-                            ? PERFORMANCE_EXEC_EXIT_DECODED_WRITE
-                            : PERFORMANCE_EXEC_EXIT_DECODED_READ;
+                    return false;
                 }
                 Integer address = op.resolveMemoryAddress(registers, operand, opContext);
                 if (address == null) {
                     if (!op.isInternalMemoryCycle()) {
-                        return currentOpWritesMemory[i]
-                                ? PERFORMANCE_EXEC_EXIT_DECODED_WRITE
-                                : PERFORMANCE_EXEC_EXIT_DECODED_READ;
+                        return false;
                     }
                 } else if (currentOpWritesMemory[i]
                         ? !isPerformanceEpochSafeWrite(address, allowLcdOffVramAccess)
                         : !isPerformanceEpochSafeRead(address, allowLcdOffVramAccess)) {
-                    return currentOpWritesMemory[i]
-                            ? PERFORMANCE_EXEC_EXIT_DECODED_WRITE
-                            : PERFORMANCE_EXEC_EXIT_DECODED_READ;
+                    return false;
                 }
             }
             if (currentExecutionOps[i].forceFinishCycle()) {
                 break;
             }
         }
-        return PERFORMANCE_EXEC_EXIT_NONE;
+        return true;
     }
 
     private static boolean isPerformanceEpochSafeRead(
@@ -659,60 +598,11 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Shared state-only entrance check for the fixed-width normal-speed epoch. */
     public boolean performanceNormalSpeedEpochEntryEligible(boolean cgbHardware) {
-        return performanceNormalSpeedEpochEntryRejectionCode(cgbHardware)
-                == PERFORMANCE_ENTRY_REJECT_NONE;
-    }
-
-    /**
-     * Side-effect-free strict entrance classifier used by the temporary SGB attribution probe.
-     * It deliberately reports an IME-disabled raw request as a rejection even though the
-     * separately proven native-CGB x1 lane may hypothetically admit that state.
-     */
-    public int performanceNormalSpeedEpochEntryRejectionCode(boolean cgbHardware) {
-        boolean topologyMatches = cgbHardware ? speedMode.isGbc() : !speedMode.isGbc();
-        if (state == State.HALTED || state == State.STOPPED
-                || state == State.SPEED_SWITCH || state == State.LOCKED) {
-            return PERFORMANCE_ENTRY_REJECT_LIFECYCLE;
-        }
-        if (state == State.IRQ_WAIT_1 || state == State.IRQ_WAIT_2
-                || state == State.IRQ_PUSH_1 || state == State.IRQ_PUSH_2
-                || state == State.IRQ_JUMP) {
-            return PERFORMANCE_ENTRY_REJECT_IRQ_MICROSTATE;
-        }
-        if (state == State.EXT_OPCODE && opcode1 == 0x10
-                || performanceInterruptTransitionInFlight()) {
-            return PERFORMANCE_ENTRY_REJECT_CONTROL_TRANSITION;
-        }
-        if (phasedPpuInputHigh || fastPhasedPpuDispatch
-                || interruptManager.hasPendingCpuReadPhase()
-                || interruptManager.hasPpuTickSignals()) {
-            return PERFORMANCE_ENTRY_REJECT_PPU_PHASE;
-        }
-        if (interruptManager.isInterruptEnablePending()) {
-            return PERFORMANCE_ENTRY_REJECT_PENDING_EI;
-        }
-        if (interruptManager.hasRawPendingEnabledInterrupt()) {
-            return interruptManager.isIme()
-                    ? PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_TRUE
-                    : PERFORMANCE_ENTRY_REJECT_RAW_PENDING_IME_FALSE;
-        }
-        if (debugAddressSpace != null || debugHooks != null || debugRetirementTracker != null
-                || clockCycle < 0 || clockCycle > 3
-                || haltBugMode || haltEntrySampleTicks != 0
-                || hdmaOpcodePrefetched || hdmaArbitrationOpcodeValid
-                || haltOpcodePrefetchValid || speedSwitchPaddingReplayValid
-                || speedMode.getSpeedMode() != 1 || !topologyMatches) {
-            return PERFORMANCE_ENTRY_REJECT_OTHER;
-        }
-        return PERFORMANCE_ENTRY_REJECT_NONE;
+        return performanceNormalSpeedEpochEntryEligible(cgbHardware, false);
     }
 
     private boolean performanceNormalSpeedEpochEntryEligible(
             boolean cgbHardware, boolean allowImeDisabledRawPendingInterrupt) {
-        if (!allowImeDisabledRawPendingInterrupt) {
-            return performanceNormalSpeedEpochEntryRejectionCode(cgbHardware)
-                    == PERFORMANCE_ENTRY_REJECT_NONE;
-        }
         boolean topologyMatches = cgbHardware
                 ? speedMode.isGbc()
                 : !speedMode.isGbc();
@@ -796,18 +686,6 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private void markPerformanceEpochTerminal() {
         performanceEpochTerminal = true;
-        if (performanceEpochLastExitCode == PERFORMANCE_EXEC_EXIT_NONE) {
-            performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_OTHER;
-        }
-    }
-
-    private void markPerformanceEpochTerminal(int exitCode) {
-        performanceEpochTerminal = true;
-        performanceEpochLastExitCode = exitCode;
-    }
-
-    public int getPerformanceEpochLastExitCode() {
-        return performanceEpochLastExitCode;
     }
 
     public void resetPerformanceEpochTelemetry() {
@@ -815,7 +693,6 @@ public class Cpu implements StatefulComponent<Cpu> {
         performanceEpochTicks = 0L;
         performanceEpochAccesses = 0L;
         performanceEpochTerminalAccesses = 0L;
-        performanceEpochLastExitCode = PERFORMANCE_EXEC_EXIT_OTHER;
     }
 
     public long getPerformanceEpochCount() {
@@ -3937,7 +3814,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             accesses++;
             if (!owner.isPerformanceEpochSafeRead(address)) {
                 terminalAccesses++;
-                owner.markPerformanceEpochTerminal(PERFORMANCE_EXEC_EXIT_DECODED_READ);
+                owner.markPerformanceEpochTerminal();
                 owner.flushPerformanceEpochPrefix();
             }
             return target.getByte(address);
@@ -3953,7 +3830,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                     // lock at this exact CPU boundary. The preceding corruption callback has
                     // already flushed the prefix for PUSH-class writes; plain LD writes flush
                     // here. Never defer either through the post-PPU journal.
-                    owner.markPerformanceEpochTerminal(PERFORMANCE_EXEC_EXIT_DECODED_WRITE);
+                    owner.markPerformanceEpochTerminal();
                     terminalAccesses++;
                     owner.flushPerformanceEpochPrefix();
                     target.setByte(address, value);
@@ -3963,7 +3840,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 // but the external write is deferred so the owner can replay it exactly once
                 // after committing the frozen peripheral prefix.
                 owner.journalPerformanceEpochWrite(address, value);
-                owner.markPerformanceEpochTerminal(PERFORMANCE_EXEC_EXIT_DECODED_WRITE);
+                owner.markPerformanceEpochTerminal();
                 terminalAccesses++;
                 owner.flushPerformanceEpochPrefix();
                 return;
