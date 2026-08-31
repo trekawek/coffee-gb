@@ -1,9 +1,12 @@
 package eu.rekawek.coffeegb.android;
 
 import android.content.Context;
+import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Size;
+import android.view.Display;
+import android.view.Surface;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
@@ -27,6 +30,9 @@ import java.util.function.Consumer;
  * active; a missing frame remains the core's deterministic synthetic-camera fallback.
  */
 final class AndroidCameraSource implements CameraSource, AutoCloseable {
+
+    private static final int SENSOR_WIDTH = 128;
+    private static final int SENSOR_HEIGHT = 112;
 
     enum Lens {
         REAR,
@@ -56,6 +62,7 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
         private static final Size TARGET_RESOLUTION = new Size(320, 240);
 
         private final Context context;
+        private final DisplayManager displayManager;
         private final Handler mainHandler = new Handler(Looper.getMainLooper());
         private final ExecutorService analyzer = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "coffee-gb-android-camera");
@@ -66,19 +73,44 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
         private volatile boolean running;
         private volatile Consumer<CameraFrame> listener;
         private Lens lens = Lens.REAR;
+        private boolean displayListenerRegistered;
         // Accessed on the main thread only.
         private ProcessCameraProvider provider;
         private ImageAnalysis analysis;
+        private final DisplayManager.DisplayListener displayListener =
+                new DisplayManager.DisplayListener() {
+                    @Override
+                    public void onDisplayAdded(int displayId) {
+                    }
+
+                    @Override
+                    public void onDisplayRemoved(int displayId) {
+                    }
+
+                    @Override
+                    public void onDisplayChanged(int displayId) {
+                        if (displayId == Display.DEFAULT_DISPLAY && analysis != null) {
+                            analysis.setTargetRotation(displayRotation());
+                        }
+                    }
+                };
 
         private CameraXInput(Context context) {
             this.context = Objects.requireNonNull(context, "context").getApplicationContext();
+            displayManager = this.context.getSystemService(DisplayManager.class);
         }
 
         @Override
         public void start(Consumer<CameraFrame> listener) {
             this.listener = Objects.requireNonNull(listener, "listener");
             running = true;
-            mainHandler.post(this::bind);
+            mainHandler.post(() -> {
+                if (displayManager != null && !displayListenerRegistered) {
+                    displayManager.registerDisplayListener(displayListener, mainHandler);
+                    displayListenerRegistered = true;
+                }
+                bind();
+            });
         }
 
         @Override
@@ -89,6 +121,10 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
                 if (provider != null && analysis != null) {
                     provider.unbind(analysis);
                     analysis = null;
+                }
+                if (displayManager != null && displayListenerRegistered) {
+                    displayManager.unregisterDisplayListener(displayListener);
+                    displayListenerRegistered = false;
                 }
             });
         }
@@ -125,8 +161,9 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
                     }
                     ImageAnalysis nextAnalysis = new ImageAnalysis.Builder()
                             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
                             .setTargetResolution(TARGET_RESOLUTION)
+                            .setTargetRotation(displayRotation())
                             .build();
                     nextAnalysis.setAnalyzer(analyzer, this::onImage);
                     if (analysis != null) {
@@ -147,17 +184,21 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
             }, mainHandler::post);
         }
 
+        private int displayRotation() {
+            Display display = displayManager == null
+                    ? null : displayManager.getDisplay(Display.DEFAULT_DISPLAY);
+            return display == null ? Surface.ROTATION_0 : display.getRotation();
+        }
+
         private void onImage(ImageProxy image) {
             try {
-                // OUTPUT_IMAGE_FORMAT_RGBA_8888 guarantees one RGBA plane. Do not inspect an
-                // Android framework format constant here: CameraX owns that compatibility layer
-                // across our API 26+ range.
-                if (!running || image.getPlanes().length != 1) {
+                if (!running || image.getPlanes().length < 1) {
                     return;
                 }
                 ImageProxy.PlaneProxy plane = image.getPlanes()[0];
-                CameraFrame frame = decodeRgba(plane.getBuffer(), image.getWidth(), image.getHeight(),
-                        plane.getRowStride(), plane.getPixelStride());
+                CameraFrame frame = decodeLuma(plane.getBuffer(), image.getWidth(), image.getHeight(),
+                        plane.getRowStride(), plane.getPixelStride(),
+                        image.getImageInfo().getRotationDegrees());
                 Consumer<CameraFrame> target = listener;
                 if (running && frame != null && target != null) {
                     target.accept(frame);
@@ -270,30 +311,62 @@ final class AndroidCameraSource implements CameraSource, AutoCloseable {
         }
     }
 
-    static CameraFrame decodeRgba(ByteBuffer bytes, int width, int height, int rowStride,
-                                  int pixelStride) {
-        if (width < 1 || height < 1 || rowStride < 1 || pixelStride < 4) {
+    /**
+     * Rotates and downsamples CameraX's luma plane directly to the Pocket Camera sensor size.
+     * This avoids allocating and copying a full RGBA analysis frame for every camera update.
+     */
+    static CameraFrame decodeLuma(ByteBuffer bytes, int width, int height, int rowStride,
+                                  int pixelStride, int rotationDegrees) {
+        if (width < 1 || height < 1 || rowStride < 1 || pixelStride < 1
+                || (rotationDegrees != 0 && rotationDegrees != 90
+                && rotationDegrees != 180 && rotationDegrees != 270)) {
             return null;
         }
         try {
             ByteBuffer source = Objects.requireNonNull(bytes, "bytes").slice();
             long finalOffset = Math.addExact(
-                    Math.addExact(Math.multiplyExact((long) height - 1L, rowStride),
-                            Math.multiplyExact((long) width - 1L, pixelStride)), 3L);
+                    Math.multiplyExact((long) height - 1L, rowStride),
+                    Math.multiplyExact((long) width - 1L, pixelStride));
             if (finalOffset >= source.remaining()) {
                 return null;
             }
-            int[] rgb = new int[Math.multiplyExact(width, height)];
-            for (int y = 0; y < height; y++) {
-                int row = Math.multiplyExact(y, rowStride);
-                for (int x = 0; x < width; x++) {
-                    int offset = Math.addExact(row, Math.multiplyExact(x, pixelStride));
-                    rgb[y * width + x] = ((source.get(offset) & 0xff) << 16)
-                            | ((source.get(offset + 1) & 0xff) << 8)
-                            | (source.get(offset + 2) & 0xff);
+
+            int rotatedWidth = rotationDegrees == 90 || rotationDegrees == 270
+                    ? height : width;
+            int rotatedHeight = rotationDegrees == 90 || rotationDegrees == 270
+                    ? width : height;
+            int[] rgb = new int[SENSOR_WIDTH * SENSOR_HEIGHT];
+            for (int y = 0; y < SENSOR_HEIGHT; y++) {
+                int rotatedY = (int) ((long) y * rotatedHeight / SENSOR_HEIGHT);
+                for (int x = 0; x < SENSOR_WIDTH; x++) {
+                    int rotatedX = (int) ((long) x * rotatedWidth / SENSOR_WIDTH);
+                    int sourceX;
+                    int sourceY;
+                    switch (rotationDegrees) {
+                        case 90 -> {
+                            sourceX = rotatedY;
+                            sourceY = height - 1 - rotatedX;
+                        }
+                        case 180 -> {
+                            sourceX = width - 1 - rotatedX;
+                            sourceY = height - 1 - rotatedY;
+                        }
+                        case 270 -> {
+                            sourceX = width - 1 - rotatedY;
+                            sourceY = rotatedX;
+                        }
+                        default -> {
+                            sourceX = rotatedX;
+                            sourceY = rotatedY;
+                        }
+                    }
+                    int offset = Math.addExact(Math.multiplyExact(sourceY, rowStride),
+                            Math.multiplyExact(sourceX, pixelStride));
+                    int luma = source.get(offset) & 0xff;
+                    rgb[y * SENSOR_WIDTH + x] = luma * 0x010101;
                 }
             }
-            return new CameraFrame(width, height, rgb);
+            return new CameraFrame(SENSOR_WIDTH, SENSOR_HEIGHT, rgb);
         } catch (ArithmeticException | IllegalArgumentException ignored) {
             return null;
         }

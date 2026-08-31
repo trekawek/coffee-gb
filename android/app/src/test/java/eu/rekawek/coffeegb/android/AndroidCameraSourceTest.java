@@ -6,7 +6,6 @@ import org.junit.Test;
 import java.nio.ByteBuffer;
 import java.util.function.Consumer;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -41,18 +40,39 @@ public class AndroidCameraSourceTest {
     }
 
     @Test
-    public void decodesRgbaWithRowPaddingWithoutRetainingTheBuffer() {
-        ByteBuffer rgba = ByteBuffer.wrap(new byte[]{
-                0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0,
-                0x55, 0x66, 0x77, (byte) 0x88, 0, 0, 0, 0,
+    public void downsamplesPaddedLumaWithoutRetainingTheBuffer() {
+        ByteBuffer luma = ByteBuffer.wrap(new byte[]{
+                0x11, 0, 0x22, 0, 0, 0,
+                0x33, 0, 0x44, 0, 0, 0,
+                0x55, 0, 0x66, 0, 0, 0,
         });
 
-        CameraFrame frame = AndroidCameraSource.decodeRgba(rgba, 1, 2, 8, 4);
+        CameraFrame frame = AndroidCameraSource.decodeLuma(luma, 2, 3, 6, 2, 0);
 
-        assertArrayEquals(new int[]{0x00112233, 0x00556677}, frame.copyRgb());
-        rgba.put(0, (byte) 0xff);
-        assertArrayEquals(new int[]{0x00112233, 0x00556677}, frame.copyRgb());
-        assertNull(AndroidCameraSource.decodeRgba(ByteBuffer.wrap(new byte[3]), 1, 1, 4, 4));
+        assertEquals(128, frame.getWidth());
+        assertEquals(112, frame.getHeight());
+        assertCorners(frame, 0x111111, 0x222222, 0x555555, 0x666666);
+        luma.put(0, (byte) 0xff);
+        assertCorners(frame, 0x111111, 0x222222, 0x555555, 0x666666);
+        assertNull(AndroidCameraSource.decodeLuma(ByteBuffer.wrap(new byte[2]),
+                2, 3, 6, 2, 0));
+        assertNull(AndroidCameraSource.decodeLuma(luma, 2, 3, 6, 2, 45));
+    }
+
+    @Test
+    public void appliesCameraXRotationMetadata() {
+        ByteBuffer luma = ByteBuffer.wrap(new byte[]{
+                0x11, 0x22,
+                0x33, 0x44,
+                0x55, 0x66,
+        });
+
+        assertCorners(AndroidCameraSource.decodeLuma(luma, 2, 3, 2, 1, 90),
+                0x555555, 0x111111, 0x666666, 0x222222);
+        assertCorners(AndroidCameraSource.decodeLuma(luma, 2, 3, 2, 1, 180),
+                0x666666, 0x555555, 0x222222, 0x111111);
+        assertCorners(AndroidCameraSource.decodeLuma(luma, 2, 3, 2, 1, 270),
+                0x222222, 0x666666, 0x111111, 0x555555);
     }
 
     @Test
@@ -65,6 +85,17 @@ public class AndroidCameraSourceTest {
         source.setLens("rear");
         assertEquals(AndroidCameraSource.Lens.REAR, source.lens());
         assertEquals(AndroidCameraSource.Lens.REAR, input.lens);
+    }
+
+    private static void assertCorners(CameraFrame frame, int topLeft, int topRight,
+                                      int bottomLeft, int bottomRight) {
+        int[] rgb = frame.copyRgb();
+        int width = frame.getWidth();
+        int height = frame.getHeight();
+        assertEquals(topLeft, rgb[0]);
+        assertEquals(topRight, rgb[width - 1]);
+        assertEquals(bottomLeft, rgb[(height - 1) * width]);
+        assertEquals(bottomRight, rgb[height * width - 1]);
     }
 
     private static final class FakeInput implements AndroidCameraSource.Input {
