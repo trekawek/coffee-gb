@@ -96,7 +96,8 @@ final class MenuPages {
             case SYSTEM -> page(route, "COFFEE GB", "SYSTEM", "", "", List.of(),
                     items(item("dmg-games", "DMG GAMES", "AUTO"),
                             item("cgb-games", "CGB GAMES", "AUTO"),
-                            item("bootstrap", "BOOTSTRAP", "SKIP")));
+                            item("bootstrap", "BOOTSTRAP", "SKIP"),
+                            item("execution-mode", "EXECUTION MODE", "PERFORMANCE")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                     List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(

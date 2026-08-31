@@ -1051,11 +1051,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 refreshMenuPages();
                 menuController.push(MenuRoute.OPTIONAL_DEVICES);
             }
-            case "execution-mode" -> openOptionPicker(MenuRoute.SETTINGS, id,
-                    "EXECUTION MODE",
-                    List.of(new AndroidMenuModel.ChoiceValue("accuracy", "ACCURACY"),
-                            new AndroidMenuModel.ChoiceValue("performance", "PERFORMANCE")),
-                    executionMode(getPreferences(MODE_PRIVATE)));
             case "touch-controls" -> {
                 touchDraft = AndroidMenuModel.touchDraft(video.touchLayout());
                 refreshMenuPages();
@@ -1099,6 +1094,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                             new AndroidMenuModel.ChoiceValue("fast-forward", "FAST-FORWARD"),
                             new AndroidMenuModel.ChoiceValue("full", "FULL")),
                     systemBootstrap(preferences));
+            case "execution-mode" -> openOptionPicker(MenuRoute.SYSTEM, id,
+                    "EXECUTION MODE",
+                    List.of(new AndroidMenuModel.ChoiceValue("accuracy", "ACCURACY"),
+                            new AndroidMenuModel.ChoiceValue("performance", "PERFORMANCE")),
+                    executionMode(preferences));
             default -> { }
         }
     }
@@ -2205,7 +2205,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         menuController.setPages(List.of(
                 pausePage(), statePage(), recentGamesPage(), libraryPage(), chooseRomPage(),
-                AndroidMenuModel.settingsPage(executionMode(preferences)),
+                AndroidMenuModel.settingsPage(),
                 AndroidMenuModel.audioPage(audio),
                 AndroidMenuModel.displayPage(
                         preferences.getBoolean(PREF_DISPLAY_BORDER, false),
@@ -2219,7 +2219,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         optionSession == null ? null : optionSession.selectedToken()),
                 AndroidMenuModel.printerPaperPage(printerPreview, printerStatus),
                 AndroidMenuModel.systemPage(systemDmg(preferences), systemCgb(preferences),
-                        systemBootstrap(preferences), systemPreferredFocus),
+                        systemBootstrap(preferences), executionMode(preferences),
+                        systemPreferredFocus),
                 AndroidMenuModel.dataMediaPage(AndroidMenuModel.transferAvailability(
                         runtime != null, observedState)),
                 AndroidMenuModel.aboutPage(BuildConfig.VERSION_NAME, aboutStatus),

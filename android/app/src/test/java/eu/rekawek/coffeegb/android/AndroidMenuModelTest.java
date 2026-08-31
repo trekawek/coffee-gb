@@ -18,7 +18,7 @@ public class AndroidMenuModelTest {
 
     @Test
     public void settingsExposesOnlyInlineEditableRoutes() {
-        assertEquals(List.of("system", "display", "audio", "peripherals", "execution-mode"),
+        assertEquals(List.of("system", "display", "audio", "peripherals"),
                 AndroidMenuModel.settingsPage().items().stream()
                         .map(MenuPageSpec.Item::id).toList());
         assertEquals("system", AndroidMenuModel.settingsPage().preferredFocusId());
@@ -67,7 +67,7 @@ public class AndroidMenuModelTest {
         assertIds(AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "READY"),
                 "paper-status");
         assertIds(AndroidMenuModel.systemPage("dmg-games"),
-                "dmg-games", "cgb-games", "bootstrap");
+                "dmg-games", "cgb-games", "bootstrap", "execution-mode");
         assertIds(AndroidMenuModel.dataMediaPage(new AndroidMenuModel.TransferAvailability(
                         true, true, "READY / NATIVE PICKER")),
                 "import-battery", "export-battery", "import-state-0", "export-state-0",
@@ -191,7 +191,7 @@ public class AndroidMenuModelTest {
 
         MenuPageSpec system = AndroidMenuModel.systemPage("bootstrap");
         assertEquals("bootstrap", system.preferredFocusId());
-        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
                 system.items().stream().map(MenuPageSpec.Item::id).toList());
 
         MenuPageSpec about = AndroidMenuModel.aboutPage("1.2.3", "OPEN");
@@ -222,11 +222,13 @@ public class AndroidMenuModelTest {
                         .map(MenuPageSpec.Item::id).toList());
         assertEquals("ON", AndroidMenuModel.displayPage(true, false).items().get(0).detail());
         assertEquals("GREEN", AndroidMenuModel.displayPage(true, false).items().get(1).detail());
-        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
-                AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "dmg-games")
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
+                AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "accuracy", "dmg-games")
                         .items().stream().map(MenuPageSpec.Item::id).toList());
-        assertEquals("DMG", AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "dmg-games")
-                .items().get(0).detail());
+        MenuPageSpec system = AndroidMenuModel.systemPage(
+                "DMG", "CGB", "FULL", "accuracy", "dmg-games");
+        assertEquals("DMG", system.items().get(0).detail());
+        assertEquals("ACCURACY", system.items().get(3).detail());
     }
 
     @Test

@@ -717,7 +717,7 @@ public final class Proposal3MenuCompositor {
     private static boolean isChoiceRow(MenuRoute route, Entry entry) {
         return switch (route) {
             case SYSTEM -> entry.id.equals("dmg-games") || entry.id.equals("cgb-games")
-                    || entry.id.equals("bootstrap");
+                    || entry.id.equals("bootstrap") || entry.id.equals("execution-mode");
             case DISPLAY -> entry.id.equals("dmg-colors");
             case OPTIONAL_DEVICES -> entry.id.equals("camera") || entry.id.equals("gamepad");
             default -> false;
@@ -1071,7 +1071,7 @@ public final class Proposal3MenuCompositor {
 
     static MenuRoute optionPickerIllustrationRoute(String context) {
         return switch (display(context)) {
-            case "DMG GAMES", "CGB GAMES", "BOOTSTRAP" -> MenuRoute.SYSTEM;
+            case "DMG GAMES", "CGB GAMES", "BOOTSTRAP", "EXECUTION MODE" -> MenuRoute.SYSTEM;
             case "DMG COLORS" -> MenuRoute.DISPLAY;
             case "CAMERA", "GAMEPAD" -> MenuRoute.OPTIONAL_DEVICES;
             default -> null;
@@ -1447,6 +1447,7 @@ public final class Proposal3MenuCompositor {
             case SYSTEM -> switch (e.id) {
                 case "dmg-games", "cgb-games" -> "AUTO";
                 case "bootstrap" -> "SKIP";
+                case "execution-mode" -> "PERFORMANCE";
                 case "video-status" -> "NEAREST NEIGHBOR / ASPECT FIT";
                 case "profile-status" -> "SELECTED ON OPEN";
                 case "rewind-save-status" -> "PORTABLE DEFAULTS";

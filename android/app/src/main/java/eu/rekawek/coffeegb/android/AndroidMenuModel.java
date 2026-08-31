@@ -48,17 +48,11 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec settingsPage() {
-        return settingsPage("performance");
-    }
-
-    static MenuPageSpec settingsPage(String executionMode) {
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
                         item("system", "SYSTEM", "", true),
                         item("display", "DISPLAY", "", true),
                         item("audio", "AUDIO", "", true),
-                        item("peripherals", "PERIPHERALS", "", true),
-                        item("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode),
-                                true)),
+                        item("peripherals", "PERIPHERALS", "", true)),
                 "system",
                 MenuPreview.empty());
     }
@@ -79,11 +73,12 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec systemPage(String dmgGames, String cgbGames, String bootstrap,
-            String preferredFocusId) {
+            String executionMode, String preferredFocusId) {
         return page(MenuRoute.SYSTEM, "COFFEE GB", "SYSTEM", "", "", List.of(), List.of(
                 item("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
                 item("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
-                item("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true)),
+                item("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true),
+                item("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode), true)),
                 preferredFocusId, MenuPreview.empty());
     }
 
@@ -246,7 +241,7 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec systemPage(String preferredFocusId) {
-        return systemPage("AUTO", "AUTO", "SKIP", preferredFocusId);
+        return systemPage("AUTO", "AUTO", "SKIP", "performance", preferredFocusId);
     }
 
     static MenuPageSpec dataMediaPage(TransferAvailability availability) {
