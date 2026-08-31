@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.controller.state
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryStorage
+import java.nio.file.Path
 
 /**
  * Host-owned persistence for one emulation session.
@@ -55,6 +56,7 @@ class FileStateStore(
 /** Existing desktop save policy retained as the default controller adapter. */
 class DesktopRomPersistenceStore(
     private val saves: ApplicationSettings.Saves,
+    private val primaryBatteryPath: Path? = null,
 ) : RomPersistenceStore {
   override fun resolve(
       configuration: Gameboy.GameboyConfiguration,
@@ -63,9 +65,10 @@ class DesktopRomPersistenceStore(
     val stateStore =
         configuration.rom.file?.let { FileStateStore(StateStorageResolver.resolve(saves, configuration).layout) }
     val batteries = BatteryStorageResolver.resolve(saves, configuration, hashes)
+    val primaryBattery = primaryBatteryPath?.let(BatteryStorage::direct) ?: batteries.primary
     return SessionPersistence(
         stateStore,
-        batteries.primary?.let { battery -> BatteryStore { battery } },
+        primaryBattery?.let { battery -> BatteryStore { battery } },
         batteries.slot?.let { battery -> BatteryStore { battery } },
     )
   }

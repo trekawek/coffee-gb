@@ -9,6 +9,7 @@ import eu.rekawek.coffeegb.swing.SwingGui.Companion.runWithStartupAudio
 import eu.rekawek.coffeegb.swing.packaging.NativeRuntimeBootstrap
 import java.io.File
 import java.io.PrintStream
+import java.nio.file.Path
 import kotlin.system.exitProcess
 
 private const val SUCCESS = 0
@@ -132,6 +133,7 @@ private fun parseCli(args: Array<String>): CliCommand {
   var forceCgb = false
   var useBootstrap = false
   var disableBatterySaves = false
+  var batterySavePath: Path? = null
   var startMuted = false
   var profileId: String? = null
   var profileOccurrences = 0
@@ -175,6 +177,12 @@ private fun parseCli(args: Array<String>): CliCommand {
       index++
       continue
     }
+    if (argument.startsWith("--battery-save=")) {
+      if (batterySavePath != null) repeatedOption("--battery-save")
+      batterySavePath = parseBatterySavePath(argument.substringAfter("--battery-save="))
+      index++
+      continue
+    }
 
     when (argument) {
       "-h", "--help" -> {
@@ -208,6 +216,14 @@ private fun parseCli(args: Array<String>): CliCommand {
       "-db", "--disable-battery-saves" -> {
         if (disableBatterySaves) repeatedOption("--disable-battery-saves")
         disableBatterySaves = true
+      }
+      "--battery-save" -> {
+        if (batterySavePath != null) repeatedOption("--battery-save")
+        val value = args.getOrNull(++index) ?: cliError("--battery-save requires a path")
+        if (value.startsWith("-")) {
+          cliError("--battery-save requires a path")
+        }
+        batterySavePath = parseBatterySavePath(value)
       }
       "--start-muted" -> {
         if (startMuted) repeatedOption("--start-muted")
@@ -243,12 +259,19 @@ private fun parseCli(args: Array<String>): CliCommand {
   if (joinNetplayEndpoint != null && positional.isEmpty()) {
     cliError("--join-netplay requires a ROM file")
   }
+  if (batterySavePath != null && positional.isEmpty()) {
+    cliError("--battery-save requires a ROM file")
+  }
+  if (batterySavePath != null && disableBatterySaves) {
+    cliError("--battery-save conflicts with --disable-battery-saves")
+  }
   if (packageSmoke &&
       (debug ||
           forceDmg ||
           forceCgb ||
           useBootstrap ||
           disableBatterySaves ||
+          batterySavePath != null ||
           startMuted ||
           profileId != null ||
           joinNetplayEndpoint != null ||
@@ -286,11 +309,22 @@ private fun parseCli(args: Array<String>): CliCommand {
               ApplicationSettingsOverrides(
                   hardwareProfile = profileOverride,
                   bootstrapMode = if (useBootstrap) BootstrapMode.NORMAL else null,
-                  batterySavesEnabled = if (disableBatterySaves) false else null,
-                  forceInMemoryBattery = joinNetplayEndpoint != null,
+                  batterySavesEnabled =
+                      when {
+                        disableBatterySaves -> false
+                        batterySavePath != null -> true
+                        else -> null
+                      },
+                  batterySavePath = batterySavePath,
+                  forceInMemoryBattery = joinNetplayEndpoint != null && batterySavePath == null,
                   suppressCloseAutosave = joinNetplayEndpoint != null,
               ),
       ))
+}
+
+private fun parseBatterySavePath(value: String): Path {
+  if (value.isBlank()) cliError("--battery-save requires a path")
+  return Path.of(value)
 }
 
 private fun parseJoinNetplayEndpoint(value: String): NetplayV8Endpoint =
@@ -324,6 +358,7 @@ internal fun printUsage(stream: PrintStream) {
           HardwareProfileRegistry.supportedIds().joinToString(", "))
   stream.println("  -b  --use-bootstrap            Run the bundled boot ROM normally")
   stream.println("  -db --disable-battery-saves    Disable battery save reads and writes")
+  stream.println("      --battery-save PATH        Use an exact process-local battery save file")
   stream.println("      --join-netplay HOST        Join a netplay host after opening ROM_FILE")
   stream.println("      --start-muted              Start muted without changing saved audio settings")
   stream.println("      --debug                    Enable debug console")

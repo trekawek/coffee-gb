@@ -88,6 +88,33 @@ class MainTest {
   }
 
   @Test
+  fun `explicit battery save is process local and replaces the blank netplay battery`() {
+    val path = File("client saves/game-client1.sav").toPath()
+    val request =
+        execute(
+                "--battery-save",
+                path.toString(),
+                "--join-netplay=localhost",
+                "game.gb",
+            )
+            .singleLaunch()
+
+    assertEquals(path, request.settingsOverrides.batterySavePath)
+    assertEquals(true, request.settingsOverrides.batterySavesEnabled)
+    assertFalse(request.settingsOverrides.forceInMemoryBattery)
+    assertTrue(request.settingsOverrides.suppressCloseAutosave)
+
+    assertUsageFailure(
+        execute("--battery-save", path.toString()),
+        "--battery-save requires a ROM file",
+    )
+    assertUsageFailure(
+        execute("--battery-save", path.toString(), "--disable-battery-saves", "game.gb"),
+        "--battery-save conflicts with --disable-battery-saves",
+    )
+  }
+
+  @Test
   fun `legacy aliases and their long forms have identical typed effects`() {
     for (alias in listOf("-d", "--force-dmg")) {
       assertEquals(
@@ -151,6 +178,7 @@ class MainTest {
               "--profile=<id>",
               "-b  --use-bootstrap",
               "-db --disable-battery-saves",
+              "--battery-save PATH",
               "--join-netplay HOST",
               "--start-muted",
               "--debug",

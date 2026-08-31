@@ -1,13 +1,19 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
+import java.nio.file.Files
 import java.nio.file.Path
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class LocalNetplayInstanceLauncherTest {
+
+  @get:Rule val temporaryFolder = TemporaryFolder()
 
   @Test
   fun `the running desktop test JVM has a reusable launcher`() {
@@ -25,9 +31,13 @@ class LocalNetplayInstanceLauncherTest {
   }
 
   @Test
-  fun `jar launcher starts each client with the ROM profile and localhost join command`() {
+  fun `jar launcher gives every client a persistent copy of the host battery save`() {
     val started = mutableListOf<List<String>>()
-    val rom = Path.of("test data", "Tetris.gb").toAbsolutePath().normalize()
+    val directory = temporaryFolder.newFolder("test data").toPath()
+    val rom = Files.createFile(directory.resolve("Tetris.gb"))
+    val hostSave = Files.write(directory.resolve("Tetris.sav"), byteArrayOf(1, 2, 3))
+    val retainedClientSave =
+        Files.write(directory.resolve("Tetris-client2.sav"), byteArrayOf(9, 8, 7))
     val launcher =
         CurrentProcessLocalNetplayInstanceLauncher(
             listOf("/usr/bin/java", "-Dcoffee-gb.theme=dark", "-jar", "/apps/coffee-gb.jar", "old.gb"),
@@ -38,23 +48,29 @@ class LocalNetplayInstanceLauncherTest {
 
     assertEquals(3, result.started)
     assertEquals(3, started.size)
-    val command = started.first()
-    assertEquals(
-        listOf(
-            "/usr/bin/java",
-            "-Dcoffee-gb.theme=dark",
-            "-jar",
-            "/apps/coffee-gb.jar",
-            "--profile=cgb",
-            "--disable-battery-saves",
-            "--start-muted",
-            "--join-netplay",
-            "localhost",
-            rom.toString(),
-        ),
-        command,
-    )
-    assertTrue(started.all { it == command })
+    started.forEachIndexed { index, command ->
+      val clientSave = directory.resolve("Tetris-client${index + 1}.sav")
+      assertEquals(
+          listOf(
+              "/usr/bin/java",
+              "-Dcoffee-gb.theme=dark",
+              "-jar",
+              "/apps/coffee-gb.jar",
+              "--profile=cgb",
+              "--battery-save",
+              clientSave.toString(),
+              "--start-muted",
+              "--join-netplay",
+              "localhost",
+              rom.toString(),
+          ),
+          command,
+      )
+      assertContentEquals(
+          if (index == 1) Files.readAllBytes(retainedClientSave) else Files.readAllBytes(hostSave),
+          Files.readAllBytes(clientSave),
+      )
+    }
   }
 
   @Test

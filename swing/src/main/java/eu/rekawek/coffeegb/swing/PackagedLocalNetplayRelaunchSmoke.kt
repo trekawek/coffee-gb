@@ -118,11 +118,17 @@ internal fun validatePackagedLocalNetplayRelaunchChildIfRequested(
   check(request.settingsOverrides.hardwareProfile == HardwareProfileRegistry.DMG) {
     "Packaged local netplay child did not retain the DMG profile"
   }
-  check(request.settingsOverrides.batterySavesEnabled == false) {
-    "Packaged local netplay child did not disable battery saves"
+  val expectedBatterySave =
+      expectedRom.resolveSibling(
+          "${expectedRom.fileName.toString().removeSuffix(".gb")}-client1.sav")
+  check(
+      request.settingsOverrides.batterySavesEnabled == true &&
+          request.settingsOverrides.batterySavePath?.toAbsolutePath()?.normalize() ==
+              expectedBatterySave) {
+    "Packaged local netplay child did not retain its isolated battery save"
   }
-  check(request.settingsOverrides.forceInMemoryBattery) {
-    "Packaged local netplay child did not select an in-memory battery"
+  check(!request.settingsOverrides.forceInMemoryBattery) {
+    "Packaged local netplay child unexpectedly selected an in-memory battery"
   }
   check(request.settingsOverrides.suppressCloseAutosave) {
     "Packaged local netplay child did not suppress close autosave"
@@ -138,7 +144,7 @@ internal fun validatePackagedLocalNetplayRelaunchChildIfRequested(
 
   val evidence =
       "$RELAUNCH_EVIDENCE_PREFIX pid=$processId, launcher=$actualLauncher, " +
-          "profile=dmg, battery-saves=false, audio=muted, join=$expectedEndpoint\n"
+          "profile=dmg, battery-save=isolated, audio=muted, join=$expectedEndpoint\n"
   writeExclusiveText(marker, evidence)
   return true
 }

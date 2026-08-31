@@ -58,6 +58,7 @@ class PackagedLocalNetplayRelaunchSmokeTest {
     val directory = Files.createTempDirectory("local-netplay-relaunch-child")
     val marker = directory.resolve("child.marker")
     val rom = Files.createFile(directory.resolve("local-netplay-relaunch-smoke.gb"))
+    val batterySave = directory.resolve("local-netplay-relaunch-smoke-client1.sav")
     val packagedLauncher = Files.createFile(directory.resolve("Coffee GB.exe"))
     val environment =
         mapOf(
@@ -70,7 +71,8 @@ class PackagedLocalNetplayRelaunchSmokeTest {
         validatePackagedLocalNetplayRelaunchChildIfRequested(
             arrayOf(
                 "--profile=dmg",
-                "--disable-battery-saves",
+                "--battery-save",
+                batterySave.toString(),
                 "--start-muted",
                 "--join-netplay",
                 "127.0.0.1:4567",

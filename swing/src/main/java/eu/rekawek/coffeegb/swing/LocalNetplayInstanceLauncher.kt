@@ -1,6 +1,9 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.hardware.HardwareProfile
+import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 
 private const val DESKTOP_MAIN_CLASS = "eu.rekawek.coffeegb.swing.MainKt"
@@ -44,8 +47,8 @@ internal data class LocalNetplayInstanceLaunchResult(
 
 /**
  * Reuses the current package launcher (or `java -jar`/module invocation) rather than depending on
- * a platform-specific installation path. Child clients deliberately disable battery saves so they
- * cannot race the host process over the same sidecar files.
+ * a platform-specific installation path. Every child receives an isolated persistent battery so
+ * it cannot race the host process over the original sidecar.
  */
 internal class CurrentProcessLocalNetplayInstanceLauncher(
     private val currentCommand: List<String> = currentProcessCommand(),
@@ -61,19 +64,25 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
     require(count in 1..3) { "Local netplay client count must be in 1..3" }
     val launcher = localNetplayLauncherPrefix(currentCommand)
         ?: return LocalNetplayInstanceLaunchResult(0, count, launcherAvailable = false)
-    val command =
-        launcher +
-            listOf(
-                "--profile=${profile.id()}",
-                "--disable-battery-saves",
-                "--start-muted",
-                "--join-netplay",
-                endpoint.startClientValue,
-                rom.toAbsolutePath().normalize().toString(),
-            )
+    val normalizedRom = rom.toAbsolutePath().normalize()
+    val hostBattery =
+        RomOrigin.directFile(normalizedRom).persistencePath(".sav").orElseThrow()
     var started = 0
-    repeat(count) {
+    repeat(count) { index ->
       try {
+        val clientBattery = localNetplayClientBatteryPath(hostBattery, index + 1)
+        copyHostBatteryIfClientIsNew(hostBattery, clientBattery)
+        val command =
+            launcher +
+                listOf(
+                    "--profile=${profile.id()}",
+                    "--battery-save",
+                    clientBattery.toString(),
+                    "--start-muted",
+                    "--join-netplay",
+                    endpoint.startClientValue,
+                    normalizedRom.toString(),
+                )
         startProcess(command)
         started++
       } catch (_: Exception) {
@@ -82,6 +91,21 @@ internal class CurrentProcessLocalNetplayInstanceLauncher(
     }
     return LocalNetplayInstanceLaunchResult(started, count, launcherAvailable = true)
   }
+}
+
+private fun localNetplayClientBatteryPath(hostBattery: Path, clientNumber: Int): Path {
+  require(clientNumber in 1..3) { "Local netplay client number must be in 1..3" }
+  val hostName = hostBattery.fileName.toString()
+  val stem = hostName.removeSuffix(".sav")
+  return hostBattery.resolveSibling("$stem-client$clientNumber.sav")
+}
+
+private fun copyHostBatteryIfClientIsNew(hostBattery: Path, clientBattery: Path) {
+  if (Files.exists(clientBattery, LinkOption.NOFOLLOW_LINKS) ||
+      !Files.isRegularFile(hostBattery, LinkOption.NOFOLLOW_LINKS)) {
+    return
+  }
+  Files.copy(hostBattery, clientBattery)
 }
 
 /**
