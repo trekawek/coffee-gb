@@ -86,6 +86,7 @@ class PackagedLocalNetplayRelaunchSmokeTest {
     assertTrue(evidence.startsWith("Coffee GB local netplay relaunch OK:"))
     assertTrue(evidence.contains("pid=1234"))
     assertTrue(evidence.contains("profile=dmg"))
+    assertTrue(evidence.contains("battery-save=isolated"))
     assertTrue(evidence.contains("audio=muted"))
     assertTrue(evidence.contains("join=127.0.0.1:4567"))
 

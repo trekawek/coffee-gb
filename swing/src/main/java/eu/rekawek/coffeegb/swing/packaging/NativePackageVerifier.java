@@ -407,7 +407,7 @@ public final class NativePackageVerifier {
                 requireOutput(evidence, "profile=dmg", "packaged local netplay relaunch profile");
                 requireOutput(
                         evidence,
-                        "battery-saves=false",
+                        "battery-save=isolated",
                         "packaged local netplay relaunch battery policy");
                 requireOutput(
                         evidence,
