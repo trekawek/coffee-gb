@@ -5,6 +5,7 @@ import eu.rekawek.coffeegb.controller.state.StateCodecTestSupport
 import eu.rekawek.coffeegb.core.GameboyType
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.core.hardware.ClockSpec
+import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -94,6 +95,46 @@ class LinkedFrameStepperTest {
       assertTrue(fixture.first.gameboy.isFastSerialClockSelectedForActiveTransfer)
       assertTrue(fixture.second.gameboy.isFastSerialClockSelectedForActiveTransfer)
       assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+    }
+  }
+
+  @Test
+  fun mirroredCgbFastInputCanStartANewElectionAfterThePassivePhaseLead() {
+    PairFixture(GameboyType.CGB).use { fixture ->
+      fixture.armBoth(0x82)
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.EXTERNAL_CLOCK_DEADLOCK,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+      assertFalse(fixture.first.gameboy.hasSameLinkTimingPhase(fixture.second.gameboy))
+
+      fixture.first.heldButtons = setOf(Button.A)
+      fixture.second.heldButtons = setOf(Button.A)
+
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.EXTERNAL_CLOCK_DEADLOCK,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+
+      val expectedLead = 1L + 2L * fixture.clockSpec.controllerTicksPerFrame()
+      assertEquals(expectedLead.toInt() and 0xffff, dividerDelta(fixture.first, fixture.second))
+    }
+  }
+
+  @Test
+  fun unequalFastInputDoesNotBypassTheTimingPhaseGuard() {
+    PairFixture(GameboyType.CGB).use { fixture ->
+      fixture.armBoth(0x82)
+      assertEquals(
+          LinkedFrameStepper.SymmetryBreak.EXTERNAL_CLOCK_DEADLOCK,
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
+      fixture.first.heldButtons = setOf(Button.A)
+      fixture.second.heldButtons = setOf(Button.B)
+
+      assertNull(
+          LinkedFrameStepper.breakMirroredRoleElection(fixture.sessions, fixture.clockSpec),
+      )
     }
   }
 
