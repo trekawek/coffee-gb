@@ -41,6 +41,26 @@ final class RasterSkin {
                 LANDSCAPE_MENU_X, LANDSCAPE_MENU_Y);
     }
 
+    static RasterSkin cgbPortrait(Context context) {
+        return load(context, R.drawable.coffee_gb_skin_cgb_portrait,
+                PORTRAIT_MENU_X, PORTRAIT_MENU_Y);
+    }
+
+    static RasterSkin cgbLandscape(Context context) {
+        return load(context, R.drawable.coffee_gb_skin_cgb_landscape,
+                LANDSCAPE_MENU_X, LANDSCAPE_MENU_Y);
+    }
+
+    static RasterSkin sgbPortrait(Context context) {
+        return load(context, R.drawable.coffee_gb_skin_sgb_portrait,
+                PORTRAIT_MENU_X, PORTRAIT_MENU_Y);
+    }
+
+    static RasterSkin sgbLandscape(Context context) {
+        return load(context, R.drawable.coffee_gb_skin_sgb_landscape,
+                LANDSCAPE_MENU_X, LANDSCAPE_MENU_Y);
+    }
+
     private static RasterSkin load(Context context, int resource,
             float menuControlX, float menuControlY) {
         BitmapFactory.Options options = new BitmapFactory.Options();

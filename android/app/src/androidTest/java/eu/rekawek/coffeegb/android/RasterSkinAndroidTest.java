@@ -26,13 +26,21 @@ public class RasterSkinAndroidTest {
     private static final float DELTA = 0.01f;
 
     @Test
-    public void rasterResourcesMapDisplayAndBakedMenuCenterInBothOrientations() {
+    public void everySystemRasterMapsItsDisplayAndBakedMenuCenter() {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
 
         assertResourceGeometry(RasterSkin.portrait(context), 920, 1884,
-                941, 1672, 91f, 203f, 849f, 888f, 135.5f, 86f);
+                941, 1672, 91f, 203f, 849f, 888f, 135.5f, 86f, 0, 0);
         assertResourceGeometry(RasterSkin.landscape(context), 1884, 920,
-                1672, 941, 377f, 104f, 1296f, 821f, 99.5f, 79.5f);
+                1672, 941, 377f, 104f, 1296f, 821f, 99.5f, 79.5f, 0, 0);
+        assertResourceGeometry(RasterSkin.cgbPortrait(context), 920, 1884,
+                941, 1672, 100f, 215f, 840f, 881f, 135.5f, 86f, 10, 9);
+        assertResourceGeometry(RasterSkin.cgbLandscape(context), 1884, 920,
+                1672, 941, 436f, 104f, 1236f, 824f, 99.5f, 79.5f, 10, 9);
+        assertResourceGeometry(RasterSkin.sgbPortrait(context), 920, 1884,
+                941, 1672, 86f, 210f, 854f, 882f, 135.5f, 86f, 8, 7);
+        assertResourceGeometry(RasterSkin.sgbLandscape(context), 1884, 920,
+                1672, 941, 420f, 99f, 1252f, 827f, 99.5f, 79.5f, 8, 7);
     }
 
     @Test
@@ -75,6 +83,8 @@ public class RasterSkinAndroidTest {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         RasterSkin portrait = RasterSkin.portrait(context);
         RasterSkin landscape = RasterSkin.landscape(context);
+        RasterSkin cgbPortrait = RasterSkin.cgbPortrait(context);
+        RasterSkin sgbPortrait = RasterSkin.sgbPortrait(context);
         Bitmap layer = Bitmap.createBitmap(920, 1884, Bitmap.Config.ARGB_8888);
 
         assertTrue(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
@@ -85,6 +95,10 @@ public class RasterSkinAndroidTest {
                 920, 1883, portrait));
         assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
                 920, 1884, landscape));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, portrait,
+                920, 1884, cgbPortrait));
+        assertFalse(CoffeeGbSurfaceView.staticLayerMatches(layer, 920, 1884, cgbPortrait,
+                920, 1884, sgbPortrait));
         assertFalse(CoffeeGbSurfaceView.staticLayerMatches(null, 920, 1884, portrait,
                 920, 1884, portrait));
         layer.recycle();
@@ -109,7 +123,8 @@ public class RasterSkinAndroidTest {
 
     private static void assertResourceGeometry(RasterSkin skin, int viewWidth, int viewHeight,
             int skinWidth, int skinHeight, float displayLeft, float displayTop,
-            float displayRight, float displayBottom, float menuX, float menuY) {
+            float displayRight, float displayBottom, float menuX, float menuY,
+            int ratioWidth, int ratioHeight) {
         SkinTransform transform = skin.transform(viewWidth, viewHeight);
         RectF skinBounds = skin.skinBounds(transform);
         RectF displayBounds = skin.displayBounds(transform);
@@ -127,6 +142,13 @@ public class RasterSkinAndroidTest {
         assertEquals(displayTop, nativeDisplayTopLeft.y(), DELTA);
         assertEquals(displayRight, nativeDisplayBottomRight.x(), DELTA);
         assertEquals(displayBottom, nativeDisplayBottomRight.y(), DELTA);
+        if (ratioWidth > 0 && ratioHeight > 0) {
+            float nativeWidth = nativeDisplayBottomRight.x() - nativeDisplayTopLeft.x();
+            float nativeHeight = nativeDisplayBottomRight.y() - nativeDisplayTopLeft.y();
+            assertEquals(nativeWidth * ratioHeight, nativeHeight * ratioWidth, DELTA);
+            assertEquals(displayBounds.width() * ratioHeight,
+                    displayBounds.height() * ratioWidth, DELTA);
+        }
         assertEquals(menuX, nativeMenu.x(), DELTA);
         assertEquals(menuY, nativeMenu.y(), DELTA);
         assertTrue(skinBounds.contains(menuCenter.x, menuCenter.y));

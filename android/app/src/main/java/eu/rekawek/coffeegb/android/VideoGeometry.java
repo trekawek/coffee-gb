@@ -17,12 +17,22 @@ final class VideoGeometry {
             width = sourceWidth * integerScale;
             height = sourceHeight * integerScale;
         } else {
-            double fitScale = Math.min(
-                    (double) targetWidth / sourceWidth,
-                    (double) targetHeight / sourceHeight);
-            width = Math.max(1, (int) Math.floor(sourceWidth * fitScale));
-            height = Math.max(1, (int) Math.floor(sourceHeight * fitScale));
+            return aspectFit(sourceWidth, sourceHeight, targetWidth, targetHeight);
         }
+        return new Viewport((targetWidth - width) / 2, (targetHeight - height) / 2, width, height);
+    }
+
+    /** Fractional fallback for a target smaller than one native source frame. */
+    private static Viewport aspectFit(
+            int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        if (sourceWidth <= 0 || sourceHeight <= 0 || targetWidth <= 0 || targetHeight <= 0) {
+            return new Viewport(0, 0, 0, 0);
+        }
+        double fitScale = Math.min(
+                (double) targetWidth / sourceWidth,
+                (double) targetHeight / sourceHeight);
+        int width = Math.max(1, (int) Math.floor(sourceWidth * fitScale));
+        int height = Math.max(1, (int) Math.floor(sourceHeight * fitScale));
         return new Viewport((targetWidth - width) / 2, (targetHeight - height) / 2, width, height);
     }
 

@@ -26,6 +26,7 @@ import eu.rekawek.coffeegb.core.joypad.Button;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,6 +50,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private static final long BENCHMARK_ANCHOR_INTERVAL_MILLIS = 180L;
     /** Lets the 600th BufferQueue fence cross a few display periods before the drain is queued. */
     private static final long BENCHMARK_DRAIN_DELAY_MILLIS = 100L;
+    /** Keeps the common SGB-border toggle hot without permanently decoding all six rasters. */
+    private static final int MAX_CACHED_SKIN_PRESENTATIONS = 2;
 
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -62,8 +65,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final Rect destination = new Rect();
     private final Bitmap bitmap = Bitmap.createBitmap(
             NativeFrameStore.MAX_WIDTH, NativeFrameStore.MAX_HEIGHT, Bitmap.Config.ARGB_8888);
-    private final RasterSkin portraitSkin;
-    private final RasterSkin landscapeSkin;
+    private final Context skinContext;
+    private final Object skinCacheLock = new Object();
+    private final LinkedHashMap<NativeFrameStore.Presentation, SkinPair> skinCache =
+            new LinkedHashMap<>(3, 0.75f, true);
     private final MenuRenderer menuRenderer = new MenuRenderer();
     private final Set<Integer> menuTouchPointers = new HashSet<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -97,8 +102,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         transientTextPaint.setColor(Color.WHITE);
         transientTextPaint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         transientTextPaint.setTextAlign(Paint.Align.LEFT);
-        portraitSkin = RasterSkin.portrait(context);
-        landscapeSkin = RasterSkin.landscape(context);
+        skinContext = context;
         touchPreferences = new TouchControlsPreferences(context);
         touchLayout = touchPreferences.load();
         setZOrderOnTop(false);
@@ -474,7 +478,32 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     }
 
     private RasterSkin skinFor(int width, int height) {
-        return height >= width ? portraitSkin : landscapeSkin;
+        NativeFrameStore active = frames;
+        NativeFrameStore.Presentation presentation = active == null
+                ? NativeFrameStore.Presentation.DMG : active.presentation();
+        return skinFor(presentation, width, height);
+    }
+
+    private RasterSkin skinFor(NativeFrameStore.Presentation presentation,
+            int width, int height) {
+        SkinPair pair;
+        synchronized (skinCacheLock) {
+            pair = skinCache.get(presentation);
+            if (pair == null) {
+                pair = SkinPair.load(skinContext, presentation);
+                skinCache.put(presentation, pair);
+                if (skinCache.size() > MAX_CACHED_SKIN_PRESENTATIONS) {
+                    var oldest = skinCache.entrySet().iterator();
+                    oldest.next();
+                    oldest.remove();
+                }
+            }
+        }
+        return height >= width ? pair.portrait() : pair.landscape();
+    }
+
+    static boolean fillsExactThemedAperture(NativeFrameStore.Presentation presentation) {
+        return presentation != NativeFrameStore.Presentation.DMG;
     }
 
     /** Package-private seam for verifying that a static layer is invalidated on resize/rotation. */
@@ -507,9 +536,10 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private boolean running = true;
         private boolean frameAvailable;
         /**
-         * The baked skin is unchanged for the lifetime of a Surface and used to be scaled and
-         * composited on every game frame. Keep one exact-size transparent overlay per renderer
-         * so the hot path can blit it after the 160x144 frame and transient UI.
+         * Each baked skin is immutable and used to be scaled and composited on every game frame.
+         * Keep one exact-size transparent overlay per renderer so the hot path can blit it after
+         * the native frame and transient UI. A presentation switch changes the skin identity and
+         * rebuilds this layer once.
          *
          * <p>The cache lives on the renderer rather than the View: a Surface recreation gets a
          * fresh cache and the old potentially-large bitmap becomes collectible with its thread.
@@ -652,7 +682,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 return false;
             }
             try {
-                RasterSkin skin = skinFor(canvas.getWidth(), canvas.getHeight());
+                NativeFrameStore active = frames;
+                NativeFrameStore.Presentation presentation = frame == null
+                        ? (active == null ? NativeFrameStore.Presentation.DMG
+                                : active.presentation())
+                        : frame.presentation();
+                RasterSkin skin = skinFor(presentation,
+                        canvas.getWidth(), canvas.getHeight());
                 SkinTransform transform = skin.transform(canvas.getWidth(), canvas.getHeight());
                 RectF display = skin.displayBounds(transform);
                 canvas.drawColor(CANVAS_MATTE);
@@ -661,14 +697,21 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                     bitmap.setPixels(frame.pixels(), 0, frame.width(), 0, 0,
                             frame.width(), frame.height());
                     source.set(0, 0, frame.width(), frame.height());
-                    VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(
-                            frame.width(), frame.height(), Math.round(display.width()),
-                            Math.round(display.height()));
-                    destination.set(Math.round(display.left) + viewport.left(),
-                            Math.round(display.top) + viewport.top(),
-                            Math.round(display.left) + viewport.left() + viewport.width(),
-                            Math.round(display.top) + viewport.top() + viewport.height());
-                    canvas.drawBitmap(bitmap, source, destination, videoPaint);
+                    if (fillsExactThemedAperture(presentation)) {
+                        // These source and aperture ratios match exactly. Use the same floating
+                        // bounds as the skin transform so independent integer rounding cannot
+                        // leave a one-pixel gutter along a themed bezel.
+                        canvas.drawBitmap(bitmap, source, display, videoPaint);
+                    } else {
+                        VideoGeometry.Viewport viewport = VideoGeometry.nearestFit(
+                                frame.width(), frame.height(), Math.round(display.width()),
+                                Math.round(display.height()));
+                        destination.set(Math.round(display.left) + viewport.left(),
+                                Math.round(display.top) + viewport.top(),
+                                Math.round(display.left) + viewport.left() + viewport.width(),
+                                Math.round(display.top) + viewport.top() + viewport.height());
+                        canvas.drawBitmap(bitmap, source, destination, videoPaint);
+                    }
                 }
                 MenuPresentation menu = menuPresentation;
                 if (menu != null) {
@@ -694,9 +737,16 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             int height = canvas.getHeight();
             if (!staticLayerMatches(staticLayer, staticLayerWidth, staticLayerHeight,
                     staticLayerSkin, width, height, skin)) {
-                staticLayer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-                staticLayerWidth = width;
-                staticLayerHeight = height;
+                if (staticLayer == null
+                        || staticLayerWidth != width || staticLayerHeight != height) {
+                    staticLayer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+                    staticLayerWidth = width;
+                    staticLayerHeight = height;
+                } else {
+                    // A family-only change keeps the canvas size. Reuse this large allocation,
+                    // clearing the former skin so its pixels cannot survive under the new hole.
+                    staticLayer.eraseColor(Color.TRANSPARENT);
+                }
                 staticLayerSkin = skin;
                 Canvas layerCanvas = new Canvas(staticLayer);
                 skin.draw(layerCanvas, skinPaint, transform);
@@ -774,6 +824,21 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         private static final long DURATION_MILLIS = 1_500L;
 
         private TransientMessage() {
+        }
+    }
+
+    private record SkinPair(RasterSkin portrait, RasterSkin landscape) {
+
+        private static SkinPair load(Context context,
+                NativeFrameStore.Presentation presentation) {
+            return switch (presentation) {
+                case DMG -> new SkinPair(
+                        RasterSkin.portrait(context), RasterSkin.landscape(context));
+                case CGB -> new SkinPair(
+                        RasterSkin.cgbPortrait(context), RasterSkin.cgbLandscape(context));
+                case SGB_BORDER -> new SkinPair(
+                        RasterSkin.sgbPortrait(context), RasterSkin.sgbLandscape(context));
+            };
         }
     }
 
