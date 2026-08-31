@@ -992,7 +992,8 @@ interface Controller : AutoCloseable {
       config.setHardwareProfile(hardwareProfile)
       config.setBootstrapMode(bootstrapMode)
       config.setExecutionMode(properties.system.executionMode)
-      config.setSupportBatterySave(properties.saves.batterySavesEnabled)
+      config.setSupportBatterySave(
+          properties.overrides.batterySavePath != null || properties.saves.batterySavesEnabled)
       if (properties.overrides.forceInMemoryBattery && rom.type.isBattery) {
         // A local netplay child must never touch the host's sidecar, but its detached checkpoint
         // still needs the same battery-state presence as the service-free network peer target.

@@ -662,6 +662,8 @@ data class ApplicationSettingsOverrides(
     val hardwareProfile: HardwareProfile? = null,
     val bootstrapMode: BootstrapMode? = null,
     val batterySavesEnabled: Boolean? = null,
+    /** Exact process-local primary battery destination selected by the launcher. */
+    val batterySavePath: Path? = null,
     /**
      * Supplies a blank in-memory cartridge battery without reading or writing a local sidecar.
      * Netplay children use this to retain the same portable-state graph as a transferred peer.
@@ -679,6 +681,9 @@ data class ApplicationSettingsOverrides(
 ) {
   init {
     hardwareProfile?.let(HardwareProfileRegistry::requireRegistered)
+    require(batterySavePath == null || !forceInMemoryBattery) {
+      "An explicit battery save cannot be combined with an in-memory battery"
+    }
   }
 }
 

@@ -4742,18 +4742,23 @@ class BasicController private constructor(
           "Active session has no precomputed ROM identity"
         }
     val batteryStorage =
-        try {
-          liveBatteryStorageResolver.resolve(
-              saves,
-              currentSession.config,
-              romHashes,
-          )
-        } catch (failure: RuntimeException) {
-          LOG.warn(
-              "Unable to reconfigure battery storage; retaining the active destination",
-              failure,
-          )
+        if (properties.overrides.batterySavePath != null) {
+          // An explicit launch path remains authoritative for the lifetime of this process.
           null
+        } else {
+          try {
+            liveBatteryStorageResolver.resolve(
+                saves,
+                currentSession.config,
+                romHashes,
+            )
+          } catch (failure: RuntimeException) {
+            LOG.warn(
+                "Unable to reconfigure battery storage; retaining the active destination",
+                failure,
+            )
+            null
+          }
         }
     if (batteryStorage != null) {
       // Resolution is pure. Commit both views only after both primary and slot paths passed, so a

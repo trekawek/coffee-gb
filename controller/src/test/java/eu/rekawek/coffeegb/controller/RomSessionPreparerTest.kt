@@ -146,6 +146,29 @@ class RomSessionPreparerTest {
   }
 
   @Test
+  fun explicitBatterySaveOverrideOwnsThePreparedSessionStorage() {
+    val directory = Files.createTempDirectory("coffee-gb-explicit-battery")
+    val batterySave = directory.resolve("client1.sav")
+    val properties =
+        EmulatorProperties(
+            ApplicationSettingsOverrides(
+                batterySavePath = batterySave,
+                runtimeWarmupEnabled = false,
+            ))
+    try {
+      val prepared =
+          RomSessionPreparer(BootStateCache(2), runtimeWarmupCache = noopWarmupCache())
+              .prepare(properties, LoadRomEvent(ROM))
+
+      assertEquals(batterySave, prepared.config.batteryStorage.targetPath())
+      assertTrue(prepared.config.isSupportBatterySave)
+    } finally {
+      properties.close()
+      Files.deleteIfExists(directory)
+    }
+  }
+
+  @Test
   fun skipLoadWarmsExactlyOneHundredTwentyControllerFramesBeforeDeferring() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(2, executor)

@@ -50,7 +50,11 @@ internal class RomSessionPreparer(
     ensureActive()
     val hostPersistenceStore = event.persistenceStore
     val persistence =
-        (hostPersistenceStore ?: DesktopRomPersistenceStore(properties.applicationSettings.saves))
+        (hostPersistenceStore
+                ?: DesktopRomPersistenceStore(
+                    properties.applicationSettings.saves,
+                    properties.overrides.batterySavePath,
+                ))
             .resolve(config, romHashes)
     persistence.applyTo(config)
     // The desktop controller retains its configurable workspace (and its bounded fallbacks).
