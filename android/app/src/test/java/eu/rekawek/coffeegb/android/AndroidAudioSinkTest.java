@@ -1049,8 +1049,8 @@ public class AndroidAudioSinkTest {
         private volatile FailurePoint firstOutputFailure = FailurePoint.NONE;
 
         @Override
-        public AndroidAudioSink.Output open() {
-            int identity = opens.incrementAndGet();
+        public synchronized AndroidAudioSink.Output open() {
+            int identity = opens.get() + 1;
             FakeOutput output = new FakeOutput(this, identity, nextSampleRate,
                     nextEffectiveBufferFrames, nextStartThresholdFrames,
                     nextInitialPlaybackHeadFrames, nextUnavailablePlaybackHeadReads,
@@ -1062,6 +1062,8 @@ public class AndroidAudioSinkTest {
             }
             outputs.add(output);
             lifecycleEvents.add("open-" + identity);
+            // Tests use opens as the publication barrier before reading current().
+            opens.incrementAndGet();
             return output;
         }
 
