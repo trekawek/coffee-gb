@@ -86,6 +86,10 @@ final class Proposal3OverlayCatalog {
     static final List<MenuRect> LIBRARY_DIVIDERS = SAVE_DIVIDERS;
     private static final List<MenuRect> CHOOSE_ROM_ROW_BOUNDS = equalRows(387, 179, 524, 333, 7, 3);
     static final List<MenuRect> CHOOSE_ROM_DIVIDERS = dividers(CHOOSE_ROM_ROW_BOUNDS);
+    private static final int[][] SYSTEM_ROW_BOUNDS = {
+            {378, 124, 530, 95}, {378, 223, 530, 103},
+            {378, 329, 530, 103}, {378, 435, 530, 103}
+    };
 
     /** Kept entirely inside the left inset so changing a percentage cannot erase its frame. */
     static final MenuRect AUDIO_VOLUME_LABEL = new MenuRect(62, 405, 275, 45);
@@ -268,11 +272,9 @@ final class Proposal3OverlayCatalog {
                 new Marker(407), false));
 
         layouts.put(MenuRoute.SYSTEM, layout(MenuRoute.SYSTEM,
-                rows(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
-                        {378, 329, 530, 103}}, Surface.DARK), List.of(),
+                rows(SYSTEM_ROW_BOUNDS, Surface.DARK), List.of(),
                 masks(SYSTEM_LEFT_META, SYSTEM_LEFT_STATUS, SYSTEM_RIGHT_COPY,
-                        rowsMasks(new int[][]{{378, 124, 530, 95}, {378, 223, 530, 103},
-                                {378, 329, 530, 103}})), false, "dmg-games", null, false));
+                        rowsMasks(SYSTEM_ROW_BOUNDS)), false, "dmg-games", null, false));
 
         layouts.put(MenuRoute.ABOUT, layout(MenuRoute.ABOUT,
                 rows(new int[][]{{352, 115, 558, 89}, {352, 207, 558, 83},

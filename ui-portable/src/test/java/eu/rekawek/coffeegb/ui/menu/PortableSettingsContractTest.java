@@ -47,7 +47,7 @@ public class PortableSettingsContractTest {
         assertEquals("PERIPHERALS", MenuRoute.OPTIONAL_DEVICES.label());
         assertEquals("DISPLAY", MenuRoute.DISPLAY.label());
         assertEquals("OPTION PICKER", MenuRoute.OPTION_PICKER.label());
-        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
                 show(MenuRoute.SYSTEM).items().stream().map(MenuPresentation.Item::id).toList());
         assertEquals(List.of("sgb-border", "dmg-colors"),
                 show(MenuRoute.DISPLAY).items().stream().map(MenuPresentation.Item::id).toList());
@@ -56,6 +56,7 @@ public class PortableSettingsContractTest {
                         .map(MenuPresentation.Item::id).toList());
         assertEquals("GREEN", show(MenuRoute.DISPLAY).items().get(1).detail());
         assertEquals("SKIP", show(MenuRoute.SYSTEM).items().get(2).detail());
+        assertEquals("PERFORMANCE", show(MenuRoute.SYSTEM).items().get(3).detail());
     }
 
     @Test
@@ -75,6 +76,21 @@ public class PortableSettingsContractTest {
             assertEquals(924, frame.width());
             assertEquals(736, frame.height());
         }
+    }
+
+    @Test
+    public void systemExecutionModeUsesTheFourthVisibleChoiceRow() {
+        MenuController controller = new MenuController(new NoopListener());
+        controller.show(MenuRoute.SYSTEM);
+        Proposal3OverlayCatalog.RouteLayout layout =
+                Proposal3OverlayCatalog.layout(MenuRoute.SYSTEM);
+
+        assertEquals(4, layout.rows().size());
+        MenuRect fourthRow = layout.rows().get(3).bounds();
+        int[] frame = new Proposal3MenuCompositor().compose(controller.presentation())
+                .orElseThrow().copyPixels();
+        assertTrue(lightPixels(frame, fourthRow.x(), fourthRow.y(),
+                fourthRow.width(), fourthRow.height()) > 20);
     }
 
     @Test
@@ -110,6 +126,8 @@ public class PortableSettingsContractTest {
                 Proposal3MenuCompositor.optionPickerIllustrationRoute("DMG GAMES"));
         assertEquals(MenuRoute.SYSTEM,
                 Proposal3MenuCompositor.optionPickerIllustrationRoute("BOOTSTRAP"));
+        assertEquals(MenuRoute.SYSTEM,
+                Proposal3MenuCompositor.optionPickerIllustrationRoute("EXECUTION MODE"));
         assertEquals(MenuRoute.DISPLAY,
                 Proposal3MenuCompositor.optionPickerIllustrationRoute("DMG COLORS"));
         assertEquals(MenuRoute.OPTIONAL_DEVICES,

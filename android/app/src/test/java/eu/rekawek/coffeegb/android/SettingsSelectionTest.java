@@ -14,16 +14,16 @@ import static org.junit.Assert.assertTrue;
 public class SettingsSelectionTest {
 
     @Test
-    public void settingsGraphIncludesTheCoreExecutionModeSelector() {
-        assertEquals(List.of("system", "display", "audio", "peripherals", "execution-mode"),
-                AndroidMenuModel.settingsPage("performance").items().stream()
+    public void settingsGraphGroupsTheExecutionModeSelectorUnderSystem() {
+        assertEquals(List.of("system", "display", "audio", "peripherals"),
+                AndroidMenuModel.settingsPage().items().stream()
                         .map(MenuPageSpec.Item::id).toList());
-        assertEquals("PERFORMANCE", AndroidMenuModel.settingsPage("performance").items().get(4)
-                .detail());
-        assertEquals("PERFORMANCE", AndroidMenuModel.settingsPage().items().get(4).detail());
-        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap"),
-                AndroidMenuModel.systemPage("AUTO", "AUTO", "SKIP", "dmg-games")
+        MenuPageSpec system = AndroidMenuModel.systemPage(
+                "AUTO", "AUTO", "SKIP", "performance", "dmg-games");
+        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
+                system
                         .items().stream().map(MenuPageSpec.Item::id).toList());
+        assertEquals("PERFORMANCE", system.items().get(3).detail());
         assertEquals(List.of("sgb-border", "dmg-colors"),
                 AndroidMenuModel.displayPage(false, false).items().stream()
                         .map(MenuPageSpec.Item::id).toList());
@@ -31,7 +31,8 @@ public class SettingsSelectionTest {
                 AndroidMenuModel.optionalDevicesPage("off", "auto", false, List.of())
                         .items().stream().map(MenuPageSpec.Item::id).toList());
         assertEquals("FAST-FORWARD",
-                AndroidMenuModel.systemPage("auto", "auto", "fast-forward", "dmg-games")
+                AndroidMenuModel.systemPage(
+                        "auto", "auto", "fast-forward", "accuracy", "dmg-games")
                         .items().get(2).detail());
     }
 
