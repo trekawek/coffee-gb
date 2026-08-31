@@ -63,7 +63,17 @@ internal object LinkedFrameStepper {
     val secondEndpoint = second.serialEndpoint as? Peer2PeerSerialEndpoint ?: return null
     if (!firstEndpoint.isConnected || !secondEndpoint.isConnected) return null
     if (!firstEndpoint.hasSameTransferState(secondEndpoint)) return null
-    if (!first.gameboy.hasSameLinkTimingPhase(second.gameboy)) return null
+    val sameTimingPhase = first.gameboy.hasSameLinkTimingPhase(second.gameboy)
+    // A passive fast-listener collision already received its one-tick phase nudge. Matching live
+    // input can begin a later software election from that deliberately unequal phase; recognize
+    // it as a new bounded escape without widening ordinary passive-listener scheduling.
+    val mirroredFastInputActivation =
+        bothExternal &&
+            first.gameboy.isFastSerialClockSelectedForActiveTransfer &&
+            second.gameboy.isFastSerialClockSelectedForActiveTransfer &&
+            first.heldButtons.isNotEmpty() &&
+            first.heldButtons == second.heldButtons
+    if (!sameTimingPhase && !mirroredFastInputActivation) return null
 
     return when {
       bothInternal -> {
@@ -81,7 +91,8 @@ internal object LinkedFrameStepper {
       }
       bothExternal -> {
         val limit =
-            if (first.gameboy.isFastSerialClockSelectedForActiveTransfer) {
+            if (first.gameboy.isFastSerialClockSelectedForActiveTransfer &&
+                !mirroredFastInputActivation) {
               FAST_EXTERNAL_ELECTION_PHASE_TICKS
             } else {
               Math.multiplyExact(
