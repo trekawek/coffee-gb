@@ -98,6 +98,8 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         boolean quietEndpoint = canAdvancePerformanceQuietTransfer(1);
         if (!quietEndpoint && endpoint != SerialEndpoint.NULL_ENDPOINT) {
             endpoint.tick();
+        } else if (quietEndpoint) {
+            endpoint.tickPerformanceQuietSpanTrusted(1);
         }
         acknowledgeInterruptIfNeeded();
         int speed = speedMode.getSpeedMode();
@@ -113,11 +115,12 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
     /**
      * Returns the largest exact PERFORMANCE span for an idle link port.
      *
-     * <p>A quiet endpoint has no wall-clock work. A stopped transfer, or an external-clock
-     * transfer whose endpoint guarantees that no input bit arrives, has no serial edge to
-     * deliver. In those states the only serial state which advances is the free-running 8-bit
-     * phase. Other endpoints, internal-clock transfers, HALT wake delay, and debug hooks remain
-     * scalar so endpoint callbacks and trace ordering cannot be observed late.</p>
+     * <p>A quiet endpoint can advance its wall clock without changing the input level. A stopped
+     * transfer, or an external-clock transfer whose endpoint guarantees that no input bit arrives,
+     * has no serial edge to deliver. In those states the port advances only the endpoint's exact
+     * arithmetic countdown and the free-running 8-bit phase. Other endpoints, internal-clock
+     * transfers, HALT wake delay, and debug hooks remain scalar so endpoint callbacks and trace
+     * ordering cannot be observed late.</p>
      */
     public int performanceQuietSpanLimit(int requested) {
         if (requested <= 0
@@ -164,6 +167,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (!canTickPerformanceQuietSpan(ticks)) {
             return false;
         }
+        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
         return true;
@@ -176,6 +180,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         }
         // The packet preflight has already established a quiet endpoint and no pending
         // acknowledge/transfer edge. Do not repeat that walk on the hot commit path.
+        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
     }
@@ -194,6 +199,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
+        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks * 2) & 0xff;
     }
@@ -227,6 +233,7 @@ public class SerialPort implements AddressSpace, StatefulComponent<SerialPort> {
         if (ticks <= 0) {
             return;
         }
+        serialEndpoint.tickPerformanceQuietSpanTrusted(ticks);
         acknowledgeInterruptIfNeeded();
         serialClocks = (serialClocks + ticks) & 0xff;
     }

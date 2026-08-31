@@ -18,7 +18,8 @@ public final class MenuExternalSurfaceState {
         EXPORT_STATE_0,
         EXPORT_SCREENSHOT,
         EXPORT_PRINTER_SHARE,
-        CAMERA_PERMISSION
+        CAMERA_PERMISSION,
+        GPS_PERMISSION
     }
 
     public enum RestorePolicy {

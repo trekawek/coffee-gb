@@ -118,6 +118,7 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
+import eu.rekawek.coffeegb.core.serial.GpsDataSource
 import eu.rekawek.coffeegb.core.serial.GpsReceiverSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.Peer2PeerSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.SerialEndpoint
@@ -161,6 +162,8 @@ class BasicController private constructor(
     private val autosaveThumbnailProvider: () -> StateImage? = { null },
     private val mobileAdapterGuestConfigurationSink: MobileAdapterGuestConfigurationSink =
         MobileAdapterGuestConfigurationSink.NO_OP,
+    /** Optional host-owned live GPS seam; null retains the deterministic core fixture. */
+    private val gpsDataSource: GpsDataSource? = null,
 ) : Controller, SnapshotSupport {
 
   constructor(
@@ -178,6 +181,25 @@ class BasicController private constructor(
       StateWorkspaceFactory.DEFAULT,
       StateOperationWorkerFactory.DEFAULT,
       CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+  )
+
+  constructor(
+      parentEventBus: EventBus,
+      properties: EmulatorProperties,
+      console: Console?,
+      gpsDataSource: GpsDataSource,
+  ) : this(
+      parentEventBus,
+      properties,
+      console,
+      RomSessionPreparer(),
+      createLoadExecutor(),
+      SnapshotManagerFactory.DEFAULT,
+      configuredRewindManager(properties),
+      StateWorkspaceFactory.DEFAULT,
+      StateOperationWorkerFactory.DEFAULT,
+      CONTROLLER_CLOSE_TIMEOUT_MILLIS,
+      gpsDataSource = gpsDataSource,
   )
 
   constructor(
@@ -3877,7 +3899,9 @@ class BasicController private constructor(
         Controller.SerialPeripheralSelection.BARCODE_BOY ->
             PreparedSerialEndpoint(BarcodeBoySerialEndpoint())
         Controller.SerialPeripheralSelection.GPS_RECEIVER ->
-            PreparedSerialEndpoint(GpsReceiverSerialEndpoint(clockSpec))
+            PreparedSerialEndpoint(
+                gpsDataSource?.let { GpsReceiverSerialEndpoint(clockSpec, it) }
+                    ?: GpsReceiverSerialEndpoint(clockSpec))
         Controller.SerialPeripheralSelection.MOBILE_ADAPTER_GB ->
             createMobileAdapterEndpoint(clockSpec)
         Controller.SerialPeripheralSelection.PEER_TO_PEER ->

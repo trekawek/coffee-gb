@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.core.serial;
 import eu.rekawek.coffeegb.core.TestDebugHooks;
 import eu.rekawek.coffeegb.core.cpu.InterruptManager;
 import eu.rekawek.coffeegb.core.cpu.SpeedMode;
+import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import org.junit.Test;
 
 import java.util.Random;
@@ -328,6 +329,37 @@ public class SerialPortPerformanceSpanTest {
             }
             assertEquals(nullPort.captureState(), peerPort.captureState());
             assertEquals(nullInterrupts.captureState(), peerInterrupts.captureState());
+        }
+    }
+
+    @Test
+    public void nativeCgbGpsEndpointEpochsMatchScalarTicks() {
+        ClockSpec clock = new ClockSpec(96_000, 60, 1);
+        GpsReceiverSerialEndpoint scalarGps = new GpsReceiverSerialEndpoint(clock);
+        GpsReceiverSerialEndpoint bulkGps = new GpsReceiverSerialEndpoint(clock);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        InterruptManager bulkInterrupts = new InterruptManager(true);
+        SerialPort scalar = new SerialPort(scalarInterrupts, true, new SpeedMode(true));
+        SerialPort bulk = new SerialPort(bulkInterrupts, true, new SpeedMode(true));
+        scalar.init(scalarGps);
+        bulk.init(bulkGps);
+
+        for (int elapsed = 0; elapsed < 150_000;) {
+            int requested = Math.min(54, 150_000 - elapsed);
+            if (bulk.performanceNormalSpeedEpochIdle(requested, true)) {
+                for (int tick = 0; tick < requested; tick++) {
+                    scalar.tick();
+                }
+                bulk.tickPerformanceNormalSpeedEpochIdle(requested);
+                elapsed += requested;
+            } else {
+                scalar.tick();
+                bulk.tick();
+                elapsed++;
+            }
+            assertEquals(scalar.captureState(), bulk.captureState());
+            GpsReceiverSerialEndpointTest.assertStateEquals(scalarGps, bulkGps);
+            assertEquals(scalarInterrupts.captureState(), bulkInterrupts.captureState());
         }
     }
 

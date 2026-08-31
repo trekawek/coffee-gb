@@ -70,4 +70,17 @@ public class MenuExternalSurfaceStateTest {
         assertTrue(denied.pauseOwned());
         assertEquals(NESTED.frames(), denied.menuStack().frames());
     }
+
+    @Test
+    public void gpsPermissionResultRestoresTheSamePausedMenuStack() {
+        MenuExternalSurfaceState gps = MenuExternalSurfaceState.launched(
+                MenuExternalSurfaceState.Action.GPS_PERMISSION, 9, NESTED, true,
+                MenuExternalSurfaceState.RestorePolicy.ALWAYS);
+
+        MenuExternalSurfaceState granted = gps.afterResult(true);
+        assertTrue(granted.active());
+        assertTrue(granted.restoreRequested());
+        assertTrue(granted.pauseOwned());
+        assertEquals(NESTED.frames(), granted.menuStack().frames());
+    }
 }
