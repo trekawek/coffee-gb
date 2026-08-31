@@ -84,6 +84,10 @@ public class SgbBorderAndroidTest {
             NativeFrameStore.Snapshot frame = runtime.frames().snapshot();
             if (frame != null && frame.width() == width && frame.height() == height) {
                 assertEquals(width * height, frame.pixels().length);
+                assertEquals(width == SuperGameboy.SGB_DISPLAY_WIDTH
+                                ? NativeFrameStore.Presentation.SGB_BORDER
+                                : NativeFrameStore.Presentation.DMG,
+                        runtime.frames().presentation());
                 return;
             }
             Thread.sleep(25L);

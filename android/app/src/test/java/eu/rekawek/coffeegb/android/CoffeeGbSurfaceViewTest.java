@@ -19,6 +19,16 @@ public class CoffeeGbSurfaceViewTest {
         assertTrue(CoffeeGbSurfaceView.requiresMenuInvalidationOnClear(existingPresentation));
     }
 
+    @Test
+    public void onlyExactRatioThemesUseFractionalApertureFit() {
+        assertFalse(CoffeeGbSurfaceView.fillsExactThemedAperture(
+                NativeFrameStore.Presentation.DMG));
+        assertTrue(CoffeeGbSurfaceView.fillsExactThemedAperture(
+                NativeFrameStore.Presentation.CGB));
+        assertTrue(CoffeeGbSurfaceView.fillsExactThemedAperture(
+                NativeFrameStore.Presentation.SGB_BORDER));
+    }
+
     private static final class NoopMenuListener implements MenuController.Listener {
 
         @Override

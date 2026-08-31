@@ -1316,7 +1316,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeBatterySave = false;
             activeSessionGeneration = 0L;
             clearPauseMenuSnapshotInternal();
-            frames.clear();
+            frames.clearToDefaultPresentation();
             lifecycle.released();
             createController();
             publish(RuntimeState.Phase.STOPPED,

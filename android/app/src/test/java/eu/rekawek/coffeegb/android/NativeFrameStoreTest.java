@@ -142,10 +142,69 @@ public class NativeFrameStoreTest {
     }
 
     @Test
+    public void hardwareProfileSelectsTheInitialSkinPresentation() {
+        NativeFrameStore store = new NativeFrameStore();
+        AtomicInteger notifications = new AtomicInteger();
+        NativeFrameStore.Listener listener = notifications::incrementAndGet;
+        store.addListener(listener);
+        try {
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+
+            store.setHardwareProfile(HardwareProfileRegistry.CGB);
+            assertEquals(NativeFrameStore.Presentation.CGB, store.presentation());
+            assertEquals(1, notifications.get());
+
+            store.setHardwareProfile(HardwareProfileRegistry.CGB0);
+            assertEquals(NativeFrameStore.Presentation.CGB, store.presentation());
+            assertEquals(1, notifications.get());
+
+            store.setHardwareProfile(HardwareProfileRegistry.MGB);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+            assertEquals(2, notifications.get());
+
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+            store.setHardwareProfile(HardwareProfileRegistry.SGB2);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+            assertEquals(2, notifications.get());
+        } finally {
+            store.removeListener(listener);
+            store.close();
+        }
+    }
+
+    @Test
+    public void cgbProfileKeepsCgbSkinForEitherNativeFrameEvent() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.CGB);
+            store.publish(new Display.DmgFrameReadyEvent(
+                    new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+
+            NativeFrameStore.Frame frame = store.takeLatest();
+            assertNotNull(frame);
+            assertEquals(NativeFrameStore.Presentation.CGB, frame.presentation());
+            assertEquals(NativeFrameStore.Presentation.CGB, store.presentation());
+            store.finishDrawing(frame);
+
+            store.publish(new Display.GbcFrameReadyEvent(
+                    new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
+            NativeFrameStore.Frame colorFrame = store.takeLatest();
+            assertNotNull(colorFrame);
+            assertEquals(NativeFrameStore.Presentation.CGB,
+                    colorFrame.presentation());
+            store.finishDrawing(colorFrame);
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
     public void sgbProfileRejectsRawDmgButAcceptsDerivedSgbFrames() {
         NativeFrameStore store = new NativeFrameStore();
         try {
             store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
             int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
             dmg[0] = 1;
             store.publish(new Display.DmgFrameReadyEvent(dmg));
@@ -158,6 +217,45 @@ public class NativeFrameStoreTest {
             assertEquals(Display.DISPLAY_WIDTH, frame.width());
             assertEquals(Display.DISPLAY_HEIGHT, frame.height());
             assertEquals(0xfff80000, frame.pixels()[0]);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void sgbSkinTracksBorderedFramesWithoutChangingAClaimedFrame() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            int[] borderedPixels = new int[
+                    SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(borderedPixels, true));
+            NativeFrameStore.Frame bordered = store.takeLatest();
+            assertNotNull(bordered);
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    bordered.presentation());
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    store.presentation());
+
+            int[] centerPixels = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(centerPixels, false));
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    bordered.presentation());
+            store.finishDrawing(bordered);
+
+            NativeFrameStore.Frame borderless = store.takeLatest();
+            assertNotNull(borderless);
+            assertEquals(NativeFrameStore.Presentation.DMG, borderless.presentation());
+            store.finishDrawing(borderless);
+
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(borderedPixels, true));
+            NativeFrameStore.Frame restored = store.takeLatest();
+            assertNotNull(restored);
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    restored.presentation());
+            store.finishDrawing(restored);
         } finally {
             store.close();
         }
@@ -167,11 +265,15 @@ public class NativeFrameStoreTest {
     public void malformedSgbLengthAbortsWritingSlotAndReclaimsPrimarySlot() {
         NativeFrameStore store = new NativeFrameStore();
         try {
-            int expected = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            int borderedExpected = SuperGameboy.SGB_DISPLAY_WIDTH
+                    * SuperGameboy.SGB_DISPLAY_HEIGHT;
             assertThrows(IllegalArgumentException.class,
                     () -> store.publish(new SgbDisplay.SgbFrameReadyEvent(
-                            new int[expected - 1], false)));
+                            new int[borderedExpected - 1], true)));
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
 
+            int expected = Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT;
             int[] valid = new int[expected];
             valid[0] = 0x00010203;
             store.publish(new SgbDisplay.SgbFrameReadyEvent(valid, false));
@@ -181,6 +283,7 @@ public class NativeFrameStoreTest {
             store.finishDrawing(frame);
             NativeFrameStore.Snapshot snapshot = requireSnapshot(store);
             assertEquals(0xff010203, snapshot.pixels()[0]);
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
         } finally {
             store.close();
         }
@@ -247,6 +350,7 @@ public class NativeFrameStoreTest {
         try {
             store.setHardwareProfile(HardwareProfileRegistry.SGB);
             store.clear();
+            assertEquals(NativeFrameStore.Presentation.DMG, store.presentation());
             int[] dmg = new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT];
             store.publish(new Display.DmgFrameReadyEvent(dmg));
             assertNull(store.snapshot());
@@ -254,6 +358,51 @@ public class NativeFrameStoreTest {
             store.setHardwareProfile(HardwareProfileRegistry.DMG);
             store.clear();
             store.publish(new Display.DmgFrameReadyEvent(dmg));
+            assertNotNull(store.snapshot());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void replacementClearAndBenchmarkEpochRetainTheLastPresentation() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            int[] pixels = new int[
+                    SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(pixels, true));
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    store.presentation());
+
+            store.beginBenchmarkEpoch(9L);
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    store.presentation());
+
+            store.clear();
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    store.presentation());
+        } finally {
+            store.close();
+        }
+    }
+
+    @Test
+    public void successfulStopClearRestoresTheDefaultDmgPresentation() {
+        NativeFrameStore store = new NativeFrameStore();
+        try {
+            store.setHardwareProfile(HardwareProfileRegistry.SGB);
+            int[] pixels = new int[
+                    SuperGameboy.SGB_DISPLAY_WIDTH * SuperGameboy.SGB_DISPLAY_HEIGHT];
+            store.publish(new SgbDisplay.SgbFrameReadyEvent(pixels, true));
+            assertEquals(NativeFrameStore.Presentation.SGB_BORDER,
+                    store.presentation());
+
+            store.clearToDefaultPresentation();
+            assertEquals(NativeFrameStore.Presentation.DMG,
+                    store.presentation());
+            store.publish(new Display.DmgFrameReadyEvent(
+                    new int[Display.DISPLAY_WIDTH * Display.DISPLAY_HEIGHT]));
             assertNotNull(store.snapshot());
         } finally {
             store.close();

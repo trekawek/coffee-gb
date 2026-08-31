@@ -23,6 +23,13 @@ import java.util.function.LongConsumer;
  */
 final class NativeFrameStore implements AutoCloseable {
 
+    /** Raster presentation paired with one published native frame. */
+    enum Presentation {
+        DMG,
+        CGB,
+        SGB_BORDER
+    }
+
     static final int MAX_WIDTH = SuperGameboy.SGB_DISPLAY_WIDTH;
     static final int MAX_HEIGHT = SuperGameboy.SGB_DISPLAY_HEIGHT;
     private static final int SLOT_COUNT = 3;
@@ -32,7 +39,7 @@ final class NativeFrameStore implements AutoCloseable {
             Long.MAX_VALUE >>> SLOT_INDEX_BITS;
 
     interface Listener {
-        /** Signals availability only; consumers must call {@link #takeLatest()} themselves. */
+        /** Signals a frame or presentation change; consumers must query the store themselves. */
         void onFrameAvailable();
     }
 
@@ -54,8 +61,9 @@ final class NativeFrameStore implements AutoCloseable {
     private long droppedFrames;
     private long benchmarkEpoch;
     private volatile boolean grayscale;
-    /** True while the active session has a Super Game Boy presentation path. */
-    private volatile boolean sgbOutput;
+    private volatile HardwareProfile.Family hardwareFamily = HardwareProfile.Family.DMG;
+    /** Current fallback for redraws which do not claim a frame, such as Surface recreation. */
+    private volatile Presentation presentation = Presentation.DMG;
     private boolean closed;
 
     NativeFrameStore() {
@@ -94,7 +102,7 @@ final class NativeFrameStore implements AutoCloseable {
         // SGB presentation afterward. Publishing both lets a renderer scheduled between those
         // callbacks briefly display the raw DMG palette. The active profile is latched by the
         // controller before emulation starts, so only the final SGB event reaches this store.
-        if (sgbOutput) {
+        if (hardwareFamily == HardwareProfile.Family.SGB) {
             return;
         }
         if (BuildConfig.DIAGNOSTICS_ENABLED) {
@@ -103,7 +111,8 @@ final class NativeFrameStore implements AutoCloseable {
         if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
             return;
         }
-        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
+        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT,
+                basePresentation());
         if (claim == 0L) {
             return;
         }
@@ -124,7 +133,8 @@ final class NativeFrameStore implements AutoCloseable {
         if (BuildConfig.DIAGNOSTICS_ENABLED && diagnostics != null && diagnostics.frameSink()) {
             return;
         }
-        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT);
+        long claim = reserve(Display.DISPLAY_WIDTH, Display.DISPLAY_HEIGHT,
+                basePresentation());
         if (claim == 0L) {
             return;
         }
@@ -148,8 +158,23 @@ final class NativeFrameStore implements AutoCloseable {
 
     /** Selects the presentation family for the active controller session. */
     void setHardwareProfile(HardwareProfile profile) {
-        sgbOutput = Objects.requireNonNull(profile, "profile")
-                .capabilities().superGameboyCommands();
+        HardwareProfile checked = Objects.requireNonNull(profile, "profile");
+        HardwareProfile.Family family = checked.family();
+        Presentation next = family == HardwareProfile.Family.CGB
+                ? Presentation.CGB : Presentation.DMG;
+        boolean changed;
+        synchronized (this) {
+            hardwareFamily = family;
+            changed = presentation != next;
+            presentation = next;
+        }
+        if (changed) {
+            notifyListeners();
+        }
+    }
+
+    Presentation presentation() {
+        return presentation;
     }
 
     void publish(SgbDisplay.SgbFrameReadyEvent event) {
@@ -161,7 +186,9 @@ final class NativeFrameStore implements AutoCloseable {
         }
         int width = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_WIDTH : Display.DISPLAY_WIDTH;
         int height = event.includeBorder() ? SuperGameboy.SGB_DISPLAY_HEIGHT : Display.DISPLAY_HEIGHT;
-        long claim = reserve(width, height);
+        Presentation framePresentation = hardwareFamily == HardwareProfile.Family.SGB
+                && event.includeBorder() ? Presentation.SGB_BORDER : basePresentation();
+        long claim = reserve(width, height, framePresentation);
         if (claim == 0L) {
             return;
         }
@@ -244,7 +271,21 @@ final class NativeFrameStore implements AutoCloseable {
         // Keep the last authoritative profile while a replacement is being parsed or selected.
         // openRom() clears the presentation before it knows whether the old session will actually
         // be replaced; a failed/rejected load must not let that still-active SGB session publish
-        // its raw DMG transfer input. The next HardwareProfileEvent overwrites this gate.
+        // its raw DMG transfer input or change its skin. The next HardwareProfileEvent overwrites
+        // this retained state.
+        clearFrames();
+        notifyListeners();
+    }
+
+    /** Clears a successfully stopped session and restores the no-system DMG presentation. */
+    synchronized void clearToDefaultPresentation() {
+        hardwareFamily = HardwareProfile.Family.DMG;
+        presentation = Presentation.DMG;
+        clearFrames();
+        notifyListeners();
+    }
+
+    private void clearFrames() {
         reservationGeneration++;
         nextSequence++;
         for (Slot slot : slots) {
@@ -256,7 +297,6 @@ final class NativeFrameStore implements AutoCloseable {
                 slot.presentationConsumed = false;
             }
         }
-        notifyListeners();
     }
 
     synchronized long droppedFrames() {
@@ -365,7 +405,18 @@ final class NativeFrameStore implements AutoCloseable {
         return false;
     }
 
-    private synchronized long reserve(int width, int height) {
+    private Presentation basePresentation() {
+        return hardwareFamily == HardwareProfile.Family.CGB
+                ? Presentation.CGB : Presentation.DMG;
+    }
+
+    /** Compatibility seam retained for package tests which reserve a synthetic frame. */
+    private long reserve(int width, int height) {
+        return reserve(width, height, presentation);
+    }
+
+    private synchronized long reserve(int width, int height,
+            Presentation framePresentation) {
         if (closed || width < 1 || height < 1 || width > MAX_WIDTH || height > MAX_HEIGHT) {
             recordDroppedFrame();
             return 0L;
@@ -408,6 +459,7 @@ final class NativeFrameStore implements AutoCloseable {
         chosen.state = SlotState.WRITING;
         chosen.width = width;
         chosen.height = height;
+        chosen.presentation = Objects.requireNonNull(framePresentation, "framePresentation");
         chosen.epoch = benchmarkEpoch;
         chosen.reservationClaim = claim;
         chosen.reservationGeneration = reservationGeneration;
@@ -431,6 +483,7 @@ final class NativeFrameStore implements AutoCloseable {
             slot.sequence = ++nextSequence;
             slot.presentationConsumed = false;
             slot.state = SlotState.PUBLISHED;
+            presentation = slot.presentation;
         }
         notifyListeners();
     }
@@ -497,6 +550,10 @@ final class NativeFrameStore implements AutoCloseable {
         int height() {
             return slot.height;
         }
+
+        Presentation presentation() {
+            return slot.presentation;
+        }
     }
 
     record Snapshot(int width, int height, int[] pixels) {
@@ -534,6 +591,7 @@ final class NativeFrameStore implements AutoCloseable {
         private SlotState state = SlotState.FREE;
         private int width;
         private int height;
+        private Presentation presentation = Presentation.DMG;
         private long sequence;
         private long epoch;
         private long reservationClaim;

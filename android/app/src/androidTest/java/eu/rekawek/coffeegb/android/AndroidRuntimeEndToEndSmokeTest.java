@@ -100,10 +100,10 @@ public class AndroidRuntimeEndToEndSmokeTest {
             // GitHub-hosted emulators are not a performance target. A valid native frame before
             // input, after input, and after state restoration proves the rendering path without
             // coupling this smoke test to the runner's callback cadence.
-            assertFrame(runtime, "before input");
+            assertFrame(runtime, "before input", NativeFrameStore.Presentation.DMG);
             runtime.input().onKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BUTTON_A));
             runtime.input().onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BUTTON_A));
-            assertFrame(runtime, "after input");
+            assertFrame(runtime, "after input", NativeFrameStore.Presentation.DMG);
 
             runtime.saveSnapshot(0);
             assertTrue("state save request", stateSaveRequested.await(
@@ -116,7 +116,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
             awaitStateOperation("state restore", stateRestored, stateFailure);
             assertTrue("state loaded flash message", stateLoadedMessage.await(
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
-            assertFrame(runtime, "after state restore");
+            assertFrame(runtime, "after state restore", NativeFrameStore.Presentation.DMG);
 
             // The in-screen menu owns the pause it creates. A successful game choice transfers
             // that ownership to the replacement request instead of leaving the new game paused
@@ -130,7 +130,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
                     == RuntimeState.Phase.RUNNING
                     && runtime.state().sessionGeneration() > firstGeneration);
             assertEquals("CI SMOKE CGB", runtime.state().romTitle());
-            assertFrame(runtime, "after ROM replacement");
+            assertFrame(runtime, "after ROM replacement", NativeFrameStore.Presentation.CGB);
 
             runtime.pause();
             await("pause before reset",
@@ -139,7 +139,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
             runtime.reset(true);
             await("playing reset", () -> runtime.state().phase() == RuntimeState.Phase.RUNNING
                     && runtime.state().sessionGeneration() > replacementGeneration);
-            assertFrame(runtime, "after reset");
+            assertFrame(runtime, "after reset", NativeFrameStore.Presentation.CGB);
 
             runtime.onHostNotVisible();
             await("background pause", () -> runtime.state().phase() == RuntimeState.Phase.PAUSED);
@@ -148,6 +148,8 @@ public class AndroidRuntimeEndToEndSmokeTest {
             await("foreground resume", () -> runtime.state().phase() == RuntimeState.Phase.RUNNING);
             runtime.stop();
             await("runtime stop", () -> runtime.state().phase() == RuntimeState.Phase.STOPPED);
+            assertEquals(NativeFrameStore.Presentation.DMG,
+                    runtime.frames().presentation());
         }
     }
 
@@ -229,12 +231,14 @@ public class AndroidRuntimeEndToEndSmokeTest {
         fail("timed out waiting for fixture start: " + runtime.state().message());
     }
 
-    private static void assertFrame(AndroidEmulationRuntime runtime, String checkpoint) throws Exception {
+    private static void assertFrame(AndroidEmulationRuntime runtime, String checkpoint,
+            NativeFrameStore.Presentation presentation) throws Exception {
         NativeFrameStore.Frame frame = awaitValue(runtime.frames()::takeLatest, checkpoint);
         try {
             assertNotNull(frame);
             assertEquals(160, frame.width());
             assertEquals(144, frame.height());
+            assertEquals(presentation, frame.presentation());
         } finally {
             runtime.frames().finishDrawing(frame);
         }
