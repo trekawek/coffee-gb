@@ -80,11 +80,20 @@ final class TouchControlsLayout {
             }
             return List.copyOf(pressed);
         }
+        float actionMiddleX = (geometry.aX + geometry.bX) / 2f;
+        float actionMiddleY = (geometry.aY + geometry.bY) / 2f;
+        if (inCircle(x, y, actionMiddleX, actionMiddleY, geometry.actionRadius)) {
+            return List.of(Button.A, Button.B);
+        }
         if (inCircle(x, y, geometry.bX, geometry.bY, geometry.actionRadius)) {
             return List.of(Button.B);
         }
         if (inCircle(x, y, geometry.aX, geometry.aY, geometry.actionRadius)) {
             return List.of(Button.A);
+        }
+        if (inCapsule(x, y, geometry.bX, geometry.bY, geometry.aX, geometry.aY,
+                geometry.actionRadius)) {
+            return List.of(Button.A, Button.B);
         }
         if (inRect(x, y, geometry.selectX, geometry.utilityY,
                 geometry.utilityWidth, geometry.utilityHeight)) {
@@ -149,6 +158,25 @@ final class TouchControlsLayout {
         float dx = x - centerX;
         float dy = y - centerY;
         return dx * dx + dy * dy <= radius * radius;
+    }
+
+    /**
+     * Covers the rest of the bridge between the two round action-button hit targets. The central
+     * A+B circle is checked first so its larger target can overlap the inner edges of both buttons.
+     */
+    private static boolean inCapsule(float x, float y, float startX, float startY,
+                                     float endX, float endY, float radius) {
+        float segmentX = endX - startX;
+        float segmentY = endY - startY;
+        float segmentLengthSquared = segmentX * segmentX + segmentY * segmentY;
+        if (segmentLengthSquared == 0f) {
+            return inCircle(x, y, startX, startY, radius);
+        }
+        float projection = ((x - startX) * segmentX + (y - startY) * segmentY)
+                / segmentLengthSquared;
+        projection = clamp(projection, 0f, 1f);
+        return inCircle(x, y, startX + projection * segmentX,
+                startY + projection * segmentY, radius);
     }
 
     private static boolean inRect(float x, float y, float centerX, float centerY,
