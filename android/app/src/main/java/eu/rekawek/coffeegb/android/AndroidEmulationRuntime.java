@@ -127,6 +127,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private volatile AndroidRumbleSink rumble;
     private volatile AndroidTiltSink tilt;
     private volatile AndroidCameraSource camera;
+    private volatile AndroidGpsSource gps;
     private AndroidPrinterStore printer;
     private boolean printerEnabled;
     private boolean cameraEnabled;
@@ -487,6 +488,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         }
         gpsEnabled = enabled;
         submit(() -> {
+            AndroidGpsSource activeGps = gps;
+            if (activeGps != null) {
+                activeGps.setEnabled(enabled);
+            }
             if (eventBus != null && controller != null && activeLayout != null) {
                 eventBus.post(new Controller.SetGpsReceiverEvent(enabled));
             }
@@ -1891,7 +1896,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     }
                 }),
                 Controller.BatteryFlushCompletedEvent.class);
-        controller = new BasicController(eventBus, properties, null);
+        gps = new AndroidGpsSource(context);
+        gps.setEnabled(gpsEnabled);
+        controller = new BasicController(eventBus, properties, null, gps);
         controller.startController();
     }
 
@@ -2383,6 +2390,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         AndroidRumbleSink activeRumble = rumble;
         AndroidTiltSink activeTilt = tilt;
         AndroidCameraSource activeCamera = camera;
+        AndroidGpsSource activeGps = gps;
         AndroidPrinterStore activePrinter = printer;
         controller = null;
         eventBus = null;
@@ -2390,6 +2398,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         rumble = null;
         tilt = null;
         camera = null;
+        gps = null;
         printer = null;
         if (active == null) {
             performanceBoost.onSessionStopped();
@@ -2404,6 +2413,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             }
             if (activeCamera != null) {
                 activeCamera.close();
+            }
+            if (activeGps != null) {
+                activeGps.close();
             }
             PocketCamera.setCameraSource(null);
             activeStateSessionId = 0L;
@@ -2429,6 +2441,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             if (activeCamera != null) {
                 activeCamera.close();
             }
+            if (activeGps != null) {
+                activeGps.close();
+            }
             PocketCamera.setCameraSource(null);
             lifecycle.released();
             activeStateSessionId = 0L;
@@ -2446,6 +2461,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             rumble = activeRumble;
             tilt = activeTilt;
             camera = activeCamera;
+            gps = activeGps;
             printer = activePrinter;
             return false;
         }

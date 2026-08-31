@@ -15,13 +15,15 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
     }
 
     /**
-     * Returns the largest span for which omitting this endpoint's master-clock callback is exact.
-     * During the admitted span {@link #tick()} and {@link #setExternalTransfer(boolean)} with a
-     * false argument must be inert, {@link #recvBit()} must return {@code -1}, and
-     * {@link #isSerialInputHigh()} must remain true. PERFORMANCE uses this capability instead of
-     * assuming that an endpoint's default methods are inert; external endpoints must opt in
-     * explicitly. Endpoint topology is configured before installation, or by the Gameboy owner
-     * thread between ticks, and must not change concurrently with this query or the admitted span.
+     * Returns the largest span which can advance this endpoint without entering its scalar
+     * master-clock callback. During the admitted span {@link #setExternalTransfer(boolean)} with
+     * a false argument must be inert, {@link #recvBit()} must return {@code -1}, and
+     * {@link #isSerialInputHigh()} must not change. Stateful endpoints advance their private
+     * clocks through {@link #tickPerformanceQuietSpanTrusted(int)}; inert endpoints may retain
+     * the default no-op implementation. PERFORMANCE uses this capability instead of assuming
+     * that an endpoint's default methods are inert; external endpoints must opt in explicitly.
+     * Endpoint topology is configured before installation, or by the Gameboy owner thread
+     * between ticks, and must not change concurrently with this query or the admitted span.
      */
     default int performanceQuietSpanLimit(int requested) {
         return 0;
@@ -40,6 +42,21 @@ public interface SerialEndpoint extends StatefulComponent<SerialEndpoint> {
     /** Returns whether the endpoint is quiet for the requested PERFORMANCE span. */
     default boolean canTickPerformanceQuietSpan(int ticks) {
         return ticks > 0 && performanceQuietSpanLimit(ticks) >= ticks;
+    }
+
+    /** Advances an endpoint span after the caller has established its quiet horizon. */
+    default boolean tickPerformanceQuietSpan(int ticks) {
+        return canTickPerformanceQuietSpan(ticks);
+    }
+
+    /** Applies a span after the caller has passed {@link #performanceQuietSpanLimit(int)}. */
+    default void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        if (!tickPerformanceQuietSpan(ticks)) {
+            throw new IllegalStateException("Serial-endpoint quiet span is not eligible: " + ticks);
+        }
     }
 
     /**

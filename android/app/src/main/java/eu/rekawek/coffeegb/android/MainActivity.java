@@ -65,6 +65,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_SCREENSHOT_REQUEST = 6;
     private static final int EXPORT_PRINTER_REQUEST = 7;
     private static final int CAMERA_PERMISSION_REQUEST = 8;
+    private static final int GPS_PERMISSION_REQUEST = 9;
 
     private static final String STATE_EXTERNAL_ACTION = "external.action";
     private static final String STATE_EXTERNAL_REQUEST = "external.request";
@@ -247,7 +248,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         && checkSelfPermission(Manifest.permission.CAMERA)
                         == PackageManager.PERMISSION_GRANTED);
                 runtime.setGamepadSelection(gamepadSelection(settings));
-                runtime.setGpsEnabled(settings.getBoolean(PREF_GPS_ENABLED, false));
+                boolean gpsRequested = settings.getBoolean(PREF_GPS_ENABLED, false);
+                boolean gpsAllowed = locationPermissionGranted();
+                if (gpsRequested && !gpsAllowed) {
+                    settings.edit().putBoolean(PREF_GPS_ENABLED, false).apply();
+                }
+                runtime.setGpsEnabled(gpsRequested && gpsAllowed);
             }
             if (!diagnosticsOptions.enabled) {
                 runtime.setDisplayGrayscale("grey".equals(displayColors(settings)));
@@ -1288,12 +1294,26 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         if ("gps".equals(id)) {
             SharedPreferences preferences = getPreferences(MODE_PRIVATE);
-            boolean enabled = !preferences.getBoolean(PREF_GPS_ENABLED, false);
-            preferences.edit().putBoolean(PREF_GPS_ENABLED, enabled).apply();
-            if (runtime != null) {
-                runtime.setGpsEnabled(enabled);
+            boolean enabled = preferences.getBoolean(PREF_GPS_ENABLED, false);
+            if (enabled) {
+                preferences.edit().putBoolean(PREF_GPS_ENABLED, false).apply();
+                if (runtime != null) {
+                    runtime.setGpsEnabled(false);
+                }
+                optionalDevicesStatus = "GPS DISABLED";
+                refreshMenuPages();
+                return;
             }
-            refreshMenuPages();
+            if (locationPermissionGranted()) {
+                preferences.edit().putBoolean(PREF_GPS_ENABLED, true).apply();
+                if (runtime != null) {
+                    runtime.setGpsEnabled(true);
+                }
+                optionalDevicesStatus = "GPS ENABLED";
+                refreshMenuPages();
+                return;
+            }
+            requestGpsPermissionForCurrentMenu();
             return;
         }
         if (devicesDraft == null) {
@@ -1324,6 +1344,42 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
             default -> { }
         }
+        refreshMenuPages();
+    }
+
+    private void requestGpsPermissionForCurrentMenu() {
+        MenuStackSnapshot restoreStack = menuController.snapshot();
+        externalSurface = MenuExternalSurfaceState.launched(
+                MenuExternalSurfaceState.Action.GPS_PERMISSION, GPS_PERMISSION_REQUEST,
+                restoreStack, menuPauseOwned,
+                MenuExternalSurfaceState.RestorePolicy.ALWAYS);
+        menuPauseOwned = false;
+        menuController.hide();
+        requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION}, GPS_PERMISSION_REQUEST);
+    }
+
+    private boolean locationPermissionGranted() {
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void completeGpsPermission(MenuExternalSurfaceState pending, int requestCode) {
+        if (externalSurface != pending || !pending.active()
+                || pending.action() != MenuExternalSurfaceState.Action.GPS_PERMISSION
+                || pending.requestCode() != requestCode || pending.restoreRequested()) {
+            return;
+        }
+        boolean granted = locationPermissionGranted();
+        getPreferences(MODE_PRIVATE).edit().putBoolean(PREF_GPS_ENABLED, granted).apply();
+        if (runtime != null) {
+            runtime.setGpsEnabled(granted);
+        }
+        optionalDevicesStatus = granted ? "GPS ENABLED" : "GPS DENIED / DISABLED";
+        externalSurface = pending.afterResult(granted);
+        restoreExternalSurfaceIfRequested();
         refreshMenuPages();
     }
 
@@ -1707,7 +1763,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 requestCode = EXPORT_PRINTER_REQUEST;
                 policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
             }
-            case CAMERA_PERMISSION -> {
+            case CAMERA_PERMISSION, GPS_PERMISSION -> {
                 return;
             }
             default -> throw new IllegalStateException("Unknown native action " + action);
@@ -1773,14 +1829,15 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     public void onRequestPermissionsResult(int requestCode, String[] permissions,
             int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != CAMERA_PERMISSION_REQUEST) {
-            return;
+        if (requestCode == CAMERA_PERMISSION_REQUEST) {
+            MenuExternalSurfaceState pending = externalSurface;
+            clearLegacyCameraPermissionFallback();
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            completeCameraPermission(pending, requestCode, granted);
+        } else if (requestCode == GPS_PERMISSION_REQUEST) {
+            completeGpsPermission(externalSurface, requestCode);
         }
-        MenuExternalSurfaceState pending = externalSurface;
-        clearLegacyCameraPermissionFallback();
-        boolean granted = grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED;
-        completeCameraPermission(pending, requestCode, granted);
     }
 
     private void postLegacyCameraPermissionFallback() {
@@ -1885,7 +1942,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 active.exportPrinter(result.uri(), new PrinterExportCompletion(
                         printerContinuationPreferences, token, this, lifecycleGeneration));
             }
-            case CAMERA_PERMISSION -> { }
+            case CAMERA_PERMISSION, GPS_PERMISSION -> { }
         }
     }
 
