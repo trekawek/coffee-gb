@@ -27,6 +27,9 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     private final MemoryController addressSpace;
 
+    /** Reused exact-reader fallback for mappers without an immutable physical ROM lease. */
+    private final PerformanceRomAccess mapperPerformanceRomAccess;
+
     /** Parser-corrected loaded-image bytes retained for side-effect-free debugger reads. */
     private final int[] debugRom;
 
@@ -80,6 +83,7 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
         this.battery = battery;
         this.debugRom = rom.getRom();
         this.addressSpace = createMemoryController(rom, battery, rtcTimeSource, clockSpec);
+        this.mapperPerformanceRomAccess = new MapperPerformanceRomAccess(addressSpace);
         this.clocked = addressSpace.isClocked();
     }
 
@@ -214,10 +218,18 @@ public class Cartridge implements AddressSpace, StatefulComponent<Cartridge>,
 
     @Override
     public PerformanceRomAccess acquirePerformanceRomAccess() {
-        if (!(addressSpace instanceof PerformanceRomAccessProvider provider)) {
+        // A subclass may override the otherwise transparent cartridge read path. Production
+        // cartridges are exact instances, so derived wrappers must opt in explicitly.
+        if (getClass() != Cartridge.class) {
             return null;
         }
-        return provider.acquirePerformanceRomAccess();
+        if (addressSpace instanceof PerformanceRomAccessProvider provider) {
+            PerformanceRomAccess physicalAccess = provider.acquirePerformanceRomAccess();
+            if (physicalAccess != null) {
+                return physicalAccess;
+            }
+        }
+        return mapperPerformanceRomAccess;
     }
 
     /**

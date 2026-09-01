@@ -129,6 +129,37 @@ public final class Unlicensed256M implements MemoryController {
     }
 
     @Override
+    public int performanceQuietSpanLimit(int requested) {
+        if (requested <= 0 || debugHooks != null) {
+            return 0;
+        }
+        // The menu has no independent clock. Once a game is selected, delegate to its mapper so
+        // an embedded MBC3 remains eligible without making every multicart tick scalar.
+        return selectedGame == null
+                ? requested
+                : selectedGame.performanceQuietSpanLimit(requested);
+    }
+
+    @Override
+    public boolean tickPerformanceQuietSpan(int ticks) {
+        if (ticks <= 0 || debugHooks != null || performanceQuietSpanLimit(ticks) < ticks) {
+            return false;
+        }
+        if (selectedGame != null) {
+            return selectedGame.tickPerformanceQuietSpan(ticks);
+        }
+        return true;
+    }
+
+    @Override
+    public void tickPerformanceQuietSpanTrusted(int ticks) {
+        if (ticks <= 0 || selectedGame == null) {
+            return;
+        }
+        selectedGame.tickPerformanceQuietSpanTrusted(ticks);
+    }
+
+    @Override
     public void setClockPaused(boolean paused) {
         clockPaused = paused;
         if (selectedGame != null) {

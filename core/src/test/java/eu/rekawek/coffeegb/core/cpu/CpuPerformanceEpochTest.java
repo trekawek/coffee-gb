@@ -506,6 +506,82 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
+    public void nativeEpochUsesLogicalRomReaderWithoutFallingBackToTheCpuBus() {
+        LogicalLeasedMemory memory = new LogicalLeasedMemory();
+        memory.bytes[0] = 0x3e; // LD A,d8
+        memory.bytes[1] = 0x5a;
+        Cpu cpu = new Cpu(memory, new InterruptManager(true), null,
+                doubleSpeed(), new Display(false));
+
+        assertEquals(4, cpu.runPerformanceEpoch(4));
+
+        assertEquals(0x5a, cpu.getRegisters().getA());
+        assertEquals(1, memory.leaseAcquisitions);
+        assertEquals(2, memory.logicalReads);
+        assertEquals(0, memory.busReads);
+    }
+
+    @Test
+    public void normalSpeedEpochsUseLogicalRomReaderWithoutFallingBackToTheCpuBus() {
+        for (boolean gbc : new boolean[] {false, true}) {
+            LogicalLeasedMemory memory = new LogicalLeasedMemory();
+            memory.bytes[0] = 0x3e; // LD A,d8
+            memory.bytes[1] = 0x5a;
+            Cpu cpu = new Cpu(memory, new InterruptManager(gbc), null,
+                    new SpeedMode(gbc), new Display(false));
+
+            int elapsed = gbc
+                    ? cpu.runNativeCgbNormalSpeedPerformanceEpoch(8)
+                    : cpu.runPhysicalDmgPerformanceEpoch(8);
+
+            assertEquals(8, elapsed);
+            assertEquals(0x5a, cpu.getRegisters().getA());
+            assertEquals(1, memory.leaseAcquisitions);
+            assertEquals(2, memory.logicalReads);
+            assertEquals(0, memory.busReads);
+        }
+    }
+
+    @Test
+    public void normalSpeedDirectWholeInstructionUsesLogicalRomOperands() {
+        LogicalLeasedMemory memory = new LogicalLeasedMemory();
+        memory.bytes[0] = 0x18; // JR -2
+        memory.bytes[1] = (byte) 0xfe;
+        Cpu cpu = new Cpu(memory, new InterruptManager(false), null,
+                new SpeedMode(false), new Display(false));
+
+        assertEquals(12, cpu.runPhysicalDmgPerformanceEpoch(12));
+
+        assertEquals(0, cpu.getRegisters().getPC());
+        assertEquals(1, memory.leaseAcquisitions);
+        assertEquals(2, memory.logicalReads);
+        assertEquals(0, memory.busReads);
+    }
+
+    @Test
+    public void logicalRomReaderObservesMapperViewChangesFromSafeWritesInTheSameEpoch() {
+        LogicalLeasedMemory memory = new LogicalLeasedMemory();
+        memory.bytes[0] = 0x3e; // LD A,01
+        memory.bytes[1] = 0x01;
+        memory.bytes[2] = (byte) 0xea; // LD (c000),A
+        memory.bytes[3] = 0x00;
+        memory.bytes[4] = (byte) 0xc0;
+        memory.bytes[5] = 0x3e; // stale-view LD A,11
+        memory.bytes[6] = 0x11;
+        System.arraycopy(memory.bytes, 0, memory.changedBytes, 0, memory.bytes.length);
+        memory.changedBytes[5] = 0x3e; // updated-view LD A,77
+        memory.changedBytes[6] = 0x77;
+        Cpu cpu = new Cpu(memory, new InterruptManager(true), null,
+                doubleSpeed(), new Display(false));
+
+        assertTrue(cpu.runPerformanceEpoch(54) > 0);
+
+        assertTrue(memory.mapperViewChanged);
+        assertEquals(0x77, cpu.getRegisters().getA());
+        assertEquals(0, memory.busReads);
+    }
+
+    @Test
     public void unavailableOrUnmappedRomLeaseFallsBackToAuthoritativeBus() {
         LeasedMemory unavailable = new LeasedMemory(0, 0x4000);
         unavailable.leaseAvailable = false;
@@ -567,7 +643,7 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
-    public void scalarAndPhysicalDmgFetchesNeverAcquireNativeRomLease() {
+    public void scalarFetchDoesNotAcquireLeaseButNormalSpeedEpochDoes() {
         LeasedMemory scalarMemory = new LeasedMemory(0, 0x4000);
         scalarMemory.bytes[0] = 0x00; // NOP on the authoritative bus
         scalarMemory.physicalBytes[0] = 0x76; // HALT only in the lease
@@ -583,16 +659,17 @@ public final class CpuPerformanceEpochTest {
         assertEquals(1, scalarMemory.busReads);
 
         LeasedMemory physicalDmgMemory = new LeasedMemory(0, 0x4000);
-        physicalDmgMemory.bytes[0] = 0x00;
-        physicalDmgMemory.physicalBytes[0] = 0x76;
+        physicalDmgMemory.bytes[0] = 0x76; // HALT only on the authoritative bus
+        physicalDmgMemory.physicalBytes[0] = 0x00; // NOP in the lease
         Cpu physicalDmg = new Cpu(physicalDmgMemory, new InterruptManager(false), null,
                 new SpeedMode(false), new Display(false));
 
         assertEquals(4, physicalDmg.runPhysicalDmgPerformanceEpoch(4));
         assertEquals(Cpu.State.OPCODE, physicalDmg.getState());
         assertEquals(1, physicalDmg.getRegisters().getPC());
-        assertEquals(0, physicalDmgMemory.leaseAcquisitions);
-        assertEquals(1, physicalDmgMemory.busReads);
+        assertEquals(1, physicalDmgMemory.leaseAcquisitions);
+        assertEquals(1, physicalDmgMemory.leaseReads);
+        assertEquals(0, physicalDmgMemory.busReads);
     }
 
     @Test
@@ -690,7 +767,7 @@ public final class CpuPerformanceEpochTest {
     }
 
     @Test
-    public void nativeCgbNormalSpeedRunsOrdinaryCodeUnderImeDisabledRawPendingInterrupt()
+    public void nativeCgbNormalSpeedLeavesUnknownRomFetchScalarUnderRawPendingInterrupt()
             throws Exception {
         ParityMemory directMemory = new ParityMemory();
         ParityMemory scalarMemory = new ParityMemory();
@@ -707,7 +784,7 @@ public final class CpuPerformanceEpochTest {
 
         assertTrue(direct.performanceNativeCgbNormalSpeedEpochEntryEligible());
         int elapsed = direct.runNativeCgbNormalSpeedPerformanceEpoch(54);
-        assertEquals(54, elapsed);
+        assertEquals(3, elapsed);
         for (int tick = 0; tick < elapsed; tick++) {
             scalar.tick();
         }
@@ -716,6 +793,7 @@ public final class CpuPerformanceEpochTest {
         assertDeepEquals("interrupts", scalarInterrupts.captureState(),
                 directInterrupts.captureState());
         assertArrayEquals(scalarMemory.bytes, directMemory.bytes);
+        assertEquals("unknown ROM opcode was speculatively read", 0, directMemory.reads);
     }
 
     @Test
@@ -773,9 +851,9 @@ public final class CpuPerformanceEpochTest {
         CountingMemory retiMemory = new CountingMemory();
         retiMemory.bytes[0] = (byte) 0xd9; // RETI
         Cpu reti = normalSpeedNativeCpu(retiMemory, pendingVBlank());
-        assertEquals(4, reti.runNativeCgbNormalSpeedPerformanceEpoch(4));
-        assertTrue(reti.getState() != Cpu.State.OPCODE);
-        assertEquals("in-flight RETI must remain scalar", 0,
+        assertEquals(3, reti.runNativeCgbNormalSpeedPerformanceEpoch(4));
+        assertEquals(Cpu.State.OPCODE, reti.getState());
+        assertEquals("RETI fetch must remain scalar", 0,
                 reti.runNativeCgbNormalSpeedPerformanceEpoch(54));
     }
 
@@ -1529,6 +1607,64 @@ public final class CpuPerformanceEpochTest {
                 return physicalBytes[physicalOffset] & 0xff;
             }
             return bytes[address & 0xffff] & 0xff;
+        }
+    }
+
+    private static final class LogicalLeasedMemory
+            implements AddressSpace, PerformanceRomAccessProvider {
+
+        private final byte[] bytes = new byte[0x10000];
+        private final byte[] changedBytes = new byte[0x10000];
+        private int leaseAcquisitions;
+        private int logicalReads;
+        private int busReads;
+        private boolean mapperViewChanged;
+
+        private final PerformanceRomAccess lease = new PerformanceRomAccess() {
+            @Override
+            public int physicalOffset(int cpuAddress) {
+                return -1;
+            }
+
+            @Override
+            public int readPhysicalByte(int physicalOffset) {
+                return 0xff;
+            }
+
+            @Override
+            public int readCpuByte(int cpuAddress) {
+                if (cpuAddress < 0 || cpuAddress >= 0x8000) {
+                    return -1;
+                }
+                logicalReads++;
+                return (mapperViewChanged ? changedBytes : bytes)[cpuAddress] & 0xff;
+            }
+        };
+
+        @Override
+        public boolean accepts(int address) {
+            return address >= 0 && address <= 0xffff;
+        }
+
+        @Override
+        public void setByte(int address, int value) {
+            if ((address & 0xffff) == 0xc000) {
+                mapperViewChanged = true;
+            }
+            bytes[address & 0xffff] = (byte) value;
+            changedBytes[address & 0xffff] = (byte) value;
+        }
+
+        @Override
+        public int getByte(int address) {
+            busReads++;
+            return (mapperViewChanged ? changedBytes : bytes)[address & 0xffff] & 0xff;
+        }
+
+        @Override
+        public PerformanceRomAccess acquirePerformanceRomAccess() {
+            leaseAcquisitions++;
+            return lease;
         }
     }
 }

@@ -19,6 +19,9 @@ public interface MemoryController extends AddressSpace, StatefulComponent<Memory
      * Returns the largest PERFORMANCE span which can advance this mapper without entering its
      * scalar clock path.  Clocked controllers must opt in explicitly; this conservative default
      * keeps newly added mapper hardware on the exact scheduler until its clock contract is known.
+     * Opting in also certifies that CPU ROM reads commute with the deferred arithmetic clock
+     * advance; cartridge-control, external-RAM, and RTC accesses are pre-fenced or terminate
+     * after an exact committed clock prefix.
      */
     default int performanceQuietSpanLimit(int requested) {
         if (requested <= 0) {

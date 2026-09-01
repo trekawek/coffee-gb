@@ -223,13 +223,52 @@ public class PerformanceRomAccessTest {
     }
 
     @Test
-    public void nonMbc5CartridgeHasSafeNullFallback() throws IOException {
+    public void basicRomCartridgeUsesReusedExactMapperFallback() throws IOException {
         byte[] rom = new byte[0x8000];
+        rom[0x0000] = 0x21;
+        rom[0x3fff] = 0x43;
+        rom[0x4000] = 0x65;
+        rom[0x7fff] = (byte) 0x87;
         rom[0x0147] = 0x00;
 
         Cartridge cartridge = new Cartridge(new Rom(rom), Battery.NULL_BATTERY);
 
-        assertNull(cartridge.acquirePerformanceRomAccess());
+        PerformanceRomAccess access = cartridge.acquirePerformanceRomAccess();
+        assertNotNull(access);
+        assertSame(access, cartridge.acquirePerformanceRomAccess());
+        assertEquals(-1, access.physicalOffset(0x0000));
+        assertEquals(0xff, access.readPhysicalByte(0));
+        assertEquals(0x21, access.readCpuByte(0x0000));
+        assertEquals(0x43, access.readCpuByte(0x3fff));
+        assertEquals(0x65, access.readCpuByte(0x4000));
+        assertEquals(0x87, access.readCpuByte(0x7fff));
+        assertEquals(-1, access.readCpuByte(-1));
+        assertEquals(-1, access.readCpuByte(0x8000));
+    }
+
+    @Test
+    public void productionCartridgeFallsBackWhenSpecializedMapperDeclines() throws IOException {
+        Cartridge cartridge = new Cartridge(new Rom(mbc5Rom()), Battery.NULL_BATTERY);
+        cartridge.setDebugHooks(new TestDebugHooks());
+
+        PerformanceRomAccess access = cartridge.acquirePerformanceRomAccess();
+
+        assertNotNull(access);
+        assertEquals(-1, access.physicalOffset(0x0000));
+        assertEquals(0x20, access.readCpuByte(0x0000));
+        assertEquals(0x21, access.readCpuByte(0x4000));
+    }
+
+    @Test
+    public void derivedCartridgeStillFailsClosed() throws IOException {
+        Cartridge derived = new Cartridge(new Rom(mbc5Rom()), Battery.NULL_BATTERY) {
+            @Override
+            public int getByte(int address) {
+                return 0x5a;
+            }
+        };
+
+        assertNull(derived.acquirePerformanceRomAccess());
     }
 
     private static Mbc5 plainMbc5() throws IOException {

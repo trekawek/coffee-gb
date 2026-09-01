@@ -1524,8 +1524,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !dma.requiresClockTick(false)
                 && !hdma.hasActiveOrPendingTransfer()
                 && hdma.isPerformanceInactiveRequestClockStable()
-                && !cartridgeClocked
-                && !slotCartridgeClocked
                 && serialPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS)
                 && infraredPort.performanceEpochIdle(Cpu.PERFORMANCE_EPOCH_MAX_TICKS);
     }
@@ -1542,6 +1540,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
+        if (cartridgeClocked) {
+            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        }
+        if (slotCartridgeClocked) {
+            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        }
         span = Math.min(span, timer.performanceEpochSpanLimit(span));
         span = Math.min(span, sound.performanceEpochSpanLimit(span));
         span = Math.min(span, joypad.performanceSettledHaltSpanLimit(span));
@@ -1648,7 +1652,7 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
      * Attempts one native-CGB double-speed settled-HALT packet. HALT has no CPU bus work once
      * its entry and wake samples have settled, but the packet still stops before every timer,
      * audio, input, PPU, STAT, DMA, and frame boundary. Unlike the ordinary epoch this path does
-     * not borrow a ROM mapping or change the CPU instruction sequencer.
+     * not borrow a ROM reader or change the CPU instruction sequencer.
      */
     private int tryPerformanceSettledNativeCgbHaltSpan(long remaining) {
         if (remaining <= 0 || !cpu.performanceNativeCgbSettledHaltSpanEligible()
@@ -1656,6 +1660,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) SETTLED_HALT_PERFORMANCE_MAX_SPAN, remaining);
+        if (cartridgeClocked) {
+            span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        }
+        if (slotCartridgeClocked) {
+            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
+        }
         span = Math.min(span, timer.performanceEpochSpanLimit(span));
         // This is a settled no-bus HALT transaction, so ordinary compact samples cannot race a
         // deferred CPU sound-register write. Only the synchronous host callback stays scalar.
@@ -1723,14 +1733,18 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && !hdma.holdsHblankSpeedSwitchTail()
                 && !hdma.pausesOamDmaForSpeedSwitchBurst()
                 && !hdma.requiresCpuHdmaPhaseFlags()
-                && hdma.isPerformanceInactiveRequestClockStable()
-                && !cartridgeClocked
-                && !slotCartridgeClocked;
+                && hdma.isPerformanceInactiveRequestClockStable();
     }
 
     private void tickPerformanceSettledNativeCgbHaltSpan(
             int ticks, PerformanceEpochPpuPlan ppuPlan, boolean directRaster,
             boolean steadyRaster) {
+        if (cartridgeClocked) {
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
         timer.tickPerformanceEpochTrusted(ticks);
         sound.tickFrameSequencer(false);
         assert !sound.hasPendingFrameSequencerClock()
@@ -1845,12 +1859,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return 0;
         }
         int span = (int) Math.min((long) Cpu.PERFORMANCE_EPOCH_MAX_TICKS, remaining);
-        if (nativeCgbNormalSpeed && cartridgeClocked) {
-            // Native x1 keeps every decoded mapper/RTC access on the scalar boundary.  A
-            // clocked primary cartridge may therefore join only through its independently
-            // proven arithmetic clock horizon; the conservative MemoryController default
-            // rejects unknown clocked hardware here.
+        if (cartridgeClocked) {
+            // Cartridge-control, external-RAM, and RTC accesses stay on the scalar boundary.
+            // A clocked cartridge may join only through its independently proven arithmetic
+            // horizon; the conservative MemoryController default rejects unknown hardware.
             span = Math.min(span, cartridge.performanceQuietSpanLimit(span));
+        }
+        if (slotCartridgeClocked) {
+            span = Math.min(span, slotCartridge.performanceQuietSpanLimit(span));
         }
         span = Math.min(span, timer.performanceNormalSpeedEpochSpanLimit(span, cgbHardware));
         span = Math.min(span, nativeCgbNormalSpeed || sgb || physicalDmgLcdOffEpoch
@@ -2036,8 +2052,6 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
                 && (lcdEnabled ? !lcdDisabled : lcdOffEpoch && lcdDisabled)
                 && !dma.isTransferInProgress()
                 && !dma.requiresClockTick(false)
-                && (!cartridgeClocked || nativeCgbNormalSpeed)
-                && !slotCartridgeClocked
                 && (!cgbHardware || (!hdma.hasActiveOrPendingTransfer()
                         && !hdma.hasPendingHblankTransfer()
                         && !hdma.isHaltRequestLatched()
@@ -2071,6 +2085,12 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
     private void commitPerformanceEpochPeripherals(int ticks) {
         if (ticks <= 0) {
             return;
+        }
+        if (cartridgeClocked) {
+            cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
         timer.tickPerformanceEpochTrusted(ticks);
         sound.tickFrameSequencer(false);
@@ -2149,11 +2169,14 @@ public class Gameboy implements Runnable, StatefulComponent<Gameboy>, Closeable 
             return;
         }
         capturePerformanceEpochEntryStatReadPhase();
-        if (cgbHardware && !speedMode.isDmgCompat() && cartridgeClocked) {
+        if (cartridgeClocked) {
             // Scalar Gameboy.tick() clocks the cartridge before Timer and every other
             // subsystem.  Prefix flushes and the final suffix both pass through this method,
             // preserving that ordering before a fenced mapper/RTC boundary returns scalar.
             cartridge.tickPerformanceQuietSpanTrusted(ticks);
+        }
+        if (slotCartridgeClocked) {
+            slotCartridge.tickPerformanceQuietSpanTrusted(ticks);
         }
         timer.tickPerformanceNormalSpeedEpochTrusted(ticks);
         sound.tickFrameSequencer(false);

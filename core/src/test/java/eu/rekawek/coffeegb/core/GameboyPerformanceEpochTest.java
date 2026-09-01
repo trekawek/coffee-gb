@@ -15,6 +15,7 @@ import org.junit.Test;
 
 import java.lang.reflect.Array;
 import java.lang.reflect.RecordComponent;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
@@ -511,22 +512,114 @@ public final class GameboyPerformanceEpochTest {
     }
 
     @Test
-    public void clockedMbc3CgbCompatibilityRemainsOutsideRunningEpoch()
+    public void clockedMbc3DmgAndCgbCompatibilityMatchScalarWithRunningEpochCoverage()
             throws Exception {
-        byte[] compatibility = mbc3(dmgRomWramLoop());
-        try (Gameboy cgbCompatibility = new Gameboy.GameboyConfiguration(new Rom(compatibility))
-                     .setHardwareProfile(HardwareProfileRegistry.CGB)
-                     .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
-                     .setExecutionMode(ExecutionMode.PERFORMANCE)
-                     .setPlayerInputSource(PlayerInputSource.RELEASED)
-                     .setRtcTimeSource(() -> 0L)
-                     .setSupportBatterySave(false)
-                     .build()) {
-            cgbCompatibility.runTicks(100_000);
+        for (HardwareProfile profile : new HardwareProfile[] {
+                HardwareProfileRegistry.DMG, HardwareProfileRegistry.CGB}) {
+            byte[] image = mbc3(dmgRomWramLoop());
+            try (Gameboy scalar = clockedMbc3NormalSpeedSession(
+                    image, profile, PlayerInputSnapshot::released);
+                 Gameboy candidate = clockedMbc3NormalSpeedSession(
+                         image, profile, PlayerInputSource.RELEASED)) {
+                for (int chunk = 0; chunk < 20; chunk++) {
+                    assertEquals(profile.id() + " MBC3 frame callback " + chunk,
+                            scalar.runTicks(5_000), candidate.runTicks(5_000));
+                    assertDeepStateEquals(profile.id() + " MBC3 chunk " + chunk,
+                            scalar.captureStateWithoutTimeSource(),
+                            candidate.captureStateWithoutTimeSource());
+                }
 
-            assertTrue(cgbCompatibility.getSpeedMode().isDmgCompat());
-            assertEquals("clocked MBC3 entered CGB-compatibility running epoch",
-                    0L, cgbCompatibility.getPerformanceEpochTicks());
+                assertEquals("custom-source MBC3 oracle unexpectedly entered " + profile.id(),
+                        0L, scalar.getPerformanceEpochTicks());
+                assertTrue(profile.id() + " MBC3 had no running-epoch coverage",
+                        candidate.getPerformanceEpochTicks() > 10_000L);
+            }
+        }
+    }
+
+    @Test
+    public void nativeDoubleSpeedMbc3MatchesScalarWithRunningEpochCoverage()
+            throws Exception {
+        byte[] image = nativeMbc3(doubleSpeedLoop());
+        try (Gameboy scalar = nativeDoubleSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeDoubleSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            for (int chunk = 0; chunk < 40; chunk++) {
+                assertEquals("native CGB x2 MBC3 frame callback " + chunk,
+                        scalar.runTicks(5_000), candidate.runTicks(5_000));
+                assertDeepStateEquals("native CGB x2 MBC3 chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+
+            assertEquals(2, candidate.getSpeedMode().getSpeedMode());
+            assertEquals("custom-source MBC3 oracle unexpectedly entered x2 epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("native CGB x2 MBC3 had no running-epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000L);
+        }
+    }
+
+    @Test
+    public void nativeDoubleSpeedMbc3SettledHaltMatchesScalarWithBulkCoverage()
+            throws Exception {
+        byte[] image = nativeMbc3(doubleSpeedLoop());
+        image[0x106] = 0x76; // HALT immediately after the speed switch.
+        try (Gameboy scalar = nativeDoubleSpeedMbc3Session(
+                image, PlayerInputSnapshot::released);
+             Gameboy candidate = nativeDoubleSpeedMbc3Session(
+                     image, PlayerInputSource.RELEASED)) {
+            assertEquals("native CGB x2 MBC3 HALT setup frame callback",
+                    scalar.runTicks(160_000), candidate.runTicks(160_000));
+            assertEquals(2, candidate.getSpeedMode().getSpeedMode());
+            assertEquals(Cpu.State.HALTED, candidate.getCpu().getState());
+            assertDeepStateEquals("native CGB x2 MBC3 settled-HALT setup",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            assertEquals("native CGB x2 MBC3 settled-HALT frame callback",
+                    scalar.runTicks(256), candidate.runTicks(256));
+
+            assertEquals("custom-source MBC3 HALT oracle entered a bulk lane",
+                    0L, scalar.getPerformanceBulkTicks());
+            assertTrue("clocked native CGB x2 settled HALT had no substantial packet",
+                    candidate.getPerformanceBulkMaxTicks() > 3);
+            assertDeepStateEquals("native CGB x2 MBC3 settled HALT",
+                    scalar.captureStateWithoutTimeSource(),
+                    candidate.captureStateWithoutTimeSource());
+        }
+    }
+
+    @Test
+    public void datelClockedMbc3SlotMatchesScalarAcrossRtcBoundaries()
+            throws Exception {
+        byte[] slotImage = mbc3(nativeCgbMbc3RtcWriteLoop());
+        try (Gameboy scalar = datelMbc3SlotSession(
+                slotImage, PlayerInputSnapshot::released);
+             Gameboy candidate = datelMbc3SlotSession(
+                     slotImage, PlayerInputSource.RELEASED)) {
+            launchDatelSlot(scalar);
+            launchDatelSlot(candidate);
+            scalar.resetPerformanceBulkCounters();
+            candidate.resetPerformanceBulkCounters();
+
+            for (int chunk = 0; chunk < 20; chunk++) {
+                assertEquals("Datel MBC3-slot frame callback " + chunk,
+                        scalar.runTicks(5_000), candidate.runTicks(5_000));
+                assertDeepStateEquals("Datel MBC3-slot chunk " + chunk,
+                        scalar.captureStateWithoutTimeSource(),
+                        candidate.captureStateWithoutTimeSource());
+            }
+
+            assertEquals("custom-source Datel oracle unexpectedly entered epoch lane",
+                    0L, scalar.getPerformanceEpochTicks());
+            assertTrue("Datel MBC3 slot had no running-epoch coverage",
+                    candidate.getPerformanceEpochTicks() > 10_000L);
+            assertEquals("slot RTC write/read boundary", 42,
+                    candidate.getAddressSpace().getByte(0xc000));
         }
     }
 
@@ -1589,6 +1682,37 @@ public final class GameboyPerformanceEpochTest {
                 .build();
     }
 
+    private static Gameboy nativeDoubleSpeedMbc3Session(
+            byte[] image, PlayerInputSource inputSource) throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setRtcTimeSource(() -> 0L)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy datelMbc3SlotSession(
+            byte[] slotImage, PlayerInputSource inputSource) throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(datelPerformanceRom()))
+                .setSlotRom(new Rom(slotImage))
+                .setHardwareProfile(HardwareProfileRegistry.CGB)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setRtcTimeSource(() -> 0L)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static void launchDatelSlot(Gameboy gameboy) {
+        gameboy.getAddressSpace().setByte(0x7fe4, 0x11);
+        gameboy.getAddressSpace().setByte(0x7ff4, 0x10);
+        gameboy.runTicks(4);
+    }
+
     private static Gameboy fastForwardCgbCompatibilitySession(PlayerInputSource inputSource)
             throws Exception {
         return new Gameboy.GameboyConfiguration(new Rom(validNonColorRom()))
@@ -1619,6 +1743,19 @@ public final class GameboyPerformanceEpochTest {
                 .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
                 .setExecutionMode(executionMode)
                 .setPlayerInputSource(inputSource)
+                .setSupportBatterySave(false)
+                .build();
+    }
+
+    private static Gameboy clockedMbc3NormalSpeedSession(
+            byte[] image, HardwareProfile profile, PlayerInputSource inputSource)
+            throws Exception {
+        return new Gameboy.GameboyConfiguration(new Rom(image))
+                .setHardwareProfile(profile)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setExecutionMode(ExecutionMode.PERFORMANCE)
+                .setPlayerInputSource(inputSource)
+                .setRtcTimeSource(() -> 0L)
                 .setSupportBatterySave(false)
                 .build();
     }
@@ -1995,6 +2132,22 @@ public final class GameboyPerformanceEpochTest {
         byte[] image = validNonColorRom();
         image[0x143] = (byte) 0x80;
         updateHeaderChecksum(image);
+        return image;
+    }
+
+    private static byte[] datelPerformanceRom() {
+        byte[] image = new byte[0x20000];
+        image[0x100] = 0x00;
+        image[0x101] = (byte) 0xc3;
+        image[0x102] = 0x50;
+        image[0x103] = 0x01;
+        image[0x104] = 0x44; // Deliberately invalid logo, as on the supported Datel image.
+        byte[] title = "Action Replay V4".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(title, 0, image, 0x134, title.length);
+        image[0x147] = 0x00;
+        image[0x148] = 0x02;
+        image[0x150] = 0x18;
+        image[0x151] = (byte) 0xfe;
         return image;
     }
 
