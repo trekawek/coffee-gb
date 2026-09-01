@@ -29,9 +29,12 @@ public final class FixtureRomProvider extends ContentProvider {
             "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-cgb.gbc");
     static final Uri SGB_URI = Uri.parse(
             "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-sgb.gb");
+    static final Uri TILT_URI = Uri.parse(
+            "content://eu.rekawek.coffeegb.android.test.fixture/ci-smoke-tilt.gbc");
     private static final String DISPLAY_NAME = "coffee-gb-ci-smoke.gb";
     private static final String SECOND_DISPLAY_NAME = "coffee-gb-ci-smoke-cgb.gbc";
     private static final String SGB_DISPLAY_NAME = "coffee-gb-ci-smoke-sgb.gb";
+    private static final String TILT_DISPLAY_NAME = "coffee-gb-ci-smoke-tilt.gbc";
     private static final int ROM_SIZE = 0x8000;
     private static final byte[] NINTENDO_LOGO = {
             (byte) 0xce, (byte) 0xed, 0x66, 0x66, (byte) 0xcc, 0x0d, 0x00, 0x0b,
@@ -79,8 +82,10 @@ public final class FixtureRomProvider extends ContentProvider {
             try (FileOutputStream output = new FileOutputStream(fixture)) {
                 output.write(fixtureBytes(
                         uri.equals(SECOND_URI) ? "CI SMOKE CGB"
-                                : uri.equals(SGB_URI) ? "CI SMOKE SGB" : "CI SMOKE",
-                        uri.equals(SECOND_URI), uri.equals(SGB_URI)));
+                                : uri.equals(SGB_URI) ? "CI SMOKE SGB"
+                                : uri.equals(TILT_URI) ? "CI SMOKE TILT" : "CI SMOKE",
+                        uri.equals(SECOND_URI) || uri.equals(TILT_URI),
+                        uri.equals(SGB_URI), uri.equals(TILT_URI)));
             }
             return ParcelFileDescriptor.open(fixture, ParcelFileDescriptor.MODE_READ_ONLY);
         } catch (IOException failure) {
@@ -104,7 +109,8 @@ public final class FixtureRomProvider extends ContentProvider {
     }
 
     private static void assertFixture(Uri uri) {
-        if (!URI.equals(uri) && !SECOND_URI.equals(uri) && !SGB_URI.equals(uri)) {
+        if (!URI.equals(uri) && !SECOND_URI.equals(uri) && !SGB_URI.equals(uri)
+                && !TILT_URI.equals(uri)) {
             throw new IllegalArgumentException("Unknown CI fixture");
         }
     }
@@ -112,10 +118,12 @@ public final class FixtureRomProvider extends ContentProvider {
     private static String displayName(Uri uri) {
         assertFixture(uri);
         return uri.equals(SECOND_URI) ? SECOND_DISPLAY_NAME
-                : uri.equals(SGB_URI) ? SGB_DISPLAY_NAME : DISPLAY_NAME;
+                : uri.equals(SGB_URI) ? SGB_DISPLAY_NAME
+                : uri.equals(TILT_URI) ? TILT_DISPLAY_NAME : DISPLAY_NAME;
     }
 
-    private static byte[] fixtureBytes(String fixtureTitle, boolean cgb, boolean sgb) {
+    private static byte[] fixtureBytes(
+            String fixtureTitle, boolean cgb, boolean sgb, boolean tilt) {
         byte[] rom = new byte[ROM_SIZE];
         rom[0x0100] = (byte) 0xc3; // JP 0x0150
         rom[0x0101] = 0x50;
@@ -125,7 +133,7 @@ public final class FixtureRomProvider extends ContentProvider {
         System.arraycopy(title, 0, rom, 0x0134, title.length);
         rom[0x0143] = cgb ? (byte) 0x80 : 0x00;
         rom[0x0146] = sgb ? (byte) 0x03 : 0x00;
-        rom[0x0147] = 0x00; // ROM only
+        rom[0x0147] = (byte) (tilt ? 0x22 : 0x00); // MBC7 or ROM only
         rom[0x0148] = 0x00; // 32 KiB
         rom[0x0149] = 0x00; // no RAM
         int checksum = 0;

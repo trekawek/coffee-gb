@@ -67,6 +67,42 @@ version_is_newer() {
   return 1
 }
 
+baseline_profile_for_api() {
+  local metadata="$1"
+  local device_api="$2"
+
+  awk -v api="$device_api" '
+    /"minApi"[[:space:]]*:/ {
+      value=$0
+      sub(/^.*:/, "", value)
+      gsub(/[^0-9]/, "", value)
+      min_api=value + 0
+    }
+    /"maxApi"[[:space:]]*:/ {
+      value=$0
+      sub(/^.*:/, "", value)
+      gsub(/[^0-9]/, "", value)
+      max_api=value + 0
+    }
+    /"baselineProfiles\/[^"[:space:]]+[.]dm"/ {
+      path=$0
+      sub(/^[^"]*"/, "", path)
+      sub(/".*/, "", path)
+      if (api >= min_api && api <= max_api) {
+        matches++
+        selected=path
+      }
+    }
+    END {
+      if (matches == 1) {
+        print selected
+        exit 0
+      }
+      exit 1
+    }
+  ' "$metadata"
+}
+
 script_path="${BASH_SOURCE[0]}"
 script_dir="$(cd -- "$(dirname -- "$script_path")" && pwd -P)"
 repo_root="$script_dir"
@@ -177,7 +213,29 @@ else
   "$apksigner_bin" verify --verbose "$signed_apk"
 fi
 
-echo "Installing the $build_variant QA APK with adb -r (app data preserved)"
-"$adb_bin" install -r "$signed_apk"
+device_api="$("$adb_bin" shell getprop ro.build.version.sdk | tr -d '\r')"
+[[ "$device_api" =~ ^[0-9]+$ ]] || die "device returned an invalid Android API level"
+profile_metadata="$apk_dir/output-metadata.json"
+[[ -f "$profile_metadata" ]] || die "Android build did not produce output metadata: $profile_metadata"
 
-echo "Installed $signed_apk"
+if relative_profile="$(baseline_profile_for_api "$profile_metadata" "$device_api")"; then
+  case "$relative_profile" in
+    /*|../*|*/../*|*/..) die "Android build reported an unsafe baseline-profile path" ;;
+  esac
+  generated_profile="$apk_dir/$relative_profile"
+  [[ -s "$generated_profile" ]] \
+    || die "Android build did not produce the selected baseline profile: $generated_profile"
+  signed_profile="${signed_apk%.apk}.dm"
+  cp -- "$generated_profile" "$signed_profile"
+  echo "Installing the $build_variant QA APK and API $device_api baseline profile (app data preserved)"
+  "$adb_bin" install-multiple -r "$signed_apk" "$signed_profile"
+  echo "Installed $signed_apk and $signed_profile"
+elif ((device_api < 28)); then
+  # AGP does not emit install-time DM artifacts for every supported legacy Android version.
+  # The bundled ProfileInstaller can still install the embedded profile after first launch.
+  echo "Installing the $build_variant QA APK with adb -r (no API $device_api install-time profile available)"
+  "$adb_bin" install -r "$signed_apk"
+  echo "Installed $signed_apk"
+else
+  die "Android build metadata did not select exactly one baseline profile for API $device_api"
+fi

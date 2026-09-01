@@ -51,6 +51,13 @@ public class AndroidEmulationRuntimeTest {
     }
 
     @Test
+    public void staleControllerLoadingCannotResurrectAStoppedRuntimeShell() {
+        assertTrue(AndroidEmulationRuntime.controllerLoadCallbackMatches(4L, 4L, true));
+        assertFalse(AndroidEmulationRuntime.controllerLoadCallbackMatches(3L, 4L, true));
+        assertFalse(AndroidEmulationRuntime.controllerLoadCallbackMatches(4L, 4L, false));
+    }
+
+    @Test
     public void benchmarkEndpointAndAckMustBelongToOneCurrentPresentedSession() {
         assertTrue(AndroidEmulationRuntime.benchmarkSessionMatches(12L, 12L, 12L, 12L));
         assertFalse(AndroidEmulationRuntime.benchmarkSessionMatches(11L, 12L, 12L, 12L));

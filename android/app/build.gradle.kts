@@ -474,6 +474,30 @@ androidComponents {
                 }
               }
             }
+            val installProfiles = apk.parentFile.resolve("baselineProfiles")
+                .walkTopDown()
+                .filter { candidate -> candidate.isFile && candidate.extension == "dm" }
+                .toList()
+            check(installProfiles.size == 2) {
+              "${apk.name} requires exactly two API-ranged install profiles: $installProfiles"
+            }
+            installProfiles.forEach { profile ->
+              check(profile.nameWithoutExtension == apk.nameWithoutExtension) {
+                "${profile.name} must share the APK stem ${apk.nameWithoutExtension}"
+              }
+              ZipFile(profile).use { archive ->
+                val entries = archive.entries().asSequence()
+                    .filterNot { entry -> entry.isDirectory }
+                    .map { entry -> entry.name to entry.size }
+                    .toList()
+                check(entries.size == 2
+                    && entries.map { entry -> entry.first }.toSet()
+                        == setOf("primary.prof", "primary.profm")
+                    && entries.all { entry -> entry.second > 0L }) {
+                  "${profile.name} must contain only non-empty primary.prof and primary.profm"
+                }
+              }
+            }
           }
         }
       }

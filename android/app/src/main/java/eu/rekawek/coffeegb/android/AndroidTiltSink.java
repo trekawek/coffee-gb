@@ -196,7 +196,11 @@ final class AndroidTiltSink implements AutoCloseable {
             calibrationRotation = rotation;
             calibrated = true;
         }
-        eventBus.post(new AccelerometerEvent(x - neutralX, y - neutralY));
+        // Android reports acceleration in m/s² while the portable MBC7 contract uses g units.
+        // Feeding the raw delta made the emulated sensor roughly 9.8 times too sensitive.
+        eventBus.post(new AccelerometerEvent(
+                (x - neutralX) / SensorManager.GRAVITY_EARTH,
+                (y - neutralY) / SensorManager.GRAVITY_EARTH));
     }
 
     private void startIfNeeded() {

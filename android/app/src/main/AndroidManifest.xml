@@ -13,6 +13,7 @@
 
     <application
         android:allowBackup="false"
+        android:appCategory="game"
         android:icon="@mipmap/ic_launcher"
         android:label="Coffee GB"
         android:roundIcon="@mipmap/ic_launcher_round"

@@ -2,7 +2,10 @@ package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.memento.Memento;
 
+import eu.rekawek.coffeegb.core.debug.DebugHooks;
 import eu.rekawek.coffeegb.core.events.EventBus;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccess;
+import eu.rekawek.coffeegb.core.memory.PerformanceRomAccessProvider;
 import eu.rekawek.coffeegb.core.state.MachineStateCapture;
 import eu.rekawek.coffeegb.core.state.ComponentState;
 import eu.rekawek.coffeegb.core.memory.cart.MemoryController;
@@ -14,7 +17,7 @@ import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
  * Used by Kirby's Tilt 'n' Tumble.
  * Features ROM banking, accelerometer (sensor), and EEPROM.
  */
-public class Mbc7 implements MemoryController {
+public class Mbc7 implements MemoryController, PerformanceRomAccessProvider {
 
     private final int romBanks;
 
@@ -35,6 +38,12 @@ public class Mbc7 implements MemoryController {
     private int latchState = 0;
 
     private final Mbc7Eeprom eeprom;
+
+    private transient DebugHooks debugHooks;
+
+    /** Reused snapshot; a caller borrows it only until its bounded transaction completes. */
+    private final Mbc7PerformanceRomAccess performanceRomAccess =
+            new Mbc7PerformanceRomAccess();
 
     public Mbc7(Rom rom, Battery battery) {
         this.cartridge = rom.getRom();
@@ -117,6 +126,22 @@ public class Mbc7 implements MemoryController {
         }
     }
 
+    @Override
+    public void setDebugHooks(DebugHooks hooks) {
+        debugHooks = hooks;
+    }
+
+    @Override
+    public PerformanceRomAccess acquirePerformanceRomAccess() {
+        // Derived boards may add mapping semantics outside plain MBC7. Debug sessions retain the
+        // ordinary mapper path so instrumentation remains authoritative.
+        if (getClass() != Mbc7.class || debugHooks != null) {
+            return null;
+        }
+        performanceRomAccess.upperWindowBase = (selectedRomBank % romBanks) * 0x4000;
+        return performanceRomAccess;
+    }
+
     private void writeEeprom(int value) {
         eeprom.write(value);
     }
@@ -131,6 +156,39 @@ public class Mbc7 implements MemoryController {
             return cartridge[cartOffset];
         } else {
             return 0xff;
+        }
+    }
+
+    private final class Mbc7PerformanceRomAccess implements PerformanceRomAccess {
+
+        private int upperWindowBase;
+
+        @Override
+        public int physicalOffset(int cpuAddress) {
+            if (cpuAddress < 0 || cpuAddress >= 0x8000) {
+                return -1;
+            }
+            return cpuAddress < 0x4000
+                    ? cpuAddress
+                    : upperWindowBase + cpuAddress - 0x4000;
+        }
+
+        @Override
+        public int readPhysicalByte(int physicalOffset) {
+            return physicalOffset >= 0 && physicalOffset < cartridge.length
+                    ? cartridge[physicalOffset]
+                    : 0xff;
+        }
+
+        @Override
+        public int readCpuByte(int cpuAddress) {
+            if (cpuAddress < 0 || cpuAddress >= 0x8000) {
+                return -1;
+            }
+            int physicalOffset = cpuAddress < 0x4000
+                    ? cpuAddress
+                    : upperWindowBase + cpuAddress - 0x4000;
+            return physicalOffset < cartridge.length ? cartridge[physicalOffset] : 0xff;
         }
     }
 

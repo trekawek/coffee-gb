@@ -51,6 +51,7 @@ GATE_SCRIPT=${COFFEE_GB_M2_GATE_SCRIPT:-$SCRIPT_DIR/surface-timestats-gate.sh}
 
 usage() {
   echo "usage: benchmark-device-matrix.sh --parent-apk <signed.apk> --candidate-apk <signed.apk>" >&2
+  echo "       Each APK requires a same-stem install-time profile beside it: <signed.dm>" >&2
   echo "       --color-slot <0..9> --non-color-slot <0..9>" >&2
   echo "       [--execution-mode accuracy|performance] [--audio-policy canonical|silent-pcm-v1|silent-pcm-relaxed-apu-v1]" >&2
   echo "       [--output-dir <dir>]" >&2
@@ -191,6 +192,12 @@ case "$non_color_slot" in 0|1|2|3|4|5|6|7|8|9) : ;; *) fatal "non-color catalog 
 
 [ -f "$parent_apk" ] && [ -r "$parent_apk" ] || fatal "parent APK is not a readable regular file"
 [ -f "$candidate_apk" ] && [ -r "$candidate_apk" ] || fatal "candidate APK is not a readable regular file"
+case "$parent_apk" in *.apk) : ;; *) fatal "parent APK path must end in .apk" ;; esac
+case "$candidate_apk" in *.apk) : ;; *) fatal "candidate APK path must end in .apk" ;; esac
+parent_dm=${parent_apk%.apk}.dm
+candidate_dm=${candidate_apk%.apk}.dm
+[ -s "$parent_dm" ] && [ -r "$parent_dm" ] || fatal "parent DM is not a readable non-empty regular file"
+[ -s "$candidate_dm" ] && [ -r "$candidate_dm" ] || fatal "candidate DM is not a readable non-empty regular file"
 
 if [ -n "$output_dir" ]; then
   if [ -e "$output_dir" ] && [ ! -d "$output_dir" ]; then
@@ -550,8 +557,8 @@ save_display_settings() {
 
 # Verify once, then again before each measured side.  No stay/power setting is silently changed:
 # a plugged device with the corresponding stay-on bit and low_power=0 is an eligibility condition.
-# No package manager/data reset is ever issued; install -r is the only installation form and
-# preserves the app-owned catalog.
+# No package manager/data reset is ever issued; install-multiple -r preserves the app-owned
+# catalog while installing the APK and its matching baseline-profile companion atomically.
 check_host_environment
 save_display_settings
 
@@ -592,11 +599,17 @@ verify_installed_profile() {
       line=$0
       gsub(/[][]/, " ", line)
       fields=split(line, token, /[[:space:]]+/)
-      for (i = 1; i <= fields; i++) if (token[i] == "status=speed-profile") found=1
+      status=0
+      reason=0
+      for (i = 1; i <= fields; i++) {
+        if (token[i] == "status=speed-profile") status=1
+        if (token[i] == "reason=install-dm") reason=1
+      }
+      if (status && reason) found=1
     }
     END { exit(found ? 0 : 1) }
   ' "$tmp_dir/package-dump"; then
-    fatal "installed benchmark package is not ART-compiled with status=speed-profile"
+    fatal "installed benchmark package does not report status=speed-profile reason=install-dm"
   fi
 }
 
@@ -1032,15 +1045,16 @@ run_one() {
     "$first_side" "$execution_mode" "$rate"
 
   adb_shell_checked am force-stop "$PACKAGE"
-  if ! adb_capture "$tmp_dir/install" install -r -d --no-streaming "$apk"; then
-    fatal "selected signed APK installation failed"
+  dm=${apk%.apk}.dm
+  if ! adb_capture "$tmp_dir/install" install-multiple -r -d --no-streaming "$apk" "$dm"; then
+    fatal "selected signed APK and DM installation failed"
   fi
   if ! awk 'tolower($0) ~ /(^|[^a-z])success([^a-z]|$)/ { ok=1 } END { exit(ok ? 0 : 1) }' \
       "$tmp_dir/install"; then
     fatal "selected signed APK installation was not confirmed"
   fi
-  # Verify the environment after installation and before the visible launch; install -r never
-  # receives a clear-data flag, so app-owned recent data remains intact.
+  # Verify the environment after installation and before the visible launch; install-multiple -r
+  # never receives a clear-data flag, so app-owned recent data remains intact.
   pin_display_rate "$rate"
   check_host_environment
   resolve_uid

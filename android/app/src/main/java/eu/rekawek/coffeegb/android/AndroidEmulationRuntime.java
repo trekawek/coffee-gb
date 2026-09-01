@@ -124,7 +124,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             new BenchmarkAudioLifecycleGate();
     /** Owner-thread fence invalidating every scheduled scenario/audio poll on replacement. */
     private long benchmarkScenarioCompletionEpoch;
+    private final AndroidRumblePreference rumblePreference = new AndroidRumblePreference();
     private volatile AndroidRumbleSink rumble;
+    private AndroidRumblePreference.Output rumblePreferenceOutput;
     private volatile AndroidTiltSink tilt;
     private volatile AndroidCameraSource camera;
     private volatile AndroidGpsSource gps;
@@ -154,8 +156,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
     private final AndroidStateSaveCompletionTracker stateSaveCompletions =
             new AndroidStateSaveCompletionTracker();
     private long activeOpenRequestId;
-    private long tiltOpenRequestId;
-    private boolean tiltRequiredForOpenRequest;
+    private volatile long controllerInstanceGeneration;
+    private final TiltSessionLifecycle tiltSession = new TiltSessionLifecycle();
     private long cameraOpenRequestId;
     private boolean cameraRequiredForOpenRequest;
     private long nextFlushRequestId;
@@ -423,10 +425,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         if (rejectBenchmarkMutation()) {
             return;
         }
-        AndroidRumbleSink activeRumble = rumble;
-        if (activeRumble != null) {
-            activeRumble.setEnabled(enabled);
-        }
+        rumblePreference.setEnabled(enabled);
     }
 
     /** Calibrates an active MBC7 cartridge to the device's current resting position. */
@@ -670,7 +669,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             return;
         }
         submit(() -> {
-            if (controller != null && activeLayout != null) {
+            if (controller != null && activeLayout != null && tiltSession.hasActiveSession()) {
+                tiltSession.beginRequestedAnonymousReloadTransition();
                 if (releaseMenuPause) {
                     preparePlayingReplacement();
                 }
@@ -1321,6 +1321,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeRomTitle = "";
             activeBatterySave = false;
             activeSessionGeneration = 0L;
+            tiltSession.clear();
             clearPauseMenuSnapshotInternal();
             frames.clearToDefaultPresentation();
             lifecycle.released();
@@ -1507,6 +1508,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void createController() {
         eventBus = new EventBusImpl();
+        final long callbackControllerGeneration = ++controllerInstanceGeneration;
         eventBus.register(
                 (StateOperationCompletedEvent event) -> {
                     if (event.getOperation() == StateOperation.SAVE
@@ -1547,7 +1549,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             diagnostics.audioStats(new AndroidAudioSink.AudioStats(0, 0, 0, 0));
         }
         audio.start();
-        rumble = new AndroidRumbleSink(context, eventBus, false);
+        AndroidRumbleSink createdRumble = new AndroidRumbleSink(context, eventBus, false);
+        AndroidRumblePreference.Output createdRumbleOutput = createdRumble::setEnabled;
+        rumblePreference.attach(createdRumbleOutput);
+        rumblePreferenceOutput = createdRumbleOutput;
+        rumble = createdRumble;
         tilt = new AndroidTiltSink(context, eventBus);
         camera = new AndroidCameraSource(context);
         camera.setLens(cameraLens);
@@ -1690,15 +1696,41 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.BenchmarkGameplayScenarioCompletedEvent.class);
         eventBus.register(
                 (Controller.RomLoadingEvent event) -> submit(() -> {
+                    if (!controllerLoadCallbackMatches(callbackControllerGeneration,
+                            controllerInstanceGeneration, activeLayout != null)) {
+                        return;
+                    }
                     if (event.getOpenRequestId() != null
                             && event.getOpenRequestId() == activeOpenRequestId) {
                         publish(RuntimeState.Phase.LOADING, "Loading selected ROM…", List.of(),
+                                false, true, state.flushPending());
+                    } else if (event.getOpenRequestId() == null
+                            && !tiltSession.openTransitionPending()) {
+                        // Reset and system-setting reloads are controller-owned and have no host
+                        // request id. RomLoading proves that a setting change actually requires a
+                        // reload; irrelevant selectors produce no transition to clean up.
+                        tiltSession.beginObservedAnonymousReloadTransition();
+                        publish(RuntimeState.Phase.LOADING, "Reloading current ROM…", List.of(),
                                 false, true, state.flushPending());
                     }
                 }),
                 Controller.RomLoadingEvent.class);
         eventBus.register(
+                (Controller.RomLoadingCancelledEvent event) -> {
+                    if (event.getOpenRequestId() != null) {
+                        submit(() -> {
+                            if (callbackControllerGeneration == controllerInstanceGeneration) {
+                                tiltSession.openCancelled(event.getOpenRequestId());
+                            }
+                        });
+                    }
+                },
+                Controller.RomLoadingCancelledEvent.class);
+        eventBus.register(
                 (Controller.EmulationStartedEvent event) -> {
+                    if (callbackControllerGeneration != controllerInstanceGeneration) {
+                        return;
+                    }
                     // This callback runs synchronously on the controller thread. Keep the CPU
                     // sample and adaptive session ownership on that thread instead of the runtime
                     // owner executor.
@@ -1706,85 +1738,110 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     performanceBoost.onSessionStarted(executionMode);
                     AndroidPerformanceBoost.apply(executionMode);
                     submit(() -> {
-                    boolean requestedOpen = event.getOpenRequestId() != null
-                            && event.getOpenRequestId() == activeOpenRequestId;
-                    // Reset reloads the current cartridge without a host open-request id. Its
-                    // session generation is authoritative and must replace the just-ended one;
-                    // otherwise its following metadata event would be rejected as stale.
-                    boolean resetReload = isResetReload(event.getOpenRequestId(), activeLayout != null,
-                            event.getSessionGeneration(), activeSessionGeneration);
-                    if (requestedOpen || resetReload) {
-                        activeRomTitle = event.getRomName();
-                        activeBatterySave = false;
-                        activeSessionGeneration = event.getSessionGeneration() == null ? 0L
-                                : event.getSessionGeneration();
-                        diagnostics.beginSession(activeSessionGeneration);
-                        restartPlaybackTimerOnNextPublish = true;
-                        clearPauseMenuSnapshotInternal();
-                        AndroidTiltSink activeTilt = tilt;
-                        if (activeTilt != null) {
-                            activeTilt.setCartridgeActive(tiltOpenRequestId
-                                    == activeOpenRequestId && tiltRequiredForOpenRequest);
+                        if (callbackControllerGeneration != controllerInstanceGeneration) {
+                            return;
                         }
-                        AndroidCameraSource activeCamera = camera;
-                        if (activeCamera != null) {
-                            activeCamera.setCartridgeActive(cameraOpenRequestId
-                                    == activeOpenRequestId && cameraRequiredForOpenRequest);
-                        }
-                        if (currentSource != null && !diagnostics.enabled()) {
-                            NativeFrameStore.Snapshot recentFrame = frames.snapshot();
-                            persistActiveRecentGame(recentFrame);
-                            if (recentFrame == null) {
-                                scheduleRecentPreview(currentSource, activeOpenRequestId, 0);
+                        TiltSessionLifecycle.OpenStart openStart = event.getOpenRequestId() != null
+                                ? tiltSession.openStarted(event.getOpenRequestId())
+                                : new TiltSessionLifecycle.OpenStart(false, false, false);
+                        // Reset reloads the current cartridge without a host open-request id. Its
+                        // session generation is authoritative and must replace the just-ended one;
+                        // otherwise its following metadata event would be rejected as stale.
+                        boolean anonymousReload = isResetReload(event.getOpenRequestId(),
+                                activeLayout != null, event.getSessionGeneration(),
+                                activeSessionGeneration);
+                        TiltSessionLifecycle.AnonymousStart anonymousStart = anonymousReload
+                                ? tiltSession.anonymousStarted()
+                                : new TiltSessionLifecycle.AnonymousStart(false, false, false);
+                        boolean supersededStart = (openStart.accepted()
+                                && !openStart.completesCurrentTransition())
+                                || (anonymousStart.accepted()
+                                        && !anonymousStart.completesCurrentTransition());
+                        if (supersededStart) {
+                            AndroidTiltSink activeTilt = tilt;
+                            if (activeTilt != null) {
+                                activeTilt.setCartridgeActive(openStart.accepted()
+                                        ? openStart.sensorActive()
+                                        : anonymousStart.sensorActive());
                             }
+                            return;
                         }
-                        lifecycle.activated(lifecycleCommands());
-                        if (printerEnabled) {
-                            eventBus.post(new Controller.SetPrinterEvent(true));
-                        }
-                        if (gpsEnabled) {
-                            eventBus.post(new Controller.SetGpsReceiverEvent(true));
-                        }
-                        boolean configuredScenario = diagnostics.enabled()
-                                && benchmarkScenario.enabled();
-                        if (configuredScenario) {
-                            benchmarkScenario.beginSession(activeSessionGeneration);
-                            if (!input.beginBenchmarkScenario()) {
-                                benchmarkScenario.resetSession();
-                                diagnostics.invalidateSession();
-                                publishBenchmarkScenarioInputFailure();
-                                return;
+                        if (openStart.accepted() || anonymousStart.accepted()) {
+                            activeRomTitle = event.getRomName();
+                            activeBatterySave = false;
+                            activeSessionGeneration = event.getSessionGeneration() == null ? 0L
+                                    : event.getSessionGeneration();
+                            diagnostics.beginSession(activeSessionGeneration);
+                            restartPlaybackTimerOnNextPublish = true;
+                            clearPauseMenuSnapshotInternal();
+                            AndroidTiltSink activeTilt = tilt;
+                            boolean sessionUsesTilt = openStart.accepted()
+                                    ? openStart.sensorActive()
+                                    : anonymousStart.sensorActive();
+                            if (activeTilt != null) {
+                                activeTilt.setCartridgeActive(sessionUsesTilt);
                             }
-                            eventBus.post(new Controller.BenchmarkGameplayScenarioStartEvent(
-                                    activeSessionGeneration,
-                                    benchmarkScenario.endpointFrameForTesting()));
-                            eventBus.post(new Controller.ResumeEmulationEvent());
-                        } else if (benchmarkNoScenarioAudioPreArmRequired(
-                                diagnostics.enabled(), diagnosticsOptions.audioOutput,
-                                diagnosticsOptions.benchmarkScenario,
-                                diagnosticsOptions.audioPolicy)) {
-                            if (!startBenchmarkNoScenarioAudioPreArm(activeSessionGeneration)) {
-                                invalidateBenchmarkSession(false);
-                                publish(RuntimeState.Phase.FAILED,
-                                        "Benchmark audio output could not be prepared.",
-                                        List.of(), false, true, false);
-                                return;
+                            AndroidCameraSource activeCamera = camera;
+                            if (activeCamera != null) {
+                                activeCamera.setCartridgeActive(cameraOpenRequestId
+                                        == activeOpenRequestId && cameraRequiredForOpenRequest);
                             }
-                        } else {
-                            diagnostics.emulationStarted(activeSessionGeneration);
+                            if (currentSource != null && !diagnostics.enabled()) {
+                                NativeFrameStore.Snapshot recentFrame = frames.snapshot();
+                                persistActiveRecentGame(recentFrame);
+                                if (recentFrame == null) {
+                                    scheduleRecentPreview(currentSource, activeOpenRequestId, 0);
+                                }
+                            }
+                            lifecycle.activated(lifecycleCommands());
+                            if (printerEnabled) {
+                                eventBus.post(new Controller.SetPrinterEvent(true));
+                            }
+                            if (gpsEnabled) {
+                                eventBus.post(new Controller.SetGpsReceiverEvent(true));
+                            }
+                            boolean configuredScenario = diagnostics.enabled()
+                                    && benchmarkScenario.enabled();
+                            if (configuredScenario) {
+                                benchmarkScenario.beginSession(activeSessionGeneration);
+                                if (!input.beginBenchmarkScenario()) {
+                                    benchmarkScenario.resetSession();
+                                    diagnostics.invalidateSession();
+                                    publishBenchmarkScenarioInputFailure();
+                                    return;
+                                }
+                                eventBus.post(new Controller.BenchmarkGameplayScenarioStartEvent(
+                                        activeSessionGeneration,
+                                        benchmarkScenario.endpointFrameForTesting()));
+                                eventBus.post(new Controller.ResumeEmulationEvent());
+                            } else if (benchmarkNoScenarioAudioPreArmRequired(
+                                    diagnostics.enabled(), diagnosticsOptions.audioOutput,
+                                    diagnosticsOptions.benchmarkScenario,
+                                    diagnosticsOptions.audioPolicy)) {
+                                if (!startBenchmarkNoScenarioAudioPreArm(activeSessionGeneration)) {
+                                    invalidateBenchmarkSession(false);
+                                    publish(RuntimeState.Phase.FAILED,
+                                            "Benchmark audio output could not be prepared.",
+                                            List.of(), false, true, false);
+                                    return;
+                                }
+                            } else {
+                                diagnostics.emulationStarted(activeSessionGeneration);
+                            }
+                            boolean benchmarkPaused = diagnostics.enabled() && !configuredScenario;
+                            publish(benchmarkPaused ? RuntimeState.Phase.PAUSED
+                                            : RuntimeState.Phase.RUNNING,
+                                    "Loaded " + event.getRomName()
+                                            + ". App-private saves are ready.",
+                                    List.of(), true, benchmarkPaused, false);
                         }
-                        boolean benchmarkPaused = diagnostics.enabled() && !configuredScenario;
-                        publish(benchmarkPaused ? RuntimeState.Phase.PAUSED
-                                        : RuntimeState.Phase.RUNNING,
-                                "Loaded " + event.getRomName() + ". App-private saves are ready.",
-                                List.of(), true, benchmarkPaused, false);
-                    }
                     });
                 },
                 Controller.EmulationStartedEvent.class);
         eventBus.register(
                 (Controller.SessionPresentationEvent event) -> submit(() -> {
-                    if (activeLayout == null) {
+                    if (callbackControllerGeneration != controllerInstanceGeneration
+                            || activeLayout == null) {
                         return;
                     }
                     Long eventGeneration = event.getSessionGeneration();
@@ -1803,12 +1860,21 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.SessionPresentationEvent.class);
         eventBus.register(
                 (Controller.EmulationStoppedEvent event) -> {
+                    if (callbackControllerGeneration != controllerInstanceGeneration) {
+                        return;
+                    }
                     // The BasicController thread survives between sessions; do not let a prior
                     // PERFORMANCE session leave its scheduler hint on an idle/Accuracy session.
                     performanceBoost.onSessionStopped();
                     AndroidPerformanceBoost.apply(ExecutionMode.ACCURACY);
                     submit(() -> {
-                        if (!closed.get()) {
+                        if (!closed.get()
+                                && callbackControllerGeneration == controllerInstanceGeneration) {
+                            boolean keepTiltSensor = tiltSession.stopped();
+                            AndroidTiltSink activeTilt = tilt;
+                            if (activeTilt != null) {
+                                activeTilt.setCartridgeActive(keepTiltSensor);
+                            }
                             invalidateBenchmarkSession(false);
                             if (!diagnostics.enabled()) {
                                 persistActiveRecentGame(frames.snapshot());
@@ -1822,18 +1888,36 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                 Controller.EmulationStoppedEvent.class);
         eventBus.register(
                 (Controller.LoadRomFailedEvent event) -> submit(() -> {
-                    if (event.getOpenRequestId() != null
-                            && event.getOpenRequestId() == activeOpenRequestId) {
-                        invalidateBenchmarkSession(false);
-                        if (!diagnostics.enabled()) {
-                            new RecentSafDocuments(context).removeGame(currentSource,
-                                    activeCandidateToken, activeArchiveEntryName,
-                                    activeArchiveEntryOccurrence);
-                        }
-                        publish(RuntimeState.Phase.FAILED,
-                                "Coffee GB could not load the selected ROM.",
-                                List.of(), false, true, false);
+                    if (callbackControllerGeneration != controllerInstanceGeneration) {
+                        return;
                     }
+                    boolean keepTiltSensor;
+                    if (event.getOpenRequestId() != null) {
+                        TiltSessionLifecycle.OpenFailure failure = tiltSession.openFailed(
+                                event.getOpenRequestId());
+                        if (!failure.currentTransition()) {
+                            return;
+                        }
+                        keepTiltSensor = failure.sensorActive();
+                    } else {
+                        if (!tiltSession.anonymousReloadPending()) {
+                            return;
+                        }
+                        keepTiltSensor = tiltSession.anonymousFailed();
+                    }
+                    AndroidTiltSink activeTilt = tilt;
+                    if (activeTilt != null) {
+                        activeTilt.setCartridgeActive(keepTiltSensor);
+                    }
+                    invalidateBenchmarkSession(false);
+                    if (!diagnostics.enabled()) {
+                        new RecentSafDocuments(context).removeGame(currentSource,
+                                activeCandidateToken, activeArchiveEntryName,
+                                activeArchiveEntryOccurrence);
+                    }
+                    publish(RuntimeState.Phase.FAILED,
+                            "Coffee GB could not load the selected ROM.",
+                            List.of(), false, true, false);
                 }),
                 Controller.LoadRomFailedEvent.class);
         // The desktop ASK policy emits a prompt before restoring a managed close autosave.
@@ -2024,6 +2108,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
 
     private void activateSnapshot(RomSourceSnapshot snapshot, long token, Uri source,
             RecentSafDocuments.Entry recent, boolean releaseMenuPause) {
+        long tiltTransitionRequestId = 0L;
         try {
             RomSourceSnapshot.ArchiveCandidate candidate = token
                     == RomSourceSnapshot.ArchiveCandidate.DIRECT_TOKEN ? null
@@ -2074,8 +2159,9 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeArchiveEntryOccurrence = candidate == null ? -1 : candidate.entryOccurrence();
             activeRomHash = hash;
             activeOpenRequestId = ++nextOpenRequestId;
-            tiltOpenRequestId = activeOpenRequestId;
-            tiltRequiredForOpenRequest = !diagnostics.enabled() && rom.getType().isMbc7();
+            boolean tiltRequired = !diagnostics.enabled() && rom.getType().isMbc7();
+            tiltSession.beginOpenTransition(activeOpenRequestId, tiltRequired);
+            tiltTransitionRequestId = activeOpenRequestId;
             cameraOpenRequestId = activeOpenRequestId;
             cameraRequiredForOpenRequest = !diagnostics.enabled() && (rom.getType().isPocketCamera()
                     || rom.getCartridgeProperties().getMapper() == CartridgeProperties.Mapper.POCKET_CAMERA);
@@ -2087,6 +2173,14 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             controllerEventBus().post(new Controller.LoadRomEvent(
                     image, null, persistenceStore, activeOpenRequestId, !diagnostics.enabled()));
         } catch (Exception failure) {
+            if (tiltTransitionRequestId != 0L) {
+                TiltSessionLifecycle.OpenFailure tiltFailure = tiltSession.openFailed(
+                        tiltTransitionRequestId);
+                AndroidTiltSink activeTilt = tilt;
+                if (tiltFailure.currentTransition() && activeTilt != null) {
+                    activeTilt.setCartridgeActive(tiltFailure.sensorActive());
+                }
+            }
             if (recent == null) {
                 if (!diagnostics.enabled()) {
                     forgetRevokedPermission(source);
@@ -2389,6 +2483,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         EventBus activeBus = eventBus;
         AndroidAudioSink activeAudio = audio;
         AndroidRumbleSink activeRumble = rumble;
+        AndroidRumblePreference.Output activeRumbleOutput = rumblePreferenceOutput;
         AndroidTiltSink activeTilt = tilt;
         AndroidCameraSource activeCamera = camera;
         AndroidGpsSource activeGps = gps;
@@ -2396,6 +2491,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         controller = null;
         eventBus = null;
         audio = null;
+        rumblePreference.detach(activeRumbleOutput);
+        rumblePreferenceOutput = null;
         rumble = null;
         tilt = null;
         camera = null;
@@ -2422,6 +2519,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeStateSessionId = 0L;
             pendingStateRequests.clear();
             stateSaveCompletions.clear();
+            controllerInstanceGeneration++;
             return true;
         }
         try {
@@ -2450,6 +2548,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             activeStateSessionId = 0L;
             pendingStateRequests.clear();
             stateSaveCompletions.clear();
+            controllerInstanceGeneration++;
             return true;
         } catch (RuntimeException failure) {
             // The synchronized boost owner can be disarmed safely even if controller shutdown
@@ -2459,6 +2558,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             controller = active;
             eventBus = activeBus;
             audio = activeAudio;
+            if (activeRumbleOutput != null) {
+                rumblePreference.attach(activeRumbleOutput);
+            }
+            rumblePreferenceOutput = activeRumbleOutput;
             rumble = activeRumble;
             tilt = activeTilt;
             camera = activeCamera;
@@ -2703,6 +2806,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         synchronized (presentationLock) {
             boolean activeSession = phase == RuntimeState.Phase.RUNNING
                     || phase == RuntimeState.Phase.PAUSED;
+            boolean tiltOrientationLocked = !diagnostics.enabled()
+                    && tiltSession.orientationLocked(phase);
             String romTitle = activeSession ? activeRomTitle : "";
             long sessionGeneration = activeSession ? activeSessionGeneration : 0L;
             long playTimeNanos = updatePlayTime(phase, sessionGeneration);
@@ -2712,6 +2817,7 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
                     activeSession && activeBatterySave,
                     sessionGeneration,
                     playTimeNanos,
+                    tiltOrientationLocked,
                     Math.addExact(state.generation(), 1));
             state = next;
         }
@@ -2757,6 +2863,11 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             Long eventSessionGeneration, long activeSessionGeneration) {
         return openRequestId == null && hasActiveLayout && eventSessionGeneration != null
                 && eventSessionGeneration > activeSessionGeneration;
+    }
+
+    static boolean controllerLoadCallbackMatches(
+            long callbackGeneration, long activeGeneration, boolean hasActiveLayout) {
+        return callbackGeneration == activeGeneration && hasActiveLayout;
     }
 
     /** Shared fail-closed generation gate for synchronous and owner-queued benchmark events. */

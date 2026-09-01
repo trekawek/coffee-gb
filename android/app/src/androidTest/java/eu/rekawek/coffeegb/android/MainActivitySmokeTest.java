@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.android;
 
 import android.app.Instrumentation;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -26,6 +27,7 @@ import org.junit.runner.RunWith;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,6 +41,106 @@ import static org.junit.Assert.assertTrue;
 /** Exercises the bound runtime through Activity recreation and a visibility transition. */
 @RunWith(AndroidJUnit4.class)
 public class MainActivitySmokeTest {
+
+    @Test
+    public void mbc7OrientationLockSurvivesRecreationResetAndReplacement() throws Exception {
+        AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        AtomicReference<Integer> originalOrientation = new AtomicReference<>();
+        List<RuntimeState> transitions = new CopyOnWriteArrayList<>();
+        RuntimeObserver transitionObserver = transitions::add;
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            await("runtime binding", () -> {
+                scenario.onActivity(activity -> {
+                    runtime.set(runtime(activity));
+                    originalOrientation.compareAndSet(null, activity.getRequestedOrientation());
+                });
+                return runtime.get() != null;
+            });
+            runtime.get().addObserver(transitionObserver);
+
+            runtime.get().openRom(FixtureRomProvider.TILT_URI, 0);
+            await("tilt fixture running", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.RUNNING
+                    && runtime.get().state().tiltOrientationLocked());
+            awaitActivityOrientation(scenario, true, ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+
+            scenario.recreate();
+            awaitActivityOrientation(scenario, true, ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+            // Rebinding after Activity recreation deliberately leaves a live game paused until
+            // the user resumes it. Establish a playing session before exercising reset semantics.
+            runtime.get().resume();
+            await("tilt fixture resumed after recreation", () ->
+                    runtime.get().state().phase() == RuntimeState.Phase.RUNNING
+                            && runtime.get().state().tiltOrientationLocked());
+
+            long beforeReset = runtime.get().state().sessionGeneration();
+            transitions.clear();
+            runtime.get().reset();
+            await("tilt fixture reset", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.RUNNING
+                    && runtime.get().state().sessionGeneration() > beforeReset);
+            awaitActivityOrientation(scenario, true, ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+            assertFalse("reset transition must publish at least one presentation state",
+                    transitions.isEmpty());
+            assertFalse("MBC7 reset must not publish an unlocked presentation state",
+                    transitions.stream().anyMatch(state -> !state.tiltOrientationLocked()));
+
+            long beforeSystemReload = runtime.get().state().sessionGeneration();
+            transitions.clear();
+            runtime.get().setSystemSelection("execution-mode", "accuracy");
+            await("tilt fixture reloaded after active system setting", () ->
+                    runtime.get().state().phase() == RuntimeState.Phase.RUNNING
+                            && runtime.get().state().sessionGeneration() > beforeSystemReload);
+            awaitActivityOrientation(scenario, true, ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+            assertFalse("system reload must publish at least one presentation state",
+                    transitions.isEmpty());
+            assertFalse("active MBC7 system reload must not publish an unlocked state",
+                    transitions.stream().anyMatch(state -> !state.tiltOrientationLocked()));
+
+            long beforeReplacement = runtime.get().state().sessionGeneration();
+            transitions.clear();
+            runtime.get().openRom(FixtureRomProvider.TILT_URI, 0);
+            await("tilt fixture replaced by tilt fixture", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.RUNNING
+                    && runtime.get().state().sessionGeneration() > beforeReplacement);
+            awaitActivityOrientation(scenario, true, ActivityInfo.SCREEN_ORIENTATION_LOCKED);
+            assertFalse("replacement must publish at least one presentation state",
+                    transitions.isEmpty());
+            assertFalse("MBC7 replacement must not publish an unlocked presentation state",
+                    transitions.stream().anyMatch(state -> !state.tiltOrientationLocked()));
+
+            long beforeNormal = runtime.get().state().sessionGeneration();
+            runtime.get().openRom(FixtureRomProvider.URI, 0);
+            await("tilt fixture replaced by normal fixture", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.RUNNING
+                    && runtime.get().state().sessionGeneration() > beforeNormal
+                    && !runtime.get().state().tiltOrientationLocked());
+            awaitActivityOrientation(scenario, false, originalOrientation.get());
+
+            long beforeModeRestore = runtime.get().state().sessionGeneration();
+            runtime.get().setSystemSelection("execution-mode", "performance");
+            await("execution mode restored after orientation test", () ->
+                    runtime.get().state().phase() == RuntimeState.Phase.RUNNING
+                            && runtime.get().state().sessionGeneration() > beforeModeRestore);
+        } finally {
+            if (runtime.get() != null) {
+                runtime.get().removeObserver(transitionObserver);
+                runtime.get().stop();
+            }
+        }
+    }
+
+    private static void awaitActivityOrientation(
+            ActivityScenario<MainActivity> scenario, boolean locked, int orientation)
+            throws Exception {
+        await("Activity orientation presentation", () -> {
+            AtomicBoolean matched = new AtomicBoolean();
+            scenario.onActivity(activity -> matched.set(
+                    observedState(activity).tiltOrientationLocked() == locked
+                            && activity.getRequestedOrientation() == orientation));
+            return matched.get();
+        });
+    }
 
     @Test
     public void romPickerUsesTrustedExtensionFilterWhenTheDeviceProvidesOne() {

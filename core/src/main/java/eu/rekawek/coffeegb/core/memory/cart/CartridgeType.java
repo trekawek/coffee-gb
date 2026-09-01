@@ -99,7 +99,12 @@ public enum CartridgeType {
     }
 
     public boolean isRumble() {
-        return nameContainsSegment("RUMBLE");
+        // The legacy 0x22 header label includes RUMBLE, but retail MBC7 boards expose only an
+        // accelerometer and EEPROM. Among standardized header values, only MBC5 types 0x1c-0x1e
+        // have a cartridge motor output.
+        return this == ROM_MBC5_RUMBLE
+                || this == ROM_MBC5_RUMBLE_SRAM
+                || this == ROM_MBC5_RUMBLE_SRAM_BATTERY;
     }
 
     private boolean nameContainsSegment(String segment) {

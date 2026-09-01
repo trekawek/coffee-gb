@@ -118,6 +118,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private View menuButton;
     private AndroidEmulationRuntime runtime;
     private AndroidEmulationRuntime observedRuntime;
+    private TiltOrientationLock tiltOrientationLock;
     private long observedGeneration = -1L;
     private boolean bound;
     private InputManager inputManager;
@@ -298,6 +299,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             pendingBenchmarkArm.clear();
             bound = false;
             observedState = RuntimeState.stopped();
+            if (tiltOrientationLock != null) {
+                tiltOrientationLock.setActive(false);
+            }
             stateCatalogGeneration++;
             stateSlotsLoading = false;
             stateSlots = List.of();
@@ -331,6 +335,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        tiltOrientationLock = new TiltOrientationLock(new TiltOrientationLock.Host() {
+            @Override
+            public int requestedOrientation() {
+                return getRequestedOrientation();
+            }
+
+            @Override
+            public void requestOrientation(int orientation) {
+                setRequestedOrientation(orientation);
+            }
+        });
         diagnosticsOptions = BuildConfig.DIAGNOSTICS_ENABLED
                 ? DiagnosticsOptions.fromIntent(getIntent()) : DiagnosticsOptions.disabled();
         if (diagnosticsOptions.enabled) {
@@ -529,6 +544,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onDestroy() {
         lifecycleGeneration++;
+        if (tiltOrientationLock != null) {
+            tiltOrientationLock.setActive(false);
+        }
         if (printerContinuationPreferences != null) {
             printerContinuationPreferences.unregisterOnSharedPreferenceChangeListener(
                     printerContinuationListener);
@@ -2615,6 +2633,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void applyState(RuntimeState state) {
         if (state.generation() < observedGeneration) {
             return;
+        }
+        if (tiltOrientationLock != null) {
+            tiltOrientationLock.setActive(state.tiltOrientationLocked());
         }
         long previousSessionGeneration = observedState.sessionGeneration();
         if (diagnosticsOptions.enabled
