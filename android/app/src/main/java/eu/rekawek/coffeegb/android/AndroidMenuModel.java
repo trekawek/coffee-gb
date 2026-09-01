@@ -67,7 +67,7 @@ final class AndroidMenuModel {
 
     static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {
         return page(MenuRoute.DISPLAY, "COFFEE GB", "DISPLAY", "", "", List.of(), List.of(
-                checkbox("sgb-border", "SGB BORDER", onOff(sgbBorder), true),
+                checkbox("sgb-border", "SGB BORDER", sgbBorder, true),
                 dropdown("dmg-colors", "DMG COLORS", grayscale ? "GREY" : "GREEN", true)),
                 "sgb-border", MenuPreview.empty());
     }
@@ -78,7 +78,7 @@ final class AndroidMenuModel {
                 dropdown("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
                 dropdown("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
                 dropdown("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true),
-                dropdown("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode),
+                dropdown("execution-mode", "EXEC MODE", executionModeLabel(executionMode),
                         true)),
                 preferredFocusId, MenuPreview.empty());
     }
@@ -89,7 +89,7 @@ final class AndroidMenuModel {
                 List.of(
                         dropdown("camera", "CAMERA", cameraLabel(camera), true),
                         dropdown("gamepad", "GAMEPAD", gamepadLabel(gamepad, gamepadChoices), true),
-                        checkbox("gps", "GPS", onOff(gps), true)),
+                        checkbox("gps", "GPS", gps, true)),
                 "camera", MenuPreview.empty());
     }
 
@@ -187,13 +187,13 @@ final class AndroidMenuModel {
         return page(MenuRoute.AUDIO, "COFFEE GB", "AUDIO", "", "", List.of(), List.of(
                 slider("volume", "VOLUME", draft.volume() + "%", true,
                                 draft.volume()),
-                        checkbox("mute-audio", "MUTE", onOff(draft.muted()), true)),
+                        checkbox("mute-audio", "MUTE", draft.muted(), true)),
                 "volume", MenuPreview.empty());
     }
 
     static MenuPageSpec touchPage(TouchDraft draft, boolean controllerAvailable) {
         ArrayList<MenuPageSpec.Item> rows = new ArrayList<>();
-        rows.add(checkbox("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true));
+        rows.add(checkbox("haptics", "HAPTIC FEEDBACK", draft.haptics(), true));
         if (controllerAvailable) {
             rows.add(button("controller-mapping", "REMAP CONTROLS", "", true));
         }
@@ -360,18 +360,14 @@ final class AndroidMenuModel {
         return MenuPageSpec.Item.dropdown(id, label, detail, enabled);
     }
 
-    private static MenuPageSpec.Item checkbox(String id, String label, String detail,
+    private static MenuPageSpec.Item checkbox(String id, String label, boolean checked,
             boolean enabled) {
-        return MenuPageSpec.Item.checkbox(id, label, detail, enabled);
+        return MenuPageSpec.Item.checkbox(id, label, checked, enabled);
     }
 
     private static MenuPageSpec.Item slider(String id, String label, String detail,
             boolean enabled, int progress) {
         return MenuPageSpec.Item.slider(id, label, detail, enabled, progress);
-    }
-
-    private static String onOff(boolean enabled) {
-        return enabled ? "ON" : "OFF";
     }
 
     record AudioDraft(int volume, boolean muted) {

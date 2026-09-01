@@ -146,6 +146,7 @@ public final class MenuPresentation {
         private final String secondaryId;
         private final MenuWidgetType widgetType;
         private final int progress;
+        private final boolean checked;
 
         public Item(String id, String label, String detail, boolean enabled) {
             this(id, label, detail, enabled, null);
@@ -171,6 +172,12 @@ public final class MenuPresentation {
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId,
                 MenuWidgetType widgetType, int progress) {
+            this(id, label, detail, enabled, secondaryId, widgetType, progress,
+                    widgetType != null && widgetType.checkedFrom(detail));
+        }
+
+        Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                MenuWidgetType widgetType, int progress, boolean checked) {
             this.id = requireText(id, "id");
             this.label = requireText(label, "label");
             this.detail = requireText(detail, "detail");
@@ -178,6 +185,7 @@ public final class MenuPresentation {
             this.secondaryId = secondaryId == null ? null : requireText(secondaryId, "secondaryId");
             this.widgetType = java.util.Objects.requireNonNull(widgetType, "widgetType");
             this.progress = progress(progress);
+            this.checked = widgetType == MenuWidgetType.CHECKBOX && checked;
         }
 
         public String id() {
@@ -210,6 +218,11 @@ public final class MenuPresentation {
 
         public int progress() {
             return progress;
+        }
+
+        /** Returns the checkbox state; non-checkbox widgets always return {@code false}. */
+        public boolean checked() {
+            return checked;
         }
 
         private static int progress(int value) {

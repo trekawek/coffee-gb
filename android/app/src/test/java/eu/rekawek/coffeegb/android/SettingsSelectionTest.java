@@ -27,9 +27,13 @@ public class SettingsSelectionTest {
         assertEquals(List.of("sgb-border", "dmg-colors"),
                 AndroidMenuModel.displayPage(false, false).items().stream()
                         .map(MenuPageSpec.Item::id).toList());
+        assertFalse(AndroidMenuModel.displayPage(false, false).items().get(0).checked());
+        assertEquals("", AndroidMenuModel.displayPage(false, false).items().get(0).detail());
         assertEquals(List.of("camera", "gamepad", "gps"),
                 AndroidMenuModel.optionalDevicesPage("off", "auto", false, List.of())
                         .items().stream().map(MenuPageSpec.Item::id).toList());
+        assertFalse(AndroidMenuModel.optionalDevicesPage("off", "auto", false, List.of())
+                .items().get(2).checked());
         assertEquals("FAST-FORWARD",
                 AndroidMenuModel.systemPage(
                         "auto", "auto", "fast-forward", "accuracy", "dmg-games")

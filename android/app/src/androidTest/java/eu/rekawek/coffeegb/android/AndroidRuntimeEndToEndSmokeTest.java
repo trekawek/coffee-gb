@@ -38,6 +38,7 @@ public class AndroidRuntimeEndToEndSmokeTest {
     // ordinary UI/lifecycle checks, so this remains a functional—not timing—test.
     private static final long TIMEOUT_MILLIS = 180_000L;
     private static final long STATE_REQUEST_TIMEOUT_MILLIS = 60_000L;
+    private static final int TEST_STATE_SLOT = StateRef.MAX_SLOT;
 
     @Test
     public void playsGeneratedContentFixtureThroughSaveAndLifecycleTransitions() throws Exception {
@@ -70,13 +71,13 @@ public class AndroidRuntimeEndToEndSmokeTest {
             });
             events.register(event -> {
                 if (event.getRef() instanceof StateRef.Slot
-                        && ((StateRef.Slot) event.getRef()).getIndex() == 0) {
+                        && ((StateRef.Slot) event.getRef()).getIndex() == TEST_STATE_SLOT) {
                     stateSaveRequested.countDown();
                 }
             }, StateSaveRequestEvent.class);
             events.register(event -> {
                 if (!(event.getRef() instanceof StateRef.Slot)
-                        || ((StateRef.Slot) event.getRef()).getIndex() != 0) {
+                        || ((StateRef.Slot) event.getRef()).getIndex() != TEST_STATE_SLOT) {
                     return;
                 }
                 if (event.getOperation() == StateOperation.SAVE) {
@@ -105,14 +106,14 @@ public class AndroidRuntimeEndToEndSmokeTest {
             runtime.input().onKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BUTTON_A));
             assertFrame(runtime, "after input", NativeFrameStore.Presentation.DMG);
 
-            runtime.saveSnapshot(0);
+            runtime.saveSnapshot(TEST_STATE_SLOT);
             assertTrue("state save request", stateSaveRequested.await(
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
             awaitStateOperation("state save", stateSaved, stateFailure);
             assertTrue("state saved flash message", stateSavedMessage.await(
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));
-            awaitSavedState(runtime, 0);
-            runtime.restoreSnapshot(0);
+            awaitSavedState(runtime, TEST_STATE_SLOT);
+            runtime.restoreSnapshot(TEST_STATE_SLOT);
             awaitStateOperation("state restore", stateRestored, stateFailure);
             assertTrue("state loaded flash message", stateLoadedMessage.await(
                     STATE_REQUEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS));

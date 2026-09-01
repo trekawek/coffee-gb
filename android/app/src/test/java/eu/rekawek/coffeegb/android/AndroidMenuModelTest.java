@@ -87,13 +87,18 @@ public class AndroidMenuModelTest {
             draft = AndroidMenuModel.adjustVolume(draft, -1);
         }
         assertEquals(0, draft.volume());
-        assertTrue(draft.toggleMuted().muted());
+        draft = draft.toggleMuted();
+        assertTrue(draft.muted());
 
         MenuPageSpec page = AndroidMenuModel.audioPage(draft);
         assertTrue(page.items().get(0).adjustable());
         assertEquals(0, page.items().get(0).progress());
-        assertFalse(page.items().stream().filter(item -> item.id().equals("mute-audio"))
-                .findFirst().orElseThrow().adjustable());
+        MenuPageSpec.Item mute = page.items().stream()
+                .filter(item -> item.id().equals("mute-audio"))
+                .findFirst().orElseThrow();
+        assertFalse(mute.adjustable());
+        assertTrue(mute.checked());
+        assertEquals("", mute.detail());
         assertFalse(page.items().stream().anyMatch(item -> item.id().contains("save")
                 || item.id().contains("cancel") || item.id().contains("emulated")));
     }
@@ -241,7 +246,8 @@ public class AndroidMenuModelTest {
         assertEquals(List.of("sgb-border", "dmg-colors"),
                 AndroidMenuModel.displayPage(true, false).items().stream()
                         .map(MenuPageSpec.Item::id).toList());
-        assertEquals("ON", AndroidMenuModel.displayPage(true, false).items().get(0).detail());
+        assertTrue(AndroidMenuModel.displayPage(true, false).items().get(0).checked());
+        assertEquals("", AndroidMenuModel.displayPage(true, false).items().get(0).detail());
         assertEquals("GREEN", AndroidMenuModel.displayPage(true, false).items().get(1).detail());
         assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
                 AndroidMenuModel.systemPage("DMG", "CGB", "FULL", "accuracy", "dmg-games")

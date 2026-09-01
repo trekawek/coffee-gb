@@ -213,6 +213,7 @@ public final class MenuPageSpec {
         private final String secondaryId;
         private final MenuWidgetType widgetType;
         private final int progress;
+        private final boolean checked;
 
         public Item(String id, String label, String detail, boolean enabled) {
             this(id, label, detail, enabled, null);
@@ -239,6 +240,12 @@ public final class MenuPageSpec {
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId,
                 MenuWidgetType widgetType, int progress) {
+            this(id, label, detail, enabled, secondaryId, widgetType, progress,
+                    widgetType != null && widgetType.checkedFrom(detail));
+        }
+
+        private Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                MenuWidgetType widgetType, int progress, boolean checked) {
             this.id = text(id, "id");
             this.label = text(label, "label");
             this.detail = text(detail, "detail");
@@ -246,6 +253,7 @@ public final class MenuPageSpec {
             this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
             this.widgetType = Objects.requireNonNull(widgetType, "widgetType");
             this.progress = progress(progress);
+            this.checked = widgetType == MenuWidgetType.CHECKBOX && checked;
         }
 
         public static Item button(String id, String label, String detail, boolean enabled) {
@@ -258,6 +266,12 @@ public final class MenuPageSpec {
 
         public static Item checkbox(String id, String label, String detail, boolean enabled) {
             return new Item(id, label, detail, enabled, null, MenuWidgetType.CHECKBOX);
+        }
+
+        /** Builds a checkbox with explicit state and no legacy ON/OFF detail copy. */
+        public static Item checkbox(String id, String label, boolean checked, boolean enabled) {
+            return new Item(id, label, "", enabled, null,
+                    MenuWidgetType.CHECKBOX, -1, checked);
         }
 
         public static Item slider(String id, String label, String detail, boolean enabled,
@@ -295,6 +309,11 @@ public final class MenuPageSpec {
 
         public int progress() {
             return progress;
+        }
+
+        /** Returns the checkbox state; non-checkbox widgets always return {@code false}. */
+        public boolean checked() {
+            return checked;
         }
 
         private static int progress(int value) {

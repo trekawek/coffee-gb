@@ -40,6 +40,8 @@ font size.
 - `SLIDER`
 
 All four types use the same row bounds and `Proposal3GlyphAtlas.Role.MEDIUM` item typography.
+Checkboxes use the typed `Item.checkbox(id, label, checked, enabled)` state; their display text is
+only the label, so hosts do not encode or render `ON`/`OFF` strings.
 `Proposal3WidgetSkins` supplies only three route-neutral surface textures:
 
 ```
