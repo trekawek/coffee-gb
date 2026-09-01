@@ -249,7 +249,7 @@ public class MainActivitySmokeTest {
     }
 
     @Test
-    public void systemBackClosesRootMenuBeforeFinishingActivity() throws Exception {
+    public void systemBackKeepsNoGameRootMenuVisible() throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitRoute(scenario, MenuRoute.LIBRARY);
@@ -264,13 +264,19 @@ public class MainActivitySmokeTest {
             scenario.onActivity(activity -> {
                 assertFalse(activity.isFinishing());
                 assertFalse(activity.isDestroyed());
-                assertEquals("Open Coffee GB menu",
+                assertEquals("Close Coffee GB menu",
                         menuButton(activity).getContentDescription().toString());
             });
             assertEquals(Lifecycle.State.RESUMED, scenario.getState());
 
             sendSystemBack(instrumentation);
-            waitForState(scenario, Lifecycle.State.DESTROYED, instrumentation);
+            scenario.onActivity(activity -> {
+                assertFalse(activity.isFinishing());
+                assertFalse(activity.isDestroyed());
+                assertEquals("Close Coffee GB menu",
+                        menuButton(activity).getContentDescription().toString());
+            });
+            assertEquals(Lifecycle.State.RESUMED, scenario.getState());
         }
     }
 
