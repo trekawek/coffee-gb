@@ -291,33 +291,10 @@ class SwingGui private constructor(
                 desktopUiCoordinator.stateSlotLoadAvailability(slot, available)
               }
             },
-            onPortableCatalog = { catalog ->
+            onPortableCatalog = { catalog, compatibilitySlots ->
               if (::desktopActions.isInitialized) {
                 desktopActions.updatePortableStateSlots(
-                    catalog.entries.filter { it.ref is eu.rekawek.coffeegb.controller.state.StateRef.Slot }
-                        .filter {
-                          (it.ref as eu.rekawek.coffeegb.controller.state.StateRef.Slot).index in
-                              eu.rekawek.coffeegb.controller.state.StateRef.MIN_SLOT..
-                                  eu.rekawek.coffeegb.controller.state.StateRef.MAX_SLOT
-                        }
-                        .map { entry ->
-                          val ref = entry.ref as eu.rekawek.coffeegb.controller.state.StateRef.Slot
-                          val image = entry.thumbnail
-                          val preview = if (image == null) {
-                            eu.rekawek.coffeegb.ui.menu.MenuPreview.empty()
-                          } else {
-                            val rgb = image.copyRgb()
-                            val argb = IntArray(rgb.size) { index -> 0xff000000.toInt() or rgb[index] }
-                            eu.rekawek.coffeegb.ui.menu.MenuPreview.ready(image.width, image.height, argb)
-                          }
-                          PortableMenuStateSlot(
-                              ref.index,
-                              entry.canLoad,
-                              preview,
-                              entry.catalogEntry?.metadata?.savedAt
-                                  ?.takeIf { entry.canLoad },
-                          )
-                        })
+                    portableMenuStateSlots(catalog, compatibilitySlots))
               }
             },
             onRememberResumeDecision = { resume ->
@@ -473,6 +450,7 @@ class SwingGui private constructor(
                           if (::menu.isInitialized) menu.applyCameraSettings(peripherals)
                         },
                     ),
+                openRomFromPortableMenu = { menu.openRomChooser() },
             ),
             proposal3MenuAvailable = proposal3MenuEnabled,
             stateCatalogRefresh = stateUxController::refreshPortableCatalog,

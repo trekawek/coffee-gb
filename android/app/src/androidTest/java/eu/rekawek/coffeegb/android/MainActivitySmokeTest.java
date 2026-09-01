@@ -104,9 +104,17 @@ public class MainActivitySmokeTest {
                 assertFalse(menu.getDefaultFocusHighlightEnabled());
 
                 assertTrue(menu.performClick());
-                assertEquals("Open Coffee GB menu", menu.getContentDescription().toString());
-                assertTrue(menu.performClick());
                 assertEquals("Close Coffee GB menu", menu.getContentDescription().toString());
+                assertTrue(menuController(activity).dispatchBackEdge());
+                assertEquals(MenuRoute.LIBRARY, menuController(activity).route());
+                assertTrue(menuController(activity).visible());
+
+                menuController(activity).push(MenuRoute.SETTINGS);
+                assertTrue(menu.performClick());
+                assertEquals(MenuRoute.SETTINGS, menuController(activity).route());
+                assertTrue(menuController(activity).visible());
+                assertTrue(menuController(activity).dispatchBackEdge());
+                assertEquals(MenuRoute.LIBRARY, menuController(activity).route());
             });
         }
     }

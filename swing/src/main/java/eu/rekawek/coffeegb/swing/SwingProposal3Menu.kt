@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor
 import java.util.EnumSet
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
 
 /**
@@ -84,6 +85,8 @@ internal class SwingProposal3Menu(
 
   @Volatile private var chordLatched = false
 
+  private val nativeRomChooserOpen = AtomicBoolean()
+
   private var pauseOwnedByMenu = false
 
   /** Captured before root pause stops the live frame source; retained through child routes. */
@@ -144,6 +147,7 @@ internal class SwingProposal3Menu(
       pendingArchiveSelection = null
       pendingChoice = null
       selectedArchiveItemId = null
+      controller.setRootDismissAllowed(true)
       controller.setBackIntercepted(false)
       opening = false
       if (controller.visible()) controller.hide()
@@ -155,6 +159,21 @@ internal class SwingProposal3Menu(
   override fun updatePlayerButtons(buttons: Collection<Button>): Boolean {
     val current = EnumSet.noneOf(Button::class.java)
     current.addAll(buttons)
+    if (nativeRomChooserOpen.get()) {
+      // The native chooser owns input while its modal event loop is active. Keep the physical
+      // snapshot current so a held button cannot become a fresh menu edge when the chooser closes.
+      // Releases are safe and must still clear the activation that opened the chooser.
+      val previous = EnumSet.noneOf(Button::class.java)
+      previous.addAll(gamepadHeld)
+      gamepadHeld.clear()
+      gamepadHeld.addAll(current)
+      for (button in Button.values()) {
+        if (!current.contains(button) && previous.contains(button)) {
+          controller.onKeyUp(button.toMenuKey())
+        }
+      }
+      return true
+    }
     val wasVisible = visible()
 
     if (!wasVisible) {
@@ -195,12 +214,13 @@ internal class SwingProposal3Menu(
       if (becameReleased) {
         controller.onKeyUp(button.toMenuKey())
       }
-      if (!visible()) break
+      if (!visible() || nativeRomChooserOpen.get()) break
     }
     return true
   }
 
   override fun onKeyDown(key: MenuKey, repeat: Boolean): Boolean {
+    if (nativeRomChooserOpen.get()) return true
     if (!visible()) return false
     if (opening) return true
     refreshPrinterPageBeforeInput()
@@ -208,6 +228,10 @@ internal class SwingProposal3Menu(
   }
 
   override fun onKeyUp(key: MenuKey): Boolean {
+    if (nativeRomChooserOpen.get()) {
+      controller.onKeyUp(key)
+      return true
+    }
     if (opening) return true
     // An activation can hide the menu synchronously (for example OPEN ROM).  Let the portable
     // controller release its captured edge even after that transition so Start/A never leaks
@@ -301,10 +325,15 @@ internal class SwingProposal3Menu(
       // The desktop's idle surface follows Android: the portable Library, rather than a paused
       // console, is the entry point when no ROM is active. There is nothing to capture or pause.
       pauseSnapshot = null
+      controller.setRootDismissAllowed(false)
+      controller.setBackIntercepted(false)
       controller.setPage(pageFor(MenuRoute.LIBRARY, current))
       controller.show(MenuRoute.LIBRARY)
       return
     }
+
+    controller.setRootDismissAllowed(true)
+    controller.setBackIntercepted(false)
 
     val title = checkNotNull(current.gameTitle) { "Loaded session has no ROM title" }
     // Freeze the actual display before requesting pause; a child route must reuse this snapshot.
@@ -717,7 +746,7 @@ internal class SwingProposal3Menu(
                 ),
                 item(
                     PortableMenuSettingId.EXECUTION_MODE,
-                    "EXEC MODE",
+                    "MODE",
                     settings
                         ?.displayValue(PortableMenuSettingId.EXECUTION_MODE)
                         ?.uppercase()
@@ -775,10 +804,10 @@ internal class SwingProposal3Menu(
           val options = pickerSettings.choicesFor(pending.settingId)
           val choices =
               options.map { choice ->
-                item(
+                MenuPageSpec.Item.checkbox(
                     "choice:${choice.token}",
                     choice.label.uppercase(),
-                    if (choice.token == committed) "SELECTED" else "",
+                    choice.token == committed,
                     choice.enabled,
                 )
               }
@@ -1046,7 +1075,7 @@ internal class SwingProposal3Menu(
         PortableMenuSettingId.DMG_GAMES -> "DMG GAMES"
         PortableMenuSettingId.CGB_GAMES -> "CGB GAMES"
         PortableMenuSettingId.BOOTSTRAP -> "BOOTSTRAP"
-        PortableMenuSettingId.EXECUTION_MODE -> "EXECUTION MODE"
+        PortableMenuSettingId.EXECUTION_MODE -> "MODE"
         PortableMenuSettingId.DMG_COLORS -> "DMG COLORS"
         PortableMenuSettingId.CAMERA -> "CAMERA"
         PortableMenuSettingId.GAMEPAD -> "GAMEPAD"
@@ -1134,7 +1163,21 @@ internal class SwingProposal3Menu(
   }
 
   private fun runNativeRomChooser() {
-    runCommandAndHide(DesktopCommand.OPEN_ROM)
+    if (!nativeRomChooserOpen.compareAndSet(false, true)) return
+    // Polling and global keyboard presses stay consumed until the nested EDT loop returns;
+    // release edges still clear the activation that opened the chooser.
+    runOnEdt {
+      try {
+        // Keep the frozen overlay and its pause ownership behind JFileChooser. Cancelling therefore
+        // needs no reconstruction, while an approved document hands off to the ROM lifecycle only
+        // after the modal window has closed.
+        if (commands.openRomFromMenu()) {
+          hideAndResume()
+        }
+      } finally {
+        nativeRomChooserOpen.set(false)
+      }
+    }
   }
 
   private fun openRoute(route: MenuRoute) {
@@ -1338,6 +1381,12 @@ internal interface PortableMenuCommandBridge {
   fun isEnabled(command: DesktopCommand): Boolean
 
   fun invoke(command: DesktopCommand)
+
+  /** Returns false when the native ROM chooser was dismissed without selecting a file. */
+  fun openRomFromMenu(): Boolean {
+    invoke(DesktopCommand.OPEN_ROM)
+    return true
+  }
 
   fun canOpenAbout(): Boolean
 

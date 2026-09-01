@@ -103,6 +103,18 @@ public class MenuWidgetTypeTest {
         assertEquals(List.of(MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
                         MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN),
                 show(MenuRoute.SYSTEM));
+        assertEquals(List.of(MenuWidgetType.CHECKBOX), show(MenuRoute.OPTION_PICKER));
+    }
+
+    @Test
+    public void defaultPickerUsesTypedCheckedStateInsteadOfStatusCopy() {
+        MenuController controller = new MenuController(new NoopListener());
+        controller.show(MenuRoute.OPTION_PICKER);
+
+        MenuPresentation.Item choice = controller.presentation().items().get(0);
+        assertEquals(MenuWidgetType.CHECKBOX, choice.widgetType());
+        assertTrue(choice.checked());
+        assertEquals("", choice.detail());
     }
 
     private static List<MenuWidgetType> show(MenuRoute route) {

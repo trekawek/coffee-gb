@@ -30,7 +30,11 @@ internal data class StateWorkerContext(
 )
 
 internal sealed interface StateWorkerResult {
-  data class Catalog(val catalog: StateBrowserCatalog) : StateWorkerResult
+  data class Catalog(
+      val catalog: StateBrowserCatalog,
+      /** Preserved `.snN` sidecars found only where every managed source has an empty slot. */
+      val compatibilitySlots: Set<Int> = emptySet(),
+  ) : StateWorkerResult
 
   data class Saved(
       val ref: StateRef,
@@ -92,9 +96,39 @@ internal class StateOperationWorker(
   private val scheduler: StateTaskScheduler =
       executor?.let(::ExecutorStateTaskScheduler) ?: BoundedPriorityStateTaskScheduler()
 
-  fun catalog(context: StateWorkerContext, requestId: Long) =
+  fun catalog(
+      context: StateWorkerContext,
+      requestId: Long,
+      compatibilityFallback: (StateRef.Slot) -> CompatibilitySnapshot? = { null },
+  ) =
       submit(context, requestId, StateOperation.CATALOG, StateWorkerPurpose.MANUAL) {
-        StateWorkerResult.Catalog(context.workspace.catalog(context.identity))
+        val catalog = context.workspace.catalog(context.identity)
+        val compatibilitySlots =
+            catalog.entries
+                .asSequence()
+                .filter { it.catalogEntry == null }
+                .mapNotNull { it.ref as? StateRef.Slot }
+                .mapNotNull { ref ->
+                  try {
+                    compatibilityFallback(ref)?.let { ref.index }
+                  } catch (failure: Throwable) {
+                    if (failure is InterruptedException) {
+                      Thread.currentThread().interrupt()
+                      throw failure
+                    }
+                    // A broken compatibility sidecar must not hide the independent managed
+                    // catalog. The normal quick-load path will still report an actionable error
+                    // if the user explicitly tries that slot.
+                    LOG.warn(
+                        "Unable to inspect compatibility snapshot slot {} while listing states",
+                        ref.index,
+                        failure,
+                    )
+                    null
+                  }
+                }
+                .toSet()
+        StateWorkerResult.Catalog(catalog, compatibilitySlots)
       }
 
   fun save(

@@ -94,7 +94,7 @@ internal class StateUxDesktopController(
     onBoundsChanged: (Rectangle) -> Unit = {},
     private val onDesktopStatus: (String, DesktopCommand?) -> Unit = { _, _ -> },
     onSlotLoadAvailability: (slot: Int, available: Boolean) -> Unit = { _, _ -> },
-    private val onPortableCatalog: (StateBrowserCatalog) -> Unit = {},
+    private val onPortableCatalog: (StateBrowserCatalog, Set<Int>) -> Unit = { _, _ -> },
     private val onRememberResumeDecision: (resume: Boolean) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
@@ -159,7 +159,7 @@ internal class StateUxDesktopController(
         // request. A newer same-session result is therefore also the authoritative answer for an
         // older portable request; advance the high-water mark so an older late result is ignored.
         latestPortableCatalogRequest = event.requestId
-        onPortableCatalog(event.catalog)
+        onPortableCatalog(event.catalog, event.compatibilitySlots)
       }
     }
     eventBus.register<ControllerOwnershipChangingEvent> {
@@ -332,7 +332,7 @@ internal class StateUxDesktopController(
   }
 
   private fun publishEmptyPortableCatalog() {
-    onPortableCatalog(StateBrowserCatalog(emptyList(), false, null, emptyList()))
+    onPortableCatalog(StateBrowserCatalog(emptyList(), false, null, emptyList()), emptySet())
   }
 
   fun takeScreenshot() {

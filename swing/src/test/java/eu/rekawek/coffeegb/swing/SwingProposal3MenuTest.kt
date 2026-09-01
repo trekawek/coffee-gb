@@ -92,6 +92,25 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `idle Library root consumes back while child routes still return to it`() {
+    val menu = newMenu(FakeBridge(gameLoaded = false))
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      press(menu, MenuKey.B)
+      assertTrue(menu.visible())
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+
+      repeat(2) { press(menu, MenuKey.DOWN) }
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      assertTrue(menu.visible())
+    }
+  }
+
+  @Test
   fun `library open rom row delegates to desktop native chooser command boundary`() {
     val bridge = FakeBridge(gameLoaded = false)
     val frames = mutableListOf<MenuArgbFrame?>()
@@ -113,6 +132,60 @@ class SwingProposal3MenuTest {
     assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
     assertTrue(frames.any { it != null })
     assertTrue(frames.last() == null)
+  }
+
+  @Test
+  fun `cancelling native ROM chooser restores idle Library overlay`() {
+    val bridge = FakeBridge(gameLoaded = false, romChooserAccepted = false)
+    val frames = mutableListOf<MenuArgbFrame?>()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = { frames += it },
+            commands = bridge,
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      assertEquals("open-rom", menu.focusedItemIdForTest())
+      assertTrue(menu.visible())
+    }
+
+    assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
+    assertTrue(frames.last() != null)
+  }
+
+  @Test
+  fun `cancelling native ROM chooser keeps the running game paused behind its menu`() {
+    lateinit var menu: SwingProposal3Menu
+    val bridge =
+        FakeBridge(
+            romChooserAccepted = false,
+            duringRomChooser = {
+              assertTrue(menu.onKeyDown(MenuKey.B, false))
+              assertTrue(menu.onKeyUp(MenuKey.B))
+              assertTrue(menu.updatePlayerButtons(EnumSet.of(Button.DOWN)))
+              assertTrue(menu.updatePlayerButtons(emptySet()))
+            },
+        )
+    menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openFromDesktop()
+      repeat(3) { press(menu, MenuKey.DOWN) }
+      assertEquals("open-rom", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+      assertEquals("open-rom", menu.focusedItemIdForTest())
+      assertTrue(menu.visible())
+    }
+
+    assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
+    assertEquals(listOf(true), bridge.pauseTransitions)
   }
 
   @Test
@@ -378,6 +451,10 @@ class SwingProposal3MenuTest {
           menu.presentationForTest().items().all {
             it.widgetType() == MenuWidgetType.DROPDOWN
           })
+      assertEquals(
+          "MODE",
+          menu.presentationForTest().items().single { it.id() == "execution-mode" }.label(),
+      )
     }
   }
 
@@ -404,6 +481,10 @@ class SwingProposal3MenuTest {
         press(menu, MenuKey.A)
         assertEquals(MenuRoute.OPTION_PICKER, menu.routeForTest())
         assertTrue(menu.visibleItemIdsForTest().all { it.startsWith("choice:") })
+        val pickerItems = menu.presentationForTest().items()
+        assertTrue(pickerItems.all { it.widgetType() == MenuWidgetType.CHECKBOX })
+        assertTrue(pickerItems.all { it.detail().isEmpty() })
+        assertEquals(1, pickerItems.count { it.checked() })
         // Move away from the committed option so this verifies A applies the selected option,
         // rather than merely returning with no change.
         press(menu, MenuKey.DOWN)
@@ -1043,6 +1124,8 @@ class SwingProposal3MenuTest {
       private val recentAvailable: Boolean = true,
       private val playTimeNanos: Long = 0,
       private val gameLoaded: Boolean = true,
+      private val romChooserAccepted: Boolean = true,
+      private val duringRomChooser: (() -> Unit)? = null,
   ) : PortableMenuCommandBridge {
     val invoked = mutableListOf<DesktopCommand>()
     val pauseTransitions = mutableListOf<Boolean>()
@@ -1079,6 +1162,12 @@ class SwingProposal3MenuTest {
     override fun invoke(command: DesktopCommand) {
       invoked += command
       if (command == DesktopCommand.MUTE) muted = !muted
+    }
+
+    override fun openRomFromMenu(): Boolean {
+      invoke(DesktopCommand.OPEN_ROM)
+      duringRomChooser?.invoke()
+      return romChooserAccepted
     }
 
     override fun audioVolume(): Int? = volume.takeIf { audioAvailable }

@@ -78,7 +78,7 @@ final class AndroidMenuModel {
                 dropdown("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
                 dropdown("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
                 dropdown("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true),
-                dropdown("execution-mode", "EXEC MODE", executionModeLabel(executionMode),
+                dropdown("execution-mode", "MODE", executionModeLabel(executionMode),
                         true)),
                 preferredFocusId, MenuPreview.empty());
     }
@@ -97,8 +97,8 @@ final class AndroidMenuModel {
             String selectedToken) {
         ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
         for (ChoiceValue choice : choices) {
-            items.add(button("choice:" + choice.token(), choice.label(),
-                    choice.token().equals(selectedToken) ? "SELECTED" : "", choice.enabled()));
+            items.add(checkbox("choice:" + choice.token(), choice.label(),
+                    choice.token().equals(selectedToken), choice.enabled()));
         }
         boolean fallback = items.isEmpty() || items.stream().noneMatch(MenuPageSpec.Item::enabled);
         if (fallback) {

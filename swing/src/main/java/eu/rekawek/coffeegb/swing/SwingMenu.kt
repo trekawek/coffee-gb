@@ -355,7 +355,8 @@ internal class SwingMenu(
     return fileMenu
   }
 
-  internal fun openRomChooser() {
+  /** Returns true only when the native chooser supplied a ROM to the opening pipeline. */
+  internal fun openRomChooser(): Boolean {
     val chooser = RomFileChooser()
     chooser.dialogTitle = "Open Game Boy ROM"
     chooser.fileFilter =
@@ -369,21 +370,23 @@ internal class SwingMenu(
         )
     chooser.isAcceptAllFileFilterUsed = false
     chooser.accessibleContext.accessibleName = "Choose a Game Boy ROM or ZIP or 7z archive"
-    openRomChooser(chooser, chooser.currentDirectory, window)
+    return openRomChooser(chooser, chooser.currentDirectory, window)
   }
 
   private fun openRomChooser(
       chooser: RomFileChooser,
       systemDefaultRomDirectory: File,
       parent: Component,
-  ) {
+  ): Boolean {
     properties.applicationSettings.general.romDirectory?.let(chooser::useConfiguredDirectory)
         ?: run { chooser.currentDirectory = systemDefaultRomDirectory }
     val code = chooser.showOpenDialog(parent)
     if (code == JFileChooser.APPROVE_OPTION) {
       val rom = chooser.selectedFile
       launchRom(rom, RomOpenSource.CHOOSER)
+      return true
     }
+    return false
   }
 
   private fun createGameMenu(): JMenu {

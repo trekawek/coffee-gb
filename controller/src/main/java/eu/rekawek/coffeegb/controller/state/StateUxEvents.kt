@@ -59,6 +59,8 @@ data class StateCatalogReadyEvent(
     val requestId: Long,
     val sessionId: Long,
     val catalog: StateBrowserCatalog,
+    /** Decodable legacy quick-state sidecars absent from the managed catalog. */
+    val compatibilitySlots: Set<Int> = emptySet(),
 ) : Event
 
 data class StateSaveRequestEvent(

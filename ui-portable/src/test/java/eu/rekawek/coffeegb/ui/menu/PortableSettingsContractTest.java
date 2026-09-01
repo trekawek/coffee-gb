@@ -83,6 +83,7 @@ public class PortableSettingsContractTest {
         assertEquals(List.of(MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
                         MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN),
                 types(MenuRoute.SYSTEM));
+        assertEquals(List.of(MenuWidgetType.CHECKBOX), types(MenuRoute.OPTION_PICKER));
     }
 
     private static MenuPresentation variant(MenuWidgetType type) {

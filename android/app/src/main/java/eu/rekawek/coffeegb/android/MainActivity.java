@@ -383,6 +383,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 }
             }
         });
+        menuController.setRootDismissAllowed(observedState.sessionGeneration() != 0L);
         video.setMenuInput(menuController);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             predictiveMenuBack = new Api33MenuBackCallback(this, this::dispatchMenuBack);
@@ -671,6 +672,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         current = observedState;
         if (menuController.visible()) {
             if (wasVisible) {
+                if (current.sessionGeneration() == 0L) {
+                    return;
+                }
                 menuController.hide();
             }
             return;
@@ -1095,7 +1099,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                             new AndroidMenuModel.ChoiceValue("full", "FULL")),
                     systemBootstrap(preferences));
             case "execution-mode" -> openOptionPicker(MenuRoute.SYSTEM, id,
-                    "EXECUTION MODE",
+                    "MODE",
                     List.of(new AndroidMenuModel.ChoiceValue("accuracy", "ACCURACY"),
                             new AndroidMenuModel.ChoiceValue("performance", "PERFORMANCE")),
                     executionMode(preferences));
@@ -2625,6 +2629,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             deferredMenuFocusRestore = menuController.snapshot();
         }
         observedState = state;
+        if (menuController != null) {
+            menuController.setRootDismissAllowed(state.sessionGeneration() != 0L);
+        }
         if (diagnosticsOptions.enabled && state.phase() == RuntimeState.Phase.PAUSED
                 && !benchmarkAnchorRequested && runtime != null && video != null
                 && state.sessionGeneration() > 0L
