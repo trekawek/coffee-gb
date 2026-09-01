@@ -63,15 +63,15 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private final AddressSpace baseAddressSpace;
 
-    /** Immutable typed entrance to the optional native-CGB physical ROM mapping chain. */
+    /** Immutable typed entrance to the optional running-epoch ROM reader chain. */
     private final PerformanceRomAccessProvider performanceRomAccessProvider;
 
     private AddressSpace addressSpace;
 
-    /** Reused CPU-bus observer for the native-CGB coarse PERFORMANCE epoch. */
+    /** Reused CPU-bus observer for coarse running PERFORMANCE epochs. */
     private transient PerformanceEpochBus performanceEpochBus;
 
-    /** Borrowed direct ROM mapping retained only for one bounded native-CGB epoch. */
+    /** Borrowed ROM reader retained only for one bounded running PERFORMANCE epoch. */
     private transient PerformanceRomAccess performanceEpochRomAccess;
 
     private transient AddressSpace performanceEpochTarget;
@@ -268,8 +268,8 @@ public class Cpu implements StatefulComponent<Cpu> {
                     }
                 }
 
-                // Fence the next fetch/operand window before the native epoch may use its
-                // borrowed ROM mapping. Scalar and physical-DMG fetches remain on the base bus.
+                // Fence the next fetch/operand window before the native x2 epoch may use its
+                // borrowed ROM reader.
                 if (!performanceEpochPrefetchSafe()) {
                     performanceEpochTerminal = true;
                     break;
@@ -351,8 +351,8 @@ public class Cpu implements StatefulComponent<Cpu> {
     /**
      * Fixed four-master-dot epoch for native CGB software which remains at normal speed.
      * Address-known ROM reads and work/high-RAM accesses may remain inside the epoch.
-     * CPU-visible peripheral, mapper, cartridge-RAM, and RTC accesses stay scalar so they
-     * retain their position before the owner ticks Sound and the remaining peripherals.
+     * CPU-visible peripheral, cartridge-control, external-RAM, and RTC accesses stay scalar so
+     * they retain their position before the owner ticks Sound and the remaining peripherals.
      */
     public int runNativeCgbNormalSpeedPerformanceEpoch(int maxMasterTicks) {
         return !speedMode.isDmgCompat()
@@ -397,6 +397,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         }
         PerformanceEpochBus bus = performanceEpochBus;
         AddressSpace target = addressSpace;
+        performanceEpochRomAccess = acquirePerformanceEpochRomAccess();
         performanceEpochTarget = target;
         performanceEpochTerminal = false;
         performanceEpochJournalValid = false;
@@ -448,6 +449,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 }
             }
         } finally {
+            performanceEpochRomAccess = null;
             addressSpace = target;
             performanceEpochActive = false;
             performanceEpochLcdOffVramAccess = false;
@@ -546,7 +548,21 @@ public class Cpu implements StatefulComponent<Cpu> {
      * fetch boundary itself untouched when the next opcode is HALT.
      */
     private boolean performanceNextBoundaryFetchesHalt() {
-        return state == State.OPCODE && readInstructionByte(registers.getPC()) == 0x76;
+        if (state != State.OPCODE) {
+            return false;
+        }
+        int pc = registers.getPC();
+        if (pc >= 0x8000) {
+            return readInstructionByte(pc) == 0x76;
+        }
+        PerformanceRomAccess romAccess = performanceEpochRomAccess;
+        if (romAccess == null) {
+            return true;
+        }
+        int physicalOffset = romAccess.physicalOffset(pc);
+        // A logical mapper read may itself mutate cartridge state. Leave this rare masked-IRQ
+        // boundary scalar instead of peeking and then fetching the same opcode a second time.
+        return physicalOffset < 0 || romAccess.readPhysicalByte(physicalOffset) == 0x76;
     }
 
     private boolean hasImeDisabledRawPendingInterrupt() {
@@ -1330,7 +1346,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         switch (state) {
             case OPCODE:
                 clearState();
-                opcode1 = readInstructionByte(pc);
+                opcode1 = readPerformanceEpochInstructionByte(pc);
                 if (opcode1 == 0xcb) {
                     state = State.EXT_OPCODE;
                 } else if (opcode1 == 0x10) {
@@ -1358,7 +1374,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                 return 0;
 
             case EXT_OPCODE:
-                opcode2 = readInstructionByte(pc);
+                opcode2 = readPerformanceEpochInstructionByte(pc);
                 if (currentOpcode == null) {
                     setCurrentOpcode(Opcodes.EXT_COMMANDS.get(opcode2));
                 }
@@ -1379,7 +1395,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             case OPERAND:
                 boolean fetchedOperand = false;
                 if (operandIndex < currentOperandLength) {
-                    operand[operandIndex++] = readInstructionByte(pc);
+                    operand[operandIndex++] = readPerformanceEpochInstructionByte(pc);
                     registers.incrementPC();
                     fetchedOperand = true;
                     if (operandIndex < currentOperandLength) {
@@ -1431,7 +1447,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             ? speedSwitchPaddingOpcode
                             : useHdmaArbitrationOpcode
                             ? hdmaArbitrationOpcode
-                            : readInstructionByte(pc);
+                            : readPerformanceEpochInstructionByte(pc);
                     accessedMemory = true;
                     notifyOpcodeFetched(pc, false, opcode1);
                     if (opcode1 == 0xcb) {
@@ -1468,7 +1484,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         return;
                     }
                     accessedMemory = true;
-                    opcode2 = readInstructionByte(pc);
+                    opcode2 = readPerformanceEpochInstructionByte(pc);
                     if (opcode1 == 0xcb) {
                         notifyOpcodeFetched(debugInstructionPc, true, opcode2);
                     }
@@ -1490,7 +1506,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                             return;
                         }
                         accessedMemory = true;
-                        operand[operandIndex++] = readInstructionByte(pc);
+                        operand[operandIndex++] = readPerformanceEpochInstructionByte(pc);
                         registers.incrementPC();
                     }
                     ops = currentOpcode.getOps();
@@ -1530,7 +1546,8 @@ public class Cpu implements StatefulComponent<Cpu> {
                         // HALT always samples the next opcode. It is normally fetched
                         // again on wake, but a simultaneously acknowledged HDMA request
                         // turns this sample into the held pipeline opcode.
-                        haltPrefetchedOpcode = readInstructionByte(registers.getPC());
+                        haltPrefetchedOpcode = readPerformanceEpochInstructionByte(
+                                registers.getPC());
                         haltOpcodePrefetchValid = false;
                         // committing a pending EI happens even when entering halt, so
                         // "ei; halt" halts with IME=1 (no halt bug, wake dispatches)
@@ -2040,7 +2057,7 @@ public class Cpu implements StatefulComponent<Cpu> {
      * Executes a complete high-frequency instruction transaction after its real
      * opcode fetch. Each additional machine-cycle boundary is charged at native
      * CGB's fixed two-master-dot width. Instruction bytes are fetched in program
-     * order through the epoch's borrowed ROM mapping when available; an unsafe data
+     * order through the epoch's borrowed ROM reader when available; an unsafe data
      * access is left in the canonical RUNNING state for the ordinary epoch sequencer.
      *
      * @return additional master ticks, or {@code -1} when this opcode/budget is not
@@ -2293,7 +2310,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         while (operandIndex < operandLength) {
             performanceEpochElapsed += 4;
             extraTicks += 4;
-            operand[operandIndex++] = readInstructionByte(registers.getPC());
+            operand[operandIndex++] = readPerformanceEpochInstructionByte(registers.getPC());
             registers.incrementPC();
         }
         ops = currentOpcode.getOps();
@@ -3198,13 +3215,13 @@ public class Cpu implements StatefulComponent<Cpu> {
                 : observed.getByte(address, DebugMemoryAccess.EXECUTE);
     }
 
-    /** Acquires one borrowed mapping after the native epoch entrance proof has passed. */
+    /** Acquires one borrowed reader after the running-epoch entrance proof has passed. */
     private PerformanceRomAccess acquirePerformanceEpochRomAccess() {
         PerformanceRomAccessProvider provider = performanceRomAccessProvider;
         return provider == null ? null : provider.acquirePerformanceRomAccess();
     }
 
-    /** Native-CGB epoch-only instruction fetch through its borrowed physical ROM mapping. */
+    /** Running-PERFORMANCE instruction fetch through its borrowed ROM reader. */
     private int readPerformanceEpochInstructionByte(int address) {
         PerformanceRomAccess romAccess = performanceEpochRomAccess;
         if (romAccess != null && address >= 0 && address < 0x8000) {

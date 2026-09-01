@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.core.memory.cart.type;
 
 import eu.rekawek.coffeegb.core.AddressSpace;
+import eu.rekawek.coffeegb.core.TestDebugHooks;
 import eu.rekawek.coffeegb.core.hardware.ClockSpec;
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties;
@@ -20,6 +21,7 @@ import java.util.Arrays;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public class Unlicensed256MTest {
@@ -77,6 +79,52 @@ public class Unlicensed256MTest {
 
         assertEquals(0xc0, mapper.getByte(0x0000));
         assertEquals(0xc3, mapper.getByte(0x4000));
+    }
+
+    @Test
+    public void menuAndSelectedGameAllowPerformanceQuietSpansUntilDebugging() throws IOException {
+        Unlicensed256M mapper = new Unlicensed256M(
+                new Rom(multicartRom()), Battery.NULL_BATTERY);
+
+        assertEquals(64, mapper.performanceQuietSpanLimit(64));
+        assertTrue(mapper.tickPerformanceQuietSpan(64));
+        mapper.tickPerformanceQuietSpanTrusted(64);
+
+        configure(mapper, 0x60, 0xe0, 0x91);
+        assertEquals(64, mapper.performanceQuietSpanLimit(64));
+        assertTrue(mapper.tickPerformanceQuietSpan(64));
+        mapper.tickPerformanceQuietSpanTrusted(64);
+
+        mapper.setDebugHooks(new TestDebugHooks());
+        assertEquals(0, mapper.performanceQuietSpanLimit(64));
+        assertFalse(mapper.tickPerformanceQuietSpan(64));
+    }
+
+    @Test
+    public void selectedMbc3DelegatesPerformanceQuietSpans() throws IOException {
+        Unlicensed256M scalar = new Unlicensed256M(
+                new Rom(multicartRom(0x13)), Battery.NULL_BATTERY,
+                () -> 0L, ClockSpec.LEGACY);
+        Unlicensed256M mapper = new Unlicensed256M(
+                new Rom(multicartRom(0x13)), Battery.NULL_BATTERY,
+                () -> 0L, ClockSpec.LEGACY);
+
+        configure(scalar, 0x60, 0xe0, 0x91);
+        configure(mapper, 0x60, 0xe0, 0x91);
+
+        assertNotNull(mapper.getActiveMbc3());
+        int halfSecond = 2_097_152;
+        assertEquals(halfSecond, mapper.performanceQuietSpanLimit(halfSecond));
+        assertTrue(mapper.tickPerformanceQuietSpan(halfSecond));
+        mapper.tickPerformanceQuietSpanTrusted(halfSecond);
+        for (int tick = 0; tick < 2 * halfSecond; tick++) {
+            scalar.tick();
+        }
+
+        int scalarSeconds = latchedRtcSeconds(scalar);
+        int bulkSeconds = latchedRtcSeconds(mapper);
+        assertEquals(1, bulkSeconds);
+        assertEquals(scalarSeconds, bulkSeconds);
     }
 
     @Test
@@ -158,7 +206,19 @@ public class Unlicensed256MTest {
         mapper.setByte(0x7002, flags);
     }
 
+    private static int latchedRtcSeconds(AddressSpace mapper) {
+        mapper.setByte(0x0000, 0x0a);
+        mapper.setByte(0x4000, 0x08);
+        mapper.setByte(0x6000, 0x00);
+        mapper.setByte(0x6000, 0x01);
+        return mapper.getByte(0xa000);
+    }
+
     private static byte[] multicartRom() {
+        return multicartRom(0x1b);
+    }
+
+    private static byte[] multicartRom(int selectedType) {
         byte[] data = new byte[0x400000];
         for (int bank = 0; bank < data.length / 0x4000; bank++) {
             data[bank * 0x4000] = (byte) bank;
@@ -168,7 +228,7 @@ public class Unlicensed256MTest {
         data[0x0101] = (byte) 0xc3;
         data[0x0102] = 0x00;
         data[0x0103] = 0x40;
-        putHeader(data, 0xc0, "SELECTED", 0x1b, 0x05, 0x03);
+        putHeader(data, 0xc0, "SELECTED", selectedType, 0x05, 0x03);
         return data;
     }
 
