@@ -702,6 +702,15 @@ internal class SwingProposal3Menu(
                     settings?.displayValue(PortableMenuSettingId.BOOTSTRAP)?.uppercase().orEmpty(),
                     settings != null,
                 ),
+                item(
+                    PortableMenuSettingId.EXECUTION_MODE,
+                    "EXECUTION MODE",
+                    settings
+                        ?.displayValue(PortableMenuSettingId.EXECUTION_MODE)
+                        ?.uppercase()
+                        .orEmpty(),
+                    settings != null,
+                ),
             )
         if (settings != null) {
           page(
@@ -897,6 +906,7 @@ internal class SwingProposal3Menu(
                   PortableMenuSettingId.DMG_GAMES,
                   PortableMenuSettingId.CGB_GAMES,
                   PortableMenuSettingId.BOOTSTRAP,
+                  PortableMenuSettingId.EXECUTION_MODE,
               )) {
             openChoice(id, MenuRoute.SYSTEM)
           }
@@ -1021,6 +1031,7 @@ internal class SwingProposal3Menu(
         PortableMenuSettingId.DMG_GAMES -> "DMG GAMES"
         PortableMenuSettingId.CGB_GAMES -> "CGB GAMES"
         PortableMenuSettingId.BOOTSTRAP -> "BOOTSTRAP"
+        PortableMenuSettingId.EXECUTION_MODE -> "EXECUTION MODE"
         PortableMenuSettingId.DMG_COLORS -> "DMG COLORS"
         PortableMenuSettingId.CAMERA -> "CAMERA"
         PortableMenuSettingId.GAMEPAD -> "GAMEPAD"

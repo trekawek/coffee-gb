@@ -359,7 +359,10 @@ class SwingProposal3MenuTest {
 
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SYSTEM, menu.routeForTest())
-      assertEquals(listOf("dmg-games", "cgb-games", "bootstrap"), menu.visibleItemIdsForTest())
+      assertEquals(
+          listOf("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
+          menu.visibleItemIdsForTest(),
+      )
     }
   }
 
@@ -370,6 +373,7 @@ class SwingProposal3MenuTest {
             MenuRoute.SYSTEM to "dmg-games",
             MenuRoute.SYSTEM to "cgb-games",
             MenuRoute.SYSTEM to "bootstrap",
+            MenuRoute.SYSTEM to "execution-mode",
             MenuRoute.DISPLAY to "dmg-colors",
             MenuRoute.OPTIONAL_DEVICES to "camera",
             MenuRoute.OPTIONAL_DEVICES to "gamepad",
@@ -1175,6 +1179,7 @@ class SwingProposal3MenuTest {
                       "dmg-games" to "auto",
                       "cgb-games" to "auto",
                       "bootstrap" to "skip",
+                      "execution-mode" to "accuracy",
                       "sgb-border" to "off",
                       "dmg-colors" to "green",
                       "camera" to "off",
@@ -1185,6 +1190,7 @@ class SwingProposal3MenuTest {
                       "dmg-games" to choices("auto", "dmg", "cgb", "sgb"),
                       "cgb-games" to choices("auto", "cgb"),
                       "bootstrap" to choices("skip", "fast-forward", "full"),
+                      "execution-mode" to choices("accuracy", "performance"),
                       "dmg-colors" to choices("green", "grey"),
                       "camera" to choices("off", "camera-0"),
                       "gamepad" to
@@ -1197,6 +1203,7 @@ class SwingProposal3MenuTest {
                       "dmg-games" to "AUTO",
                       "cgb-games" to "AUTO",
                       "bootstrap" to "SKIP",
+                      "execution-mode" to "ACCURACY",
                       "sgb-border" to "OFF",
                       "dmg-colors" to "GREEN",
                       "camera" to "OFF",

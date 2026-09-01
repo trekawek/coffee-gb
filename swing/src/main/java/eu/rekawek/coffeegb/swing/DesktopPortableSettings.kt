@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.Gameboy.BootstrapMode
 import eu.rekawek.coffeegb.core.events.EventBus
 import eu.rekawek.coffeegb.core.hardware.HardwareProfileRegistry
@@ -102,6 +103,7 @@ internal class DesktopPortableSettingsAccess(
                 PortableMenuSettingId.DMG_GAMES to profileToken(advanced.dmgGamesProfile),
                 PortableMenuSettingId.CGB_GAMES to profileToken(advanced.cgbGamesProfile),
                 PortableMenuSettingId.BOOTSTRAP to bootstrapToken(advanced.bootstrapMode),
+                PortableMenuSettingId.EXECUTION_MODE to executionModeToken(advanced.executionMode),
                 PortableMenuSettingId.SGB_BORDER to if (settings.display.showSgbBorder) "on" else "off",
                 PortableMenuSettingId.DMG_COLORS to if (settings.display.grayscale) "grey" else "green",
                 PortableMenuSettingId.CAMERA to cameraToken,
@@ -117,6 +119,11 @@ internal class DesktopPortableSettingsAccess(
                         PortableMenuSettingChoice("fast-forward", "FAST-FORWARD"),
                         PortableMenuSettingChoice("full", "FULL"),
                     ),
+                PortableMenuSettingId.EXECUTION_MODE to
+                    listOf(
+                        PortableMenuSettingChoice("accuracy", "ACCURACY"),
+                        PortableMenuSettingChoice("performance", "PERFORMANCE"),
+                    ),
                 PortableMenuSettingId.DMG_COLORS to
                     listOf(
                         PortableMenuSettingChoice("green", "GREEN"),
@@ -131,6 +138,7 @@ internal class DesktopPortableSettingsAccess(
                 PortableMenuSettingId.DMG_GAMES to profileToken(advanced.dmgGamesProfile),
                 PortableMenuSettingId.CGB_GAMES to profileToken(advanced.cgbGamesProfile),
                 PortableMenuSettingId.BOOTSTRAP to bootstrapToken(advanced.bootstrapMode),
+                PortableMenuSettingId.EXECUTION_MODE to executionModeToken(advanced.executionMode),
                 PortableMenuSettingId.SGB_BORDER to
                     if (settings.display.showSgbBorder) "ON" else "OFF",
                 PortableMenuSettingId.DMG_COLORS to
@@ -151,6 +159,8 @@ internal class DesktopPortableSettingsAccess(
       PortableMenuSettingId.CGB_GAMES -> updateSystem { it.copy(cgbGamesProfile = profileSelection(token)) }
       PortableMenuSettingId.BOOTSTRAP ->
           updateSystem { it.copy(bootstrapMode = bootstrapMode(token)) }
+      PortableMenuSettingId.EXECUTION_MODE ->
+          updateSystem { it.copy(executionMode = executionMode(token)) }
       PortableMenuSettingId.DMG_COLORS -> updateDisplay { it.copy(grayscale = token == "grey") }
       PortableMenuSettingId.CAMERA -> applyCameraChoice(token)
       PortableMenuSettingId.GAMEPAD -> applyGamepadChoice(token)
@@ -253,6 +263,15 @@ internal class DesktopPortableSettingsAccess(
         "fast-forward" -> BootstrapMode.FAST_FORWARD
         "full" -> BootstrapMode.NORMAL
         else -> error("Unknown bootstrap choice: $token")
+      }
+
+  private fun executionModeToken(mode: ExecutionMode): String = mode.name.lowercase()
+
+  private fun executionMode(token: String): ExecutionMode =
+      when (token) {
+        "accuracy" -> ExecutionMode.ACCURACY
+        "performance" -> ExecutionMode.PERFORMANCE
+        else -> error("Unknown execution mode choice: $token")
       }
 
   private fun selectedGamepadToken(selection: ApplicationSettings.GamepadSelection): String =

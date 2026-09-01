@@ -131,8 +131,9 @@ public final class Proposal3MenuCompositor {
             case PAUSE_CONSOLE, SAVE_STATES -> Proposal3GlyphAtlas.Role.SEMIBOLD;
             // Seven archive rows use the compact 36px face so their ink fits the fixed viewport.
             case CHOOSE_ROM -> Proposal3GlyphAtlas.Role.MEDIUM;
-            case CONTROLLER_MAPPING, OPTIONAL_DEVICES, SYSTEM, DISPLAY, OPTION_PICKER ->
-                    Proposal3GlyphAtlas.Role.SMALL;
+            case CONTROLLER_MAPPING -> Proposal3GlyphAtlas.Role.SMALL;
+            case OPTIONAL_DEVICES, SYSTEM, DISPLAY, OPTION_PICKER ->
+                    Proposal3GlyphAtlas.Role.NOTICE;
             case ABOUT -> rowIndex == 0 ? Proposal3GlyphAtlas.Role.SEMIBOLD
                     : Proposal3GlyphAtlas.Role.NOTICE;
             default -> Proposal3GlyphAtlas.Role.MEDIUM;
@@ -738,8 +739,13 @@ public final class Proposal3MenuCompositor {
             return new MenuRect(row.x() + 8,
                     row.y() + Math.max(0, (row.height() - 36) / 2), 36, 36);
         }
-        return new MenuRect(row.x() + 172, row.y() + Math.max(0, (row.height() - 36) / 2),
-                36, 36);
+        int size = 48;
+        return new MenuRect(row.x() + 172,
+                row.y() + Math.max(0, (row.height() - size) / 2), size, size);
+    }
+
+    static MenuRect checkboxBoundsForAudit(MenuRoute route, MenuRect row) {
+        return checkboxBounds(route, row);
     }
 
     private void paintChoiceField(MenuRoute route, MenuRect row, String value, boolean selected,
@@ -751,7 +757,14 @@ public final class Proposal3MenuCompositor {
         MenuRect valueBounds = new MenuRect(left + 12, top + 7, choiceField.width() - 48, 40);
         drawWidgetText(raster, value, valueBounds,
                 selected ? MenuRaster.PAPER_TEXT : MenuRaster.PAPER_TEXT,
-                MenuRaster.HorizontalAlignment.RIGHT, Proposal3GlyphAtlas.Role.SMALL);
+                MenuRaster.HorizontalAlignment.RIGHT, choiceTextRole(route));
+    }
+
+    static Proposal3GlyphAtlas.Role choiceTextRole(MenuRoute route) {
+        return switch (route) {
+            case SYSTEM, DISPLAY, OPTIONAL_DEVICES -> Proposal3GlyphAtlas.Role.NOTICE;
+            default -> Proposal3GlyphAtlas.Role.SMALL;
+        };
     }
 
     private void paintRowIcon(MenuRoute route, int entryIndex,
@@ -1252,9 +1265,11 @@ public final class Proposal3MenuCompositor {
         };
     }
 
-    private static Proposal3GlyphAtlas.Role detailTextRole(MenuRoute route) {
-        return route == MenuRoute.SYSTEM ? Proposal3GlyphAtlas.Role.SMALL
-                : Proposal3GlyphAtlas.Role.MEDIUM;
+    static Proposal3GlyphAtlas.Role detailTextRole(MenuRoute route) {
+        return switch (route) {
+            case SYSTEM, DISPLAY, OPTIONAL_DEVICES -> Proposal3GlyphAtlas.Role.NOTICE;
+            default -> Proposal3GlyphAtlas.Role.MEDIUM;
+        };
     }
 
     private static String focusedId(MenuPresentation p, Prepared prepared) {

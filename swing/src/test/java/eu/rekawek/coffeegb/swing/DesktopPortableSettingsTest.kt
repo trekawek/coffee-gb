@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.controller.Controller
 import eu.rekawek.coffeegb.controller.events.register
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
+import eu.rekawek.coffeegb.core.ExecutionMode
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import eu.rekawek.coffeegb.swing.io.GamepadCatalog
 import javax.swing.SwingUtilities
@@ -12,7 +13,7 @@ import org.junit.Test
 
 class DesktopPortableSettingsTest {
   @Test
-  fun `committed system display camera and gamepad choices do not reapply`() {
+  fun `committed portable choices do not reapply and execution mode changes persist`() {
     val properties = EmulatorProperties()
     val eventBus = EventBusImpl()
     val displaySettings = FakeDisplaySettings(properties.applicationSettings.display)
@@ -40,6 +41,10 @@ class DesktopPortableSettingsTest {
 
     onEdt {
       val snapshot = access.snapshot()
+      assertEquals(
+          listOf("accuracy", "performance"),
+          snapshot.choicesFor(PortableMenuSettingId.EXECUTION_MODE).map { it.token },
+      )
       access.applyChoice(
           PortableMenuSettingId.DMG_GAMES,
           snapshot.value(PortableMenuSettingId.DMG_GAMES)!!,
@@ -47,6 +52,10 @@ class DesktopPortableSettingsTest {
       access.applyChoice(
           PortableMenuSettingId.DMG_COLORS,
           snapshot.value(PortableMenuSettingId.DMG_COLORS)!!,
+      )
+      access.applyChoice(
+          PortableMenuSettingId.EXECUTION_MODE,
+          snapshot.value(PortableMenuSettingId.EXECUTION_MODE)!!,
       )
       access.applyChoice(PortableMenuSettingId.CAMERA, "off")
       val gamepad = snapshot.value(PortableMenuSettingId.GAMEPAD)
@@ -63,6 +72,20 @@ class DesktopPortableSettingsTest {
     assertEquals(0, cameraApplyCalls)
     assertEquals(0, deviceApplyCalls)
     assertEquals(initialGamepad, properties.applicationSettings.input.gamepads[0])
+
+    val targetExecutionMode =
+        when (properties.applicationSettings.advanced.executionMode) {
+          ExecutionMode.ACCURACY -> ExecutionMode.PERFORMANCE
+          ExecutionMode.PERFORMANCE -> ExecutionMode.ACCURACY
+        }
+    onEdt {
+      access.applyChoice(
+          PortableMenuSettingId.EXECUTION_MODE,
+          targetExecutionMode.name.lowercase(),
+      )
+    }
+    assertEquals(targetExecutionMode, properties.applicationSettings.advanced.executionMode)
+    assertEquals(1, systemEvents)
     onEdt { displayController.close() }
     eventBus.close()
     properties.close()

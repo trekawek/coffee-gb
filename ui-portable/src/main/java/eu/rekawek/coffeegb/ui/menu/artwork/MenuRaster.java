@@ -120,19 +120,26 @@ final class MenuRaster {
         if (bounds.width() < 32 || bounds.height() < 32) {
             throw new IllegalArgumentException("Checkbox needs a 32px square minimum");
         }
+        int size = Math.min(bounds.width(), bounds.height());
+        int frameInset = Math.max(3, size / 12);
+        int interiorInset = Math.max(7, size * 7 / 36);
         fill(bounds, PAPER_TEXT);
-        fill(new MenuRect(bounds.x() + 3, bounds.y() + 3, bounds.width() - 6,
-                bounds.height() - 6), INK);
-        fill(new MenuRect(bounds.x() + 7, bounds.y() + 7, bounds.width() - 14,
-                bounds.height() - 14), PAPER);
+        fill(new MenuRect(bounds.x() + frameInset, bounds.y() + frameInset,
+                bounds.width() - frameInset * 2, bounds.height() - frameInset * 2), INK);
+        fill(new MenuRect(bounds.x() + interiorInset, bounds.y() + interiorInset,
+                bounds.width() - interiorInset * 2, bounds.height() - interiorInset * 2), PAPER);
         if (!checked) {
             return;
         }
-        fill(new MenuRect(bounds.x() + 9, bounds.y() + 18, 5, 5), INK);
-        fill(new MenuRect(bounds.x() + 12, bounds.y() + 21, 5, 5), INK);
+        int stepSize = Math.max(3, size / 12);
+        int stroke = Math.max(5, size / 7);
+        int startX = bounds.x() + size / 4;
+        int centerY = bounds.y() + size / 2;
+        fill(new MenuRect(startX, centerY, stroke, stroke), INK);
+        fill(new MenuRect(startX + stepSize, centerY + stepSize, stroke, stroke), INK);
         for (int step = 0; step < 4; step++) {
-            fill(new MenuRect(bounds.x() + 15 + step * 3, bounds.y() + 18 - step * 3,
-                    5, 5), INK);
+            fill(new MenuRect(startX + stepSize * (2 + step), centerY - step * stepSize,
+                    stroke, stroke), INK);
         }
     }
 
