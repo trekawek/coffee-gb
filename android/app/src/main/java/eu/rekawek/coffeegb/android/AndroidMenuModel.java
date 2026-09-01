@@ -49,36 +49,37 @@ final class AndroidMenuModel {
 
     static MenuPageSpec settingsPage() {
         return page(MenuRoute.SETTINGS, "COFFEE GB", "SETTINGS", "", "", List.of(), List.of(
-                        item("system", "SYSTEM", "", true),
-                        item("display", "DISPLAY", "", true),
-                        item("audio", "AUDIO", "", true),
-                        item("peripherals", "PERIPHERALS", "", true)),
+                        button("system", "SYSTEM", "", true),
+                        button("display", "DISPLAY", "", true),
+                        button("audio", "AUDIO", "", true),
+                        button("peripherals", "PERIPHERALS", "", true)),
                 "system",
                 MenuPreview.empty());
     }
 
     static MenuPageSpec libraryPage(boolean runtimeAvailable) {
         return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "", "", List.of(), List.of(
-                        item("recent-games", "RECENT GAMES", "", runtimeAvailable),
-                        item("open-rom", "OPEN ROM", "", runtimeAvailable),
-                        item("settings", "SETTINGS", "", true)),
+                        button("recent-games", "RECENT GAMES", "", runtimeAvailable),
+                        button("open-rom", "OPEN ROM", "", runtimeAvailable),
+                        button("settings", "SETTINGS", "", true)),
                 runtimeAvailable ? "recent-games" : "settings", MenuPreview.empty());
     }
 
     static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {
         return page(MenuRoute.DISPLAY, "COFFEE GB", "DISPLAY", "", "", List.of(), List.of(
-                item("sgb-border", "SGB BORDER", onOff(sgbBorder), true),
-                item("dmg-colors", "DMG COLORS", grayscale ? "GREY" : "GREEN", true)),
+                checkbox("sgb-border", "SGB BORDER", onOff(sgbBorder), true),
+                dropdown("dmg-colors", "DMG COLORS", grayscale ? "GREY" : "GREEN", true)),
                 "sgb-border", MenuPreview.empty());
     }
 
     static MenuPageSpec systemPage(String dmgGames, String cgbGames, String bootstrap,
             String executionMode, String preferredFocusId) {
         return page(MenuRoute.SYSTEM, "COFFEE GB", "SYSTEM", "", "", List.of(), List.of(
-                item("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
-                item("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
-                item("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true),
-                item("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode), true)),
+                dropdown("dmg-games", "DMG GAMES", systemChoiceLabel(dmgGames), true),
+                dropdown("cgb-games", "CGB GAMES", systemChoiceLabel(cgbGames), true),
+                dropdown("bootstrap", "BOOTSTRAP", systemChoiceLabel(bootstrap), true),
+                dropdown("execution-mode", "EXECUTION MODE", executionModeLabel(executionMode),
+                        true)),
                 preferredFocusId, MenuPreview.empty());
     }
 
@@ -86,9 +87,9 @@ final class AndroidMenuModel {
             List<ChoiceValue> gamepadChoices) {
         return page(MenuRoute.OPTIONAL_DEVICES, "COFFEE GB", "PERIPHERALS", "", "", List.of(),
                 List.of(
-                        item("camera", "CAMERA", cameraLabel(camera), true),
-                        item("gamepad", "GAMEPAD", gamepadLabel(gamepad, gamepadChoices), true),
-                        item("gps", "GPS", onOff(gps), true)),
+                        dropdown("camera", "CAMERA", cameraLabel(camera), true),
+                        dropdown("gamepad", "GAMEPAD", gamepadLabel(gamepad, gamepadChoices), true),
+                        checkbox("gps", "GPS", onOff(gps), true)),
                 "camera", MenuPreview.empty());
     }
 
@@ -96,7 +97,7 @@ final class AndroidMenuModel {
             String selectedToken) {
         ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
         for (ChoiceValue choice : choices) {
-            items.add(item("choice:" + choice.token(), choice.label(),
+            items.add(button("choice:" + choice.token(), choice.label(),
                     choice.token().equals(selectedToken) ? "SELECTED" : "", choice.enabled()));
         }
         boolean fallback = items.isEmpty() || items.stream().noneMatch(MenuPageSpec.Item::enabled);
@@ -105,7 +106,7 @@ final class AndroidMenuModel {
             // accidentally persist. Keep the status visible so a transient device/query
             // failure is understandable, while requiring B to leave the picker.
             items.clear();
-            items.add(item("picker-status", "NOT AVAILABLE", "", true));
+            items.add(button("picker-status", "NOT AVAILABLE", "", true));
         }
         String preferred = items.stream().filter(MenuPageSpec.Item::enabled)
                 .findFirst().map(MenuPageSpec.Item::id).orElse(items.get(0).id());
@@ -134,7 +135,7 @@ final class AndroidMenuModel {
             return recentGamesPage(games, focusedId);
         }
         return page(MenuRoute.RECENT_GAMES, "COFFEE GB", "RECENT GAMES", "", "",
-                List.of(), List.of(item("recent-games-loading", "LOADING RECENT GAMES", "",
+                List.of(), List.of(button("recent-games-loading", "LOADING RECENT GAMES", "",
                         true)), "recent-games-loading", MenuPreview.empty(), BACK_ONLY_HINTS);
     }
 
@@ -184,17 +185,17 @@ final class AndroidMenuModel {
 
     static MenuPageSpec audioPage(AudioDraft draft) {
         return page(MenuRoute.AUDIO, "COFFEE GB", "AUDIO", "", "", List.of(), List.of(
-                adjustable("volume", "VOLUME", draft.volume() + "%", true,
+                slider("volume", "VOLUME", draft.volume() + "%", true,
                                 draft.volume()),
-                        item("mute-audio", "MUTE", onOff(draft.muted()), true)),
+                        checkbox("mute-audio", "MUTE", onOff(draft.muted()), true)),
                 "volume", MenuPreview.empty());
     }
 
     static MenuPageSpec touchPage(TouchDraft draft, boolean controllerAvailable) {
         ArrayList<MenuPageSpec.Item> rows = new ArrayList<>();
-        rows.add(item("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true));
+        rows.add(checkbox("haptics", "HAPTIC FEEDBACK", onOff(draft.haptics()), true));
         if (controllerAvailable) {
-            rows.add(item("controller-mapping", "REMAP CONTROLS", "", true));
+            rows.add(button("controller-mapping", "REMAP CONTROLS", "", true));
         }
         return page(MenuRoute.TOUCH_CONTROLS, "COFFEE GB", "CONTROLS", "", "",
                 List.of(), rows,
@@ -213,7 +214,7 @@ final class AndroidMenuModel {
         if (!connected) {
             // Normal navigation omits the remap affordance when disconnected.  Keep one
             // concise recovery row for a restored stack whose controller disappeared.
-            rows.add(item("controller-status", "NO CONTROLLER CONNECTED", "", true));
+            rows.add(button("controller-status", "NO CONTROLLER CONNECTED", "", true));
             return page(MenuRoute.CONTROLLER_MAPPING, "COFFEE GB", "REMAP CONTROLS", "",
                     "", List.of(), rows,
                     "controller-status", MenuPreview.empty(), BACK_ONLY_HINTS);
@@ -234,7 +235,7 @@ final class AndroidMenuModel {
                 waitingForRelease);
         addMapping(rows, "map-right", "RIGHT", Button.RIGHT, labels, captureTarget,
                 waitingForRelease);
-        rows.add(item("reset-controller", "RESET CONTROLLER", "", true));
+        rows.add(button("reset-controller", "RESET CONTROLLER", "", true));
         String preferred = captureTarget == null ? "map-a" : mappingId(captureTarget);
         return page(MenuRoute.CONTROLLER_MAPPING, "COFFEE GB", "REMAP CONTROLS", "",
                 "", List.of(controllerName), rows, preferred, MenuPreview.empty());
@@ -250,21 +251,22 @@ final class AndroidMenuModel {
             // Back is a global B action and is removed from the immutable page model. Keep
             // unavailable direct/restored routes valid with one concise, inert status row.
             return page(MenuRoute.DATA_MEDIA, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
-                    List.of(detail), List.of(item("transfer-status", detail, "", true)),
+                    List.of(detail), List.of(button("transfer-status", detail, "", true)),
                     "transfer-status", MenuPreview.empty(), BACK_ONLY_HINTS);
         }
         String transferDetail = availability.enabled() ? "NATIVE PICKER" : detail;
         boolean enabled = availability.enabled();
         return page(MenuRoute.DATA_MEDIA, "COFFEE GB", "DATA & MEDIA", "", "CURRENT GAME",
                 List.of("PRIVATE SAVE DATA", "ANDROID PICKER", detail), List.of(
-                        item("import-battery", "IMPORT BATTERY SAVE", transferDetail, enabled),
-                        item("export-battery", "EXPORT BATTERY SAVE", transferDetail, enabled),
-                        item("import-state-0", "IMPORT STATE SLOT 0", transferDetail, enabled),
-                        item("export-state-0", "EXPORT STATE SLOT 0", transferDetail, enabled),
-                        item("export-screenshot", "EXPORT NATIVE SCREENSHOT", transferDetail, enabled),
-                        item("preview-printer-paper", "PRINTER PAPER", availability.runtimePresent()
+                        button("import-battery", "IMPORT BATTERY SAVE", transferDetail, enabled),
+                        button("export-battery", "EXPORT BATTERY SAVE", transferDetail, enabled),
+                        button("import-state-0", "IMPORT STATE SLOT 0", transferDetail, enabled),
+                        button("export-state-0", "EXPORT STATE SLOT 0", transferDetail, enabled),
+                        button("export-screenshot", "EXPORT NATIVE SCREENSHOT", transferDetail,
+                                enabled),
+                        button("preview-printer-paper", "PRINTER PAPER", availability.runtimePresent()
                                 ? "OPEN" : "NO GAME", availability.runtimePresent()),
-                        item("back", "BACK", "RETURN", true)),
+                        button("back", "BACK", "RETURN", true)),
                 "import-battery", MenuPreview.empty());
     }
 
@@ -284,12 +286,12 @@ final class AndroidMenuModel {
     static MenuPageSpec aboutPage(String version, String status) {
         return page(MenuRoute.ABOUT, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                 List.of("VERSION " + version, "MIT LICENSE", status), List.of(
-                        item("privacy-notices", "PRIVACY & NOTICES", "OPEN", true),
-                        item("network", "NO NETWORK ACCESS", "", false),
-                        item("storage", "NO BROAD STORAGE ACCESS", "", false),
-                        item("live-camera", "CAMERA ONLY WHEN ENABLED", "", false),
-                        item("source-notices", "SOURCE & THIRD-PARTY NOTICES", status, true),
-                        item("back", "BACK", "RETURN", true)),
+                        button("privacy-notices", "PRIVACY & NOTICES", "OPEN", true),
+                        button("network", "NO NETWORK ACCESS", "", false),
+                        button("storage", "NO BROAD STORAGE ACCESS", "", false),
+                        button("live-camera", "CAMERA ONLY WHEN ENABLED", "", false),
+                        button("source-notices", "SOURCE & THIRD-PARTY NOTICES", status, true),
+                        button("back", "BACK", "RETURN", true)),
                 "privacy-notices", MenuPreview.empty());
     }
 
@@ -305,15 +307,15 @@ final class AndroidMenuModel {
                     ? "PAPER LOADING" : "NO PAPER";
             return page(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PRINTER PAPER", "",
                     "GAME BOY PRINTER", List.of(status),
-                    List.of(item("paper-status", label, "", true)), "paper-status", preview,
+                    List.of(button("paper-status", label, "", true)), "paper-status", preview,
                     BACK_ONLY_HINTS);
         }
         return page(MenuRoute.PRINTER_PAPER, "COFFEE GB", "PRINTER PAPER", "",
                 "GAME BOY PRINTER", List.of("PAPER " + state, status, "EXPORT FULL RESOLUTION"),
                 List.of(
-                        item("clear-paper", "CLEAR PAPER", "CONFIRM", true),
-                        item("export-share-paper", "EXPORT & SHARE", "NATIVE PNG", true),
-                        item("back", "BACK", "RETURN", true)),
+                        button("clear-paper", "CLEAR PAPER", "CONFIRM", true),
+                        button("export-share-paper", "EXPORT & SHARE", "NATIVE PNG", true),
+                        button("back", "BACK", "RETURN", true)),
                 "export-share-paper", preview);
     }
 
@@ -326,7 +328,7 @@ final class AndroidMenuModel {
         } else {
             detail = labels.getOrDefault(button, "UNMAPPED");
         }
-        rows.add(item(id, label, detail, true));
+        rows.add(button(id, label, detail, true));
     }
 
     private static String mappingId(Button button) {
@@ -348,14 +350,24 @@ final class AndroidMenuModel {
                 items, 1, footerHints, preferredFocusId, preview);
     }
 
-    private static MenuPageSpec.Item item(String id, String label, String detail,
+    private static MenuPageSpec.Item button(String id, String label, String detail,
             boolean enabled) {
-        return new MenuPageSpec.Item(id, label, detail, enabled);
+        return MenuPageSpec.Item.button(id, label, detail, enabled);
     }
 
-    private static MenuPageSpec.Item adjustable(String id, String label, String detail,
+    private static MenuPageSpec.Item dropdown(String id, String label, String detail,
+            boolean enabled) {
+        return MenuPageSpec.Item.dropdown(id, label, detail, enabled);
+    }
+
+    private static MenuPageSpec.Item checkbox(String id, String label, String detail,
+            boolean enabled) {
+        return MenuPageSpec.Item.checkbox(id, label, detail, enabled);
+    }
+
+    private static MenuPageSpec.Item slider(String id, String label, String detail,
             boolean enabled, int progress) {
-        return new MenuPageSpec.Item(id, label, detail, enabled, null, true, progress);
+        return MenuPageSpec.Item.slider(id, label, detail, enabled, progress);
     }
 
     private static String onOff(boolean enabled) {

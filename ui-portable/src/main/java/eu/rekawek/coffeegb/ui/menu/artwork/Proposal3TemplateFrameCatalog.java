@@ -6,11 +6,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Objects;
 
-/** Package-private catalog for the audited, text-free Proposal 3 route templates. */
+/** Package-private decoder for the audited common text-free Proposal 3 template. */
 final class Proposal3TemplateFrameCatalog {
 
     private static final String RESOURCE_ROOT =
-            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates/";
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates/";
 
     private Proposal3TemplateFrameCatalog() {
     }
@@ -19,7 +19,7 @@ final class Proposal3TemplateFrameCatalog {
         String resourcePath = resourcePath(route);
         InputStream stream = Proposal3TemplateFrameCatalog.class.getResourceAsStream(resourcePath);
         if (stream == null) {
-            throw new IOException("Missing Proposal 3 text-free template: " + resourcePath);
+            throw new IOException("Missing common Proposal 3 text-free template: " + resourcePath);
         }
         try (InputStream input = stream) {
             return validatePackagedDimensions(route, PngArgbDecoder.decode(input));
@@ -28,7 +28,7 @@ final class Proposal3TemplateFrameCatalog {
 
     static String resourcePath(MenuRoute route) {
         Objects.requireNonNull(route, "route");
-        return RESOURCE_ROOT + MenuArtworkCatalog.artwork(route).sourceFilename();
+        return RESOURCE_ROOT + MenuArtworkCatalog.artwork(route).templateFilename();
     }
 
     static MenuArgbFrame validatePackagedDimensions(MenuRoute route, MenuArgbFrame frame)

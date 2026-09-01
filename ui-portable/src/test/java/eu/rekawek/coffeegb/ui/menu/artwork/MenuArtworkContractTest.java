@@ -51,6 +51,7 @@ public class MenuArtworkContractTest {
         assertEquals(MenuRoute.values().length, catalog.size());
 
         Set<String> sourceFilenames = new HashSet<>();
+        Set<String> templateFilenames = new HashSet<>();
         for (MenuRoute route : MenuRoute.values()) {
             MenuArtwork artwork = catalog.get(route);
             assertNotNull(artwork);
@@ -58,11 +59,15 @@ public class MenuArtworkContractTest {
             assertEquals(route, artwork.route());
             assertTrue(sourceFilenames.add(artwork.sourceFilename()));
             assertEquals(EXPECTED_FILENAMES.get(route), artwork.sourceFilename());
+            templateFilenames.add(artwork.templateFilename());
+            assertEquals(MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME,
+                    artwork.templateFilename());
             assertEquals(MenuArtworkCatalog.SOURCE_VISIBLE_CROP, artwork.sourceVisibleCrop());
             assertEquals(MenuArtworkCatalog.PACKAGED_WIDTH, artwork.packagedWidth());
             assertEquals(MenuArtworkCatalog.PACKAGED_HEIGHT, artwork.packagedHeight());
         }
         assertEquals(MenuRoute.values().length, sourceFilenames.size());
+        assertEquals(Set.of(MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME), templateFilenames);
     }
 
     @Test
@@ -75,6 +80,45 @@ public class MenuArtworkContractTest {
         assertEquals(838, MenuArtworkCatalog.SOURCE_VISIBLE_CROP.bottom());
         assertTrue(MenuArtworkCatalog.SOURCE_VISIBLE_CROP.right() <= MenuArtworkCatalog.SOURCE_WIDTH);
         assertTrue(MenuArtworkCatalog.SOURCE_VISIBLE_CROP.bottom() <= MenuArtworkCatalog.SOURCE_HEIGHT);
+    }
+
+    @Test
+    public void sharedScreenGeometryPinsSevenInterchangeableRows() {
+        assertEquals(new MenuRect(8, 8, 908, 95), MenuScreenTemplate.TITLE_BAR);
+        assertEquals(new MenuRect(45, 25, 834, 61), MenuScreenTemplate.TITLE);
+        assertEquals(new MenuRect(8, 110, 400, 534), MenuScreenTemplate.LEFT_PANEL);
+        assertEquals(new MenuRect(30, 140, 352, 340), MenuScreenTemplate.PICTURE);
+        assertEquals(new MenuRect(30, 490, 352, 139), MenuScreenTemplate.SUBTITLE);
+        assertEquals(new MenuRect(418, 110, 498, 534), MenuScreenTemplate.RIGHT_PANEL);
+        assertEquals(new MenuRect(424, 121, 484, 516), MenuScreenTemplate.OPTION_LIST);
+        assertEquals(new MenuRect(8, 652, 908, 76), MenuScreenTemplate.FOOTER_PANEL);
+        assertEquals(new MenuRect(18, 659, 888, 61), MenuScreenTemplate.FOOTER);
+
+        assertEquals(7, MenuScreenTemplate.OPTION_ROW_COUNT);
+        assertEquals(MenuScreenTemplate.OPTION_ROW_COUNT,
+                MenuScreenTemplate.OPTION_ROWS.size());
+        assertEquals(MenuScreenTemplate.OPTION_ROW_COUNT - 1,
+                MenuScreenTemplate.OPTION_DIVIDERS.size());
+        for (int index = 0; index < MenuScreenTemplate.OPTION_ROW_COUNT; index++) {
+            MenuRect row = MenuScreenTemplate.OPTION_ROWS.get(index);
+            assertSame(row, MenuScreenTemplate.optionRow(index));
+            assertEquals(MenuScreenTemplate.OPTION_ROW_HEIGHT, row.height());
+            assertTrue(contains(MenuScreenTemplate.OPTION_LIST, row));
+            if (index > 0) {
+                MenuRect previous = MenuScreenTemplate.OPTION_ROWS.get(index - 1);
+                MenuRect divider = MenuScreenTemplate.OPTION_DIVIDERS.get(index - 1);
+                assertEquals(previous.bottom(), divider.y());
+                assertEquals(MenuScreenTemplate.OPTION_DIVIDER_HEIGHT, divider.height());
+                assertEquals(divider.bottom(), row.y());
+            }
+        }
+        assertTrue(contains(MenuArtworkCatalog.PACKAGED_BOUNDS, MenuScreenTemplate.TITLE_BAR));
+        assertTrue(contains(MenuArtworkCatalog.PACKAGED_BOUNDS, MenuScreenTemplate.LEFT_PANEL));
+        assertTrue(contains(MenuArtworkCatalog.PACKAGED_BOUNDS, MenuScreenTemplate.RIGHT_PANEL));
+        assertTrue(contains(MenuArtworkCatalog.PACKAGED_BOUNDS, MenuScreenTemplate.FOOTER_PANEL));
+        assertTrue(contains(MenuScreenTemplate.LEFT_PANEL, MenuScreenTemplate.PICTURE));
+        assertTrue(contains(MenuScreenTemplate.LEFT_PANEL, MenuScreenTemplate.SUBTITLE));
+        assertTrue(contains(MenuScreenTemplate.RIGHT_PANEL, MenuScreenTemplate.OPTION_LIST));
     }
 
     @Test
@@ -160,7 +204,10 @@ public class MenuArtworkContractTest {
         Path classes = Paths.get(MenuArtwork.class.getProtectionDomain().getCodeSource()
                 .getLocation().toURI());
         if (Files.isDirectory(classes)) {
-            assertTrue(Files.exists(classes.resolve(
+            assertTrue(Files.isRegularFile(classes.resolve(
+                    "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates/"
+                            + MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME)));
+            assertFalse(Files.exists(classes.resolve(
                     "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates")));
             assertFalse(Files.exists(classes.resolve(
                     "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw")));
@@ -171,11 +218,13 @@ public class MenuArtworkContractTest {
     @Test
     public void publicApiIsPlatformNeutralAndDoesNotExposeRawAccess() {
         assertEquals(0, MenuArtwork.class.getConstructors().length);
+        assertEquals(0, MenuScreenTemplate.class.getConstructors().length);
         for (Class<?> type : new Class<?>[]{
                 MenuRect.class,
                 MenuPoint.class,
                 MenuArtwork.class,
                 MenuArtworkCatalog.class,
+                MenuScreenTemplate.class,
                 MenuArgbFrame.class,
                 MenuViewport.class
         }) {
@@ -214,6 +263,11 @@ public class MenuArtworkContractTest {
             width = (int) (heightCrossProduct / MenuViewport.SOURCE_HEIGHT);
         }
         return new MenuRect((viewWidth - width) / 2, (viewHeight - height) / 2, width, height);
+    }
+
+    private static boolean contains(MenuRect outer, MenuRect inner) {
+        return inner.x() >= outer.x() && inner.y() >= outer.y()
+                && inner.right() <= outer.right() && inner.bottom() <= outer.bottom();
     }
 
     private static void expectIllegalArgument(Runnable action) {

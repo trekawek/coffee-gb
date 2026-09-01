@@ -11,6 +11,7 @@ import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
+import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor
 import java.util.EnumSet
@@ -349,18 +350,18 @@ internal class SwingProposal3Menu(
         label: String,
         isEnabled: Boolean,
         secondaryId: String? = null,
-        adjustable: Boolean = false,
+        widgetType: MenuWidgetType = MenuWidgetType.BUTTON,
         progress: Int = -1,
-    ) = MenuPageSpec.Item(id, label, "", isEnabled, secondaryId, adjustable, progress)
+    ) = MenuPageSpec.Item(id, label, "", isEnabled, secondaryId, widgetType, progress)
 
     fun item(
         id: String,
         label: String,
         detail: String,
         isEnabled: Boolean,
-        adjustable: Boolean = false,
+        widgetType: MenuWidgetType = MenuWidgetType.BUTTON,
         progress: Int = -1,
-    ) = MenuPageSpec.Item(id, label, detail, isEnabled, null, adjustable, progress)
+    ) = MenuPageSpec.Item(id, label, detail, isEnabled, null, widgetType, progress)
 
     fun page(
         context: String,
@@ -409,12 +410,14 @@ internal class SwingProposal3Menu(
                   "CAMERA",
                   snapshot.displayValue(PortableMenuSettingId.CAMERA)?.uppercase().orEmpty(),
                   true,
+                  widgetType = MenuWidgetType.DROPDOWN,
               ),
               item(
                   PortableMenuSettingId.GAMEPAD,
                   "GAMEPAD",
                   snapshot.displayValue(PortableMenuSettingId.GAMEPAD)?.uppercase().orEmpty(),
                   true,
+                  widgetType = MenuWidgetType.DROPDOWN,
               ),
           )
         }
@@ -454,9 +457,8 @@ internal class SwingProposal3Menu(
         val catalog = commands.stateSlots()
         val slots =
             (0..9).map { slot ->
-              // "USED" is presentation metadata only: the shared compositor turns it into the
-              // occupied-slot seal without showing legacy status text in the state list.
-              MenuPageSpec.Item(
+              // The shared button detail identifies occupied slots without a state-specific skin.
+              MenuPageSpec.Item.button(
                   "slot-$slot",
                   "SLOT $slot",
                   if (catalog.firstOrNull { it.index == slot }?.loadable == true) "USED" else "",
@@ -531,7 +533,15 @@ internal class SwingProposal3Menu(
             val audioItems =
                 buildList {
                   if (volume != null) {
-                    add(item("volume", "VOLUME", "$volume%", true, adjustable = true, progress = volume))
+                    add(
+                        item(
+                            "volume",
+                            "VOLUME",
+                            "$volume%",
+                            true,
+                            widgetType = MenuWidgetType.SLIDER,
+                            progress = volume,
+                        ))
                   }
                   add(
                       item(
@@ -539,6 +549,7 @@ internal class SwingProposal3Menu(
                           "MUTE",
                           if (state.muted) "ON" else "OFF",
                           enabled(DesktopCommand.MUTE),
+                          widgetType = MenuWidgetType.CHECKBOX,
                       ))
                 }
             if (audioItems.any { it.enabled() }) {
@@ -689,18 +700,21 @@ internal class SwingProposal3Menu(
                     "DMG GAMES",
                     settings?.displayValue(PortableMenuSettingId.DMG_GAMES)?.uppercase().orEmpty(),
                     settings != null,
+                    widgetType = MenuWidgetType.DROPDOWN,
                 ),
                 item(
                     PortableMenuSettingId.CGB_GAMES,
                     "CGB GAMES",
                     settings?.displayValue(PortableMenuSettingId.CGB_GAMES)?.uppercase().orEmpty(),
                     settings != null,
+                    widgetType = MenuWidgetType.DROPDOWN,
                 ),
                 item(
                     PortableMenuSettingId.BOOTSTRAP,
                     "BOOTSTRAP",
                     settings?.displayValue(PortableMenuSettingId.BOOTSTRAP)?.uppercase().orEmpty(),
                     settings != null,
+                    widgetType = MenuWidgetType.DROPDOWN,
                 ),
                 item(
                     PortableMenuSettingId.EXECUTION_MODE,
@@ -710,6 +724,7 @@ internal class SwingProposal3Menu(
                         ?.uppercase()
                         .orEmpty(),
                     settings != null,
+                    widgetType = MenuWidgetType.DROPDOWN,
                 ),
             )
         if (settings != null) {
@@ -735,12 +750,14 @@ internal class SwingProposal3Menu(
                     "SGB BORDER",
                     settings?.displayValue(PortableMenuSettingId.SGB_BORDER)?.uppercase().orEmpty(),
                     settings != null && PortableMenuSettingId.SGB_BORDER in settings.toggleIds,
+                    widgetType = MenuWidgetType.CHECKBOX,
                 ),
                 item(
                     PortableMenuSettingId.DMG_COLORS,
                     "DMG COLORS",
                     settings?.displayValue(PortableMenuSettingId.DMG_COLORS)?.uppercase().orEmpty(),
                     settings != null,
+                    widgetType = MenuWidgetType.DROPDOWN,
                 ),
         )
         if (settings != null) {
@@ -836,10 +853,10 @@ internal class SwingProposal3Menu(
             actionLabel,
             listOf("UNSAVED PROGRESS MAY BE LOST"),
             listOf(
-                MenuPageSpec.Item("cancel", "CANCEL", "RETURN", true),
-                MenuPageSpec.Item("confirm", "CONFIRM", actionLabel, true),
+                MenuPageSpec.Item.button("cancel", "CANCEL", "RETURN", true),
+                MenuPageSpec.Item.button("confirm", "CONFIRM", actionLabel, true),
             ),
-            columns = 2,
+            columns = 1,
         )
       }
     }

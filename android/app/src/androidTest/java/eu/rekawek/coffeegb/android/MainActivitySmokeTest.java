@@ -348,7 +348,7 @@ public class MainActivitySmokeTest {
             moveFocusTo(scenario, instrumentation, "import-battery");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.CONFIRM_ACTION);
-            press(instrumentation, KeyEvent.KEYCODE_DPAD_RIGHT, 1);
+            press(instrumentation, KeyEvent.KEYCODE_DPAD_DOWN, 1);
             awaitFocused(scenario, "confirm");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
 
