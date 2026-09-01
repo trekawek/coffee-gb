@@ -60,7 +60,7 @@ final class MenuPage {
                 continue;
             }
             items.add(new MenuItem(item.id(), item.label(), item.detail(), item.enabled(),
-                    item.secondaryId(), item.widgetType(), item.progress()));
+                    item.secondaryId(), item.widgetType(), item.progress(), item.checked()));
         }
         if (items.isEmpty()) {
             throw new IllegalArgumentException("A menu page needs a non-back item");
@@ -190,6 +190,7 @@ final class MenuItem {
     private final String secondaryId;
     private final MenuWidgetType widgetType;
     private final int progress;
+    private final boolean checked;
 
     MenuItem(String id, String label) {
         this(id, label, "", true, null, false, -1);
@@ -220,6 +221,12 @@ final class MenuItem {
 
     MenuItem(String id, String label, String detail, boolean enabled, String secondaryId,
             MenuWidgetType widgetType, int progress) {
+        this(id, label, detail, enabled, secondaryId, widgetType, progress,
+                widgetType != null && widgetType.checkedFrom(detail));
+    }
+
+    MenuItem(String id, String label, String detail, boolean enabled, String secondaryId,
+            MenuWidgetType widgetType, int progress, boolean checked) {
         this.id = text(id, "id");
         this.label = text(label, "label");
         this.detail = text(detail, "detail");
@@ -227,6 +234,7 @@ final class MenuItem {
         this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
         this.widgetType = java.util.Objects.requireNonNull(widgetType, "widgetType");
         this.progress = progress(progress);
+        this.checked = widgetType == MenuWidgetType.CHECKBOX && checked;
     }
 
     String id() {
@@ -261,9 +269,13 @@ final class MenuItem {
         return progress;
     }
 
+    boolean checked() {
+        return checked;
+    }
+
     MenuPresentation.Item presentation() {
         return new MenuPresentation.Item(
-                id, label, detail, enabled, secondaryId, widgetType, progress);
+                id, label, detail, enabled, secondaryId, widgetType, progress, checked);
     }
 
     private static String text(String value, String name) {

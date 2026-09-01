@@ -20,12 +20,11 @@ final class Proposal3GlyphAtlas {
     static final String CHARACTERS =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:/&-_%?+()[]!,'";
     enum Role {
-        // The atlas cells retain generous transparent gutters, but Proposal 3's compact row
-        // typography advances on a 17 px rhythm. Wide M/W glyphs end immediately before the
-        // next cell's left bearing, so this remains overlap-free while matching the mockup.
+        // These advances are part of the licensed atlas recipe recorded beside the PNGs. Keep
+        // them in sync so glyphs retain their intended spacing when a role is reused.
         SMALL(22, 36, 11, 5),
         NOTICE(28, 36, 15, 7),
-        MEDIUM(36, 36, 17, 5),
+        MEDIUM(36, 36, 19, 8),
         DISPLAY(36, 48, 20, 8),
         SEMIBOLD(48, 48, 27, 9);
 

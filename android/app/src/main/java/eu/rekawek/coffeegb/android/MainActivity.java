@@ -2335,7 +2335,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    /** Stable state rows shared by SAVE and LOAD; persisted rows carry a visual-only seal hint. */
+    /** Stable state rows shared by SAVE and LOAD; persisted rows carry a reusable status label. */
     static List<MenuPageSpec.Item> stateMenuItems(List<AndroidStateSlot> catalog) {
         ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
         for (int index = STATE_MENU_MIN_SLOT; index <= STATE_MENU_MAX_SLOT; index++) {
@@ -2345,7 +2345,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             // The reusable button detail distinguishes a persisted state from an empty but still
             // focusable slot without requiring a save-state-specific asset.
             items.add(MenuPageSpec.Item.button("slot:" + index, "SLOT " + index,
-                    used ? "USED" : "", true));
+                    used ? "SAVED" : "", true));
         }
         return List.copyOf(items);
     }

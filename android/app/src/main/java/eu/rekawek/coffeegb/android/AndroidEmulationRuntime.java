@@ -712,9 +712,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
             List<AndroidStateSlot> slots = new ArrayList<>();
             if (activeStates != null) {
                 var entries = activeStates.catalog(null).getEntries();
-                // The on-screen save/load page intentionally exposes four stable slots.  Keep the
-                // catalog read bounded to those slots so a refresh cannot decode unused entries.
-                for (int slot = 0; slot <= 3; slot++) {
+                // The on-screen save/load page exposes every controller-managed stable slot.
+                // Keep the catalog read bounded to that public range so named/autosave entries
+                // never become menu rows.
+                for (int slot = StateRef.MIN_SLOT; slot <= StateRef.MAX_SLOT; slot++) {
                     int index = slot;
                     var entry = entries.stream()
                             .filter(candidate -> candidate.getRef() instanceof StateRef.Slot

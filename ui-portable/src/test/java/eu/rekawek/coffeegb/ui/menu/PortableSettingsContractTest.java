@@ -20,7 +20,8 @@ public class PortableSettingsContractTest {
     private static final int WIDTH = MenuArtworkCatalog.PACKAGED_WIDTH;
 
     @Test
-    public void allFourWidgetKindsShareSevenEqual72PixelSlotsAndTheMediumFontRole() {
+    public void allFourWidgetKindsShareSevenEqual72PixelSlotsAndTheLicensedMediumMetrics()
+            throws Exception {
         assertEquals(7, MenuScreenTemplate.OPTION_ROW_COUNT);
         assertEquals(72, MenuScreenTemplate.OPTION_ROW_HEIGHT);
         assertEquals(7, MenuScreenTemplate.OPTION_ROWS.size());
@@ -43,6 +44,13 @@ public class PortableSettingsContractTest {
                 widgets.items().stream().map(MenuPresentation.Item::widgetType).toList());
         assertEquals(Proposal3GlyphAtlas.Role.MEDIUM,
                 Proposal3MenuCompositor.itemTextRole());
+        assertEquals(Proposal3GlyphAtlas.Role.MEDIUM,
+                Proposal3MenuCompositor.footerTextRole());
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+        assertEquals("medium glyph advance must match the packaged atlas recipe", 19,
+                atlas.advance(Proposal3GlyphAtlas.Role.MEDIUM, 'A'));
+        assertEquals("medium space advance must match the packaged atlas recipe", 8,
+                atlas.advance(Proposal3GlyphAtlas.Role.MEDIUM, ' '));
     }
 
     @Test

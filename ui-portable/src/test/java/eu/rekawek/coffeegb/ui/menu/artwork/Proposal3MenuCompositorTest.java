@@ -126,6 +126,54 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void legacyCheckboxAliasesOnlyDriveTheBoxAndNeverPaintStatusText() {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] unchecked = pixels(compositor, presentation(MenuRoute.DISPLAY, "CHECKBOX", "",
+                List.of(), List.of(MenuPageSpec.Item.checkbox(
+                        "checkbox", "SGB BORDER", false, true)), "checkbox",
+                MenuPreview.empty()));
+
+        for (String alias : List.of("NO", "FALSE", "DISABLED", "UNCHECKED")) {
+            int[] candidate = pixels(compositor, presentation(MenuRoute.DISPLAY, "CHECKBOX", "",
+                    List.of(), List.of(MenuPageSpec.Item.checkbox(
+                            "checkbox", "SGB BORDER", alias, true)), "checkbox",
+                    MenuPreview.empty()));
+            assertArrayEquals(alias + " leaked checkbox status text into the row", unchecked,
+                    candidate);
+        }
+
+        int[] checked = pixels(compositor, presentation(MenuRoute.DISPLAY, "CHECKBOX", "",
+                List.of(), List.of(MenuPageSpec.Item.checkbox(
+                        "checkbox", "SGB BORDER", true, true)), "checkbox",
+                MenuPreview.empty()));
+        for (String alias : List.of("ON", "YES", "TRUE", "ENABLED", "CHECKED")) {
+            int[] candidate = pixels(compositor, presentation(MenuRoute.DISPLAY, "CHECKBOX", "",
+                    List.of(), List.of(MenuPageSpec.Item.checkbox(
+                            "checkbox", "SGB BORDER", alias, true)), "checkbox",
+                    MenuPreview.empty()));
+            assertArrayEquals(alias + " leaked checkbox status text into the row", checked,
+                    candidate);
+        }
+    }
+
+    @Test
+    public void buttonStatusIsRenderedInTheReusableTrailingDetailRegion() {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] empty = pixels(compositor, presentation(MenuRoute.SAVE_STATES, "SAVE STATES", "",
+                List.of(), List.of(MenuPageSpec.Item.button(
+                        "slot-9", "SLOT 9", "", true)), "slot-9", MenuPreview.empty()));
+        int[] saved = pixels(compositor, presentation(MenuRoute.SAVE_STATES, "SAVE STATES", "",
+                List.of(), List.of(MenuPageSpec.Item.button(
+                        "slot-9", "SLOT 9", "SAVED", true)), "slot-9", MenuPreview.empty()));
+
+        MenuRect row = MenuScreenTemplate.optionRow(0);
+        MenuRect detail = new MenuRect(row.x() + 316, row.y(), row.width() - 336,
+                row.height());
+        assertTrue("button status was not painted", differences(empty, saved, detail) > 0);
+        assertPixelsEqualOutside(empty, saved, List.of(detail));
+    }
+
+    @Test
     public void hiddenPresentationsClearOnlyTheComposedFrameCache() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         MenuController controller = controller(new MenuPageSpec(MenuRoute.LIBRARY, "CACHE", "",

@@ -38,15 +38,15 @@ final class MenuPages {
                     List.of(),
                     items(
                             slider("volume", "VOLUME", "75%", 75),
-                            checkbox("mute-audio", "MUTE", "OFF")), 1, DEFAULT_HINTS,
+                            checkbox("mute-audio", "MUTE", false)), 1, DEFAULT_HINTS,
                     "volume", MenuPreview.empty());
             case DISPLAY -> page(route, "COFFEE GB", "DISPLAY", "", "", List.of(),
-                    items(checkbox("sgb-border", "SGB BORDER", "OFF"),
+                    items(checkbox("sgb-border", "SGB BORDER", false),
                             dropdown("dmg-colors", "DMG COLORS", "GREEN")));
             case TOUCH_CONTROLS -> page(route, "COFFEE GB", "CONTROLS", "", "",
                     List.of(),
                     items(
-                            checkbox("haptics", "HAPTIC FEEDBACK", "ON"),
+                            checkbox("haptics", "HAPTIC FEEDBACK", true),
                             button("controller-mapping", "BUTTON MAPPING"),
                             button("reset-touch", "RESET DEFAULTS")));
             case CONTROLLER_MAPPING -> page(route, "COFFEE GB", "CONTROLLER MAPPING", "", "GAMEPAD",
@@ -65,7 +65,7 @@ final class MenuPages {
                     items(
                             dropdown("camera", "CAMERA", "OFF"),
                             dropdown("gamepad", "GAMEPAD", "AUTO"),
-                            checkbox("gps", "GPS", "OFF")));
+                            checkbox("gps", "GPS", false)));
             case OPTION_PICKER -> page(route, "COFFEE GB", "OPTION PICKER", "", "", List.of(),
                     items(button("choice:default", "DEFAULT", "SELECTED")));
             case PRINTER_PAPER -> new MenuPage(route, "COFFEE GB", "PRINTER PAPER", "",
@@ -97,7 +97,7 @@ final class MenuPages {
                     items(dropdown("dmg-games", "DMG GAMES", "AUTO"),
                             dropdown("cgb-games", "CGB GAMES", "AUTO"),
                             dropdown("bootstrap", "BOOTSTRAP", "SKIP"),
-                            dropdown("execution-mode", "EXECUTION MODE", "PERFORMANCE")));
+                            dropdown("execution-mode", "EXEC MODE", "PERFORMANCE")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                     List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(
@@ -165,8 +165,9 @@ final class MenuPages {
         return widget(id, label, detail, MenuWidgetType.DROPDOWN, -1);
     }
 
-    private static MenuItem checkbox(String id, String label, String detail) {
-        return widget(id, label, detail, MenuWidgetType.CHECKBOX, -1);
+    private static MenuItem checkbox(String id, String label, boolean checked) {
+        return new MenuItem(id, label, "", true, null, MenuWidgetType.CHECKBOX, -1,
+                checked);
     }
 
     private static MenuItem slider(String id, String label, String detail, int progress) {

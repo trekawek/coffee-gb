@@ -24,6 +24,10 @@ public final class Proposal3MenuCompositor {
 
     /** One font role for every item label and item value. */
     private static final Proposal3GlyphAtlas.Role ITEM_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
+    private static final Proposal3GlyphAtlas.Role FOOTER_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
+    private static final MenuRect FOOTER_MOVE = new MenuRect(73, 660, 226, 56);
+    private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 670, 123, 48);
+    private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 94, 48);
     private static final int DISABLED_TEXT = 0xff89927b;
     private static final int DIVIDER = 0xffd4d2ad;
     private static final int DROPDOWN_FILL = 0xffd4d2ad;
@@ -79,6 +83,11 @@ public final class Proposal3MenuCompositor {
     /** The single font role shared by buttons, dropdowns, checkboxes, and sliders. */
     static Proposal3GlyphAtlas.Role itemTextRole() {
         return ITEM_ROLE;
+    }
+
+    /** Shared footer role; navigation hints stay legible at desktop and Android scales. */
+    static Proposal3GlyphAtlas.Role footerTextRole() {
+        return FOOTER_ROLE;
     }
 
     int cachedTemplateRouteCount() {
@@ -289,17 +298,13 @@ public final class Proposal3MenuCompositor {
 
     private void drawCheckbox(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
             int textColor) {
+        MenuRect checkbox = new MenuRect(row.right() - 52, row.y() + 18, 36, 36);
+        int labelLeft = row.x() + 38;
         raster.drawText(atlas(), ITEM_ROLE, item.label(),
-                new MenuRect(row.x() + 38, row.y(), 300, row.height()), textColor,
+                new MenuRect(labelLeft, row.y(), checkbox.x() - 16 - labelLeft, row.height()),
+                textColor,
                 MenuRaster.HorizontalAlignment.LEFT);
-        String detail = display(item.detail());
-        if (!detail.isEmpty()) {
-            raster.drawText(atlas(), ITEM_ROLE, detail,
-                    new MenuRect(row.x() + 326, row.y(), 78, row.height()), textColor,
-                    MenuRaster.HorizontalAlignment.RIGHT);
-        }
-        raster.drawCheckbox(new MenuRect(row.right() - 52, row.y() + 18, 36, 36),
-                isChecked(detail));
+        raster.drawCheckbox(checkbox, item.checked());
     }
 
     private void drawSlider(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
@@ -320,15 +325,12 @@ public final class Proposal3MenuCompositor {
         String move = valueAt(hints, 0);
         String choose = stripButton(valueAt(hints, 1), "A");
         String back = stripButton(valueAt(hints, 2), "B");
-        raster.drawText(atlas(), Proposal3GlyphAtlas.Role.SMALL, move,
-                new MenuRect(28, 665, 285, 46), MenuRaster.INK,
+        raster.drawText(atlas(), FOOTER_ROLE, move, FOOTER_MOVE, MenuRaster.INK,
                 MenuRaster.HorizontalAlignment.CENTER);
-        raster.drawText(atlas(), Proposal3GlyphAtlas.Role.SMALL, choose,
-                new MenuRect(462, 665, 123, 46), MenuRaster.INK,
-                MenuRaster.HorizontalAlignment.CENTER);
-        raster.drawText(atlas(), Proposal3GlyphAtlas.Role.SMALL, back,
-                new MenuRect(718, 665, 170, 46), MenuRaster.INK,
-                MenuRaster.HorizontalAlignment.CENTER);
+        raster.drawText(atlas(), FOOTER_ROLE, choose, FOOTER_CHOOSE, MenuRaster.INK,
+                MenuRaster.HorizontalAlignment.LEFT);
+        raster.drawText(atlas(), FOOTER_ROLE, back, FOOTER_BACK, MenuRaster.INK,
+                MenuRaster.HorizontalAlignment.LEFT);
     }
 
     private static List<VisibleSlot> visibleSlots(List<MenuPresentation.Item> items,
@@ -394,13 +396,6 @@ public final class Proposal3MenuCompositor {
             raster.fill(new MenuRect(centerX - 7 + step, centerY - 3 + step, 3, 3), color);
             raster.fill(new MenuRect(centerX + 7 - step, centerY - 3 + step, 3, 3), color);
         }
-    }
-
-    private static boolean isChecked(String detail) {
-        String normalized = display(detail);
-        return normalized.equals("ON") || normalized.equals("YES")
-                || normalized.equals("TRUE") || normalized.equals("ENABLED")
-                || normalized.equals("CHECKED");
     }
 
     private static int parsePercent(String value) {

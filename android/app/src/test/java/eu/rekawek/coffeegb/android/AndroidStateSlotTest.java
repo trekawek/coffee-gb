@@ -64,7 +64,8 @@ public class AndroidStateSlotTest {
     public void stateMenuAlwaysExposesTenSlotsAndMarksOnlyPersistedRows() {
         List<AndroidStateSlot> catalog = List.of(
                 AndroidStateSlot.from(0, null),
-                new AndroidStateSlot(7, "Slot 7: Saved", true, MenuPreview.empty(), null));
+                new AndroidStateSlot(StateRef.MAX_SLOT, "Slot 9: Saved", true,
+                        MenuPreview.empty(), null));
 
         List<eu.rekawek.coffeegb.ui.menu.MenuPageSpec.Item> items =
                 MainActivity.stateMenuItems(catalog);
@@ -73,7 +74,7 @@ public class AndroidStateSlotTest {
         assertEquals("slot:0", items.get(0).id());
         assertEquals("slot:9", items.get(9).id());
         assertEquals("", items.get(0).detail());
-        assertEquals("USED", items.get(7).detail());
+        assertEquals("SAVED", items.get(StateRef.MAX_SLOT).detail());
         assertTrue(items.stream().allMatch(eu.rekawek.coffeegb.ui.menu.MenuPageSpec.Item::enabled));
     }
 }

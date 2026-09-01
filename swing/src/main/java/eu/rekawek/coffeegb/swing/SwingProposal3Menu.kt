@@ -461,7 +461,7 @@ internal class SwingProposal3Menu(
               MenuPageSpec.Item.button(
                   "slot-$slot",
                   "SLOT $slot",
-                  if (catalog.firstOrNull { it.index == slot }?.loadable == true) "USED" else "",
+                  if (catalog.firstOrNull { it.index == slot }?.loadable == true) "SAVED" else "",
                   true,
               )
             }
@@ -544,12 +544,11 @@ internal class SwingProposal3Menu(
                         ))
                   }
                   add(
-                      item(
+                      MenuPageSpec.Item.checkbox(
                           "mute-audio",
                           "MUTE",
-                          if (state.muted) "ON" else "OFF",
+                          state.muted,
                           enabled(DesktopCommand.MUTE),
-                          widgetType = MenuWidgetType.CHECKBOX,
                       ))
                 }
             if (audioItems.any { it.enabled() }) {
@@ -718,7 +717,7 @@ internal class SwingProposal3Menu(
                 ),
                 item(
                     PortableMenuSettingId.EXECUTION_MODE,
-                    "EXECUTION MODE",
+                    "EXEC MODE",
                     settings
                         ?.displayValue(PortableMenuSettingId.EXECUTION_MODE)
                         ?.uppercase()
@@ -745,12 +744,11 @@ internal class SwingProposal3Menu(
       MenuRoute.DISPLAY -> {
         val displayItems =
             listOf(
-                item(
+                MenuPageSpec.Item.checkbox(
                     PortableMenuSettingId.SGB_BORDER,
                     "SGB BORDER",
-                    settings?.displayValue(PortableMenuSettingId.SGB_BORDER)?.uppercase().orEmpty(),
+                    settings?.value(PortableMenuSettingId.SGB_BORDER) == "on",
                     settings != null && PortableMenuSettingId.SGB_BORDER in settings.toggleIds,
-                    widgetType = MenuWidgetType.CHECKBOX,
                 ),
                 item(
                     PortableMenuSettingId.DMG_COLORS,

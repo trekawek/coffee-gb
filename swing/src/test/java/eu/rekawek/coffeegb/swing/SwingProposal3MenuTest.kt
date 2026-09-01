@@ -336,6 +336,9 @@ class SwingProposal3MenuTest {
           listOf(MenuWidgetType.SLIDER, MenuWidgetType.CHECKBOX),
           menu.presentationForTest().items().map { it.widgetType() },
       )
+      val initialMute = menu.presentationForTest().items().single { it.id() == "mute-audio" }
+      assertFalse(initialMute.checked())
+      assertEquals("", initialMute.detail())
       press(menu, MenuKey.LEFT)
       assertEquals(95, bridge.volume)
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
@@ -343,6 +346,9 @@ class SwingProposal3MenuTest {
       assertEquals("mute-audio", menu.focusedItemIdForTest())
       press(menu, MenuKey.A)
       assertTrue(bridge.muted)
+      val toggledMute = menu.presentationForTest().items().single { it.id() == "mute-audio" }
+      assertTrue(toggledMute.checked())
+      assertEquals("", toggledMute.detail())
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
       assertTrue(menu.visible())
     }
@@ -417,9 +423,15 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openRouteForTest(MenuRoute.DISPLAY)
+      val initialBorder = menu.presentationForTest().items().single { it.id() == "sgb-border" }
+      assertFalse(initialBorder.checked())
+      assertEquals("", initialBorder.detail())
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.DISPLAY, menu.routeForTest())
       assertEquals(listOf("sgb-border"), settings.toggled)
+      val toggledBorder = menu.presentationForTest().items().single { it.id() == "sgb-border" }
+      assertTrue(toggledBorder.checked())
+      assertEquals("", toggledBorder.detail())
 
       press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
@@ -605,6 +617,10 @@ class SwingProposal3MenuTest {
 
       repeat(9) { press(menu, MenuKey.DOWN) }
       assertEquals("slot-9", menu.focusedItemIdForTest())
+      assertEquals(
+          "SAVED",
+          menu.presentationForTest().items().single { it.id() == "slot-9" }.detail(),
+      )
       press(menu, MenuKey.A)
     }
 
