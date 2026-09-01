@@ -45,6 +45,25 @@ public final class CommonMenuGalleryMain {
         controller.show(MenuRoute.SAVE_STATES);
         write(compositor.compose(controller.presentation()).orElseThrow(),
                 new File(directory, "17-save_states_occupied.png"));
+
+        controller.setPage(new MenuPageSpec(MenuRoute.AUDIO, "AUDIO", "", "", "",
+                List.of(), List.of(
+                        MenuPageSpec.Item.slider("volume", "VOLUME", "100%", true, 100),
+                        MenuPageSpec.Item.checkbox("mute-audio", "MUTE", false, true)),
+                1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "volume",
+                MenuPreview.empty()));
+        controller.show(MenuRoute.AUDIO);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "18-audio_100.png"));
+
+        controller.setPage(new MenuPageSpec(MenuRoute.SYSTEM, "SYSTEM", "", "", "",
+                List.of(), List.of(MenuPageSpec.Item.dropdown(
+                        "bootstrap", "BOOTSTRAP", "FAST-FORWARD", true)),
+                1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "bootstrap",
+                MenuPreview.empty()));
+        controller.show(MenuRoute.SYSTEM);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "19-system_fast_forward.png"));
     }
 
     private static void write(MenuArgbFrame frame, File target) throws Exception {
