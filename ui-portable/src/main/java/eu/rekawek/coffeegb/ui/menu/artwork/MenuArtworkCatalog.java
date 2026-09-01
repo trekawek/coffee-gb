@@ -8,13 +8,16 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The canonical Proposal 3 artwork catalog.
+ * The canonical portable menu artwork catalog.
  *
- * <p>The source PNGs are complete 1672x941 compositions, while packaged text-free templates use
- * the fixed 924x736 crop declared by {@link #SOURCE_VISIBLE_CROP}. Template resource paths and
- * decoding remain package-private; this public catalog exposes route metadata only.
+ * <p>The legacy route PNG names describe the original 1672x941 Proposal 3 compositions. All
+ * runtime routes now share one text-free 924x736 frame; only runtime title, picture, subtitle, and
+ * option widgets vary. Template resource paths and decoding remain package-private.
  */
 public final class MenuArtworkCatalog {
+
+    /** Filename of the common text-free frame used by every route. */
+    public static final String COMMON_TEMPLATE_FILENAME = "common-menu-frame.png";
 
     /** Width of every original Proposal 3 composition in pixels. */
     public static final int SOURCE_WIDTH = 1672;
@@ -72,11 +75,14 @@ public final class MenuArtworkCatalog {
         if (catalog.size() != MenuRoute.values().length) {
             throw new IllegalStateException("Proposal 3 artwork catalog does not cover every route");
         }
-        java.util.Set<String> filenames = new java.util.HashSet<>();
+        java.util.Set<String> sourceFilenames = new java.util.HashSet<>();
         for (MenuRoute route : MenuRoute.values()) {
             MenuArtwork artwork = catalog.get(route);
-            if (artwork == null || !filenames.add(artwork.sourceFilename())) {
+            if (artwork == null || !sourceFilenames.add(artwork.sourceFilename())) {
                 throw new IllegalStateException("Proposal 3 artwork catalog contains a duplicate or missing route");
+            }
+            if (!COMMON_TEMPLATE_FILENAME.equals(artwork.templateFilename())) {
+                throw new IllegalStateException("Menu route does not use the common template: " + route);
             }
         }
         return Collections.unmodifiableMap(catalog);

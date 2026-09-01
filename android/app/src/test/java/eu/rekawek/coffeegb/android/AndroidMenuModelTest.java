@@ -4,6 +4,7 @@ import eu.rekawek.coffeegb.ui.menu.MenuController;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuWidgetType;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import org.junit.Test;
 
@@ -95,6 +96,26 @@ public class AndroidMenuModelTest {
                 .findFirst().orElseThrow().adjustable());
         assertFalse(page.items().stream().anyMatch(item -> item.id().contains("save")
                 || item.id().contains("cancel") || item.id().contains("emulated")));
+    }
+
+    @Test
+    public void settingsRowsUseTheSharedTypedWidgetLibrary() {
+        assertWidgetTypes(AndroidMenuModel.audioPage(AndroidMenuModel.audioDraft(75, true)),
+                MenuWidgetType.SLIDER, MenuWidgetType.CHECKBOX);
+        assertWidgetTypes(AndroidMenuModel.displayPage(true, false),
+                MenuWidgetType.CHECKBOX, MenuWidgetType.DROPDOWN);
+        assertWidgetTypes(AndroidMenuModel.systemPage("dmg-games"),
+                MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
+                MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN);
+                assertWidgetTypes(AndroidMenuModel.optionalDevicesPage(
+                        "rear", "auto", true, List.of()),
+                MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
+                MenuWidgetType.CHECKBOX);
+        assertWidgetTypes(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true),
+                MenuWidgetType.CHECKBOX, MenuWidgetType.BUTTON);
+        assertWidgetTypes(AndroidMenuModel.optionPickerPage("CHOOSE", List.of(
+                        new AndroidMenuModel.ChoiceValue("one", "ONE")), "one"),
+                MenuWidgetType.BUTTON);
     }
 
     @Test
@@ -267,5 +288,10 @@ public class AndroidMenuModelTest {
 
     private static void assertIds(MenuPageSpec page, String... expected) {
         assertEquals(List.of(expected), page.items().stream().map(MenuPageSpec.Item::id).toList());
+    }
+
+    private static void assertWidgetTypes(MenuPageSpec page, MenuWidgetType... expected) {
+        assertEquals(List.of(expected), page.items().stream()
+                .map(MenuPageSpec.Item::widgetType).toList());
     }
 }

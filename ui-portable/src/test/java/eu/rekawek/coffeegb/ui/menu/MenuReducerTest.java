@@ -39,7 +39,7 @@ public class MenuReducerTest {
     }
 
     @Test
-    public void horizontalAndVerticalMovementWorkOnMultiColumnPages() {
+    public void everyPageUsesTheSingleVerticalOptionRail() {
         MenuPage page = new MenuPage(
                 MenuRoute.SETTINGS,
                 "COFFEE GB",
@@ -56,14 +56,17 @@ public class MenuReducerTest {
                 List.of("MOVE"));
         MenuState state = MenuState.visible(page, 0);
 
+        assertEquals(1, page.columns());
         state = MenuReducer.move(state, MenuCommand.Direction.RIGHT);
+        assertEquals("one", state.focusedItemId());
+        state = MenuReducer.move(state, MenuCommand.Direction.DOWN);
         assertEquals("two", state.focusedItemId());
         state = MenuReducer.move(state, MenuCommand.Direction.DOWN);
-        assertEquals("four", state.focusedItemId());
+        assertEquals("three", state.focusedItemId());
         state = MenuReducer.move(state, MenuCommand.Direction.LEFT);
         assertEquals("three", state.focusedItemId());
         state = MenuReducer.move(state, MenuCommand.Direction.UP);
-        assertEquals("one", state.focusedItemId());
+        assertEquals("two", state.focusedItemId());
     }
 
     @Test

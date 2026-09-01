@@ -58,16 +58,19 @@ public class MenuControllerTest {
     }
 
     @Test
-    public void axisMovementTriggersOnlyOnEdgesUntilNeutral() {
+    public void verticalAxisMovementTriggersOnlyOnEdgesAndHorizontalAxisIsInert() {
         Events events = new Events();
         MenuController controller = new MenuController(events);
         controller.setPage(page(MenuRoute.CONFIRM_ACTION, 2, List.of(
                 item("one", "ONE", true, null), item("two", "TWO", true, null))));
         controller.show(MenuRoute.CONFIRM_ACTION);
 
-        controller.onAxis(1.0f, 0.0f);
-        controller.onAxis(1.0f, 0.0f);
+        controller.onAxis(0.0f, 1.0f);
+        controller.onAxis(0.0f, 1.0f);
         assertEquals(1, controller.presentation().focusedIndex());
+        controller.onAxis(0.0f, 0.0f);
+        controller.onAxis(0.0f, 1.0f);
+        assertEquals(0, controller.presentation().focusedIndex());
         controller.onAxis(0.0f, 0.0f);
         controller.onAxis(1.0f, 0.0f);
         assertEquals(0, controller.presentation().focusedIndex());
@@ -273,9 +276,9 @@ public class MenuControllerTest {
     }
 
     @Test
-    public void confirmationDefaultsUseTwoColumnDecisionAndBReturnsToParent() {
+    public void confirmationDefaultsUseTheSingleVerticalRailAndBReturnsToParent() {
         MenuPage confirmation = MenuPages.forRoute(MenuRoute.CONFIRM_ACTION);
-        assertEquals(2, confirmation.columns());
+        assertEquals(1, confirmation.columns());
         assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), confirmation.sideLines());
         assertEquals("", confirmation.headerAction());
         assertEquals("cancel", confirmation.items().get(confirmation.initialFocusIndex()).id());
@@ -286,23 +289,22 @@ public class MenuControllerTest {
         controller.push(MenuRoute.CONFIRM_ACTION);
         assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
 
-        controller.onKeyDown(MenuKey.UP, false);
-        controller.onKeyUp(MenuKey.UP);
         controller.onKeyDown(MenuKey.DOWN, false);
         controller.onKeyUp(MenuKey.DOWN);
-        assertEquals("confirm choices are horizontal", "cancel",
+        assertEquals("confirm",
                 controller.snapshot().frames().get(1).focusedItemId());
         controller.onKeyDown(MenuKey.RIGHT, false);
         controller.onKeyUp(MenuKey.RIGHT);
-        assertEquals("confirm", controller.snapshot().frames().get(1).focusedItemId());
-        controller.onKeyDown(MenuKey.LEFT, false);
-        controller.onKeyUp(MenuKey.LEFT);
+        assertEquals("horizontal input must not move the vertical rail", "confirm",
+                controller.snapshot().frames().get(1).focusedItemId());
+        controller.onKeyDown(MenuKey.UP, false);
+        controller.onKeyUp(MenuKey.UP);
         assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
         controller.onKeyDown(MenuKey.A, false);
         controller.onKeyUp(MenuKey.A);
         assertEquals(List.of("cancel:false"), events.items);
-        controller.onKeyDown(MenuKey.RIGHT, false);
-        controller.onKeyUp(MenuKey.RIGHT);
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
         controller.onKeyDown(MenuKey.START, false);
         controller.onKeyUp(MenuKey.START);
         assertEquals(List.of("cancel:false", "confirm:false"), events.items);

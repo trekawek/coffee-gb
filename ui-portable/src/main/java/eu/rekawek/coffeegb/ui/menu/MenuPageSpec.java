@@ -38,7 +38,8 @@ public final class MenuPageSpec {
         }
         ArrayList<Item> items = new ArrayList<>(copied.size());
         for (RecentGame game : copied) {
-            items.add(new Item(game.id(), game.name(), "", game.enabled()));
+            items.add(new Item(game.id(), game.name(), "", game.enabled(), null,
+                    MenuWidgetType.BUTTON));
         }
         String selectedId = focusedId;
         RecentGame selected = null;
@@ -51,7 +52,8 @@ public final class MenuPageSpec {
             }
         }
         if (items.isEmpty()) {
-            items.add(new Item("recent-games-status", "NO RECENT GAMES", "", true));
+            items.add(new Item("recent-games-status", "NO RECENT GAMES", "", true, null,
+                    MenuWidgetType.BUTTON));
             selectedId = "recent-games-status";
         } else if (selected == null) {
             for (RecentGame game : copied) {
@@ -64,7 +66,8 @@ public final class MenuPageSpec {
             if (selected == null) {
                 // Keep unavailable entries visible for honest history, but provide one inert
                 // enabled status row so the reducer always has a safe focus target.
-                items.add(new Item("recent-games-status", "NO READABLE RECENT GAMES", "", true));
+                items.add(new Item("recent-games-status", "NO READABLE RECENT GAMES", "", true,
+                        null, MenuWidgetType.BUTTON));
                 selectedId = "recent-games-status";
             }
         }
@@ -108,7 +111,9 @@ public final class MenuPageSpec {
         this.sideHeading = text(sideHeading, "sideHeading");
         this.sideLines = strings(sideLines, "sideLines");
         this.items = items(items);
-        this.columns = Math.max(1, columns);
+        // The common template has one vertical option rail. Retain the constructor parameter for
+        // source compatibility, but keep navigation aligned with the rendered layout.
+        this.columns = 1;
         this.footerHints = strings(footerHints, "footerHints");
         this.preferredFocusId = preferredFocusId == null ? null
                 : text(preferredFocusId, "preferredFocusId");
@@ -206,7 +211,7 @@ public final class MenuPageSpec {
         private final String detail;
         private final boolean enabled;
         private final String secondaryId;
-        private final boolean adjustable;
+        private final MenuWidgetType widgetType;
         private final int progress;
 
         public Item(String id, String label, String detail, boolean enabled) {
@@ -214,21 +219,50 @@ public final class MenuPageSpec {
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId) {
-            this(id, label, detail, enabled, secondaryId, false, -1);
+            this(id, label, detail, enabled, secondaryId, MenuWidgetType.BUTTON, -1);
+        }
+
+        /**
+         * Legacy constructor retained for hosts that supplied an adjustable flag. Adjustable rows
+         * are represented as sliders in the typed model.
+         */
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                boolean adjustable, int progress) {
+            this(id, label, detail, enabled, secondaryId,
+                    adjustable ? MenuWidgetType.SLIDER : MenuWidgetType.BUTTON, progress);
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId,
-                boolean adjustable, int progress) {
+                MenuWidgetType widgetType) {
+            this(id, label, detail, enabled, secondaryId, widgetType, -1);
+        }
+
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                MenuWidgetType widgetType, int progress) {
             this.id = text(id, "id");
             this.label = text(label, "label");
             this.detail = text(detail, "detail");
             this.enabled = enabled;
             this.secondaryId = secondaryId == null ? null : text(secondaryId, "secondaryId");
-            this.adjustable = adjustable;
-            if (progress < -1 || progress > 100) {
-                throw new IllegalArgumentException("progress must be absent or between 0 and 100");
-            }
-            this.progress = progress;
+            this.widgetType = Objects.requireNonNull(widgetType, "widgetType");
+            this.progress = progress(progress);
+        }
+
+        public static Item button(String id, String label, String detail, boolean enabled) {
+            return new Item(id, label, detail, enabled, null, MenuWidgetType.BUTTON);
+        }
+
+        public static Item dropdown(String id, String label, String detail, boolean enabled) {
+            return new Item(id, label, detail, enabled, null, MenuWidgetType.DROPDOWN);
+        }
+
+        public static Item checkbox(String id, String label, String detail, boolean enabled) {
+            return new Item(id, label, detail, enabled, null, MenuWidgetType.CHECKBOX);
+        }
+
+        public static Item slider(String id, String label, String detail, boolean enabled,
+                int progress) {
+            return new Item(id, label, detail, enabled, null, MenuWidgetType.SLIDER, progress);
         }
 
         public String id() {
@@ -251,12 +285,24 @@ public final class MenuPageSpec {
             return secondaryId;
         }
 
+        public MenuWidgetType widgetType() {
+            return widgetType;
+        }
+
         public boolean adjustable() {
-            return adjustable;
+            return widgetType.adjustable();
         }
 
         public int progress() {
             return progress;
+        }
+
+        private static int progress(int value) {
+            if (value < -1 || value > 100) {
+                throw new IllegalArgumentException(
+                        "progress must be absent or between 0 and 100");
+            }
+            return value;
         }
     }
 }

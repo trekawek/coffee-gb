@@ -8,75 +8,35 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.util.HashSet;
-import java.util.Map;
 import java.util.Set;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
 
 public class Proposal3TemplateFrameCatalogTest {
 
-    private static final Map<MenuRoute, String> EXPECTED_TEMPLATE_PNG_SHA256 = Map.ofEntries(
-            Map.entry(MenuRoute.PAUSE_CONSOLE,
-                    "bd1721e79d2f7e701a79643a39f572c654195aff15503159cf854d75b722b044"),
-            Map.entry(MenuRoute.SAVE_STATES,
-                    "f7c22fa13f2ecc2d6f57f64c87de2d1af72e6185c8ff6c60d6fb97870cdce943"),
-            Map.entry(MenuRoute.RECENT_GAMES,
-                    "f7c22fa13f2ecc2d6f57f64c87de2d1af72e6185c8ff6c60d6fb97870cdce943"),
-            Map.entry(MenuRoute.SETTINGS,
-                    "c1ade7eddda645020a81997df8bf582fae40bbd6ee98cc27a437820c6a509558"),
-            Map.entry(MenuRoute.AUDIO,
-                    "40555bc2278fa7d64b201337359877a1b55d01c7cede40d02494d03124ccd290"),
-            Map.entry(MenuRoute.DISPLAY,
-                    "542bb9fbc993ff30f9e6d11ae5e0e72b4f78af63bef304bb75a0ac1864c7b5cb"),
-            Map.entry(MenuRoute.TOUCH_CONTROLS,
-                    "aec6aec6750fd17cffebbd7804516253179734d0919abc5bbdda4081de1126c0"),
-            Map.entry(MenuRoute.CONTROLLER_MAPPING,
-                    "215597451cfa97c9bb2f9815db0be771925eb155617a47c37b0a72cbe52ab1c7"),
-            Map.entry(MenuRoute.OPTIONAL_DEVICES,
-                    "9d6905ea93562ae63894f843bea0e7a140de8f959d0dabd4cb816f24bb45cdd8"),
-            Map.entry(MenuRoute.OPTION_PICKER,
-                    "c1ade7eddda645020a81997df8bf582fae40bbd6ee98cc27a437820c6a509558"),
-            Map.entry(MenuRoute.DATA_MEDIA,
-                    "d4f1e25cff448338014405f2cc0358211bed7fb1b274b25b06f473da5bb54ab0"),
-            Map.entry(MenuRoute.LIBRARY,
-                    "7e1bc6e11f3014ff4476da4a8d7a4b4c66bad46456c325f9630a776c1663d924"),
-            Map.entry(MenuRoute.CHOOSE_ROM,
-                    "c1299934061703afe90e093d2059cc71fdacde87356a2518eb0f82154263f728"),
-            Map.entry(MenuRoute.SYSTEM,
-                    "542bb9fbc993ff30f9e6d11ae5e0e72b4f78af63bef304bb75a0ac1864c7b5cb"),
-            Map.entry(MenuRoute.ABOUT,
-                    "f6064339d1cecfa6b8c5a705152c075f56a3539cd3f43563c65aa81d91f3ea47"),
-            Map.entry(MenuRoute.CONFIRM_ACTION,
-                    "e9f9ab6a0aec546a96ddebf9951d22dffbaa62f72e8639e734a151484ed211cf"),
-            Map.entry(MenuRoute.PRINTER_PAPER,
-                    "e8c98c2d15c6b8010cfd71c0cefb637ad1b144f4213f9862b12c94b0db876357"));
+    private static final String EXPECTED_TEMPLATE_PATH =
+            "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates/common-menu-frame.png";
+    private static final String EXPECTED_TEMPLATE_PNG_SHA256 =
+            "b8bacd0c2db9a996a8977c708f5daafe3036e02a44acb5f6f846b0e62d8eedb5";
 
     @Test
-    public void everyRouteMapsToItsRawFilenameAndDecodesToThePackagedSize() throws Exception {
+    public void everyRouteMapsToOneCommonTemplateAndDecodesToThePackagedSize() throws Exception {
         Set<String> templatePaths = new HashSet<>();
         assertEquals(17, MenuRoute.values().length);
-        assertEquals(MenuRoute.values().length, EXPECTED_TEMPLATE_PNG_SHA256.size());
 
         for (MenuRoute route : MenuRoute.values()) {
-            String rawPath = Proposal3RawFrameCatalog.resourcePath(route);
             String templatePath = Proposal3TemplateFrameCatalog.resourcePath(route);
-            String rawFilename = filename(rawPath);
-            String templateFilename = filename(templatePath);
-
-            assertEquals(route + " changed the route filename", rawFilename, templateFilename);
-            assertEquals(route + " changed the raw/template resource mapping",
-                    rawPath.replace("/routes/raw/", "/routes/templates/"), templatePath);
-            assertTrue(route + " has a duplicate template resource path",
-                    templatePaths.add(templatePath));
+            assertEquals(route + " changed the common template resource", EXPECTED_TEMPLATE_PATH,
+                    templatePath);
+            templatePaths.add(templatePath);
             assertNotNull(route + " template resource is missing",
                     Proposal3TemplateFrameCatalog.class.getResource(templatePath));
             try (InputStream stream = Proposal3TemplateFrameCatalog.class
                     .getResourceAsStream(templatePath)) {
                 assertNotNull(route + " template resource stream is missing", stream);
                 assertEquals(route + " template PNG SHA-256",
-                        EXPECTED_TEMPLATE_PNG_SHA256.get(route), sha256(readAll(stream)));
+                        EXPECTED_TEMPLATE_PNG_SHA256, sha256(readAll(stream)));
             }
 
             MenuArgbFrame frame = Proposal3TemplateFrameCatalog.decode(route);
@@ -84,11 +44,7 @@ public class Proposal3TemplateFrameCatalogTest {
             assertEquals(route + " template height", 736, frame.height());
         }
 
-        assertEquals(MenuRoute.values().length, templatePaths.size());
-    }
-
-    private static String filename(String path) {
-        return path.substring(path.lastIndexOf('/') + 1);
+        assertEquals(Set.of(EXPECTED_TEMPLATE_PATH), templatePaths);
     }
 
     private static byte[] readAll(InputStream stream) throws IOException {

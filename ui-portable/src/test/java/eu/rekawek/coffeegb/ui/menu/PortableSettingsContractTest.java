@@ -1,161 +1,129 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuController;
-import eu.rekawek.coffeegb.ui.menu.MenuKey;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.MenuWidgetType;
 import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-/** Focused contract checks for the shared portable Settings surfaces. */
+/** Contracts for the reusable option-row widget library. */
 public class PortableSettingsContractTest {
 
-    @Test
-    public void settingsRowsAreTheFourTopAlignedEntries() {
-        MenuController controller = new MenuController(new NoopListener());
-        controller.show(MenuRoute.SETTINGS);
-        MenuPresentation page = controller.presentation();
-        assertEquals(List.of("system", "display", "audio", "peripherals"),
-                page.items().stream().map(MenuPresentation.Item::id).toList());
-        assertEquals(List.of("SYSTEM", "DISPLAY", "AUDIO", "PERIPHERALS"),
-                page.items().stream().map(MenuPresentation.Item::label).toList());
+    private static final int WIDTH = MenuArtworkCatalog.PACKAGED_WIDTH;
 
-        List<Proposal3OverlayCatalog.Slot> rows =
-                Proposal3OverlayCatalog.compactSettingsRows(page.items().size());
-        assertEquals(4, rows.size());
-        int firstY = rows.get(0).bounds().y();
-        for (int index = 0; index < rows.size(); index++) {
-            assertTrue(rows.get(index).bounds().y() >= firstY);
+    @Test
+    public void allFourWidgetKindsShareSevenEqual72PixelSlotsAndTheMediumFontRole() {
+        assertEquals(7, MenuScreenTemplate.OPTION_ROW_COUNT);
+        assertEquals(72, MenuScreenTemplate.OPTION_ROW_HEIGHT);
+        assertEquals(7, MenuScreenTemplate.OPTION_ROWS.size());
+
+        MenuRect first = MenuScreenTemplate.optionRow(0);
+        for (int index = 0; index < MenuScreenTemplate.OPTION_ROW_COUNT; index++) {
+            MenuRect row = MenuScreenTemplate.optionRow(index);
+            assertEquals(first.x(), row.x());
+            assertEquals(first.width(), row.width());
+            assertEquals(72, row.height());
             if (index > 0) {
-                assertTrue(rows.get(index - 1).bounds().bottom() < rows.get(index).bounds().y());
+                assertEquals(MenuScreenTemplate.OPTION_DIVIDER_HEIGHT,
+                        row.y() - MenuScreenTemplate.optionRow(index - 1).bottom());
             }
         }
-        assertTrue(rows.get(3).bounds().bottom() < Proposal3OverlayCatalog.SETTINGS_PANEL.bottom());
+
+        MenuPresentation widgets = presentation(widgetItems(), "button");
+        assertEquals(List.of(MenuWidgetType.BUTTON, MenuWidgetType.DROPDOWN,
+                        MenuWidgetType.CHECKBOX, MenuWidgetType.SLIDER),
+                widgets.items().stream().map(MenuPresentation.Item::widgetType).toList());
+        assertEquals(Proposal3GlyphAtlas.Role.MEDIUM,
+                Proposal3MenuCompositor.itemTextRole());
     }
 
     @Test
-    public void routeAndDefaultCoverageMatchesSettingsContract() {
-        assertEquals("PERIPHERALS", MenuRoute.OPTIONAL_DEVICES.label());
-        assertEquals("DISPLAY", MenuRoute.DISPLAY.label());
-        assertEquals("OPTION PICKER", MenuRoute.OPTION_PICKER.label());
-        assertEquals(List.of("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
-                show(MenuRoute.SYSTEM).items().stream().map(MenuPresentation.Item::id).toList());
-        assertEquals(List.of("sgb-border", "dmg-colors"),
-                show(MenuRoute.DISPLAY).items().stream().map(MenuPresentation.Item::id).toList());
-        assertEquals(List.of("camera", "gamepad", "gps"),
-                show(MenuRoute.OPTIONAL_DEVICES).items().stream()
-                        .map(MenuPresentation.Item::id).toList());
-        assertEquals("GREEN", show(MenuRoute.DISPLAY).items().get(1).detail());
-        assertEquals("SKIP", show(MenuRoute.SYSTEM).items().get(2).detail());
-        assertEquals("PERFORMANCE", show(MenuRoute.SYSTEM).items().get(3).detail());
-    }
-
-    @Test
-    public void choiceAndCheckboxRowsComposeWithPreparedAssets() throws Exception {
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        assertNotNull(skins.choiceField());
-        assertNotNull(skins.settingsIllustration(MenuRoute.SYSTEM));
-        assertNotNull(skins.settingsIllustration(MenuRoute.DISPLAY));
-        assertNotNull(skins.settingsIllustration(MenuRoute.OPTIONAL_DEVICES));
-
+    public void replacingAWidgetChangesPixelsOnlyInsideItsExistingRow() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : List.of(MenuRoute.SYSTEM, MenuRoute.DISPLAY,
-                MenuRoute.OPTIONAL_DEVICES)) {
-            MenuController controller = new MenuController(new NoopListener());
-            controller.show(route);
-            MenuArgbFrame frame = compositor.compose(controller.presentation()).orElseThrow();
-            assertEquals(924, frame.width());
-            assertEquals(736, frame.height());
+        MenuRect replacedRow = MenuScreenTemplate.optionRow(1);
+        int[] button = compose(compositor, variant(MenuWidgetType.BUTTON));
+
+        for (MenuWidgetType type : List.of(MenuWidgetType.DROPDOWN,
+                MenuWidgetType.CHECKBOX, MenuWidgetType.SLIDER)) {
+            int[] replacement = compose(compositor, variant(type));
+            assertTrue(type + " was visually identical to a button",
+                    differences(button, replacement, replacedRow) > 0);
+            assertEqualOutside(button, replacement, replacedRow);
         }
     }
 
     @Test
-    public void systemExecutionModeUsesTheFourthVisibleChoiceRow() {
-        MenuController controller = new MenuController(new NoopListener());
-        controller.show(MenuRoute.SYSTEM);
-        Proposal3OverlayCatalog.RouteLayout layout =
-                Proposal3OverlayCatalog.layout(MenuRoute.SYSTEM);
-
-        assertEquals(4, layout.rows().size());
-        MenuRect fourthRow = layout.rows().get(3).bounds();
-        int[] frame = new Proposal3MenuCompositor().compose(controller.presentation())
-                .orElseThrow().copyPixels();
-        assertTrue(lightPixels(frame, fourthRow.x(), fourthRow.y(),
-                fourthRow.width(), fourthRow.height()) > 20);
+    public void defaultSettingsScreensPublishTypedReusableWidgets() {
+        assertEquals(List.of(MenuWidgetType.BUTTON, MenuWidgetType.BUTTON,
+                        MenuWidgetType.BUTTON, MenuWidgetType.BUTTON),
+                types(MenuRoute.SETTINGS));
+        assertEquals(List.of(MenuWidgetType.SLIDER, MenuWidgetType.CHECKBOX),
+                types(MenuRoute.AUDIO));
+        assertEquals(List.of(MenuWidgetType.CHECKBOX, MenuWidgetType.DROPDOWN),
+                types(MenuRoute.DISPLAY));
+        assertEquals(List.of(MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
+                        MenuWidgetType.CHECKBOX),
+                types(MenuRoute.OPTIONAL_DEVICES));
+        assertEquals(List.of(MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
+                        MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN),
+                types(MenuRoute.SYSTEM));
     }
 
-    @Test
-    public void optionPickerUsesChoiceIdsAndScrollArrows() {
+    private static MenuPresentation variant(MenuWidgetType type) {
         ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
-        for (int index = 0; index < 8; index++) {
-            items.add(new MenuPageSpec.Item("choice:" + index, "VALUE " + index,
-                    index == 2 ? "SELECTED" : "", true));
-        }
-        MenuPageSpec spec = new MenuPageSpec(MenuRoute.OPTION_PICKER, "COFFEE GB",
-                "OPTION PICKER", "", "", List.of(), items, 1,
-                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "choice:0", MenuPreview.empty());
+        items.add(MenuPageSpec.Item.button("focus", "FOCUS", "", true));
+        items.add(switch (type) {
+            case BUTTON -> MenuPageSpec.Item.button("variant", "WIDGET", "VALUE", true);
+            case DROPDOWN -> MenuPageSpec.Item.dropdown("variant", "WIDGET", "VALUE", true);
+            case CHECKBOX -> MenuPageSpec.Item.checkbox("variant", "WIDGET", "ON", true);
+            case SLIDER -> MenuPageSpec.Item.slider("variant", "WIDGET", "50%", true, 50);
+        });
+        items.add(MenuPageSpec.Item.button("tail", "TAIL", "", true));
+        return presentation(items, "focus");
+    }
+
+    private static List<MenuPageSpec.Item> widgetItems() {
+        return List.of(
+                MenuPageSpec.Item.button("button", "BUTTON", "", true),
+                MenuPageSpec.Item.dropdown("dropdown", "DROPDOWN", "VALUE", true),
+                MenuPageSpec.Item.checkbox("checkbox", "CHECKBOX", "ON", true),
+                MenuPageSpec.Item.slider("slider", "SLIDER", "50%", true, 50));
+    }
+
+    private static MenuPresentation presentation(List<MenuPageSpec.Item> items, String focus) {
         MenuController controller = new MenuController(new NoopListener());
-        controller.setPage(spec);
-        controller.show(MenuRoute.OPTION_PICKER);
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] top = compositor.compose(controller.presentation()).orElseThrow().copyPixels();
-        controller.onKeyDown(MenuKey.DOWN, false);
-        controller.onKeyUp(MenuKey.DOWN);
-        controller.onKeyDown(MenuKey.DOWN, false);
-        controller.onKeyUp(MenuKey.DOWN);
-        controller.onKeyDown(MenuKey.DOWN, false);
-        controller.onKeyUp(MenuKey.DOWN);
-        int[] middle = compositor.compose(controller.presentation()).orElseThrow().copyPixels();
-        assertFalse(java.util.Arrays.equals(top, middle));
-        assertTrue(lightPixels(top, 420, 118, 489, 67) > 0);
-        assertTrue(lightPixels(middle, 420, 118, 489, 67) > 0);
+        controller.setPage(new MenuPageSpec(MenuRoute.SETTINGS, "WIDGETS", "", "", "",
+                List.of(), items, 1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), focus,
+                MenuPreview.empty()));
+        controller.show(MenuRoute.SETTINGS);
+        return controller.presentation();
     }
 
-    @Test
-    public void optionPickerRetainsTheOriginatingSettingsIllustration() {
-        assertEquals(MenuRoute.SYSTEM,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("DMG GAMES"));
-        assertEquals(MenuRoute.SYSTEM,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("BOOTSTRAP"));
-        assertEquals(MenuRoute.SYSTEM,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("EXECUTION MODE"));
-        assertEquals(MenuRoute.DISPLAY,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("DMG COLORS"));
-        assertEquals(MenuRoute.OPTIONAL_DEVICES,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("CAMERA"));
-        assertEquals(MenuRoute.OPTIONAL_DEVICES,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("GAMEPAD"));
-        assertEquals(null,
-                Proposal3MenuCompositor.optionPickerIllustrationRoute("SELECT OPTION"));
+    private static int[] compose(Proposal3MenuCompositor compositor,
+            MenuPresentation presentation) {
+        return compositor.compose(presentation).orElseThrow().copyPixels();
     }
 
-    @Test
-    public void dynamicMasksStayInsideTheCanonicalFrame() {
-        for (MenuRoute route : MenuRoute.values()) {
-            for (MenuRect mask : Proposal3MenuCompositor.dynamicMasks(route)) {
-                assertTrue(route + " mask escaped left edge", mask.x() >= 0);
-                assertTrue(route + " mask escaped top edge", mask.y() >= 0);
-                assertTrue(route + " mask escaped right edge", mask.right() <= 924);
-                assertTrue(route + " mask escaped bottom edge", mask.bottom() <= 736);
-            }
-        }
+    private static List<MenuWidgetType> types(MenuRoute route) {
+        MenuController controller = new MenuController(new NoopListener());
+        controller.show(route);
+        return controller.presentation().items().stream()
+                .map(MenuPresentation.Item::widgetType).toList();
     }
 
-    private static int lightPixels(int[] pixels, int x, int y, int width, int height) {
+    private static int differences(int[] left, int[] right, MenuRect bounds) {
         int count = 0;
-        for (int row = y; row < y + height; row++) {
-            for (int column = x; column < x + width; column++) {
-                int pixel = pixels[row * 924 + column];
-                if (((pixel >>> 16) & 0xff) > 180 && ((pixel >>> 8) & 0xff) > 175) {
+        for (int y = bounds.y(); y < bounds.bottom(); y++) {
+            for (int x = bounds.x(); x < bounds.right(); x++) {
+                if (left[y * WIDTH + x] != right[y * WIDTH + x]) {
                     count++;
                 }
             }
@@ -163,10 +131,16 @@ public class PortableSettingsContractTest {
         return count;
     }
 
-    private static MenuPresentation show(MenuRoute route) {
-        MenuController controller = new MenuController(new NoopListener());
-        controller.show(route);
-        return controller.presentation();
+    private static void assertEqualOutside(int[] expected, int[] actual, MenuRect bounds) {
+        assertEquals(expected.length, actual.length);
+        for (int index = 0; index < expected.length; index++) {
+            int x = index % WIDTH;
+            int y = index / WIDTH;
+            if (!bounds.contains(x, y)) {
+                assertEquals("replacement escaped its row at " + x + "," + y,
+                        expected[index], actual[index]);
+            }
+        }
     }
 
     private static final class NoopListener implements MenuController.Listener {

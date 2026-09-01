@@ -6,6 +6,7 @@ import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.ui.menu.MenuKey
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
+import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import java.time.Instant
 import java.nio.file.Path
@@ -58,8 +59,8 @@ class SwingProposal3MenuTest {
 
     assertEquals(1, captures)
     val pause = frames.filterNotNull().last()
-    // 160x144 aspect-fits as a 264x238 image centered in the 340x238 pause preview.
-    assertEquals(gameColor, pause.copyPixels()[140 * pause.width() + 78])
+    // The frozen 160x144 frame aspect-fits inside the common 352x340 picture aperture.
+    assertEquals(gameColor, pause.copyPixels()[310 * pause.width() + 206])
   }
 
   @Test
@@ -268,7 +269,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `reset confirmation uses left right selection and cancel returns without invoking`() {
+  fun `reset confirmation uses common vertical list and cancel returns without invoking`() {
     val bridge = FakeBridge()
     val menu = newMenu(bridge)
 
@@ -278,9 +279,9 @@ class SwingProposal3MenuTest {
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
       assertEquals("cancel", menu.focusedItemIdForTest())
-      press(menu, MenuKey.RIGHT)
+      press(menu, MenuKey.DOWN)
       assertEquals("confirm", menu.focusedItemIdForTest())
-      press(menu, MenuKey.LEFT)
+      press(menu, MenuKey.UP)
       assertEquals("cancel", menu.focusedItemIdForTest())
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
@@ -299,11 +300,11 @@ class SwingProposal3MenuTest {
       moveToPauseItem(menu, 4)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      press(menu, MenuKey.RIGHT)
+      press(menu, MenuKey.DOWN)
       assertEquals("confirm", menu.focusedItemIdForTest())
-      press(menu, MenuKey.LEFT)
+      press(menu, MenuKey.UP)
       assertEquals("cancel", menu.focusedItemIdForTest())
-      press(menu, MenuKey.RIGHT)
+      press(menu, MenuKey.DOWN)
       assertEquals("confirm", menu.focusedItemIdForTest())
       assertTrue(menu.onKeyDown(MenuKey.A, false))
       menu.onKeyUp(MenuKey.A)
@@ -331,6 +332,10 @@ class SwingProposal3MenuTest {
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
       assertEquals("volume", menu.focusedItemIdForTest())
       assertEquals(listOf("volume", "mute-audio"), menu.visibleItemIdsForTest())
+      assertEquals(
+          listOf(MenuWidgetType.SLIDER, MenuWidgetType.CHECKBOX),
+          menu.presentationForTest().items().map { it.widgetType() },
+      )
       press(menu, MenuKey.LEFT)
       assertEquals(95, bridge.volume)
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
@@ -363,6 +368,10 @@ class SwingProposal3MenuTest {
           listOf("dmg-games", "cgb-games", "bootstrap", "execution-mode"),
           menu.visibleItemIdsForTest(),
       )
+      assertTrue(
+          menu.presentationForTest().items().all {
+            it.widgetType() == MenuWidgetType.DROPDOWN
+          })
     }
   }
 
@@ -915,7 +924,7 @@ class SwingProposal3MenuTest {
     }
 
     val frame = frames.filterNotNull().last()
-    assertEquals(0xffd02020.toInt(), frame.copyPixels()[345 * frame.width() + 642])
+    assertEquals(0xffd02020.toInt(), frame.copyPixels()[310 * frame.width() + 206])
 
     javax.swing.SwingUtilities.invokeAndWait { assertTrue(menu.onKeyDown(MenuKey.A, false)) }
     assertEquals(1, printer.exportCount)
@@ -945,7 +954,7 @@ class SwingProposal3MenuTest {
       assertEquals(MenuRoute.PRINTER_PAPER, menu.routeForTest())
       assertEquals(listOf("no-paper"), menu.visibleItemIdsForTest())
       val emptyFrame = frames.filterNotNull().last()
-      assertEquals(0, inkPixels(emptyFrame, 45, 487, 306, 123))
+      assertTrue(emptyFrame.copyPixels()[310 * emptyFrame.width() + 206] != 0xffd02020.toInt())
       press(menu, MenuKey.B)
 
       assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
@@ -953,21 +962,6 @@ class SwingProposal3MenuTest {
 
     assertEquals(0, printer.exportCount)
     assertEquals(0, printer.clearCount)
-  }
-
-  private fun inkPixels(frame: MenuArgbFrame, x: Int, y: Int, width: Int, height: Int): Int {
-    var count = 0
-    val pixels = frame.copyPixels()
-    for (row in y until y + height) {
-      for (column in x until x + width) {
-        val pixel = pixels[row * frame.width() + column]
-        val red = pixel ushr 16 and 0xff
-        val green = pixel ushr 8 and 0xff
-        val blue = pixel and 0xff
-        if ((red + green + blue) / 3 < 45) count++
-      }
-    }
-    return count
   }
 
   private fun savedDatePixels(frame: MenuArgbFrame): IntArray {

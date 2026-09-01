@@ -25,7 +25,7 @@ final class Proposal3GlyphAtlas {
         // next cell's left bearing, so this remains overlap-free while matching the mockup.
         SMALL(22, 36, 11, 5),
         NOTICE(28, 36, 15, 7),
-        MEDIUM(36, 36, 19, 8),
+        MEDIUM(36, 36, 17, 5),
         DISPLAY(36, 48, 20, 8),
         SEMIBOLD(48, 48, 27, 9);
 

@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import org.junit.Test;
 
 import java.io.DataInputStream;
@@ -18,29 +19,19 @@ import static org.junit.Assert.assertTrue;
 
 public class MenuArtworkRuntimeResourceTest {
 
-    private static final long RUNTIME_ARTWORK_BUDGET = 14_680_064L;
+    private static final long RUNTIME_ARTWORK_BUDGET = 2_200_000L;
     private static final String PROPOSAL3_ROOT =
             "eu/rekawek/coffeegb/ui/menu/artwork/proposal3";
     private static final String TEMPLATE_ROOT =
-            "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates";
-    private static final Set<String> EXPECTED_RAW_FILES = Set.of(
-            "00-pause-console.png",
-            "01-save-states.png",
-            "02-settings.png",
-            "03-audio.png",
-            "04-touch-controls.png",
-            "05-controller-mapping.png",
-            "06-optional-devices.png",
-            "07-data-media.png",
-            "08-library.png",
-            "09-choose-rom.png",
-            "10-system.png",
-            "11-about.png",
-            "12-confirm-action.png",
-            "13-printer-paper.png",
-            "14-display.png",
-            "15-option-picker.png",
-            "16-recent-games.png");
+            "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates";
+    private static final Set<String> EXPECTED_TEMPLATE_FILES =
+            Set.of("common-menu-frame.png");
+    private static final Set<String> EXPECTED_WIDGET_FILES = Set.of(
+            "dark-widget.png", "paper-widget.png", "selected-widget.png");
+    private static final Set<String> EXPECTED_ILLUSTRATION_FILES = Set.of(
+            "about.png", "archive.png", "audio.png", "controller.png",
+            "data-media.png", "library.png", "peripherals.png", "printer.png",
+            "settings.png", "system.png", "touch-controls.png", "warning.png");
 
     @Test
     public void allProposal3ResourcesStayWithinBudget() throws Exception {
@@ -56,12 +47,12 @@ public class MenuArtworkRuntimeResourceTest {
                 }
             }
         }
-        assertTrue("runtime Proposal 3 artwork exceeds 14,680,064 bytes: " + bytes,
+        assertTrue("runtime common-menu artwork exceeds 2,200,000 bytes: " + bytes,
                 bytes <= RUNTIME_ARTWORK_BUDGET);
     }
 
     @Test
-    public void templateRouteDirectoryContainsExactlyExpectedDirectPngFiles() throws Exception {
+    public void templateDirectoryContainsExactlyOneCommonFrame() throws Exception {
         Path templateRoot = productionClasses().resolve(TEMPLATE_ROOT);
         assertTrue(Files.isDirectory(templateRoot));
         List<Path> entries;
@@ -71,16 +62,50 @@ public class MenuArtworkRuntimeResourceTest {
         assertFalse("baked-text raw routes must not ship at runtime",
                 Files.exists(productionClasses().resolve(
                         "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw")));
-        assertEquals(EXPECTED_RAW_FILES.size(), entries.size());
+        assertFalse("obsolete route templates must not ship at runtime",
+                Files.exists(productionClasses().resolve(
+                        "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/templates")));
+        assertEquals(EXPECTED_TEMPLATE_FILES.size(), entries.size());
         Set<String> actualNames = entries.stream()
                 .map(path -> path.getFileName().toString())
                 .collect(Collectors.toSet());
-        assertEquals(EXPECTED_RAW_FILES, actualNames);
+        assertEquals(EXPECTED_TEMPLATE_FILES, actualNames);
         for (Path entry : entries) {
             assertTrue("unexpected non-file route resource: " + entry,
                     Files.isRegularFile(entry));
             assertCroppedPng(entry);
         }
+    }
+
+    @Test
+    public void runtimeContainsOnlySharedWidgetSkinsAndCentralIllustrations() throws Exception {
+        Path root = productionClasses().resolve(PROPOSAL3_ROOT);
+        assertEquals(EXPECTED_WIDGET_FILES, directFileNames(root.resolve("widgets")));
+        assertEquals(EXPECTED_ILLUSTRATION_FILES,
+                directFileNames(root.resolve("illustrations")));
+    }
+
+    @Test
+    public void everyCentralIllustrationDecodesInsideTheSharedPictureAperture() throws Exception {
+        Set<String> decodedNames = new java.util.HashSet<>();
+        int illustratedRoutes = 0;
+        for (MenuRoute route : MenuRoute.values()) {
+            String name = MenuIllustrationCatalog.resourceName(route);
+            java.util.Optional<MenuArgbFrame> frame = MenuIllustrationCatalog.decode(route);
+            if (name == null) {
+                assertFalse(route + " unexpectedly has an illustration", frame.isPresent());
+                continue;
+            }
+            illustratedRoutes++;
+            decodedNames.add(name);
+            assertTrue(route + " illustration did not decode", frame.isPresent());
+            assertTrue(route + " illustration is wider than the common aperture",
+                    frame.get().width() <= MenuScreenTemplate.PICTURE.width());
+            assertTrue(route + " illustration is taller than the common aperture",
+                    frame.get().height() <= MenuScreenTemplate.PICTURE.height());
+        }
+        assertEquals(14, illustratedRoutes);
+        assertEquals(EXPECTED_ILLUSTRATION_FILES, decodedNames);
     }
 
     @Test
@@ -108,6 +133,16 @@ public class MenuArtworkRuntimeResourceTest {
                 .getCodeSource().getLocation().toURI());
         assertTrue("Maven production classes are not a directory", Files.isDirectory(classes));
         return classes;
+    }
+
+    private static Set<String> directFileNames(Path directory) throws IOException {
+        assertTrue(Files.isDirectory(directory));
+        try (java.util.stream.Stream<Path> stream = Files.list(directory)) {
+            List<Path> entries = stream.collect(Collectors.toList());
+            assertTrue(entries.stream().allMatch(Files::isRegularFile));
+            return entries.stream().map(path -> path.getFileName().toString())
+                    .collect(Collectors.toSet());
+        }
     }
 
     private static void assertCroppedPng(Path path) throws IOException {

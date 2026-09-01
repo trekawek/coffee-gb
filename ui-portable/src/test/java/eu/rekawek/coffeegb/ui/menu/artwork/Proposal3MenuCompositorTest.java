@@ -2,1525 +2,246 @@ package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuController;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
-import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import org.junit.Test;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
-import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
+/** Architecture-level contracts for the common menu template compositor. */
 public class Proposal3MenuCompositorTest {
 
+    private static final int WIDTH = MenuArtworkCatalog.PACKAGED_WIDTH;
+    private static final int HEIGHT = MenuArtworkCatalog.PACKAGED_HEIGHT;
+    private static final List<String> FOOTER =
+            List.of("D-PAD MOVE", "A CHOOSE", "B BACK");
+
     @Test
-    public void everyRouteComposesToTheCanonicalFrame() {
+    public void everyRouteProducesOneCanonical924By736Frame() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        MenuPreview preview = preview();
+
         for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation presentation = defaultPresentation(route);
-            MenuArgbFrame frame = compositor.compose(presentation).orElseThrow();
-            assertEquals(route.name(), 924, frame.width());
-            assertEquals(route.name(), 736, frame.height());
-            assertEquals(route.name(), 1, compositor.cachedTemplateRouteCount());
-            assertEquals(route.name(), 1, compositor.cachedComposedFrameCount());
+            MenuArgbFrame frame = compositor.compose(presentation(route, "COMMON TITLE", "",
+                    List.of(), buttons(1, 0), "item-0", preview)).orElseThrow();
+            assertEquals(route + " width", 924, frame.width());
+            assertEquals(route + " height", 736, frame.height());
+        }
+
+        assertEquals("all routes must share one decoded template", 1,
+                compositor.cachedTemplateRouteCount());
+        assertEquals("the compositor retains only its current frame", 1,
+                compositor.cachedComposedFrameCount());
+    }
+
+    @Test
+    public void composedContentCannotChangeTheSharedBaseOutsideDynamicRegions() throws Exception {
+        MenuRoute route = MenuRoute.SYSTEM;
+        int[] base = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
+        int[] composed = new Proposal3MenuCompositor().compose(presentation(route,
+                "CUSTOM TITLE", "CUSTOM SUBTITLE", List.of("SECOND LINE"),
+                mixedWidgets(), "slider", preview())).orElseThrow().copyPixels();
+
+        List<MenuRect> masks = Proposal3MenuCompositor.dynamicMasks(route);
+        for (MenuRoute candidate : MenuRoute.values()) {
+            assertEquals("dynamic regions must not vary by route", masks,
+                    Proposal3MenuCompositor.dynamicMasks(candidate));
+        }
+        assertPixelsEqualOutside(base, composed, masks);
+    }
+
+    @Test
+    public void titlePreviewAndOptionalSubtitleAreIndependentCustomizations() {
+        MenuPresentation plain = presentation(MenuRoute.PAUSE_CONSOLE, "TITLE ONE", "",
+                List.of(), buttons(2, 0), "item-0", MenuPreview.empty());
+        MenuPresentation customized = presentation(MenuRoute.PAUSE_CONSOLE, "TITLE TWO",
+                "SCREENSHOT CAPTION", List.of("DETACHED PREVIEW"), buttons(2, 0), "item-0",
+                preview());
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] before = compositor.compose(plain).orElseThrow().copyPixels();
+        int[] after = compositor.compose(customized).orElseThrow().copyPixels();
+
+        assertTrue("title did not change", differences(before, after,
+                MenuScreenTemplate.TITLE) > 0);
+        assertTrue("preview did not change", differences(before, after,
+                MenuScreenTemplate.PICTURE) > 0);
+        assertTrue("subtitle did not change", differences(before, after,
+                MenuScreenTemplate.SUBTITLE) > 0);
+        assertPixelsEqualOutside(before, after, List.of(MenuScreenTemplate.TITLE,
+                MenuScreenTemplate.PICTURE, MenuScreenTemplate.SUBTITLE));
+    }
+
+    @Test
+    public void moreThanSevenItemsUseGenericStartMiddleAndEndArrowSlots() {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        List<MenuPageSpec.Item> thirteen = buttons(13, 0);
+
+        int[] start = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW", "",
+                List.of(), thirteen, "item-0", preview()));
+        int[] startBaseline = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW",
+                "", List.of(), buttons(7, 0), "item-0", preview()));
+        assertEquals(0, differences(startBaseline, start, arrowRegion(0)));
+        assertTrue(differences(startBaseline, start, arrowRegion(6)) > 0);
+        assertArrowPoints(start, 6, false);
+
+        List<MenuPageSpec.Item> endBaselineItems = new ArrayList<>();
+        endBaselineItems.add(button("placeholder", "PLACEHOLDER"));
+        for (int index = 7; index < 13; index++) {
+            endBaselineItems.add(button("item-" + index, "ITEM " + index));
+        }
+        int[] end = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW", "",
+                List.of(), thirteen, "item-12", preview()));
+        int[] endBaseline = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW",
+                "", List.of(), endBaselineItems, "item-12", preview()));
+        assertTrue(differences(endBaseline, end, arrowRegion(0)) > 0);
+        assertEquals(0, differences(endBaseline, end, arrowRegion(6)));
+        assertArrowPoints(end, 0, true);
+
+        List<MenuPageSpec.Item> middleBaselineItems = new ArrayList<>();
+        middleBaselineItems.add(button("top-placeholder", "PLACEHOLDER"));
+        for (int index = 4; index <= 8; index++) {
+            middleBaselineItems.add(button("item-" + index, "ITEM " + index));
+        }
+        middleBaselineItems.add(button("bottom-placeholder", "PLACEHOLDER"));
+        int[] middle = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW", "",
+                List.of(), thirteen, "item-6", preview()));
+        int[] middleBaseline = pixels(compositor, presentation(MenuRoute.RECENT_GAMES, "OVERFLOW",
+                "", List.of(), middleBaselineItems, "item-6", preview()));
+        assertTrue(differences(middleBaseline, middle, arrowRegion(0)) > 0);
+        assertTrue(differences(middleBaseline, middle, arrowRegion(6)) > 0);
+        for (int row = 1; row < 6; row++) {
+            assertEquals("overflow altered content slot " + row, 0,
+                    differences(middleBaseline, middle, arrowRegion(row)));
         }
     }
 
     @Test
-    public void hiddenPresentationProducesNoFrame() {
+    public void hiddenPresentationsClearOnlyTheComposedFrameCache() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        assertFalse(compositor.compose(new MenuController(listener()).presentation()).isPresent());
-    }
-
-    @Test
-    public void canonicalFramesRenderRuntimeTextAboveTheTemplateLayer() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            int[] template = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
-            int[] composed = compositor.compose(defaultPresentation(route)).orElseThrow().copyPixels();
-            assertFalse(route.name() + " did not render runtime content above the template",
-                    Arrays.equals(template, composed));
-            assertNoDifferenceOutside(template, composed,
-                    Proposal3MenuCompositor.dynamicMasks(route));
-        }
-    }
-
-    @Test
-    public void templateAuthorityIsUntouchedOutsideDeclaredDynamicMasks() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation presentation = defaultPresentation(route);
-            int[] template = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
-            int[] composed = compositor.compose(presentation).orElseThrow().copyPixels();
-            List<MenuRect> masks = compositor.dynamicMasks(route);
-            for (int index = 0; index < template.length; index++) {
-                int x = index % 924;
-                int y = index / 924;
-                if (!inside(masks, x, y)) {
-                    assertEquals(route.name() + " changed template pixel " + x + "," + y,
-                            template[index], composed[index]);
-                }
-            }
-        }
-    }
-
-    @Test
-    public void outerArtworkFrameRemainsByteIdentical() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            int[] template = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
-            int[] composed = compositor.compose(defaultPresentation(route)).orElseThrow().copyPixels();
-            for (int y : new int[]{2, 8, 727, 733}) {
-                for (int x : new int[]{2, 8, 915, 921}) {
-                    assertEquals(route + " outer frame " + x + "," + y,
-                            template[y * 924 + x], composed[y * 924 + x]);
-                }
-            }
-        }
-    }
-
-    @Test
-    public void pauseOpenRomIsRenderedAsAnEqualHeightMenuRow() throws Exception {
-        MenuPresentation presentation = presentation(new MenuPageSpec(MenuRoute.PAUSE_CONSOLE,
-                "COFFEE GB", "", "", "TETRIS", List.of("PLAY TIME", "00:42",
-                "BATTERY SAVE ACTIVE"),
-                List.of(
-                        item("resume", "RESUME", true),
-                        item("save-state", "SAVE STATE", true),
-                        item("load-state", "LOAD STATE", true),
-                        item("open-rom", "OPEN ROM", true),
-                        item("reset", "RESET GAME", true),
-                        item("settings", "SETTINGS", true),
-                        item("stop", "STOP GAME", true)), 1,
-                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "open-rom",
+        MenuController controller = controller(new MenuPageSpec(MenuRoute.LIBRARY, "CACHE", "",
+                "", "", List.of(), buttons(1, 0), 1, FOOTER, "item-0",
                 MenuPreview.empty()));
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
-        int[] composed = new Proposal3MenuCompositor().compose(presentation).orElseThrow().copyPixels();
-        assertFalse(Arrays.equals(template, composed));
-        assertTrue(differentInside(template, composed, Proposal3OverlayCatalog.PAUSE_OPEN_ROM));
-        assertFalse(differentInside(template, composed, Proposal3OverlayCatalog.PAUSE_HEADER_ACTION));
-        assertNoDifferenceOutside(template, composed,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.PAUSE_CONSOLE));
-    }
-
-    @Test
-    public void confirmationHasNoHeaderBackOrInjectedExtraCopy() throws Exception {
-        MenuPresentation presentation = defaultPresentation(MenuRoute.CONFIRM_ACTION);
-        assertEquals(2, presentation.columns());
-        assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), presentation.sideLines());
-
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.CONFIRM_ACTION).copyPixels();
-        int[] composed = new Proposal3MenuCompositor().compose(presentation).orElseThrow()
-                .copyPixels();
-        assertTrue("confirmation header Back artwork was not cleared",
-                differentInside(template, composed, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR));
-        assertEquals("confirmation header still contains dark Back artwork", 0,
-                inkPixels(composed, Proposal3OverlayCatalog.CONFIRM_HEADER_CLEAR));
-        assertFalse("confirmation added copy beyond its warning",
-                differentInside(template, composed, Proposal3OverlayCatalog.CONFIRM_COPY_THREE));
-        assertNoDifferenceOutside(template, composed,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.CONFIRM_ACTION));
-    }
-
-    @Test
-    public void pauseRailUsesSevenExactEqualRowsWithUntouchedDividers() {
-        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
-                MenuRoute.PAUSE_CONSOLE);
-        assertEquals(7, layout.rows().size());
-        for (int index = 0; index < layout.rows().size(); index++) {
-            MenuRect row = layout.rows().get(index).bounds();
-            assertEquals(424, row.x());
-            assertEquals(484, row.width());
-            assertEquals(72, row.height());
-            assertEquals(121 + index * 74, row.y());
-        }
-        assertEquals(6, Proposal3OverlayCatalog.PAUSE_DIVIDERS.size());
-        for (int index = 0; index < Proposal3OverlayCatalog.PAUSE_DIVIDERS.size(); index++) {
-            MenuRect divider = Proposal3OverlayCatalog.PAUSE_DIVIDERS.get(index);
-            assertEquals(193 + index * 74, divider.y());
-            assertEquals(2, divider.height());
-        }
-    }
-
-    @Test
-    public void stateRailUsesSevenEqualRowsWithoutSyntheticActionsOrHeaderBack() throws Exception {
-        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
-                MenuRoute.SAVE_STATES);
-        assertEquals(7, layout.rows().size());
-        assertTrue(layout.scrollable());
-        assertTrue(layout.actions().isEmpty());
-        for (int index = 0; index < layout.rows().size(); index++) {
-            MenuRect row = layout.rows().get(index).bounds();
-            assertEquals(423, row.x());
-            assertEquals(483, row.width());
-            assertEquals(67, row.height());
-            assertEquals(121 + index * 76, row.y());
-        }
-        assertEquals(6, Proposal3OverlayCatalog.SAVE_DIVIDERS.size());
-        for (int index = 0; index < Proposal3OverlayCatalog.SAVE_DIVIDERS.size(); index++) {
-            MenuRect divider = Proposal3OverlayCatalog.SAVE_DIVIDERS.get(index);
-            assertEquals(191 + index * 76, divider.y());
-            assertEquals(3, divider.height());
-        }
-        MenuPresentation presentation = defaultPresentation(MenuRoute.SAVE_STATES);
-        assertEquals(10, presentation.items().size());
-        assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("manage")));
-        assertTrue(presentation.items().stream().noneMatch(item -> item.id().contains("back")));
-        assertTrue(presentation.sideHeading().isEmpty());
-        assertTrue(presentation.sideLines().isEmpty());
-        assertEquals("", presentation.headerAction());
-
-        MenuRect lastRow = layout.rows().get(layout.rows().size() - 1).bounds();
-        assertEquals("state rail must reach the footer without a synthetic action row", 644,
-                lastRow.bottom());
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES).copyPixels();
-        assertTrue("legacy action-strip frame survived at its left edge",
-                paperish(pixel(template, 14, 568)));
-        assertTrue("legacy action-strip frame survived at its center",
-                paperish(pixel(template, 305, 568)));
-        assertFalse("state rail must continue through the removed action strip",
-                paperish(pixel(template, 906, 568)));
-    }
-
-    @Test
-    public void overflowingRailsUseSevenItemsAndRevealDirectionalChevronRows() throws Exception {
-        assertSevenEqualRows(MenuRoute.CONTROLLER_MAPPING);
-        assertSevenEqualRows(MenuRoute.LIBRARY);
-        assertSevenEqualRows(MenuRoute.CHOOSE_ROM);
-        assertEquals("Library uses the full seven-row rail", 7,
-                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).rows().size());
-        assertTrue("Library no longer has a synthetic bottom action",
-                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY).actions().isEmpty());
-
-        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(
-                MenuRoute.SAVE_STATES);
-        MenuPresentation top = defaultPresentation(MenuRoute.SAVE_STATES);
-        MenuPresentation lower = withFocus(top, "slot-6");
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] topPixels = compositor.compose(top).orElseThrow().copyPixels();
-        int[] lowerPixels = compositor.compose(lower).orElseThrow().copyPixels();
-        MenuRect bottomChevron = chevronBounds(layout.rows().get(6).bounds());
-        MenuRect topChevron = chevronBounds(layout.rows().get(0).bounds());
-
-        assertTrue("top of an overflowing list needs a down-chevron row",
-                lightPixels(topPixels, bottomChevron) > 20);
-        assertTrue("scrolling down needs an up-chevron row",
-                lightPixels(lowerPixels, topChevron) > 20);
-        assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES)
-                        .copyPixels(), topPixels,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
-        assertNoDifferenceOutside(Proposal3TemplateFrameCatalog.decode(MenuRoute.SAVE_STATES)
-                        .copyPixels(), lowerPixels,
-                        Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
-    }
-
-    @Test
-    public void settingsRailUsesOneNormalHeightAudioRowAtTheTop() {
-        List<Proposal3OverlayCatalog.Slot> rows =
-                Proposal3OverlayCatalog.compactSettingsRows(1);
-        assertEquals(1, rows.size());
-        MenuRect row = rows.get(0).bounds();
-        assertEquals("Audio must use the normal top settings slot",
-                Proposal3OverlayCatalog.SETTINGS_PANEL.x() + 3, row.x());
-        assertEquals("Audio must start at the top of the settings rail",
-                Proposal3OverlayCatalog.SETTINGS_PANEL.y() + 3, row.y());
-        assertEquals(481, row.width());
-        assertEquals(67, row.height());
-        assertTrue("single-item Settings must not invent a divider",
-                Proposal3OverlayCatalog.compactSettingsDividers(1).isEmpty());
-    }
-
-    @Test
-    public void focusArrowIsWholeAndVerticallySymmetric() {
-        int[] pixels = new int[MenuRaster.WIDTH * MenuRaster.HEIGHT];
-        int left = 100;
-        int centerY = 200;
-        new MenuRaster(pixels).drawFocusArrow(left, centerY, MenuRaster.PAPER_TEXT);
-
-        for (int x = 0; x < MenuRaster.FOCUS_ARROW_WIDTH; x++) {
-            int first = -1;
-            int last = -1;
-            int count = 0;
-            for (int y = 0; y < MenuRaster.HEIGHT; y++) {
-                if (pixel(pixels, left + x, y) == MenuRaster.PAPER_TEXT) {
-                    if (first < 0) {
-                        first = y;
-                    }
-                    last = y;
-                    count++;
-                }
-            }
-            assertEquals("cursor column must be solid", last - first + 1, count);
-            assertEquals("cursor must taper symmetrically", centerY * 2 - 1, first + last);
-        }
-        assertEquals(MenuRaster.FOCUS_ARROW_HEIGHT,
-                countColorInColumn(pixels, left, MenuRaster.PAPER_TEXT));
-        assertEquals(2, countColorInColumn(pixels,
-                left + MenuRaster.FOCUS_ARROW_WIDTH - 1, MenuRaster.PAPER_TEXT));
-    }
-
-    @Test
-    public void hostRecentIdsStillResolveTheSelectedRowsFocusArrow() {
-        MenuPresentation presentation = presentation(MenuPageSpec.recentGames(List.of(
-                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", "TODAY", true,
-                        MenuPreview.empty()),
-                new MenuPageSpec.RecentGame("recent:7", "POCKET CAMERA.GBC", "YESTERDAY", true,
-                        MenuPreview.empty())), "recent:7"));
-        int[] pixels = new Proposal3MenuCompositor().compose(presentation)
-                .orElseThrow().copyPixels();
-        Proposal3OverlayCatalog.RouteLayout layout =
-                Proposal3OverlayCatalog.layout(MenuRoute.RECENT_GAMES);
-        MenuRect canonical = layout.rows().get(0).bounds();
-        MenuRect selected = layout.rows().get(1).bounds();
-        int left = selected.x() + layout.marker().sourceX() - canonical.x();
-
-        assertEquals("selected recent row lost its focus arrow",
-                MenuRaster.FOCUS_ARROW_HEIGHT,
-                countColorInColumn(pixels, left, MenuRaster.PAPER_TEXT));
-    }
-
-    @Test
-    public void controlsRailCompactsForOneAndTwoHostItems() {
-        assertEquals(1, Proposal3OverlayCatalog.compactTouchRows(1).size());
-        assertEquals(2, Proposal3OverlayCatalog.compactTouchRows(2).size());
-        assertEquals(1, Proposal3OverlayCatalog.compactTouchDividers(2).size());
-
-        MenuPresentation one = controlsPresentation(List.of(
-                item("haptics", "HAPTIC FEEDBACK", true)), "haptics");
-        MenuPresentation two = controlsPresentation(List.of(
-                item("haptics", "HAPTIC FEEDBACK", true),
-                item("controller-mapping", "BUTTON MAPPING", true)), "haptics");
-        MenuRect oldThirdRow = new MenuRect(420, 343, 490, 108);
-        int[] onePixels = new Proposal3MenuCompositor().compose(one).orElseThrow().copyPixels();
-        int[] twoPixels = new Proposal3MenuCompositor().compose(two).orElseThrow().copyPixels();
-
-        assertTrue("one-item Controls rail did not render its focused row",
-                selectedPixels(onePixels, Proposal3OverlayCatalog.TOUCH_PANEL) > 100);
-        assertTrue("two-item Controls rail did not render its focused row",
-                selectedPixels(twoPixels, Proposal3OverlayCatalog.TOUCH_PANEL) > 100);
-        assertEquals("one-item Controls rail left a third bordered slot",
-                0, selectedPixels(onePixels, oldThirdRow));
-        assertEquals("two-item Controls rail left a third bordered slot",
-                0, selectedPixels(twoPixels, oldThirdRow));
-    }
-
-    @Test
-    public void occupiedStateUsesTheFramedSaveSealInsteadOfLegacyStatusText() {
-        MenuPresentation empty = defaultPresentation(MenuRoute.SAVE_STATES);
-        ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
-        for (MenuPresentation.Item item : empty.items()) {
-            items.add(new MenuPageSpec.Item(item.id(), item.label(),
-                    item.id().equals("slot-0") ? "USED" : item.detail(), item.enabled(),
-                    item.secondaryId(), item.adjustable(), item.progress()));
-        }
-        MenuPresentation used = presentation(new MenuPageSpec(empty.route(), empty.title(),
-                empty.context(), empty.headerAction(), empty.sideHeading(), empty.sideLines(),
-                items, empty.columns(), empty.footerHints(), "slot-0", empty.preview()));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] emptyPixels = compositor.compose(empty).orElseThrow().copyPixels();
-        int[] usedPixels = compositor.compose(used).orElseThrow().copyPixels();
-        MenuRect seal = new MenuRect(Proposal3OverlayCatalog.layout(MenuRoute.SAVE_STATES)
-                .rows().get(0).bounds().right() - 40, 139, 30, 30);
-
-        assertTrue("occupied slot seal did not render", differentInside(emptyPixels, usedPixels, seal));
-        assertNoDifferenceOutside(emptyPixels, usedPixels,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.SAVE_STATES));
-    }
-
-    @Test
-    public void pauseMetadataUsesExpandedNoticeRegionsThatFitCanonicalCopy() throws Exception {
-        List<Proposal3TextCatalog.TextRegion> metadata = Proposal3TextCatalog
-                .regions(MenuRoute.PAUSE_CONSOLE).stream()
-                .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
-                .toList();
-        assertEquals(3, metadata.size());
-        assertEquals(new MenuRect(31, 496, 172, 48), metadata.get(0).bounds());
-        assertEquals(new MenuRect(220, 496, 159, 48), metadata.get(1).bounds());
-        assertEquals(new MenuRect(102, 577, 285, 52), metadata.get(2).bounds());
-
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        String[] values = {"PLAY TIME", "00:00", "NO BATTERY SAVE"};
-        for (int index = 0; index < values.length; index++) {
-            MenuRect bounds = metadata.get(index).bounds();
-            assertTrue(values[index] + " would exceed its metadata width",
-                    glyphInkFits(atlas, Proposal3GlyphAtlas.Role.NOTICE, values[index],
-                            bounds.width()));
-            assertTrue(values[index] + " would exceed its metadata height",
-                    glyphInkHeightFits(atlas, Proposal3GlyphAtlas.Role.NOTICE, values[index],
-                            bounds.height()));
-        }
-    }
-
-    @Test
-    public void pauseFooterLabelsAreLoweredWithoutMovingDpadOrKeycaps() throws Exception {
-        List<Proposal3TextCatalog.TextRegion> footer = Proposal3TextCatalog
-                .regions(MenuRoute.PAUSE_CONSOLE).stream()
-                .filter(region -> region.key() == Proposal3TextCatalog.Key.FOOTER_LABEL)
-                .toList();
-        assertEquals(2, footer.size());
-        assertEquals(670, footer.get(0).bounds().y());
-        assertEquals(670, footer.get(1).bounds().y());
-        Proposal3TextCatalog.TextRegion dpad = Proposal3TextCatalog
-                .regions(MenuRoute.PAUSE_CONSOLE).stream()
-                .filter(region -> region.key() == Proposal3TextCatalog.Key.FOOTER_DPAD)
-                .findFirst().orElseThrow();
-        assertEquals(660, dpad.bounds().y());
-
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
-        int[] composed = compositor.compose(defaultPresentation(MenuRoute.PAUSE_CONSOLE))
-                .orElseThrow().copyPixels();
-        int[] aKeycap = inkBounds(template, new MenuRect(405, 660, 55, 56));
-        int[] bKeycap = inkBounds(template, new MenuRect(660, 660, 55, 56));
-        for (int index = 0; index < footer.size(); index++) {
-            int[] label = inkBounds(composed, footer.get(index).bounds());
-            int[] keycap = index == 0 ? aKeycap : bKeycap;
-            assertTrue("footer label should not rise above its keycap", label[1] >= keycap[1]);
-            assertTrue("footer label should not fall below its keycap", label[3] <= keycap[3]);
-        }
-    }
-
-    @Test
-    public void dashGlyphIsVerticallyAlignedWithCapHeightAcrossByteBounceRoles() throws Exception {
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        for (Proposal3GlyphAtlas.Role role : Proposal3GlyphAtlas.Role.values()) {
-            int[] cap = glyphBounds(atlas, role, 'A');
-            int[] dash = glyphBounds(atlas, role, '-');
-            int capCenter = (cap[1] + cap[3]) / 2;
-            int dashCenter = (dash[1] + dash[3]) / 2;
-            assertTrue(role + " dash is not aligned with cap height: " + Arrays.toString(dash),
-                    Math.abs(capCenter - dashCenter) <= 1);
-            assertTrue(role + " dash must remain below the cap top", dash[1] > cap[1]);
-            assertTrue(role + " dash was clipped by its cell", dash[3] < atlas.cellHeight(role));
-        }
-    }
-
-    @Test
-    public void stateSavedDateUsesOnlyTheBlankAreaBelowTheFocusedPreview() {
-        MenuPresentation empty = defaultPresentation(MenuRoute.SAVE_STATES);
-        MenuPresentation dated = presentation(new MenuPageSpec(
-                empty.route(), empty.title(), empty.context(), empty.headerAction(),
-                empty.sideHeading(), List.of("SAVED 2026-08-13 17:15"),
-                copyItems(empty.items()), empty.columns(), empty.footerHints(), "slot-0",
-                empty.preview()));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] emptyPixels = compositor.compose(empty).orElseThrow().copyPixels();
-        int[] datedPixels = compositor.compose(dated).orElseThrow().copyPixels();
-        MenuRect savedDate = new MenuRect(30, 505, 352, 44);
-        int changed = 0;
-        for (int y = 0; y < MenuArtworkCatalog.PACKAGED_HEIGHT; y++) {
-            for (int x = 0; x < MenuArtworkCatalog.PACKAGED_WIDTH; x++) {
-                int offset = y * MenuArtworkCatalog.PACKAGED_WIDTH + x;
-                if (emptyPixels[offset] != datedPixels[offset]) {
-                    assertTrue("saved date escaped its reserved area at " + x + "," + y,
-                            x >= savedDate.x() && x < savedDate.right()
-                                    && y >= savedDate.y() && y < savedDate.bottom());
-                    changed++;
-                }
-            }
-        }
-        assertTrue("saved date did not render", changed > 0);
-    }
-
-    @Test
-    public void pausePreviewClearsTheEntireBezelInnerAperture() throws Exception {
-        MenuRect aperture = Proposal3OverlayCatalog.PAUSE_PREVIEW;
-        assertEquals(new MenuRect(30, 139, 351, 243), aperture);
-
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.PAUSE_CONSOLE).copyPixels();
-        for (int y = aperture.y(); y < aperture.bottom(); y++) {
-            for (int x = aperture.x(); x < aperture.right(); x++) {
-                assertEquals("placeholder pixel survived at " + x + "," + y,
-                        0xff121b14, pixel(template, x, y));
-            }
-        }
-
-        MenuPresentation populated = withPreview(defaultPresentation(MenuRoute.PAUSE_CONSOLE),
-                MenuPreview.ready(160, 144, new int[160 * 144]));
-        int[] composed = new Proposal3MenuCompositor().compose(populated).orElseThrow().copyPixels();
-        // The 4:3 game frame is centered in this wider aperture, leaving matte at both corners.
-        assertEquals(0xff121b14, pixel(composed, aperture.x(), aperture.y()));
-        assertEquals(0xff121b14, pixel(composed, aperture.right() - 1, aperture.bottom() - 1));
-    }
-
-    @Test
-    public void changingCanonicalNormalRowLabelChangesPixelsInsideItsMask() throws Exception {
-        MenuPresentation first = defaultPresentation(MenuRoute.SETTINGS);
-        MenuPresentation second = presentation(new MenuPageSpec(MenuRoute.SETTINGS,
-                first.title(), first.context(), first.headerAction(), first.sideHeading(),
-                first.sideLines(), List.of(
-                        item("audio", "A DIFFERENT USER LABEL", true),
-                        item("touch-controls", "TOUCH CONTROLS", true),
-                        item("controller-mapping", "CONTROLLER MAPPING", true),
-                        item("optional-devices", "OPTIONAL DEVICES", true),
-                        item("video", "VIDEO", true),
-                        item("system-profile", "SYSTEM PROFILE", true),
-                        item("rewind-save", "REWIND & SAVE", true),
-                        item("data-media", "DATA & MEDIA", true),
-                        item("about", "ABOUT", true)), 1, first.footerHints()));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] before = compositor.compose(first).orElseThrow().copyPixels();
-        int[] after = compositor.compose(second).orElseThrow().copyPixels();
-        assertFalse("canonical normal-row label was not rendered at compose time",
-                Arrays.equals(before, after));
-        List<MenuRect> masks = compositor.dynamicMasks(MenuRoute.SETTINGS);
-        for (int index = 0; index < before.length; index++) {
-            if (before[index] == after[index]) {
-                continue;
-            }
-            int x = index % 924;
-            int y = index / 924;
-            assertTrue("changed pixel outside settings masks: " + x + "," + y,
-                    inside(masks, x, y));
-        }
-    }
-
-    @Test
-    public void everyMultiRowRouteKeepsRowGlyphMaskAndBaselineAcrossFocusStates() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        for (MenuRoute route : MenuRoute.values()) {
-            if (route == MenuRoute.OPTIONAL_DEVICES || route == MenuRoute.OPTION_PICKER) {
-                continue;
-            }
-            List<Proposal3OverlayCatalog.Slot> rows = route == MenuRoute.SETTINGS
-                    ? Proposal3OverlayCatalog.compactSettingsRows(
-                            defaultPresentation(route).items().size())
-                    : Proposal3OverlayCatalog.layout(route).rows();
-            if (rows.size() < 2) {
-                continue;
-            }
-
-            String firstRowId = firstRowFocusId(route);
-            MenuPresentation selected = withFocus(defaultPresentation(route), firstRowId);
-            String alternateFocusId = focusTarget(route);
-            assertFalse(route + " focus comparison must use two different items",
-                    firstRowId.equals(alternateFocusId));
-            MenuPresentation unselected = withFocus(selected, alternateFocusId);
-            MenuPresentation.Item rowItem = itemById(selected, firstRowId);
-            assertNotNull(route + " first visible row is missing from the presentation", rowItem);
-
-            Proposal3OverlayCatalog.Slot slot = rows.get(0);
-            MenuRect labelBounds = Proposal3MenuCompositor.rowLabelBoundsForAudit(route,
-                    slot.bounds(), supportsRowDetails(route) && !rowItem.detail().isEmpty(), 0);
-            int[] selectedPixels = compositor.compose(selected).orElseThrow().copyPixels();
-            int[] unselectedPixels = compositor.compose(unselected).orElseThrow().copyPixels();
-            boolean[] selectedMask = glyphMask(selectedPixels,
-                    rowBackground(route, slot, true, skins), labelBounds);
-            boolean[] unselectedMask = glyphMask(unselectedPixels,
-                    rowBackground(route, slot, false, skins), labelBounds);
-
-            assertTrue(route + " selected row has no detectable glyphs", hasGlyph(selectedMask));
-            assertTrue(route + " unselected row has no detectable glyphs",
-                    hasGlyph(unselectedMask));
-            assertArrayEquals(route + " changed glyph pixels when focus moved away",
-                    selectedMask, unselectedMask);
-            assertEquals(route + " changed the actual glyph baseline when focus moved away",
-                    glyphTop(selectedMask, labelBounds.width()),
-                    glyphTop(unselectedMask, labelBounds.width()));
-        }
-    }
-
-    @Test
-    public void everyRouteRendersCommonAndPresentationChromeAtComposeTime() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation presentation = defaultPresentation(route);
-            int[] template = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
-            int[] composed = compositor.compose(presentation).orElseThrow().copyPixels();
-            for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
-                String value = runtimeRegionValue(region, presentation);
-                if (value.isEmpty()) {
-                    continue;
-                }
-                assertTrue(route + " baked/runtime text region remained unchanged: "
-                                + region.key() + "#" + region.index(),
-                        differentInside(template, composed, region.bounds()));
-            }
-            assertTrue(route + " common footer was not audited",
-                    Proposal3MenuCompositor.dynamicMasks(route).contains(
-                            Proposal3TextCatalog.FOOTER));
-        }
-    }
-
-    @Test
-    public void screenshotMetadataUsesTheReadableNoticeRole() {
-        for (Proposal3TextCatalog.TextRegion region
-                : Proposal3TextCatalog.regions(MenuRoute.PAUSE_CONSOLE)) {
-            if (region.key() == Proposal3TextCatalog.Key.SIDE_LINE) {
-                assertEquals(Proposal3GlyphAtlas.Role.NOTICE, region.role());
-            }
-        }
-        Proposal3TextCatalog.TextRegion savedAt = Proposal3TextCatalog.regions(MenuRoute.SAVE_STATES)
-                .stream()
-                .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
-                .findFirst()
-                .orElseThrow();
-        assertEquals(Proposal3GlyphAtlas.Role.NOTICE, savedAt.role());
-    }
-
-    @Test
-    public void recentTimestampSplitsIntoTwoReadableLinesThatFit() throws Exception {
-        Proposal3TextCatalog.TextRegion lastPlayed =
-                Proposal3TextCatalog.regions(MenuRoute.RECENT_GAMES).stream()
-                        .filter(region -> region.key() == Proposal3TextCatalog.Key.SIDE_LINE)
-                        .findFirst()
-                        .orElseThrow();
-        assertEquals(Proposal3GlyphAtlas.Role.NOTICE, lastPlayed.role());
-        String caption = Proposal3MenuCompositor.recentLastPlayedText(
-                "LAST PLAYED: 2026-08-17 20:13");
-        assertEquals("LAST PLAYED:\n2026-08-17 20:13", caption);
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        for (String line : caption.split("\\n")) {
-            assertTrue("recent caption line would ellipsize: " + line,
-                    atlas.measure(lastPlayed.role(), line) <= lastPlayed.bounds().width());
-        }
-        assertTrue("two-line recent caption does not have enough vertical room",
-                lastPlayed.bounds().height() >= 2 * 40);
-    }
-
-    @Test
-    public void recentGamesPaintTheSelectedPreviewAndLastPlayedLabelInTheLoadStateAperture() {
-        int[] pixels = new int[160 * 144];
-        java.util.Arrays.fill(pixels, 0xff396e55);
-        MenuPresentation presentation = presentation(MenuPageSpec.recentGames(List.of(
-                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB",
-                        "2026-08-17 20:13", true,
-                        MenuPreview.ready(160, 144, pixels))), "recent:0"));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] empty = compositor.compose(defaultPresentation(MenuRoute.RECENT_GAMES))
-                .orElseThrow().copyPixels();
-        int[] composed = compositor.compose(presentation).orElseThrow().copyPixels();
-
-        assertTrue("recent game preview was not painted",
-                differentInside(empty, composed, Proposal3OverlayCatalog.SAVE_PREVIEW));
-        assertTrue("last played label was not painted",
-                inkPixels(composed, new MenuRect(30, 490, 352, 88)) > 20);
-    }
-
-    @Test
-    public void recentCaptionPaintsTodayAndFullTimestampOnSeparateLines() {
-        MenuPresentation blank = presentation(MenuPageSpec.recentGames(List.of(
-                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", "", true,
-                        MenuPreview.empty())), "recent:0"));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] baseline = compositor.compose(blank).orElseThrow().copyPixels();
-        MenuRect labelLine = new MenuRect(30, 490, 352, 44);
-        MenuRect valueLine = new MenuRect(30, 534, 352, 44);
-
-        for (String value : List.of("TODAY", "2026-08-17 20:13")) {
-            MenuPresentation captioned = presentation(MenuPageSpec.recentGames(List.of(
-                    new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB", value, true,
-                            MenuPreview.empty())), "recent:0"));
-            int[] rendered = compositor.compose(captioned).orElseThrow().copyPixels();
-            assertTrue(value + " lost the LAST PLAYED label line",
-                    differentInside(baseline, rendered, labelLine));
-            assertTrue(value + " lost the timestamp value line",
-                    differentInside(baseline, rendered, valueLine));
-        }
-    }
-
-    @Test
-    public void canonicalRowsAndActionsFitWithoutEllipsizing() throws Exception {
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation presentation = defaultPresentation(route);
-            Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
-            int rowCount = Math.min(layout.rows().size(), presentation.items().size());
-            for (int index = 0; index < rowCount; index++) {
-                MenuPresentation.Item item = presentation.items().get(index);
-                boolean detail = route == MenuRoute.AUDIO
-                        || route == MenuRoute.TOUCH_CONTROLS
-                        || route == MenuRoute.CONTROLLER_MAPPING
-                        || route == MenuRoute.OPTIONAL_DEVICES
-                        || route == MenuRoute.SYSTEM
-                        || route == MenuRoute.DISPLAY;
-                MenuRect label = Proposal3MenuCompositor.rowLabelBoundsForAudit(route,
-                        layout.rows().get(index).bounds(), detail, index);
-                assertTrue(route + " row label would ellipsize: " + item.label(),
-                        atlas.measure(Proposal3MenuCompositor.rowTextRole(route, index), item.label())
-                                <= label.width());
-                if (detail && !item.detail().isEmpty()) {
-                    MenuRect detailBounds = Proposal3MenuCompositor.rowDetailBoundsForAudit(route,
-                            layout.rows().get(index).bounds());
-                    Proposal3GlyphAtlas.Role detailRole =
-                            Proposal3MenuCompositor.detailTextRole(route);
-                    assertTrue(route + " row detail would ellipsize: " + item.detail(),
-                            atlas.measure(detailRole, item.detail()) <= detailBounds.width());
-                }
-            }
-            if (route == MenuRoute.PRINTER_PAPER) {
-                String[] labels = {"CLEAR PAPER", "EXPORT & SHARE"};
-                for (int index = 0; index < labels.length; index++) {
-                    Proposal3GlyphAtlas.Role role = index == 1
-                            ? Proposal3GlyphAtlas.Role.SMALL
-                            : Proposal3MenuCompositor.actionTextRole(route);
-                    assertTrue(route + " action would ellipsize: " + labels[index],
-                            atlas.measure(role, labels[index])
-                                    <= layout.actions().get(index).bounds().width() - 20);
-                }
-            }
-        }
-    }
-
-    @Test
-    public void settingsChoicesUseLegibleTypeAndDisplayCheckboxUsesLargeGeometry() {
-        for (MenuRoute route : List.of(MenuRoute.SYSTEM, MenuRoute.DISPLAY,
-                MenuRoute.OPTIONAL_DEVICES)) {
-            assertEquals(Proposal3GlyphAtlas.Role.NOTICE,
-                    Proposal3MenuCompositor.rowTextRole(route, 0));
-            assertEquals(Proposal3GlyphAtlas.Role.NOTICE,
-                    Proposal3MenuCompositor.choiceTextRole(route));
-        }
-
-        MenuRect displayRow = Proposal3OverlayCatalog.layout(MenuRoute.DISPLAY)
-                .rows().get(0).bounds();
-        MenuRect checkbox = Proposal3MenuCompositor.checkboxBoundsForAudit(
-                MenuRoute.DISPLAY, displayRow);
-        assertEquals(48, checkbox.width());
-        assertEquals(48, checkbox.height());
-        assertEquals(displayRow.y() + (displayRow.height() - checkbox.height()) / 2,
-                checkbox.y());
-    }
-
-    @Test
-    public void aboutNoticeRowsUseNormalWidthMetricsInBothFocusStates() throws Exception {
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        Proposal3WidgetSkins skins = Proposal3WidgetSkins.load();
-        MenuRoute route = MenuRoute.ABOUT;
-        MenuPresentation canonical = defaultPresentation(route);
-        List<Proposal3OverlayCatalog.Slot> rows = Proposal3OverlayCatalog.layout(route).rows();
-        String[] ids = {"privacy-notices", "network", "storage", "live-camera", "source-notices"};
-
-        assertEquals("About title must retain the Proposal 3 display weight",
-                Proposal3GlyphAtlas.Role.SEMIBOLD,
-                Proposal3MenuCompositor.rowTextRole(route, 0));
-
-        for (int index = 1; index < ids.length; index++) {
-            MenuPresentation.Item item = itemById(canonical, ids[index]);
-            MenuRect label = Proposal3MenuCompositor.rowLabelBoundsForAudit(route,
-                    rows.get(index).bounds(), false, index);
-            assertNotNull("missing About row " + ids[index], item);
-            assertEquals("About row role changed with its position or focus",
-                    Proposal3GlyphAtlas.Role.NOTICE,
-                    Proposal3MenuCompositor.rowTextRole(route, index));
-            assertTrue("About row would ellipsize: " + item.label(),
-                    atlas.measure(Proposal3GlyphAtlas.Role.NOTICE, item.label()) <= label.width());
-            assertTrue("About row glyph pixels exceed its label bounds: " + item.label(),
-                    glyphInkFits(atlas, Proposal3GlyphAtlas.Role.NOTICE, item.label(),
-                            label.width()));
-
-            MenuPresentation selected = withFocus(canonical, ids[index]);
-            MenuPresentation normal = withFocus(canonical, ids[0]);
-            int[] selectedPixels = new Proposal3MenuCompositor().compose(selected)
-                    .orElseThrow().copyPixels();
-            int[] normalPixels = new Proposal3MenuCompositor().compose(normal)
-                    .orElseThrow().copyPixels();
-            boolean[] selectedMask = glyphMask(selectedPixels,
-                    rowBackground(route, rows.get(index), true, skins), label);
-            boolean[] normalMask = glyphMask(normalPixels,
-                    rowBackground(route, rows.get(index), false, skins), label);
-            assertArrayEquals("About row changed glyph geometry when focused: " + ids[index],
-                    normalMask, selectedMask);
-            assertEquals("About row changed baseline when focused: " + ids[index],
-                    glyphTop(normalMask, label.width()), glyphTop(selectedMask, label.width()));
-        }
-    }
-
-    @Test
-    public void canonicalChromeFitsWithoutEllipsizing() throws Exception {
-        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation presentation = defaultPresentation(route);
-            for (Proposal3TextCatalog.TextRegion region : Proposal3TextCatalog.regions(route)) {
-                if (region.key() == Proposal3TextCatalog.Key.FOOTER_BUTTON
-                        || region.key() == Proposal3TextCatalog.Key.FOOTER_LABEL
-                        || region.key() == Proposal3TextCatalog.Key.CONFIRM_TITLE
-                        || region.key() == Proposal3TextCatalog.Key.CONFIRM_COPY_ONE
-                        || region.key() == Proposal3TextCatalog.Key.CONFIRM_COPY_TWO
-                        || region.key() == Proposal3TextCatalog.Key.CONFIRM_COPY_THREE) {
-                    continue;
-                }
-                String value = runtimeRegionValue(region, presentation);
-                for (String line : value.split("\\n", -1)) {
-                    assertTrue(route + " chrome would ellipsize: " + line,
-                            atlas.measure(Proposal3MenuCompositor.chromeTextRole(route, region), line)
-                                    <= region.bounds().width());
-                }
-            }
-        }
-    }
-
-    private static String runtimeRegionValue(Proposal3TextCatalog.TextRegion region,
-            MenuPresentation presentation) {
-        if (region.literal() != null) {
-            return region.literal();
-        }
-        return switch (region.key()) {
-            case HEADER_TITLE -> presentation.title();
-            case HEADER_CONTEXT -> presentation.route() == MenuRoute.PAUSE_CONSOLE ? ""
-                    : presentation.context().isEmpty() ? "/" : presentation.context();
-            case HEADER_ACTION -> presentation.route() == MenuRoute.PAUSE_CONSOLE
-                    || presentation.route() == MenuRoute.SAVE_STATES
-                    || presentation.route() == MenuRoute.CONFIRM_ACTION
-                    || presentation.route() == MenuRoute.SETTINGS
-                    || presentation.route() == MenuRoute.AUDIO
-                    || presentation.route() == MenuRoute.TOUCH_CONTROLS
-                    || presentation.route() == MenuRoute.CONTROLLER_MAPPING
-                    || presentation.route() == MenuRoute.SYSTEM ? ""
-                    : presentation.headerAction();
-            case SIDE_HEADING -> presentation.sideHeading();
-            case SIDE_LINE -> {
-                String value = region.index() < presentation.sideLines().size()
-                        ? presentation.sideLines().get(region.index()) : "";
-                yield presentation.route() == MenuRoute.RECENT_GAMES
-                        ? Proposal3MenuCompositor.recentLastPlayedText(value) : value;
-            }
-            case FOOTER_DPAD, FOOTER_BUTTON, FOOTER_LABEL, CONFIRM_TITLE,
-                    CONFIRM_COPY_ONE, CONFIRM_COPY_TWO -> "RUNTIME";
-            case CONFIRM_COPY_THREE -> presentation.sideLines().size() < 2 ? "" : "RUNTIME";
-            case LITERAL -> "";
-        };
-    }
-
-    @Test
-    public void changingRouteChromePresentationChangesRuntimePixels() {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation source = defaultPresentation(route);
-            List<String> sideLines = List.of("RUNTIME SIDE ONE", "RUNTIME SIDE TWO",
-                    "RUNTIME SIDE THREE");
-            MenuPresentation changed = presentation(new MenuPageSpec(route,
-                    "RUNTIME TITLE", "RUNTIME CONTEXT", "RUNTIME ACTION",
-                    "RUNTIME HEADING", sideLines, copyItems(source.items()), source.columns(),
-                    List.of("RUNTIME MOVE", "[X] ACCEPT", "[Y] RETURN"),
-                    source.items().get(Math.max(0, source.focusedIndex())).id(), source.preview()));
-            int[] before = compositor.compose(source).orElseThrow().copyPixels();
-            int[] after = compositor.compose(changed).orElseThrow().copyPixels();
-            assertFalse(route + " presentation chrome was not runtime-rendered",
-                    Arrays.equals(before, after));
-            assertNoDifferenceOutside(before, after,
-                    Proposal3MenuCompositor.dynamicMasks(route));
-        }
-    }
-
-    @Test
-    public void libraryUsesThreePlainRowsInsideTheFullSevenRowRail() throws Exception {
-        MenuPresentation live = presentation(new MenuPageSpec(MenuRoute.LIBRARY,
-                "COFFEE GB", "LIBRARY", "", "", List.of(), List.of(
-                        new MenuPageSpec.Item("recent-games", "RECENT GAMES", "", true),
-                        new MenuPageSpec.Item("open-rom", "OPEN ROM", "", true),
-                        new MenuPageSpec.Item("settings", "SETTINGS", "", true)),
-                1, List.of("D-PAD MOVE", "[A] OK", "[B] BACK"), "recent-games",
-                MenuPreview.empty()));
-        assertEquals(List.of("recent-games", "open-rom", "settings"), live.items().stream()
-                .map(MenuPresentation.Item::id).toList());
-        assertEquals("", live.headerAction());
-        assertEquals("", live.sideHeading());
-        assertTrue(live.sideLines().isEmpty());
-
-        Proposal3OverlayCatalog.RouteLayout library =
-                Proposal3OverlayCatalog.layout(MenuRoute.LIBRARY);
-        Proposal3OverlayCatalog.RouteLayout recent =
-                Proposal3OverlayCatalog.layout(MenuRoute.RECENT_GAMES);
-        assertEquals(recent.rows().size(), library.rows().size());
-        for (int index = 0; index < recent.rows().size(); index++) {
-            assertEquals("Library row geometry diverged at " + index,
-                    recent.rows().get(index).bounds(), library.rows().get(index).bounds());
-        }
-        assertEquals(recent.marker().sourceX(), library.marker().sourceX());
-        assertEquals(Proposal3MenuCompositor.rowTextRole(MenuRoute.RECENT_GAMES, 0),
-                Proposal3MenuCompositor.rowTextRole(MenuRoute.LIBRARY, 0));
-
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY).copyPixels();
-        int[] recentTemplate = Proposal3TemplateFrameCatalog.decode(MenuRoute.RECENT_GAMES)
-                .copyPixels();
-        assertNoDifferenceOutside(recentTemplate, template,
-                List.of(new MenuRect(106, 225, 200, 170)));
-        int[] pixels = new Proposal3MenuCompositor().compose(live).orElseThrow().copyPixels();
-        assertFalse("Library rows were not rendered", Arrays.equals(template, pixels));
-        // The icon-only left panel lies outside every dynamic mask and must remain byte-identical.
-        assertNoDifferenceOutside(template, pixels,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.LIBRARY));
-    }
-
-    @Test
-    public void everyRouteFocusMutationIsVisibleAndConfinedToAuditedMasks() {
-        Map<MenuRoute, String> focusTargets = Map.ofEntries(
-                Map.entry(MenuRoute.PAUSE_CONSOLE, "save-state"),
-                Map.entry(MenuRoute.SAVE_STATES, "slot-1"),
-                Map.entry(MenuRoute.AUDIO, "mute-audio"),
-                Map.entry(MenuRoute.DISPLAY, "dmg-colors"),
-                Map.entry(MenuRoute.TOUCH_CONTROLS, "controller-mapping"),
-                Map.entry(MenuRoute.CONTROLLER_MAPPING, "map-b"),
-                Map.entry(MenuRoute.OPTIONAL_DEVICES, "gamepad"),
-                Map.entry(MenuRoute.DATA_MEDIA, "export-battery"),
-                Map.entry(MenuRoute.LIBRARY, "open-rom"),
-                Map.entry(MenuRoute.CHOOSE_ROM, "rom-2"),
-                Map.entry(MenuRoute.SYSTEM, "cgb-games"),
-                Map.entry(MenuRoute.ABOUT, "network"),
-                Map.entry(MenuRoute.CONFIRM_ACTION, "confirm"),
-                Map.entry(MenuRoute.PRINTER_PAPER, "clear-paper"));
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (Map.Entry<MenuRoute, String> target : focusTargets.entrySet()) {
-            MenuPresentation canonical = defaultPresentation(target.getKey());
-            MenuPresentation focused = withFocus(canonical, target.getValue());
-            int[] before = compositor.compose(canonical).orElseThrow().copyPixels();
-            int[] after = compositor.compose(focused).orElseThrow().copyPixels();
-            assertFalse(target.getKey() + " focus mutation was visually inert",
-                    Arrays.equals(before, after));
-            assertNoDifferenceOutside(before, after,
-                    Proposal3MenuCompositor.dynamicMasks(target.getKey()));
-        }
-    }
-
-    @Test
-    public void paperActionFocusSwapsBothBackgroundAndGlyphPalette() {
-        MenuPresentation canonical = defaultPresentation(MenuRoute.PRINTER_PAPER);
-        MenuPresentation clearFocused = withFocus(canonical, "clear-paper");
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] before = compositor.compose(canonical).orElseThrow().copyPixels();
-        int[] after = compositor.compose(clearFocused).orElseThrow().copyPixels();
-        MenuRect clear = Proposal3OverlayCatalog.layout(MenuRoute.PRINTER_PAPER)
-                .actions().get(0).bounds();
-        MenuRect export = Proposal3OverlayCatalog.layout(MenuRoute.PRINTER_PAPER)
-                .actions().get(1).bounds();
-        assertTrue(selectedPixels(after, clear) > selectedPixels(before, clear) + 500);
-        assertTrue(selectedPixels(after, export) + 500 < selectedPixels(before, export));
-        assertTrue(inkPixels(after, clear) < inkPixels(before, clear));
-        assertTrue(inkPixels(after, export) > inkPixels(before, export));
-    }
-
-    @Test
-    public void audioSliderMovesTheFlatKnobToBothEndpoints() throws Exception {
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] zero = compositor.compose(audioPresentation(0)).orElseThrow().copyPixels();
-        int[] hundred = compositor.compose(audioPresentation(100)).orElseThrow().copyPixels();
-        int railY = Proposal3OverlayCatalog.AUDIO_SLIDER.y();
-        int knobY = railY - (MenuRaster.AUDIO_KNOB_HEIGHT
-                - Proposal3OverlayCatalog.AUDIO_SLIDER.height()) / 2;
-        assertEquals(MenuRaster.INK, pixel(zero, MenuRaster.audioKnobCenter(0),
-                knobY + MenuRaster.AUDIO_KNOB_HEIGHT / 2));
-        assertEquals(MenuRaster.INK, pixel(hundred, MenuRaster.audioKnobCenter(100),
-                knobY + MenuRaster.AUDIO_KNOB_HEIGHT / 2));
-        assertTrue("0% and 100% must move the knob",
-                differentInside(zero, hundred, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
-        assertNoDifferenceOutside(template, zero,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.AUDIO));
-        assertNoDifferenceOutside(template, hundred,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.AUDIO));
-    }
-
-    @Test
-    public void canonicalAudioProgressKeepsSliderGeometryAndUsesRuntimeText() throws Exception {
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        int[] canonical = new Proposal3MenuCompositor().compose(audioPresentation(75))
-                .orElseThrow().copyPixels();
-        assertFalse(Arrays.equals(template, canonical));
-        assertNoDifferenceOutside(template, canonical,
-                Proposal3MenuCompositor.dynamicMasks(MenuRoute.AUDIO));
-    }
-
-    @Test
-    public void audioStatusWithoutVolumeClearsTheTemplateSlider() throws Exception {
-        MenuPresentation unavailable = presentation(new MenuPageSpec(MenuRoute.AUDIO,
-                "COFFEE GB", "AUDIO", "", "", List.of(),
-                List.of(item("audio-status", "NOT AVAILABLE", true)), 1,
-                List.of("", "", "B BACK"), "audio-status", MenuPreview.empty()));
-        int[] template = Proposal3TemplateFrameCatalog.decode(MenuRoute.AUDIO).copyPixels();
-        int[] pixels = new Proposal3MenuCompositor().compose(unavailable).orElseThrow().copyPixels();
-
-        MenuRect slider = Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE;
-        assertTrue("status-only audio page retained the template slider",
-                differentInside(template, pixels, slider));
-        for (int y = slider.y(); y < slider.bottom(); y++) {
-            for (int x = slider.x(); x < slider.right(); x++) {
-                assertEquals("status-only audio page left an active slider pixel at "
-                                + x + "," + y,
-                        MenuRaster.PAPER, pixel(pixels, x, y));
-            }
-        }
-    }
-
-    @Test
-    public void audioSliderUsesOneCoordinateSystemAndFlatTrackColors() {
-        int[] pixels = new int[MenuRaster.WIDTH * MenuRaster.HEIGHT];
-        MenuRaster raster = new MenuRaster(pixels);
-        MenuRect rail = Proposal3OverlayCatalog.AUDIO_SLIDER;
-        raster.drawAudioSlider(rail, 50);
-
-        int tickY = rail.y() + rail.height() + 17;
-        for (int percent = 0; percent <= 100; percent += 10) {
-            int center = MenuRaster.audioKnobCenter(percent);
-            assertEquals("tick center for " + percent + "%", MenuRaster.INK,
-                    pixel(pixels, center, tickY + 2));
-            assertEquals("tick left edge for " + percent + "%", MenuRaster.INK,
-                    pixel(pixels, center - 2, tickY + 2));
-            assertEquals("tick right edge for " + percent + "%", MenuRaster.INK,
-                    pixel(pixels, center + 2, tickY + 2));
-        }
-
-        int knobCenter = MenuRaster.audioKnobCenter(50);
-        MenuRect interior = new MenuRect(rail.x() + 3, rail.y() + 3,
-                rail.width() - 6, rail.height() - 6);
-        for (int y = interior.y(); y < interior.bottom(); y++) {
-            for (int x = interior.x(); x < interior.right(); x++) {
-                if (x >= knobCenter - MenuRaster.AUDIO_KNOB_WIDTH / 2
-                        && x < knobCenter + MenuRaster.AUDIO_KNOB_WIDTH / 2) {
-                    continue;
-                }
-                int expected = x < knobCenter ? MenuRaster.AUDIO_SLIDER_FILL
-                        : MenuRaster.AUDIO_SLIDER_EMPTY;
-                assertEquals("slider color changed at " + x + "," + y,
-                        expected, pixel(pixels, x, y));
-            }
-        }
-    }
-
-    @Test
-    public void audioVolumeLabelAppearsAtEveryBoundaryWithoutTouchingFrame() {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] zero = compositor.compose(audioPresentation(0)).orElseThrow().copyPixels();
-        int[] seventyFive = compositor.compose(audioPresentation(75)).orElseThrow().copyPixels();
-        int[] hundred = compositor.compose(audioPresentation(100)).orElseThrow().copyPixels();
-        MenuRect label = Proposal3OverlayCatalog.AUDIO_VOLUME_LABEL;
-        assertTrue("0% volume label is missing", inkPixels(zero, label) > 10);
-        assertTrue("75% volume label is missing", inkPixels(seventyFive, label) > 10);
-        assertTrue("100% volume label is missing", inkPixels(hundred, label) > 10);
-        assertNoDifferenceOutside(zero, seventyFive,
-                List.of(label, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
-        assertNoDifferenceOutside(seventyFive, hundred,
-                List.of(label, Proposal3OverlayCatalog.AUDIO_SLIDER_ZONE));
-    }
-
-    @Test
-    public void audioMuteIsACompactCheckboxWithoutFarRightStatusText() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        int[] off = compositor.compose(audioPresentation(75, false)).orElseThrow().copyPixels();
-        int[] on = compositor.compose(audioPresentation(75, true)).orElseThrow().copyPixels();
-        assertNoDifferenceOutside(off, on,
-                List.of(Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX));
-        assertTrue("mute checkbox did not reflect its checked state",
-                differentInside(off, on, Proposal3OverlayCatalog.AUDIO_MUTE_CHECKBOX));
-
-        MenuRect farRightStatus = new MenuRect(700, Proposal3OverlayCatalog.AUDIO_MUTE.y(),
-                190, Proposal3OverlayCatalog.AUDIO_MUTE.height());
-        assertEquals("mute state must not be rendered as a distant status label", 0,
-                differenceCount(off, rowBackground(MenuRoute.AUDIO,
-                        Proposal3OverlayCatalog.layout(MenuRoute.AUDIO).rows().get(0), true,
-                        Proposal3WidgetSkins.load()), farRightStatus));
-    }
-
-    @Test
-    public void readyPreviewUsesNearestNeighbourAspectFitWithoutStretching() {
-        MenuPresentation canonical = defaultPresentation(MenuRoute.PRINTER_PAPER);
-        MenuPreview preview = MenuPreview.ready(2, 1, new int[]{0xffff0000, 0xff0000ff});
-        MenuPresentation presentation = withPreview(canonical, preview);
-        int[] pixels = new Proposal3MenuCompositor().compose(presentation)
-                .orElseThrow().copyPixels();
-        MenuRect target = Proposal3OverlayCatalog.PRINTER_PREVIEW;
-        assertEquals(MenuRaster.PAPER, pixel(pixels, target.x(), target.y()));
-        assertEquals(MenuRaster.PAPER, pixel(pixels, target.x(), 264));
-        assertEquals(0xffff0000, pixel(pixels, target.x(), 265));
-        assertEquals(0xffff0000, pixel(pixels, target.x() + 159, 300));
-        assertEquals(0xff0000ff, pixel(pixels, target.x() + 160, 300));
-        assertEquals(0xff0000ff, pixel(pixels, target.right() - 1, 424));
-        assertEquals(MenuRaster.PAPER, pixel(pixels, target.x(), 425));
-    }
-
-    @Test
-    public void emptyPrinterPreviewClearsTemplateSampleAndShowsStatus() {
-        int[] pixels = new Proposal3MenuCompositor()
-                .compose(defaultPresentation(MenuRoute.PRINTER_PAPER)).orElseThrow().copyPixels();
-        MenuRect target = Proposal3OverlayCatalog.PRINTER_PREVIEW;
-        // The status is centered by drawWidgetText; every other pixel in the preview must be the
-        // clean matte, otherwise the source artwork's decorative sample print has leaked through.
-        MenuRect status = new MenuRect(555, 320, 175, 58);
-        for (int y = target.y(); y < target.bottom(); y++) {
-            for (int x = target.x(); x < target.right(); x++) {
-                if (!status.contains(x, y)) {
-                    assertEquals("empty printer preview retained sample at " + x + "," + y,
-                            MenuRaster.PAPER, pixel(pixels, x, y));
-                }
-            }
-        }
-        assertTrue("empty printer preview did not render NO PAPER",
-                inkPixels(pixels, status) > 100);
-    }
-
-    @Test
-    public void cacheIsBoundedAndConcurrentCompositionIsDeterministic() throws Exception {
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        MenuPresentation presentation = defaultPresentation(MenuRoute.PAUSE_CONSOLE);
-        MenuArgbFrame first = compositor.compose(presentation).orElseThrow();
-        assertSame(first, compositor.compose(presentation).orElseThrow());
-        ExecutorService executor = Executors.newFixedThreadPool(4);
-        try {
-            List<Callable<int[]>> tasks = new ArrayList<>();
-            for (int index = 0; index < 8; index++) {
-                tasks.add(() -> compositor.compose(presentation).orElseThrow().copyPixels());
-            }
-            for (Future<int[]> task : executor.invokeAll(tasks)) {
-                assertArrayEquals(first.copyPixels(), task.get());
-            }
-        } finally {
-            executor.shutdownNow();
-        }
+        controller.show(MenuRoute.LIBRARY);
+
+        MenuPresentation visible = controller.presentation();
+        MenuArgbFrame first = compositor.compose(visible).orElseThrow();
+        assertSame("same immutable presentation should reuse its frame", first,
+                compositor.compose(visible).orElseThrow());
         assertEquals(1, compositor.cachedTemplateRouteCount());
         assertEquals(1, compositor.cachedComposedFrameCount());
+
+        controller.hide();
+        assertFalse(compositor.compose(controller.presentation()).isPresent());
+        assertEquals(1, compositor.cachedTemplateRouteCount());
+        assertEquals(0, compositor.cachedComposedFrameCount());
+
+        controller.show(MenuRoute.LIBRARY);
+        MenuArgbFrame recomposed = compositor.compose(controller.presentation()).orElseThrow();
+        assertNotSame(first, recomposed);
+        assertArrayEquals(first.copyPixels(), recomposed.copyPixels());
     }
 
-    @Test
-    public void roleSpecificByteBounceAtlasesArePinnedAndNoFontSourceShips() throws Exception {
-        assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "byte-bounce-medium-atlas.png", 576, 144,
-                "38e3864c385f17fca89c3adb94e9ab34d4d66bba3bf84a69994f5171561ad45f");
-        assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "byte-bounce-semibold-atlas.png", 768, 192,
-                "a8c278084120e4100626a51f7dc32cdc976888eafe3a12196676de3809a8ffba");
-        assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "byte-bounce-display-atlas.png", 576, 192,
-                "b89c0d788c66feff71a7f8ed31c8feaadb90851b6df65491e13ca1dfe522a1d4");
-        assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "byte-bounce-small-atlas.png", 352, 144,
-                "dee0e554f5be7a4cb24a09d9a4f107b612448ce780bc7a8335277309caa9de4c");
-        assertAtlas("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                + "byte-bounce-notice-atlas.png", 448, 144,
-                "f8d1f2744192418c9d4a57f3fbe7d52950b3bfd98ec00aca4412d9e88eacc1b1");
-        assertNotNull(Proposal3MenuCompositor.class.getResource(
-                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/"
-                        + "ByteBounce-licensed-source.txt"));
-        assertTrue(Proposal3MenuCompositor.class.getResource(
-                "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/overlay/ByteBounce.ttf") == null);
+    private static List<MenuPageSpec.Item> mixedWidgets() {
+        return List.of(
+                MenuPageSpec.Item.button("button", "BUTTON", "", true),
+                MenuPageSpec.Item.dropdown("dropdown", "DROPDOWN", "VALUE", true),
+                MenuPageSpec.Item.checkbox("checkbox", "CHECKBOX", "ON", true),
+                MenuPageSpec.Item.slider("slider", "SLIDER", "50%", true, 50));
     }
 
-    @Test
-    public void widgetOverlayPngsArePinnedAndDecodable() throws Exception {
-        String root = "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/widgets/";
-        assertAtlas(root + "dark-widget.png", 900, 160,
-                "b4c845c44627138ecf49a3adf1cad62f7caeeb093eff209a87c5c89d00f7634a");
-        assertAtlas(root + "paper-widget.png", 900, 160,
-                "0026fd096f910ecf76860c42484e8325edd957922412deec536e9f17f3308af5");
-        assertAtlas(root + "selected-widget.png", 900, 160,
-                "33c95fdf9ec596b9e5c7041348117f2c244bc021cdc14ffa7f335a4f75521723");
-        assertAtlas(root + "data-arrow-left.png", 45, 45,
-                "a6b67e6cd8bac2b4f29d7f48a8cfef3a1045a71604e6196388c22b60fcd7b562");
-        assertAtlas(root + "data-arrow-right.png", 45, 45,
-                "dfe2752eb83a470f67e3d8dfe650f32d9649cd54809611c4b5826909c8872fc6");
-        assertAtlas(root + "data-camera.png", 50, 50,
-                "a3f8e3c551a4be14edb547d4edd657500f5fa1d426172645210125c0fc24f6a6");
-        assertAtlas(root + "data-printer.png", 50, 50,
-                "85e2337a5f49a5bd0f841de9c582086406c0800ee4917b590b8068645cc949f4");
-        assertAtlas(root + "about-network.png", 70, 58,
-                "dee7372a54fbde9f7aacf6dbb6a818c2ea320be17bd6c1720e3d1b99b63f8331");
-        assertAtlas(root + "about-storage.png", 70, 58,
-                "233d11ffda3207650c03ba5cd3f150b1ac1ff55938b0f3e26ae929da218571d1");
-        assertAtlas(root + "about-camera.png", 70, 58,
-                "64fdb7e1ec7df02d383a148e34cb8ce01452945538dc8b091ff2927c5ccb9910");
-        assertAtlas(root + "about-source.png", 70, 58,
-                "6bf1ffe75351e8556ce3b071017faae4f89443c0343171567496924f077ca999");
-        assertAtlas(root + "action-save.png", 39, 39,
-                "5e8d892803639f28b56c268b40cf414ae4da60eaf95f7a64854111221a19dec2");
-        assertAtlas(root + "action-load.png", 39, 39,
-                "f340767214348008cf5b04ca86c4d4b473fe9f0705d8dfa2d913de39444c3ecd");
-        assertAtlas(root + "action-delete.png", 42, 46,
-                "088f24312b1d4f3714c6eb299074bcc3ef519f876ab656fa2109a2b29a19b8b5");
-        assertAtlas(root + "action-optional-save.png", 39, 38,
-                "8aad7ebe6a7b9af8c19a214f9bd7e72fa4aab14c518daffba6a3346670b2e7c8");
-        assertAtlas(root + "action-optional-cancel.png", 44, 42,
-                "edb8cb73d475eb30ec1624a77ab9975ca49537636e64bba8da945216ed543d6a");
-        assertAtlas(root + "action-library.png", 45, 39,
-                "819fa8b4fbe9e7148294747a5db150ec2007cb3cc1d13753860b61d3408d3113");
-        assertAtlas(root + "action-github.png", 53, 53,
-                "5629b630fcf132e8edfbe1f6c2690dddca2990d81cb1b65caf2b64cd2fdb2634");
+    private static MenuPageSpec.Item button(String id, String label) {
+        return MenuPageSpec.Item.button(id, label, "", true);
     }
 
-    @Test
-    public void audioSliderRuntimeUsesOnlyTheFlatPalettePrimitive() {
-        java.lang.reflect.Method method = null;
-        for (java.lang.reflect.Method candidate : MenuRaster.class.getDeclaredMethods()) {
-            if (candidate.getName().equals("drawAudioSlider")) {
-                method = candidate;
-                break;
-            }
+    private static List<MenuPageSpec.Item> buttons(int count, int firstIndex) {
+        ArrayList<MenuPageSpec.Item> result = new ArrayList<>(count);
+        for (int offset = 0; offset < count; offset++) {
+            int index = firstIndex + offset;
+            result.add(button("item-" + index, "ITEM " + index));
         }
-        assertNotNull(method);
-        assertFalse(Arrays.stream(method.getParameterTypes())
-                .anyMatch(type -> type == int[].class));
-        assertEquals(2, method.getParameterCount());
-        assertEquals(MenuRect.class, method.getParameterTypes()[0]);
-        assertEquals(int.class, method.getParameterTypes()[1]);
+        return List.copyOf(result);
     }
 
-    @Test
-    public void firstCompositionOfAudioAndControlsRendersCompleteChrome() {
-        // These routes used to produce a partially populated non-focus PNG on the first compose
-        // in a fresh renderer, while their immediately-following focus frame was complete. Keep
-        // this deliberately first-use test separate from the route-wide cache tests below.
-        for (MenuRoute route : new MenuRoute[]{MenuRoute.AUDIO, MenuRoute.TOUCH_CONTROLS}) {
-            MenuPresentation presentation = defaultPresentation(route);
-            int[] pixels = new Proposal3MenuCompositor().compose(presentation).orElseThrow()
-                    .copyPixels();
-            assertTrue(route + " first frame lost its header glyphs",
-                    inkPixels(pixels, new MenuRect(45, 25, 620, 61)) > 1_000);
-            assertTrue(route + " first frame lost D-pad footer glyphs",
-                    inkPixels(pixels, new MenuRect(70, 669, 240, 43)) > 1_000);
-            assertTrue(route + " first frame lost A footer glyphs",
-                    inkPixels(pixels, new MenuRect(455, 669, 126, 48)) > 500);
-            assertTrue(route + " first frame lost B footer glyphs",
-                    inkPixels(pixels, new MenuRect(708, 669, 128, 48)) > 300);
-        }
-    }
-
-    @Test
-    public void positionalBlankFooterHintsProduceACleanBOnlyFooter() {
-        MenuPresentation source = defaultPresentation(MenuRoute.TOUCH_CONTROLS);
-        MenuPresentation backOnly = presentation(new MenuPageSpec(MenuRoute.TOUCH_CONTROLS,
-                source.title(), source.context(), source.headerAction(), source.sideHeading(),
-                source.sideLines(), copyItems(source.items()), source.columns(),
-                List.of("", "", "B BACK"), "haptics", source.preview()));
-        int[] pixels = new Proposal3MenuCompositor().compose(backOnly).orElseThrow().copyPixels();
-
-        assertEquals("blank D-pad hint was rendered", 0,
-                inkPixels(pixels, new MenuRect(70, 669, 240, 43)));
-        assertEquals("blank A hint was rendered", 0,
-                inkPixels(pixels, new MenuRect(455, 669, 126, 48)));
-        assertEquals("omitted A keycap remained visible", 0,
-                inkPixels(pixels, Proposal3TextCatalog.FOOTER_CHOOSE_KEYCAP_CLEAR));
-        assertTrue("B-only footer lost its B label", inkPixels(pixels,
-                new MenuRect(708, 669, 128, 48)) > 300);
-    }
-
-    @Test
-    public void publicApiIsPortable() {
-        for (Class<?> type : new Class<?>[]{Proposal3MenuCompositor.class,
-                MenuArgbFrame.class, MenuViewport.class, MenuArtwork.class,
-                MenuArtworkCatalog.class}) {
-            assertPortable(type.getName());
-            for (java.lang.reflect.Method method : type.getMethods()) {
-                assertPortable(method.toGenericString());
-            }
-        }
-    }
-
-    @Test
-    public void writesRepresentativePreviewPngsForVisualReview() throws Exception {
-        if (!Boolean.getBoolean("ui.portable.writePreviews")) {
-            return;
-        }
-        Path workingDirectory = Paths.get(System.getProperty("user.dir")).toAbsolutePath();
-        Path repositoryDirectory = workingDirectory.getFileName().toString().equals("ui-portable")
-                ? workingDirectory.getParent() : workingDirectory;
-        Path directory = repositoryDirectory.resolve("output/portable-compositor");
-        Files.createDirectories(directory);
-        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
-        for (MenuRoute route : MenuRoute.values()) {
-            MenuPresentation canonical = defaultPresentation(route);
-            MenuArgbFrame frame = compositor.compose(canonical).orElseThrow();
-            writeFrame(directory.resolve(route.name().toLowerCase() + ".png"), frame);
-            MenuPresentation focusedPresentation = route == MenuRoute.RECENT_GAMES
-                    ? recentGamesPresentation("recent:7")
-                    : withFocus(canonical, focusTarget(route));
-            MenuArgbFrame focused = compositor.compose(focusedPresentation)
-                    .orElseThrow();
-            writeFrame(directory.resolve(route.name().toLowerCase() + "-focus.png"), focused);
-        }
-        writeFrame(directory.resolve("recent_games-today.png"), compositor.compose(
-                recentGamesPresentation("recent:0", "TODAY", "YESTERDAY"))
-                .orElseThrow());
-        writeFrame(directory.resolve("recent_games-full-timestamp.png"), compositor.compose(
-                recentGamesPresentation("recent:0")).orElseThrow());
-        MenuPresentation saveStates = defaultPresentation(MenuRoute.SAVE_STATES);
-        ArrayList<MenuPresentation.Item> usedStateItems = new ArrayList<>();
-        for (MenuPresentation.Item item : saveStates.items()) {
-            usedStateItems.add(new MenuPresentation.Item(item.id(), item.label(),
-                    item.id().equals("slot-0") ? "USED" : item.detail(), item.enabled(),
-                    item.secondaryId(), item.adjustable(), item.progress()));
-        }
-        writeFrame(directory.resolve("save_states-used.png"), compositor.compose(
-                presentation(spec(saveStates, "slot-0", saveStates.preview(), usedStateItems)))
-                .orElseThrow());
-        writeFrame(directory.resolve("save_states-lower.png"), compositor.compose(
-                withFocus(saveStates, "slot-6")).orElseThrow());
-        // A deliberately non-placeholder Game Boy-sized image makes the pause-menu review
-        // artifact exercise the same aspect-fit and frozen-preview path as a live game frame.
-        int[] gameFrame = new int[160 * 144];
-        for (int y = 0; y < 144; y++) {
-            for (int x = 0; x < 160; x++) {
-                int color;
-                if (y < 36) {
-                    color = ((x / 8 + y / 6) & 1) == 0 ? 0xffb7dd79 : 0xff8fbe63;
-                } else if (y < 105) {
-                    color = ((x / 12 + y / 10) & 1) == 0 ? 0xff396e55 : 0xff28513f;
-                } else {
-                    color = ((x / 10 + y / 8) & 1) == 0 ? 0xff172c34 : 0xff0f2028;
-                }
-                if (x >= 61 && x < 99 && y >= 47 && y < 82) {
-                    color = (x + y) % 7 < 4 ? 0xffffd66b : 0xffdb7d46;
-                }
-                gameFrame[y * 160 + x] = color;
-            }
-        }
-        MenuPresentation populatedPause = presentation(new MenuPageSpec(MenuRoute.PAUSE_CONSOLE,
-                "COFFEE GB", "", "", "THE LEGEND OF ZELDA: LINK'S AWAKENING DX",
-                List.of("PLAY TIME", "1:23:45", "BATTERY SAVE ACTIVE"),
-                List.of(
-                        item("resume", "RESUME", true),
-                        item("save-state", "SAVE STATE", true),
-                        item("load-state", "LOAD STATE", true),
-                        item("open-rom", "OPEN ROM", true),
-                        item("reset", "RESET GAME", true),
-                        item("settings", "SETTINGS", true),
-                        item("stop", "STOP GAME", true)), 1,
-                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), "open-rom",
-                MenuPreview.ready(160, 144, gameFrame)));
-        writeFrame(directory.resolve("pause_console-populated.png"),
-                compositor.compose(populatedPause).orElseThrow());
-        MenuPresentation confirmation = defaultPresentation(MenuRoute.CONFIRM_ACTION);
-        ArrayList<MenuPresentation.Item> stopItems = new ArrayList<>(confirmation.items());
-        for (int index = 0; index < stopItems.size(); index++) {
-            MenuPresentation.Item item = stopItems.get(index);
-            if ("confirm".equals(item.id())) {
-                stopItems.set(index, new MenuPresentation.Item(item.id(), item.label(),
-                        "STOP GAME", item.enabled(), item.secondaryId(), item.adjustable(),
-                        item.progress()));
-            }
-        }
-        writeFrame(directory.resolve("confirm_action-stop.png"), compositor.compose(
-                presentation(spec(confirmation, "confirm", confirmation.preview(), stopItems)))
-                .orElseThrow());
-        writeFrame(directory.resolve("audio-volume-0.png"),
-                compositor.compose(audioPresentation(0)).orElseThrow());
-        writeFrame(directory.resolve("audio-volume-100.png"),
-                compositor.compose(audioPresentation(100)).orElseThrow());
-    }
-
-    private static void writeFrame(Path path, MenuArgbFrame frame) throws IOException {
-        BufferedImage image = new BufferedImage(frame.width(), frame.height(),
-                BufferedImage.TYPE_INT_ARGB);
-        image.setRGB(0, 0, frame.width(), frame.height(), frame.copyPixels(), 0, frame.width());
-        // Keep visual-review artifacts coherent for viewers that inspect the directory while the
-        // route loop is still running. Directly replacing a PNG can expose a partially written
-        // non-focus frame, making it look as though the first composition lost glyphs.
-        Path temporary = Files.createTempFile(path.getParent(),
-                path.getFileName().toString() + ".", ".tmp");
-        ImageIO.write(image, "png", temporary.toFile());
-        try {
-            try {
-                Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE,
-                        StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary, path, StandardCopyOption.REPLACE_EXISTING);
-            }
-        } finally {
-            Files.deleteIfExists(temporary);
-        }
-    }
-
-    private static MenuPresentation defaultPresentation(MenuRoute route) {
-        if (route == MenuRoute.RECENT_GAMES) {
-            return recentGamesPresentation("recent:0");
-        }
-        MenuController controller = new MenuController(listener());
+    private static MenuPresentation presentation(MenuRoute route, String title, String subtitle,
+            List<String> sideLines, List<MenuPageSpec.Item> items, String focus,
+            MenuPreview preview) {
+        MenuPageSpec spec = new MenuPageSpec(route, title, "", "", subtitle, sideLines, items, 1,
+                FOOTER, focus, preview);
+        MenuController controller = controller(spec);
         controller.show(route);
         return controller.presentation();
     }
 
-    private static MenuPresentation recentGamesPresentation(String focusedId) {
-        return recentGamesPresentation(focusedId, "2026-08-17 20:13", "2026-08-16 09:42");
-    }
-
-    private static MenuPresentation recentGamesPresentation(String focusedId,
-            String firstLastPlayed, String secondLastPlayed) {
-        return presentation(MenuPageSpec.recentGames(List.of(
-                new MenuPageSpec.RecentGame("recent:0", "ADVENTURE BOY.GB",
-                        firstLastPlayed, true, MenuPreview.empty()),
-                new MenuPageSpec.RecentGame("recent:7", "POCKET CAMERA.GBC",
-                        secondLastPlayed, true, MenuPreview.empty())), focusedId));
-    }
-
-    private static MenuPresentation controlsPresentation(List<MenuPageSpec.Item> items,
-            String preferredFocusId) {
-        MenuPresentation source = defaultPresentation(MenuRoute.TOUCH_CONTROLS);
-        return presentation(new MenuPageSpec(MenuRoute.TOUCH_CONTROLS, source.title(),
-                source.context(), source.headerAction(), source.sideHeading(), source.sideLines(),
-                items, 1, source.footerHints(), preferredFocusId, source.preview()));
-    }
-
-    private static String focusTarget(MenuRoute route) {
-        return switch (route) {
-            case PAUSE_CONSOLE -> "save-state";
-            case SAVE_STATES -> "slot-1";
-            case RECENT_GAMES -> "recent:7";
-            case SETTINGS -> "audio";
-            case AUDIO -> "mute-audio";
-            case DISPLAY -> "dmg-colors";
-            case TOUCH_CONTROLS -> "controller-mapping";
-            case CONTROLLER_MAPPING -> "map-b";
-            case OPTIONAL_DEVICES -> "gamepad";
-            case OPTION_PICKER -> "choice:default";
-            case DATA_MEDIA -> "export-battery";
-            case LIBRARY -> "open-rom";
-            case CHOOSE_ROM -> "rom-2";
-            case SYSTEM -> "cgb-games";
-            case ABOUT -> "network";
-            case CONFIRM_ACTION -> "confirm";
-            case PRINTER_PAPER -> "clear-paper";
-        };
-    }
-
-    private static String firstRowFocusId(MenuRoute route) {
-        return switch (route) {
-            case PAUSE_CONSOLE -> "resume";
-            case SAVE_STATES -> "slot-0";
-            case RECENT_GAMES -> "recent:0";
-            case SETTINGS -> "system";
-            case AUDIO -> "mute-audio";
-            case DISPLAY -> "sgb-border";
-            case TOUCH_CONTROLS -> "haptics";
-            case CONTROLLER_MAPPING -> "map-a";
-            case OPTIONAL_DEVICES -> "camera";
-            case OPTION_PICKER -> "choice:default";
-            case DATA_MEDIA -> "import-battery";
-            case LIBRARY -> "recent-games";
-            case CHOOSE_ROM -> "rom-1";
-            case SYSTEM -> "dmg-games";
-            case ABOUT -> "privacy-notices";
-            case CONFIRM_ACTION, PRINTER_PAPER ->
-                    throw new AssertionError("route does not have visible rows: " + route);
-        };
-    }
-
-    private static MenuPresentation.Item itemById(MenuPresentation presentation, String id) {
-        for (MenuPresentation.Item item : presentation.items()) {
-            if (id.equals(item.id())) {
-                return item;
-            }
-        }
-        return null;
-    }
-
-    /** Mirrors the compositor's private row label reservation so icons and details stay excluded. */
-    private static boolean supportsRowDetails(MenuRoute route) {
-        return switch (route) {
-            case SAVE_STATES, AUDIO, TOUCH_CONTROLS, CONTROLLER_MAPPING,
-                    OPTIONAL_DEVICES, SYSTEM -> true;
-            default -> false;
-        };
-    }
-
-    private static MenuPresentation presentation(MenuPageSpec spec) {
-        final MenuPresentation[] result = new MenuPresentation[1];
-        MenuController controller = new MenuController(new MenuController.Listener() {
-            @Override
-            public void onPresentation(MenuPresentation presentation) {
-                result[0] = presentation;
-            }
-
-            @Override
-            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
-            }
-
-            @Override
-            public void onHeaderSelected(MenuRoute route) {
-            }
-        });
+    private static MenuController controller(MenuPageSpec spec) {
+        MenuController controller = new MenuController(new NoopListener());
         controller.setPage(spec);
-        controller.show(spec.route());
-        result[0] = controller.presentation();
-        return result[0];
+        return controller;
     }
 
-    private static MenuPresentation withFocus(MenuPresentation source, String preferredFocusId) {
-        return presentation(spec(source, preferredFocusId, source.preview(), source.items()));
+    private static MenuPreview preview() {
+        return MenuPreview.ready(2, 2,
+                new int[]{0xff18251a, 0xffd2ceaa, 0xff6b775d, 0xff24382a});
     }
 
-    private static MenuPresentation withPreview(MenuPresentation source, MenuPreview preview) {
-        String focus = source.items().get(source.focusedIndex()).id();
-        return presentation(spec(source, focus, preview, source.items()));
+    private static int[] pixels(Proposal3MenuCompositor compositor,
+            MenuPresentation presentation) {
+        return compositor.compose(presentation).orElseThrow().copyPixels();
     }
 
-    private static MenuPresentation audioPresentation(int progress) {
-        return audioPresentation(progress, false);
+    private static MenuRect arrowRegion(int rowIndex) {
+        MenuRect row = MenuScreenTemplate.optionRow(rowIndex);
+        return new MenuRect(row.x() + row.width() / 2 - 32, row.y() + 14, 64,
+                row.height() - 28);
     }
 
-    private static MenuPresentation audioPresentation(int progress, boolean muted) {
-        MenuPresentation source = defaultPresentation(MenuRoute.AUDIO);
-        ArrayList<MenuPresentation.Item> items = new ArrayList<>(source.items());
-        MenuPresentation.Item volume = items.get(0);
-        items.set(0, new MenuPresentation.Item(volume.id(), volume.label(), progress + "%",
-                volume.enabled(), volume.secondaryId(), true, progress));
-        MenuPresentation.Item mute = items.get(1);
-        items.set(1, new MenuPresentation.Item(mute.id(), mute.label(), muted ? "ON" : "OFF",
-                mute.enabled(), mute.secondaryId(), mute.adjustable(), mute.progress()));
-        return presentation(spec(source, "mute-audio", source.preview(), items));
-    }
-
-    private static MenuPageSpec spec(MenuPresentation source, String preferredFocusId,
-            MenuPreview preview, List<MenuPresentation.Item> sourceItems) {
-        ArrayList<MenuPageSpec.Item> items = new ArrayList<>(sourceItems.size());
-        for (MenuPresentation.Item item : sourceItems) {
-            items.add(new MenuPageSpec.Item(item.id(), item.label(), item.detail(), item.enabled(),
-                    item.secondaryId(), item.adjustable(), item.progress()));
+    private static int differences(int[] left, int[] right, MenuRect bounds) {
+        int count = 0;
+        for (int y = bounds.y(); y < bounds.bottom(); y++) {
+            for (int x = bounds.x(); x < bounds.right(); x++) {
+                if (left[y * WIDTH + x] != right[y * WIDTH + x]) {
+                    count++;
+                }
+            }
         }
-        return new MenuPageSpec(source.route(), source.title(), source.context(),
-                source.headerAction(), source.sideHeading(), source.sideLines(), items,
-                source.columns(), source.footerHints(), preferredFocusId, preview);
+        return count;
     }
 
-    private static MenuPageSpec.Item item(String id, String label, boolean enabled) {
-        return new MenuPageSpec.Item(id, label, "", enabled);
+    private static void assertArrowPoints(int[] pixels, int rowIndex, boolean up) {
+        MenuRect row = MenuScreenTemplate.optionRow(rowIndex);
+        int centerX = row.x() + row.width() / 2;
+        int centerY = row.y() + row.height() / 2;
+        int tipY = centerY + (up ? -8 : 8);
+        int baseY = centerY + (up ? 8 : -8);
+        assertEquals(MenuRaster.PAPER_TEXT, pixels[tipY * WIDTH + centerX]);
+        assertEquals(MenuRaster.PAPER_TEXT, pixels[baseY * WIDTH + centerX - 8]);
+        assertNotEquals(MenuRaster.PAPER_TEXT, pixels[tipY * WIDTH + centerX - 8]);
     }
 
-    private static List<MenuPageSpec.Item> copyItems(List<MenuPresentation.Item> source) {
-        ArrayList<MenuPageSpec.Item> result = new ArrayList<>(source.size());
-        for (MenuPresentation.Item item : source) {
-            result.add(new MenuPageSpec.Item(item.id(), item.label(), item.detail(), item.enabled(),
-                    item.secondaryId(), item.adjustable(), item.progress()));
+    private static void assertPixelsEqualOutside(int[] expected, int[] actual,
+            List<MenuRect> masks) {
+        assertEquals(WIDTH * HEIGHT, expected.length);
+        assertEquals(WIDTH * HEIGHT, actual.length);
+        for (int y = 0; y < HEIGHT; y++) {
+            for (int x = 0; x < WIDTH; x++) {
+                if (!insideAny(masks, x, y)) {
+                    assertEquals("shared base changed at " + x + "," + y,
+                            expected[y * WIDTH + x], actual[y * WIDTH + x]);
+                }
+            }
         }
-        return result;
     }
 
-    private static MenuController.Listener listener() {
-        return new MenuController.Listener() {
-            @Override
-            public void onPresentation(MenuPresentation presentation) {
-            }
-
-            @Override
-            public void onItemSelected(MenuRoute route, String id, boolean secondary) {
-            }
-
-            @Override
-            public void onHeaderSelected(MenuRoute route) {
-            }
-        };
-    }
-
-    private static boolean inside(List<MenuRect> masks, int x, int y) {
+    private static boolean insideAny(List<MenuRect> masks, int x, int y) {
         for (MenuRect mask : masks) {
             if (mask.contains(x, y)) {
                 return true;
@@ -1529,287 +250,17 @@ public class Proposal3MenuCompositorTest {
         return false;
     }
 
-    private static boolean differentInside(int[] before, int[] after, MenuRect region) {
-        for (int y = region.y(); y < region.bottom(); y++) {
-            for (int x = region.x(); x < region.right(); x++) {
-                if (before[y * 924 + x] != after[y * 924 + x]) {
-                    return true;
-                }
-            }
+    private static final class NoopListener implements MenuController.Listener {
+        @Override
+        public void onPresentation(MenuPresentation presentation) {
         }
-        return false;
-    }
 
-    private static int pixel(int[] pixels, int x, int y) {
-        return pixels[y * 924 + x];
-    }
-
-    private static void assertSevenEqualRows(MenuRoute route) {
-        Proposal3OverlayCatalog.RouteLayout layout = Proposal3OverlayCatalog.layout(route);
-        assertTrue(route + " must scroll after seven visible items", layout.scrollable());
-        assertEquals(route + " row count", 7, layout.rows().size());
-        int height = layout.rows().get(0).bounds().height();
-        for (Proposal3OverlayCatalog.Slot row : layout.rows()) {
-            assertEquals(route + " row height", height, row.bounds().height());
+        @Override
+        public void onItemSelected(MenuRoute route, String id, boolean secondary) {
         }
-    }
 
-    private static MenuRect chevronBounds(MenuRect row) {
-        return new MenuRect(row.x() + row.width() / 2 - 16,
-                row.y() + row.height() / 2 - 8, 32, 16);
-    }
-
-    private static int selectedPixels(int[] pixels, MenuRect bounds) {
-        return countPixels(pixels, bounds, pixel -> {
-            int red = pixel >>> 16 & 0xff;
-            int green = pixel >>> 8 & 0xff;
-            int blue = pixel & 0xff;
-            return red >= green + 18 && red >= blue + 18;
-        });
-    }
-
-    private static int lightPixels(int[] pixels, MenuRect bounds) {
-        return countPixels(pixels, bounds, pixel -> {
-            int red = pixel >>> 16 & 0xff;
-            int green = pixel >>> 8 & 0xff;
-            int blue = pixel & 0xff;
-            return red >= 210 && green >= 195 && blue >= 145;
-        });
-    }
-
-    private static int inkPixels(int[] pixels, MenuRect bounds) {
-        return countPixels(pixels, bounds, pixel -> {
-            int red = pixel >>> 16 & 0xff;
-            int green = pixel >>> 8 & 0xff;
-            int blue = pixel & 0xff;
-            return (red + green + blue) / 3 < 45;
-        });
-    }
-
-    private static boolean paperish(int value) {
-        int red = value >>> 16 & 0xff;
-        int green = value >>> 8 & 0xff;
-        int blue = value & 0xff;
-        return red + green + blue > 450;
-    }
-
-    private static int countPixels(int[] pixels, MenuRect bounds, PixelPredicate predicate) {
-        int result = 0;
-        for (int y = bounds.y(); y < bounds.bottom(); y++) {
-            for (int x = bounds.x(); x < bounds.right(); x++) {
-                if (predicate.test(pixel(pixels, x, y))) {
-                    result++;
-                }
-            }
+        @Override
+        public void onHeaderSelected(MenuRoute route) {
         }
-        return result;
-    }
-
-    private static int countColorInColumn(int[] pixels, int x, int color) {
-        int result = 0;
-        for (int y = 0; y < MenuRaster.HEIGHT; y++) {
-            if (pixel(pixels, x, y) == color) {
-                result++;
-            }
-        }
-        return result;
-    }
-
-    private static int differenceCount(int[] before, int[] after, MenuRect bounds) {
-        int result = 0;
-        for (int y = bounds.y(); y < bounds.bottom(); y++) {
-            for (int x = bounds.x(); x < bounds.right(); x++) {
-                if (pixel(before, x, y) != pixel(after, x, y)) {
-                    result++;
-                }
-            }
-        }
-        return result;
-    }
-
-    private static void assertNoDifferenceOutside(int[] before, int[] after,
-            List<MenuRect> masks) {
-        for (int index = 0; index < before.length; index++) {
-            if (before[index] == after[index]) {
-                continue;
-            }
-            int x = index % 924;
-            int y = index / 924;
-            assertTrue("changed pixel outside stage-one masks: " + x + "," + y,
-                    inside(masks, x, y));
-        }
-    }
-
-    private static int[] rowBackground(MenuRoute route, Proposal3OverlayCatalog.Slot slot,
-            boolean selected, Proposal3WidgetSkins skins) throws Exception {
-        int[] background = Proposal3TemplateFrameCatalog.decode(route).copyPixels();
-        Proposal3OverlayCatalog.Surface surface = selected
-                ? Proposal3OverlayCatalog.Surface.DARK : slot.surface();
-        Proposal3WidgetSkins.Surface skin = selected ? Proposal3WidgetSkins.Surface.SELECTED
-                : surface == Proposal3OverlayCatalog.Surface.DARK
-                ? Proposal3WidgetSkins.Surface.DARK : Proposal3WidgetSkins.Surface.PAPER;
-        MenuRect target = route == MenuRoute.PAUSE_CONSOLE ? slot.bounds()
-                : expand(slot.bounds(), 2);
-        new MenuRaster(background).paintWidget(skins.surface(skin), target);
-        if (route == MenuRoute.PAUSE_CONSOLE) {
-            for (MenuRect divider : Proposal3OverlayCatalog.PAUSE_DIVIDERS) {
-                new MenuRaster(background).fill(divider, MenuRaster.PAPER);
-            }
-        }
-        return background;
-    }
-
-    private static MenuRect expand(MenuRect bounds, int amount) {
-        return new MenuRect(Math.max(0, bounds.x() - amount),
-                Math.max(0, bounds.y() - amount),
-                Math.min(924, bounds.right() + amount) - Math.max(0, bounds.x() - amount),
-                Math.min(736, bounds.bottom() + amount) - Math.max(0, bounds.y() - amount));
-    }
-
-    private static boolean[] glyphMask(int[] pixels, int[] background, MenuRect bounds) {
-        boolean[] result = new boolean[bounds.width() * bounds.height()];
-        for (int y = 0; y < bounds.height(); y++) {
-            for (int x = 0; x < bounds.width(); x++) {
-                int index = (bounds.y() + y) * 924 + bounds.x() + x;
-                result[y * bounds.width() + x] = pixels[index] != background[index];
-            }
-        }
-        return result;
-    }
-
-    private static boolean hasGlyph(boolean[] mask) {
-        for (boolean pixel : mask) {
-            if (pixel) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean glyphInkFits(Proposal3GlyphAtlas atlas,
-            Proposal3GlyphAtlas.Role role, String value, int width) {
-        int cursor = 0;
-        int right = 0;
-        for (int index = 0; index < value.length(); index++) {
-            int glyph = atlas.index(value.charAt(index));
-            for (int y = 0; y < atlas.cellHeight(role); y++) {
-                for (int x = 0; x < atlas.cellWidth(role); x++) {
-                    if ((atlas.pixel(role, glyph, x, y) >>> 24) != 0) {
-                        right = Math.max(right, cursor + x + 1);
-                    }
-                }
-            }
-            cursor += atlas.advance(role, value.charAt(index));
-        }
-        return right <= width;
-    }
-
-    private static boolean glyphInkHeightFits(Proposal3GlyphAtlas atlas,
-            Proposal3GlyphAtlas.Role role, String value, int height) {
-        int top = Integer.MAX_VALUE;
-        int bottom = -1;
-        for (int index = 0; index < value.length(); index++) {
-            int glyph = atlas.index(value.charAt(index));
-            for (int y = 0; y < atlas.cellHeight(role); y++) {
-                for (int x = 0; x < atlas.cellWidth(role); x++) {
-                    if ((atlas.pixel(role, glyph, x, y) >>> 24) != 0) {
-                        top = Math.min(top, y);
-                        bottom = Math.max(bottom, y);
-                    }
-                }
-            }
-        }
-        return bottom < height && top >= 0;
-    }
-
-    private static int[] glyphBounds(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role,
-            char value) {
-        int glyph = atlas.index(value);
-        int left = Integer.MAX_VALUE;
-        int top = Integer.MAX_VALUE;
-        int right = -1;
-        int bottom = -1;
-        for (int y = 0; y < atlas.cellHeight(role); y++) {
-            for (int x = 0; x < atlas.cellWidth(role); x++) {
-                if ((atlas.pixel(role, glyph, x, y) >>> 24) == 0) {
-                    continue;
-                }
-                left = Math.min(left, x);
-                top = Math.min(top, y);
-                right = Math.max(right, x);
-                bottom = Math.max(bottom, y);
-            }
-        }
-        return new int[]{left, top, right, bottom};
-    }
-
-    private static int[] inkBounds(int[] pixels, MenuRect bounds) {
-        int left = Integer.MAX_VALUE;
-        int top = Integer.MAX_VALUE;
-        int right = -1;
-        int bottom = -1;
-        for (int y = bounds.y(); y < bounds.bottom(); y++) {
-            for (int x = bounds.x(); x < bounds.right(); x++) {
-                int value = pixel(pixels, x, y);
-                int red = value >>> 16 & 0xff;
-                int green = value >>> 8 & 0xff;
-                int blue = value & 0xff;
-                if ((red + green + blue) / 3 >= 45) {
-                    continue;
-                }
-                left = Math.min(left, x);
-                top = Math.min(top, y);
-                right = Math.max(right, x);
-                bottom = Math.max(bottom, y);
-            }
-        }
-        assertTrue("expected ink in " + bounds, right >= left && bottom >= top);
-        return new int[]{left, top, right, bottom};
-    }
-
-    /** Returns the first actual lit glyph row, i.e. the rendered baseline anchor, not a constant. */
-    private static int glyphTop(boolean[] mask, int width) {
-        for (int y = 0; y < mask.length / width; y++) {
-            for (int x = 0; x < width; x++) {
-                if (mask[y * width + x]) {
-                    return y;
-                }
-            }
-        }
-        return -1;
-    }
-
-    private static void assertAtlas(String path, int width, int height, String expectedHash)
-            throws Exception {
-        byte[] bytes;
-        try (java.io.InputStream input = Proposal3MenuCompositorTest.class.getResourceAsStream(path)) {
-            assertNotNull(path, input);
-            bytes = input.readAllBytes();
-        }
-        assertEquals(expectedHash, hex(MessageDigest.getInstance("SHA-256").digest(bytes)));
-        MenuArgbFrame decoded = PngArgbDecoder.decode(new java.io.ByteArrayInputStream(bytes));
-        assertEquals(width, decoded.width());
-        assertEquals(height, decoded.height());
-    }
-
-    private static String hex(byte[] bytes) {
-        StringBuilder result = new StringBuilder(bytes.length * 2);
-        for (byte value : bytes) {
-            result.append(String.format("%02x", value & 0xff));
-        }
-        return result.toString();
-    }
-
-    private static void assertPortable(String signature) {
-        assertFalse(signature, signature.contains("android."));
-        assertFalse(signature, signature.contains("java.awt."));
-        assertFalse(signature, signature.contains("javax.imageio."));
-        assertFalse(signature, signature.contains("javafx."));
-        assertFalse(signature, signature.contains("org."));
-    }
-
-    @FunctionalInterface
-    private interface PixelPredicate {
-        boolean test(int pixel);
     }
 }

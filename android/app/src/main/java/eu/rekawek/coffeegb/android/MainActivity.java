@@ -2264,13 +2264,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 List.of("PLAY TIME", elapsed,
                         battery ? "BATTERY SAVE ACTIVE" : "NO BATTERY SAVE"),
                 List.of(
-                        item("resume", "RESUME", "", true),
-                        item("save-state", "SAVE STATE", "", runtime != null),
-                        item("load-state", "LOAD STATE", "", runtime != null),
-                        item("open-rom", "OPEN ROM", "", runtime != null),
-                        item("reset", "RESET GAME", "CONFIRM", runtime != null),
-                        item("settings", "SETTINGS", "OPEN", true),
-                        item("recent-games", "RECENT GAMES", "OPEN", runtime != null)),
+                        button("resume", "RESUME", "", true),
+                        button("save-state", "SAVE STATE", "", runtime != null),
+                        button("load-state", "LOAD STATE", "", runtime != null),
+                        button("open-rom", "OPEN ROM", "", runtime != null),
+                        button("reset", "RESET GAME", "CONFIRM", runtime != null),
+                        button("settings", "SETTINGS", "OPEN", true),
+                        button("recent-games", "RECENT GAMES", "OPEN", runtime != null)),
                 1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), null, preview);
     }
 
@@ -2342,9 +2342,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             // Every stable slot remains focusable in both modes. LOAD treats an empty or
             // unavailable slot as a no-op; SAVE overwrites directly without confirmation.
             boolean used = catalogContainsLoadableSlot(catalog, index);
-            // The compositor uses this semantic marker to distinguish a persisted state from an
-            // empty but still focusable slot. It is intentionally not exposed as row copy.
-            items.add(new MenuPageSpec.Item("slot:" + index, "SLOT " + index,
+            // The reusable button detail distinguishes a persisted state from an empty but still
+            // focusable slot without requiring a save-state-specific asset.
+            items.add(MenuPageSpec.Item.button("slot:" + index, "SLOT " + index,
                     used ? "USED" : "", true));
         }
         return List.copyOf(items);
@@ -2383,12 +2383,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private MenuPageSpec chooseRomPage() {
         ArrayList<MenuPageSpec.Item> items = new ArrayList<>();
         for (RuntimeState.Selection selection : observedState.selections()) {
-            items.add(item("archive:" + selection.token(), selection.label(), "A OPEN", true));
+            items.add(button("archive:" + selection.token(), selection.label(), "A OPEN", true));
         }
         if (items.isEmpty()) {
-            items.add(item("empty", "NO ROM CANDIDATES", "CANCEL", false));
+            items.add(button("empty", "NO ROM CANDIDATES", "CANCEL", false));
         }
-        items.add(item("cancel", "BACK TO LIBRARY", "CANCEL", true));
+        items.add(button("cancel", "BACK TO LIBRARY", "CANCEL", true));
         return page(MenuRoute.CHOOSE_ROM, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
                 List.of("SELECT ONE TO OPEN", "A OPENS ROM", "B CANCELS PENDING ZIP"), items,
                 List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
@@ -2413,27 +2413,21 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         ConfirmVariant variant = confirmVariant == null ? ConfirmVariant.RESET : confirmVariant;
         return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", variant.label,
                 List.of(variant.description),
-                List.of(item("cancel", "CANCEL", "RETURN", true),
-                        item("confirm", "CONFIRM", variant.label, true)),
-                2, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
+                List.of(button("cancel", "CANCEL", "RETURN", true),
+                        button("confirm", "CONFIRM", variant.label, true)),
+                List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
     private static MenuPageSpec page(MenuRoute route, String title, String context,
             String headerAction, String sideHeading, List<String> sideLines,
             List<MenuPageSpec.Item> items, List<String> hints) {
-        return page(route, title, context, headerAction, sideHeading, sideLines, items, 1, hints);
-    }
-
-    private static MenuPageSpec page(MenuRoute route, String title, String context,
-            String headerAction, String sideHeading, List<String> sideLines,
-            List<MenuPageSpec.Item> items, int columns, List<String> hints) {
         return new MenuPageSpec(route, title, context, headerAction, sideHeading, sideLines,
-                items, columns, hints);
+                items, 1, hints);
     }
 
-    private static MenuPageSpec.Item item(String id, String label, String detail,
+    private static MenuPageSpec.Item button(String id, String label, String detail,
             boolean enabled) {
-        return new MenuPageSpec.Item(id, label, detail, enabled);
+        return MenuPageSpec.Item.button(id, label, detail, enabled);
     }
 
     private AndroidMenuModel.AudioDraft loadAudioDraft() {

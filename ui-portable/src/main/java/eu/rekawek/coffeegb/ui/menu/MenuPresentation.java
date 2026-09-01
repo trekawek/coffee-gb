@@ -41,7 +41,7 @@ public final class MenuPresentation {
         this.sideLines = immutableStrings(sideLines, "sideLines");
         this.items = immutableItems(items);
         this.focusedIndex = focusedIndex;
-        this.columns = Math.max(1, columns);
+        this.columns = 1;
         this.footerHints = immutableStrings(footerHints, "footerHints");
         this.preview = java.util.Objects.requireNonNull(preview, "preview");
         if (visible && route == null) {
@@ -144,7 +144,7 @@ public final class MenuPresentation {
         private final String detail;
         private final boolean enabled;
         private final String secondaryId;
-        private final boolean adjustable;
+        private final MenuWidgetType widgetType;
         private final int progress;
 
         public Item(String id, String label, String detail, boolean enabled) {
@@ -152,21 +152,32 @@ public final class MenuPresentation {
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId) {
-            this(id, label, detail, enabled, secondaryId, false, -1);
+            this(id, label, detail, enabled, secondaryId, MenuWidgetType.BUTTON, -1);
+        }
+
+        /**
+         * Legacy constructor retained for renderer and host source compatibility.
+         */
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                boolean adjustable, int progress) {
+            this(id, label, detail, enabled, secondaryId,
+                    adjustable ? MenuWidgetType.SLIDER : MenuWidgetType.BUTTON, progress);
         }
 
         public Item(String id, String label, String detail, boolean enabled, String secondaryId,
-                boolean adjustable, int progress) {
+                MenuWidgetType widgetType) {
+            this(id, label, detail, enabled, secondaryId, widgetType, -1);
+        }
+
+        public Item(String id, String label, String detail, boolean enabled, String secondaryId,
+                MenuWidgetType widgetType, int progress) {
             this.id = requireText(id, "id");
             this.label = requireText(label, "label");
             this.detail = requireText(detail, "detail");
             this.enabled = enabled;
             this.secondaryId = secondaryId == null ? null : requireText(secondaryId, "secondaryId");
-            this.adjustable = adjustable;
-            if (progress < -1 || progress > 100) {
-                throw new IllegalArgumentException("progress must be absent or between 0 and 100");
-            }
-            this.progress = progress;
+            this.widgetType = java.util.Objects.requireNonNull(widgetType, "widgetType");
+            this.progress = progress(progress);
         }
 
         public String id() {
@@ -189,12 +200,24 @@ public final class MenuPresentation {
             return secondaryId;
         }
 
+        public MenuWidgetType widgetType() {
+            return widgetType;
+        }
+
         public boolean adjustable() {
-            return adjustable;
+            return widgetType.adjustable();
         }
 
         public int progress() {
             return progress;
+        }
+
+        private static int progress(int value) {
+            if (value < -1 || value > 100) {
+                throw new IllegalArgumentException(
+                        "progress must be absent or between 0 and 100");
+            }
+            return value;
         }
     }
 }
