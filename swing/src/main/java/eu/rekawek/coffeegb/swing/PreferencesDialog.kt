@@ -937,6 +937,7 @@ internal class PreferencesPanel private constructor(
             systemEditor.dmgGamesProfile.selectedItem,
             systemEditor.cgbGamesProfile.selectedItem,
             systemEditor.bootstrapMode.selectedItem,
+            systemEditor.executionMode.selectedItem,
             peripheralsEditor.cameraDevice.selectedItem,
         ))
   }

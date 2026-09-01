@@ -412,6 +412,32 @@ class PreferencesDialogTest {
       }
 
   @Test
+  fun `execution mode alone marks Preferences dirty so it can be applied`() =
+      onEdt {
+        val dirtyStates = mutableListOf<Boolean>()
+        val panel =
+            PreferencesPanel(
+                ApplicationSettings(),
+                draftChanged = { dirtyStates += it },
+            )
+        val accuracy = panel.systemEditor.executionMode.selectedItem
+        val performance =
+            (0 until panel.systemEditor.executionMode.itemCount)
+                .map(panel.systemEditor.executionMode::getItemAt)
+                .single { it.mode == ExecutionMode.PERFORMANCE }
+
+        panel.systemEditor.executionMode.selectedItem = performance
+
+        assertTrue(panel.isDirty())
+        assertEquals(true, dirtyStates.last())
+        assertEquals(ExecutionMode.PERFORMANCE, panel.validatedEdit().advanced?.executionMode)
+
+        panel.systemEditor.executionMode.selectedItem = accuracy
+        assertFalse(panel.isDirty())
+        assertEquals(false, dirtyStates.last())
+      }
+
+  @Test
   fun `restore page defaults changes only the selected category draft`() =
       onEdt {
         val defaults = ApplicationSettings()

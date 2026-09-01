@@ -655,7 +655,8 @@ public class Proposal3MenuCompositorTest {
                         || route == MenuRoute.TOUCH_CONTROLS
                         || route == MenuRoute.CONTROLLER_MAPPING
                         || route == MenuRoute.OPTIONAL_DEVICES
-                        || route == MenuRoute.SYSTEM;
+                        || route == MenuRoute.SYSTEM
+                        || route == MenuRoute.DISPLAY;
                 MenuRect label = Proposal3MenuCompositor.rowLabelBoundsForAudit(route,
                         layout.rows().get(index).bounds(), detail, index);
                 assertTrue(route + " row label would ellipsize: " + item.label(),
@@ -664,8 +665,8 @@ public class Proposal3MenuCompositorTest {
                 if (detail && !item.detail().isEmpty()) {
                     MenuRect detailBounds = Proposal3MenuCompositor.rowDetailBoundsForAudit(route,
                             layout.rows().get(index).bounds());
-                    Proposal3GlyphAtlas.Role detailRole = route == MenuRoute.SYSTEM
-                            ? Proposal3GlyphAtlas.Role.SMALL : Proposal3GlyphAtlas.Role.MEDIUM;
+                    Proposal3GlyphAtlas.Role detailRole =
+                            Proposal3MenuCompositor.detailTextRole(route);
                     assertTrue(route + " row detail would ellipsize: " + item.detail(),
                             atlas.measure(detailRole, item.detail()) <= detailBounds.width());
                 }
@@ -682,6 +683,26 @@ public class Proposal3MenuCompositorTest {
                 }
             }
         }
+    }
+
+    @Test
+    public void settingsChoicesUseLegibleTypeAndDisplayCheckboxUsesLargeGeometry() {
+        for (MenuRoute route : List.of(MenuRoute.SYSTEM, MenuRoute.DISPLAY,
+                MenuRoute.OPTIONAL_DEVICES)) {
+            assertEquals(Proposal3GlyphAtlas.Role.NOTICE,
+                    Proposal3MenuCompositor.rowTextRole(route, 0));
+            assertEquals(Proposal3GlyphAtlas.Role.NOTICE,
+                    Proposal3MenuCompositor.choiceTextRole(route));
+        }
+
+        MenuRect displayRow = Proposal3OverlayCatalog.layout(MenuRoute.DISPLAY)
+                .rows().get(0).bounds();
+        MenuRect checkbox = Proposal3MenuCompositor.checkboxBoundsForAudit(
+                MenuRoute.DISPLAY, displayRow);
+        assertEquals(48, checkbox.width());
+        assertEquals(48, checkbox.height());
+        assertEquals(displayRow.y() + (displayRow.height() - checkbox.height()) / 2,
+                checkbox.y());
     }
 
     @Test

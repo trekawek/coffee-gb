@@ -90,6 +90,7 @@ internal object PortableMenuSettingId {
   const val DMG_GAMES = "dmg-games"
   const val CGB_GAMES = "cgb-games"
   const val BOOTSTRAP = "bootstrap"
+  const val EXECUTION_MODE = "execution-mode"
   const val SGB_BORDER = "sgb-border"
   const val DMG_COLORS = "dmg-colors"
   const val CAMERA = "camera"
@@ -141,6 +142,7 @@ internal data class PortableMenuSettingsSnapshot(
             PortableMenuSettingId.DMG_GAMES,
             PortableMenuSettingId.CGB_GAMES,
             PortableMenuSettingId.BOOTSTRAP,
+            PortableMenuSettingId.EXECUTION_MODE,
             PortableMenuSettingId.SGB_BORDER,
             PortableMenuSettingId.DMG_COLORS,
             PortableMenuSettingId.CAMERA,
