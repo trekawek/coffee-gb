@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuWidgetType;
 import android.view.InputDevice;
 import org.junit.Test;
 
@@ -24,6 +25,7 @@ public class SettingsSelectionTest {
                 system
                         .items().stream().map(MenuPageSpec.Item::id).toList());
         assertEquals("PERFORMANCE", system.items().get(3).detail());
+        assertEquals("MODE", system.items().get(3).label());
         assertEquals(List.of("sgb-border", "dmg-colors"),
                 AndroidMenuModel.displayPage(false, false).items().stream()
                         .map(MenuPageSpec.Item::id).toList());
@@ -48,7 +50,11 @@ public class SettingsSelectionTest {
         assertEquals(List.of("choice:auto", "choice:dmg"),
                 page.items().stream().map(MenuPageSpec.Item::id).toList());
         assertEquals("", page.items().get(0).detail());
-        assertEquals("SELECTED", page.items().get(1).detail());
+        assertEquals("", page.items().get(1).detail());
+        assertFalse(page.items().get(0).checked());
+        assertTrue(page.items().get(1).checked());
+        assertEquals(List.of(MenuWidgetType.CHECKBOX, MenuWidgetType.CHECKBOX),
+                page.items().stream().map(MenuPageSpec.Item::widgetType).toList());
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), page.footerHints());
     }
 

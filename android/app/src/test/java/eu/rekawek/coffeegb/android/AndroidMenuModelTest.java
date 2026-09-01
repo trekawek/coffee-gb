@@ -120,7 +120,7 @@ public class AndroidMenuModelTest {
                 MenuWidgetType.CHECKBOX, MenuWidgetType.BUTTON);
         assertWidgetTypes(AndroidMenuModel.optionPickerPage("CHOOSE", List.of(
                         new AndroidMenuModel.ChoiceValue("one", "ONE")), "one"),
-                MenuWidgetType.BUTTON);
+                MenuWidgetType.CHECKBOX);
     }
 
     @Test

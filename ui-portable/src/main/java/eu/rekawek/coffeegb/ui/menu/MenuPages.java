@@ -67,7 +67,7 @@ final class MenuPages {
                             dropdown("gamepad", "GAMEPAD", "AUTO"),
                             checkbox("gps", "GPS", false)));
             case OPTION_PICKER -> page(route, "COFFEE GB", "OPTION PICKER", "", "", List.of(),
-                    items(button("choice:default", "DEFAULT", "SELECTED")));
+                    items(checkbox("choice:default", "DEFAULT", true)));
             case PRINTER_PAPER -> new MenuPage(route, "COFFEE GB", "PRINTER PAPER", "",
                     "GAME BOY PRINTER", List.of("PAPER READY", "1 PAGE", ""), items(
                             button("clear-paper", "CLEAR PAPER"),
@@ -97,7 +97,7 @@ final class MenuPages {
                     items(dropdown("dmg-games", "DMG GAMES", "AUTO"),
                             dropdown("cgb-games", "CGB GAMES", "AUTO"),
                             dropdown("bootstrap", "BOOTSTRAP", "SKIP"),
-                            dropdown("execution-mode", "EXEC MODE", "PERFORMANCE")));
+                            dropdown("execution-mode", "MODE", "PERFORMANCE")));
             case ABOUT -> page(route, "COFFEE GB", "ABOUT", "", "COFFEE GB",
                     List.of("MIT LICENSE", "OPEN SOURCE"),
                     items(

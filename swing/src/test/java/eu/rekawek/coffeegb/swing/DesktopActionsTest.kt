@@ -175,6 +175,25 @@ class DesktopActionsTest {
   }
 
   @Test
+  fun `portable ROM chooser reports cancellation without changing the native action`() {
+    val calls = mutableListOf<String>()
+    val registry =
+        DesktopActionRegistry(
+            handlers(calls).copy(
+                openRomFromPortableMenu = {
+                  calls += "portable-open"
+                  false
+                },
+            ),
+        )
+
+    assertFalse(registry.openRomFromMenu())
+    registry[DesktopCommand.OPEN_ROM].actionPerformed(event())
+
+    assertEquals(listOf("portable-open", "open"), calls)
+  }
+
+  @Test
   fun `gameplay bindings withdraw only matching unmodified application shortcuts`() {
     val shortcuts =
         DesktopShortcutRegistry(

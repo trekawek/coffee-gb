@@ -83,6 +83,11 @@ internal data class DesktopCommandHandlers(
     val setAudioVolume: ((Int) -> Unit)? = null,
     /** Typed in-screen settings port. Null keeps older/test hosts Audio-only compatible. */
     val portableSettings: PortableMenuSettingsAccess? = null,
+    /**
+     * Native chooser entry used specifically by the portable menu. The result is true only when
+     * the user approved a file, allowing the overlay to return after a cancelled chooser.
+     */
+    val openRomFromPortableMenu: (() -> Boolean)? = null,
 )
 
 /** Stable in-screen settings identifiers shared by Swing's production bridge and route host. */
@@ -303,6 +308,15 @@ internal class DesktopActionRegistry(
           ActionEvent(this, ActionEvent.ACTION_PERFORMED, "portable-menu"),
       )
     }
+  }
+
+  override fun openRomFromMenu(): Boolean {
+    if (!isEnabled(DesktopCommand.OPEN_ROM)) return false
+    return handlers.openRomFromPortableMenu?.invoke()
+        ?: run {
+          invoke(DesktopCommand.OPEN_ROM)
+          true
+        }
   }
 
   override fun canOpenAbout(): Boolean = handlers.openAbout != null

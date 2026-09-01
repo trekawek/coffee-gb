@@ -30,6 +30,7 @@ public final class MenuController implements MenuTouchInput {
 
     private MenuState state = MenuReducer.initial();
     private boolean backIntercepted;
+    private boolean rootDismissAllowed = true;
 
     public MenuController(Listener listener) {
         this.listener = Objects.requireNonNull(listener, "listener");
@@ -141,10 +142,25 @@ public final class MenuController implements MenuTouchInput {
         }
     }
 
+    /**
+     * Controls whether Back may dismiss a one-page stack.
+     *
+     * <p>Child routes always pop normally. Hosts use this for an idle Library root when there is
+     * no gameplay surface to reveal underneath it.</p>
+     */
+    public void setRootDismissAllowed(boolean allowed) {
+        synchronized (lock) {
+            rootDismissAllowed = allowed;
+        }
+    }
+
     public void back() {
         MenuPresentation next;
         synchronized (lock) {
             if (!state.visible()) {
+                return;
+            }
+            if (state.stack().size() == 1 && !rootDismissAllowed) {
                 return;
             }
             state = MenuReducer.back(state);
@@ -347,6 +363,9 @@ public final class MenuController implements MenuTouchInput {
             case B -> {
                 if (backIntercepted) {
                     return new Transition(state.presentation(), Event.back(state.route()));
+                }
+                if (state.stack().size() == 1 && !rootDismissAllowed) {
+                    return new Transition(state.presentation(), null);
                 }
                 state = MenuReducer.back(state);
                 if (!state.visible()) {

@@ -172,6 +172,27 @@ public class MenuControllerTest {
     }
 
     @Test
+    public void lockedRootConsumesBackWhileChildRoutesStillPop() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setRootDismissAllowed(false);
+        controller.show(MenuRoute.LIBRARY);
+
+        assertTrue(controller.dispatchBackEdge());
+        assertTrue(controller.visible());
+        assertEquals(MenuRoute.LIBRARY, controller.route());
+
+        controller.push(MenuRoute.SETTINGS);
+        assertTrue(controller.dispatchBackEdge());
+        assertTrue(controller.visible());
+        assertEquals(MenuRoute.LIBRARY, controller.route());
+
+        controller.setRootDismissAllowed(true);
+        assertTrue(controller.dispatchBackEdge());
+        assertFalse(controller.visible());
+    }
+
+    @Test
     public void fullStackRestorePreservesEveryFocusAndUsesPreferredEnabledFallback() {
         Events events = new Events();
         MenuController controller = new MenuController(events);

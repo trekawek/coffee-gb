@@ -28,9 +28,48 @@ import java.util.Arrays;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 /** Covers the persisted-thumbnail handoff used by AndroidEmulationRuntime.listStateSlots. */
 public class AndroidStatePreviewCatalogTest {
+
+    @Test
+    public void reopenedRepositoryMarksExistingManagedStateAsSaved() throws Exception {
+        StateRef.Slot ref = new StateRef.Slot(StateRef.MAX_SLOT);
+        Path root = Files.createTempDirectory("android-state-restart");
+        StateStorageLayout layout = new StateStorageLayout(root);
+        EventBusImpl eventBus = new EventBusImpl();
+        Gameboy.GameboyConfiguration configuration = new Gameboy.GameboyConfiguration(
+                new Rom(testRom())).setGameboyType(GameboyType.DMG)
+                .setBootstrapMode(Gameboy.BootstrapMode.SKIP)
+                .setSupportBatterySave(false);
+        Gameboy gameboy = configuration.build();
+        try {
+            gameboy.init(eventBus, SerialEndpoint.NULL_ENDPOINT, null);
+            byte[] state = StateCodec.INSTANCE.encode(
+                    StateCodec.INSTANCE.capture(configuration, gameboy,
+                            new StateDiagnosticMetadata("android-test", "restart-catalog")),
+                    StateCompression.NONE);
+            new StateRepository(layout, AtomicFileWriter.system()).save(ref, state,
+                    new StateSaveMetadata("saved", Instant.parse("2026-09-01T12:00:00Z"),
+                            null, null));
+
+            // A fresh repository is the same boundary used after the emulator service starts.
+            StateCatalogEntry entry = new StateRepository(layout, AtomicFileWriter.system())
+                    .catalog((MachineIdentity) null).getEntries().stream()
+                    .filter(candidate -> candidate.getRef().equals(ref))
+                    .findFirst().orElseThrow();
+            AndroidStateSlot slot = AndroidStateSlot.from(ref.getIndex(), entry);
+
+            assertTrue(slot.loadable());
+            assertEquals("SAVED", MainActivity.stateMenuItems(java.util.List.of(slot))
+                    .get(ref.getIndex()).detail());
+        } finally {
+            gameboy.stop();
+            gameboy.close();
+            eventBus.close();
+        }
+    }
 
     @Test
     public void catalogPreviewReadsPersistedThumbnailAsDetachedArgbPixels() throws Exception {

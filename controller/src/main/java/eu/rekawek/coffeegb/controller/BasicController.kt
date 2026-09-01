@@ -2156,7 +2156,10 @@ class BasicController private constructor(
             StateOperation.CATALOG,
         ) ?: return
     latestStateRequests[StateOperation.CATALOG] = event.requestId
-    stateWorker.catalog(context, event.requestId)
+    val compatibilityManager = snapshotManager
+    stateWorker.catalog(context, event.requestId) { ref ->
+      compatibilityManager?.readSnapshotReadOnly(ref.index)
+    }
   }
 
   private fun requestStateSave(event: StateSaveRequestEvent) {
@@ -2482,6 +2485,7 @@ class BasicController private constructor(
                 event.requestId,
                 context.sessionId,
                 result.catalog,
+                result.compatibilitySlots,
             ))
       }
       is StateWorkerResult.Saved -> finishStateSave(event, result)

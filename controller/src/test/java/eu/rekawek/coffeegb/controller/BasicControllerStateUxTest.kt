@@ -1216,6 +1216,7 @@ class BasicControllerStateUxTest {
     val completed = LinkedBlockingQueue<StateOperationCompletedEvent>()
     val failed = LinkedBlockingQueue<StateOperationFailedEvent>()
     val availability = LinkedBlockingQueue<StateSlotLoadAvailabilityEvent>()
+    val catalogs = LinkedBlockingQueue<StateCatalogReadyEvent>()
     eventBus.register<EmulationStartedEvent>(started::add)
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<Controller.SnapshotSavedEvent>(legacySaved::add)
@@ -1223,6 +1224,7 @@ class BasicControllerStateUxTest {
     eventBus.register<StateOperationCompletedEvent>(completed::add)
     eventBus.register<StateOperationFailedEvent>(failed::add)
     eventBus.register<StateSlotLoadAvailabilityEvent>(availability::add)
+    eventBus.register<StateCatalogReadyEvent>(catalogs::add)
     val stateExecutor = ManualExecutorService()
     val controller =
         BasicController(
@@ -1271,8 +1273,21 @@ class BasicControllerStateUxTest {
       val legacyBytes = Files.readAllBytes(legacySidecar)
       assertFalse(Files.exists(managedState))
 
+      eventBus.post(StateCatalogRequestEvent(90, stateSession.sessionId))
+      stateExecutor.awaitQueued(1)
+      stateExecutor.runNext()
+      val compatibilityCatalog =
+          assertNotNull(catalogs.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(setOf(slot.index), compatibilityCatalog.compatibilitySlots)
+      assertTrue(
+          compatibilityCatalog.catalog.entries
+              .single { it.ref == slot }
+              .isEmpty,
+          "legacy sidecars stay outside the managed-state browser catalog",
+      )
+
       eventBus.post(
-          StateSlotLoadAvailabilityRequestEvent(90, stateSession.sessionId, slot))
+          StateSlotLoadAvailabilityRequestEvent(91, stateSession.sessionId, slot))
       stateExecutor.awaitQueued(1)
       stateExecutor.runNext()
       assertTrue(
@@ -1295,7 +1310,7 @@ class BasicControllerStateUxTest {
       Files.createDirectories(managedState.parent)
       Files.write(managedState, byteArrayOf(1, 2, 3, 4))
       eventBus.post(
-          StateSlotLoadAvailabilityRequestEvent(91, stateSession.sessionId, slot))
+          StateSlotLoadAvailabilityRequestEvent(92, stateSession.sessionId, slot))
       stateExecutor.awaitQueued(1)
       stateExecutor.runNext()
       assertFalse(
