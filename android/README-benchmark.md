@@ -14,8 +14,8 @@ cd ..
 
 The `benchmark` build type is signed with the machine-local Android debug key (no repository
 secret). Parent and candidate must use the same certificate and must be distinct final signed APK
-SHA-256 identities. The wrapper verifies the certificate and installs the selected APK; pass the
-resulting signed APK paths to the scheduler.
+SHA-256 identities. The wrapper verifies the certificate and installs the selected APK/profile
+pair; pass the resulting signed APK paths to the scheduler.
 
 The physical scheduler is the primary workflow. It pins exactly one configured Redmi device,
 checks its model/API/UID/signing state, force-stops and reinstalls the selected artifact for every
@@ -32,6 +32,11 @@ adjacent parent/candidate runs in 12 randomized seven-row blocks:
   --execution-mode accuracy \
   --output-dir /path/to/private-report-dir
 ```
+
+Keep each Gradle-generated install-time baseline profile beside its signed APK with the same
+stem (`parent-signed.dm` and `candidate-signed.dm`). The runner installs each APK/DM pair in one
+data-preserving transaction and rejects a run unless ART reports both `status=speed-profile` and
+`reason=install-dm`.
 
 `--execution-mode` accepts `accuracy` (the default) or `performance`. Run the matrix separately
 for each mode; the app emits the selected strategy as `execution_mode` in both `matrix_run` and

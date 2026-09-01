@@ -12,6 +12,7 @@ import eu.rekawek.coffeegb.core.memory.cart.Cartridge;
 import eu.rekawek.coffeegb.core.memory.cart.Rom;
 import eu.rekawek.coffeegb.core.memory.cart.battery.Battery;
 import eu.rekawek.coffeegb.core.memory.cart.type.Mbc5;
+import eu.rekawek.coffeegb.core.memory.cart.type.Mbc7;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -23,6 +24,83 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 
 public class PerformanceRomAccessTest {
+
+    @Test
+    public void plainMbc7LeaseSnapshotsBothWindowsAndIsReused() throws IOException {
+        Mbc7 mapper = plainMbc7();
+
+        PerformanceRomAccess lease = mapper.acquirePerformanceRomAccess();
+
+        assertNotNull(lease);
+        assertEquals(0x20, lease.readCpuByte(0x0000));
+        assertEquals(0x40, lease.readCpuByte(0x3fff));
+        assertEquals(0x21, lease.readCpuByte(0x4000));
+        assertEquals(0x41, lease.readCpuByte(0x7fff));
+        assertEquals(0x80, lease.readCpuByte(0x0100));
+        assertEquals(0x81, lease.readCpuByte(0x4100));
+        assertEquals(0x0100, lease.physicalOffset(0x0100));
+        assertEquals(0x4100, lease.physicalOffset(0x4100));
+        assertEquals(-1, lease.physicalOffset(0x8000));
+        assertEquals(-1, lease.readCpuByte(-1));
+        assertEquals(0xff, lease.readPhysicalByte(Integer.MAX_VALUE));
+
+        mapper.setByte(0x2000, 0x03);
+        assertEquals("borrowed mapping remains stable until reacquisition",
+                0x81, lease.readCpuByte(0x4100));
+
+        PerformanceRomAccess reacquired = mapper.acquirePerformanceRomAccess();
+        assertSame("plain MBC7 acquisition must not allocate", lease, reacquired);
+        assertEquals(0x83, reacquired.readCpuByte(0x4100));
+        assertEquals(0xc100, reacquired.physicalOffset(0x4100));
+    }
+
+    @Test
+    public void plainMbc7LeaseFailsClosedForDerivedMapperAndDebugHooks() throws IOException {
+        Mbc7 derivedMapper = new Mbc7(new Rom(mbc7Rom()), Battery.NULL_BATTERY) {
+        };
+        assertNull(derivedMapper.acquirePerformanceRomAccess());
+
+        Mbc7 debuggedMapper = plainMbc7();
+        debuggedMapper.setDebugHooks(new TestDebugHooks());
+        assertNull(debuggedMapper.acquirePerformanceRomAccess());
+    }
+
+    @Test
+    public void mbc7LeaseUsesNinthBankBitModuloAndOpenBusForPartialFinalBank()
+            throws IOException {
+        byte[] rom = new byte[0x9000];
+        rom[0x0000] = 0x50;
+        rom[0x8000] = 0x52;
+        rom[0x8fff] = 0x5f;
+        rom[0x0147] = 0x22;
+        rom[0x0148] = 0x00;
+        Mbc7 mapper = new Mbc7(new Rom(rom), Battery.NULL_BATTERY);
+
+        mapper.setByte(0x2000, 0x02);
+        PerformanceRomAccess partialBank = mapper.acquirePerformanceRomAccess();
+        assertEquals(0x52, partialBank.readCpuByte(0x4000));
+        assertEquals(0x5f, partialBank.readCpuByte(0x4fff));
+        assertEquals(0xff, partialBank.readCpuByte(0x5000));
+        assertEquals(0x9000, partialBank.physicalOffset(0x5000));
+
+        mapper.setByte(0x3000, 0x01);
+        PerformanceRomAccess ninthBitBank = mapper.acquirePerformanceRomAccess();
+        assertSame(partialBank, ninthBitBank);
+        assertEquals("0x102 wraps over the physical three-bank image to bank zero",
+                0x50, ninthBitBank.readCpuByte(0x4000));
+        assertEquals(0x0000, ninthBitBank.physicalOffset(0x4000));
+    }
+
+    @Test
+    public void productionCartridgeExposesPlainMbc7Lease() throws IOException {
+        Cartridge cartridge = new Cartridge(new Rom(mbc7Rom()), Battery.NULL_BATTERY);
+
+        PerformanceRomAccess lease = cartridge.acquirePerformanceRomAccess();
+
+        assertNotNull(lease);
+        assertEquals(0x20, lease.readCpuByte(0x0000));
+        assertEquals(0x21, lease.readCpuByte(0x4000));
+    }
 
     @Test
     public void plainMbc5LeaseSnapshotsBothWindowsAndIsReused() throws IOException {
@@ -158,14 +236,29 @@ public class PerformanceRomAccessTest {
         return new Mbc5(new Rom(mbc5Rom()), Battery.NULL_BATTERY);
     }
 
+    private static Mbc7 plainMbc7() throws IOException {
+        return new Mbc7(new Rom(mbc7Rom()), Battery.NULL_BATTERY);
+    }
+
+    private static byte[] mbc7Rom() {
+        byte[] rom = bankedRom();
+        rom[0x0147] = 0x22;
+        return rom;
+    }
+
     private static byte[] mbc5Rom() {
+        byte[] rom = bankedRom();
+        rom[0x0147] = 0x19;
+        return rom;
+    }
+
+    private static byte[] bankedRom() {
         byte[] rom = new byte[0x40000];
         for (int bank = 0; bank < 16; bank++) {
             rom[bank * 0x4000] = (byte) (0x20 + bank);
             rom[bank * 0x4000 + 0x3fff] = (byte) (0x40 + bank);
             rom[bank * 0x4000 + 0x0100] = (byte) (0x80 + bank);
         }
-        rom[0x0147] = 0x19;
         rom[0x0148] = 0x04;
         return rom;
     }

@@ -20,6 +20,7 @@ public record RuntimeState(
         boolean batterySaveActive,
         long sessionGeneration,
         long playTimeNanos,
+        boolean tiltOrientationLocked,
         long generation) {
 
     public RuntimeState {
@@ -36,6 +37,15 @@ public record RuntimeState(
         if (generation < 0) {
             throw new IllegalArgumentException("generation must not be negative");
         }
+    }
+
+    /** Compatibility constructor for callers predating session-scoped tilt presentation. */
+    public RuntimeState(Phase phase, String message, List<Selection> selections,
+            boolean transferReady, boolean paused, boolean flushPending, String romTitle,
+            boolean batterySaveActive, long sessionGeneration, long playTimeNanos,
+            long generation) {
+        this(phase, message, selections, transferReady, paused, flushPending,
+                romTitle, batterySaveActive, sessionGeneration, playTimeNanos, false, generation);
     }
 
     /** Compatibility constructor for callers that do not expose an active session. */

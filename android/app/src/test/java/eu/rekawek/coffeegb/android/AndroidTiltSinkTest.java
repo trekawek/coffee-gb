@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.android;
 
 import android.view.Surface;
+import android.hardware.SensorManager;
 import eu.rekawek.coffeegb.core.events.EventBusImpl;
 import eu.rekawek.coffeegb.core.memory.cart.type.AccelerometerEvent;
 import org.junit.Test;
@@ -25,13 +26,49 @@ public class AndroidTiltSinkTest {
         input.sample(5, 10);
         input.sample(7, 13);
         assertSample(samples.get(0), 0, 0);
-        assertSample(samples.get(1), 2, 3);
+        assertSample(samples.get(1),
+                2 / SensorManager.GRAVITY_EARTH,
+                3 / SensorManager.GRAVITY_EARTH);
 
         orientation.rotation = Surface.ROTATION_90;
         input.sample(7, 13);
         input.sample(8, 14);
         assertSample(samples.get(2), 0, 0);
-        assertSample(samples.get(3), -1, 1);
+        assertSample(samples.get(3),
+                -1 / SensorManager.GRAVITY_EARTH,
+                1 / SensorManager.GRAVITY_EARTH);
+
+        orientation.rotation = Surface.ROTATION_180;
+        input.sample(8, 14);
+        input.sample(9, 16);
+        assertSample(samples.get(4), 0, 0);
+        assertSample(samples.get(5),
+                -1 / SensorManager.GRAVITY_EARTH,
+                -2 / SensorManager.GRAVITY_EARTH);
+
+        orientation.rotation = Surface.ROTATION_270;
+        input.sample(9, 16);
+        input.sample(11, 19);
+        assertSample(samples.get(6), 0, 0);
+        assertSample(samples.get(7),
+                3 / SensorManager.GRAVITY_EARTH,
+                -2 / SensorManager.GRAVITY_EARTH);
+    }
+
+    @Test
+    public void convertsAndroidMetersPerSecondSquaredToGravityUnits() {
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        List<AccelerometerEvent> samples = new ArrayList<>();
+        events.register(samples::add, AccelerometerEvent.class);
+        FakeInput input = new FakeInput(true);
+        AndroidTiltSink sink = new AndroidTiltSink(events, input,
+                () -> Surface.ROTATION_0);
+
+        sink.setCartridgeActive(true);
+        input.sample(0, 0);
+        input.sample(SensorManager.GRAVITY_EARTH, -SensorManager.GRAVITY_EARTH);
+
+        assertSample(samples.get(1), 1, -1);
     }
 
     @Test
@@ -54,7 +91,9 @@ public class AndroidTiltSinkTest {
         assertEquals(1, input.stops);
         assertEquals(2, samples.size());
         assertSample(samples.get(0), 0, 0);
-        assertSample(samples.get(1), 5, 3);
+        assertSample(samples.get(1),
+                5 / SensorManager.GRAVITY_EARTH,
+                3 / SensorManager.GRAVITY_EARTH);
         sink.close();
         assertEquals(2, input.stops);
 
@@ -82,9 +121,13 @@ public class AndroidTiltSinkTest {
         input.sample(4, 7);
         input.sample(5, 9);
 
-        assertSample(samples.get(1), 2, 3);
+        assertSample(samples.get(1),
+                2 / SensorManager.GRAVITY_EARTH,
+                3 / SensorManager.GRAVITY_EARTH);
         assertSample(samples.get(2), 0, 0);
-        assertSample(samples.get(3), 1, 2);
+        assertSample(samples.get(3),
+                1 / SensorManager.GRAVITY_EARTH,
+                2 / SensorManager.GRAVITY_EARTH);
     }
 
     private static void assertSample(AccelerometerEvent sample, double x, double y) {

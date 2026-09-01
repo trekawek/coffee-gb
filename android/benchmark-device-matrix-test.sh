@@ -11,8 +11,12 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 parent=$tmp/parent.apk
 candidate=$tmp/candidate.apk
+parent_dm=$tmp/parent.dm
+candidate_dm=$tmp/candidate.dm
 printf 'parent-signed-by-test\n' >"$parent"
 printf 'candidate-signed-by-test\n' >"$candidate"
+printf 'parent-profile-for-test\n' >"$parent_dm"
+printf 'candidate-profile-for-test\n' >"$candidate_dm"
 
 parent_hash=1111111111111111111111111111111111111111111111111111111111111111
 candidate_hash=2222222222222222222222222222222222222222222222222222222222222222
@@ -77,7 +81,14 @@ fi
 shift 2
 command=${1:-}
 if [ "$command" = get-state ]; then echo device; exit 0; fi
-if [ "$command" = install ]; then echo Success; exit 0; fi
+if [ "$command" = install-multiple ]; then
+  [ "$#" -eq 6 ] && [ "$2" = -r ] && [ "$3" = -d ] && [ "$4" = --no-streaming ] \
+    || exit 1
+  case "$5" in *.apk) : ;; *) exit 1 ;; esac
+  [ "$6" = "${5%.apk}.dm" ] && [ -s "$5" ] && [ -s "$6" ] || exit 1
+  echo Success
+  exit 0
+fi
 if [ "$command" = logcat ]; then
   if [ "${2:-}" = -c ]; then
     : >"$log"
@@ -151,6 +162,8 @@ if [ "$sub" = dumpsys ]; then
       echo 'ApplicationInfo{eu.rekawek.coffeegb.android flags=[ HAS_CODE ALLOW_CLEAR_USER_DATA ] privateFlags=[ DIRECT_BOOT_AWARE ]}'
       if [ "$mode" = profile_missing ]; then
         echo 'arm64: [status=verify] [reason=install]'
+      elif [ "$mode" = profile_stale ]; then
+        echo 'arm64: [status=speed-profile] [reason=bg-dexopt]'
       else
         echo 'arm64: [status=speed-profile] [reason=install-dm]'
       fi
@@ -483,8 +496,12 @@ force_stop_count=$(awk '/^force-stop$/ { count++ } END { print count + 0 }' "$re
 [ "$force_stop_count" -eq 168 ] || { echo "expected 168 force-stops, got $force_stop_count" >&2; exit 1; }
 arm_count=$(awk '/^arm / { count++ } END { print count + 0 }' "$records")
 [ "$arm_count" -eq 168 ] || { echo "expected 168 singleTop arms, got $arm_count" >&2; exit 1; }
-install_count=$(grep -c -- ' install -r -d --no-streaming ' "$calls" || true)
-[ "$install_count" -eq 168 ] || { echo "expected 168 data-preserving installs, got $install_count" >&2; exit 1; }
+install_count=$(grep -c -- ' install-multiple -r -d --no-streaming ' "$calls" || true)
+[ "$install_count" -eq 168 ] || { echo "expected 168 profiled data-preserving installs, got $install_count" >&2; exit 1; }
+parent_profile_count=$(grep -c -- " $parent $parent_dm" "$calls" || true)
+[ "$parent_profile_count" -eq 84 ] || { echo "expected 84 parent APK/DM installs, got $parent_profile_count" >&2; exit 1; }
+candidate_profile_count=$(grep -c -- " $candidate $candidate_dm" "$calls" || true)
+[ "$candidate_profile_count" -eq 84 ] || { echo "expected 84 candidate APK/DM installs, got $candidate_profile_count" >&2; exit 1; }
 awk '
   /^launch / {
     launch_no++
@@ -641,9 +658,16 @@ grep -q -- '--es coffee_gb_audio_policy silent-pcm-relaxed-apu-v1' "$calls" || {
   exit 1
 }
 
+: >"$calls"
+mv "$candidate_dm" "$candidate_dm.missing"
+expect_failure missing_dm
+[ ! -s "$calls" ] || { echo 'missing DM reached adb instead of failing preflight' >&2; exit 1; }
+mv "$candidate_dm.missing" "$candidate_dm"
+
 expect_failure wrong_device
 expect_failure unsigned
 expect_failure profile_missing
+expect_failure profile_stale
 expect_failure layer
 expect_failure timeout
 expect_failure privacy

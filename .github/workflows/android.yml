@@ -26,6 +26,10 @@ jobs:
         run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
       - name: Install same-checkout portable artifacts
         run: mvn -B -pl controller,ui-portable -am install -DskipTests -Dmaven.repo.local="$GITHUB_WORKSPACE/build/android-m2"
+      - name: Test Android profile install wrappers
+        run: |
+          bash ./upload_to_android-test.sh
+          sh ./android/benchmark-device-matrix-test.sh
       - name: Test, lint, and assemble debug and R8 release APKs
         run: >-
           ./android/gradlew -p android --no-daemon
