@@ -130,7 +130,7 @@ final class MenuRaster {
         Objects.requireNonNull(value, "value");
         Objects.requireNonNull(target, "target");
         String fitted = ellipsize(atlas, role, value, target.width());
-        int textWidth = atlas.measure(role, fitted);
+        int textWidth = atlas.renderedWidth(role, fitted);
         int x = switch (alignment) {
             case LEFT -> target.x();
             case CENTER -> target.x() + Math.max(0, (target.width() - textWidth) / 2);
@@ -275,16 +275,17 @@ final class MenuRaster {
             String value, int width) {
         String normalized = value.toUpperCase(java.util.Locale.ROOT)
                 .replaceAll("\\s+", " ").trim();
-        if (atlas.measure(role, normalized) <= width) {
+        if (atlas.renderedWidth(role, normalized) <= width) {
             return normalized;
         }
         String suffix = "...";
-        int suffixWidth = atlas.measure(role, suffix);
+        int suffixWidth = atlas.renderedWidth(role, suffix);
         if (suffixWidth >= width) {
             return suffix;
         }
         int end = normalized.length();
-        while (end > 0 && atlas.measure(role, normalized.substring(0, end)) + suffixWidth > width) {
+        while (end > 0 && atlas.renderedWidth(role,
+                normalized.substring(0, end) + suffix) > width) {
             end--;
         }
         return normalized.substring(0, end).stripTrailing() + suffix;

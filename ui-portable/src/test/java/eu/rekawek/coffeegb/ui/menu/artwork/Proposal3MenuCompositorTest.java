@@ -174,6 +174,75 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void rightAlignedTextKeepsTheCompleteTrailingGlyph() throws Exception {
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+
+        for (String value : List.of("SAVED", "100%", "PERFORMANCE", "FAST-FORWARD")) {
+            int renderedWidth = atlas.renderedWidth(Proposal3GlyphAtlas.Role.MEDIUM, value);
+            MenuRaster left = new MenuRaster(new int[WIDTH * HEIGHT]);
+            MenuRaster right = new MenuRaster(new int[WIDTH * HEIGHT]);
+            left.drawText(atlas, Proposal3GlyphAtlas.Role.MEDIUM, value,
+                    new MenuRect(100, 100, 300, 72), MenuRaster.PAPER_TEXT,
+                    MenuRaster.HorizontalAlignment.LEFT);
+            right.drawText(atlas, Proposal3GlyphAtlas.Role.MEDIUM, value,
+                    new MenuRect(500, 100, renderedWidth, 72), MenuRaster.PAPER_TEXT,
+                    MenuRaster.HorizontalAlignment.RIGHT);
+
+            assertEquals(value + " lost ink when right-aligned",
+                    paintedPixels(left.pixels()), paintedPixels(right.pixels()));
+        }
+    }
+
+    @Test
+    public void trailingWidgetsUseTheSafeInsetAndOneHundredPercentIsNotEllipsized() {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] empty = pixels(compositor, presentation(MenuRoute.AUDIO, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.button(
+                        "empty", "", "", true)), "empty", MenuPreview.empty()));
+        int[] saved = pixels(compositor, presentation(MenuRoute.SAVE_STATES, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.button(
+                        "saved", "", "SAVED", true)), "saved", MenuPreview.empty()));
+        int[] dropdown = pixels(compositor, presentation(MenuRoute.SYSTEM, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.dropdown(
+                        "dropdown", "BOOTSTRAP", "FAST-FORWARD", true)), "dropdown",
+                MenuPreview.empty()));
+        int[] dropdownEllipsis = pixels(compositor, presentation(MenuRoute.SYSTEM, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.dropdown(
+                        "dropdown", "BOOTSTRAP", "FAST-FORW...", true)), "dropdown",
+                MenuPreview.empty()));
+        int[] checkbox = pixels(compositor, presentation(MenuRoute.DISPLAY, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.checkbox(
+                        "checkbox", "", true, true)), "checkbox", MenuPreview.empty()));
+        int[] oneHundred = pixels(compositor, presentation(MenuRoute.AUDIO, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.slider(
+                        "volume", "", "100%", true, 100)), "volume", MenuPreview.empty()));
+        int[] ellipsis = pixels(compositor, presentation(MenuRoute.AUDIO, "TRAILING", "",
+                List.of(), List.of(MenuPageSpec.Item.slider(
+                        "volume", "", "...", true, 100)), "volume", MenuPreview.empty()));
+
+        MenuRect row = MenuScreenTemplate.optionRow(0);
+        MenuRect rightInset = new MenuRect(row.right() - 20, row.y(), 20, row.height());
+        for (int[] candidate : List.of(saved, dropdown, checkbox, oneHundred)) {
+            assertEquals("trailing widget entered the shared right inset", 0,
+                    differences(empty, candidate, rightInset));
+        }
+        MenuRect value = new MenuRect(row.x() + 376, row.y(), 88, row.height());
+        assertTrue("100% was rendered as an ellipsis",
+                differences(oneHundred, ellipsis, value) > 0);
+        MenuRect field = new MenuRect(row.right() - 20 - 262, row.y() + 10, 262,
+                row.height() - 20);
+        assertTrue("FAST-FORWARD was rendered as an ellipsis",
+                differences(dropdown, dropdownEllipsis, field) > 0);
+
+        int fieldRight = row.right() - 20;
+        int fieldCenterY = row.y() + 10 + (row.height() - 20) / 2;
+        assertEquals("dropdown chevron touched the field border", MenuRaster.PAPER,
+                dropdown[(fieldCenterY - 2) * WIDTH + fieldRight - 4]);
+        assertEquals(MenuRaster.INK,
+                dropdown[(fieldCenterY - 2) * WIDTH + fieldRight - 3]);
+    }
+
+    @Test
     public void hiddenPresentationsClearOnlyTheComposedFrameCache() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         MenuController controller = controller(new MenuPageSpec(MenuRoute.LIBRARY, "CACHE", "",
@@ -259,6 +328,16 @@ public class Proposal3MenuCompositorTest {
                 if (left[y * WIDTH + x] != right[y * WIDTH + x]) {
                     count++;
                 }
+            }
+        }
+        return count;
+    }
+
+    private static int paintedPixels(int[] pixels) {
+        int count = 0;
+        for (int pixel : pixels) {
+            if (pixel != 0) {
+                count++;
             }
         }
         return count;

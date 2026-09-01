@@ -54,9 +54,16 @@ final class Proposal3GlyphAtlas {
     }
 
     private final int[][] pixels;
+    private final int[][] inkRightEdges;
 
     private Proposal3GlyphAtlas(int[][] pixels) {
         this.pixels = pixels;
+        this.inkRightEdges = new int[Role.values().length][CHARACTERS.length()];
+        for (Role role : Role.values()) {
+            for (int glyph = 0; glyph < CHARACTERS.length(); glyph++) {
+                inkRightEdges[role.ordinal()][glyph] = inkRightEdge(role, glyph);
+            }
+        }
     }
 
     static Proposal3GlyphAtlas load() throws IOException {
@@ -130,6 +137,24 @@ final class Proposal3GlyphAtlas {
         return width;
     }
 
+    /**
+     * Returns the horizontal space needed to paint every non-transparent pixel.
+     *
+     * <p>The bitmap glyph cells intentionally overlap their horizontal advance. Measuring only
+     * advances is correct for placing the next character, but it clips the right edge of the
+     * final character when text is right-aligned or tightly fitted.</p>
+     */
+    int renderedWidth(Role role, String value) {
+        Objects.requireNonNull(value, "value");
+        if (value.isEmpty()) {
+            return 0;
+        }
+        char last = normalize(value.charAt(value.length() - 1));
+        int advance = advance(role, last);
+        int inkRight = inkRightEdges[role.ordinal()][index(last)];
+        return measure(role, value) - advance + Math.max(advance, inkRight);
+    }
+
     /** Returns the atlas cell index, using '?' for characters outside the portable alphabet. */
     int index(char value) {
         int index = CHARACTERS.indexOf(normalize(value));
@@ -145,6 +170,17 @@ final class Proposal3GlyphAtlas {
         int cellX = (index % 16) * role.cellWidth;
         int cellY = (index / 16) * role.cellHeight;
         return pixels[role.ordinal()][(cellY + y) * role.width() + cellX + x];
+    }
+
+    private int inkRightEdge(Role role, int glyph) {
+        for (int x = role.cellWidth - 1; x >= 0; x--) {
+            for (int y = 0; y < role.cellHeight; y++) {
+                if ((pixel(role, glyph, x, y) >>> 24) != 0) {
+                    return x + 1;
+                }
+            }
+        }
+        return 0;
     }
 
     private static char normalize(char value) {

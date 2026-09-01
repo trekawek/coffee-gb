@@ -32,6 +32,7 @@ public final class Proposal3MenuCompositor {
     private static final int DIVIDER = 0xffd4d2ad;
     private static final int DROPDOWN_FILL = 0xffd4d2ad;
     private static final int SCROLL_ARROW_SIZE = 18;
+    private static final int TRAILING_CONTENT_RIGHT_INSET = 20;
 
     private final Object lock = new Object();
     private int[] cachedTemplatePixels;
@@ -266,20 +267,20 @@ public final class Proposal3MenuCompositor {
                 MenuRaster.HorizontalAlignment.LEFT);
         if (detail) {
             raster.drawText(atlas(), ITEM_ROLE, item.detail(),
-                    new MenuRect(row.x() + 316, row.y(), row.width() - 336, row.height()),
+                    new MenuRect(row.x() + 316, row.y(),
+                            row.width() - 316 - TRAILING_CONTENT_RIGHT_INSET, row.height()),
                     textColor, MenuRaster.HorizontalAlignment.RIGHT);
         }
     }
 
     private void drawDropdown(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
             int textColor) {
-        String labelText = display(item.label());
         String valueText = display(item.detail());
-        int availableLeft = row.x() + 24;
-        int availableRight = row.right() - 4;
-        int gap = 6;
-        int fieldWidth = Math.min(238,
-                Math.max(103, atlas().measure(ITEM_ROLE, valueText) + 35));
+        int availableLeft = row.x() + 20;
+        int availableRight = row.right() - TRAILING_CONTENT_RIGHT_INSET;
+        int gap = 4;
+        int fieldWidth = Math.min(262,
+                Math.max(103, atlas().renderedWidth(ITEM_ROLE, valueText) + 27));
         int labelWidth = Math.max(80, availableRight - availableLeft - gap - fieldWidth);
         raster.drawText(atlas(), ITEM_ROLE, item.label(),
                 new MenuRect(availableLeft, row.y(), labelWidth, row.height()), textColor,
@@ -292,13 +293,14 @@ public final class Proposal3MenuCompositor {
         raster.drawText(atlas(), ITEM_ROLE, valueText,
                 new MenuRect(field.x() + 4, field.y(), field.width() - 27, field.height()),
                 MenuRaster.INK, MenuRaster.HorizontalAlignment.LEFT);
-        drawDownChevron(raster, field.right() - 10, field.y() + field.height() / 2,
+        drawDownChevron(raster, field.right() - 14, field.y() + field.height() / 2,
                 MenuRaster.INK);
     }
 
     private void drawCheckbox(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
             int textColor) {
-        MenuRect checkbox = new MenuRect(row.right() - 52, row.y() + 18, 36, 36);
+        MenuRect checkbox = new MenuRect(
+                row.right() - TRAILING_CONTENT_RIGHT_INSET - 36, row.y() + 18, 36, 36);
         int labelLeft = row.x() + 38;
         raster.drawText(atlas(), ITEM_ROLE, item.label(),
                 new MenuRect(labelLeft, row.y(), checkbox.x() - 16 - labelLeft, row.height()),
@@ -313,10 +315,11 @@ public final class Proposal3MenuCompositor {
                 new MenuRect(row.x() + 38, row.y(), 148, row.height()), textColor,
                 MenuRaster.HorizontalAlignment.LEFT);
         int progress = item.progress() >= 0 ? item.progress() : parsePercent(item.detail());
-        raster.drawSlider(new MenuRect(row.x() + 192, row.y() + 29, 198, 14), progress);
+        raster.drawSlider(new MenuRect(row.x() + 192, row.y() + 29, 176, 14), progress);
         String value = display(item.detail()).isEmpty() ? progress + "%" : item.detail();
         raster.drawText(atlas(), ITEM_ROLE, value,
-                new MenuRect(row.x() + 398, row.y(), 70, row.height()), textColor,
+                new MenuRect(row.x() + 376, row.y(),
+                        row.width() - 376 - TRAILING_CONTENT_RIGHT_INSET, row.height()), textColor,
                 MenuRaster.HorizontalAlignment.RIGHT);
     }
 
