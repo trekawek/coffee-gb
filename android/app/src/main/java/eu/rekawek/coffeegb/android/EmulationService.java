@@ -34,10 +34,7 @@ public final class EmulationService extends Service implements AudioManager.OnAu
     static void start(Context context, String executionMode) {
         DiagnosticsOptions selected = DiagnosticsOptions.disabled(
                 DiagnosticsOptions.parseExecutionMode(executionMode));
-        nextStartOptions = selected;
-        context.startService(new Intent(context, EmulationService.class)
-                .putExtra(DiagnosticsOptions.EXTRA_EXECUTION_MODE,
-                        DiagnosticsOptions.executionModeValue(selected.executionMode)));
+        context.startService(startIntent(context, selected));
     }
 
     static void start(Context context, DiagnosticsOptions options) {
@@ -61,6 +58,11 @@ public final class EmulationService extends Service implements AudioManager.OnAu
         return checked.benchmarkScenario.externalValue();
     }
 
+    static boolean benchmarkModeExtraValue(DiagnosticsOptions options) {
+        DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
+        return checked.enabled;
+    }
+
     static String audioPolicyExtraValue(DiagnosticsOptions options) {
         DiagnosticsOptions checked = options == null ? DiagnosticsOptions.disabled() : options;
         return checked.audioPolicy.externalValue();
@@ -73,7 +75,8 @@ public final class EmulationService extends Service implements AudioManager.OnAu
 
     private static Intent populateStartIntent(Intent intent, DiagnosticsOptions checked) {
         nextStartOptions = checked;
-        return intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK, checked.enabled)
+        return intent.putExtra(DiagnosticsOptions.EXTRA_BENCHMARK,
+                        benchmarkModeExtraValue(checked))
                 .putExtra(DiagnosticsOptions.EXTRA_HARDWARE,
                         checked.hardware.externalValue())
                 .putExtra(DiagnosticsOptions.EXTRA_AUDIO, checked.audioOutput)

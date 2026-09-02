@@ -94,6 +94,12 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     private transient long performanceEpochTerminalAccesses;
 
+    /** Unsafe decoded or delegated memory boundaries reached by attempted epochs. */
+    private transient long performanceEpochFenceAttemptCount;
+
+    /** Fence-attempt subset whose resolved address was in the cartridge RAM/RTC window. */
+    private transient long performanceEpochCartWindowFenceAttemptCount;
+
     private transient IntConsumer performanceEpochPrefixCommitter;
 
     private transient int performanceEpochElapsed;
@@ -102,6 +108,9 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     /** Epoch-local proof that LCD-off CGB VRAM is an unobserved direct memory plane. */
     private transient boolean performanceEpochLcdOffVramAccess;
+
+    /** Epoch-local proof that native-CGB FF44 cannot change before the owner commits. */
+    private transient boolean performanceEpochStableLyRead;
 
     private transient DebugCpuAddressSpace debugAddressSpace;
 
@@ -233,6 +242,40 @@ public class Cpu implements StatefulComponent<Cpu> {
      * @return master ticks consumed by the CPU epoch
      */
     public int runPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceEpoch(maxMasterTicks, false, false);
+    }
+
+    /**
+     * Native-CGB x2 epoch whose owner has intersected the packet with the invariant STAT
+     * horizon. That horizon also proves the CPU-visible LY value cannot change, so FF44 reads
+     * may use the canonical bus without terminating the packet. All other IO remains fenced.
+     */
+    public int runNativeCgbPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceEpoch(maxMasterTicks, false, true);
+    }
+
+    /**
+     * Native-CGB x2 running epoch used only while HBlank DMA is armed between bursts. Unsafe
+     * decoded memory cycles remain scalar so LCDC/HDMA control writes cannot cross the owner's
+     * HDMA callback, and HALT remains scalar so its request-latch timing is sampled per dot.
+     * The same owner-proven STAT horizon permits stable FF44 reads.
+     */
+    public int runNativeCgbArmedHblankWaitPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceEpoch(maxMasterTicks, true, true);
+    }
+
+    /**
+     * Native-CGB x2 checkpoint-replay epoch. Every decoded memory boundary and HALT stays on
+     * the scalar scheduler: unlike the ordinary invariant-STAT lease, FF44 is not stable while
+     * the owner replays the PPU/STAT dots exactly.
+     */
+    public int runNativeCgbStatReplayPerformanceEpoch(int maxMasterTicks) {
+        return runPerformanceEpoch(maxMasterTicks, true, false);
+    }
+
+    private int runPerformanceEpoch(
+            int maxMasterTicks, boolean fenceDecodedMemoryAndHalt,
+            boolean allowStableLyRead) {
         if (maxMasterTicks <= 0 || !performanceEpochEntryEligible()) {
             return 0;
         }
@@ -257,6 +300,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             performanceEpochElapsed = 0;
             performanceEpochPrefixTicks = 0;
             performanceEpochActive = true;
+            performanceEpochStableLyRead = allowStableLyRead;
             bus.resetForEpoch(target);
             addressSpace = bus;
             while (elapsed < requested) {
@@ -270,7 +314,11 @@ public class Cpu implements StatefulComponent<Cpu> {
 
                 // Fence the next fetch/operand window before the native x2 epoch may use its
                 // borrowed ROM reader.
-                if (!performanceEpochPrefetchSafe()) {
+                if (!performanceEpochPrefetchSafe()
+                        || fenceDecodedMemoryAndHalt
+                        && (performanceNextBoundaryFetchesHalt()
+                        || !performanceDecodedMemoryBoundarySafe(
+                        true, false, allowStableLyRead))) {
                     performanceEpochTerminal = true;
                     break;
                 }
@@ -294,6 +342,7 @@ public class Cpu implements StatefulComponent<Cpu> {
             performanceEpochRomAccess = null;
             addressSpace = target;
             performanceEpochActive = false;
+            performanceEpochStableLyRead = false;
             performanceEpochAccesses += bus.accesses();
             performanceEpochTerminalAccesses += bus.terminalAccesses();
             performanceEpochTicks += elapsed;
@@ -428,7 +477,7 @@ public class Cpu implements StatefulComponent<Cpu> {
                         && performanceNextBoundaryFetchesHalt()
                         || fenceDecodedMemoryCycles
                         && !performanceDecodedMemoryBoundarySafe(
-                        allowResolvedSafeDecodedAccess, allowLcdOffVramAccess)) {
+                        allowResolvedSafeDecodedAccess, allowLcdOffVramAccess, false)) {
                     performanceEpochTerminal = true;
                     break;
                 }
@@ -470,7 +519,8 @@ public class Cpu implements StatefulComponent<Cpu> {
      * machine-cycle tick, so the complete group is classified before any part may run.
      */
     private boolean performanceDecodedMemoryBoundarySafe(
-            boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess) {
+            boolean allowResolvedSafeDecodedAccess, boolean allowLcdOffVramAccess,
+            boolean allowStableLyRead) {
         if (state != State.RUNNING || currentExecutionOps == null) {
             return true;
         }
@@ -478,20 +528,25 @@ public class Cpu implements StatefulComponent<Cpu> {
             Op op = currentExecutionOps[i];
             if (allowResolvedSafeDecodedAccess
                     && op.causesOemBug(registers, opContext) != null) {
+                recordPerformanceEpochFenceAttempt();
                 return false;
             }
             if (currentOpAccessesMemory[i]) {
                 if (!allowResolvedSafeDecodedAccess) {
+                    recordPerformanceEpochFenceAttempt();
                     return false;
                 }
                 Integer address = op.resolveMemoryAddress(registers, operand, opContext);
                 if (address == null) {
                     if (!op.isInternalMemoryCycle()) {
+                        recordPerformanceEpochFenceAttempt();
                         return false;
                     }
                 } else if (currentOpWritesMemory[i]
                         ? !isPerformanceEpochSafeWrite(address, allowLcdOffVramAccess)
-                        : !isPerformanceEpochSafeRead(address, allowLcdOffVramAccess)) {
+                        : !isPerformanceEpochSafeRead(
+                        address, allowLcdOffVramAccess, allowStableLyRead)) {
+                    recordPerformanceEpochFenceAttempt(address);
                     return false;
                 }
             }
@@ -503,9 +558,10 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     private static boolean isPerformanceEpochSafeRead(
-            int address, boolean allowLcdOffVramAccess) {
+            int address, boolean allowLcdOffVramAccess, boolean allowStableLyRead) {
         return PerformanceEpochBus.isSafeRead(address)
-                || allowLcdOffVramAccess && PerformanceEpochBus.isVideoRam(address);
+                || allowLcdOffVramAccess && PerformanceEpochBus.isVideoRam(address)
+                || allowStableLyRead && (address & 0xffff) == 0xff44;
     }
 
     private static boolean isPerformanceEpochSafeWrite(
@@ -515,7 +571,8 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     private boolean isPerformanceEpochSafeRead(int address) {
-        return isPerformanceEpochSafeRead(address, performanceEpochLcdOffVramAccess);
+        return isPerformanceEpochSafeRead(
+                address, performanceEpochLcdOffVramAccess, performanceEpochStableLyRead);
     }
 
     private boolean isPerformanceEpochSafeWrite(int address) {
@@ -704,11 +761,25 @@ public class Cpu implements StatefulComponent<Cpu> {
         performanceEpochTerminal = true;
     }
 
+    private void recordPerformanceEpochFenceAttempt() {
+        performanceEpochFenceAttemptCount++;
+    }
+
+    private void recordPerformanceEpochFenceAttempt(int address) {
+        performanceEpochFenceAttemptCount++;
+        int normalized = address & 0xffff;
+        if (normalized >= 0xa000 && normalized <= 0xbfff) {
+            performanceEpochCartWindowFenceAttemptCount++;
+        }
+    }
+
     public void resetPerformanceEpochTelemetry() {
         performanceEpochCount = 0L;
         performanceEpochTicks = 0L;
         performanceEpochAccesses = 0L;
         performanceEpochTerminalAccesses = 0L;
+        performanceEpochFenceAttemptCount = 0L;
+        performanceEpochCartWindowFenceAttemptCount = 0L;
     }
 
     public long getPerformanceEpochCount() {
@@ -725,6 +796,14 @@ public class Cpu implements StatefulComponent<Cpu> {
 
     public long getPerformanceEpochTerminalAccesses() {
         return performanceEpochTerminalAccesses;
+    }
+
+    public long getPerformanceEpochFenceAttemptCount() {
+        return performanceEpochFenceAttemptCount;
+    }
+
+    public long getPerformanceEpochCartWindowFenceAttemptCount() {
+        return performanceEpochCartWindowFenceAttemptCount;
     }
 
     /**
@@ -865,6 +944,10 @@ public class Cpu implements StatefulComponent<Cpu> {
                 || speedMode.getSpeedMode() != 1) {
             return false;
         }
+        return hasOnlyDurableOrdinaryHaltWakeStatPhase();
+    }
+
+    private boolean hasOnlyDurableOrdinaryHaltWakeStatPhase() {
         int flags = getStatReadPhaseFlags();
         int allowed = STAT_READ_PHASE_ORDINARY_HALT_WAKE
                 | STAT_READ_PHASE_ONE_CYCLE_ORDINARY_HALT_WAKE;
@@ -2243,7 +2326,10 @@ public class Cpu implements StatefulComponent<Cpu> {
 
         opContext = context;
         opIndex = runningOp;
-        if (read ? !PerformanceEpochBus.isSafeRead(address)
+        boolean directStableLyRead = opcode == 0xf0
+                && performanceEpochStableLyRead
+                && address == 0xff44;
+        if (read ? !PerformanceEpochBus.isSafeRead(address) && !directStableLyRead
                 : !PerformanceEpochBus.isSafeWrite(address)) {
             return extraTicks;
         }
@@ -3568,6 +3654,35 @@ public class Cpu implements StatefulComponent<Cpu> {
     }
 
     /**
+     * Whether an HDMA-owned native-CGB x2 data interior may keep the CPU completely frozen.
+     * The scalar arbiter has already fetched and decoded the next opcode; the transfer releases
+     * that held pipeline only on its separately scalar block-completion tick.
+     */
+    public boolean performanceHdmaOwnedBlockCpuFrozenEligible() {
+        return speedMode.isGbc()
+                && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 2
+                && debugAddressSpace == null
+                && debugHooks == null
+                && debugRetirementTracker == null
+                && hdmaOpcodePrefetched
+                && (state == State.OPERAND
+                || state == State.EXT_OPCODE && opcode1 != 0x10)
+                && clockCycle >= 0 && clockCycle <= 3
+                && haltEntrySampleTicks == 0
+                && !haltBugMode
+                && !phasedPpuInputHigh
+                && !fastPhasedPpuDispatch
+                && !hdmaArbitrationOpcodeValid
+                && !haltOpcodePrefetchValid
+                && !speedSwitchPaddingReplayValid
+                && hasOnlyDurableOrdinaryHaltWakeStatPhase()
+                && !interruptManager.hasPpuTickSignals()
+                && !interruptManager.isInterruptEnablePending()
+                && !interruptManager.hasRawPendingEnabledInterrupt();
+    }
+
+    /**
      * Whether the CPU side of an HDMA request slot is still in progress. Besides an
      * already decoded instruction, the latter half of an opcode cycle owns the slot
      * until the arbiter performs its one authoritative opcode fetch.
@@ -3830,6 +3945,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         public int getByte(int address) {
             accesses++;
             if (!owner.isPerformanceEpochSafeRead(address)) {
+                owner.recordPerformanceEpochFenceAttempt(address);
                 terminalAccesses++;
                 owner.markPerformanceEpochTerminal();
                 owner.flushPerformanceEpochPrefix();
@@ -3841,6 +3957,7 @@ public class Cpu implements StatefulComponent<Cpu> {
         public void setByte(int address, int value) {
             accesses++;
             if (!owner.isPerformanceEpochSafeWrite(address)) {
+                owner.recordPerformanceEpochFenceAttempt(address);
                 int a = address & 0xffff;
                 if (!owner.speedMode.isGbc() && a >= 0xfe00 && a <= 0xfeff) {
                     // DMG OAM writes must observe the corruption-suppression latch and access

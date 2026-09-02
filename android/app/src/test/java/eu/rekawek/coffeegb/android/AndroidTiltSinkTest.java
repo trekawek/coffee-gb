@@ -27,7 +27,7 @@ public class AndroidTiltSinkTest {
         input.sample(7, 13);
         assertSample(samples.get(0), 0, 0);
         assertSample(samples.get(1),
-                2 / SensorManager.GRAVITY_EARTH,
+                -2 / SensorManager.GRAVITY_EARTH,
                 3 / SensorManager.GRAVITY_EARTH);
 
         orientation.rotation = Surface.ROTATION_90;
@@ -35,7 +35,7 @@ public class AndroidTiltSinkTest {
         input.sample(8, 14);
         assertSample(samples.get(2), 0, 0);
         assertSample(samples.get(3),
-                -1 / SensorManager.GRAVITY_EARTH,
+                1 / SensorManager.GRAVITY_EARTH,
                 1 / SensorManager.GRAVITY_EARTH);
 
         orientation.rotation = Surface.ROTATION_180;
@@ -43,7 +43,7 @@ public class AndroidTiltSinkTest {
         input.sample(9, 16);
         assertSample(samples.get(4), 0, 0);
         assertSample(samples.get(5),
-                -1 / SensorManager.GRAVITY_EARTH,
+                1 / SensorManager.GRAVITY_EARTH,
                 -2 / SensorManager.GRAVITY_EARTH);
 
         orientation.rotation = Surface.ROTATION_270;
@@ -51,8 +51,40 @@ public class AndroidTiltSinkTest {
         input.sample(11, 19);
         assertSample(samples.get(6), 0, 0);
         assertSample(samples.get(7),
-                3 / SensorManager.GRAVITY_EARTH,
+                -3 / SensorManager.GRAVITY_EARTH,
                 -2 / SensorManager.GRAVITY_EARTH);
+    }
+
+    @Test
+    public void loweringDisplayRightEdgeProducesPositiveHorizontalTiltForEveryRotation() {
+        EventBusImpl events = new EventBusImpl(null, null, false);
+        List<AccelerometerEvent> samples = new ArrayList<>();
+        events.register(samples::add, AccelerometerEvent.class);
+        FakeInput input = new FakeInput(true);
+        FakeOrientation orientation = new FakeOrientation(Surface.ROTATION_0);
+        AndroidTiltSink sink = new AndroidTiltSink(events, input, orientation);
+
+        int[] rotations = {
+                Surface.ROTATION_0,
+                Surface.ROTATION_90,
+                Surface.ROTATION_180,
+                Surface.ROTATION_270
+        };
+        float gravity = SensorManager.GRAVITY_EARTH;
+        float[][] rightEdgeDownDeltas = {
+                {-gravity, 0},
+                {0, gravity},
+                {gravity, 0},
+                {0, -gravity}
+        };
+
+        sink.setCartridgeActive(true);
+        for (int i = 0; i < rotations.length; i++) {
+            orientation.rotation = rotations[i];
+            input.sample(0, 0);
+            input.sample(rightEdgeDownDeltas[i][0], rightEdgeDownDeltas[i][1]);
+            assertSample(samples.get(samples.size() - 1), 1, 0);
+        }
     }
 
     @Test
@@ -68,7 +100,7 @@ public class AndroidTiltSinkTest {
         input.sample(0, 0);
         input.sample(SensorManager.GRAVITY_EARTH, -SensorManager.GRAVITY_EARTH);
 
-        assertSample(samples.get(1), 1, -1);
+        assertSample(samples.get(1), -1, -1);
     }
 
     @Test
@@ -92,7 +124,7 @@ public class AndroidTiltSinkTest {
         assertEquals(2, samples.size());
         assertSample(samples.get(0), 0, 0);
         assertSample(samples.get(1),
-                5 / SensorManager.GRAVITY_EARTH,
+                -5 / SensorManager.GRAVITY_EARTH,
                 3 / SensorManager.GRAVITY_EARTH);
         sink.close();
         assertEquals(2, input.stops);
@@ -122,11 +154,11 @@ public class AndroidTiltSinkTest {
         input.sample(5, 9);
 
         assertSample(samples.get(1),
-                2 / SensorManager.GRAVITY_EARTH,
+                -2 / SensorManager.GRAVITY_EARTH,
                 3 / SensorManager.GRAVITY_EARTH);
         assertSample(samples.get(2), 0, 0);
         assertSample(samples.get(3),
-                1 / SensorManager.GRAVITY_EARTH,
+                -1 / SensorManager.GRAVITY_EARTH,
                 2 / SensorManager.GRAVITY_EARTH);
     }
 

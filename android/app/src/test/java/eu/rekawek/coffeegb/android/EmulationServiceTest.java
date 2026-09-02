@@ -3,8 +3,16 @@ package eu.rekawek.coffeegb.android;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 
 public class EmulationServiceTest {
+
+    @Test
+    public void ordinaryStartWireExplicitlyDisablesBenchmarkMode() {
+        assertFalse(EmulationService.benchmarkModeExtraValue(
+                DiagnosticsOptions.disabled(
+                        eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)));
+    }
 
     @Test
     public void startWireForwardsBenchmarkScenarioToken() {

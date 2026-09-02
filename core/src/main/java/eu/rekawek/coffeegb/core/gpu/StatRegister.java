@@ -993,6 +993,142 @@ public class StatRegister implements AddressSpace, StatefulComponent<StatRegiste
     }
 
     /**
+     * Returns a bounded native-CGB x2 span for which the CPU may run against its frozen
+     * peripheral view while the owner replays every PPU/STAT dot exactly.
+     *
+     * <p>This is deliberately narrower than the scalar evaluator: only a fully settled,
+     * LYC-only source with mutually consistent register copies is admitted. The equality line,
+     * its preceding comparator line, and all frame/VBlank handoffs stay scalar. Callers must
+     * additionally fence every decoded memory boundary (including FF41/FF44/FF0F) and HALT.</p>
+     */
+    public int performanceNativeCgbCheckpointReplaySpanLimit(int requested) {
+        if (requested <= 0 || !gbc || statEvaluationDirty
+                || enableBits != 0x40
+                || lycIrqStatSource != 0x40
+                || lycIrqStatLatch != 0x40
+                || modeIrqStatLatch != 0x40
+                || mode0IrqStatLatch != 0x40
+                || lycIrqValueSource != lycIrqValueLatch
+                || lycIrqValueSource != modeIrqLycLatch
+                || lycIrqValueSource != mode0IrqLycLatch
+                || pendingModeIrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingModeIrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqStatClock != NO_LYC_IRQ_EVENT
+                || pendingMode0IrqLycClock != NO_LYC_IRQ_EVENT
+                || pendingCgbMode0Interrupt
+                || pendingCgbMode1Interrupt
+                || pendingCgbMode2Interrupt
+                || pendingCgbMode2LateReplay
+                || pendingCgbMode2PublicationClock != NO_LYC_IRQ_EVENT
+                || pendingCgbFrameMode2Interrupt
+                || retractableCgbMode2Interrupt
+                || releaseTailLycCpuAcceptance
+                || pendingLycWriteIrq != NO_LYC_IRQ_EVENT
+                || pendingLycComparatorIrq != NO_LYC_IRQ_EVENT
+                || interruptManager.hasPpuTickSignals()) {
+            return 0;
+        }
+        refreshGpuTiming();
+        int currentLine = timing.line;
+        int lyc = lycIrqValueSource;
+        if (!timing.nativeDoubleSpeed || !timing.lcdEnabled || timing.firstLine
+                || currentLine < 1 || currentLine > 142
+                || currentLine == lyc || currentLine + 1 == lyc) {
+            return 0;
+        }
+
+        int lineLength = timing.firstLine ? 455 : 456;
+        int limit = Math.min(requested, lineLength - timing.ticksInLine - 1);
+        if (nextLycIrqEvent != NO_LYC_IRQ_EVENT) {
+            long distance = nextLycIrqEvent - lycIrqClock;
+            if (distance <= 1) {
+                return 0;
+            }
+            limit = Math.min(limit,
+                    (int) Math.min((long) Integer.MAX_VALUE, distance - 1));
+        }
+        return Math.max(0, limit);
+    }
+
+    /**
+     * Returns the LYC-only checkpoint subwindows whose scalar replay has a closed-form state
+     * transition.  At an ordinary visible-line start, mode 0/1/2 are all low and only the
+     * dot-2 HALT-wake release can occur.  In the line tail, mode 2 rises at dot 448 and native
+     * double speed registers the already-proven non-matching LY at dot 454.  The mid-line
+     * mode-0 checkpoints retain exact replay.
+     *
+     * <p>The broad replay proof remains authoritative.  These additional guards require the
+     * readable and interrupt coincidence planes, shared level, comparator signal, and window
+     * history to be canonical before replacing the per-dot evaluator.  The caller must retain
+     * the replay runner's every-memory-boundary and HALT fences and commit one of GPU's already
+     * preflighted raster/mode-2 plans before applying the trusted endpoint below.</p>
+     */
+    public int performanceNativeCgbCheckpointAggregateSpanLimit(int requested) {
+        int limit = performanceNativeCgbCheckpointReplaySpanLimit(requested);
+        if (limit <= 0) {
+            return 0;
+        }
+        int ticksInLine = timing.ticksInLine;
+        boolean lineStart = ticksInLine <= 12;
+        boolean lineTail = ticksInLine >= 447;
+        if (!lineStart && !lineTail) {
+            return 0;
+        }
+        if (registers.get(LYC) != lycIrqValueSource
+                || registeredLy != timing.visibleLy
+                || coincidence || intCoincidence || intLine
+                || lycWriteSuppressed
+                || suppressedLycIrqLine != -1
+                || modeBlockedLycIrqLine != -1
+                || lycComparatorSignal
+                || pendingCgbMode2IfHighAtCapture
+                || cgbMode2CapturedAtLineEdge) {
+            return 0;
+        }
+        if (lineStart) {
+            if (previousMode0Window || previousMode1Window || previousMode2Window) {
+                return 0;
+            }
+        } else if (!previousMode0Window || previousMode1Window
+                || previousMode2Window != (ticksInLine >= 448)) {
+            return 0;
+        }
+        return limit;
+    }
+
+    /** Applies one prefix of a preflighted native-CGB LYC-only checkpoint transaction. */
+    public void advancePerformanceNativeCgbCheckpointAggregateSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        int endTicksInLine = gpu.getTicksInLine();
+        int startTicksInLine = endTicksInLine - ticks;
+        if (startTicksInLine < 0
+                || !(endTicksInLine <= 79
+                || startTicksInLine >= 447 && endTicksInLine <= 455)) {
+            throw new IllegalStateException(
+                    "STAT aggregate left its preflighted checkpoint window");
+        }
+
+        interruptManager.finishLcdcReadMaskWindowAndClearCpuReadInterruptPreview(ticks);
+        lycIrqClock += ticks;
+        clearCpuStatReadPhase();
+
+        refreshGpuTiming();
+        previousMode0Window = timing.mode0IntWindow;
+        previousMode1Window = timing.mode1IntWindow;
+        previousMode2Window = timing.mode2IntWindow;
+        if (startTicksInLine < CGB_DOUBLE_TAIL_LATCH
+                && endTicksInLine >= CGB_DOUBLE_TAIL_LATCH) {
+            registeredLy = timing.visibleLy;
+        }
+        if (startTicksInLine < timing.cpuMachineCycleDots
+                && endTicksInLine >= timing.cpuMachineCycleDots) {
+            interruptManager.releaseHaltWake(InterruptType.LCDC);
+        }
+    }
+
+    /**
      * Returns the full SGB/SGB2 LCD-off span when STAT has no live publication residue.
      * The LCD-off DMG comparator is frozen, so {@code nextLycIrqEvent} is deliberately not
      * consulted here; only pending writes, captures, and PPU-to-CPU signals can still publish.

@@ -14,6 +14,7 @@ private val requiredBaselineProfileClassNames = listOf(
     "eu.rekawek.coffeegb.core.Gameboy",
     "eu.rekawek.coffeegb.core.cpu.Cpu",
     "eu.rekawek.coffeegb.core.cpu.Cpu\$PerformanceEpochBus",
+    "eu.rekawek.coffeegb.core.memory.Hdma",
     "eu.rekawek.coffeegb.core.gpu.Gpu",
     "eu.rekawek.coffeegb.core.gpu.StatRegister",
     "eu.rekawek.coffeegb.core.sound.Sound",
@@ -253,7 +254,7 @@ val verifyBaselineProfileSource = tasks.register("verifyBaselineProfileSource") 
     val expected = expectedBaselineProfileRules.joinToString(separator = "\n", postfix = "\n")
     val actual = baselineProfileSource.asFile.readText()
     check(actual == expected) {
-      "src/main/baseline-prof.txt must contain exactly the eight unique reviewed HP rules " +
+      "src/main/baseline-prof.txt must contain exactly the nine unique reviewed HP rules " +
           "in order, with no S flags."
     }
   }

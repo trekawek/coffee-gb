@@ -530,6 +530,32 @@ public class CpuPpuInterruptTimingTest {
     }
 
     @Test
+    public void ownedHdmaBlockRequiresAnOrdinaryFrozenDoubleSpeedOpcode() {
+        Harness ordinary = new Harness(true);
+        ordinary.enableDoubleSpeed();
+        ordinary.memory.setByte(PROGRAM, 0x06); // LD B,d8
+        ordinary.cpu.prefetchOpcodeForHdma();
+
+        assertTrue(ordinary.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
+        ordinary.cpu.releaseHdmaPrefetchedOpcode();
+        assertFalse(ordinary.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
+
+        Harness prefetchedStop = new Harness(true);
+        prefetchedStop.enableDoubleSpeed();
+        prefetchedStop.memory.setByte(PROGRAM, 0x10); // STOP prefix
+        prefetchedStop.cpu.prefetchOpcodeForHdma();
+        assertFalse(prefetchedStop.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
+
+        Harness pendingInterrupt = new Harness(true);
+        pendingInterrupt.enableDoubleSpeed();
+        pendingInterrupt.memory.setByte(PROGRAM, 0x06);
+        pendingInterrupt.cpu.prefetchOpcodeForHdma();
+        pendingInterrupt.enable(LCDC);
+        pendingInterrupt.interrupts.requestInterrupt(LCDC);
+        assertFalse(pendingInterrupt.cpu.performanceHdmaOwnedBlockCpuFrozenEligible());
+    }
+
+    @Test
     public void hdmaArbitrationFetchIsTheOnlyOpcodeBusRead() {
         for (int opcode : new int[] {0x04, 0x76}) { // INC B; HALT
             Harness h = new Harness(true);

@@ -197,9 +197,10 @@ final class AndroidTiltSink implements AutoCloseable {
             calibrated = true;
         }
         // Android reports acceleration in m/s² while the portable MBC7 contract uses g units.
-        // Feeding the raw delta made the emulated sensor roughly 9.8 times too sensitive.
+        // Its gravity-derived horizontal acceleration has the opposite sign from the portable
+        // tilt contract, so invert X after mapping the sensor axes to the display orientation.
         eventBus.post(new AccelerometerEvent(
-                (x - neutralX) / SensorManager.GRAVITY_EARTH,
+                (neutralX - x) / SensorManager.GRAVITY_EARTH,
                 (y - neutralY) / SensorManager.GRAVITY_EARTH));
     }
 
