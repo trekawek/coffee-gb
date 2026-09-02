@@ -31,11 +31,13 @@ public class SettingsSelectionTest {
                         .map(MenuPageSpec.Item::id).toList());
         assertFalse(AndroidMenuModel.displayPage(false, false).items().get(0).checked());
         assertEquals("", AndroidMenuModel.displayPage(false, false).items().get(0).detail());
-        assertEquals(List.of("camera", "gamepad", "gps"),
-                AndroidMenuModel.optionalDevicesPage("off", "auto", false, List.of())
+        assertEquals(List.of("rumble", "camera", "gamepad", "gps"),
+                AndroidMenuModel.optionalDevicesPage("off", "auto", true, false, List.of())
                         .items().stream().map(MenuPageSpec.Item::id).toList());
-        assertFalse(AndroidMenuModel.optionalDevicesPage("off", "auto", false, List.of())
-                .items().get(2).checked());
+        MenuPageSpec peripherals = AndroidMenuModel.optionalDevicesPage(
+                "off", "auto", true, false, List.of());
+        assertTrue(peripherals.items().get(0).checked());
+        assertFalse(peripherals.items().get(3).checked());
         assertEquals("FAST-FORWARD",
                 AndroidMenuModel.systemPage(
                         "auto", "auto", "fast-forward", "accuracy", "dmg-games")

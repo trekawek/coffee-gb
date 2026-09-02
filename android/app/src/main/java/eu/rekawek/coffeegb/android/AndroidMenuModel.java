@@ -83,14 +83,15 @@ final class AndroidMenuModel {
                 preferredFocusId, MenuPreview.empty());
     }
 
-    static MenuPageSpec optionalDevicesPage(String camera, String gamepad, boolean gps,
-            List<ChoiceValue> gamepadChoices) {
+    static MenuPageSpec optionalDevicesPage(String camera, String gamepad, boolean rumble,
+            boolean gps, List<ChoiceValue> gamepadChoices) {
         return page(MenuRoute.OPTIONAL_DEVICES, "COFFEE GB", "PERIPHERALS", "", "", List.of(),
                 List.of(
+                        checkbox("rumble", "RUMBLE", rumble, true),
                         dropdown("camera", "CAMERA", cameraLabel(camera), true),
                         dropdown("gamepad", "GAMEPAD", gamepadLabel(gamepad, gamepadChoices), true),
                         checkbox("gps", "GPS", gps, true)),
-                "camera", MenuPreview.empty());
+                "rumble", MenuPreview.empty());
     }
 
     static MenuPageSpec optionPickerPage(String title, List<ChoiceValue> choices,
@@ -204,7 +205,8 @@ final class AndroidMenuModel {
 
     static MenuPageSpec optionalDevicesPage(DevicesDraft draft, String status,
             MenuPreview paperPreview) {
-        return optionalDevicesPage(draft.camera() ? "rear" : "off", "auto", false, List.of());
+        return optionalDevicesPage(
+                draft.camera() ? "rear" : "off", "auto", draft.rumble(), false, List.of());
     }
 
     static MenuPageSpec controllerPage(String controllerName, Map<Button, String> labels,

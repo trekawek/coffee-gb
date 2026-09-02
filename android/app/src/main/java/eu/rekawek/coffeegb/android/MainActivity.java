@@ -1286,6 +1286,17 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void handleOptionalDevicesItem(AndroidEmulationRuntime active, String id) {
+        if ("rumble".equals(id)) {
+            SharedPreferences preferences = getPreferences(MODE_PRIVATE);
+            boolean enabled = !preferences.getBoolean("devices.rumble", false);
+            preferences.edit().putBoolean("devices.rumble", enabled).apply();
+            if (active != null) {
+                active.setRumbleEnabled(enabled);
+            }
+            optionalDevicesStatus = enabled ? "RUMBLE ENABLED" : "RUMBLE DISABLED";
+            refreshMenuPages();
+            return;
+        }
         if ("camera".equals(id)) {
             String selected = cameraSelection(getPreferences(MODE_PRIVATE));
             ArrayList<AndroidMenuModel.ChoiceValue> choices = new ArrayList<>(cameraChoices());
@@ -1342,7 +1353,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             devicesDraft = loadDevicesDraft();
         }
         switch (id) {
-            case "rumble" -> devicesDraft = devicesDraft.toggleRumble();
             case "live-camera" -> devicesDraft = devicesDraft.toggleCamera();
             case "game-boy-printer" -> devicesDraft = devicesDraft.togglePrinter();
             case "calibrate-tilt" -> {
@@ -2234,6 +2244,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                         "grey".equals(displayColors(preferences))),
                 AndroidMenuModel.touchPage(touch, controllerAvailable), controllerPage(),
                 AndroidMenuModel.optionalDevicesPage(camera, gamepad,
+                        preferences.getBoolean("devices.rumble", false),
                         preferences.getBoolean(PREF_GPS_ENABLED, false), gamepadChoices),
                 AndroidMenuModel.optionPickerPage(
                         optionSession == null ? "SELECT OPTION" : optionSession.title(),
