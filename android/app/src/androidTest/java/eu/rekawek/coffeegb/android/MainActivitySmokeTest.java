@@ -539,6 +539,54 @@ public class MainActivitySmokeTest {
     }
 
     @Test
+    public void rumbleControlPersistsAndUpdatesTheBoundRuntimeImmediately() throws Exception {
+        Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();
+        AtomicReference<AndroidEmulationRuntime> runtime = new AtomicReference<>();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            await("runtime binding", () -> {
+                scenario.onActivity(activity -> runtime.set(runtime(activity)));
+                return runtime.get() != null;
+            });
+            scenario.onActivity(activity -> {
+                activity.getPreferences(MainActivity.MODE_PRIVATE).edit()
+                        .putBoolean("devices.rumble", false).commit();
+                runtime(activity).setRumbleEnabled(false);
+                menuController(activity).show(MenuRoute.OPTIONAL_DEVICES);
+            });
+            awaitRoute(scenario, MenuRoute.OPTIONAL_DEVICES);
+            awaitFocused(scenario, "rumble");
+
+            press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
+            scenario.onActivity(activity -> {
+                assertTrue(activity.getPreferences(MainActivity.MODE_PRIVATE)
+                        .getBoolean("devices.rumble", false));
+                assertTrue(runtime(activity).rumbleEnabledForTesting());
+            });
+
+            runtime.set(null);
+            scenario.recreate();
+            await("runtime rebinding", () -> {
+                scenario.onActivity(activity -> runtime.set(runtime(activity)));
+                return runtime.get() != null;
+            });
+            awaitRoute(scenario, MenuRoute.OPTIONAL_DEVICES);
+            awaitFocused(scenario, "rumble");
+            scenario.onActivity(activity -> {
+                assertTrue(activity.getPreferences(MainActivity.MODE_PRIVATE)
+                        .getBoolean("devices.rumble", false));
+                assertTrue(runtime(activity).rumbleEnabledForTesting());
+            });
+
+            press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
+            scenario.onActivity(activity -> {
+                assertFalse(activity.getPreferences(MainActivity.MODE_PRIVATE)
+                        .getBoolean("devices.rumble", true));
+                assertFalse(runtime(activity).rumbleEnabledForTesting());
+            });
+        }
+    }
+
+    @Test
     public void deniedCameraPermissionUsesOneOwnerAndStatusSurvivesRecreation()
             throws Exception {
         Instrumentation instrumentation = InstrumentationRegistry.getInstrumentation();

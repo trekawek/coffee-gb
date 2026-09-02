@@ -69,7 +69,8 @@ public class AllRouteRendererAndroidTest {
         pages.add(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true));
         pages.add(AndroidMenuModel.controllerPage("PHYSICAL BLUETOOTH GAME CONTROLLER",
                 Map.of(Button.A, "BUTTON A", Button.B, "BUTTON B"), null, false));
-        pages.add(AndroidMenuModel.optionalDevicesPage("rear", "auto", true, List.of()));
+        pages.add(AndroidMenuModel.optionalDevicesPage(
+                "rear", "auto", true, true, List.of()));
         pages.add(AndroidMenuModel.optionPickerPage("OPTION PICKER", List.of(
                 new AndroidMenuModel.ChoiceValue("one", "ONE"),
                 new AndroidMenuModel.ChoiceValue("two", "TWO"),

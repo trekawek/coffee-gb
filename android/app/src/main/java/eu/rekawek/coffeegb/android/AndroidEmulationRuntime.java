@@ -428,6 +428,10 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         rumblePreference.setEnabled(enabled);
     }
 
+    boolean rumbleEnabledForTesting() {
+        return rumblePreference.enabledForTesting();
+    }
+
     /** Calibrates an active MBC7 cartridge to the device's current resting position. */
     void calibrateTilt() {
         if (rejectBenchmarkMutation()) {

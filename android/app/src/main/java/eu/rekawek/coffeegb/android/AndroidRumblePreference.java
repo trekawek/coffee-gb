@@ -19,6 +19,10 @@ final class AndroidRumblePreference {
         }
     }
 
+    synchronized boolean enabledForTesting() {
+        return enabled;
+    }
+
     synchronized void attach(Output output) {
         Output checked = Objects.requireNonNull(output, "output");
         checked.setEnabled(enabled);

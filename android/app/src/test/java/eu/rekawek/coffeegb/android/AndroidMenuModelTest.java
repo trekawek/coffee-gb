@@ -64,7 +64,7 @@ public class AndroidMenuModelTest {
         assertIds(AndroidMenuModel.optionalDevicesPage(
                         new AndroidMenuModel.DevicesDraft(false, false, false), "READY",
                         MenuPreview.empty()),
-                "camera", "gamepad", "gps");
+                "rumble", "camera", "gamepad", "gps");
         assertIds(AndroidMenuModel.printerPaperPage(MenuPreview.empty(), "READY"),
                 "paper-status");
         assertIds(AndroidMenuModel.systemPage("dmg-games"),
@@ -112,9 +112,9 @@ public class AndroidMenuModelTest {
         assertWidgetTypes(AndroidMenuModel.systemPage("dmg-games"),
                 MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
                 MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN);
-                assertWidgetTypes(AndroidMenuModel.optionalDevicesPage(
-                        "rear", "auto", true, List.of()),
-                MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
+        assertWidgetTypes(AndroidMenuModel.optionalDevicesPage(
+                        "rear", "auto", true, true, List.of()),
+                MenuWidgetType.CHECKBOX, MenuWidgetType.DROPDOWN, MenuWidgetType.DROPDOWN,
                 MenuWidgetType.CHECKBOX);
         assertWidgetTypes(AndroidMenuModel.touchPage(AndroidMenuModel.resetTouchDraft(), true),
                 MenuWidgetType.CHECKBOX, MenuWidgetType.BUTTON);
