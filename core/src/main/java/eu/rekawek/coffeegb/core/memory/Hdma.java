@@ -780,6 +780,186 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
     }
 
     /**
+     * Whether a native-CGB double-speed running epoch may borrow the quiet interval between
+     * HBlank-DMA bursts. The programmed transfer remains armed, but neither request clock nor
+     * any CPU/HDMA arbitration state can change until the GPU publishes the next HBlank edge.
+     * That edge is deliberately left to the scalar scheduler by the GPU epoch horizons.
+     */
+    public boolean isPerformanceArmedHblankWaitStable() {
+        return speedMode.isGbc()
+                && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 2
+                && transferInProgress
+                && hblankTransfer
+                && lcdEnabled
+                && tick < 0
+                && hblankRequestTicks < 0
+                && hblankRequestAge == 0
+                && nextHblankRequestTicks < 0
+                && nextHblankRequestAge == 0
+                && !stopAfterCurrentBlock
+                && !preserveLengthAfterCurrentBlock
+                && !speedSwitchInProgress
+                && !speedSwitchStartedWithoutRequest
+                && !pauseOamDmaForSpeedSwitchBurst
+                && wakeRequestArbitration == WakeRequestArbitration.NONE
+                && !cpuHalted
+                && !haltEnteredThisTick
+                && !requestOverlappedCpuWrite
+                && !interruptEntryWonArbitration
+                && cpuRequestArbitration == CpuRequestArbitration.NONE
+                && !cpuRequestAllowsLateInterrupt
+                && !haltOpcodeRequestLatched
+                && sourceBusSample == null;
+    }
+
+    /**
+     * Whether the native-CGB x2 scheduler has a structurally stable, already-owned HBlank data
+     * interior. The source may be either one side-effect-free WRAM block or one ROM block whose
+     * immutable physical mapping still has to be proven by a bounded
+     * {@link PerformanceRomAccess} lease. The atomic tick-32 VRAM commit remains scalar.
+     */
+    public boolean isPerformanceNativeCgbOwnedHblankDataStructurallyStable() {
+        return transferInProgress
+                && hblankTransfer
+                && tick >= 0 && tick < 31
+                && speedMode.isGbc()
+                && !speedMode.isDmgCompat()
+                && speedMode.getSpeedMode() == 2
+                && lcdEnabled
+                && gpuMode == Mode.HBlank
+                && gpuLine >= 0 && gpuLine < 144
+                && hblankRequestTicks == 0
+                && hblankRequestAge > 0
+                && nextHblankRequestTicks < 0
+                && nextHblankRequestAge == 0
+                && cpuRequestArbitration == CpuRequestArbitration.DMA
+                && wakeRequestArbitration == WakeRequestArbitration.NONE
+                && !cpuRequestAllowsLateInterrupt
+                && !cpuHalted
+                && !haltEnteredThisTick
+                && !haltOpcodeRequestLatched
+                && !requestOverlappedCpuWrite
+                && !interruptEntryWonArbitration
+                && !stopAfterCurrentBlock
+                && !preserveLengthAfterCurrentBlock
+                && !speedSwitchInProgress
+                && !speedSwitchStartedWithoutRequest
+                && !pauseOamDmaForSpeedSwitchBurst
+                && sourceBusSample == null
+                && debugHooks == null
+                && !debugMemoryHooks
+                && (src & 0x0f) == 0
+                && (src >= 0x0000 && src <= 0x7ff0
+                || src >= 0xc000 && src <= 0xdff0);
+    }
+
+    /** Existing lease-free WRAM tier retained for callers which do not borrow cartridge data. */
+    public boolean isPerformanceNativeCgbOwnedHblankDataStable() {
+        return isPerformanceNativeCgbOwnedHblankDataStructurallyStable()
+                && isPerformanceOwnedHblankWramSource();
+    }
+
+    /** Whether this structurally stable packet needs an immutable ROM mapping lease. */
+    public boolean requiresPerformanceNativeCgbOwnedHblankRomAccess() {
+        return isPerformanceNativeCgbOwnedHblankDataStructurallyStable()
+                && isPerformanceOwnedRomSource();
+    }
+
+    /** WRAM plus an exactly mapped immutable-ROM tier for the native-CGB owner. */
+    public boolean isPerformanceNativeCgbOwnedHblankDataStable(
+            PerformanceRomAccess romAccess) {
+        return isPerformanceNativeCgbOwnedHblankDataStructurallyStable()
+                && (isPerformanceOwnedHblankWramSource()
+                || hasCompletePerformanceOwnedPhysicalRomBlock(romAccess));
+    }
+
+    private boolean isPerformanceOwnedHblankWramSource() {
+        return src >= 0xc000 && src <= 0xdff0;
+    }
+
+    private boolean isPerformanceOwnedRomSource() {
+        return src >= 0x0000 && src <= 0x7ff0;
+    }
+
+    /**
+     * Proves every byte separately: the generic physical lease does not promise that adjacent
+     * CPU addresses have adjacent backing offsets, even though ordinary MBC5/MBC7 mappings do.
+     */
+    private boolean hasCompletePerformanceOwnedPhysicalRomBlock(
+            PerformanceRomAccess romAccess) {
+        if (romAccess == null || !isPerformanceOwnedRomSource()) {
+            return false;
+        }
+        for (int j = 0; j < 0x10; j++) {
+            if (romAccess.physicalOffset(src + j) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Returns the complete remaining data-only prefix through internal tick 31, or zero when the
+     * request cannot consume that whole prefix. Tick 32 is the observable destination commit and
+     * is intentionally excluded.
+     */
+    public int performanceNativeCgbOwnedHblankDataSpanLimit(int requested) {
+        return performanceNativeCgbOwnedHblankDataSpanLimit(requested, null);
+    }
+
+    /** Immutable-ROM-aware counterpart using one owner-thread lease for the whole transaction. */
+    public int performanceNativeCgbOwnedHblankDataSpanLimit(
+            int requested, PerformanceRomAccess romAccess) {
+        if (requested <= 0 || !isPerformanceNativeCgbOwnedHblankDataStable(romAccess)) {
+            return 0;
+        }
+        int remainingDataTicks = 31 - tick;
+        return requested >= remainingDataTicks ? remainingDataTicks : 0;
+    }
+
+    /** Applies one preflighted WRAM-source data prefix without publishing transient bus samples. */
+    public void advancePerformanceNativeCgbOwnedHblankDataTrusted(int ticks) {
+        advancePerformanceNativeCgbOwnedHblankDataTrusted(ticks, null);
+    }
+
+    /**
+     * Applies one preflighted WRAM/immutable-ROM data prefix. ROM bytes retain the scalar odd-slot
+     * ordering, but bypass inert outer bus layers through the same bounded physical lease.
+     */
+    public void advancePerformanceNativeCgbOwnedHblankDataTrusted(
+            int ticks, PerformanceRomAccess romAccess) {
+        if (ticks <= 0
+                || performanceNativeCgbOwnedHblankDataSpanLimit(ticks, romAccess) != ticks) {
+            throw new IllegalStateException(
+                    "HDMA burst is not stable for a native-CGB PERFORMANCE data span");
+        }
+        boolean physicalRomSource = isPerformanceOwnedRomSource();
+        int endTick = tick + ticks;
+        ppuBusGeneration += ticks;
+        for (int sourceTick = tick + 1; sourceTick <= endTick; sourceTick++) {
+            if ((sourceTick & 1) == 0) {
+                continue;
+            }
+            int j = sourceTick >> 1;
+            int sourceAddress = (src + j) & 0xffff;
+            blockData[j] = physicalRomSource
+                    ? romAccess.readPhysicalByte(romAccess.physicalOffset(sourceAddress))
+                    : readSourceByte(sourceAddress);
+            sourceBytesTransferred++;
+        }
+        tick = endTick;
+        hblankRequestAge += ticks;
+        sourceBusSample = null;
+    }
+
+    /** Stable HDMA clock contract used only by the native-CGB x2 running epoch. */
+    public boolean isPerformanceNativeCgbRunningEpochStable() {
+        return isPerformanceInactiveRequestClockStable()
+                || isPerformanceArmedHblankWaitStable();
+    }
+
+    /**
      * Replays the arithmetic part of {@link #advanceHblankRequest()} for a preflighted inactive
      * packet. Zero clocks age once per scalar dot; negative clocks remain invariant.
      */
@@ -793,6 +973,21 @@ public class Hdma implements AddressSpace, StatefulComponent<Hdma> {
         }
         if (nextHblankRequestTicks == 0) {
             nextHblankRequestAge += ticks;
+        }
+    }
+
+    /**
+     * Native-CGB x2 counterpart of {@link #advancePerformanceInactiveRequestClockTrusted(int)}.
+     * An armed HBlank wait has two negative request clocks, so its trusted commit is a no-op;
+     * inactive zero clocks retain their established scalar-equivalent age arithmetic.
+     */
+    public void advancePerformanceNativeCgbRunningEpochClockTrusted(int ticks) {
+        if (ticks < 0 || !isPerformanceNativeCgbRunningEpochStable()) {
+            throw new IllegalStateException(
+                    "HDMA request clock is not stable for a native-CGB PERFORMANCE span");
+        }
+        if (isPerformanceInactiveRequestClockStable()) {
+            advancePerformanceInactiveRequestClockTrusted(ticks);
         }
     }
 

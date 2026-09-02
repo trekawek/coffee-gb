@@ -228,6 +228,191 @@ public class StatRegisterTest {
     }
 
     @Test
+    public void nativeCgbCheckpointReplayAdmitsOnlyNonTargetVisibleLineWindows() {
+        Fixture lineStart = settledNativeLycOnlyFixture(10, 0, 72);
+        assertEquals(54,
+                lineStart.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+        assertEquals(54,
+                lineStart.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+
+        Fixture lineTail = settledNativeLycOnlyFixture(10, 447, 72);
+        assertEquals("tail must stop before the line rollover", 8,
+                lineTail.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+        assertEquals("canonical tail has a closed-form endpoint", 8,
+                lineTail.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+        assertEquals(0, lineTail.stat.performanceNativeCgbCheckpointReplaySpanLimit(0));
+
+        Fixture midLine = settledNativeLycOnlyFixture(10, 100, 72);
+        assertEquals("mid-line checkpoints retain exact replay", 0,
+                midLine.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+
+        Fixture normalSpeed = new Fixture(true, false);
+        normalSpeed.gpu.setByte(GpuRegister.LYC.getAddress(), 72);
+        normalSpeed.stat.setByte(StatRegister.ADDRESS, 0x40);
+        normalSpeed.advanceTo(10, 0);
+        assertEquals("normal-speed CGB", 0,
+                normalSpeed.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+
+        assertEquals("LYC equality line", 0,
+                settledNativeLycOnlyFixture(72, 0, 72).stat
+                        .performanceNativeCgbCheckpointReplaySpanLimit(54));
+        assertEquals("preceding comparator line", 0,
+                settledNativeLycOnlyFixture(71, 447, 72).stat
+                        .performanceNativeCgbCheckpointReplaySpanLimit(54));
+        assertEquals("VBlank handoff line", 0,
+                settledNativeLycOnlyFixture(143, 0, 72).stat
+                        .performanceNativeCgbCheckpointReplaySpanLimit(54));
+    }
+
+    @Test
+    public void nativeCgbCheckpointReplayRejectsPendingAndMismatchedStatPlanes()
+            throws Exception {
+        for (String field : new String[]{
+                "lycIrqStatSource", "lycIrqStatLatch", "modeIrqStatLatch",
+                "mode0IrqStatLatch", "lycIrqValueLatch", "modeIrqLycLatch",
+                "mode0IrqLycLatch"}) {
+            Fixture mismatch = settledNativeLycOnlyFixture(10, 0, 72);
+            setIntField(mismatch.stat, field, 0);
+            assertEquals(field, 0,
+                    mismatch.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+        }
+
+        for (String field : new String[]{
+                "pendingModeIrqStatClock", "pendingModeIrqLycClock",
+                "pendingMode0IrqStatClock", "pendingMode0IrqLycClock",
+                "pendingCgbMode2PublicationClock", "pendingLycWriteIrq",
+                "pendingLycComparatorIrq"}) {
+            Fixture pending = settledNativeLycOnlyFixture(10, 0, 72);
+            setLongField(pending.stat, field, longField(pending.stat, "lycIrqClock") + 1);
+            assertEquals(field, 0,
+                    pending.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+        }
+
+        for (String field : new String[]{
+                "pendingCgbMode0Interrupt", "pendingCgbMode1Interrupt",
+                "pendingCgbMode2Interrupt", "pendingCgbMode2LateReplay",
+                "pendingCgbFrameMode2Interrupt", "retractableCgbMode2Interrupt",
+                "releaseTailLycCpuAcceptance"}) {
+            Fixture pending = settledNativeLycOnlyFixture(10, 0, 72);
+            setBooleanField(pending.stat, field, true);
+            assertEquals(field, 0,
+                    pending.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+        }
+
+        Fixture dirty = settledNativeLycOnlyFixture(10, 0, 72);
+        dirty.gpu.setByteFromCpu(GpuRegister.SCX.getAddress(), 1);
+        assertEquals("dirty evaluator", 0,
+                dirty.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+
+        Fixture signalled = settledNativeLycOnlyFixture(10, 0, 72);
+        signalled.interrupts.requestInterrupt(LCDC);
+        signalled.interrupts.clearInterrupt(LCDC);
+        assertTrue(signalled.interrupts.hasPpuTickSignals());
+        assertEquals("PPU signal", 0,
+                signalled.stat.performanceNativeCgbCheckpointReplaySpanLimit(54));
+    }
+
+    @Test
+    public void nativeCgbCheckpointReplayMatchesScalarAtLineStartAndTail() {
+        int[][] windows = {{10, 0, 13}, {10, 447, 8}};
+        for (int[] window : windows) {
+            Fixture scalar = settledNativeLycOnlyFixture(window[0], window[1], 72);
+            Fixture replay = settledNativeLycOnlyFixture(window[0], window[1], 72);
+            int span = replay.stat.performanceNativeCgbCheckpointReplaySpanLimit(window[2]);
+            assertEquals(window[0] + ":" + window[1], window[2], span);
+
+            for (int dot = 0; dot < span; dot++) {
+                scalar.gpu.tick();
+                scalar.stat.tick();
+                replay.gpu.tick();
+                replay.stat.tickNativeCgbPerformancePostGpu();
+            }
+
+            assertEquals("GPU line", scalar.gpu.getLine(), replay.gpu.getLine());
+            assertEquals("GPU dot", scalar.gpu.getTicksInLine(), replay.gpu.getTicksInLine());
+            assertEquals("STAT state", scalar.stat.captureState(), replay.stat.captureState());
+            assertEquals("interrupt state", scalar.interrupts.captureState(),
+                    replay.interrupts.captureState());
+        }
+    }
+
+    @Test
+    public void nativeCgbCheckpointAggregateRejectsNonCanonicalEndpointPlanes()
+            throws Exception {
+        for (String field : new String[]{
+                "coincidence", "intCoincidence", "intLine", "lycWriteSuppressed",
+                "lycComparatorSignal", "pendingCgbMode2IfHighAtCapture",
+                "cgbMode2CapturedAtLineEdge", "previousMode0Window",
+                "previousMode1Window", "previousMode2Window"}) {
+            Fixture nonCanonical = settledNativeLycOnlyFixture(10, 0, 72);
+            setBooleanField(nonCanonical.stat, field, true);
+            assertEquals(field, 0,
+                    nonCanonical.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+        }
+
+        for (String field : new String[]{"suppressedLycIrqLine", "modeBlockedLycIrqLine"}) {
+            Fixture nonCanonical = settledNativeLycOnlyFixture(10, 0, 72);
+            setIntField(nonCanonical.stat, field, 7);
+            assertEquals(field, 0,
+                    nonCanonical.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+        }
+
+        Fixture wrongRegisteredLy = settledNativeLycOnlyFixture(10, 0, 72);
+        setIntField(wrongRegisteredLy.stat, "registeredLy", 9);
+        assertEquals("registered LY", 0,
+                wrongRegisteredLy.stat.performanceNativeCgbCheckpointAggregateSpanLimit(54));
+
+        Fixture tail = settledNativeLycOnlyFixture(10, 447, 72);
+        setBooleanField(tail.stat, "previousMode0Window", false);
+        assertEquals("tail mode-0 history", 0,
+                tail.stat.performanceNativeCgbCheckpointAggregateSpanLimit(8));
+    }
+
+    @Test
+    public void nativeCgbCheckpointAggregateMatchesScalarAcrossPartialPrefixes() {
+        int[][] windows = {
+                {1, 0, 54}, {10, 6, 54}, {142, 12, 54},
+                {10, 447, 8}, {10, 451, 4}
+        };
+        for (int[] window : windows) {
+            Fixture scalar = settledNativeLycOnlyFixture(window[0], window[1], 72);
+            Fixture aggregate = settledNativeLycOnlyFixture(window[0], window[1], 72);
+            int span = aggregate.stat
+                    .performanceNativeCgbCheckpointAggregateSpanLimit(window[2]);
+            assertEquals(window[0] + ":" + window[1], window[2], span);
+
+            for (int dot = 0; dot < span; dot++) {
+                scalar.gpu.tick();
+                scalar.stat.tick();
+            }
+            int remaining = span;
+            int prefix = 1;
+            while (remaining > 0) {
+                int chunk = Math.min(remaining, prefix);
+                for (int dot = 0; dot < chunk; dot++) {
+                    aggregate.gpu.tick();
+                }
+                aggregate.stat
+                        .advancePerformanceNativeCgbCheckpointAggregateSpanTrusted(chunk);
+                remaining -= chunk;
+                prefix = prefix == 5 ? 1 : prefix + 1;
+            }
+
+            assertEquals("GPU line", scalar.gpu.getLine(), aggregate.gpu.getLine());
+            assertEquals("GPU dot", scalar.gpu.getTicksInLine(),
+                    aggregate.gpu.getTicksInLine());
+            assertEquals("STAT state", scalar.stat.captureState(),
+                    aggregate.stat.captureState());
+            assertEquals("interrupt state", scalar.interrupts.captureState(),
+                    aggregate.interrupts.captureState());
+            assertEquals("STAT readback", scalar.stat.getByte(StatRegister.ADDRESS),
+                    aggregate.stat.getByte(StatRegister.ADDRESS));
+            assertEquals("LY readback", scalar.gpu.getByte(GpuRegister.LY.getAddress()),
+                    aggregate.gpu.getByte(GpuRegister.LY.getAddress()));
+        }
+    }
+
+    @Test
     public void performanceSgbLcdOffSpanRejectsEveryLiveStatPublicationPlane()
             throws Exception {
         Fixture settled = settledDmgLcdOffFixture();
@@ -3073,6 +3258,13 @@ public class StatRegisterTest {
         field.setBoolean(stat, value);
     }
 
+    private static void setIntField(StatRegister stat, String name, int value)
+            throws Exception {
+        Field field = StatRegister.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.setInt(stat, value);
+    }
+
     private static Fixture settledDmgLcdOffFixture() {
         Fixture fixture = new Fixture(false);
         fixture.gpu.setByte(0xff40, 0);
@@ -3086,6 +3278,14 @@ public class StatRegisterTest {
         Fixture fixture = new Fixture(true);
         fixture.advanceTo(1, 100);
         assertFalse(fixture.gpu.isStatEventCheckpoint());
+        return fixture;
+    }
+
+    private static Fixture settledNativeLycOnlyFixture(int line, int ticksInLine, int lyc) {
+        Fixture fixture = new Fixture(true, true);
+        fixture.gpu.setByte(GpuRegister.LYC.getAddress(), lyc);
+        fixture.stat.setByte(StatRegister.ADDRESS, 0x40);
+        fixture.advanceTo(line, ticksInLine);
         return fixture;
     }
 

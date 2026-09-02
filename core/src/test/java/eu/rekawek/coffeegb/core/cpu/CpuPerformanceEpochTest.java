@@ -41,7 +41,287 @@ public final class CpuPerformanceEpochTest {
         assertEquals(1, memory.writes);
         assertEquals(0xff40, memory.lastWriteAddress);
         assertEquals(1, cpu.getPerformanceEpochTerminalAccesses());
+        assertEquals(1L, cpu.getPerformanceEpochFenceAttemptCount());
+        assertEquals(0L, cpu.getPerformanceEpochCartWindowFenceAttemptCount());
         assertTrue("journal is one-shot", !cpu.replayPerformanceEpochJournal());
+    }
+
+    @Test
+    public void nativeCgbEpochAdmitsStableLyReadWithScalarParityAtEveryBudget()
+            throws Exception {
+        assertStableLyReadEpochMatchesScalar(false);
+    }
+
+    @Test
+    public void armedHblankWaitEpochAdmitsStableLyReadWithScalarParityAtEveryBudget()
+            throws Exception {
+        assertStableLyReadEpochMatchesScalar(true);
+    }
+
+    @Test
+    public void stableLyReadLeaseDoesNotLeakIntoPlainEpoch() {
+        for (boolean armed : new boolean[]{false, true}) {
+            LeasedMemory memory = new LeasedMemory(0, 0x4000);
+            memory.bytes[0] = (byte) 0xf0; // LDH A,(FF44), under the native-CGB lease
+            memory.bytes[1] = 0x44;
+            memory.bytes[2] = (byte) 0xf0; // LDH A,(FF44), through the plain API
+            memory.bytes[3] = 0x44;
+            System.arraycopy(memory.bytes, 0, memory.physicalBytes, 0, 4);
+            memory.bytes[0xff44] = 0x66;
+            Cpu cpu = new Cpu(memory, new InterruptManager(true), null,
+                    doubleSpeed(), new Display(false));
+
+            int leasedElapsed = armed
+                    ? cpu.runNativeCgbArmedHblankWaitPerformanceEpoch(6)
+                    : cpu.runNativeCgbPerformanceEpoch(6);
+            String path = armed ? "armed HBlank wait" : "native CGB";
+            assertEquals(path + " did not finish its leased FF44 read", 6, leasedElapsed);
+            assertEquals(path + " did not read FF44", 1, memory.busReads);
+            assertEquals(0L, cpu.getPerformanceEpochTerminalAccesses());
+            assertEquals(0L, cpu.getPerformanceEpochFenceAttemptCount());
+
+            cpu.resetPerformanceEpochTelemetry();
+            int plainElapsed = cpu.runPerformanceEpoch(54);
+
+            assertEquals(path + " leaked its stable-LY lease into the plain API", 6,
+                    plainElapsed);
+            assertEquals(path + " plain API did not delegate exactly one FF44 read", 2,
+                    memory.busReads);
+            assertEquals(0x66, cpu.getRegisters().getA());
+            assertEquals(4, cpu.getRegisters().getPC());
+            assertEquals(Cpu.State.OPCODE, cpu.getState());
+            assertEquals(1L, cpu.getPerformanceEpochTerminalAccesses());
+            assertEquals(1L, cpu.getPerformanceEpochFenceAttemptCount());
+            assertFalse(cpu.hasPerformanceEpochJournal());
+        }
+    }
+
+    @Test
+    public void armedHblankWaitEpochKeepsOtherPpuIoAndLyWritesBeforeTheBus()
+            throws Exception {
+        String[] labels = {"FF41 read", "FF45 read", "FF44 write", "FF44 RMW"};
+        int[][] programs = {
+                {0xf0, 0x41},       // LDH A,(FF41)
+                {0xf0, 0x45},       // LDH A,(FF45)
+                {0xe0, 0x44},       // LDH (FF44),A
+                {0x34}              // INC (HL), with HL=FF44
+        };
+        int[] addresses = {0xff41, 0xff45, 0xff44, 0xff44};
+
+        for (int index = 0; index < labels.length; index++) {
+            LeasedMemory directMemory = new LeasedMemory(0, 0x4000);
+            ParityMemory scalarMemory = new ParityMemory();
+            for (int offset = 0; offset < programs[index].length; offset++) {
+                directMemory.bytes[offset] = (byte) programs[index][offset];
+                directMemory.physicalBytes[offset] = (byte) programs[index][offset];
+                scalarMemory.bytes[offset] = (byte) programs[index][offset];
+            }
+            directMemory.bytes[addresses[index]] = 0x23;
+            scalarMemory.bytes[addresses[index]] = 0x23;
+
+            InterruptManager directInterrupts = new InterruptManager(true);
+            InterruptManager scalarInterrupts = new InterruptManager(true);
+            Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            direct.getRegisters().setA(0x45);
+            direct.getRegisters().setHL(0xff44);
+            scalar.restoreState(direct.captureState());
+            scalarInterrupts.restoreState(directInterrupts.captureState());
+
+            int elapsed = direct.runNativeCgbArmedHblankWaitPerformanceEpoch(54);
+            assertTrue(labels[index] + " safe prefix made no progress", elapsed > 0);
+            for (int tick = 0; tick < elapsed; tick++) {
+                scalar.tick();
+            }
+
+            assertDeepEquals(labels[index] + " CPU boundary",
+                    scalar.captureState(), direct.captureState());
+            assertDeepEquals(labels[index] + " interrupt boundary",
+                    scalarInterrupts.captureState(), directInterrupts.captureState());
+            assertArrayEquals(labels[index] + " memory",
+                    scalarMemory.bytes, directMemory.bytes);
+            assertEquals(labels[index] + " crossed its decoded read", 0,
+                    directMemory.busReads);
+            assertEquals(labels[index] + " changed the target byte", 0x23,
+                    directMemory.bytes[addresses[index]] & 0xff);
+            assertFalse(labels[index] + " was journaled",
+                    direct.hasPerformanceEpochJournal());
+            assertEquals(labels[index] + " delegated a terminal access", 0L,
+                    direct.getPerformanceEpochTerminalAccesses());
+            assertEquals(labels[index] + " did not record one decoded fence", 1L,
+                    direct.getPerformanceEpochFenceAttemptCount());
+            assertEquals(Cpu.State.RUNNING, direct.getState());
+        }
+    }
+
+    @Test
+    public void statReplayEpochKeepsLyReadBeforeTheBusAfterASafePrefix()
+            throws Exception {
+        LeasedMemory directMemory = new LeasedMemory(0, 0x4000);
+        ParityMemory scalarMemory = new ParityMemory();
+        int[] program = {0x00, 0xf0, 0x44}; // NOP; LDH A,(FF44)
+        for (int offset = 0; offset < program.length; offset++) {
+            directMemory.bytes[offset] = (byte) program[offset];
+            directMemory.physicalBytes[offset] = (byte) program[offset];
+            scalarMemory.bytes[offset] = (byte) program[offset];
+        }
+        directMemory.bytes[0xff44] = 0x23;
+        scalarMemory.bytes[0xff44] = 0x23;
+        InterruptManager directInterrupts = new InterruptManager(true);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                doubleSpeed(), new Display(false));
+        Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                doubleSpeed(), new Display(false));
+        scalar.restoreState(direct.captureState());
+        scalarInterrupts.restoreState(directInterrupts.captureState());
+
+        int elapsed = direct.runNativeCgbStatReplayPerformanceEpoch(54);
+        assertTrue("safe NOP prefix made no progress", elapsed > 0);
+        for (int tick = 0; tick < elapsed; tick++) {
+            scalar.tick();
+        }
+
+        assertDeepEquals("STAT replay CPU boundary",
+                scalar.captureState(), direct.captureState());
+        assertDeepEquals("STAT replay interrupt boundary",
+                scalarInterrupts.captureState(), directInterrupts.captureState());
+        assertEquals("STAT replay crossed the FF44 read", 0, directMemory.busReads);
+        assertEquals("STAT replay did not record the FF44 fence", 1L,
+                direct.getPerformanceEpochFenceAttemptCount());
+        assertEquals(0L, direct.getPerformanceEpochTerminalAccesses());
+        assertFalse(direct.hasPerformanceEpochJournal());
+    }
+
+    @Test
+    public void statReplayEpochLeavesHaltOnTheZeroDotScalarBoundary()
+            throws Exception {
+        LeasedMemory memory = new LeasedMemory(0, 0x4000);
+        memory.bytes[0] = 0x00;
+        memory.bytes[1] = 0x76;
+        memory.physicalBytes[0] = 0x00;
+        memory.physicalBytes[1] = 0x76;
+        InterruptManager interrupts = new InterruptManager(true);
+        Cpu cpu = new Cpu(memory, interrupts, null, doubleSpeed(), new Display(false));
+        assertTrue(cpu.runNativeCgbStatReplayPerformanceEpoch(54) > 0);
+        assertEquals(1, cpu.getRegisters().getPC());
+        var cpuState = cpu.captureState();
+        var interruptState = interrupts.captureState();
+
+        assertEquals(0, cpu.runNativeCgbStatReplayPerformanceEpoch(54));
+        assertDeepEquals("zero-dot STAT replay HALT CPU", cpuState, cpu.captureState());
+        assertDeepEquals("zero-dot STAT replay HALT interrupts",
+                interruptState, interrupts.captureState());
+    }
+
+    @Test
+    public void armedHblankWaitEpochStopsBeforeLcdcAndHdmaControlWrites()
+            throws Exception {
+        int[] addresses = {0xff40, 0xff55};
+        for (int address : addresses) {
+            LeasedMemory directMemory = new LeasedMemory(0, 0x4000);
+            ParityMemory scalarMemory = new ParityMemory();
+            int[] program = {0xe0, address & 0xff}; // LDH (a8),A
+            for (int offset = 0; offset < program.length; offset++) {
+                directMemory.bytes[offset] = (byte) program[offset];
+                directMemory.physicalBytes[offset] = (byte) program[offset];
+                scalarMemory.bytes[offset] = (byte) program[offset];
+            }
+            directMemory.bytes[address] = 0x12;
+            scalarMemory.bytes[address] = 0x12;
+
+            InterruptManager directInterrupts = new InterruptManager(true);
+            InterruptManager scalarInterrupts = new InterruptManager(true);
+            Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            direct.getRegisters().setA(0x34);
+            scalar.restoreState(direct.captureState());
+            scalarInterrupts.restoreState(directInterrupts.captureState());
+
+            int elapsed = direct.runNativeCgbArmedHblankWaitPerformanceEpoch(54);
+            assertTrue("0x" + Integer.toHexString(address) + " prefix made no progress",
+                    elapsed > 0);
+            for (int tick = 0; tick < elapsed; tick++) {
+                scalar.tick();
+            }
+
+            assertDeepEquals("0x" + Integer.toHexString(address) + " CPU boundary",
+                    scalar.captureState(), direct.captureState());
+            assertDeepEquals("0x" + Integer.toHexString(address) + " interrupt boundary",
+                    scalarInterrupts.captureState(), directInterrupts.captureState());
+            assertEquals("unsafe write crossed the decoded fence", 0x12,
+                    directMemory.bytes[address] & 0xff);
+            assertFalse("unsafe write was journaled", direct.hasPerformanceEpochJournal());
+            assertEquals("decoded fence delegated an access", 0L,
+                    direct.getPerformanceEpochTerminalAccesses());
+            assertEquals(Cpu.State.RUNNING, direct.getState());
+        }
+    }
+
+    @Test
+    public void armedHblankWaitEpochStopsBeforeHaltAfterASafePrefix()
+            throws Exception {
+        LeasedMemory directMemory = new LeasedMemory(0, 0x4000);
+        ParityMemory scalarMemory = new ParityMemory();
+        directMemory.bytes[0] = 0x00; // NOP
+        directMemory.bytes[1] = 0x76; // HALT
+        directMemory.physicalBytes[0] = 0x00;
+        directMemory.physicalBytes[1] = 0x76;
+        scalarMemory.bytes[0] = 0x00;
+        scalarMemory.bytes[1] = 0x76;
+        InterruptManager directInterrupts = new InterruptManager(true);
+        InterruptManager scalarInterrupts = new InterruptManager(true);
+        Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                doubleSpeed(), new Display(false));
+        Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                doubleSpeed(), new Display(false));
+        scalar.restoreState(direct.captureState());
+        scalarInterrupts.restoreState(directInterrupts.captureState());
+
+        int elapsed = direct.runNativeCgbArmedHblankWaitPerformanceEpoch(54);
+        assertTrue("safe NOP prefix made no progress", elapsed > 0);
+        for (int tick = 0; tick < elapsed; tick++) {
+            scalar.tick();
+        }
+        assertDeepEquals("CPU before HALT", scalar.captureState(), direct.captureState());
+        assertDeepEquals("interrupts before HALT", scalarInterrupts.captureState(),
+                directInterrupts.captureState());
+        assertEquals(1, direct.getRegisters().getPC());
+        assertEquals(Cpu.State.OPCODE, direct.getState());
+
+        var cpuState = direct.captureState();
+        var interruptState = directInterrupts.captureState();
+        assertEquals("HALT fetch must remain on the zero-dot scalar boundary", 0,
+                direct.runNativeCgbArmedHblankWaitPerformanceEpoch(54));
+        assertDeepEquals("zero-dot HALT CPU", cpuState, direct.captureState());
+        assertDeepEquals("zero-dot HALT interrupts", interruptState,
+                directInterrupts.captureState());
+    }
+
+    @Test
+    public void doubleSpeedCartWindowFenceAttemptIsClassifiedAndReset() {
+        CountingMemory memory = new CountingMemory();
+        memory.bytes[0] = 0x7e; // LD A,(HL)
+        memory.bytes[0xa000] = 0x66;
+        Cpu cpu = new Cpu(memory, new InterruptManager(true), null,
+                doubleSpeed(), new Display(false));
+        cpu.getRegisters().setHL(0xa000);
+
+        int elapsed = cpu.runPerformanceEpoch(54);
+
+        assertTrue(elapsed > 0);
+        assertEquals(1, memory.reads[0xa000]);
+        assertEquals(1L, cpu.getPerformanceEpochTerminalAccesses());
+        assertEquals(1L, cpu.getPerformanceEpochFenceAttemptCount());
+        assertEquals(1L, cpu.getPerformanceEpochCartWindowFenceAttemptCount());
+
+        cpu.resetPerformanceEpochTelemetry();
+        assertEquals(0L, cpu.getPerformanceEpochFenceAttemptCount());
+        assertEquals(0L, cpu.getPerformanceEpochCartWindowFenceAttemptCount());
     }
 
     @Test
@@ -714,6 +994,7 @@ public final class CpuPerformanceEpochTest {
         assertEquals(1, memory.reads[0xff44]);
         assertEquals(0x66, cpu.getRegisters().getA());
         assertEquals(1, cpu.getPerformanceEpochTerminalAccesses());
+        assertEquals(1L, cpu.getPerformanceEpochFenceAttemptCount());
         assertFalse(cpu.hasPerformanceEpochJournal());
     }
 
@@ -969,6 +1250,11 @@ public final class CpuPerformanceEpochTest {
                     pair.direct.getRegisters().getA());
             assertEquals(labels[index] + " delegated a terminal read", 0L,
                     pair.direct.getPerformanceEpochTerminalAccesses());
+            assertEquals(labels[index] + " did not record its decoded fence", 1L,
+                    pair.direct.getPerformanceEpochFenceAttemptCount());
+            assertEquals(labels[index] + " cart-window classification", index == 2 || index == 3
+                            ? 1L : 0L,
+                    pair.direct.getPerformanceEpochCartWindowFenceAttemptCount());
         }
 
         CpuPair mapper = newNativeNormalSpeedPair(0xea, 0x00, 0x20); // LD (2000),A
@@ -980,6 +1266,10 @@ public final class CpuPerformanceEpochTest {
                 mapper.directMemory.writes);
         assertEquals("mapper-control fence delegated a terminal write", 0L,
                 mapper.direct.getPerformanceEpochTerminalAccesses());
+        assertEquals("mapper-control decoded fence was not recorded", 1L,
+                mapper.direct.getPerformanceEpochFenceAttemptCount());
+        assertEquals("mapper-control write was misclassified as a cart-window fence", 0L,
+                mapper.direct.getPerformanceEpochCartWindowFenceAttemptCount());
     }
 
     @Test
@@ -1009,6 +1299,62 @@ public final class CpuPerformanceEpochTest {
         interrupts.setByte(0xffff, 1);
         interrupts.requestInterrupt(InterruptManager.InterruptType.VBlank);
         return interrupts;
+    }
+
+    private static void assertStableLyReadEpochMatchesScalar(boolean armed)
+            throws Exception {
+        String path = armed ? "armed HBlank wait" : "native CGB";
+        for (int budget = 1; budget <= 54; budget++) {
+            LeasedMemory directMemory = new LeasedMemory(0, 0x4000);
+            CountingMemory scalarMemory = new CountingMemory();
+            int[] program = {
+                    0xf0, 0x44,       // LDH A,(FF44)
+                    0x18, 0xfc        // JR back to the FF44 read
+            };
+            for (int offset = 0; offset < program.length; offset++) {
+                directMemory.bytes[offset] = (byte) program[offset];
+                directMemory.physicalBytes[offset] = (byte) program[offset];
+                scalarMemory.bytes[offset] = (byte) program[offset];
+            }
+            directMemory.bytes[0xff44] = 0x66;
+            scalarMemory.bytes[0xff44] = 0x66;
+
+            InterruptManager directInterrupts = new InterruptManager(true);
+            InterruptManager scalarInterrupts = new InterruptManager(true);
+            Cpu direct = new Cpu(directMemory, directInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            Cpu scalar = new Cpu(scalarMemory, scalarInterrupts, null,
+                    doubleSpeed(), new Display(false));
+            scalar.restoreState(direct.captureState());
+            scalarInterrupts.restoreState(directInterrupts.captureState());
+
+            int elapsed = armed
+                    ? direct.runNativeCgbArmedHblankWaitPerformanceEpoch(budget)
+                    : direct.runNativeCgbPerformanceEpoch(budget);
+            String boundary = path + " budget " + budget;
+            assertEquals(boundary + " stopped at a stable FF44 read", budget, elapsed);
+            for (int tick = 0; tick < elapsed; tick++) {
+                scalar.tick();
+            }
+
+            assertDeepEquals(boundary + " CPU",
+                    scalar.captureState(), direct.captureState());
+            assertDeepEquals(boundary + " interrupts",
+                    scalarInterrupts.captureState(), directInterrupts.captureState());
+            assertArrayEquals(boundary + " memory", scalarMemory.bytes, directMemory.bytes);
+            assertEquals(boundary + " FF44 read count",
+                    scalarMemory.reads[0xff44], directMemory.busReads);
+            if (budget >= 6) {
+                assertTrue(boundary + " did not execute FF44", directMemory.busReads > 0);
+                assertEquals(0x66, direct.getRegisters().getA());
+            }
+            assertEquals(boundary + " FF44 read was terminal", 0L,
+                    direct.getPerformanceEpochTerminalAccesses());
+            assertEquals(boundary + " FF44 read recorded a fence", 0L,
+                    direct.getPerformanceEpochFenceAttemptCount());
+            assertFalse(boundary + " FF44 read created a journal",
+                    direct.hasPerformanceEpochJournal());
+        }
     }
 
     private static Cpu normalSpeedNativeCpu(

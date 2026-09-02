@@ -1160,11 +1160,11 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         return Math.max(0, limit);
     }
 
-    /** Native-CGB coarse epoch horizon; HDMA is unconditionally part of this contract. */
+    /** Native-CGB coarse epoch horizon; the next HBlank/HDMA request edge remains scalar. */
     public int performanceEpochSpanLimit(int requested) {
         if (requested <= 0 || !lcdEnabled || dma == null || dma.isTransferInProgress()
                 || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()
-                || hdma == null || hdma.hasActiveOrPendingTransfer()) {
+                || hdma == null || !hdma.isPerformanceNativeCgbRunningEpochStable()) {
             return 0;
         }
         if (!performanceScanlineEnabled || !performanceScanlineCapable
@@ -1177,9 +1177,8 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
         }
         int limit;
         if (mode == Mode.PixelTransfer) {
-            // Direct rendered mode 3 is the only mode-3 cursor admitted here.  Unlike the
-            // older scheduler horizon, this coarse transaction cannot yet advance HDMA's
-            // HBlank-request synchronizer, so even an armed transfer remains fail-closed.
+            // Direct rendered mode 3 is the only mode-3 cursor admitted here. Stop before its
+            // HBlank hand-off so an armed transfer's request synchronizer remains scalar.
             if (!performanceScanlineCursor
                     || ticksInLine + 1 >= performanceScanlineEndTick) {
                 return 0;
@@ -1199,6 +1198,33 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             return 0;
         }
         return Math.min(requested, Math.max(0, limit));
+    }
+
+    /**
+     * HBlank-only horizon for the data interior of an HDMA burst which already owns the CPU bus.
+     * The direct compositor has emptied both pixel pipelines, and the returned span stays before
+     * both the scanline edge and HDMA's separately scalar atomic destination commit.
+     */
+    public int performanceNativeCgbOwnedHblankDataSpanLimit(int requested) {
+        if (requested <= 0
+                || !gbc || dmgCompatValue || speedModeValue != 2
+                || !lcdEnabled || firstLine || line < 0 || line >= 144
+                || mode != Mode.HBlank || !performanceScanlineLine
+                || !performanceScanlineEnabled || !performanceScanlineCapable
+                || performanceObservationBlocked || mutablePpuStateExposed
+                || debugHooks != null || !pendingPpuWrites.isEmpty()
+                || r.hasPendingConflictLatches() || lcdc.hasPendingConflictLatches()
+                || !lcdc.isPerformanceQuietSpanFixedPoint()
+                || !isPerformanceNativeCgbIdleOutput()
+                || !bootCompatibilityResolved
+                || dma == null || dma.isTransferInProgress() || dma.ownsOamForPpu()
+                || dma.hasPpuOamOwnershipTransitionThisTick()
+                || hdma == null
+                || !hdma.isPerformanceNativeCgbOwnedHblankDataStructurallyStable()) {
+            return 0;
+        }
+        int lineLength = firstLine ? 455 : 456;
+        return Math.min(requested, Math.max(0, lineLength - ticksInLine - 1));
     }
 
     /**
@@ -1323,7 +1349,7 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
                 || phase != oamSearchPhase || performanceScanlineCursor
                 || performanceScanlineLine || dma == null || dma.isTransferInProgress()
                 || dma.ownsOamForPpu() || dma.hasPpuOamOwnershipTransitionThisTick()
-                || hdma == null || hdma.hasActiveOrPendingTransfer()) {
+                || hdma == null || !hdma.isPerformanceNativeCgbRunningEpochStable()) {
             return 0;
         }
         if (!performanceScanlineEnabled || !performanceScanlineCapable
@@ -1673,6 +1699,18 @@ public class Gpu implements AddressSpace, StatefulComponent<Gpu> {
             timingGeneration += ticks;
             performanceScanlineFastTicks += ticks;
         }
+    }
+
+    /** Applies a preflighted direct-line HBlank data span without crossing its mode/line edge. */
+    public void advancePerformanceNativeCgbOwnedHblankDataSpanTrusted(int ticks) {
+        if (ticks <= 0) {
+            return;
+        }
+        advancePerformanceNativeCgbIdleOutputSpanTrusted(ticks);
+        ticksInLine += ticks;
+        timingGeneration += ticks;
+        performanceScanlineFastTicks += ticks;
+        cpuLyReadAcrossLineEdge = false;
     }
 
     /** Physical-DMG trusted epoch commit with canonical empty output-clock advancement. */

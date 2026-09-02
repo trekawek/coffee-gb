@@ -235,7 +235,7 @@ class RomSessionPreparerTest {
   }
 
   @Test
-  fun runtimeWarmupOnlyAcceptsFreshOrdinarySkipCartridges() {
+  fun runtimeWarmupSharesBootstrapModesButRejectsSlotsRtcAndNonStandardMappers() {
     val executor = RecordingWarmupExecutor()
     val cache = RuntimeWarmupCache(8, executor)
 
@@ -248,6 +248,34 @@ class RomSessionPreparerTest {
 
     assertEquals(1, executor.calls.size)
     assertEquals(1, cache.size)
+  }
+
+  @Test
+  fun cgbMbc7IsEligibleForShadowMeasuredRuntimeWarmup() {
+    val executor = RecordingWarmupExecutor()
+    val cache = RuntimeWarmupCache(2, executor)
+    val config =
+        skipConfig(mbc7CgbImage())
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+            .setExecutionMode(eu.rekawek.coffeegb.core.ExecutionMode.PERFORMANCE)
+
+    assertTrue(config.rom.type.isMbc7)
+    assertTrue(cache.warm(config, RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1) {})
+    assertEquals(1, executor.calls.size)
+    assertEquals(1, cache.size)
+  }
+
+  @Test
+  fun mbc7RemainsIneligibleForBootStateCache() {
+    val cache = BootStateCache(2)
+    val config =
+        skipConfig(mbc7CgbImage())
+            .setHardwareProfile(HardwareProfileRegistry.CGB)
+            .setBootstrapMode(BootstrapMode.FAST_FORWARD)
+
+    assertTrue(config.rom.type.isMbc7)
+    assertNull(cache.getOrCreate(config))
+    assertEquals(0, cache.size)
   }
 
   @Test
@@ -518,6 +546,12 @@ class RomSessionPreparerTest {
   private fun mbc5Image(): RomImage = RomImage.memory(mbc5Bytes(), "mbc5.gb")
 
   private fun mbc5Bytes(): ByteArray = ROM.readBytes().also { it[0x147] = 0x19 }
+
+  private fun mbc7CgbImage(): RomImage =
+      RomImage.memory(
+          cgbNativeImage().bytes().also { it[0x147] = 0x22 },
+          "mbc7-cgb.gb",
+      )
 
   private fun nonStandardMapperImage(): RomImage =
       RomImage.memory(ROM.readBytes().also { it[0x147] = 0x00 }, "oversized-rom.gb")

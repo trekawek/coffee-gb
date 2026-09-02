@@ -76,6 +76,273 @@ public class HdmaTest {
     }
 
     @Test
+    public void nativeCgbEpochMayBorrowOnlyTheStableWaitBetweenHblankBursts() {
+        Fixture fixture = new Fixture(2);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(1, 0);
+        fixture.hdma.onGpuUpdate(Mode.OamSearch);
+        fixture.startTransfer(0x81);
+
+        assertTrue(fixture.hdma.isPerformanceArmedHblankWaitStable());
+        assertTrue(fixture.hdma.isPerformanceNativeCgbRunningEpochStable());
+        Hdma.HdmaState initialWait = hdmaState(fixture);
+        fixture.hdma.advancePerformanceNativeCgbRunningEpochClockTrusted(54);
+        assertSameHdmaState(initialWait, hdmaState(fixture));
+
+        fixture.hdma.onGpuTiming(1, 248);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        assertEquals(3, hdmaState(fixture).hblankRequestTicks());
+        assertFalse(fixture.hdma.isPerformanceNativeCgbRunningEpochStable());
+        fixture.advanceHblankRequest(1);
+        assertEquals(2, hdmaState(fixture).hblankRequestTicks());
+        fixture.advanceHblankRequest(1);
+        assertEquals(1, hdmaState(fixture).hblankRequestTicks());
+        fixture.advanceHblankRequest(1);
+        assertEquals(0, hdmaState(fixture).hblankRequestTicks());
+        assertFalse(fixture.hdma.isPerformanceArmedHblankWaitStable());
+
+        fixture.hdma.resolveCpuRequest(false, false);
+        int guard = 0;
+        while (!fixture.hdma.tick() && guard++ < 64) {
+            // Complete exactly one 16-byte burst.
+        }
+        assertTrue("first HBlank burst did not complete", guard < 64);
+        assertEquals(0xa0, fixture.memory.getByte(0x8000));
+        assertTrue("second block was not left armed",
+                fixture.hdma.hasPendingHblankTransfer());
+        assertTrue("post-burst wait did not reopen the native x2 lease",
+                fixture.hdma.isPerformanceArmedHblankWaitStable());
+
+        fixture.hdma.onGpuUpdate(Mode.OamSearch);
+        assertTrue("armed wait should span OAM search",
+                fixture.hdma.isPerformanceArmedHblankWaitStable());
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        assertTrue("armed wait should span pixel transfer",
+                fixture.hdma.isPerformanceArmedHblankWaitStable());
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        assertEquals(3, hdmaState(fixture).hblankRequestTicks());
+        assertFalse("next HBlank edge must close the lease",
+                fixture.hdma.isPerformanceNativeCgbRunningEpochStable());
+    }
+
+    @Test
+    public void nativeCgbOwnedWramDataInteriorMatchesScalarAndLeavesCommitScalar() {
+        Fixture scalar = ownedHblankDataFixture(0xc800);
+        Fixture bulk = ownedHblankDataFixture(0xc800);
+
+        int span = bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(64);
+        assertEquals(31, span);
+        assertEquals("a partial budget must leave the whole interior scalar", 0,
+                bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(span - 1));
+        for (int i = 0; i < span; i++) {
+            assertFalse(scalar.hdma.tick());
+            scalar.hdma.consumeSourceBusSample();
+            scalar.hdma.advanceHblankRequest();
+        }
+        bulk.hdma.advancePerformanceNativeCgbOwnedHblankDataTrusted(span);
+
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals(scalar.hdma.getPpuBusGeneration(), bulk.hdma.getPpuBusGeneration());
+        assertEquals("tick-32 destination publication must not be folded into the packet", 0,
+                bulk.memory.getByte(0x8000));
+        assertEquals(0, bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(1));
+
+        assertTrue(scalar.hdma.tick());
+        scalar.hdma.consumeSourceBusSample();
+        scalar.hdma.advanceHblankRequest();
+        assertTrue(bulk.hdma.tick());
+        bulk.hdma.consumeSourceBusSample();
+        bulk.hdma.advanceHblankRequest();
+
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals(scalar.hdma.getPpuBusGeneration(), bulk.hdma.getPpuBusGeneration());
+        for (int i = 0; i < 0x10; i++) {
+            assertEquals(0x40 + i, bulk.memory.getByte(0x8000 + i));
+        }
+    }
+
+    @Test
+    public void nativeCgbOwnedRomDataInteriorMatchesScalarThroughPhysicalLease() {
+        Fixture scalar = ownedHblankDataFixture(0x4000);
+        Fixture bulk = ownedHblankDataFixture(0x4000);
+        int[] physicalReads = {0};
+        PerformanceRomAccess physicalRom = new PerformanceRomAccess() {
+            @Override
+            public int physicalOffset(int cpuAddress) {
+                return cpuAddress >= 0 && cpuAddress < 0x8000 ? cpuAddress : -1;
+            }
+
+            @Override
+            public int readPhysicalByte(int physicalOffset) {
+                assertEquals("physical ROM reads lost their source-slot order",
+                        0x4000 + physicalReads[0]++, physicalOffset);
+                return bulk.memory.getByte(physicalOffset);
+            }
+        };
+
+        int span = bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(64, physicalRom);
+        assertEquals(31, span);
+        assertEquals("ROM must not enter the lease-free WRAM tier", 0,
+                bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(64));
+        for (int i = 0; i < span; i++) {
+            assertFalse(scalar.hdma.tick());
+            scalar.hdma.consumeSourceBusSample();
+            scalar.hdma.advanceHblankRequest();
+        }
+        bulk.hdma.advancePerformanceNativeCgbOwnedHblankDataTrusted(span, physicalRom);
+
+        assertEquals("the complete ROM block was not sampled exactly once", 0x10,
+                physicalReads[0]);
+        assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+        assertEquals(scalar.hdma.getPpuBusGeneration(), bulk.hdma.getPpuBusGeneration());
+        assertEquals("tick-32 destination publication must remain scalar", 0,
+                bulk.memory.getByte(0x8000));
+    }
+
+    @Test
+    public void nativeCgbOwnedRomDataRequiresAllSixteenImmutablePhysicalOffsets() {
+        Fixture fixture = ownedHblankDataFixture(0x7ff0);
+        PerformanceRomAccess completePhysicalRom = physicalRomAccess(fixture.memory, -1);
+        PerformanceRomAccess physicalRomWithHole = physicalRomAccess(fixture.memory, 0x7ff8);
+        PerformanceRomAccess logicalOnlyRom = new PerformanceRomAccess() {
+            @Override
+            public int physicalOffset(int cpuAddress) {
+                return -1;
+            }
+
+            @Override
+            public int readPhysicalByte(int physicalOffset) {
+                throw new AssertionError("logical-only ROM must remain scalar");
+            }
+
+            @Override
+            public int readCpuByte(int cpuAddress) {
+                return fixture.memory.getByte(cpuAddress);
+            }
+        };
+
+        assertTrue(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStructurallyStable());
+        assertTrue(fixture.hdma.requiresPerformanceNativeCgbOwnedHblankRomAccess());
+        assertFalse(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStable());
+        assertTrue(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStable(completePhysicalRom));
+        assertFalse(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStable(null));
+        assertFalse(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStable(logicalOnlyRom));
+        assertFalse(fixture.hdma.isPerformanceNativeCgbOwnedHblankDataStable(physicalRomWithHole));
+        assertEquals(0,
+                fixture.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(31, logicalOnlyRom));
+        assertEquals(0,
+                fixture.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(
+                        31, physicalRomWithHole));
+    }
+
+    @Test
+    public void nativeCgbOwnedDataInteriorAdmitsOnlyAlignedWramOrRomSourceBlocks() {
+        assertTrue(ownedHblankDataFixture(0xc000).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStable());
+        assertTrue(ownedHblankDataFixture(0xdff0).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStable());
+        assertTrue(ownedHblankDataFixture(0x0000).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStructurallyStable());
+        assertTrue(ownedHblankDataFixture(0x7ff0).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStructurallyStable());
+        assertFalse(ownedHblankDataFixture(0xbff0).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStructurallyStable());
+        assertFalse(ownedHblankDataFixture(0xe000).hdma
+                .isPerformanceNativeCgbOwnedHblankDataStructurallyStable());
+    }
+
+    @Test
+    public void nativeCgbOwnedWramDataInteriorMatchesScalarFromEveryDataTick() {
+        for (int scalarPrefix = 0; scalarPrefix < 31; scalarPrefix++) {
+            Fixture scalar = ownedHblankDataFixture(0xcf00);
+            Fixture bulk = ownedHblankDataFixture(0xcf00);
+            for (int i = 0; i < scalarPrefix; i++) {
+                assertFalse(scalar.hdma.tick());
+                scalar.hdma.consumeSourceBusSample();
+                scalar.hdma.advanceHblankRequest();
+                assertFalse(bulk.hdma.tick());
+                bulk.hdma.consumeSourceBusSample();
+                bulk.hdma.advanceHblankRequest();
+            }
+
+            int span = 31 - scalarPrefix;
+            for (int i = 0; i < span; i++) {
+                assertFalse(scalar.hdma.tick());
+                scalar.hdma.consumeSourceBusSample();
+                scalar.hdma.advanceHblankRequest();
+            }
+            assertEquals(span,
+                    bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(span));
+            bulk.hdma.advancePerformanceNativeCgbOwnedHblankDataTrusted(span);
+
+            assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+            assertEquals(scalar.hdma.getPpuBusGeneration(), bulk.hdma.getPpuBusGeneration());
+        }
+    }
+
+    @Test
+    public void nativeCgbOwnedPhysicalRomDataInteriorMatchesScalarFromEveryDataTick() {
+        for (int scalarPrefix = 0; scalarPrefix < 31; scalarPrefix++) {
+            Fixture scalar = ownedHblankDataFixture(0x4000);
+            Fixture bulk = ownedHblankDataFixture(0x4000);
+            PerformanceRomAccess physicalRom = physicalRomAccess(bulk.memory, -1);
+            for (int i = 0; i < scalarPrefix; i++) {
+                assertFalse(scalar.hdma.tick());
+                scalar.hdma.consumeSourceBusSample();
+                scalar.hdma.advanceHblankRequest();
+                assertFalse(bulk.hdma.tick());
+                bulk.hdma.consumeSourceBusSample();
+                bulk.hdma.advanceHblankRequest();
+            }
+
+            int span = 31 - scalarPrefix;
+            for (int i = 0; i < span; i++) {
+                assertFalse(scalar.hdma.tick());
+                scalar.hdma.consumeSourceBusSample();
+                scalar.hdma.advanceHblankRequest();
+            }
+            assertEquals(span,
+                    bulk.hdma.performanceNativeCgbOwnedHblankDataSpanLimit(
+                            span, physicalRom));
+            bulk.hdma.advancePerformanceNativeCgbOwnedHblankDataTrusted(
+                    span, physicalRom);
+
+            assertSameHdmaState(hdmaState(scalar), hdmaState(bulk));
+            assertEquals(scalar.hdma.getPpuBusGeneration(), bulk.hdma.getPpuBusGeneration());
+        }
+    }
+
+    @Test
+    public void restoredArmedHblankWaitRetainsTheNativeCgbEpochLease() {
+        Fixture original = new Fixture(2);
+        original.hdma.onLcdSwitch(true);
+        original.hdma.onGpuTiming(7, 120);
+        original.hdma.onGpuUpdate(Mode.PixelTransfer);
+        original.startTransfer(0x82);
+        assertTrue(original.hdma.isPerformanceArmedHblankWaitStable());
+
+        Fixture restored = new Fixture(2);
+        restored.hdma.restoreState(original.hdma.captureState());
+
+        assertTrue(restored.hdma.isPerformanceArmedHblankWaitStable());
+        restored.hdma.advancePerformanceNativeCgbRunningEpochClockTrusted(31);
+        assertSameHdmaState(hdmaState(original), hdmaState(restored));
+    }
+
+    @Test
+    public void normalSpeedArmedHblankWaitRemainsOutsideTheNativeCgbEpochLease() {
+        Fixture fixture = new Fixture(1);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(3, 120);
+        fixture.hdma.onGpuUpdate(Mode.PixelTransfer);
+        fixture.startTransfer(0x81);
+
+        assertTrue(fixture.hdma.hasPendingHblankTransfer());
+        assertFalse(fixture.hdma.isPerformanceArmedHblankWaitStable());
+        assertFalse(fixture.hdma.isPerformanceNativeCgbRunningEpochStable());
+    }
+
+    @Test
     public void runningEpochHaltReconciliationExcludesOnlyTheTerminalCurrentAge() {
         Fixture scalar = new Fixture();
         Fixture bulk = new Fixture();
@@ -488,6 +755,41 @@ public class HdmaTest {
         fixture.hdma.onGpuUpdate(Mode.HBlank);
         fixture.hdma.onGpuTiming(1, 249);
         return fixture;
+    }
+
+    private Fixture ownedHblankDataFixture(int source) {
+        Fixture fixture = new Fixture(2);
+        for (int i = 0; i < 0x10; i++) {
+            fixture.memory.setByte((source + i) & 0xffff, 0x40 + i);
+        }
+        fixture.hdma.setByte(0xff51, source >>> 8);
+        fixture.hdma.setByte(0xff52, source & 0xf0);
+        fixture.hdma.onLcdSwitch(true);
+        fixture.hdma.onGpuTiming(1, 248);
+        fixture.hdma.onGpuUpdate(Mode.HBlank);
+        fixture.startTransfer(0x80);
+        fixture.hdma.resolveCpuRequest(false, false);
+        while (hdmaState(fixture).tick() < 0) {
+            assertFalse(fixture.hdma.tick());
+            fixture.hdma.consumeSourceBusSample();
+            fixture.hdma.advanceHblankRequest();
+        }
+        return fixture;
+    }
+
+    private PerformanceRomAccess physicalRomAccess(Ram memory, int missingCpuAddress) {
+        return new PerformanceRomAccess() {
+            @Override
+            public int physicalOffset(int cpuAddress) {
+                return cpuAddress >= 0 && cpuAddress < 0x8000
+                        && cpuAddress != missingCpuAddress ? cpuAddress : -1;
+            }
+
+            @Override
+            public int readPhysicalByte(int physicalOffset) {
+                return memory.getByte(physicalOffset);
+            }
+        };
     }
 
     private Hdma.HdmaState hdmaState(Fixture fixture) {

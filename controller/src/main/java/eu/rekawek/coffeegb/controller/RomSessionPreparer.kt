@@ -251,7 +251,7 @@ internal class RuntimeWarmupCache(
         val rom = config.rom
         if (config.slotRom != null ||
             rom.cartridgeProperties.mapper != Mapper.STANDARD ||
-            !isOrdinaryNonRtcCartridge(rom.type)) {
+            !isRuntimeWarmupCartridge(rom.type)) {
           return null
         }
         if (flavor == RuntimeWarmupFlavor.SHADOW_MEASURED_EXACT_V1
@@ -415,6 +415,10 @@ internal class RuntimeWarmupCache(
     internal val shared = RuntimeWarmupCache()
   }
 }
+
+// MBC7 is safe for the service-free disposable run, but remains outside reusable boot templates.
+private fun isRuntimeWarmupCartridge(type: CartridgeType): Boolean =
+    isOrdinaryNonRtcCartridge(type) || type.isMbc7
 
 private fun isOrdinaryNonRtcCartridge(type: CartridgeType): Boolean =
     type == CartridgeType.ROM ||
