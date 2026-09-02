@@ -18,6 +18,7 @@ final class MenuRaster {
 
     static final int INK = 0xff1d2a1c;
     static final int PAPER_TEXT = 0xffe4dfb5;
+    static final int SELECTED_TEXT = PAPER_TEXT;
     static final int PAPER = 0xffd4d2ad;
 
     static final int SLIDER_EMPTY = PAPER;

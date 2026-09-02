@@ -243,7 +243,7 @@ public final class Proposal3MenuCompositor {
                 ? Proposal3WidgetSkins.Surface.SELECTED : Proposal3WidgetSkins.Surface.DARK;
         raster.paintWidget(skins().surface(surface), row);
         int textColor = item.enabled()
-                ? focused ? MenuRaster.INK : MenuRaster.PAPER_TEXT
+                ? focused ? MenuRaster.SELECTED_TEXT : MenuRaster.PAPER_TEXT
                 : DISABLED_TEXT;
         if (focused) {
             raster.drawFocusArrow(row.x() + 5, row.y() + row.height() / 2, textColor);
