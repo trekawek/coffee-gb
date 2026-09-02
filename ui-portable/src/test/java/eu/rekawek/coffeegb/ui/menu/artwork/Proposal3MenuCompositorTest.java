@@ -157,6 +157,31 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void focusedRowsUseAReadableLightForeground() throws Exception {
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] focused = pixels(compositor, presentation(MenuRoute.SYSTEM, "SELECTION", "",
+                List.of(), List.of(button("focus", "FOCUSED ITEM")), "focus",
+                MenuPreview.empty()));
+        MenuRect row = MenuScreenTemplate.optionRow(0);
+
+        assertEquals("focus arrow must use the light selected foreground",
+                MenuRaster.SELECTED_TEXT,
+                focused[(row.y() + row.height() / 2) * WIDTH + row.x() + 5]);
+
+        Proposal3WidgetSkins.Sprite selected = Proposal3WidgetSkins.load()
+                .surface(Proposal3WidgetSkins.Surface.SELECTED);
+        double minimumContrast = Double.POSITIVE_INFINITY;
+        for (int y = 0; y < selected.height(); y++) {
+            for (int x = 0; x < selected.width(); x++) {
+                minimumContrast = Math.min(minimumContrast,
+                        contrastRatio(MenuRaster.SELECTED_TEXT, selected.pixel(x, y)));
+            }
+        }
+        assertTrue("selected foreground contrast was only " + minimumContrast,
+                minimumContrast >= 4.5);
+    }
+
+    @Test
     public void buttonStatusIsRenderedInTheReusableTrailingDetailRegion() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         int[] empty = pixels(compositor, presentation(MenuRoute.SAVE_STATES, "SAVE STATES", "",
@@ -341,6 +366,24 @@ public class Proposal3MenuCompositorTest {
             }
         }
         return count;
+    }
+
+    private static double contrastRatio(int first, int second) {
+        double lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+        double darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+        return (lighter + 0.05) / (darker + 0.05);
+    }
+
+    private static double relativeLuminance(int color) {
+        double red = linearChannel((color >> 16) & 0xff);
+        double green = linearChannel((color >> 8) & 0xff);
+        double blue = linearChannel(color & 0xff);
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    }
+
+    private static double linearChannel(int channel) {
+        double value = channel / 255.0;
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
     }
 
     private static void assertArrowPoints(int[] pixels, int rowIndex, boolean up) {
