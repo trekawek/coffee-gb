@@ -29,7 +29,7 @@ import org.junit.Test
 class SwingProposal3MenuTest {
 
   @Test
-  fun `start and select remain gameplay input while the menu is hidden`() {
+  fun `start and select chord opens the hidden menu while either button alone remains gameplay input`() {
     val bridge = FakeBridge()
     val releaseCount = AtomicInteger()
     val menu =
@@ -39,11 +39,20 @@ class SwingProposal3MenuTest {
             releaseGameplay = { releaseCount.incrementAndGet() },
         )
 
-    assertFalse(menu.updatePlayerButtons(EnumSet.of(Button.START, Button.SELECT)))
-    assertFalse(menu.visible())
+    assertFalse(menu.updatePlayerButtons(EnumSet.of(Button.SELECT)))
     assertFalse(menu.updatePlayerButtons(emptySet()))
-    assertEquals(0, releaseCount.get())
-    assertTrue(bridge.pauseTransitions.isEmpty())
+
+    assertFalse(menu.updatePlayerButtons(EnumSet.of(Button.START)))
+    assertTrue(menu.updatePlayerButtons(EnumSet.of(Button.START, Button.SELECT)))
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertTrue(menu.visible())
+    assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+    assertEquals(listOf(true), bridge.pauseTransitions)
+    assertTrue(menu.updatePlayerButtons(emptySet()))
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertEquals(1, releaseCount.get())
   }
 
   @Test

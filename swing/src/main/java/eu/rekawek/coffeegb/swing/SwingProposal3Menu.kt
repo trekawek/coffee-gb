@@ -273,8 +273,16 @@ internal class SwingProposal3Menu(
       return true
     }
     if (!visible()) {
+      val menuChordPressed =
+          current.contains(Button.START) &&
+              current.contains(Button.SELECT) &&
+              !(gamepadHeld.contains(Button.START) && gamepadHeld.contains(Button.SELECT))
       gamepadHeld.clear()
       gamepadHeld.addAll(current)
+      if (menuChordPressed) {
+        runOnEdt(::openOnEdt)
+        return true
+      }
       return false
     }
 
