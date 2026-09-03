@@ -29,7 +29,7 @@ import org.junit.Test
 class SwingProposal3MenuTest {
 
   @Test
-  fun `start and select controller chord captures gameplay and neutral rearm is explicit`() {
+  fun `start and select remain gameplay input while the menu is hidden`() {
     val bridge = FakeBridge()
     val releaseCount = AtomicInteger()
     val menu =
@@ -39,10 +39,36 @@ class SwingProposal3MenuTest {
             releaseGameplay = { releaseCount.incrementAndGet() },
         )
 
-    assertTrue(menu.updatePlayerButtons(EnumSet.of(Button.START, Button.SELECT)))
-    assertTrue(menu.visible())
-    repeat(2) { javax.swing.SwingUtilities.invokeAndWait {} }
-    assertTrue(releaseCount.get() >= 1)
+    assertFalse(menu.updatePlayerButtons(EnumSet.of(Button.START, Button.SELECT)))
+    assertFalse(menu.visible())
+    assertFalse(menu.updatePlayerButtons(emptySet()))
+    assertEquals(0, releaseCount.get())
+    assertTrue(bridge.pauseTransitions.isEmpty())
+  }
+
+  @Test
+  fun `desktop open trigger is inert on a visible child route and B remains resume`() {
+    val bridge = FakeBridge()
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.SETTINGS)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+
+      // Escape uses this same idempotent entry point. It must not behave like route-local B.
+      menu.openFromDesktop()
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+      assertTrue(menu.visible())
+      assertEquals(listOf(true), bridge.pauseTransitions)
+
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+      assertEquals(listOf(true), bridge.pauseTransitions)
+      press(menu, MenuKey.B)
+    }
+
+    assertFalse(menu.visible())
+    assertEquals(listOf(true, false), bridge.pauseTransitions)
   }
 
   @Test

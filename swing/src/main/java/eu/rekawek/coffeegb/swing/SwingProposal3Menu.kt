@@ -124,10 +124,6 @@ internal class SwingProposal3Menu(
 
   private val gamepadHeld = EnumSet.noneOf(Button::class.java)
 
-  @Volatile private var opening = false
-
-  @Volatile private var chordLatched = false
-
   /** Invalidates physical-controller actions queued for an older root or emulator session. */
   @Volatile private var menuEpoch = 0L
 
@@ -194,7 +190,7 @@ internal class SwingProposal3Menu(
     }
   }
 
-  override fun visible(): Boolean = controller.visible() || opening
+  override fun visible(): Boolean = controller.visible()
 
   /** Opens the menu from a desktop command or test seam on the EDT. */
   internal fun openFromDesktop() {
@@ -216,7 +212,6 @@ internal class SwingProposal3Menu(
       selectedArchiveItemId = null
       controller.setRootDismissAllowed(true)
       controller.setBackIntercepted(false)
-      opening = false
       if (controller.visible()) controller.hide()
       else frameSink(null)
       releaseGameplaySoon()
@@ -254,24 +249,7 @@ internal class SwingProposal3Menu(
       }
       return true
     }
-    val wasVisible = visible()
-
-    if (!wasVisible) {
-      val startAndSelect =
-          current.contains(Button.START) && current.contains(Button.SELECT)
-      if (!startAndSelect) {
-        chordLatched = false
-      } else if (!chordLatched) {
-        chordLatched = true
-        opening = true
-        SwingUtilities.invokeLater {
-          opening = false
-          openOnEdt()
-        }
-        gamepadHeld.clear()
-        gamepadHeld.addAll(current)
-        return true
-      }
+    if (!visible()) {
       gamepadHeld.clear()
       gamepadHeld.addAll(current)
       return false
@@ -302,7 +280,6 @@ internal class SwingProposal3Menu(
   override fun onKeyDown(key: MenuKey, repeat: Boolean): Boolean {
     if (romDialogOpen.get()) return true
     if (!visible()) return false
-    if (opening) return true
     refreshPrinterPageBeforeInput()
     return controller.onKeyDown(key, repeat)
   }
@@ -312,7 +289,6 @@ internal class SwingProposal3Menu(
       controller.onKeyUp(key)
       return true
     }
-    if (opening) return true
     // An activation can hide the menu synchronously (for example OPEN ROM).  Let the portable
     // controller release its captured edge even after that transition so Start/A never leaks
     // into the game or reports a spurious unhandled key-up to the host.
@@ -406,7 +382,7 @@ internal class SwingProposal3Menu(
 
   private fun openOnEdt() {
     check(SwingUtilities.isEventDispatchThread()) { "Portable menu must open on the EDT" }
-    if (opening || controller.visible()) return
+    if (controller.visible()) return
     val current = commands.menuState()
     if (current.commands.sessionBusy) return
     menuEpoch++

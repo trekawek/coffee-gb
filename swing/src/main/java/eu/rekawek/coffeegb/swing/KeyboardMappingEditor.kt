@@ -217,8 +217,8 @@ class KeyboardMappingEditor private constructor(
   /**
    * Attempts to assign one Java AWT key code.
    *
-   * Escape and Enter are valid bindings. Tab remains reserved for focus navigation and Backspace
-   * remains reserved for Rewind.
+   * Enter is a valid binding. Escape opens the on-screen menu, Tab remains reserved for focus
+   * navigation, and Backspace remains reserved for Rewind.
    */
   fun editBinding(
       player: Int,
@@ -242,6 +242,7 @@ class KeyboardMappingEditor private constructor(
         showStatus(
             when (keyCode) {
               KeyEvent.VK_BACK_SPACE -> "Backspace is reserved for Rewind."
+              KeyEvent.VK_ESCAPE -> "Escape is reserved for the on-screen menu."
               KeyEvent.VK_TAB -> "Tab is reserved for focus navigation."
               else -> "That key is reserved by the desktop frontend."
             })
@@ -611,6 +612,7 @@ class KeyboardMappingEditor private constructor(
         setOf(
             KeyEvent.VK_TAB,
             KeyEvent.VK_BACK_SPACE,
+            KeyEvent.VK_ESCAPE,
         )
 
     val MODIFIER_KEYS =

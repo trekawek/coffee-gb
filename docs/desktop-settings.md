@@ -127,7 +127,8 @@ owns sizing, letterboxing, fullscreen, rotation, color, blending, and the Super 
 
 Controls combines keyboard and gamepad subpages for a selected player. Keyboard presents all eight
 buttons like a Game Boy pad plus separate A and B Autofire controls; choose **Capture** and press a
-key, including Enter or Escape. Tab remains reserved for focus navigation and Backspace for Rewind.
+key, including Enter. Escape is reserved for the on-screen menu, Tab for focus navigation, and
+Backspace for Rewind.
 Assigning an occupied key swaps the two bindings, or moves it when the destination was unassigned.
 Held autofire inputs pulse for two frames down and two frames up, approximately 15 presses per
 second. Gamepad L1 drives A Autofire and R1 drives B Autofire. Gamepad lists up to four logical
@@ -183,9 +184,9 @@ on the right or bottom without stretching or cropping the final source pixel.
 The main window is resizable and has a base 160×144 minimum content area. **View → Fullscreen**
 enters borderless fullscreen; <kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated
 button, in which case the accelerator is automatically disabled and the menu command remains
-available. <kbd>Escape</kbd> always leaves fullscreen when the main game window owns focus, while
-remaining available to windowed emulation and dialogs. Menu radio items, Preferences, persisted
-settings, and the live renderer are synchronized through one EDT-owned coordinator.
+available. <kbd>Escape</kbd> opens the on-screen menu without leaving fullscreen. Menu radio items,
+Preferences, persisted settings, and the live renderer are synchronized through one EDT-owned
+coordinator.
 
 The typed `.coffeegb.properties` model retains an optional legacy outer-frame width and height as a
 startup fallback. A separate, deliberately harmless desktop UI-state store records the main

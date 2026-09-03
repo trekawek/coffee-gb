@@ -1,12 +1,8 @@
 package eu.rekawek.coffeegb.swing
 
-import java.awt.event.ActionEvent
 import java.nio.file.Paths
-import javax.swing.AbstractAction
 import javax.swing.JMenu
 import javax.swing.JMenuBar
-import javax.swing.JMenuItem
-import javax.swing.JSeparator
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -30,27 +26,6 @@ class SwingMenuTest {
     openRecentRomPath(path, null) { candidate, source -> legacy += candidate to source }
     assertTrue(exact.isEmpty())
     assertEquals(listOf(path to RomOpenSource.RECENT), legacy)
-  }
-
-  @Test
-  fun `Proposal 3 menu insertion follows the feature flag`() {
-    val openMenuAction =
-        object : AbstractAction("On-screen Menu") {
-          override fun actionPerformed(event: ActionEvent) = Unit
-        }
-    val disabledMenu = JMenu("Game")
-
-    addProposal3MenuItem(disabledMenu, openMenuAction, enabled = false)
-
-    assertEquals(0, disabledMenu.menuComponentCount)
-
-    val enabledMenu = JMenu("Game")
-    addProposal3MenuItem(enabledMenu, openMenuAction, enabled = true)
-
-    assertEquals(2, enabledMenu.menuComponentCount)
-    assertEquals(openMenuAction, (enabledMenu.getMenuComponent(0) as JMenuItem).action)
-    assertEquals("On-screen Menu", (enabledMenu.getMenuComponent(0) as JMenuItem).text)
-    assertTrue(enabledMenu.getMenuComponent(1) is JSeparator)
   }
 
   @Test

@@ -109,17 +109,14 @@ class DesktopActionsTest {
   }
 
   @Test
-  fun `Proposal 3 command opens the idle Library only when the desktop feature is enabled`() {
-    val handlers = handlers(mutableListOf())
-    val hidden = DesktopActionRegistry(handlers, proposal3MenuAvailable = false)
-    val enabled = DesktopActionRegistry(handlers, proposal3MenuAvailable = true)
-    val idle = DesktopCommandPresentation()
+  fun `on-screen menu command is available by default unless the session is busy`() {
+    val registry = DesktopActionRegistry(handlers(mutableListOf()))
 
-    hidden.update(idle)
-    enabled.update(idle)
+    registry.update(DesktopCommandPresentation())
+    assertTrue(registry[DesktopCommand.OPEN_MENU].isEnabled)
 
-    assertFalse(hidden[DesktopCommand.OPEN_MENU].isEnabled)
-    assertTrue(enabled[DesktopCommand.OPEN_MENU].isEnabled)
+    registry.update(DesktopCommandPresentation(sessionBusy = true))
+    assertFalse(registry[DesktopCommand.OPEN_MENU].isEnabled)
   }
 
   @Test
