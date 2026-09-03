@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JMenuItem
 import javax.swing.SwingUtilities
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.Test
 
@@ -69,5 +70,83 @@ class SwingEdtTest {
     SwingUtilities.invokeAndWait {}
 
     assertEquals("new request", item.get().text)
+  }
+
+  @Test
+  fun `managed replacement stop stays rejected after the request commits before EDT delivery`() {
+    val managedOpenActive = AtomicBoolean(true)
+    val fullscreen = AtomicBoolean(true)
+    val homeOpened = AtomicBoolean(false)
+    val edtEntered = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    SwingUtilities.invokeLater {
+      edtEntered.countDown()
+      releaseEdt.await()
+    }
+    try {
+      assertTrue(edtEntered.await(2, TimeUnit.SECONDS))
+      val controllerThread =
+          Thread {
+            dispatchAcceptedRomLifecycle(
+                openRequestId = null,
+                accept = { !managedOpenActive.get() },
+            ) {
+              fullscreen.set(false)
+              homeOpened.set(true)
+            }
+          }
+      controllerThread.start()
+      controllerThread.join(1_000)
+
+      // The successful replacement clears its active request before Swing drains the old Stop.
+      managedOpenActive.set(false)
+    } finally {
+      releaseEdt.countDown()
+    }
+    SwingUtilities.invokeAndWait {}
+
+    assertTrue(fullscreen.get())
+    assertFalse(homeOpened.get())
+  }
+
+  @Test
+  fun `ordinary stop is applied only if no managed open appears before EDT delivery`() {
+    val managedOpenActive = AtomicBoolean(false)
+    val stopCount = AtomicLong()
+    val edtEntered = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    SwingUtilities.invokeLater {
+      edtEntered.countDown()
+      releaseEdt.await()
+    }
+    try {
+      assertTrue(edtEntered.await(2, TimeUnit.SECONDS))
+      val controllerThread =
+          Thread {
+            dispatchAcceptedRomLifecycle(
+                openRequestId = null,
+                accept = { !managedOpenActive.get() },
+            ) {
+              stopCount.incrementAndGet()
+            }
+          }
+      controllerThread.start()
+      controllerThread.join(1_000)
+      managedOpenActive.set(true)
+    } finally {
+      releaseEdt.countDown()
+    }
+    SwingUtilities.invokeAndWait {}
+    assertEquals(0, stopCount.get())
+
+    managedOpenActive.set(false)
+    dispatchAcceptedRomLifecycle(
+        openRequestId = null,
+        accept = { !managedOpenActive.get() },
+    ) {
+      stopCount.incrementAndGet()
+    }
+    SwingUtilities.invokeAndWait {}
+    assertEquals(1, stopCount.get())
   }
 }
