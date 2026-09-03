@@ -47,28 +47,42 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `desktop open trigger is inert on a visible child route and B remains resume`() {
+  fun `desktop toggle opens hidden menu then resumes from a visible child route`() {
     val bridge = FakeBridge()
+    val menu =
+        SwingProposal3Menu(
+            frameSink = {},
+            commands = bridge,
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.toggleFromDesktop()
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+      menu.openRouteForTest(MenuRoute.SETTINGS)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+
+      menu.toggleFromDesktop()
+    }
+
+    assertFalse(menu.visible())
+    assertFalse(bridge.pausedState)
+    assertEquals(listOf(true, false), bridge.pauseTransitions)
+  }
+
+  @Test
+  fun `desktop toggle resumes a game that was paused before the menu opened`() {
+    val bridge = FakeBridge(initiallyPaused = true)
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openRouteForTest(MenuRoute.SETTINGS)
-      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
-
-      // Escape uses this same idempotent entry point. It must not behave like route-local B.
-      menu.openFromDesktop()
-      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
-      assertTrue(menu.visible())
-      assertEquals(listOf(true), bridge.pauseTransitions)
-
-      press(menu, MenuKey.B)
-      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
-      assertEquals(listOf(true), bridge.pauseTransitions)
-      press(menu, MenuKey.B)
+      menu.toggleFromDesktop()
     }
 
     assertFalse(menu.visible())
-    assertEquals(listOf(true, false), bridge.pauseTransitions)
+    assertFalse(bridge.pausedState)
+    assertEquals(listOf(false), bridge.pauseTransitions)
   }
 
   @Test
@@ -126,6 +140,24 @@ class SwingProposal3MenuTest {
 
     assertTrue(bridge.pauseTransitions.isEmpty())
     assertEquals(0, captures)
+  }
+
+  @Test
+  fun `desktop toggle cannot dismiss the idle Library because there is no paused game`() {
+    val menu =
+        SwingProposal3Menu(
+            frameSink = {},
+            commands = FakeBridge(gameLoaded = false),
+            releaseGameplay = {},
+        )
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.toggleFromDesktop()
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      menu.toggleFromDesktop()
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      assertTrue(menu.visible())
+    }
   }
 
   @Test
@@ -462,7 +494,9 @@ class SwingProposal3MenuTest {
                 // the dialog and must not navigate the browser underneath it.
                 assertTrue(menu.onKeyDown(MenuKey.B, false))
                 assertTrue(menu.onKeyUp(MenuKey.B))
+                menu.toggleFromDesktop()
                 assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+                assertTrue(menu.visible())
 
                 // Model a lifecycle replacement while that nested loop is active.
                 menu.closeForLifecycle()
@@ -535,7 +569,41 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `archive selection replacing a visible browser preserves its pause ownership`() {
+  fun `desktop toggle closes a loading file browser resumes and rejects its late listing`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-escape")
+    try {
+      Files.writeString(directory.resolve("late.gb"), "rom")
+      val bridge = FakeBridge(preferredRomDirectory = directory)
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.toggleFromDesktop()
+        moveToPauseItem(menu, "open-rom")
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+
+        menu.toggleFromDesktop()
+        assertFalse(menu.visible())
+      }
+
+      assertFalse(bridge.pausedState)
+      assertEquals(listOf(true, false), bridge.pauseTransitions)
+      worker.runNextAndFlushEdt()
+      assertFalse(menu.visible())
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun `desktop toggle cancels archive replacing a browser and preserves pause ownership`() {
     val directory = Files.createTempDirectory("coffee-gb-menu-browser-archive")
     try {
       val bridge = FakeBridge(preferredRomDirectory = directory)
@@ -566,7 +634,7 @@ class SwingProposal3MenuTest {
             onCancelled = { cancelled.incrementAndGet() },
         )
         assertEquals(MenuRoute.CHOOSE_ROM, menu.routeForTest())
-        press(menu, MenuKey.B)
+        menu.toggleFromDesktop()
       }
 
       assertFalse(menu.visible())
@@ -692,7 +760,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `root B is the only resume action and resumes an already paused game`() {
+  fun `root B resumes an already paused game`() {
     val bridge = FakeBridge(initiallyPaused = true)
     val menu = newMenu(bridge)
 

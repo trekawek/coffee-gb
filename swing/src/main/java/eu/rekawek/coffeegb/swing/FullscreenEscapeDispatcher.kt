@@ -11,7 +11,7 @@ import javax.swing.MenuSelectionManager
 import javax.swing.SwingUtilities
 
 /**
- * Reserves Escape for opening the on-screen menu and F11 for leaving fullscreen without taking
+ * Reserves Escape for toggling the on-screen menu and F11 for leaving fullscreen without taking
  * F11 away from windowed emulator input or either key away from owned dialogs.
  *
  * One captured press owns the complete physical-key sequence. Either action may synchronously
@@ -26,20 +26,20 @@ internal class FullscreenEscapeDispatcher private constructor(
     private val belongsToMainWindow: (Component?) -> Boolean,
     private val isMenuActive: () -> Boolean,
     private val isFullscreen: () -> Boolean,
-    private val openMenu: () -> Unit,
+    private val toggleMenu: () -> Unit,
     private val exitFullscreen: () -> Unit,
 ) : KeyEventDispatcher, AutoCloseable {
   private val lifecycleLock = Any()
   private var installed = false
   private var capturedSequenceKeyCode: Int? = null
-  private val resetFullscreenExitSequence: () -> Unit = {
+  private val resetCapturedSequence: () -> Unit = {
     synchronized(lifecycleLock) { capturedSequenceKeyCode = null }
   }
 
   constructor(
       mainWindow: Window,
       isFullscreen: () -> Boolean,
-      openMenu: () -> Unit,
+      toggleMenu: () -> Unit,
       exitFullscreen: () -> Unit,
       focusManager: KeyboardFocusManager =
           KeyboardFocusManager.getCurrentKeyboardFocusManager(),
@@ -49,7 +49,7 @@ internal class FullscreenEscapeDispatcher private constructor(
       belongsToMainWindow = { component -> component.belongsTo(mainWindow) },
       isMenuActive = { MenuSelectionManager.defaultManager().selectedPath.isNotEmpty() },
       isFullscreen,
-      openMenu,
+      toggleMenu,
       exitFullscreen,
   )
 
@@ -59,7 +59,7 @@ internal class FullscreenEscapeDispatcher private constructor(
       belongsToMainWindow: (Component?) -> Boolean,
       isMenuActive: () -> Boolean = { false },
       isFullscreen: () -> Boolean,
-      openMenu: () -> Unit,
+      toggleMenu: () -> Unit,
       exitFullscreen: () -> Unit,
       lifecycleRegistry: EscapeSequenceLifecycleRegistry = EscapeSequenceLifecycleRegistry.NOOP,
       @Suppress("UNUSED_PARAMETER") testSeam: Unit = Unit,
@@ -69,7 +69,7 @@ internal class FullscreenEscapeDispatcher private constructor(
       belongsToMainWindow,
       isMenuActive,
       isFullscreen,
-      openMenu,
+      toggleMenu,
       exitFullscreen,
   )
 
@@ -78,7 +78,7 @@ internal class FullscreenEscapeDispatcher private constructor(
       if (installed) return
       registry.add(this)
       try {
-        lifecycleRegistry.add(resetFullscreenExitSequence)
+        lifecycleRegistry.add(resetCapturedSequence)
         installed = true
       } catch (failure: RuntimeException) {
         registry.remove(this)
@@ -91,7 +91,7 @@ internal class FullscreenEscapeDispatcher private constructor(
     synchronized(lifecycleLock) {
       if (!installed) return
       try {
-        lifecycleRegistry.remove(resetFullscreenExitSequence)
+        lifecycleRegistry.remove(resetCapturedSequence)
       } finally {
         registry.remove(this)
         installed = false
@@ -101,7 +101,7 @@ internal class FullscreenEscapeDispatcher private constructor(
   }
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-    var requestMenuOpen = false
+    var requestMenuToggle = false
     var requestExit = false
     val consume =
         synchronized(lifecycleLock) {
@@ -125,7 +125,7 @@ internal class FullscreenEscapeDispatcher private constructor(
                 true
               } else if (keyCode == KeyEvent.VK_ESCAPE && !isMenuActive()) {
                 capturedSequenceKeyCode = keyCode
-                requestMenuOpen = true
+                requestMenuToggle = true
                 true
               } else if (keyCode == KeyEvent.VK_F11 && isFullscreen()) {
                 capturedSequenceKeyCode = keyCode
@@ -145,8 +145,8 @@ internal class FullscreenEscapeDispatcher private constructor(
             else -> false
           }
         }
-    if (requestMenuOpen) {
-      openMenu()
+    if (requestMenuToggle) {
+      toggleMenu()
     }
     if (requestExit) {
       exitFullscreen()
@@ -170,7 +170,7 @@ internal interface KeyEventDispatcherRegistry {
   fun remove(dispatcher: KeyEventDispatcher)
 }
 
-/** Clears a captured sequence when a fullscreen peer transition can discard its key release. */
+/** Clears a captured reserved-key sequence when a native peer transition can discard its release. */
 internal interface EscapeSequenceLifecycleRegistry {
   fun add(reset: () -> Unit)
 
@@ -216,7 +216,7 @@ private class WindowEscapeSequenceLifecycleRegistry(
       }
 
   override fun add(reset: () -> Unit) {
-    check(this.reset == null) { "Fullscreen Escape lifecycle listener is already installed" }
+    check(this.reset == null) { "Reserved-key lifecycle listener is already installed" }
     this.reset = reset
     window.addWindowFocusListener(listener)
     window.addWindowListener(listener)

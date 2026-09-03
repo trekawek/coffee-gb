@@ -50,7 +50,7 @@ Default keyboard controls:
 | D-pad | Arrow keys |
 | A / B | <kbd>Z</kbd> / <kbd>X</kbd> |
 | Start / Select | <kbd>Enter</kbd> / <kbd>Shift</kbd> |
-| Open on-screen menu | <kbd>Esc</kbd> |
+| Open menu / resume paused game | <kbd>Esc</kbd> |
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
