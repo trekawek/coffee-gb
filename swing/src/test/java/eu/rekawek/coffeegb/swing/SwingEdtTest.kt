@@ -149,4 +149,102 @@ class SwingEdtTest {
     SwingUtilities.invokeAndWait {}
     assertEquals(1, stopCount.get())
   }
+
+  @Test
+  fun `system reload loading event keeps its following stop from exiting fullscreen`() {
+    val replacementLoading = AtomicBoolean(false)
+    val fullscreen = AtomicBoolean(true)
+    val homeOpened = AtomicBoolean(false)
+    val edtEntered = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    SwingUtilities.invokeLater {
+      edtEntered.countDown()
+      releaseEdt.await()
+    }
+    try {
+      assertTrue(edtEntered.await(2, TimeUnit.SECONDS))
+      val controllerThread =
+          Thread {
+            // BasicController publishes this exact order for an in-place hardware-profile reload:
+            // loading the replacement, stopping the old session, then starting the new one.
+            dispatchSwingMutation { replacementLoading.set(true) }
+            dispatchAcceptedRomLifecycle(openRequestId = null, accept = { true }) {
+              if (shouldPresentStoppedSession(
+                  managedOpenActive = false,
+                  replacementLoading = replacementLoading.get(),
+              )) {
+                fullscreen.set(false)
+                homeOpened.set(true)
+              }
+            }
+            dispatchSwingMutation { replacementLoading.set(false) }
+          }
+      controllerThread.start()
+      controllerThread.join(1_000)
+    } finally {
+      releaseEdt.countDown()
+    }
+    SwingUtilities.invokeAndWait {}
+
+    assertTrue(fullscreen.get())
+    assertFalse(homeOpened.get())
+  }
+
+  @Test
+  fun `terminal stop still exits fullscreen and reveals library`() {
+    assertTrue(
+        shouldPresentStoppedSession(
+            managedOpenActive = false,
+            replacementLoading = false,
+        ))
+    assertFalse(
+        shouldPresentStoppedSession(
+            managedOpenActive = true,
+            replacementLoading = false,
+        ))
+    assertFalse(
+        shouldPresentStoppedSession(
+            managedOpenActive = false,
+            replacementLoading = true,
+        ))
+  }
+
+  @Test
+  fun `cancelled replacement clears loading before its following terminal stop`() {
+    val replacementLoading = AtomicBoolean(false)
+    val fullscreen = AtomicBoolean(true)
+    val homeOpened = AtomicBoolean(false)
+    val edtEntered = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    SwingUtilities.invokeLater {
+      edtEntered.countDown()
+      releaseEdt.await()
+    }
+    try {
+      assertTrue(edtEntered.await(2, TimeUnit.SECONDS))
+      val controllerThread =
+          Thread {
+            dispatchSwingMutation { replacementLoading.set(true) }
+            // requestStop cancels every pending load/replacement before its terminal Stop.
+            dispatchSwingMutation { replacementLoading.set(false) }
+            dispatchAcceptedRomLifecycle(openRequestId = null, accept = { true }) {
+              if (shouldPresentStoppedSession(
+                  managedOpenActive = false,
+                  replacementLoading = replacementLoading.get(),
+              )) {
+                fullscreen.set(false)
+                homeOpened.set(true)
+              }
+            }
+          }
+      controllerThread.start()
+      controllerThread.join(1_000)
+    } finally {
+      releaseEdt.countDown()
+    }
+    SwingUtilities.invokeAndWait {}
+
+    assertFalse(fullscreen.get())
+    assertTrue(homeOpened.get())
+  }
 }

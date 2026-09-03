@@ -159,7 +159,7 @@ class SwingGuiShutdownTest {
     )
     assertTrue(
         shouldApplyRomLifecycleEvent(null, false) { it == visibleId },
-        "reset, profile restart, and ordinary stop events remain supported",
+        "unmanaged events proceed to terminal-versus-replacement presentation classification",
     )
   }
 
