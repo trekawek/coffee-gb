@@ -10,15 +10,15 @@ Publish from the repository default branch and leave a verified GitHub release w
 ## 1. Establish the versions
 
 1. Require a clean working tree and fetch the default branch and tags.
-2. Confirm the local default branch matches its remote. Do not release unpushed or unmerged commits.
-3. Run `python3 .claude/skills/release-new-version/scripts/versions.py` from the repository root.
+2. Confirm the local default branch matches its remote. If it is clean and only behind its remote, run `git pull --ff-only origin <default-branch>` and verify it now matches. Do not release unpushed commits, a branch with divergent history, or an unmerged branch.
+3. Run `python3 .agents/skills/release-new-version/scripts/versions.py` from the repository root.
 4. Treat its values as authoritative:
    - release version: the current root Maven version without `-SNAPSHOT`;
    - development version: increment the final numeric component and append `-SNAPSHOT`;
    - tag: `coffee-gb-<release_version>`;
    - title: `Coffee GB <release_version>` (exact capitalization and spacing, with no
      trailing punctuation);
-5. Stop if the current version is not a numeric Maven snapshot, the tag or release already exists unexpectedly, or the default branch is not synchronized.
+5. Stop if the current version is not a numeric Maven snapshot, the tag or release already exists unexpectedly, or the default branch cannot be synchronized by a clean fast-forward.
 
 ## 2. Run Maven release
 
