@@ -166,6 +166,67 @@ public class MenuControllerTest {
     }
 
     @Test
+    public void fullWidthRowsDelegateVerticalMovementWithoutReducerWrapping() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setPage(fullWidthPage(0, 1, List.of(
+                item("one", "ONE", true, null),
+                item("two", "TWO", true, null))));
+        controller.show(MenuRoute.FILE_BROWSER);
+
+        controller.onKeyDown(MenuKey.UP, false);
+        controller.onKeyDown(MenuKey.UP, true);
+        controller.onKeyUp(MenuKey.UP);
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
+
+        assertEquals(List.of("FILE_BROWSER:-1", "FILE_BROWSER:1"), events.rowRequests);
+        assertEquals("one", controller.snapshot().frames().get(0).focusedItemId());
+    }
+
+    @Test
+    public void fullWidthLayoutAloneKeepsOrdinaryReducerNavigation() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setPage(new MenuPageSpec(MenuRoute.ABOUT, "COFFEE GB", "ABOUT", "", "",
+                List.of(), List.of(
+                        item("one", "ONE", true, null),
+                        item("two", "TWO", true, null)),
+                1, List.of("D-PAD MOVE", "A OPEN", "B BACK"), null, MenuPreview.empty(),
+                MenuPageLayout.FULL_WIDTH_LIST, MenuPagination.singlePage()));
+        controller.show(MenuRoute.ABOUT);
+
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
+        assertEquals("two", controller.snapshot().frames().get(0).focusedItemId());
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
+
+        assertEquals("one", controller.snapshot().frames().get(0).focusedItemId());
+        assertEquals(List.of(), events.rowRequests);
+    }
+
+    @Test
+    public void pageReplacementCanForceFocusWhenTheOldRowRemainsVisible() {
+        MenuController controller = new MenuController(new Events());
+        controller.setPage(fullWidthPage(0, 2, List.of(
+                item("old", "OLD", true, null),
+                item("edge", "EDGE", true, null))));
+        controller.show(MenuRoute.FILE_BROWSER);
+        controller.setPageAndFocus(fullWidthPage(1, 2, List.of(
+                item("edge", "EDGE", true, null),
+                item("next", "NEXT", true, null))), "next");
+
+        assertEquals("next", controller.snapshot().frames().get(0).focusedItemId());
+        assertThrows(IllegalArgumentException.class, () -> controller.setPageAndFocus(
+                fullWidthPage(1, 2, List.of(item("edge", "EDGE", true, null))), "missing"));
+        controller.hide();
+        controller.show(MenuRoute.FILE_BROWSER);
+        assertEquals(List.of("edge", "next"), controller.presentation().items().stream()
+                .map(MenuPresentation.Item::id).toList());
+    }
+
+    @Test
     public void fullWidthSliderAdjustmentTakesPrecedenceOverPagination() {
         Events events = new Events();
         MenuController controller = new MenuController(events);
@@ -478,6 +539,7 @@ public class MenuControllerTest {
         private final List<String> adjustments = new ArrayList<>();
         private final List<MenuRoute> backRoutes = new ArrayList<>();
         private final List<String> pageRequests = new ArrayList<>();
+        private final List<String> rowRequests = new ArrayList<>();
 
         @Override
         public void onPresentation(MenuPresentation presentation) {
@@ -505,6 +567,11 @@ public class MenuControllerTest {
         @Override
         public void onPageRequested(MenuRoute route, int targetIndex) {
             pageRequests.add(route + ":" + targetIndex);
+        }
+
+        @Override
+        public void onListRowRequested(MenuRoute route, int direction) {
+            rowRequests.add(route + ":" + direction);
         }
     }
 }

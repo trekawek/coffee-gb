@@ -74,6 +74,26 @@ class DesktopRomFileBrowserTest {
   }
 
   @Test
+  fun `directory listing hides dot entries without consuming the result limit`() {
+    val directory = Files.createTempDirectory("coffee-gb-rom-browser-hidden")
+    try {
+      Files.createDirectory(directory.resolve(".hidden-directory"))
+      Files.writeString(directory.resolve(".hidden.gb"), "rom")
+      Files.writeString(directory.resolve(".hidden.zip"), "archive")
+      val visibleDirectory = Files.createDirectory(directory.resolve("visible-directory"))
+      val visibleRom = Files.writeString(directory.resolve("visible.gb"), "rom")
+
+      val result = DesktopRomFileBrowser(maxEntries = 2).list(directory)
+
+      assertFalse(result.truncated)
+      assertEquals(listOf("..", "visible-directory", "visible.gb"), result.entries.map { it.label })
+      assertEquals(listOf(directory.parent, visibleDirectory, visibleRom), result.entries.map { it.path })
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
   fun `parent from a filesystem root targets the roots view`() {
     val root = Path.of("/").toAbsolutePath().normalize()
     val result = DesktopRomFileBrowser(maxEntries = 1).list(root)

@@ -115,18 +115,20 @@ internal class DesktopRomFileBrowser(
     }
   }
 
-  private fun classify(path: Path): Entry? =
-      try {
-        when {
-          Files.isDirectory(path) -> Entry(EntryKind.DIRECTORY, displayName(path), path)
-          Files.isRegularFile(path) && supportedRomName(displayName(path)) ->
-              Entry(EntryKind.ROM, displayName(path), path)
-          else -> null
-        }
-      } catch (_: SecurityException) {
-        // One inaccessible child must not make the containing directory unusable.
-        null
+  private fun classify(path: Path): Entry? {
+    val name = displayName(path)
+    if (name.startsWith(".")) return null
+    return try {
+      when {
+        Files.isDirectory(path) -> Entry(EntryKind.DIRECTORY, name, path)
+        Files.isRegularFile(path) && supportedRomName(name) -> Entry(EntryKind.ROM, name, path)
+        else -> null
       }
+    } catch (_: SecurityException) {
+      // One inaccessible child must not make the containing directory unusable.
+      null
+    }
+  }
 
   private fun readableError(location: String, failure: Throwable): String {
     val detail = failure.message?.trim()?.takeIf(String::isNotEmpty)

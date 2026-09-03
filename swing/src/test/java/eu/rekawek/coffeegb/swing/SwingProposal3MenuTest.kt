@@ -182,6 +182,68 @@ class SwingProposal3MenuTest {
   }
 
   @Test
+  fun `browser vertical movement scrolls one row and never wraps at either end`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-scroll")
+    try {
+      repeat(12) { index ->
+        Files.writeString(directory.resolve("game-${index.toString().padStart(2, '0')}.gb"), "rom")
+      }
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = FakeBridge(gameLoaded = false, preferredRomDirectory = directory),
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        repeat(6) { press(menu, MenuKey.DOWN) }
+        assertEquals("game-05.gb", focusedLabel(menu))
+        assertEquals(6, menu.presentationForTest().focusedIndex())
+
+        press(menu, MenuKey.DOWN)
+        assertEquals(
+            listOf("game-00.gb", "game-01.gb", "game-02.gb", "game-03.gb", "game-04.gb", "game-05.gb", "game-06.gb"),
+            menu.presentationForTest().items().map { it.label() },
+        )
+        assertEquals("game-06.gb", focusedLabel(menu))
+        assertEquals(6, menu.presentationForTest().focusedIndex())
+
+        repeat(6) { press(menu, MenuKey.UP) }
+        assertEquals("game-00.gb", focusedLabel(menu))
+        assertEquals(0, menu.presentationForTest().focusedIndex())
+        press(menu, MenuKey.UP)
+        assertEquals("..", focusedLabel(menu))
+        assertEquals("..", menu.presentationForTest().items().first().label())
+        press(menu, MenuKey.UP)
+        assertEquals("..", focusedLabel(menu))
+
+        press(menu, MenuKey.RIGHT)
+        assertEquals("game-06.gb", focusedLabel(menu))
+        assertEquals(0, menu.presentationForTest().focusedIndex())
+        repeat(5) { press(menu, MenuKey.DOWN) }
+        assertEquals("game-11.gb", focusedLabel(menu))
+        val finalRows = menu.presentationForTest().items().map { it.label() }
+        press(menu, MenuKey.DOWN)
+        assertEquals("game-11.gb", focusedLabel(menu))
+        assertEquals(finalRows, menu.presentationForTest().items().map { it.label() })
+
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      }
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
   fun `browser parent and directory rows navigate and restore the directory focus`() {
     val parent = Files.createTempDirectory("coffee-gb-menu-browser-navigation")
     try {
@@ -219,6 +281,53 @@ class SwingProposal3MenuTest {
       javax.swing.SwingUtilities.invokeAndWait {
         assertEquals(child.toAbsolutePath().normalize().toString(), menu.presentationForTest().context())
         assertEquals("..", focusedLabel(menu))
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      }
+    } finally {
+      deleteTree(parent)
+    }
+  }
+
+  @Test
+  fun `browser back opens the parent then closes from its starting directory`() {
+    val parent = Files.createTempDirectory("coffee-gb-menu-browser-back")
+    try {
+      val child = Files.createDirectory(parent.resolve("Child ROMs"))
+      Files.writeString(child.resolve("inside.gb"), "rom")
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = FakeBridge(gameLoaded = false, preferredRomDirectory = parent),
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        press(menu, MenuKey.DOWN)
+        assertEquals("Child ROMs/", focusedLabel(menu))
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals(child.toAbsolutePath().normalize().toString(), menu.presentationForTest().context())
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+        assertEquals("LOADING...", focusedLabel(menu))
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals(parent.toAbsolutePath().normalize().toString(), menu.presentationForTest().context())
+        assertEquals("Child ROMs/", focusedLabel(menu))
         press(menu, MenuKey.B)
         assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
       }
