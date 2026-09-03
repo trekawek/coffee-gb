@@ -1057,7 +1057,7 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `generic choice picker applies every settings family and returns to its origin`() {
+  fun `choice picker applies every settings family and restart choices return to game`() {
     val choiceCases =
         listOf(
             MenuRoute.SYSTEM to "dmg-games",
@@ -1087,11 +1087,89 @@ class SwingProposal3MenuTest {
         // rather than merely returning with no change.
         press(menu, MenuKey.DOWN)
         press(menu, MenuKey.A)
-        assertEquals(origin, menu.routeForTest())
+        if (origin == MenuRoute.SYSTEM) {
+          assertFalse(menu.visible())
+          assertEquals(listOf(true, false), bridge.pauseTransitions)
+        } else {
+          assertEquals(origin, menu.routeForTest())
+        }
       }
       assertEquals(settingId, settings.applied.single().first)
       assertTrue(settings.applied.single().second != settings.initialValue(settingId))
     }
+  }
+
+  @Test
+  fun `changed system choice resumes a menu-owned pause before applying it`() {
+    lateinit var bridge: FakeBridge
+    val settings =
+        FakeSettingsAccess { id, _ ->
+          assertEquals(PortableMenuSettingId.DMG_GAMES, id)
+          assertFalse(bridge.pausedState)
+        }
+    bridge = FakeBridge(settingsAccess = settings)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.SYSTEM)
+      press(menu, MenuKey.A)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+    }
+
+    assertFalse(menu.visible())
+    assertEquals(listOf(true, false), bridge.pauseTransitions)
+    assertEquals(
+        PortableMenuSettingId.DMG_GAMES to "dmg",
+        settings.applied.single(),
+    )
+  }
+
+  @Test
+  fun `changed system choice preserves a pause that predates the menu`() {
+    lateinit var bridge: FakeBridge
+    val settings = FakeSettingsAccess { _, _ -> assertTrue(bridge.pausedState) }
+    bridge = FakeBridge(settingsAccess = settings, initiallyPaused = true)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      menu.openRouteForTest(MenuRoute.SYSTEM)
+      press(menu, MenuKey.A)
+      press(menu, MenuKey.DOWN)
+      press(menu, MenuKey.A)
+    }
+
+    assertFalse(menu.visible())
+    assertTrue(bridge.pausedState)
+    assertTrue(bridge.pauseTransitions.isEmpty())
+  }
+
+  @Test
+  fun `idle and unchanged system choices stay in the menu`() {
+    val idleSettings = FakeSettingsAccess()
+    val idleBridge = FakeBridge(settingsAccess = idleSettings, gameLoaded = false)
+    val idleMenu = newMenu(idleBridge)
+    val unchangedSettings = FakeSettingsAccess()
+    val unchangedBridge = FakeBridge(settingsAccess = unchangedSettings)
+    val unchangedMenu = newMenu(unchangedBridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      idleMenu.openRouteForTest(MenuRoute.SYSTEM)
+      press(idleMenu, MenuKey.A)
+      press(idleMenu, MenuKey.DOWN)
+      press(idleMenu, MenuKey.A)
+      assertEquals(MenuRoute.SYSTEM, idleMenu.routeForTest())
+      assertTrue(idleMenu.visible())
+
+      unchangedMenu.openRouteForTest(MenuRoute.SYSTEM)
+      press(unchangedMenu, MenuKey.A)
+      press(unchangedMenu, MenuKey.A)
+      assertEquals(MenuRoute.SYSTEM, unchangedMenu.routeForTest())
+      assertTrue(unchangedMenu.visible())
+    }
+
+    assertTrue(idleBridge.pauseTransitions.isEmpty())
+    assertEquals(listOf(true), unchangedBridge.pauseTransitions)
   }
 
   @Test
@@ -1883,7 +1961,9 @@ class SwingProposal3MenuTest {
     }
   }
 
-  private class FakeSettingsAccess : PortableMenuSettingsAccess {
+  private class FakeSettingsAccess(
+      private val beforeApply: (String, String) -> Unit = { _, _ -> },
+  ) : PortableMenuSettingsAccess {
     val applied = mutableListOf<Pair<String, String>>()
     val toggled = mutableListOf<String>()
     private var current = initialSnapshot()
@@ -1892,6 +1972,7 @@ class SwingProposal3MenuTest {
 
     override fun applyChoice(id: String, token: String) {
       require(current.choicesFor(id).any { it.token == token && it.enabled })
+      beforeApply(id, token)
       applied += id to token
       current =
           current.copy(

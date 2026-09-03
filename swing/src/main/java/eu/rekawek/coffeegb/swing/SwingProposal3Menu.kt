@@ -26,6 +26,13 @@ import javax.swing.Timer
 
 private const val FILE_BROWSER_PAGE_SIZE = 7
 private const val FILE_BROWSER_MARQUEE_FRAME_MILLIS = 50
+private val SESSION_RESTART_SETTING_IDS =
+    setOf(
+        PortableMenuSettingId.DMG_GAMES,
+        PortableMenuSettingId.CGB_GAMES,
+        PortableMenuSettingId.BOOTSTRAP,
+        PortableMenuSettingId.EXECUTION_MODE,
+    )
 private val FILE_BROWSER_EXECUTOR =
     Executors.newSingleThreadExecutor { task ->
       Thread(task, "coffee-gb-rom-browser").apply { isDaemon = true }
@@ -1042,13 +1049,7 @@ internal class SwingProposal3Menu(
             "peripherals" -> openRoute(MenuRoute.OPTIONAL_DEVICES)
           }
       MenuRoute.SYSTEM ->
-          if (id in
-              setOf(
-                  PortableMenuSettingId.DMG_GAMES,
-                  PortableMenuSettingId.CGB_GAMES,
-                  PortableMenuSettingId.BOOTSTRAP,
-                  PortableMenuSettingId.EXECUTION_MODE,
-              )) {
+          if (id in SESSION_RESTART_SETTING_IDS) {
             openChoice(id, MenuRoute.SYSTEM)
           }
       MenuRoute.DISPLAY ->
@@ -1067,14 +1068,27 @@ internal class SwingProposal3Menu(
             runOnEdt {
               val pending = pendingChoice ?: return@runOnEdt
               val token = id.removePrefix("choice:")
-              if (commands.settingsSnapshot()?.choicesFor(pending.settingId)?.any {
+              val settings = commands.settingsSnapshot()
+              if (settings?.choicesFor(pending.settingId)?.any {
                     it.token == token && it.enabled
                   } == true) {
-                commands.applySettingsChoice(pending.settingId, token)
+                val closeForSessionRestart =
+                    commands.menuState().commands.gameLoaded &&
+                        pending.settingId in SESSION_RESTART_SETTING_IDS &&
+                        settings.value(pending.settingId) != token
                 pendingChoice = null
                 controller.setBackIntercepted(false)
-                controller.setPage(pageFor(pending.originRoute, commands.menuState()))
-                controller.back()
+                if (closeForSessionRestart) {
+                  // Resume first so BasicController observes the menu-owned intent before the
+                  // settings adapter queues UpdatedSystemMappingEvent. A pause which predated the
+                  // menu is not owned here, so hideAndResume leaves that state intact.
+                  hideAndResume()
+                  commands.applySettingsChoice(pending.settingId, token)
+                } else {
+                  commands.applySettingsChoice(pending.settingId, token)
+                  controller.setPage(pageFor(pending.originRoute, commands.menuState()))
+                  controller.back()
+                }
               }
             }
           }
