@@ -1623,10 +1623,12 @@ class BasicControllerTest {
     val started = LinkedBlockingQueue<EmulationStartedEvent>()
     val stopped = LinkedBlockingQueue<EmulationStoppedEvent>()
     val loading = LinkedBlockingQueue<RomLoadingEvent>()
+    val playback = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
     val frames = LinkedBlockingQueue<GbcFrameReadyEvent>()
     eventBus.register<EmulationStartedEvent> { started.add(it) }
     eventBus.register<EmulationStoppedEvent> { stopped.add(it) }
     eventBus.register<RomLoadingEvent> { loading.add(it) }
+    eventBus.register<Controller.SessionPlaybackStateEvent> { playback.add(it) }
     eventBus.register<GbcFrameReadyEvent> { frames.add(it) }
 
     val nextRom = namedRom("NEXT_GAME")
@@ -1652,9 +1654,20 @@ class BasicControllerTest {
     controller.startController()
     try {
       eventBus.post(LoadRomEvent(ROM))
-      assertEquals("CPU_INSTRS", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
+      val initial = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals("CPU_INSTRS", initial.romName)
+      val runningInitial = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(initial.sessionGeneration, runningInitial.sessionGeneration)
+      assertFalse(runningInitial.paused)
       loading.clear()
+      playback.clear()
       frames.clear()
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      val pausedInitial = assertNotNull(playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals(initial.sessionGeneration, pausedInitial.sessionGeneration)
+      assertTrue(pausedInitial.paused)
+      playback.clear()
 
       eventBus.post(LoadRomEvent(nextRom))
       assertTrue(preparing.await(TIMEOUT_SECONDS, TimeUnit.SECONDS))
@@ -1669,7 +1682,17 @@ class BasicControllerTest {
       )
 
       release.countDown()
-      assertEquals("NEXT_GAME", started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)?.romName)
+      val replacement = assertNotNull(started.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS))
+      assertEquals("NEXT_GAME", replacement.romName)
+      val replacementPlayback =
+          generateSequence {
+                playback.poll(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+              }
+              .first { it.sessionGeneration == replacement.sessionGeneration }
+      assertFalse(
+          replacementPlayback.paused,
+          "a resume requested while loading must become the replacement's playback state",
+      )
     } finally {
       release.countDown()
       controller.close()
