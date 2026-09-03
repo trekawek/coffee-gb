@@ -112,10 +112,10 @@ final class MenuPages {
                             button("storage", "NO BROAD STORAGE ACCESS"),
                             button("live-camera", "CAMERA ONLY WHEN ENABLED"),
                             button("source-notices", "SOURCE & THIRD-PARTY NOTICES")));
-            case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM", "", "RESET GAME",
+            case CONFIRM_ACTION -> page(route, "COFFEE GB", "CONFIRM ACTION", "", "RESET GAME",
                     List.of("UNSAVED PROGRESS MAY BE LOST"),
-                    items(button("cancel", "CANCEL"),
-                            button("confirm", "CONFIRM", "RESET GAME")), 1, DEFAULT_HINTS,
+                    items(button("confirm", "CONFIRM"),
+                            button("cancel", "CANCEL")), 1, DEFAULT_HINTS,
                     "cancel", MenuPreview.empty());
         };
     }

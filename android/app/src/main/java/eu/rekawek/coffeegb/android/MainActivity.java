@@ -2890,6 +2890,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private MenuPageSpec confirmationPage() {
         ConfirmVariant variant = confirmVariant == null ? ConfirmVariant.RESET : confirmVariant;
+        if (variant == ConfirmVariant.RESET) {
+            return AndroidMenuModel.resetConfirmationPage();
+        }
         return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", variant.label,
                 List.of(variant.description),
                 List.of(button("cancel", "CANCEL", "RETURN", true),

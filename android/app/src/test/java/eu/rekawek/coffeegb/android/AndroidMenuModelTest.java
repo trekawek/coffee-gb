@@ -62,6 +62,16 @@ public class AndroidMenuModelTest {
     }
 
     @Test
+    public void resetConfirmationUsesPlainConfirmAndCancelRows() {
+        MenuPageSpec page = AndroidMenuModel.resetConfirmationPage();
+
+        assertEquals("CONFIRM ACTION", page.context());
+        assertIds(page, "confirm", "cancel");
+        assertTrue(page.items().stream().allMatch(item -> item.detail().isEmpty()));
+        assertEquals("cancel", page.preferredFocusId());
+    }
+
+    @Test
     public void sharedFooterAdvertisesTheThreeButtonMenuContract() {
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B BACK"),
                 AndroidMenuModel.settingsPage().footerHints());

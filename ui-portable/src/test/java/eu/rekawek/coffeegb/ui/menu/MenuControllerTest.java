@@ -481,8 +481,12 @@ public class MenuControllerTest {
     public void confirmationDefaultsUseTheSingleVerticalRailAndBReturnsToParent() {
         MenuPage confirmation = MenuPages.forRoute(MenuRoute.CONFIRM_ACTION);
         assertEquals(1, confirmation.columns());
+        assertEquals("CONFIRM ACTION", confirmation.context());
         assertEquals(List.of("UNSAVED PROGRESS MAY BE LOST"), confirmation.sideLines());
         assertEquals("", confirmation.headerAction());
+        assertEquals(List.of("confirm", "cancel"),
+                confirmation.items().stream().map(MenuItem::id).toList());
+        assertTrue(confirmation.items().stream().allMatch(item -> item.detail().isEmpty()));
         assertEquals("cancel", confirmation.items().get(confirmation.initialFocusIndex()).id());
 
         Events events = new Events();
@@ -491,22 +495,22 @@ public class MenuControllerTest {
         controller.push(MenuRoute.CONFIRM_ACTION);
         assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
 
-        controller.onKeyDown(MenuKey.DOWN, false);
-        controller.onKeyUp(MenuKey.DOWN);
+        controller.onKeyDown(MenuKey.UP, false);
+        controller.onKeyUp(MenuKey.UP);
         assertEquals("confirm",
                 controller.snapshot().frames().get(1).focusedItemId());
         controller.onKeyDown(MenuKey.RIGHT, false);
         controller.onKeyUp(MenuKey.RIGHT);
         assertEquals("horizontal input must not move the vertical rail", "confirm",
                 controller.snapshot().frames().get(1).focusedItemId());
-        controller.onKeyDown(MenuKey.UP, false);
-        controller.onKeyUp(MenuKey.UP);
+        controller.onKeyDown(MenuKey.DOWN, false);
+        controller.onKeyUp(MenuKey.DOWN);
         assertEquals("cancel", controller.snapshot().frames().get(1).focusedItemId());
         controller.onKeyDown(MenuKey.A, false);
         controller.onKeyUp(MenuKey.A);
         assertEquals(List.of("cancel:false"), events.items);
-        controller.onKeyDown(MenuKey.DOWN, false);
-        controller.onKeyUp(MenuKey.DOWN);
+        controller.onKeyDown(MenuKey.UP, false);
+        controller.onKeyUp(MenuKey.UP);
         controller.onKeyDown(MenuKey.START, false);
         controller.onKeyUp(MenuKey.START);
         assertEquals(List.of("cancel:false", "confirm:false"), events.items);
