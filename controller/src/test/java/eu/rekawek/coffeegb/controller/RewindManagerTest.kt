@@ -124,12 +124,14 @@ class RewindManagerTest {
       assertEquals(RewindManager.CAPACITY, manager.historySize)
       assertEquals(RewindManager.CAPACITY + EXTRA_CAPTURES, manager.captureCount)
       assertTrue(manager.snapshotsForTesting().none { it === evictedSnapshot })
+      assertEquals(manager.retainedBytesByScanForTesting(), manager.retainedBytesForTesting())
       for (index in capturedIndex - 1 downTo EXTRA_CAPTURES) {
         assertTrue(manager.rewindOneStep(session.gameboy))
         assertEquals(index and 0xff, session.gameboy.addressSpace.getByte(TEST_ADDRESS))
       }
       assertFalse(manager.rewindOneStep(session.gameboy))
       assertEquals(0, manager.historySize)
+      assertEquals(0L, manager.retainedBytesForTesting())
       val heldEvictedSnapshot = requireNotNull(evictedSnapshot)
       heldEvictedSnapshot.restore(session.gameboy)
       assertEquals(0, session.gameboy.addressSpace.getByte(TEST_ADDRESS))
@@ -142,6 +144,33 @@ class RewindManagerTest {
       assertEquals(0, session.gameboy.addressSpace.getByte(TEST_ADDRESS))
       manager.record(session.gameboy)
       assertEquals(1, manager.historySize, "clear resets the six-frame cadence")
+    }
+  }
+
+  @Test
+  fun sessionRetentionStaysExactAcrossCapacityAndRewindRemoval() {
+    StateCodecTestSupport.session(configuration()).use { session ->
+      val manager =
+          RewindManager(
+              durationSeconds = RewindManager.MIN_DURATION_SECONDS,
+              memoryBudgetBytes = Long.MAX_VALUE,
+          )
+      val capacity =
+          RewindManager.MIN_DURATION_SECONDS * 60 / RewindManager.RECORD_INTERVAL
+      repeat((capacity + EXTRA_CAPTURES) * RewindManager.RECORD_INTERVAL) { frame ->
+        session.gameboy.addressSpace.setByte(TEST_ADDRESS, frame and 0xff)
+        manager.record(session)
+      }
+
+      assertEquals(capacity, manager.historySize)
+      assertEquals(manager.retainedBytesByScanForTesting(), manager.retainedBytesForTesting())
+
+      assertTrue(manager.rewindOneStep(session))
+      assertEquals(capacity - 1, manager.historySize)
+      assertEquals(manager.retainedBytesByScanForTesting(), manager.retainedBytesForTesting())
+
+      manager.clear()
+      assertEquals(0L, manager.retainedBytesForTesting())
     }
   }
 
@@ -247,7 +276,7 @@ class RewindManagerTest {
   }
 
   @Test
-  fun preparedSeedTransfersExactRetentionIntoFirstHistoryEntry() {
+  fun preparedSeedTransfersExactIncrementalRetentionIntoFirstHistoryEntry() {
     StateCodecTestSupport.session(configuration()).use { session ->
       val manager =
           RewindManager(memoryBudgetBytes = RewindManager.MIN_MEMORY_BUDGET_BYTES)
@@ -255,7 +284,7 @@ class RewindManagerTest {
 
       val pendingBytes = manager.retainedBytesForTesting()
       assertTrue(pendingBytes > 0L, "the staged baseline is manager-owned memory")
-      assertEquals(pendingBytes, manager.approximateRetainedBytesForTesting)
+      assertEquals(pendingBytes, manager.retainedBytesByScanForTesting())
 
       session.gameboy.addressSpace.setByte(TEST_ADDRESS, 0x5a)
       manager.record(session)
@@ -263,13 +292,13 @@ class RewindManagerTest {
       assertEquals(1, manager.historySize)
       assertFalse(manager.hasPreparedSessionSeed)
       assertEquals(
+          manager.retainedBytesByScanForTesting(),
           manager.retainedBytesForTesting(),
-          manager.approximateRetainedBytesForTesting,
-          "the first seed-relative entry must be charged as a complete retained root",
+          "the first seed-relative entry must remain exact after transferring graph ownership",
       )
       manager.clear()
       assertEquals(0L, manager.retainedBytesForTesting())
-      assertEquals(0L, manager.approximateRetainedBytesForTesting)
+      assertEquals(0L, manager.retainedBytesByScanForTesting())
     }
   }
 
@@ -308,6 +337,10 @@ class RewindManagerTest {
       }
       assertTrue(
           budgetManager.retainedBytesForTesting() <= RewindManager.MIN_MEMORY_BUDGET_BYTES)
+      assertEquals(
+          budgetManager.retainedBytesByScanForTesting(),
+          budgetManager.retainedBytesForTesting(),
+      )
       assertTrue(budgetManager.budgetEvictionCount > 0)
     }
 
