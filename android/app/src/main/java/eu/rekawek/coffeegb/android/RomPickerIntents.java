@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.net.Uri;
+import android.provider.DocumentsContract;
 
 /** Creates the best ROM-picker request available without broad storage permissions. */
 final class RomPickerIntents {
@@ -49,6 +51,18 @@ final class RomPickerIntents {
                         "application/zip", "application/x-zip-compressed"})
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+    }
+
+    /** Bootstraps the in-screen browser with a persistable scoped directory grant. */
+    static Intent directoryTree(Uri initialUri) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                .addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        if (initialUri != null && DocumentsContract.isTreeUri(initialUri)) {
+            intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri);
+        }
+        return intent;
     }
 
     private static boolean hasTrustedMiuiPicker(PackageManager packages) {

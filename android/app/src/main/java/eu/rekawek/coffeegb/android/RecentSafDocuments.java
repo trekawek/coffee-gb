@@ -573,12 +573,7 @@ final class RecentSafDocuments {
         } catch (java.io.IOException ignored) {
             // Continue with Android's persisted document grants.
         }
-        for (android.content.UriPermission permission : resolver.getPersistedUriPermissions()) {
-            if (permission.getUri().equals(uri) && permission.isReadPermission()) {
-                return true;
-            }
-        }
-        return false;
+        return PersistedReadPermissions.covers(resolver, uri);
     }
 
     record Entry(Uri uri, String romName, long candidateToken, String archiveEntryName,

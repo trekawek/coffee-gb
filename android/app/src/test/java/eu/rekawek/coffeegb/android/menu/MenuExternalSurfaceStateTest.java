@@ -45,6 +45,18 @@ public class MenuExternalSurfaceStateTest {
     }
 
     @Test
+    public void selectedRomTreeAlwaysRestoresTheBrowserParentAndPauseOwnership() {
+        MenuExternalSurfaceState tree = MenuExternalSurfaceState.launched(
+                MenuExternalSurfaceState.Action.SELECT_ROM_TREE, 1, NESTED, true,
+                MenuExternalSurfaceState.RestorePolicy.ALWAYS).afterResult(true);
+
+        assertTrue(tree.active());
+        assertTrue(tree.restoreRequested());
+        assertTrue(tree.pauseOwned());
+        assertEquals(NESTED.frames(), tree.menuStack().frames());
+    }
+
+    @Test
     public void recreationRetainsActionPolicyFocusAndRestoreRequest() {
         MenuExternalSurfaceState state = MenuExternalSurfaceState.restored(
                 MenuExternalSurfaceState.Action.IMPORT_BATTERY, 2, NESTED, false,

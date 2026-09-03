@@ -2583,10 +2583,8 @@ public final class AndroidEmulationRuntime implements AutoCloseable {
         } catch (IOException ignored) {
             // A transient document can still be opened or reported as unavailable below.
         }
-        for (UriPermission permission : context.getContentResolver().getPersistedUriPermissions()) {
-            if (permission.isReadPermission() && permission.getUri().equals(uri)) {
-                return true;
-            }
+        if (PersistedReadPermissions.covers(context.getContentResolver(), uri)) {
+            return true;
         }
         int read = resultFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION;
         int persistable = resultFlags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
