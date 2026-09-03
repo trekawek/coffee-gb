@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPagination;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
@@ -33,6 +35,22 @@ public final class CommonMenuGalleryMain {
             write(compositor.compose(controller.presentation()).orElseThrow(), new File(directory,
                     String.format("%02d-%s.png", route.ordinal(), route.name().toLowerCase())));
         }
+
+        controller.setPage(new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB",
+                "1/3  /MNT/NAS/EMU/ROMS/GBC", "", "", List.of(), List.of(
+                        MenuPageSpec.Item.button("parent", "..", "", true),
+                        MenuPageSpec.Item.button("directory", "FAVORITES/", "", true),
+                        MenuPageSpec.Item.button("long-rom",
+                                "A VERY LONG GAME BOY COLOR FILENAME WITH REGION AND REVISION.GBC",
+                                "", true),
+                        MenuPageSpec.Item.button("rom-2", "POCKET CAMERA.GBC", "", true),
+                        MenuPageSpec.Item.button("rom-3", "TETRIS.GB", "", true)),
+                1, List.of("L/R PAGE", "A OPEN", "B BACK"), "long-rom",
+                MenuPreview.empty(), MenuPageLayout.FULL_WIDTH_LIST,
+                new MenuPagination(0, 3)));
+        controller.show(MenuRoute.FILE_BROWSER);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "file_browser_populated.png"));
 
         ArrayList<MenuPageSpec.Item> slots = new ArrayList<>();
         for (int slot = 0; slot < 10; slot++) {

@@ -3,6 +3,7 @@ package eu.rekawek.coffeegb.swing
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import java.nio.file.Path
 import javax.swing.Action
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -103,6 +104,7 @@ class DesktopActionsTest {
     assertFalse(registry[DesktopCommand.SAVE_STATE].isEnabled)
     assertFalse(registry[DesktopCommand.LOAD_STATE].isEnabled)
     assertFalse(registry[DesktopCommand.NETPLAY].isEnabled)
+    assertFalse(registry[DesktopCommand.FULLSCREEN].isEnabled)
     assertTrue(registry[DesktopCommand.QUIT].isEnabled.not())
   }
 
@@ -118,6 +120,18 @@ class DesktopActionsTest {
 
     assertFalse(hidden[DesktopCommand.OPEN_MENU].isEnabled)
     assertTrue(enabled[DesktopCommand.OPEN_MENU].isEnabled)
+  }
+
+  @Test
+  fun `fullscreen remains actionable from the idle Library`() {
+    val calls = mutableListOf<String>()
+    val registry = registry(calls)
+    registry.update(DesktopCommandPresentation())
+
+    assertTrue(registry[DesktopCommand.FULLSCREEN].isEnabled)
+    registry[DesktopCommand.FULLSCREEN].actionPerformed(event())
+
+    assertEquals(listOf("fullscreen=true"), calls)
   }
 
   @Test
@@ -191,6 +205,31 @@ class DesktopActionsTest {
     registry[DesktopCommand.OPEN_ROM].actionPerformed(event())
 
     assertEquals(listOf("portable-open", "open"), calls)
+  }
+
+  @Test
+  fun `portable ROM browser reads its preferred directory and delegates the exact path`() {
+    val calls = mutableListOf<String>()
+    val preferred = Path.of("configured-roms")
+    val selected = Path.of("configured-roms", "exact name.gb")
+    val registry =
+        DesktopActionRegistry(
+            handlers(calls).copy(
+                preferredRomDirectory = { preferred },
+                openRomPathFromPortableMenu = { path ->
+                  calls += "path=$path"
+                  false
+                },
+            ),
+        )
+
+    assertEquals(preferred, registry.preferredRomDirectory())
+    assertFalse(registry.openRomPathFromMenu(selected))
+    assertEquals(listOf("path=$selected"), calls)
+
+    registry.update(DesktopCommandPresentation(sessionBusy = true))
+    assertFalse(registry.openRomPathFromMenu(Path.of("blocked.gb")))
+    assertEquals(listOf("path=$selected"), calls)
   }
 
   @Test

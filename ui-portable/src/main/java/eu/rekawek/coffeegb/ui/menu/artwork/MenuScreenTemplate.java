@@ -57,6 +57,31 @@ public final class MenuScreenTemplate {
             new MenuRect(424, 489, 484, OPTION_DIVIDER_HEIGHT),
             new MenuRect(424, 563, 484, OPTION_DIVIDER_HEIGHT));
 
+    /** Complete single content panel used by full-width list pages. */
+    public static final MenuRect FULL_WIDTH_PANEL = new MenuRect(8, 110, 908, 534);
+
+    /** Seven-row rail spanning the full-width panel while preserving its generated border. */
+    public static final MenuRect FULL_WIDTH_OPTION_LIST = new MenuRect(16, 121, 892, 516);
+
+    /** Full-width list slots, aligned vertically with the standard option rail. */
+    public static final List<MenuRect> FULL_WIDTH_OPTION_ROWS = List.of(
+            new MenuRect(16, 121, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 195, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 269, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 343, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 417, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 491, 892, OPTION_ROW_HEIGHT),
+            new MenuRect(16, 565, 892, OPTION_ROW_HEIGHT));
+
+    /** Separators between full-width filename rows. */
+    public static final List<MenuRect> FULL_WIDTH_OPTION_DIVIDERS = List.of(
+            new MenuRect(16, 193, 892, OPTION_DIVIDER_HEIGHT),
+            new MenuRect(16, 267, 892, OPTION_DIVIDER_HEIGHT),
+            new MenuRect(16, 341, 892, OPTION_DIVIDER_HEIGHT),
+            new MenuRect(16, 415, 892, OPTION_DIVIDER_HEIGHT),
+            new MenuRect(16, 489, 892, OPTION_DIVIDER_HEIGHT),
+            new MenuRect(16, 563, 892, OPTION_DIVIDER_HEIGHT));
+
     /** Complete footer chrome, including its border. */
     public static final MenuRect FOOTER_PANEL = new MenuRect(8, 652, 908, 76);
 
@@ -69,5 +94,10 @@ public final class MenuScreenTemplate {
     /** Returns the bounds of one reusable widget row. */
     public static MenuRect optionRow(int index) {
         return OPTION_ROWS.get(index);
+    }
+
+    /** Returns one row from the single-panel file-list rail. */
+    public static MenuRect fullWidthOptionRow(int index) {
+        return FULL_WIDTH_OPTION_ROWS.get(index);
     }
 }

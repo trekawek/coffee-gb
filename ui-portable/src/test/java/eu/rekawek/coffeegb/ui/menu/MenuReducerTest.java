@@ -21,21 +21,36 @@ public class MenuReducerTest {
         MenuState state = MenuReducer.reduce(hidden, MenuCommand.show(MenuRoute.PAUSE_CONSOLE));
         assertTrue(state.visible());
         assertEquals(MenuRoute.PAUSE_CONSOLE, state.route());
-        assertEquals("resume", state.focusedItemId());
+        assertEquals("save-state", state.focusedItemId());
 
         state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.DOWN));
+        assertEquals("load-state", state.focusedItemId());
+        state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.UP));
         assertEquals("save-state", state.focusedItemId());
         state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.UP));
-        assertEquals("resume", state.focusedItemId());
-        state = MenuReducer.reduce(state, MenuCommand.move(MenuCommand.Direction.UP));
-        assertEquals("recent-games", state.focusedItemId());
+        assertEquals("settings", state.focusedItemId());
 
         MenuPresentation presentation = state.presentation();
         assertTrue(presentation.visible());
         assertEquals(MenuRoute.PAUSE_CONSOLE, presentation.route());
-        assertEquals("recent-games", presentation.items().get(presentation.focusedIndex()).id());
+        assertEquals("settings", presentation.items().get(presentation.focusedIndex()).id());
         assertUnmodifiable(presentation.items());
         assertNotSame(presentation, state.presentation());
+    }
+
+    @Test
+    public void rootCatalogsUseTheSharedPauseAndLibraryOrdering() {
+        MenuPage pause = MenuPages.forRoute(MenuRoute.PAUSE_CONSOLE);
+        assertEquals(List.of("save-state", "load-state", "open-rom", "reset", "recent-games",
+                        "settings"),
+                pause.items().stream().map(MenuItem::id).toList());
+        assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"), pause.footerHints());
+        assertEquals("save-state", pause.items().get(pause.initialFocusIndex()).id());
+
+        MenuPage library = MenuPages.forRoute(MenuRoute.LIBRARY);
+        assertEquals(List.of("open-rom", "recent-games", "settings"),
+                library.items().stream().map(MenuItem::id).toList());
+        assertEquals("open-rom", library.items().get(library.initialFocusIndex()).id());
     }
 
     @Test
@@ -72,7 +87,6 @@ public class MenuReducerTest {
     @Test
     public void pushAndBackPreserveParentFocusThenHideAtRoot() {
         MenuState state = MenuReducer.show(MenuReducer.initial(), MenuRoute.PAUSE_CONSOLE);
-        state = MenuReducer.move(state, MenuCommand.Direction.DOWN);
         assertEquals("save-state", state.focusedItemId());
 
         state = MenuReducer.push(state, MenuRoute.SETTINGS);

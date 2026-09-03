@@ -4,14 +4,21 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.memory.cart.RomSourceSnapshot
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
 import eu.rekawek.coffeegb.ui.menu.MenuKey
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout
 import eu.rekawek.coffeegb.ui.menu.MenuRoute
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
+import java.io.IOException
 import java.time.Instant
+import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.util.Comparator
 import java.util.EnumSet
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JRootPane
 import kotlin.test.assertEquals
@@ -81,8 +88,12 @@ class SwingProposal3MenuTest {
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
       assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
-      assertEquals(listOf("recent-games", "open-rom", "settings"), menu.visibleItemIdsForTest())
-      assertEquals("recent-games", menu.focusedItemIdForTest())
+      assertEquals(
+          listOf("open-rom", "recent-games", "settings", "fullscreen"),
+          menu.visibleItemIdsForTest(),
+      )
+      assertEquals("open-rom", menu.focusedItemIdForTest())
+      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
     }
@@ -111,81 +122,328 @@ class SwingProposal3MenuTest {
   }
 
   @Test
-  fun `library open rom row delegates to desktop native chooser command boundary`() {
-    val bridge = FakeBridge(gameLoaded = false)
-    val frames = mutableListOf<MenuArgbFrame?>()
-    val menu =
-        SwingProposal3Menu(
-            frameSink = { frames += it },
-            commands = bridge,
-            releaseGameplay = {},
+  fun `library open rom uses the preferred directory and pages whole browser results`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-pages")
+    try {
+      Files.createDirectory(directory.resolve("A folder"))
+      repeat(8) { index ->
+        Files.writeString(directory.resolve("game-${index.toString().padStart(2, '0')}.gb"), "rom")
+      }
+      Files.writeString(directory.resolve("ignored.txt"), "not a rom")
+      val bridge = FakeBridge(gameLoaded = false, preferredRomDirectory = directory)
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        assertEquals("open-rom", menu.focusedItemIdForTest())
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+        assertEquals(MenuPageLayout.FULL_WIDTH_LIST, menu.presentationForTest().layout())
+        assertEquals(listOf("LOADING..."), menu.presentationForTest().items().map { it.label() })
+      }
+
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        val firstPage = menu.presentationForTest()
+        assertEquals(directory.toAbsolutePath().normalize().toString(), firstPage.context().removePrefix("1/2  "))
+        assertEquals(0, firstPage.pagination().pageIndex())
+        assertEquals(2, firstPage.pagination().pageCount())
+        assertEquals(
+            listOf("..", "A folder/", "game-00.gb", "game-01.gb", "game-02.gb", "game-03.gb", "game-04.gb"),
+            firstPage.items().map { it.label() },
         )
 
-    javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
-    javax.swing.SwingUtilities.invokeAndWait {
-      press(menu, MenuKey.DOWN)
-      assertEquals("open-rom", menu.focusedItemIdForTest())
-      assertTrue(menu.onKeyDown(MenuKey.START, false))
-      assertTrue(menu.onKeyUp(MenuKey.START))
-    }
+        repeat(2) { press(menu, MenuKey.DOWN) }
+        assertEquals("game-00.gb", focusedLabel(menu))
+        press(menu, MenuKey.RIGHT)
+        val secondPage = menu.presentationForTest()
+        assertEquals(1, secondPage.pagination().pageIndex())
+        assertEquals(listOf("game-05.gb", "game-06.gb", "game-07.gb"), secondPage.items().map { it.label() })
+        assertEquals("game-07.gb", focusedLabel(menu))
 
-    assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
-    assertTrue(frames.any { it != null })
-    assertTrue(frames.last() == null)
+        press(menu, MenuKey.LEFT)
+        assertEquals(0, menu.presentationForTest().pagination().pageIndex())
+        assertEquals("game-00.gb", focusedLabel(menu))
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+        assertTrue(menu.visible())
+      }
+    } finally {
+      deleteTree(directory)
+    }
   }
 
   @Test
-  fun `cancelling native ROM chooser restores idle Library overlay`() {
-    val bridge = FakeBridge(gameLoaded = false, romChooserAccepted = false)
-    val frames = mutableListOf<MenuArgbFrame?>()
-    val menu =
-        SwingProposal3Menu(
-            frameSink = { frames += it },
-            commands = bridge,
-            releaseGameplay = {},
-        )
+  fun `browser parent and directory rows navigate and restore the directory focus`() {
+    val parent = Files.createTempDirectory("coffee-gb-menu-browser-navigation")
+    try {
+      val child = Files.createDirectory(parent.resolve("Child ROMs"))
+      Files.writeString(child.resolve("inside.gb"), "rom")
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = FakeBridge(gameLoaded = false, preferredRomDirectory = child),
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
 
-    javax.swing.SwingUtilities.invokeAndWait {
-      menu.openFromDesktop()
-      press(menu, MenuKey.DOWN)
-      press(menu, MenuKey.A)
-      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
-      assertEquals("open-rom", menu.focusedItemIdForTest())
-      assertTrue(menu.visible())
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals("..", focusedLabel(menu))
+        press(menu, MenuKey.A)
+        assertEquals("LOADING...", focusedLabel(menu))
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals(parent.toAbsolutePath().normalize().toString(), menu.presentationForTest().context())
+        assertEquals("Child ROMs/", focusedLabel(menu))
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals(child.toAbsolutePath().normalize().toString(), menu.presentationForTest().context())
+        assertEquals("..", focusedLabel(menu))
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      }
+    } finally {
+      deleteTree(parent)
     }
-
-    assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
-    assertTrue(frames.last() != null)
   }
 
   @Test
-  fun `cancelling native ROM chooser keeps the running game paused behind its menu`() {
-    lateinit var menu: SwingProposal3Menu
-    val bridge =
-        FakeBridge(
-            romChooserAccepted = false,
-            duringRomChooser = {
-              assertTrue(menu.onKeyDown(MenuKey.B, false))
-              assertTrue(menu.onKeyUp(MenuKey.B))
-              assertTrue(menu.updatePlayerButtons(EnumSet.of(Button.DOWN)))
-              assertTrue(menu.updatePlayerButtons(emptySet()))
-            },
-        )
-    menu = newMenu(bridge)
+  fun `rejected browser ROM keeps the running game paused and browser open`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-reject")
+    try {
+      val rom = Files.writeString(directory.resolve("selected.gb"), "rom")
+      val bridge =
+          FakeBridge(
+              preferredRomDirectory = directory,
+              romPathAccepted = false,
+          )
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
 
-    javax.swing.SwingUtilities.invokeAndWait {
-      menu.openFromDesktop()
-      repeat(3) { press(menu, MenuKey.DOWN) }
-      assertEquals("open-rom", menu.focusedItemIdForTest())
-      press(menu, MenuKey.A)
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        moveToPauseItem(menu, "open-rom")
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
 
-      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
-      assertEquals("open-rom", menu.focusedItemIdForTest())
-      assertTrue(menu.visible())
+      javax.swing.SwingUtilities.invokeAndWait {
+        press(menu, MenuKey.DOWN)
+        assertEquals("selected.gb", focusedLabel(menu))
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+        assertTrue(menu.visible())
+        assertEquals(listOf(rom), bridge.openedRomPaths)
+        assertEquals(listOf(true), bridge.pauseTransitions)
+
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+        assertEquals(listOf(true), bridge.pauseTransitions)
+      }
+    } finally {
+      deleteTree(directory)
     }
+  }
 
-    assertEquals(listOf(DesktopCommand.OPEN_ROM), bridge.invoked)
-    assertEquals(listOf(true), bridge.pauseTransitions)
+  @Test
+  fun `accepted browser ROM opens the exact path and closes the idle overlay`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-accept")
+    try {
+      val rom = Files.writeString(directory.resolve("  Pokémon 日本 long filename.gbc"), "rom")
+      val bridge =
+          FakeBridge(
+              gameLoaded = false,
+              preferredRomDirectory = directory,
+              romPathAccepted = true,
+          )
+      val worker = QueuedExecutor()
+      val frames = mutableListOf<MenuArgbFrame?>()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = { frames += it },
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        press(menu, MenuKey.START)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        press(menu, MenuKey.DOWN)
+        press(menu, MenuKey.A)
+        assertFalse(menu.visible())
+      }
+
+      assertEquals(listOf(rom), bridge.openedRomPaths)
+      assertTrue(bridge.invoked.isEmpty())
+      assertTrue(frames.last() == null)
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun `late accepted ROM confirmation cannot hide a replacement menu`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-reentrant")
+    try {
+      val rom = Files.writeString(directory.resolve("replacement.gb"), "rom")
+      lateinit var menu: SwingProposal3Menu
+      val bridge =
+          FakeBridge(
+              preferredRomDirectory = directory,
+              romPathAccepted = true,
+              duringRomPath = {
+                // A modal replacement confirmation runs a nested EDT loop. Its input belongs to
+                // the dialog and must not navigate the browser underneath it.
+                assertTrue(menu.onKeyDown(MenuKey.B, false))
+                assertTrue(menu.onKeyUp(MenuKey.B))
+                assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+
+                // Model a lifecycle replacement while that nested loop is active.
+                menu.closeForLifecycle()
+                menu.openFromDesktop()
+                assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+              },
+          )
+      val worker = QueuedExecutor()
+      menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        moveToPauseItem(menu, "open-rom")
+        press(menu, MenuKey.A)
+      }
+      worker.runNextAndFlushEdt()
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        press(menu, MenuKey.DOWN)
+        press(menu, MenuKey.A)
+
+        assertEquals(listOf(rom), bridge.openedRomPaths)
+        assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+        assertTrue(menu.visible())
+        press(menu, MenuKey.B)
+        assertFalse(menu.visible())
+        assertEquals(listOf(true, false), bridge.pauseTransitions)
+      }
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun `late browser listing cannot reopen a browser closed with back`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-stale")
+    try {
+      Files.writeString(directory.resolve("late.gb"), "rom")
+      val worker = QueuedExecutor()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = FakeBridge(gameLoaded = false, preferredRomDirectory = directory),
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+        press(menu, MenuKey.B)
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      }
+
+      worker.runNextAndFlushEdt()
+      javax.swing.SwingUtilities.invokeAndWait {
+        assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+        assertEquals(listOf("open-rom", "recent-games", "settings", "fullscreen"), menu.visibleItemIdsForTest())
+      }
+    } finally {
+      deleteTree(directory)
+    }
+  }
+
+  @Test
+  fun `archive selection replacing a visible browser preserves its pause ownership`() {
+    val directory = Files.createTempDirectory("coffee-gb-menu-browser-archive")
+    try {
+      val bridge = FakeBridge(preferredRomDirectory = directory)
+      val worker = QueuedExecutor()
+      val cancelled = AtomicInteger()
+      val menu =
+          SwingProposal3Menu(
+              frameSink = {},
+              commands = bridge,
+              releaseGameplay = {},
+              fileBrowserExecutor = worker,
+          )
+
+      javax.swing.SwingUtilities.invokeAndWait {
+        menu.openFromDesktop()
+        moveToPauseItem(menu, "open-rom")
+        press(menu, MenuKey.A)
+        assertEquals(MenuRoute.FILE_BROWSER, menu.routeForTest())
+
+        menu.showArchiveSelection(
+            requestId = 91,
+            candidates =
+                listOf(
+                    archiveCandidate(61, "first.gb", "FIRST"),
+                    archiveCandidate(62, "second.gbc", "SECOND"),
+                ),
+            onSelected = {},
+            onCancelled = { cancelled.incrementAndGet() },
+        )
+        assertEquals(MenuRoute.CHOOSE_ROM, menu.routeForTest())
+        press(menu, MenuKey.B)
+      }
+
+      assertFalse(menu.visible())
+      assertEquals(1, cancelled.get())
+      assertEquals(listOf(true, false), bridge.pauseTransitions)
+
+      // The listing queued by the replaced browser must remain harmless after archive dismissal.
+      worker.runNextAndFlushEdt()
+      assertFalse(menu.visible())
+    } finally {
+      deleteTree(directory)
+    }
   }
 
   @Test
@@ -199,6 +457,143 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
     }
+  }
+
+  @Test
+  fun `pause root exposes the requested actions and fullscreen checkbox`() {
+    val bridge = FakeBridge(initialFullscreen = true)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      assertEquals(
+          listOf(
+              "save-state",
+              "load-state",
+              "open-rom",
+              "reset",
+              "recent-games",
+              "settings",
+              "fullscreen",
+          ),
+          menu.visibleItemIdsForTest(),
+      )
+      assertEquals("save-state", menu.focusedItemIdForTest())
+      assertEquals(
+          listOf("D-PAD MOVE", "A CHOOSE", "B RESUME"),
+          menu.presentationForTest().footerHints(),
+      )
+      val fullscreen =
+          menu.presentationForTest().items().single { it.id() == "fullscreen" }
+      assertEquals(MenuWidgetType.CHECKBOX, fullscreen.widgetType())
+      assertTrue(fullscreen.checked())
+      assertFalse(menu.visibleItemIdsForTest().contains("resume"))
+    }
+  }
+
+  @Test
+  fun `fullscreen toggles in place from both desktop roots`() {
+    val pauseBridge = FakeBridge()
+    val pauseMenu = newMenu(pauseBridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      moveToPauseItem(pauseMenu, "fullscreen")
+      press(pauseMenu, MenuKey.A)
+      assertTrue(pauseBridge.fullscreen)
+      assertTrue(
+          pauseMenu.presentationForTest().items().single { it.id() == "fullscreen" }.checked())
+      assertEquals(MenuRoute.PAUSE_CONSOLE, pauseMenu.routeForTest())
+    }
+
+    val libraryBridge = FakeBridge(gameLoaded = false)
+    val libraryMenu = newMenu(libraryBridge)
+    javax.swing.SwingUtilities.invokeAndWait {
+      repeat(3) { press(libraryMenu, MenuKey.DOWN) }
+      press(libraryMenu, MenuKey.A)
+      assertTrue(libraryBridge.fullscreen)
+      assertTrue(
+          libraryMenu.presentationForTest().items().single { it.id() == "fullscreen" }.checked())
+      assertEquals(MenuRoute.LIBRARY, libraryMenu.routeForTest())
+    }
+  }
+
+  @Test
+  fun `external fullscreen changes refresh a visible root without moving focus`() {
+    val bridge = FakeBridge(initialFullscreen = true)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      moveToPauseItem(menu, "fullscreen")
+      bridge.fullscreen = false
+      menu.refreshDisplayPresentation()
+
+      assertEquals(MenuRoute.PAUSE_CONSOLE, menu.routeForTest())
+      assertEquals("fullscreen", menu.focusedItemIdForTest())
+      assertFalse(
+          menu.presentationForTest().items().single { it.id() == "fullscreen" }.checked())
+    }
+  }
+
+  @Test
+  fun `external fullscreen changes refresh a Library root beneath its child`() {
+    val bridge = FakeBridge(gameLoaded = false)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      repeat(2) { press(menu, MenuKey.DOWN) }
+      assertEquals("settings", menu.focusedItemIdForTest())
+      press(menu, MenuKey.A)
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+
+      bridge.fullscreen = true
+      menu.refreshDisplayPresentation()
+      assertEquals(MenuRoute.SETTINGS, menu.routeForTest())
+
+      press(menu, MenuKey.B)
+      assertEquals(MenuRoute.LIBRARY, menu.routeForTest())
+      assertEquals("settings", menu.focusedItemIdForTest())
+      assertTrue(
+          menu.presentationForTest().items().single { it.id() == "fullscreen" }.checked())
+    }
+  }
+
+  @Test
+  fun `root B is the only resume action and resumes an already paused game`() {
+    val bridge = FakeBridge(initiallyPaused = true)
+    val menu = newMenu(bridge)
+
+    javax.swing.SwingUtilities.invokeAndWait {
+      assertTrue(menu.visible())
+      press(menu, MenuKey.B)
+    }
+
+    assertFalse(menu.visible())
+    assertFalse(bridge.pausedState)
+    assertEquals(listOf(false), bridge.pauseTransitions)
+  }
+
+  @Test
+  fun `queued root B cannot resume after lifecycle teardown wins the EDT race`() {
+    val bridge = FakeBridge()
+    val menu = newMenu(bridge)
+    val edtBlocked = CountDownLatch(1)
+    val releaseEdt = CountDownLatch(1)
+    javax.swing.SwingUtilities.invokeLater {
+      edtBlocked.countDown()
+      releaseEdt.await()
+    }
+
+    try {
+      assertTrue(edtBlocked.await(5, TimeUnit.SECONDS))
+      menu.closeForLifecycle()
+      physicalPress(menu, Button.B)
+    } finally {
+      releaseEdt.countDown()
+    }
+    javax.swing.SwingUtilities.invokeAndWait {}
+
+    assertFalse(menu.visible())
+    assertTrue(bridge.pausedState)
+    assertEquals(listOf(true), bridge.pauseTransitions)
   }
 
   @Test
@@ -233,7 +628,7 @@ class SwingProposal3MenuTest {
       assertTrue(label.isVisible)
       menu.openFromDesktop()
       assertFalse(label.isVisible)
-      assertTrue(menu.onKeyDown(MenuKey.A, false))
+      assertTrue(menu.onKeyDown(MenuKey.B, false))
     }
 
     assertEquals(false, feedbackVisibleAtFirstFrame)
@@ -347,7 +742,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 4)
+      moveToPauseItem(menu, "reset")
       press(menu, MenuKey.A)
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
@@ -370,7 +765,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 4)
+      moveToPauseItem(menu, "reset")
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
       press(menu, MenuKey.DOWN)
@@ -642,7 +1037,6 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait { menu.openFromDesktop() }
     javax.swing.SwingUtilities.invokeAndWait {
-      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
       assertEquals("slot-0", menu.focusedItemIdForTest())
@@ -660,7 +1054,6 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
       assertEquals("slot-0", menu.focusedItemIdForTest())
@@ -692,7 +1085,6 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       press(menu, MenuKey.DOWN)
-      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
 
@@ -714,7 +1106,6 @@ class SwingProposal3MenuTest {
     val saveBridge = FakeBridge()
     val saveMenu = newMenu(saveBridge)
 
-    physicalPress(saveMenu, Button.DOWN)
     physicalPress(saveMenu, Button.A)
     javax.swing.SwingUtilities.invokeAndWait {}
 
@@ -733,7 +1124,6 @@ class SwingProposal3MenuTest {
         }
     val loadMenu = newMenu(loadBridge)
 
-    physicalPress(loadMenu, Button.DOWN)
     physicalPress(loadMenu, Button.DOWN)
     physicalPress(loadMenu, Button.A)
     javax.swing.SwingUtilities.invokeAndWait {}
@@ -770,7 +1160,6 @@ class SwingProposal3MenuTest {
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
       press(menu, MenuKey.DOWN)
-      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
       assertTrue(frames.filterNotNull().last().copyPixels().contains(red))
@@ -786,7 +1175,6 @@ class SwingProposal3MenuTest {
     bridge.loadedSlot = null
     val emptyMenu = newMenu(bridge)
     javax.swing.SwingUtilities.invokeAndWait {
-      press(emptyMenu, MenuKey.DOWN)
       press(emptyMenu, MenuKey.DOWN)
       press(emptyMenu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, emptyMenu.routeForTest())
@@ -832,7 +1220,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      moveToPauseItem(menu, 6)
+      moveToPauseItem(menu, "recent-games")
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
       assertEquals(listOf("recent:0", "recent:1"), menu.visibleItemIdsForTest())
@@ -860,7 +1248,7 @@ class SwingProposal3MenuTest {
     val menu = newMenu(bridge)
 
     javax.swing.SwingUtilities.invokeAndWait {
-      moveToPauseItem(menu, 6)
+      moveToPauseItem(menu, "recent-games")
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
       assertEquals(listOf("recent-games-status"), menu.visibleItemIdsForTest())
@@ -898,7 +1286,7 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      moveToPauseItem(menu, 6)
+      moveToPauseItem(menu, "recent-games")
       press(menu, MenuKey.A)
 
       assertEquals("CURRENT / ACTIVE", menu.presentationForTest().items().first().label())
@@ -957,7 +1345,6 @@ class SwingProposal3MenuTest {
 
     javax.swing.SwingUtilities.invokeAndWait {
       menu.openFromDesktop()
-      press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       val dated = frames.filterNotNull().last()
       press(menu, MenuKey.DOWN)
@@ -1070,6 +1457,38 @@ class SwingProposal3MenuTest {
     }
   }
 
+  private fun focusedLabel(menu: SwingProposal3Menu): String {
+    val presentation = menu.presentationForTest()
+    return presentation.items()[presentation.focusedIndex()].label()
+  }
+
+  private fun deleteTree(root: Path) {
+    if (!Files.exists(root)) return
+    Files.walk(root).use { paths ->
+      paths.sorted(Comparator.reverseOrder()).forEach { path ->
+        try {
+          Files.deleteIfExists(path)
+        } catch (failure: IOException) {
+          throw AssertionError("Unable to clean test path $path", failure)
+        }
+      }
+    }
+  }
+
+  private class QueuedExecutor : Executor {
+    private val tasks = ArrayDeque<Runnable>()
+
+    override fun execute(command: Runnable) {
+      tasks.addLast(command)
+    }
+
+    fun runNextAndFlushEdt() {
+      check(tasks.isNotEmpty()) { "No queued browser listing" }
+      tasks.removeFirst().run()
+      javax.swing.SwingUtilities.invokeAndWait {}
+    }
+  }
+
   private fun newMenu(
       bridge: FakeBridge,
       printer: PortableMenuPrinterBridge? = null,
@@ -1085,8 +1504,12 @@ class SwingProposal3MenuTest {
     return menu
   }
 
-  private fun moveToPauseItem(menu: SwingProposal3Menu, downPresses: Int) {
-    repeat(downPresses) { press(menu, MenuKey.DOWN) }
+  private fun moveToPauseItem(menu: SwingProposal3Menu, itemId: String) {
+    repeat(menu.visibleItemIdsForTest().size) {
+      if (menu.focusedItemIdForTest() == itemId) return
+      press(menu, MenuKey.DOWN)
+    }
+    error("Pause item $itemId was not reachable")
   }
 
   private fun press(menu: SwingProposal3Menu, key: MenuKey) {
@@ -1117,6 +1540,7 @@ class SwingProposal3MenuTest {
               DesktopCommand.PREFERENCES,
               DesktopCommand.CLOSE_GAME,
               DesktopCommand.MUTE,
+              DesktopCommand.FULLSCREEN,
       ),
       private val audioAvailable: Boolean = true,
       private val aboutAvailable: Boolean = true,
@@ -1124,11 +1548,16 @@ class SwingProposal3MenuTest {
       private val recentAvailable: Boolean = true,
       private val playTimeNanos: Long = 0,
       private val gameLoaded: Boolean = true,
-      private val romChooserAccepted: Boolean = true,
-      private val duringRomChooser: (() -> Unit)? = null,
+      initiallyPaused: Boolean = false,
+      initialFullscreen: Boolean = false,
+      private val preferredRomDirectory: Path? = null,
+      private val romPathAccepted: Boolean = true,
+      private val duringRomPath: ((Path) -> Unit)? = null,
   ) : PortableMenuCommandBridge {
     val invoked = mutableListOf<DesktopCommand>()
     val pauseTransitions = mutableListOf<Boolean>()
+    var pausedState = initiallyPaused
+    var fullscreen = initialFullscreen
     var muted = false
     var volume = 100
     var aboutOpened = false
@@ -1138,6 +1567,7 @@ class SwingProposal3MenuTest {
     var recentCatalog: List<PortableMenuRecentGame> = emptyList()
     var openedRecentPath: Path? = null
     var openedRecentOrigin: RomOrigin? = null
+    val openedRomPaths = mutableListOf<Path>()
     var stateCatalog: List<PortableMenuStateSlot> = emptyList()
     var catalogRefreshOnEdt: Boolean? = null
     var saveOnEdt: Boolean? = null
@@ -1150,10 +1580,12 @@ class SwingProposal3MenuTest {
                 DesktopCommandPresentation(
                     gameLoaded = gameLoaded,
                     pauseSupported = gameLoaded,
+                    paused = pausedState,
                     stateCommandsAvailable = gameLoaded,
                     stateBrowserAvailable = gameLoaded,
                     muted = muted,
                     audioVolume = volume,
+                    fullscreen = fullscreen,
                 ),
         )
 
@@ -1162,12 +1594,15 @@ class SwingProposal3MenuTest {
     override fun invoke(command: DesktopCommand) {
       invoked += command
       if (command == DesktopCommand.MUTE) muted = !muted
+      if (command == DesktopCommand.FULLSCREEN) fullscreen = !fullscreen
     }
 
-    override fun openRomFromMenu(): Boolean {
-      invoke(DesktopCommand.OPEN_ROM)
-      duringRomChooser?.invoke()
-      return romChooserAccepted
+    override fun preferredRomDirectory(): Path? = preferredRomDirectory
+
+    override fun openRomPathFromMenu(path: Path): Boolean {
+      openedRomPaths.add(path)
+      duringRomPath?.invoke(path)
+      return romPathAccepted
     }
 
     override fun audioVolume(): Int? = volume.takeIf { audioAvailable }
@@ -1193,6 +1628,7 @@ class SwingProposal3MenuTest {
     }
 
     override fun setPaused(paused: Boolean) {
+      pausedState = paused
       pauseTransitions += paused
     }
 

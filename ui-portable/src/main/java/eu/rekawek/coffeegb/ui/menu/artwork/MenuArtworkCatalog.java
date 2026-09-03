@@ -11,13 +11,17 @@ import java.util.Objects;
  * The canonical portable menu artwork catalog.
  *
  * <p>The legacy route PNG names describe the original 1672x941 Proposal 3 compositions. All
- * runtime routes now share one text-free 924x736 frame; only runtime title, picture, subtitle, and
- * option widgets vary. Template resource paths and decoding remain package-private.
+ * runtime routes use text-free 924x736 frames for the split-panel and full-width layouts; only
+ * runtime title, picture, subtitle, and option widgets vary. Template resource paths and decoding
+ * remain package-private.
  */
 public final class MenuArtworkCatalog {
 
     /** Filename of the common text-free frame used by every route. */
     public static final String COMMON_TEMPLATE_FILENAME = "common-menu-frame.png";
+
+    /** Text-free single-panel frame used by full-width list routes. */
+    public static final String FULL_WIDTH_TEMPLATE_FILENAME = "full-width-menu-frame.png";
 
     /** Width of every original Proposal 3 composition in pixels. */
     public static final int SOURCE_WIDTH = 1672;
@@ -66,6 +70,7 @@ public final class MenuArtworkCatalog {
         add(catalog, MenuRoute.OPTION_PICKER, "15-option-picker.png");
         add(catalog, MenuRoute.DATA_MEDIA, "07-data-media.png");
         add(catalog, MenuRoute.LIBRARY, "08-library.png");
+        add(catalog, MenuRoute.FILE_BROWSER, "17-file-browser.png");
         add(catalog, MenuRoute.CHOOSE_ROM, "09-choose-rom.png");
         add(catalog, MenuRoute.SYSTEM, "10-system.png");
         add(catalog, MenuRoute.ABOUT, "11-about.png");
@@ -81,8 +86,10 @@ public final class MenuArtworkCatalog {
             if (artwork == null || !sourceFilenames.add(artwork.sourceFilename())) {
                 throw new IllegalStateException("Proposal 3 artwork catalog contains a duplicate or missing route");
             }
-            if (!COMMON_TEMPLATE_FILENAME.equals(artwork.templateFilename())) {
-                throw new IllegalStateException("Menu route does not use the common template: " + route);
+            String expectedTemplate = route == MenuRoute.FILE_BROWSER
+                    ? FULL_WIDTH_TEMPLATE_FILENAME : COMMON_TEMPLATE_FILENAME;
+            if (!expectedTemplate.equals(artwork.templateFilename())) {
+                throw new IllegalStateException("Menu route uses the wrong template: " + route);
             }
         }
         return Collections.unmodifiableMap(catalog);

@@ -40,9 +40,12 @@ public class AllRouteRendererAndroidTest {
         java.util.Arrays.fill(previewPixels, Color.BLACK);
         MenuPreview readyPaper = MenuPreview.ready(16, 96, previewPixels);
         List<MenuPageSpec> pages = pages(readyPaper);
-        assertEquals(MenuRoute.values().length, pages.size());
+        ArrayList<MenuRoute> androidRoutes = new ArrayList<>(List.of(MenuRoute.values()));
+        // Android keeps the scoped-storage document picker; FILE_BROWSER is desktop-only.
+        androidRoutes.remove(MenuRoute.FILE_BROWSER);
+        assertEquals(androidRoutes.size(), pages.size());
         for (int index = 0; index < pages.size(); index++) {
-            assertEquals(MenuRoute.values()[index], pages.get(index).route());
+            assertEquals(androidRoutes.get(index), pages.get(index).route());
         }
 
         for (MenuPageSpec page : pages) {

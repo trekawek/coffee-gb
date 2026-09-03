@@ -2,6 +2,7 @@ package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.ui.menu.MenuWidgetType;
 
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.LongSupplier;
 
 /**
  * Portable compositor for the common Coffee GB menu template and reusable widget library.
@@ -27,21 +29,33 @@ public final class Proposal3MenuCompositor {
     private static final Proposal3GlyphAtlas.Role FOOTER_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
     private static final MenuRect FOOTER_MOVE = new MenuRect(73, 660, 226, 56);
     private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 670, 123, 48);
-    private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 94, 48);
+    private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 184, 48);
     private static final int DISABLED_TEXT = 0xff89927b;
     private static final int DIVIDER = 0xffd4d2ad;
     private static final int DROPDOWN_FILL = 0xffd4d2ad;
     private static final int SCROLL_ARROW_SIZE = 18;
     private static final int TRAILING_CONTENT_RIGHT_INSET = 20;
+    private static final long MARQUEE_DELAY_NANOS = 1_000_000_000L;
+    private static final int MARQUEE_PIXELS_PER_SECOND = 24;
 
     private final Object lock = new Object();
-    private int[] cachedTemplatePixels;
+    private final LongSupplier nanoTime;
+    private int[] cachedSplitTemplatePixels;
+    private int[] cachedFullWidthTemplatePixels;
     private Proposal3GlyphAtlas cachedAtlas;
     private Proposal3WidgetSkins cachedSkins;
     private MenuPresentation cachedPresentation;
     private MenuArgbFrame cachedFrame;
+    private int cachedMarqueeOffset = -1;
+    private String marqueeFocusKey;
+    private long marqueeFocusStartedNanos;
 
     public Proposal3MenuCompositor() {
+        this(System::nanoTime);
+    }
+
+    Proposal3MenuCompositor(LongSupplier nanoTime) {
+        this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
     }
 
     /** Returns a detached canonical frame, or empty when the presentation is hidden. */
@@ -51,24 +65,30 @@ public final class Proposal3MenuCompositor {
             if (!presentation.visible()) {
                 cachedPresentation = null;
                 cachedFrame = null;
+                cachedMarqueeOffset = -1;
+                marqueeFocusKey = null;
                 return Optional.empty();
             }
-            if (presentation == cachedPresentation) {
+            int marqueeOffset = marqueeOffset(presentation);
+            if (presentation == cachedPresentation && marqueeOffset == cachedMarqueeOffset) {
                 return Optional.of(cachedFrame);
             }
 
-            int[] working = templatePixels().clone();
+            int[] working = templatePixels(presentation.layout()).clone();
             MenuRaster raster = new MenuRaster(working);
             drawTitle(presentation, raster);
-            drawPicture(presentation, raster);
-            drawSubtitle(presentation, raster);
-            drawOptions(presentation, raster);
+            if (presentation.layout() == MenuPageLayout.SPLIT) {
+                drawPicture(presentation, raster);
+                drawSubtitle(presentation, raster);
+            }
+            drawOptions(presentation, raster, marqueeOffset);
             drawFooter(presentation, raster);
 
             MenuArgbFrame frame = MenuArgbFrame.trusted(MenuArtworkCatalog.PACKAGED_WIDTH,
                     MenuArtworkCatalog.PACKAGED_HEIGHT, raster.pixels());
             cachedPresentation = presentation;
             cachedFrame = frame;
+            cachedMarqueeOffset = marqueeOffset;
             return Optional.of(frame);
         }
     }
@@ -76,6 +96,16 @@ public final class Proposal3MenuCompositor {
     /** The only regions that any screen is allowed to customize above the shared base. */
     static List<MenuRect> dynamicMasks(MenuRoute route) {
         Objects.requireNonNull(route, "route");
+        return dynamicMasks(route == MenuRoute.FILE_BROWSER
+                ? MenuPageLayout.FULL_WIDTH_LIST : MenuPageLayout.SPLIT);
+    }
+
+    static List<MenuRect> dynamicMasks(MenuPageLayout layout) {
+        Objects.requireNonNull(layout, "layout");
+        if (layout == MenuPageLayout.FULL_WIDTH_LIST) {
+            return List.of(MenuScreenTemplate.TITLE, MenuScreenTemplate.FULL_WIDTH_OPTION_LIST,
+                    MenuScreenTemplate.FOOTER);
+        }
         return List.of(MenuScreenTemplate.TITLE, MenuScreenTemplate.PICTURE,
                 MenuScreenTemplate.SUBTITLE, MenuScreenTemplate.OPTION_LIST,
                 MenuScreenTemplate.FOOTER);
@@ -91,9 +121,28 @@ public final class Proposal3MenuCompositor {
         return FOOTER_ROLE;
     }
 
+    /** Text bounds after the baked B key, wide enough for either Back or Resume. */
+    static MenuRect footerBackBounds() {
+        return FOOTER_BACK;
+    }
+
+    static long marqueeDelayNanos() {
+        return MARQUEE_DELAY_NANOS;
+    }
+
+    static int marqueePixelsPerSecond() {
+        return MARQUEE_PIXELS_PER_SECOND;
+    }
+
+    static MenuRect fullWidthLabelBounds(int rowIndex) {
+        MenuRect row = MenuScreenTemplate.fullWidthOptionRow(rowIndex);
+        return new MenuRect(row.x() + 38, row.y(), row.width() - 58, row.height());
+    }
+
     int cachedTemplateRouteCount() {
         synchronized (lock) {
-            return cachedTemplatePixels == null ? 0 : 1;
+            int count = cachedSplitTemplatePixels == null ? 0 : 1;
+            return count + (cachedFullWidthTemplatePixels == null ? 0 : 1);
         }
     }
 
@@ -103,18 +152,30 @@ public final class Proposal3MenuCompositor {
         }
     }
 
-    private int[] templatePixels() {
-        if (cachedTemplatePixels == null) {
+    private int[] templatePixels(MenuPageLayout layout) {
+        if (layout == MenuPageLayout.FULL_WIDTH_LIST) {
+            if (cachedFullWidthTemplatePixels == null) {
+                try {
+                    cachedFullWidthTemplatePixels = Proposal3TemplateFrameCatalog.decode(layout)
+                            .copyPixels();
+                } catch (IOException e) {
+                    throw new IllegalStateException("Unable to decode the full-width menu template",
+                            e);
+                }
+            }
+            return cachedFullWidthTemplatePixels;
+        }
+        if (cachedSplitTemplatePixels == null) {
             try {
                 // Every route resolves the same resource. LIBRARY makes the visual provenance
                 // explicit without coupling the common frame to the currently visible route.
-                cachedTemplatePixels = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY)
+                cachedSplitTemplatePixels = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY)
                         .copyPixels();
             } catch (IOException e) {
                 throw new IllegalStateException("Unable to decode the common menu template", e);
             }
         }
-        return cachedTemplatePixels;
+        return cachedSplitTemplatePixels;
     }
 
     private Proposal3GlyphAtlas atlas() {
@@ -137,6 +198,37 @@ public final class Proposal3MenuCompositor {
             }
         }
         return cachedSkins;
+    }
+
+    /** Returns the focused filename offset after its one-second dwell, clamped at the tail. */
+    private int marqueeOffset(MenuPresentation presentation) {
+        if (presentation.layout() != MenuPageLayout.FULL_WIDTH_LIST
+                || presentation.focusedIndex() < 0
+                || presentation.focusedIndex() >= presentation.items().size()) {
+            marqueeFocusKey = null;
+            return 0;
+        }
+        MenuPresentation.Item focused = presentation.items().get(presentation.focusedIndex());
+        String normalized = display(focused.label());
+        String focusKey = presentation.route() + "\u0000" + focused.id() + "\u0000" + normalized;
+        long now = nanoTime.getAsLong();
+        if (!focusKey.equals(marqueeFocusKey)) {
+            marqueeFocusKey = focusKey;
+            marqueeFocusStartedNanos = now;
+            return 0;
+        }
+        int overflow = atlas().renderedWidth(ITEM_ROLE, normalized)
+                - fullWidthLabelBounds(presentation.focusedIndex()).width();
+        if (overflow <= 0) {
+            return 0;
+        }
+        long elapsed = Math.max(0L, now - marqueeFocusStartedNanos);
+        if (elapsed <= MARQUEE_DELAY_NANOS) {
+            return 0;
+        }
+        long movingNanos = elapsed - MARQUEE_DELAY_NANOS;
+        long offset = movingNanos * MARQUEE_PIXELS_PER_SECOND / 1_000_000_000L;
+        return (int) Math.min(overflow, offset);
     }
 
     private void drawTitle(MenuPresentation presentation, MenuRaster raster) {
@@ -215,10 +307,14 @@ public final class Proposal3MenuCompositor {
         }
     }
 
-    private void drawOptions(MenuPresentation presentation, MenuRaster raster) {
+    private void drawOptions(MenuPresentation presentation, MenuRaster raster,
+            int marqueeOffset) {
         List<VisibleSlot> visible = visibleSlots(presentation.items(), presentation.focusedIndex());
+        boolean fullWidth = presentation.layout() == MenuPageLayout.FULL_WIDTH_LIST;
         for (int slotIndex = 0; slotIndex < MenuScreenTemplate.OPTION_ROW_COUNT; slotIndex++) {
-            MenuRect row = MenuScreenTemplate.optionRow(slotIndex);
+            MenuRect row = fullWidth
+                    ? MenuScreenTemplate.fullWidthOptionRow(slotIndex)
+                    : MenuScreenTemplate.optionRow(slotIndex);
             VisibleSlot slot = visible.get(slotIndex);
             if (slot.arrow != Arrow.NONE) {
                 raster.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.DARK), row);
@@ -230,15 +326,19 @@ public final class Proposal3MenuCompositor {
                 continue;
             }
             boolean focused = slot.sourceIndex == presentation.focusedIndex();
-            paintWidgetRow(raster, row, slot.item, focused);
+            paintWidgetRow(raster, row, slot.item, focused, fullWidth,
+                    focused ? marqueeOffset : 0);
         }
-        for (MenuRect divider : MenuScreenTemplate.OPTION_DIVIDERS) {
+        List<MenuRect> dividers = fullWidth
+                ? MenuScreenTemplate.FULL_WIDTH_OPTION_DIVIDERS
+                : MenuScreenTemplate.OPTION_DIVIDERS;
+        for (MenuRect divider : dividers) {
             raster.fill(divider, DIVIDER);
         }
     }
 
     private void paintWidgetRow(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
-            boolean focused) {
+            boolean focused, boolean fullWidth, int marqueeOffset) {
         Proposal3WidgetSkins.Surface surface = focused
                 ? Proposal3WidgetSkins.Surface.SELECTED : Proposal3WidgetSkins.Surface.DARK;
         raster.paintWidget(skins().surface(surface), row);
@@ -250,7 +350,7 @@ public final class Proposal3MenuCompositor {
         }
 
         switch (item.widgetType()) {
-            case BUTTON -> drawButton(raster, row, item, textColor);
+            case BUTTON -> drawButton(raster, row, item, textColor, fullWidth, marqueeOffset);
             case DROPDOWN -> drawDropdown(raster, row, item, textColor);
             case CHECKBOX -> drawCheckbox(raster, row, item, textColor);
             case SLIDER -> drawSlider(raster, row, item, textColor);
@@ -258,13 +358,18 @@ public final class Proposal3MenuCompositor {
     }
 
     private void drawButton(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
-            int textColor) {
+            int textColor, boolean fullWidth, int marqueeOffset) {
         boolean detail = !display(item.detail()).isEmpty();
         MenuRect label = detail
                 ? new MenuRect(row.x() + 38, row.y(), 276, row.height())
                 : new MenuRect(row.x() + 38, row.y(), row.width() - 58, row.height());
-        raster.drawText(atlas(), ITEM_ROLE, item.label(), label, textColor,
-                MenuRaster.HorizontalAlignment.LEFT);
+        if (fullWidth && !detail) {
+            raster.drawClippedText(atlas(), ITEM_ROLE, item.label(), label, textColor,
+                    marqueeOffset);
+        } else {
+            raster.drawText(atlas(), ITEM_ROLE, item.label(), label, textColor,
+                    MenuRaster.HorizontalAlignment.LEFT);
+        }
         if (detail) {
             raster.drawText(atlas(), ITEM_ROLE, item.detail(),
                     new MenuRect(row.x() + 316, row.y(),

@@ -108,6 +108,20 @@ internal class DesktopRomOpen(
     open(listOf(RomOpenInput.LocalPath(path)), source, allowAutosaveResume)
   }
 
+  /**
+   * Starts an exact path chosen by the in-screen browser and reports a rejected confirmation.
+   * The portable menu uses the result to remain visible when the user keeps the running game.
+   */
+  internal fun openFromPortableMenu(path: Path): Boolean {
+    check(SwingUtilities.isEventDispatchThread()) {
+      "Portable ROM selections must be opened on the Event Dispatch Thread"
+    }
+    return beginOpen(
+        listOf(RomOpenInput.LocalPath(path)),
+        RomOpenSource.CHOOSER,
+    ) != null
+  }
+
   /** Reopens a recent archive candidate by exact entry identity when the sidecar still matches. */
   fun openRecent(path: Path, origin: RomOrigin?) {
     if (!SwingUtilities.isEventDispatchThread()) {

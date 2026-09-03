@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -26,9 +27,29 @@ final class Proposal3TemplateFrameCatalog {
         }
     }
 
+    static MenuArgbFrame decode(MenuPageLayout layout) throws IOException {
+        Objects.requireNonNull(layout, "layout");
+        String resourcePath = resourcePath(layout);
+        InputStream stream = Proposal3TemplateFrameCatalog.class.getResourceAsStream(resourcePath);
+        if (stream == null) {
+            throw new IOException("Missing Proposal 3 text-free template: " + resourcePath);
+        }
+        try (InputStream input = stream) {
+            return validatePackagedDimensions(MenuRoute.FILE_BROWSER, PngArgbDecoder.decode(input));
+        }
+    }
+
     static String resourcePath(MenuRoute route) {
         Objects.requireNonNull(route, "route");
         return RESOURCE_ROOT + MenuArtworkCatalog.artwork(route).templateFilename();
+    }
+
+    static String resourcePath(MenuPageLayout layout) {
+        Objects.requireNonNull(layout, "layout");
+        String filename = layout == MenuPageLayout.FULL_WIDTH_LIST
+                ? MenuArtworkCatalog.FULL_WIDTH_TEMPLATE_FILENAME
+                : MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME;
+        return RESOURCE_ROOT + filename;
     }
 
     static MenuArgbFrame validatePackagedDimensions(MenuRoute route, MenuArgbFrame frame)

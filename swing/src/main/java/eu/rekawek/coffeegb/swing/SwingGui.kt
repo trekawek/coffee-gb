@@ -451,6 +451,10 @@ class SwingGui private constructor(
                         },
                     ),
                 openRomFromPortableMenu = { menu.openRomChooser() },
+                preferredRomDirectory = {
+                  properties.applicationSettings.general.romDirectory
+                },
+                openRomPathFromPortableMenu = romOpen::openFromPortableMenu,
             ),
             proposal3MenuAvailable = proposal3MenuEnabled,
             stateCatalogRefresh = stateUxController::refreshPortableCatalog,
@@ -563,7 +567,10 @@ class SwingGui private constructor(
       dispatchSwingMutation { desktopUiCoordinator.presentedFramesPerSecond(null) }
     }
     eventBus.register<DisplaySettingsChangedEvent> { event ->
-      dispatchSwingMutation { desktopUiCoordinator.displaySettings(event.display) }
+      dispatchSwingMutation {
+        desktopUiCoordinator.displaySettings(event.display)
+        portableMenu?.refreshDisplayPresentation()
+      }
     }
     eventBus.register<RomLoadingEvent> { event ->
       dispatchAcceptedRomLifecycle(event.openRequestId, ::acceptRomLifecycle) {

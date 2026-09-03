@@ -6,7 +6,9 @@ import eu.rekawek.coffeegb.swing.io.DesktopMenuInputCapture
 import eu.rekawek.coffeegb.swing.io.DesktopMenuKeyboardInput
 import eu.rekawek.coffeegb.ui.menu.MenuController
 import eu.rekawek.coffeegb.ui.menu.MenuKey
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec
+import eu.rekawek.coffeegb.ui.menu.MenuPagination
 import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
@@ -15,17 +17,28 @@ import eu.rekawek.coffeegb.ui.menu.MenuWidgetType
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame
 import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor
 import java.util.EnumSet
+import java.nio.file.Path
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.swing.SwingUtilities
+import javax.swing.Timer
+
+private const val FILE_BROWSER_PAGE_SIZE = 7
+private const val FILE_BROWSER_MARQUEE_FRAME_MILLIS = 50
+private val FILE_BROWSER_EXECUTOR =
+    Executors.newSingleThreadExecutor { task ->
+      Thread(task, "coffee-gb-rom-browser").apply { isDaemon = true }
+    }
 
 /**
  * Swing host for the complete Proposal 3 route tree.
  *
  * <p>Each route is still rendered by the portable compositor. This host only supplies route
  * state, controller capture, and a command bridge to existing desktop actions. Unsupported
- * operations remain disabled; the filesystem picker and printer export chooser stay native Swing
- * dialogs. Once a native picker returns a multi-ROM archive, its bounded candidates are rendered
- * by the portable CHOOSE_ROM page.</p>
+ * operations remain disabled. Open ROM uses a full-width, asynchronous filesystem page here while
+ * the desktop File menu and printer export keep their native Swing dialogs. Multi-ROM archives
+ * continue through the portable CHOOSE_ROM page.</p>
  */
 internal class SwingProposal3Menu(
     private val frameSink: (MenuArgbFrame?) -> Unit,
@@ -34,6 +47,8 @@ internal class SwingProposal3Menu(
     private val printer: PortableMenuPrinterBridge? = null,
     private val onVisibilityChanged: (Boolean) -> Unit = {},
     private val capturePausePreview: () -> MenuPreview = { MenuPreview.empty() },
+    private val romFileBrowser: DesktopRomFileBrowser = DesktopRomFileBrowser(),
+    private val fileBrowserExecutor: Executor = FILE_BROWSER_EXECUTOR,
 ) : DesktopMenuInputCapture, DesktopMenuKeyboardInput, DesktopArchiveSelectionHost {
 
   private enum class StateMenuMode { SAVE, LOAD }
@@ -44,6 +59,20 @@ internal class SwingProposal3Menu(
       val byItemId: Map<String, RomSourceSnapshot.ArchiveCandidate>,
       val onSelected: (RomSourceSnapshot.ArchiveCandidate) -> Unit,
       val onCancelled: () -> Unit,
+  )
+
+  private data class FileBrowserRow(
+      val id: String,
+      val label: String,
+      val entry: DesktopRomFileBrowser.Entry?,
+  )
+
+  private data class FileBrowserState(
+      val requestId: Long,
+      val location: Path?,
+      val rows: List<FileBrowserRow>,
+      val pageIndex: Int,
+      val preferredId: String,
   )
 
   private val compositor = Proposal3MenuCompositor()
@@ -66,6 +95,10 @@ internal class SwingProposal3Menu(
               handleItemAdjusted(route, id, direction)
             }
 
+            override fun onPageRequested(route: MenuRoute, targetIndex: Int) {
+              if (route == MenuRoute.FILE_BROWSER) changeFileBrowserPage(targetIndex)
+            }
+
             override fun onHeaderSelected(route: MenuRoute) {
               // Proposal 3 uses B for back navigation and exposes actions only as menu rows.
             }
@@ -73,8 +106,13 @@ internal class SwingProposal3Menu(
             override fun onBackIntercepted(route: MenuRoute) {
               if (route == MenuRoute.CHOOSE_ROM) {
                 cancelArchiveSelection()
+              } else if (route == MenuRoute.FILE_BROWSER) {
+                closeFileBrowser()
               } else if (route == MenuRoute.OPTION_PICKER) {
                 cancelChoiceSelection()
+              } else if (route == MenuRoute.PAUSE_CONSOLE) {
+                val expectedMenuEpoch = menuEpoch
+                runOnEdt { resumePauseRootIfCurrent(expectedMenuEpoch) }
               }
             }
           })
@@ -85,7 +123,11 @@ internal class SwingProposal3Menu(
 
   @Volatile private var chordLatched = false
 
-  private val nativeRomChooserOpen = AtomicBoolean()
+  /** Invalidates physical-controller actions queued for an older root or emulator session. */
+  @Volatile private var menuEpoch = 0L
+
+  /** Gates controller/keyboard input while a ROM chooser or replacement dialog owns the EDT. */
+  private val romDialogOpen = AtomicBoolean()
 
   private var pauseOwnedByMenu = false
 
@@ -95,6 +137,22 @@ internal class SwingProposal3Menu(
   private var pendingConfirmation: DesktopCommand? = null
 
   private var pendingArchiveSelection: PendingArchiveSelection? = null
+
+  private var fileBrowserState: FileBrowserState? = null
+  private var fileBrowserRequestId = 0L
+
+  private val fileBrowserMarqueeTimer =
+      Timer(FILE_BROWSER_MARQUEE_FRAME_MILLIS) {
+        val presentation = controller.presentation()
+        if (presentation.visible() && presentation.route() == MenuRoute.FILE_BROWSER) {
+          render(presentation)
+        } else {
+          (it.source as Timer).stop()
+        }
+      }.apply {
+        isRepeats = true
+        isCoalesce = true
+      }
 
   /** The choice page is transient; never let a stale selection survive lifecycle teardown. */
   private data class PendingChoice(
@@ -141,10 +199,14 @@ internal class SwingProposal3Menu(
   /** Hides the menu during ROM/controller lifecycle transitions without resuming a new session. */
   internal fun closeForLifecycle() {
     runOnEdt {
+      menuEpoch++
       pauseOwnedByMenu = false
       pauseSnapshot = null
       pendingConfirmation = null
       pendingArchiveSelection = null
+      fileBrowserRequestId++
+      fileBrowserState = null
+      fileBrowserMarqueeTimer.stop()
       pendingChoice = null
       selectedArchiveItemId = null
       controller.setRootDismissAllowed(true)
@@ -156,12 +218,25 @@ internal class SwingProposal3Menu(
     }
   }
 
+  /** Rebinds fullscreen state after native Screen-menu, shortcut, or Preferences changes. */
+  internal fun refreshDisplayPresentation() {
+    runOnEdt {
+      if (!controller.visible()) return@runOnEdt
+      val rootRoute = controller.snapshot().frames().firstOrNull()?.route() ?: return@runOnEdt
+      if (rootRoute == MenuRoute.PAUSE_CONSOLE || rootRoute == MenuRoute.LIBRARY) {
+        // setPage also replaces a matching ancestor frame, so a child route can stay open while
+        // its root checkbox is refreshed for the next B navigation.
+        controller.setPage(pageFor(rootRoute, commands.menuState()))
+      }
+    }
+  }
+
   override fun updatePlayerButtons(buttons: Collection<Button>): Boolean {
     val current = EnumSet.noneOf(Button::class.java)
     current.addAll(buttons)
-    if (nativeRomChooserOpen.get()) {
-      // The native chooser owns input while its modal event loop is active. Keep the physical
-      // snapshot current so a held button cannot become a fresh menu edge when the chooser closes.
+    if (romDialogOpen.get()) {
+      // The ROM dialog owns input while its modal event loop is active. Keep the physical snapshot
+      // current so a held button cannot become a fresh menu edge when the dialog closes.
       // Releases are safe and must still clear the activation that opened the chooser.
       val previous = EnumSet.noneOf(Button::class.java)
       previous.addAll(gamepadHeld)
@@ -214,13 +289,13 @@ internal class SwingProposal3Menu(
       if (becameReleased) {
         controller.onKeyUp(button.toMenuKey())
       }
-      if (!visible() || nativeRomChooserOpen.get()) break
+      if (!visible() || romDialogOpen.get()) break
     }
     return true
   }
 
   override fun onKeyDown(key: MenuKey, repeat: Boolean): Boolean {
-    if (nativeRomChooserOpen.get()) return true
+    if (romDialogOpen.get()) return true
     if (!visible()) return false
     if (opening) return true
     refreshPrinterPageBeforeInput()
@@ -228,7 +303,7 @@ internal class SwingProposal3Menu(
   }
 
   override fun onKeyUp(key: MenuKey): Boolean {
-    if (nativeRomChooserOpen.get()) {
+    if (romDialogOpen.get()) {
       controller.onKeyUp(key)
       return true
     }
@@ -247,6 +322,13 @@ internal class SwingProposal3Menu(
   ) {
     require(candidates.size > 1) { "Archive selection requires multiple candidates" }
     runOnEdt {
+      // An archive request may finish while the user has reopened this overlay and is browsing
+      // for another ROM. Preserve that visible menu's pause ownership; recomputing it from the
+      // already-paused presentation would strand the game paused when the archive page closes.
+      val overlayAlreadyVisible = controller.visible()
+      fileBrowserRequestId++
+      fileBrowserState = null
+      fileBrowserMarqueeTimer.stop()
       pendingArchiveSelection?.let { stale ->
         pendingArchiveSelection = null
         selectedArchiveItemId = null
@@ -271,9 +353,11 @@ internal class SwingProposal3Menu(
       controller.setBackIntercepted(true)
 
       val current = commands.menuState()
-      pauseOwnedByMenu = current.commands.pauseSupported && !current.commands.paused
-      if (pauseOwnedByMenu) {
-        commands.setPaused(true)
+      if (!overlayAlreadyVisible) {
+        pauseOwnedByMenu = current.commands.pauseSupported && !current.commands.paused
+        if (pauseOwnedByMenu) {
+          commands.setPaused(true)
+        }
       }
       controller.setPage(pageFor(MenuRoute.CHOOSE_ROM, current))
       controller.show(MenuRoute.CHOOSE_ROM)
@@ -320,6 +404,7 @@ internal class SwingProposal3Menu(
     if (opening || controller.visible()) return
     val current = commands.menuState()
     if (current.commands.sessionBusy) return
+    menuEpoch++
 
     if (!current.commands.gameLoaded) {
       // The desktop's idle surface follows Android: the portable Library, rather than a paused
@@ -470,15 +555,21 @@ internal class SwingProposal3Menu(
                 if (snapshot.batterySaveActive()) "BATTERY SAVE ACTIVE" else "NO BATTERY SAVE",
             ),
             listOf(
-                item("resume", "RESUME", enabled(DesktopCommand.PAUSE)),
                 item("save-state", "SAVE STATE", stateAvailable),
                 item("load-state", "LOAD STATE", stateAvailable),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
-              item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
-              item("settings", "SETTINGS", settings != null || inlineAudioAvailable),
+                item("reset", "RESET GAME", enabled(DesktopCommand.RESET)),
                 item("recent-games", "RECENT GAMES", commands.canOpenRecentGame()),
+                item("settings", "SETTINGS", settings != null || inlineAudioAvailable),
+                MenuPageSpec.Item.checkbox(
+                    "fullscreen",
+                    "FULL SCREEN",
+                    state.fullscreen,
+                    enabled(DesktopCommand.FULLSCREEN),
+                ),
             ),
             preview = snapshot.preview(),
+            footerHints = listOf("D-PAD MOVE", "A CHOOSE", "B RESUME"),
         )
       }
 
@@ -702,9 +793,15 @@ internal class SwingProposal3Menu(
       MenuRoute.LIBRARY -> {
         val libraryItems =
             listOf(
-                item("recent-games", "RECENT GAMES", commands.canOpenRecentGame()),
                 item("open-rom", "OPEN ROM", enabled(DesktopCommand.OPEN_ROM)),
+                item("recent-games", "RECENT GAMES", commands.canOpenRecentGame()),
                 item("settings", "SETTINGS", settings != null || inlineAudioAvailable),
+                MenuPageSpec.Item.checkbox(
+                    "fullscreen",
+                    "FULL SCREEN",
+                    state.fullscreen,
+                    enabled(DesktopCommand.FULLSCREEN),
+                ),
             )
         if (hasEnabledNonBack(libraryItems)) {
           page(
@@ -843,6 +940,8 @@ internal class SwingProposal3Menu(
         }
       }
 
+      MenuRoute.FILE_BROWSER -> fileBrowserPage()
+
       MenuRoute.CHOOSE_ROM -> {
         val archive =
             requireNotNull(pendingArchiveSelection) {
@@ -893,14 +992,15 @@ internal class SwingProposal3Menu(
     when (route) {
       MenuRoute.PAUSE_CONSOLE ->
           when (id) {
-            "resume" -> runOnEdt(::resumeAndHide)
             "save-state" -> openStateRoute(StateMenuMode.SAVE)
             "load-state" -> openStateRoute(StateMenuMode.LOAD)
-            "open-rom" -> runNativeRomChooser()
+            "open-rom" -> openFileBrowser()
             "reset" -> openConfirmation(DesktopCommand.RESET)
-            "settings" -> openRoute(MenuRoute.SETTINGS)
             "recent-games" ->
                 if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
+            "settings" -> openRoute(MenuRoute.SETTINGS)
+            "fullscreen" ->
+                runCommandInPlace(DesktopCommand.FULLSCREEN, MenuRoute.PAUSE_CONSOLE)
           }
       MenuRoute.SAVE_STATES ->
           if (id.startsWith("slot-")) {
@@ -1007,9 +1107,10 @@ internal class SwingProposal3Menu(
           }
       MenuRoute.LIBRARY ->
           when (id) {
+            "open-rom" -> openFileBrowser()
             "recent-games" -> if (commands.canOpenRecentGame()) openRoute(MenuRoute.RECENT_GAMES)
-            "open-rom" -> runNativeRomChooser()
             "settings" -> openRoute(MenuRoute.SETTINGS)
+            "fullscreen" -> runCommandInPlace(DesktopCommand.FULLSCREEN, MenuRoute.LIBRARY)
           }
       MenuRoute.ABOUT ->
           if (id == "privacy-notices") runAboutAndHide()
@@ -1024,6 +1125,7 @@ internal class SwingProposal3Menu(
             id == "open-selected" -> openSelectedArchiveCandidate()
             id == "cancel" -> cancelArchiveSelection()
           }
+      MenuRoute.FILE_BROWSER -> activateFileBrowserItem(id)
     }
   }
 
@@ -1162,8 +1264,196 @@ internal class SwingProposal3Menu(
     }
   }
 
+  private fun openFileBrowser() {
+    runOnEdt {
+      val origin = controller.route()
+      if (origin != MenuRoute.PAUSE_CONSOLE && origin != MenuRoute.LIBRARY) return@runOnEdt
+      if (!commands.isEnabled(DesktopCommand.OPEN_ROM)) return@runOnEdt
+      val location = romFileBrowser.initialLocation(commands.preferredRomDirectory())
+      val requestId = ++fileBrowserRequestId
+      fileBrowserState = loadingFileBrowserState(requestId, location)
+      controller.setBackIntercepted(true)
+      controller.setPage(fileBrowserPage())
+      controller.push(MenuRoute.FILE_BROWSER)
+      submitFileBrowserListing(requestId, location, null, menuEpoch)
+    }
+  }
+
+  private fun requestFileBrowserLocation(location: Path?, restorePath: Path?) {
+    check(SwingUtilities.isEventDispatchThread()) { "File browser navigation must run on the EDT" }
+    if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return
+    val requestId = ++fileBrowserRequestId
+    fileBrowserState = loadingFileBrowserState(requestId, location)
+    controller.setPage(fileBrowserPage())
+    submitFileBrowserListing(requestId, location, restorePath, menuEpoch)
+  }
+
+  private fun submitFileBrowserListing(
+      requestId: Long,
+      location: Path?,
+      restorePath: Path?,
+      expectedMenuEpoch: Long,
+  ) {
+    fileBrowserExecutor.execute {
+      val listing = romFileBrowser.list(location)
+      SwingUtilities.invokeLater {
+        if (requestId != fileBrowserRequestId || expectedMenuEpoch != menuEpoch) return@invokeLater
+        if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@invokeLater
+        applyFileBrowserListing(requestId, listing, restorePath)
+      }
+    }
+  }
+
+  private fun applyFileBrowserListing(
+      requestId: Long,
+      listing: DesktopRomFileBrowser.Listing,
+      restorePath: Path?,
+  ) {
+    val rows = mutableListOf<FileBrowserRow>()
+    listing.entries.forEachIndexed { index, entry ->
+      val suffix =
+          if (entry.kind == DesktopRomFileBrowser.EntryKind.DIRECTORY &&
+              !entry.label.endsWith("/") &&
+              !entry.label.endsWith("\\")) {
+            "/"
+          } else {
+            ""
+          }
+      rows += FileBrowserRow("browser-entry:$requestId:$index", entry.label + suffix, entry)
+    }
+    listing.errorMessage?.let { message ->
+      rows += FileBrowserRow("browser-retry:$requestId", "RETRY: $message", null)
+    }
+    if (listing.truncated) {
+      rows +=
+          FileBrowserRow(
+              "browser-truncated:$requestId",
+              "DIRECTORY TOO LARGE - FIRST ${DesktopRomFileBrowser.DEFAULT_MAX_ENTRIES} ITEMS",
+              null,
+          )
+    }
+    if (rows.isEmpty()) {
+      rows += FileBrowserRow("browser-retry:$requestId", "NO FILESYSTEM ROOTS - RETRY", null)
+    }
+
+    val restoredIndex =
+        restorePath?.let { wanted ->
+          rows.indexOfFirst { row -> row.entry?.path == wanted }
+        }?.takeIf { it >= 0 }
+    val focusedIndex = restoredIndex ?: 0
+    val pageIndex = focusedIndex / FILE_BROWSER_PAGE_SIZE
+    val preferredId = rows[focusedIndex].id
+    fileBrowserState =
+        FileBrowserState(requestId, listing.location, rows.toList(), pageIndex, preferredId)
+    controller.setPage(fileBrowserPage())
+  }
+
+  private fun loadingFileBrowserState(requestId: Long, location: Path?): FileBrowserState {
+    val loading = FileBrowserRow("browser-loading:$requestId", "LOADING...", null)
+    return FileBrowserState(requestId, location, listOf(loading), 0, loading.id)
+  }
+
+  private fun fileBrowserPage(): MenuPageSpec {
+    val state = requireNotNull(fileBrowserState) {
+      "${MenuRoute.FILE_BROWSER.label()} requires an active filesystem listing"
+    }
+    val pageCount = maxOf(1, (state.rows.size + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE)
+    val pageIndex = state.pageIndex.coerceIn(0, pageCount - 1)
+    val first = pageIndex * FILE_BROWSER_PAGE_SIZE
+    val visibleRows = state.rows.drop(first).take(FILE_BROWSER_PAGE_SIZE)
+    val preferred =
+        state.preferredId.takeIf { wanted -> visibleRows.any { it.id == wanted } }
+            ?: visibleRows.first().id
+    val location = state.location?.toString() ?: "FILESYSTEM ROOTS"
+    val pagePrefix = if (pageCount > 1) "${pageIndex + 1}/$pageCount  " else ""
+    return MenuPageSpec(
+        MenuRoute.FILE_BROWSER,
+        "COFFEE GB",
+        pagePrefix + location,
+        "",
+        "",
+        emptyList(),
+        visibleRows.map { row -> MenuPageSpec.Item.button(row.id, row.label, "", true) },
+        1,
+        listOf("L/R PAGE", "A OPEN", "B BACK"),
+        preferred,
+        MenuPreview.empty(),
+        MenuPageLayout.FULL_WIDTH_LIST,
+        MenuPagination(pageIndex, pageCount),
+    )
+  }
+
+  private fun changeFileBrowserPage(targetIndex: Int) {
+    runOnEdt {
+      val state = fileBrowserState ?: return@runOnEdt
+      if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
+      val pageCount = maxOf(1, (state.rows.size + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE)
+      if (targetIndex !in 0 until pageCount || targetIndex == state.pageIndex) return@runOnEdt
+      val focusedRow = controller.presentation().focusedIndex().coerceAtLeast(0)
+      val first = targetIndex * FILE_BROWSER_PAGE_SIZE
+      val targetRows = state.rows.drop(first).take(FILE_BROWSER_PAGE_SIZE)
+      val preferred = targetRows[minOf(focusedRow, targetRows.lastIndex)].id
+      fileBrowserState = state.copy(pageIndex = targetIndex, preferredId = preferred)
+      controller.setPage(fileBrowserPage())
+    }
+  }
+
+  private fun activateFileBrowserItem(id: String) {
+    runOnEdt {
+      val state = fileBrowserState ?: return@runOnEdt
+      if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
+      if (id.startsWith("browser-retry:")) {
+        requestFileBrowserLocation(state.location, null)
+        return@runOnEdt
+      }
+      val entry = state.rows.firstOrNull { it.id == id }?.entry ?: return@runOnEdt
+      when (entry.kind) {
+        DesktopRomFileBrowser.EntryKind.PARENT ->
+            requestFileBrowserLocation(entry.path, state.location)
+        DesktopRomFileBrowser.EntryKind.DIRECTORY ->
+            requestFileBrowserLocation(entry.path, null)
+        DesktopRomFileBrowser.EntryKind.ROM -> {
+          val path = entry.path ?: return@runOnEdt
+          if (!romDialogOpen.compareAndSet(false, true)) return@runOnEdt
+          val expectedRequestId = state.requestId
+          val expectedMenuEpoch = menuEpoch
+          val accepted =
+              try {
+                commands.openRomPathFromMenu(path)
+              } finally {
+                romDialogOpen.set(false)
+              }
+          val sameBrowser =
+              expectedMenuEpoch == menuEpoch &&
+                  expectedRequestId == fileBrowserRequestId &&
+                  fileBrowserState?.requestId == expectedRequestId &&
+                  controller.visible() &&
+                  controller.route() == MenuRoute.FILE_BROWSER
+          if (accepted && sameBrowser) {
+            fileBrowserRequestId++
+            fileBrowserState = null
+            fileBrowserMarqueeTimer.stop()
+            controller.setBackIntercepted(false)
+            hideAndResume()
+          }
+        }
+      }
+    }
+  }
+
+  private fun closeFileBrowser() {
+    runOnEdt {
+      if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
+      fileBrowserRequestId++
+      fileBrowserState = null
+      fileBrowserMarqueeTimer.stop()
+      controller.setBackIntercepted(false)
+      controller.back()
+    }
+  }
+
   private fun runNativeRomChooser() {
-    if (!nativeRomChooserOpen.compareAndSet(false, true)) return
+    if (!romDialogOpen.compareAndSet(false, true)) return
     // Polling and global keyboard presses stay consumed until the nested EDT loop returns;
     // release edges still clear the activation that opened the chooser.
     runOnEdt {
@@ -1175,7 +1465,7 @@ internal class SwingProposal3Menu(
           hideAndResume()
         }
       } finally {
-        nativeRomChooserOpen.set(false)
+        romDialogOpen.set(false)
       }
     }
   }
@@ -1210,8 +1500,18 @@ internal class SwingProposal3Menu(
     }
   }
 
+  private fun resumePauseRootIfCurrent(expectedMenuEpoch: Long) {
+    check(SwingUtilities.isEventDispatchThread()) { "Portable menu action must run on the EDT" }
+    if (menuEpoch == expectedMenuEpoch &&
+        controller.visible() &&
+        controller.route() == MenuRoute.PAUSE_CONSOLE) {
+      resumeAndHide()
+    }
+  }
+
   private fun resumeAndHide() {
     check(SwingUtilities.isEventDispatchThread()) { "Portable menu action must run on the EDT" }
+    menuEpoch++
     val shouldResume = pauseOwnedByMenu || commands.menuState().commands.paused
     pauseOwnedByMenu = false
     if (controller.visible()) controller.hide()
@@ -1222,6 +1522,7 @@ internal class SwingProposal3Menu(
 
   private fun hideAndResume() {
     check(SwingUtilities.isEventDispatchThread()) { "Portable menu action must run on the EDT" }
+    menuEpoch++
     val shouldResume = pauseOwnedByMenu
     pauseOwnedByMenu = false
     if (controller.visible()) controller.hide()
@@ -1231,6 +1532,18 @@ internal class SwingProposal3Menu(
   }
 
   private fun render(presentation: MenuPresentation) {
+    if ((presentation.route() == MenuRoute.FILE_BROWSER || fileBrowserMarqueeTimer.isRunning) &&
+        !SwingUtilities.isEventDispatchThread()) {
+      runOnEdt { render(controller.presentation()) }
+      return
+    }
+    if (presentation.visible() && presentation.route() == MenuRoute.FILE_BROWSER) {
+      if (!fileBrowserMarqueeTimer.isRunning) fileBrowserMarqueeTimer.start()
+    } else if (fileBrowserMarqueeTimer.isRunning) {
+      fileBrowserMarqueeTimer.stop()
+    }
+    controller.setRootBackIntercepted(
+        presentation.visible() && presentation.route() == MenuRoute.PAUSE_CONSOLE)
     if (presentation.visible() &&
         (presentation.route() == MenuRoute.SAVE_STATES ||
             presentation.route() == MenuRoute.RECENT_GAMES) &&
@@ -1387,6 +1700,12 @@ internal interface PortableMenuCommandBridge {
     invoke(DesktopCommand.OPEN_ROM)
     return true
   }
+
+  /** Latest configured browser start; null lets the desktop host choose a safe fallback. */
+  fun preferredRomDirectory(): java.nio.file.Path? = null
+
+  /** Opens the exact path represented by a browser row; false means confirmation was rejected. */
+  fun openRomPathFromMenu(path: java.nio.file.Path): Boolean = false
 
   fun canOpenAbout(): Boolean
 
