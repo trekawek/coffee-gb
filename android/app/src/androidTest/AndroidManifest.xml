@@ -6,5 +6,9 @@
         android:authorities="eu.rekawek.coffeegb.android.test.fixture"
         android:process=":fixture"
         android:exported="true" />
+    <provider
+        android:name="eu.rekawek.coffeegb.android.FixtureDocumentTreeProvider"
+        android:authorities="eu.rekawek.coffeegb.android.test.browser"
+        android:exported="true" />
   </application>
 </manifest>

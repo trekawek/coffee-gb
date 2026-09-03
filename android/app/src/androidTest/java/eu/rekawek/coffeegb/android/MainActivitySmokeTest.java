@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.provider.DocumentsContract;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -155,6 +156,81 @@ public class MainActivitySmokeTest {
             assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.getAction());
             assertEquals("application/octet-stream", intent.getType());
             assertNotNull(intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES));
+        }
+    }
+
+    @Test
+    public void romBrowserBootstrapRequestsOnlyAPersistableReadTreeGrant() {
+        Uri initial = DocumentsContract.buildTreeDocumentUri(
+                "eu.rekawek.coffeegb.android.test.fixture", "rom-root");
+        Intent intent = RomPickerIntents.directoryTree(initial);
+
+        assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, intent.getAction());
+        assertEquals(initial, intent.getParcelableExtra(DocumentsContract.EXTRA_INITIAL_URI));
+        assertTrue((intent.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0);
+        assertTrue((intent.getFlags() & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION) != 0);
+        assertTrue((intent.getFlags() & Intent.FLAG_GRANT_PREFIX_URI_PERMISSION) != 0);
+        assertFalse((intent.getFlags() & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0);
+    }
+
+    @Test
+    public void inScreenRomBrowserRestoresItsBreadcrumbAndBackOwnership() throws Exception {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitRoute(scenario, MenuRoute.LIBRARY);
+            scenario.onActivity(activity -> {
+                assertTrue((Boolean) invokeResult(activity, "initializeRomBrowser",
+                        new Class<?>[]{Uri.class}, FixtureDocumentTreeProvider.TREE_URI));
+                invokeNoArgs(activity, "refreshMenuPages");
+                MenuController controller = menuController(activity);
+                controller.push(MenuRoute.FILE_BROWSER);
+                invoke(activity, "reloadRomBrowser", new Class<?>[]{Uri.class}, (Object) null);
+            });
+            await("ROM browser root listing", () -> {
+                AtomicBoolean ready = new AtomicBoolean();
+                scenario.onActivity(activity -> ready.set(menuController(activity).visible()
+                        && menuController(activity).route() == MenuRoute.FILE_BROWSER
+                        && "My ROMs".equals(menuController(activity).presentation().context())));
+                return ready.get();
+            });
+            scenario.onActivity(activity -> {
+                MenuController controller = menuController(activity);
+                controller.onKeyDown(eu.rekawek.coffeegb.ui.menu.MenuKey.DOWN, false);
+                controller.onKeyUp(eu.rekawek.coffeegb.ui.menu.MenuKey.DOWN);
+                controller.onKeyDown(eu.rekawek.coffeegb.ui.menu.MenuKey.A, false);
+                controller.onKeyUp(eu.rekawek.coffeegb.ui.menu.MenuKey.A);
+            });
+            await("ROM browser child listing", () -> {
+                AtomicBoolean ready = new AtomicBoolean();
+                scenario.onActivity(activity -> ready.set(
+                        menuController(activity).presentation().context().contains(" / ")));
+                return ready.get();
+            });
+
+            scenario.recreate();
+            await("recreated ROM browser child", () -> {
+                AtomicBoolean ready = new AtomicBoolean();
+                scenario.onActivity(activity -> ready.set(menuController(activity).visible()
+                        && menuController(activity).route() == MenuRoute.FILE_BROWSER
+                        && menuController(activity).presentation().context().contains(" / ")));
+                return ready.get();
+            });
+            scenario.onActivity(activity -> {
+                activity.onWindowFocusChanged(false);
+                MenuController controller = menuController(activity);
+                assertTrue(controller.dispatchBackEdge());
+                assertEquals(MenuRoute.FILE_BROWSER, controller.route());
+            });
+            await("ROM browser returned to tree root", () -> {
+                AtomicBoolean ready = new AtomicBoolean();
+                scenario.onActivity(activity -> ready.set("My ROMs".equals(
+                        menuController(activity).presentation().context())));
+                return ready.get();
+            });
+            scenario.onActivity(activity -> {
+                MenuController controller = menuController(activity);
+                assertTrue(controller.dispatchBackEdge());
+                assertEquals(MenuRoute.LIBRARY, controller.route());
+            });
         }
     }
 
@@ -1589,11 +1665,16 @@ public class MainActivitySmokeTest {
 
     private static void invoke(MainActivity activity, String name, Class<?>[] parameterTypes,
             Object... arguments) {
+        invokeResult(activity, name, parameterTypes, arguments);
+    }
+
+    private static Object invokeResult(MainActivity activity, String name,
+            Class<?>[] parameterTypes, Object... arguments) {
         try {
             java.lang.reflect.Method method = MainActivity.class.getDeclaredMethod(name,
                     parameterTypes);
             method.setAccessible(true);
-            method.invoke(activity, arguments);
+            return method.invoke(activity, arguments);
         } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
         }

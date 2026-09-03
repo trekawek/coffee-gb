@@ -18,9 +18,11 @@ import android.hardware.input.InputManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.DocumentsContract;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
@@ -33,7 +35,9 @@ import android.window.OnBackInvokedDispatcher;
 import eu.rekawek.coffeegb.ui.menu.MenuController;
 import eu.rekawek.coffeegb.android.menu.MenuExternalSurfaceState;
 import eu.rekawek.coffeegb.ui.menu.MenuKey;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPagination;
 import eu.rekawek.coffeegb.ui.menu.PauseMenuSnapshot;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
@@ -49,6 +53,10 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 
 /** Canvas-menu and native external-surface client for {@link EmulationService}. */
@@ -66,6 +74,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final int EXPORT_PRINTER_REQUEST = 7;
     private static final int CAMERA_PERMISSION_REQUEST = 8;
     private static final int GPS_PERMISSION_REQUEST = 9;
+    private static final int FILE_BROWSER_PAGE_SIZE = MenuPageSpec.FULL_WIDTH_ITEM_LIMIT;
+    private static final int MAX_ROM_BROWSER_DEPTH = 64;
 
     private static final String STATE_EXTERNAL_ACTION = "external.action";
     private static final String STATE_EXTERNAL_REQUEST = "external.request";
@@ -106,6 +116,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String STATE_OPTION_TOKENS = "choice.tokens";
     private static final String STATE_OPTION_LABELS = "choice.labels";
     private static final String STATE_OPTION_ENABLED = "choice.enabled";
+    private static final String STATE_BROWSER_TREE = "browser.tree";
+    private static final String STATE_BROWSER_LOCATION_URIS = "browser.location.uris";
+    private static final String STATE_BROWSER_LOCATION_LABELS = "browser.location.labels";
+    private static final String STATE_BROWSER_FOCUS_URI = "browser.focus.uri";
+    private static final String STATE_BROWSER_OPEN_AFTER_RESTORE =
+            "browser.open-after-restore";
     private static final String PRINTER_CONTINUATION_PREFS = "printer-share-continuation";
     private static final String PRINTER_CONTINUATION_TOKEN = "token";
     private static final String PRINTER_CONTINUATION_URI = "uri";
@@ -187,6 +203,18 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private static final String PREF_CAMERA_SELECTION = "devices.camera.selection";
     private static final String PREF_GAMEPAD_SELECTION = "devices.gamepad.selection";
     private static final String PREF_GPS_ENABLED = "devices.gps.enabled";
+    private static final String PREF_ROM_BROWSER_TREE = "rom.browser.tree";
+
+    private final ExecutorService romBrowserExecutor = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "coffee-gb-android-rom-browser");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private AndroidRomDocumentBrowser romDocumentBrowser;
+    private RomBrowserState romBrowserState;
+    private CancellationSignal romBrowserCancellation;
+    private long romBrowserRequestId;
+    private boolean openBrowserAfterExternalRestore;
 
     private final InputManager.InputDeviceListener inputDevices =
             new InputManager.InputDeviceListener() {
@@ -359,6 +387,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         printerContinuationPreferences = getApplicationContext().getSharedPreferences(
                 PRINTER_CONTINUATION_PREFS, MODE_PRIVATE);
+        romDocumentBrowser = new AndroidRomDocumentBrowser(getContentResolver());
         restoreActivityState(savedInstanceState);
 
         FrameLayout root = new FrameLayout(this);
@@ -391,6 +420,20 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
 
             @Override
+            public void onPageRequested(MenuRoute route, int targetIndex) {
+                if (route == MenuRoute.FILE_BROWSER) {
+                    changeRomBrowserPage(targetIndex);
+                }
+            }
+
+            @Override
+            public void onListRowRequested(MenuRoute route, int direction) {
+                if (route == MenuRoute.FILE_BROWSER) {
+                    moveRomBrowserRow(direction);
+                }
+            }
+
+            @Override
             public void onBackIntercepted(MenuRoute route) {
                 if (route == MenuRoute.CONTROLLER_MAPPING) {
                     cancelControllerCapture();
@@ -402,6 +445,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     } else {
                         resumeAndClose(active);
                     }
+                } else if (route == MenuRoute.FILE_BROWSER) {
+                    handleRomBrowserBack();
                 }
             }
         });
@@ -453,6 +498,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
         saveDrafts(outState);
         saveOptionSession(outState);
+        saveRomBrowserState(outState);
+        outState.putBoolean(STATE_BROWSER_OPEN_AFTER_RESTORE, openBrowserAfterExternalRestore);
         if (confirmVariant != null) {
             outState.putString(STATE_CONFIRM_VARIANT, confirmVariant.name());
             outState.putInt(STATE_CONFIRM_SLOT, confirmSlot);
@@ -511,6 +558,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onStop() {
         lifecycleGeneration++;
+        cancelRomBrowserRequest();
         printerPreviewGeneration++;
         cancelPendingPrinterPaperEntry();
         printerContinuationPreferences.unregisterOnSharedPreferenceChangeListener(
@@ -551,6 +599,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     @Override
     protected void onDestroy() {
         lifecycleGeneration++;
+        cancelRomBrowserRequest();
+        romBrowserExecutor.shutdownNow();
         if (tiltOrientationLock != null) {
             tiltOrientationLock.setActive(false);
         }
@@ -783,6 +833,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     private void presentMenu(MenuPresentation presentation) {
         menuController.setRootBackIntercepted(
                 presentation.visible() && presentation.route() == MenuRoute.PAUSE_CONSOLE);
+        syncBackInterception(presentation);
         if (presentation.visible() && presentation.route() == MenuRoute.SAVE_STATES
                 && refreshStatePreviewForFocus(presentation)) {
             return;
@@ -896,6 +947,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                     runtime.cancelPendingSelection();
                 }
             }
+            case FILE_BROWSER -> closeRomBrowserState();
             default -> { }
         }
         if (route == MenuRoute.CONFIRM_ACTION) {
@@ -956,6 +1008,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             case SAVE_STATES -> handleStateItem(active, id, secondary);
             case RECENT_GAMES -> handleRecentGamesItem(active, id);
             case LIBRARY -> handleLibraryItem(id);
+            case FILE_BROWSER -> handleRomBrowserItem(active, id);
             case CHOOSE_ROM -> handleChooseRomItem(active, id);
             case SETTINGS -> handleSettingsItem(id);
             case AUDIO -> handleAudioItem(id);
@@ -1749,7 +1802,365 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void openRomFromMenu() {
-        launchDocumentAction(MenuExternalSurfaceState.Action.OPEN_ROM);
+        Uri preferredTree = preferredRomTree();
+        if (preferredTree == null) {
+            launchDocumentAction(MenuExternalSurfaceState.Action.SELECT_ROM_TREE);
+            return;
+        }
+        openRomBrowser(preferredTree);
+    }
+
+    private void openRomBrowser(Uri treeUri) {
+        if (!initializeRomBrowser(treeUri)) {
+            getPreferences(MODE_PRIVATE).edit().remove(PREF_ROM_BROWSER_TREE).apply();
+            launchDocumentAction(MenuExternalSurfaceState.Action.SELECT_ROM_TREE);
+            return;
+        }
+        refreshMenuPages();
+        menuController.push(MenuRoute.FILE_BROWSER);
+        reloadRomBrowser(null);
+    }
+
+    private boolean initializeRomBrowser(Uri treeUri) {
+        final Uri root;
+        try {
+            root = AndroidRomDocumentBrowser.rootDocument(treeUri);
+        } catch (RuntimeException failure) {
+            return false;
+        }
+        cancelRomBrowserRequest();
+        long requestId = romBrowserRequestId;
+        RomBrowserRow loading = new RomBrowserRow(
+                "browser-loading:" + requestId, "LOADING...", RomBrowserRowKind.STATUS, null);
+        romBrowserState = new RomBrowserState(requestId, treeUri,
+                List.of(new RomBrowserLocation(root, "ROM FOLDER")), List.of(loading), 0, 0,
+                null);
+        return true;
+    }
+
+    private boolean adoptRomTree(Uri treeUri, int resultFlags) {
+        if (treeUri == null || !DocumentsContract.isTreeUri(treeUri)) {
+            return false;
+        }
+        int read = resultFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        int persistable = resultFlags & Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION;
+        if (read != 0 && persistable != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(treeUri, read);
+            } catch (SecurityException ignored) {
+                // The transient prefix grant still lets this Activity browse and select a ROM.
+            }
+        }
+        if (!initializeRomBrowser(treeUri)) {
+            return false;
+        }
+        if (PersistedReadPermissions.covers(getContentResolver(), treeUri)) {
+            getPreferences(MODE_PRIVATE).edit()
+                    .putString(PREF_ROM_BROWSER_TREE, treeUri.toString()).apply();
+        } else {
+            // Do not silently fall back to a former directory after this transient grant expires.
+            getPreferences(MODE_PRIVATE).edit().remove(PREF_ROM_BROWSER_TREE).apply();
+        }
+        return true;
+    }
+
+    private Uri preferredRomTree() {
+        Uri treeUri = preferredRomTreeUri();
+        if (treeUri != null && PersistedReadPermissions.covers(getContentResolver(), treeUri)) {
+            return treeUri;
+        }
+        if (treeUri != null) {
+            getPreferences(MODE_PRIVATE).edit().remove(PREF_ROM_BROWSER_TREE).apply();
+        }
+        return null;
+    }
+
+    private Uri preferredRomTreeUri() {
+        String encoded = getPreferences(MODE_PRIVATE).getString(PREF_ROM_BROWSER_TREE, null);
+        if (encoded == null || encoded.isBlank()) {
+            return null;
+        }
+        try {
+            Uri treeUri = Uri.parse(encoded);
+            return DocumentsContract.isTreeUri(treeUri) ? treeUri : null;
+        } catch (RuntimeException failure) {
+            return null;
+        }
+    }
+
+    private void reloadRomBrowser(Uri restoreFocusUri) {
+        RomBrowserState current = romBrowserState;
+        if (current == null || current.locations().isEmpty() || romDocumentBrowser == null) {
+            return;
+        }
+        Uri desiredFocus = restoreFocusUri == null
+                ? current.restoreFocusUri() : restoreFocusUri;
+        if (desiredFocus == null && current.focusedIndex() >= 0
+                && current.focusedIndex() < current.rows().size()) {
+            desiredFocus = current.rows().get(current.focusedIndex()).uri();
+        }
+        final Uri requestedFocus = desiredFocus;
+        cancelRomBrowserRequest();
+        long requestId = romBrowserRequestId;
+        CancellationSignal cancellation = new CancellationSignal();
+        romBrowserCancellation = cancellation;
+        RomBrowserRow loading = new RomBrowserRow(
+                "browser-loading:" + requestId, "LOADING...", RomBrowserRowKind.STATUS, null);
+        RomBrowserState loadingState = new RomBrowserState(requestId, current.treeUri(),
+                current.locations(), List.of(loading), 0, 0, requestedFocus);
+        romBrowserState = loadingState;
+        if (menuController != null && menuController.visible()
+                && menuController.route() == MenuRoute.FILE_BROWSER) {
+            menuController.setPageAndFocus(fileBrowserPage(), loading.id());
+        }
+        long ownerGeneration = lifecycleGeneration;
+        RomBrowserLocation location = loadingState.currentLocation();
+        try {
+            romBrowserExecutor.execute(() -> {
+                AndroidRomDocumentBrowser.Listing listing = romDocumentBrowser.list(
+                        loadingState.treeUri(), location.uri(), cancellation);
+                mainHandler.post(() -> applyRomBrowserListing(
+                        requestId, ownerGeneration, listing, requestedFocus));
+            });
+        } catch (RejectedExecutionException ignored) {
+            // Activity teardown owns the executor; no UI may be updated afterward.
+        }
+    }
+
+    private void applyRomBrowserListing(long requestId, long ownerGeneration,
+            AndroidRomDocumentBrowser.Listing listing, Uri restoreFocusUri) {
+        RomBrowserState current = romBrowserState;
+        if (requestId != romBrowserRequestId || ownerGeneration != lifecycleGeneration
+                || current == null || current.requestId() != requestId
+                || menuController == null || !menuController.visible()
+                || menuController.route() != MenuRoute.FILE_BROWSER) {
+            return;
+        }
+        ArrayList<RomBrowserLocation> locations = new ArrayList<>(current.locations());
+        RomBrowserLocation former = locations.get(locations.size() - 1);
+        locations.set(locations.size() - 1,
+                new RomBrowserLocation(former.uri(), listing.label()));
+        ArrayList<RomBrowserRow> rows = new ArrayList<>();
+        String parentLabel = locations.size() == 1 ? "..  CHANGE ROM FOLDER" : "..";
+        rows.add(new RomBrowserRow("browser-parent:" + requestId, parentLabel,
+                RomBrowserRowKind.PARENT, null));
+        int index = 0;
+        for (AndroidRomDocumentBrowser.Entry entry : listing.entries()) {
+            RomBrowserRowKind kind = entry.kind() == AndroidRomDocumentBrowser.EntryKind.DIRECTORY
+                    ? RomBrowserRowKind.DIRECTORY : RomBrowserRowKind.ROM;
+            String label = kind == RomBrowserRowKind.DIRECTORY
+                    ? entry.label() + "/" : entry.label();
+            rows.add(new RomBrowserRow("browser-entry:" + requestId + ":" + index++, label,
+                    kind, entry.uri()));
+        }
+        if (listing.errorMessage() != null) {
+            rows.add(new RomBrowserRow("browser-retry:" + requestId,
+                    listing.errorMessage() + " - RETRY", RomBrowserRowKind.RETRY, null));
+        } else if (listing.entries().isEmpty()) {
+            rows.add(new RomBrowserRow("browser-retry:" + requestId,
+                    "NO ROMS HERE - RETRY", RomBrowserRowKind.RETRY, null));
+        }
+        if (listing.truncated()) {
+            rows.add(new RomBrowserRow("browser-truncated:" + requestId,
+                    "FIRST " + AndroidRomDocumentBrowser.DEFAULT_MAX_ENTRIES + " ITEMS SHOWN",
+                    RomBrowserRowKind.STATUS, null));
+        }
+        int focusedIndex = 0;
+        if (restoreFocusUri != null) {
+            for (int row = 0; row < rows.size(); row++) {
+                if (restoreFocusUri.equals(rows.get(row).uri())) {
+                    focusedIndex = row;
+                    break;
+                }
+            }
+        }
+        int viewportStart = (focusedIndex / FILE_BROWSER_PAGE_SIZE) * FILE_BROWSER_PAGE_SIZE;
+        romBrowserState = new RomBrowserState(requestId, current.treeUri(), locations,
+                rows, viewportStart, focusedIndex, null);
+        MenuPageSpec page = fileBrowserPage();
+        menuController.setPageAndFocus(page, rows.get(focusedIndex).id());
+    }
+
+    private MenuPageSpec fileBrowserPage() {
+        RomBrowserState state = romBrowserState;
+        if (state == null || state.rows().isEmpty()) {
+            MenuPageSpec.Item choose = MenuPageSpec.Item.button(
+                    "browser-choose-folder", "CHOOSE ROM FOLDER", "", true);
+            return new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB", "ROM FOLDER", "", "",
+                    List.of(), List.of(choose), 1, List.of("", "A CHOOSE", "B BACK"),
+                    choose.id(), MenuPreview.empty(), MenuPageLayout.FULL_WIDTH_LIST,
+                    MenuPagination.singlePage());
+        }
+        int focusedIndex = Math.max(0, Math.min(state.focusedIndex(), state.rows().size() - 1));
+        int pageCount = Math.max(1,
+                (state.rows().size() + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE);
+        int pageIndex = Math.min(pageCount - 1, focusedIndex / FILE_BROWSER_PAGE_SIZE);
+        int first = Math.max(0, Math.min(state.viewportStart(), state.rows().size() - 1));
+        int last = Math.min(state.rows().size(), first + FILE_BROWSER_PAGE_SIZE);
+        ArrayList<MenuPageSpec.Item> visible = new ArrayList<>(last - first);
+        for (int index = first; index < last; index++) {
+            RomBrowserRow row = state.rows().get(index);
+            visible.add(MenuPageSpec.Item.button(row.id(), row.label(), "", true));
+        }
+        String preferred = state.rows().get(focusedIndex).id();
+        boolean preferredVisible = false;
+        for (MenuPageSpec.Item item : visible) {
+            if (item.id().equals(preferred)) {
+                preferredVisible = true;
+                break;
+            }
+        }
+        if (!preferredVisible) {
+            preferred = visible.get(0).id();
+        }
+        String pagePrefix = pageCount > 1 ? (pageIndex + 1) + "/" + pageCount + "  " : "";
+        return new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB",
+                pagePrefix + state.breadcrumb(), "", "", List.of(), visible, 1,
+                List.of("L/R PAGE", "A OPEN", "B BACK"), preferred, MenuPreview.empty(),
+                MenuPageLayout.FULL_WIDTH_LIST, new MenuPagination(pageIndex, pageCount));
+    }
+
+    private void changeRomBrowserPage(int targetIndex) {
+        RomBrowserState state = romBrowserState;
+        if (!activeRomBrowser(state)) {
+            return;
+        }
+        int pageCount = Math.max(1,
+                (state.rows().size() + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE);
+        int currentPage = state.focusedIndex() / FILE_BROWSER_PAGE_SIZE;
+        if (targetIndex < 0 || targetIndex >= pageCount || targetIndex == currentPage) {
+            return;
+        }
+        int direction = targetIndex > currentPage ? 1 : -1;
+        int focusedIndex = Math.max(0, Math.min(state.rows().size() - 1,
+                state.focusedIndex() + direction * FILE_BROWSER_PAGE_SIZE));
+        int finalPageStart = ((state.rows().size() - 1) / FILE_BROWSER_PAGE_SIZE)
+                * FILE_BROWSER_PAGE_SIZE;
+        int viewportStart = Math.max(0, Math.min(finalPageStart,
+                state.viewportStart() + direction * FILE_BROWSER_PAGE_SIZE));
+        if (focusedIndex < viewportStart) {
+            viewportStart = focusedIndex;
+        } else if (focusedIndex >= viewportStart + FILE_BROWSER_PAGE_SIZE) {
+            viewportStart = focusedIndex - FILE_BROWSER_PAGE_SIZE + 1;
+        }
+        updateRomBrowserViewport(state, viewportStart, focusedIndex);
+    }
+
+    private void moveRomBrowserRow(int direction) {
+        RomBrowserState state = romBrowserState;
+        if (!activeRomBrowser(state) || (direction != -1 && direction != 1)) {
+            return;
+        }
+        int focusedIndex = state.focusedIndex() + direction;
+        if (focusedIndex < 0 || focusedIndex >= state.rows().size()) {
+            return;
+        }
+        int viewportStart = state.viewportStart();
+        if (focusedIndex < viewportStart) {
+            viewportStart = focusedIndex;
+        } else if (focusedIndex >= viewportStart + FILE_BROWSER_PAGE_SIZE) {
+            viewportStart = focusedIndex - FILE_BROWSER_PAGE_SIZE + 1;
+        }
+        updateRomBrowserViewport(state, viewportStart, focusedIndex);
+    }
+
+    private void updateRomBrowserViewport(
+            RomBrowserState state, int viewportStart, int focusedIndex) {
+        romBrowserState = new RomBrowserState(state.requestId(), state.treeUri(),
+                state.locations(), state.rows(), viewportStart, focusedIndex,
+                state.restoreFocusUri());
+        menuController.setPageAndFocus(
+                fileBrowserPage(), state.rows().get(focusedIndex).id());
+    }
+
+    private boolean activeRomBrowser(RomBrowserState state) {
+        return state != null && !state.rows().isEmpty() && menuController != null
+                && menuController.visible() && menuController.route() == MenuRoute.FILE_BROWSER;
+    }
+
+    private void handleRomBrowserItem(AndroidEmulationRuntime active, String id) {
+        if ("browser-choose-folder".equals(id)) {
+            launchDocumentAction(MenuExternalSurfaceState.Action.SELECT_ROM_TREE);
+            return;
+        }
+        RomBrowserState state = romBrowserState;
+        if (!activeRomBrowser(state)) {
+            return;
+        }
+        RomBrowserRow selected = state.rows().stream()
+                .filter(row -> row.id().equals(id)).findFirst().orElse(null);
+        if (selected == null) {
+            return;
+        }
+        switch (selected.kind()) {
+            case PARENT -> navigateRomBrowserParent(true);
+            case DIRECTORY -> {
+                ArrayList<RomBrowserLocation> locations = new ArrayList<>(state.locations());
+                if (locations.size() >= MAX_ROM_BROWSER_DEPTH
+                        || containsRomBrowserLocation(locations, selected.uri())) {
+                    return;
+                }
+                locations.add(new RomBrowserLocation(selected.uri(), selected.labelWithoutSlash()));
+                romBrowserState = state.withLocations(locations);
+                reloadRomBrowser(null);
+            }
+            case ROM -> openRomBrowserSelection(active, selected.uri());
+            case RETRY -> reloadRomBrowser(null);
+            case STATUS -> { }
+        }
+    }
+
+    private void openRomBrowserSelection(AndroidEmulationRuntime active, Uri uri) {
+        if (active == null || uri == null) {
+            return;
+        }
+        boolean releaseMenuPause = menuPauseOwned;
+        selectionActionInFlight = true;
+        menuPauseOwned = false;
+        closeRomBrowserState();
+        menuController.hide();
+        active.openRom(uri, 0, releaseMenuPause);
+    }
+
+    private void handleRomBrowserBack() {
+        navigateRomBrowserParent(false);
+    }
+
+    private void navigateRomBrowserParent(boolean selectedRow) {
+        RomBrowserState state = romBrowserState;
+        if (!activeRomBrowser(state)) {
+            return;
+        }
+        if (state.locations().size() == 1) {
+            if (selectedRow) {
+                launchDocumentAction(MenuExternalSurfaceState.Action.SELECT_ROM_TREE);
+            } else {
+                closeRomBrowserState();
+                menuController.back();
+            }
+            return;
+        }
+        ArrayList<RomBrowserLocation> locations = new ArrayList<>(state.locations());
+        Uri child = locations.remove(locations.size() - 1).uri();
+        romBrowserState = state.withLocations(locations);
+        reloadRomBrowser(child);
+    }
+
+    private void cancelRomBrowserRequest() {
+        romBrowserRequestId++;
+        CancellationSignal cancellation = romBrowserCancellation;
+        romBrowserCancellation = null;
+        if (cancellation != null) {
+            cancellation.cancel();
+        }
+    }
+
+    private void closeRomBrowserState() {
+        cancelRomBrowserRequest();
+        romBrowserState = null;
+        openBrowserAfterExternalRestore = false;
+        syncBackInterception(menuController == null
+                ? null : menuController.presentation());
     }
 
     private void launchDocumentAction(MenuExternalSurfaceState.Action action) {
@@ -1767,8 +2178,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         int requestCode;
         MenuExternalSurfaceState.RestorePolicy policy;
         switch (action) {
+            case SELECT_ROM_TREE -> {
+                intent = romDirectoryIntent();
+                requestCode = OPEN_ROM_REQUEST;
+                policy = MenuExternalSurfaceState.RestorePolicy.ALWAYS;
+            }
             case OPEN_ROM -> {
-                intent = openRomIntent();
+                // Retained only for a document result restored from an older Activity instance.
+                intent = RomPickerIntents.create(this);
                 requestCode = OPEN_ROM_REQUEST;
                 policy = MenuExternalSurfaceState.RestorePolicy.ON_CANCEL;
             }
@@ -1821,8 +2238,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         }
     }
 
-    private Intent openRomIntent() {
-        return RomPickerIntents.create(this);
+    private Intent romDirectoryIntent() {
+        return RomPickerIntents.directoryTree(preferredRomTreeUri());
     }
 
     private static Intent importIntent() {
@@ -1852,6 +2269,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         boolean releaseMenuPause = externalSurface.pauseOwned();
         externalSurface = externalSurface.afterResult(successful);
         if (!successful) {
+            restoreExternalSurfaceIfRequested();
+            return;
+        }
+        if (action == MenuExternalSurfaceState.Action.SELECT_ROM_TREE) {
+            if (adoptRomTree(uri, data.getFlags())) {
+                openBrowserAfterExternalRestore = true;
+            }
             restoreExternalSurfaceIfRequested();
             return;
         }
@@ -1964,6 +2388,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void dispatchDocumentResult(PendingDocumentResult result) {
+        if (result.action() == MenuExternalSurfaceState.Action.SELECT_ROM_TREE) {
+            if (adoptRomTree(result.uri(), result.flags())) {
+                openBrowserAfterExternalRestore = true;
+            }
+            return;
+        }
         AndroidEmulationRuntime active = runtime;
         if (active == null) {
             pendingDocumentResult = result;
@@ -1972,6 +2402,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         switch (result.action()) {
             case OPEN_ROM -> active.openRom(
                     result.uri(), result.flags(), result.releaseMenuPause());
+            case SELECT_ROM_TREE -> { }
             case IMPORT_BATTERY -> active.importBattery(result.uri());
             case EXPORT_BATTERY -> active.exportBattery(result.uri());
             case IMPORT_STATE_0 -> active.importState(result.uri());
@@ -2081,6 +2512,14 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         menuController.restore(safeMenu);
         deferFocusRestoreIfNeeded(safeMenu);
         refreshRestoredDynamicRoute(safeMenu);
+        if (openBrowserAfterExternalRestore && romBrowserState != null) {
+            openBrowserAfterExternalRestore = false;
+            if (menuController.route() != MenuRoute.FILE_BROWSER) {
+                refreshMenuPages();
+                menuController.push(MenuRoute.FILE_BROWSER);
+                reloadRomBrowser(null);
+            }
+        }
     }
 
     private void restoreSuspendedMenu() {
@@ -2127,6 +2566,9 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             deferredMenuFocusRestore = snapshot;
             mainHandler.post(this::loadPrinterPreview);
         }
+        if (stackContains(snapshot, MenuRoute.FILE_BROWSER) && romBrowserState != null) {
+            mainHandler.post(() -> reloadRomBrowser(null));
+        }
     }
 
     private void restoreDeferredPaperFocusIfReady() {
@@ -2145,6 +2587,12 @@ public final class MainActivity extends Activity implements RuntimeObserver {
 
     private void deferFocusRestoreIfNeeded(MenuStackSnapshot desired) {
         if (menuController == null || !desired.visible()) {
+            return;
+        }
+        if (stackContains(desired, MenuRoute.FILE_BROWSER)) {
+            // Browser rows are rebuilt asynchronously with request-scoped IDs. Its persisted
+            // document URI restores focus once the provider listing arrives.
+            deferredMenuFocusRestore = MenuStackSnapshot.hidden();
             return;
         }
         MenuStackSnapshot current = menuController.snapshot();
@@ -2244,7 +2692,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
         }
         menuController.setPages(List.of(
-                pausePage(), statePage(), recentGamesPage(), libraryPage(), chooseRomPage(),
+                pausePage(), statePage(), recentGamesPage(), libraryPage(), fileBrowserPage(),
+                chooseRomPage(),
                 AndroidMenuModel.settingsPage(),
                 AndroidMenuModel.audioPage(audio),
                 AndroidMenuModel.displayPage(
@@ -2571,9 +3020,19 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (runtime != null) {
             runtime.input().cancelCapture();
         }
-        if (menuController != null) {
-            menuController.setBackIntercepted(false);
+        syncBackInterception(menuController == null ? null : menuController.presentation());
+    }
+
+    private void syncBackInterception(MenuPresentation presentation) {
+        if (menuController == null) {
+            return;
         }
+        boolean browser = presentation != null && presentation.visible()
+                && presentation.route() == MenuRoute.FILE_BROWSER;
+        boolean controllerCapture = presentation != null && presentation.visible()
+                && presentation.route() == MenuRoute.CONTROLLER_MAPPING
+                && runtime != null && runtime.input().captureActive();
+        menuController.setBackIntercepted(browser || controllerCapture);
     }
 
     private static eu.rekawek.coffeegb.core.joypad.Button mappingTarget(String id) {
@@ -2788,7 +3247,11 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         if (state == null) {
             return;
         }
-        suspendedMenu = withoutPrinterPaper(readSnapshot(state, "menu"));
+        restoreRomBrowserState(state);
+        openBrowserAfterExternalRestore = state.getBoolean(
+                STATE_BROWSER_OPEN_AFTER_RESTORE, false) && romBrowserState != null;
+        suspendedMenu = withoutUnavailableFileBrowser(
+                withoutPrinterPaper(readSnapshot(state, "menu")));
         suspendedMenuPauseOwned = state.getBoolean(STATE_MENU_PAUSE);
         String actionName = state.getString(STATE_EXTERNAL_ACTION);
         String policyName = state.getString(STATE_EXTERNAL_POLICY);
@@ -2797,7 +3260,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 externalSurface = MenuExternalSurfaceState.restored(
                         MenuExternalSurfaceState.Action.valueOf(actionName),
                         state.getInt(STATE_EXTERNAL_REQUEST, -1),
-                        withoutPrinterPaper(readSnapshot(state, "external")),
+                        withoutUnavailableFileBrowser(
+                                withoutPrinterPaper(readSnapshot(state, "external"))),
                         state.getBoolean(STATE_EXTERNAL_PAUSE),
                         MenuExternalSurfaceState.RestorePolicy.valueOf(policyName),
                         state.getBoolean(STATE_EXTERNAL_RESTORE));
@@ -2910,6 +3374,77 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         state.putSerializable(STATE_OPTION_ENABLED, enabled);
     }
 
+    private void saveRomBrowserState(Bundle state) {
+        RomBrowserState browser = romBrowserState;
+        if (browser == null) {
+            return;
+        }
+        state.putString(STATE_BROWSER_TREE, browser.treeUri().toString());
+        ArrayList<String> uris = new ArrayList<>(browser.locations().size());
+        ArrayList<String> labels = new ArrayList<>(browser.locations().size());
+        for (RomBrowserLocation location : browser.locations()) {
+            uris.add(location.uri().toString());
+            labels.add(location.label());
+        }
+        state.putStringArrayList(STATE_BROWSER_LOCATION_URIS, uris);
+        state.putStringArrayList(STATE_BROWSER_LOCATION_LABELS, labels);
+        Uri focus = browser.restoreFocusUri();
+        if (focus == null && browser.focusedIndex() >= 0
+                && browser.focusedIndex() < browser.rows().size()) {
+            focus = browser.rows().get(browser.focusedIndex()).uri();
+        }
+        if (focus != null) {
+            state.putString(STATE_BROWSER_FOCUS_URI, focus.toString());
+        }
+    }
+
+    private void restoreRomBrowserState(Bundle state) {
+        String encodedTree = state.getString(STATE_BROWSER_TREE);
+        ArrayList<String> uris = state.getStringArrayList(STATE_BROWSER_LOCATION_URIS);
+        ArrayList<String> labels = state.getStringArrayList(STATE_BROWSER_LOCATION_LABELS);
+        if (encodedTree == null || uris == null || labels == null || uris.isEmpty()
+                || uris.size() != labels.size() || uris.size() > MAX_ROM_BROWSER_DEPTH) {
+            return;
+        }
+        try {
+            Uri treeUri = Uri.parse(encodedTree);
+            if (!DocumentsContract.isTreeUri(treeUri)) {
+                return;
+            }
+            ArrayList<RomBrowserLocation> locations = new ArrayList<>(uris.size());
+            for (int index = 0; index < uris.size(); index++) {
+                Uri location = Uri.parse(uris.get(index));
+                if (!PersistedReadPermissions.covers(treeUri, location)) {
+                    return;
+                }
+                if (containsRomBrowserLocation(locations, location)) {
+                    return;
+                }
+                locations.add(new RomBrowserLocation(location, labels.get(index)));
+            }
+            String encodedFocus = state.getString(STATE_BROWSER_FOCUS_URI);
+            Uri focus = encodedFocus == null ? null : Uri.parse(encodedFocus);
+            long requestId = ++romBrowserRequestId;
+            RomBrowserRow loading = new RomBrowserRow(
+                    "browser-loading:" + requestId, "LOADING...",
+                    RomBrowserRowKind.STATUS, null);
+            romBrowserState = new RomBrowserState(requestId, treeUri, locations,
+                    List.of(loading), 0, 0, focus);
+        } catch (RuntimeException ignored) {
+            romBrowserState = null;
+        }
+    }
+
+    private static boolean containsRomBrowserLocation(
+            List<RomBrowserLocation> locations, Uri uri) {
+        for (RomBrowserLocation location : locations) {
+            if (location.uri().equals(uri)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void restoreOptionSession(Bundle state) {
         if (!state.getBoolean(STATE_OPTION_ACTIVE, false)) {
             return;
@@ -2976,6 +3511,82 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             }
         }
         return frames.isEmpty() ? MenuStackSnapshot.hidden() : new MenuStackSnapshot(frames);
+    }
+
+    private MenuStackSnapshot withoutUnavailableFileBrowser(MenuStackSnapshot snapshot) {
+        if (romBrowserState != null || !stackContains(snapshot, MenuRoute.FILE_BROWSER)) {
+            return snapshot;
+        }
+        ArrayList<MenuStackSnapshot.Frame> frames = new ArrayList<>(snapshot.frames().size());
+        for (MenuStackSnapshot.Frame frame : snapshot.frames()) {
+            if (frame.route() == MenuRoute.FILE_BROWSER) {
+                break;
+            }
+            frames.add(frame);
+        }
+        return frames.isEmpty() ? MenuStackSnapshot.hidden() : new MenuStackSnapshot(frames);
+    }
+
+    private enum RomBrowserRowKind {
+        PARENT,
+        DIRECTORY,
+        ROM,
+        RETRY,
+        STATUS
+    }
+
+    private record RomBrowserLocation(Uri uri, String label) {
+        private RomBrowserLocation {
+            Objects.requireNonNull(uri, "uri");
+            label = label == null || label.isBlank() ? "ROM FOLDER" : label;
+        }
+    }
+
+    private record RomBrowserRow(String id, String label, RomBrowserRowKind kind, Uri uri) {
+        private RomBrowserRow {
+            Objects.requireNonNull(id, "id");
+            Objects.requireNonNull(label, "label");
+            Objects.requireNonNull(kind, "kind");
+        }
+
+        private String labelWithoutSlash() {
+            return label.endsWith("/") ? label.substring(0, label.length() - 1) : label;
+        }
+    }
+
+    private record RomBrowserState(long requestId, Uri treeUri,
+                                   List<RomBrowserLocation> locations,
+                                   List<RomBrowserRow> rows,
+                                   int viewportStart, int focusedIndex,
+                                   Uri restoreFocusUri) {
+        private RomBrowserState {
+            Objects.requireNonNull(treeUri, "treeUri");
+            locations = List.copyOf(locations);
+            rows = List.copyOf(rows);
+            if (locations.isEmpty() || rows.isEmpty()) {
+                throw new IllegalArgumentException("Browser locations and rows cannot be empty");
+            }
+        }
+
+        private RomBrowserLocation currentLocation() {
+            return locations.get(locations.size() - 1);
+        }
+
+        private RomBrowserState withLocations(List<RomBrowserLocation> replacement) {
+            return new RomBrowserState(requestId, treeUri, replacement, rows,
+                    viewportStart, focusedIndex, restoreFocusUri);
+        }
+
+        private String breadcrumb() {
+            StringBuilder result = new StringBuilder();
+            for (RomBrowserLocation location : locations) {
+                if (result.length() > 0) {
+                    result.append(" / ");
+                }
+                result.append(location.label());
+            }
+            return result.toString();
+        }
     }
 
     private record ChoiceSession(MenuRoute origin, String originId, String title,

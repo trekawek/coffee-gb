@@ -74,9 +74,9 @@ final class AndroidMenuModel {
                         button("save-state", "SAVE STATE", "", runtimeAvailable),
                         button("load-state", "LOAD STATE", "", runtimeAvailable),
                         button("open-rom", "OPEN ROM", "", runtimeAvailable),
-                        button("reset", "RESET GAME", "CONFIRM", runtimeAvailable),
-                        button("recent-games", "RECENT GAMES", "OPEN", runtimeAvailable),
-                        button("settings", "SETTINGS", "OPEN", true)),
+                        button("reset", "RESET GAME", "", runtimeAvailable),
+                        button("recent-games", "RECENT GAMES", "", runtimeAvailable),
+                        button("settings", "SETTINGS", "", true)),
                 runtimeAvailable ? "save-state" : "settings", preview,
                 List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"));
     }

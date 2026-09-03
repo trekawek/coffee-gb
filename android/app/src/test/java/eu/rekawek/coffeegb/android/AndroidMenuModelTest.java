@@ -53,6 +53,7 @@ public class AndroidMenuModelTest {
         assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"), page.footerHints());
         assertFalse(page.items().stream().anyMatch(item -> item.id().equals("resume")
                 || item.id().equals("fullscreen")));
+        assertTrue(page.items().stream().allMatch(item -> item.detail().isEmpty()));
         assertEquals(List.of("PLAY TIME", "12:34", "BATTERY SAVE ACTIVE"), page.sideLines());
 
         MenuPageSpec unavailable = AndroidMenuModel.pausePage(

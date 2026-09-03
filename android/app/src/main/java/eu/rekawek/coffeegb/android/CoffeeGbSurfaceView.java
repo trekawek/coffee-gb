@@ -21,6 +21,7 @@ import android.view.SurfaceView;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
 import eu.rekawek.coffeegb.ui.menu.MenuKey;
+import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.ui.menu.MenuTouchInput;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
@@ -52,6 +53,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private static final long BENCHMARK_DRAIN_DELAY_MILLIS = 100L;
     /** Keeps the common SGB-border toggle hot without permanently decoding all six rasters. */
     private static final int MAX_CACHED_SKIN_PRESENTATIONS = 2;
+    /** The portable full-width list uses a time-based marquee for long focused names. */
+    private static final long MENU_ANIMATION_INTERVAL_MILLIS = 50L;
 
     private final Object renderLock = new Object();
     private final Paint videoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -73,6 +76,17 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     private final Set<Integer> menuTouchPointers = new HashSet<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AtomicLong transientRevision = new AtomicLong();
+    private final Runnable menuAnimationFrame = new Runnable() {
+        @Override
+        public void run() {
+            menuAnimationScheduled = false;
+            if (!requiresMenuAnimation(menuPresentation)) {
+                return;
+            }
+            onFrameAvailable();
+            scheduleMenuAnimationIfNeeded();
+        }
+    };
 
     private volatile NativeFrameStore frames;
     private volatile MenuPresentation menuPresentation;
@@ -91,6 +105,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     /** Guards the one frame-rate hint allowed for each newly-created Surface. */
     private boolean surfaceFrameRateHintApplied;
     private float surfaceFrameRateHz = DEFAULT_SURFACE_FRAME_RATE_HZ;
+    private boolean menuAnimationScheduled;
 
     public CoffeeGbSurfaceView(Context context) {
         super(context);
@@ -141,6 +156,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
         menuPresentation = presentation;
         onFrameAvailable();
+        updateMenuAnimation();
     }
 
     /**
@@ -152,12 +168,36 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             return;
         }
         menuPresentation = null;
+        updateMenuAnimation();
         onFrameAvailable();
     }
 
     /** Pure seam for keeping an already-hidden menu from resubmitting the retained game frame. */
     static boolean requiresMenuInvalidationOnClear(MenuPresentation presentation) {
         return presentation != null;
+    }
+
+    /** Only the full-width file browser currently contains time-based menu artwork. */
+    static boolean requiresMenuAnimation(MenuPresentation presentation) {
+        return presentation != null && presentation.visible()
+                && presentation.route() == MenuRoute.FILE_BROWSER;
+    }
+
+    private void updateMenuAnimation() {
+        if (surfaceReady && requiresMenuAnimation(menuPresentation)) {
+            scheduleMenuAnimationIfNeeded();
+        } else if (menuAnimationScheduled) {
+            menuAnimationScheduled = false;
+            mainHandler.removeCallbacks(menuAnimationFrame);
+        }
+    }
+
+    private void scheduleMenuAnimationIfNeeded() {
+        if (menuAnimationScheduled) {
+            return;
+        }
+        menuAnimationScheduled = true;
+        mainHandler.postDelayed(menuAnimationFrame, MENU_ANIMATION_INTERVAL_MILLIS);
     }
 
     /**
@@ -259,6 +299,8 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     /** Releases only the Surface subscription; the active emulator keeps running in its service. */
     public void detach() {
         clearTransientMessage();
+        menuPresentation = null;
+        updateMenuAnimation();
         NativeFrameStore active = frames;
         if (active != null) {
             active.removeListener(this);
@@ -385,6 +427,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         surfaceReady = true;
+        updateMenuAnimation();
         applySurfaceFrameRateHint(holder);
         if (frames != null) {
             frames.addListener(this);
@@ -400,6 +443,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         surfaceReady = false;
+        updateMenuAnimation();
         surfaceFrameRateHintApplied = false;
         NativeFrameStore active = frames;
         if (active != null) {

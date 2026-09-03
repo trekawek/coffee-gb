@@ -12,6 +12,7 @@ public final class MenuExternalSurfaceState {
 
     public enum Action {
         OPEN_ROM,
+        SELECT_ROM_TREE,
         IMPORT_BATTERY,
         EXPORT_BATTERY,
         IMPORT_STATE_0,

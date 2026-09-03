@@ -12,7 +12,9 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
 import eu.rekawek.coffeegb.core.joypad.Button;
 import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPagination;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
@@ -41,8 +43,6 @@ public class AllRouteRendererAndroidTest {
         MenuPreview readyPaper = MenuPreview.ready(16, 96, previewPixels);
         List<MenuPageSpec> pages = pages(readyPaper);
         ArrayList<MenuRoute> androidRoutes = new ArrayList<>(List.of(MenuRoute.values()));
-        // Android keeps the scoped-storage document picker; FILE_BROWSER is desktop-only.
-        androidRoutes.remove(MenuRoute.FILE_BROWSER);
         assertEquals(androidRoutes.size(), pages.size());
         for (int index = 0; index < pages.size(); index++) {
             assertEquals(androidRoutes.get(index), pages.get(index).route());
@@ -88,12 +88,21 @@ public class AllRouteRendererAndroidTest {
         pages.add(AndroidMenuModel.dataMediaPage(new AndroidMenuModel.TransferAvailability(
                 false, true, "SAVE FLUSH PENDING")));
         pages.add(AndroidMenuModel.libraryPage(true));
+        pages.add(fileBrowserPage());
         pages.add(page(MenuRoute.CHOOSE_ROM, "CHOOSE ROM", buttons("rom", 3), preview));
         pages.add(AndroidMenuModel.systemPage("execution-mode"));
         pages.add(AndroidMenuModel.aboutPage("2026.08.11-LONG-VERSION",
                 "NO BROWSER AVAILABLE"));
         pages.add(page(MenuRoute.CONFIRM_ACTION, "CONFIRM", buttons("confirm", 2), preview));
         return List.copyOf(pages);
+    }
+
+    private static MenuPageSpec fileBrowserPage() {
+        List<MenuPageSpec.Item> rows = buttons("browser", MenuPageSpec.FULL_WIDTH_ITEM_LIMIT);
+        return new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB", "1/2  ROMS / LONG FOLDER",
+                "", "", List.of(), rows, 1,
+                List.of("L/R PAGE", "A OPEN", "B BACK"), rows.get(0).id(), MenuPreview.empty(),
+                MenuPageLayout.FULL_WIDTH_LIST, new MenuPagination(0, 2));
     }
 
     private static MenuPageSpec page(MenuRoute route, String title,
