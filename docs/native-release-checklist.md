@@ -24,17 +24,17 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   and Linux detached signatures all passed their independent platform verification. The extracted
   macOS app retained `com.apple.security.cs.disable-library-validation=true`, passed Gatekeeper,
   and launched with its extracted locked natives; checksums were generated afterward.
-- [ ] The release bundle contains the portable JAR, Linux x64 DEB, Windows x64 MSI, macOS x64 DMG,
-  macOS arm64 DMG, `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every detached
-  signature named by the matrix. It contains no `*.json` files; the matrix records the Maven and
-  target-native SBOM digests validated before assembly.
-- [ ] Verify every `SHA256SUMS` entry independently after download.
-- [ ] Release notes state whether each target is `unsigned`, `verified-embedded`, or
-  `verified-detached`, exactly matching all four `target.*.signing` matrix values, and call out any
-  known platform limitation, including the current macOS system-SDL2 requirement for game
-  controllers.
+- [ ] The internal validation bundle contains the portable JAR, Linux x64 DEB, Windows x64 MSI,
+  macOS x64 DMG, macOS arm64 DMG, `NATIVE-PACKAGE-MATRIX.properties`, and `SHA256SUMS`, plus every
+  detached signature named by the matrix. It contains no `*.json` files; the matrix records the
+  Maven and target-native SBOM digests validated before assembly.
+- [ ] Verify every internal `SHA256SUMS` entry independently after downloading the validation
+  bundle. Confirm the public GitHub release omits both `NATIVE-PACKAGE-MATRIX.properties` and
+  `SHA256SUMS`.
+- [ ] Release notes call out any known platform limitation, including the current macOS system-SDL2
+  requirement for game controllers, and contain no native-package signing-evidence section.
 - [ ] The GitHub release is public, non-draft, and non-prerelease only after its exact remote asset
-  set and signing-state notes have been downloaded and verified.
+  set and release notes have been downloaded and verified.
 - [ ] No target is omitted. If a future reviewed support change removes one, its release notes and
   target/user documentation explicitly say so before publication.
 

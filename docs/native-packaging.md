@@ -278,11 +278,13 @@ The release gate accepts exactly one result for each of Linux x64, Windows x64, 
 and macOS arm64. It rejects a missing/duplicate target, non-default package type, version drift,
 invalid target-native SBOM evidence, stale checksum, or unexpected file before copying anything into the
 release bundle.
-The final `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing packages and
+The internal `NATIVE-PACKAGE-MATRIX.properties` names all four architecture-bearing packages and
 records their validated Maven and target-native SBOM digests plus signing state. The JSON SBOMs
 remain internal validation inputs and are not copied into the release bundle. Its release-level
 `SHA256SUMS` covers the matrix, universal Maven JAR, all four packages, and every detached
-signature; the release directory rejects every `*.json` file.
+signature; the release directory rejects every `*.json` file. The publication step verifies this
+metadata, then omits both `NATIVE-PACKAGE-MATRIX.properties` and `SHA256SUMS` from the public GitHub
+release assets.
 
 All normal and pull-request builds are unsigned. Signing is reachable only through the explicit
 `--release-sign` wrapper switch and then requires all of the following:

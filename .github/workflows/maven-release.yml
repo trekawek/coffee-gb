@@ -333,7 +333,10 @@ jobs:
           transaction_tmp=$(mktemp -d)
           trap 'rm -rf -- "$transaction_tmp"' EXIT
           mapfile -t release_paths < <(
-            find native-release -mindepth 1 -maxdepth 1 -type f -print | sort
+            find native-release -mindepth 1 -maxdepth 1 -type f \
+              ! -name 'NATIVE-PACKAGE-MATRIX.properties' \
+              ! -name 'SHA256SUMS' \
+              -print | sort
           )
           if (( ${#release_paths[@]} == 0 )) ||
              find native-release -mindepth 1 -maxdepth 1 ! -type f -print -quit |
@@ -348,30 +351,6 @@ jobs:
           fi
           printf '%s\n' "${release_paths[@]##*/}" >"$transaction_tmp/expected-assets"
 
-          signing_lines="$transaction_tmp/signing-lines"
-          : >"$signing_lines"
-          for target in \
-              linux-x86-64 \
-              windows-x86-64 \
-              macos-x86-64 \
-              macos-aarch64; do
-            mapfile -t signing_matches < <(
-              grep -E "^target\\.${target}\\.signing=" \
-                native-release/NATIVE-PACKAGE-MATRIX.properties || true
-            )
-            if (( ${#signing_matches[@]} != 1 )); then
-              echo "Release matrix has no unique signing state for $target" >&2
-              exit 1
-            fi
-            signing=${signing_matches[0]#*=}
-            if [[ "$signing" != unsigned &&
-                  "$signing" != verified-embedded &&
-                  "$signing" != verified-detached ]]; then
-              echo "Release matrix has invalid signing state for $target" >&2
-              exit 1
-            fi
-            printf -- '- `%s`: `%s`\n' "$target" "$signing" >>"$signing_lines"
-          done
           generated_notes="$transaction_tmp/generated-notes.md"
           gh api \
             --method POST \
@@ -389,9 +368,6 @@ jobs:
           On macOS, game controllers require a compatible system SDL2 installation; keyboard input and emulation remain usable without it.
           EOF
           {
-            echo '## Native package signing evidence'
-            cat "$signing_lines"
-            echo
             cat "$known_limitations"
             echo
             cat "$generated_notes"

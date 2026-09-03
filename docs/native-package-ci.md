@@ -172,8 +172,9 @@ Configure these protected environment secrets:
 The stores and decoded credential files live only under runner-temporary paths and are removed in
 an `always()` cleanup step. A missing secret, unprotected event, snapshot, tag mismatch, signature
 failure, timestamp failure, notarization failure, or incomplete signed matrix fails closed. The
-release notes must accurately say `verified-embedded` or `verified-detached`; merely running a
-signing command is not release evidence.
+internal matrix must accurately record `verified-embedded` or `verified-detached`; merely running a
+signing command is not release evidence. The matrix and release-level checksum file are validation
+inputs and are not published as GitHub release assets.
 
 Every `actions/checkout`, `actions/setup-java`, `actions/upload-artifact`, and
 `actions/download-artifact` use is pinned to a reviewed full commit SHA. Dependency-update review
@@ -181,12 +182,11 @@ must update the adjacent version comment and revalidate all workflow tests befor
 
 ## Installing and removing
 
-- Linux: verify `SHA256SUMS`, install the DEB with the distribution package tool, and remove the
-  `coffee-gb` package with that same tool.
-- Windows: verify `SHA256SUMS`, open the EXE, and close Coffee GB when finished. It extracts only
-  to its temporary run directory and creates no Installed Apps entry.
-- macOS: verify the checksum, open the DMG, copy Coffee GB to Applications, eject the image, and
-  remove the application by moving it to Trash.
+- Linux: install the DEB with the distribution package tool, and remove the `coffee-gb` package
+  with that same tool.
+- Windows: open the MSI and close Coffee GB when finished.
+- macOS: open the DMG, copy Coffee GB to Applications, eject the image, and remove the application
+  by moving it to Trash.
 
 Native packages bundle Java. The universal JAR remains available for Java 16+ systems and as the
 portable fallback. Removing an application does not delete ROMs, adjacent battery saves,

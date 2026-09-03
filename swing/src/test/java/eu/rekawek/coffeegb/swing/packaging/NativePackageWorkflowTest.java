@@ -187,7 +187,7 @@ public class NativePackageWorkflowTest {
         assertTrue(release.contains("--prerelease=false"));
         assertTrue(release.contains("Existing public GitHub release is unexpectedly a prerelease"));
         assertTrue(release.contains("Existing public GitHub release already matches"));
-        assertTrue(release.contains("## Native package signing evidence"));
+        assertFalse(release.contains("## Native package signing evidence"));
         assertTrue(release.contains("## Known platform limitations"));
         assertTrue(release.contains(
                 "game controllers require a compatible system SDL2 installation; keyboard input "
@@ -199,7 +199,8 @@ public class NativePackageWorkflowTest {
         assertTrue(release.contains("GitHub release title differs"));
         assertTrue(release.contains("GitHub release notes differ from the exact"));
         assertTrue(release.contains("releases/generate-notes"));
-        assertTrue(release.contains("target\\\\.${target}\\\\.signing="));
+        assertTrue(release.contains("! -name 'NATIVE-PACKAGE-MATRIX.properties'"));
+        assertTrue(release.contains("! -name 'SHA256SUMS'"));
         assertTrue(release.contains("--notes-file \"$release_notes\""));
         assertTrue(release.contains("--title \"coffee-gb ${RELEASE_VERSION}\""));
         assertFalse(release.contains("--clobber"));

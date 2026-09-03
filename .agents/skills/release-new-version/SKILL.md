@@ -38,6 +38,8 @@ After success, fetch and verify:
 - the default branch contains the next-development commit and reports `<development_version>`;
 - the GitHub release is based on the new tag;
 - the executable built at `target/checkout/swing/target/coffee-gb-<release_version>.jar` is attached as `coffee-gb-<release_version>.jar` and is non-empty.
+- `NATIVE-PACKAGE-MATRIX.properties` and `SHA256SUMS` were used only for internal validation and are
+  not attached to the GitHub release.
 
 ## 3. Build complete release notes
 
@@ -70,7 +72,9 @@ Verify with `gh release view <tag> --json name,tagName,url,assets,body` that:
   with no trailing punctuation;
 - `tagName` matches the new tag;
 - the executable `coffee-gb-<release_version>.jar` is present exactly once;
+- neither `NATIVE-PACKAGE-MATRIX.properties` nor `SHA256SUMS` is present;
 - the body covers commits, merged PRs, and fixed issues;
+- the body contains no `Native package signing evidence` section;
 - the optional screenshot renders if included.
 
 Report the workflow run, tag, release URL, released version, next development version, and executable asset.
