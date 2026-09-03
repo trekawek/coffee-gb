@@ -30,6 +30,7 @@ public final class MenuController implements MenuTouchInput {
 
     private MenuState state = MenuReducer.initial();
     private boolean backIntercepted;
+    private boolean rootBackIntercepted;
     private boolean rootDismissAllowed = true;
 
     public MenuController(Listener listener) {
@@ -139,6 +140,19 @@ public final class MenuController implements MenuTouchInput {
     public void setBackIntercepted(boolean intercepted) {
         synchronized (lock) {
             backIntercepted = intercepted;
+        }
+    }
+
+    /**
+     * Keeps a B edge on a visible root page so the host can replace dismissal with a root action.
+     *
+     * <p>Unlike {@link #setBackIntercepted(boolean)}, this never affects child-page navigation.
+     * Pause-menu hosts use it to make B an explicit Resume command while retaining ordinary B
+     * navigation throughout the rest of the route stack.</p>
+     */
+    public void setRootBackIntercepted(boolean intercepted) {
+        synchronized (lock) {
+            rootBackIntercepted = intercepted;
         }
     }
 
@@ -357,11 +371,21 @@ public final class MenuController implements MenuTouchInput {
                     return new Transition(state.presentation(), Event.adjust(
                             state.route(), item.id(), key == MenuKey.LEFT ? -1 : 1));
                 }
+                MenuPage page = state.page();
+                if (page.layout() == MenuPageLayout.FULL_WIDTH_LIST) {
+                    MenuPagination pagination = page.pagination();
+                    int targetIndex = pagination.pageIndex()
+                            + (key == MenuKey.LEFT ? -1 : 1);
+                    if (targetIndex >= 0 && targetIndex < pagination.pageCount()) {
+                        return new Transition(state.presentation(), Event.page(
+                                state.route(), targetIndex));
+                    }
+                }
                 state = MenuReducer.move(state, key == MenuKey.LEFT
                         ? MenuCommand.Direction.LEFT : MenuCommand.Direction.RIGHT);
             }
             case B -> {
-                if (backIntercepted) {
+                if (backIntercepted || (state.stack().size() == 1 && rootBackIntercepted)) {
                     return new Transition(state.presentation(), Event.back(state.route()));
                 }
                 if (state.stack().size() == 1 && !rootDismissAllowed) {
@@ -431,6 +455,7 @@ public final class MenuController implements MenuTouchInput {
             case ITEM -> listener.onItemSelected(event.route, event.id, event.secondary);
             case ADJUST -> listener.onItemAdjusted(event.route, event.id, event.adjustment);
             case BACK -> listener.onBackIntercepted(event.route);
+            case PAGE -> listener.onPageRequested(event.route, event.pageIndex);
         }
     }
 
@@ -449,37 +474,45 @@ public final class MenuController implements MenuTouchInput {
             ITEM,
             HEADER,
             ADJUST,
-            BACK
+            BACK,
+            PAGE
         }
 
         private final MenuRoute route;
         private final String id;
         private final boolean secondary;
         private final int adjustment;
+        private final int pageIndex;
         private final Kind kind;
 
-        private Event(MenuRoute route, String id, boolean secondary, int adjustment, Kind kind) {
+        private Event(MenuRoute route, String id, boolean secondary, int adjustment,
+                int pageIndex, Kind kind) {
             this.route = route;
             this.id = id;
             this.secondary = secondary;
             this.adjustment = adjustment;
+            this.pageIndex = pageIndex;
             this.kind = kind;
         }
 
         private static Event item(MenuRoute route, String id, boolean secondary) {
-            return new Event(route, id, secondary, 0, Kind.ITEM);
+            return new Event(route, id, secondary, 0, -1, Kind.ITEM);
         }
 
         private static Event header(MenuRoute route) {
-            return new Event(route, null, false, 0, Kind.HEADER);
+            return new Event(route, null, false, 0, -1, Kind.HEADER);
         }
 
         private static Event adjust(MenuRoute route, String id, int adjustment) {
-            return new Event(route, id, false, adjustment, Kind.ADJUST);
+            return new Event(route, id, false, adjustment, -1, Kind.ADJUST);
         }
 
         private static Event back(MenuRoute route) {
-            return new Event(route, null, false, 0, Kind.BACK);
+            return new Event(route, null, false, 0, -1, Kind.BACK);
+        }
+
+        private static Event page(MenuRoute route, int pageIndex) {
+            return new Event(route, null, false, 0, pageIndex, Kind.PAGE);
         }
     }
 
@@ -495,6 +528,9 @@ public final class MenuController implements MenuTouchInput {
         }
 
         default void onBackIntercepted(MenuRoute route) {
+        }
+
+        default void onPageRequested(MenuRoute route, int targetIndex) {
         }
     }
 }

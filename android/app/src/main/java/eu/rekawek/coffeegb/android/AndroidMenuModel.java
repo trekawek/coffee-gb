@@ -59,10 +59,26 @@ final class AndroidMenuModel {
 
     static MenuPageSpec libraryPage(boolean runtimeAvailable) {
         return page(MenuRoute.LIBRARY, "COFFEE GB", "LIBRARY", "", "", List.of(), List.of(
-                        button("recent-games", "RECENT GAMES", "", runtimeAvailable),
                         button("open-rom", "OPEN ROM", "", runtimeAvailable),
+                        button("recent-games", "RECENT GAMES", "", runtimeAvailable),
                         button("settings", "SETTINGS", "", true)),
-                runtimeAvailable ? "recent-games" : "settings", MenuPreview.empty());
+                runtimeAvailable ? "open-rom" : "settings", MenuPreview.empty());
+    }
+
+    static MenuPageSpec pausePage(String title, String elapsed, boolean batterySaveActive,
+            boolean runtimeAvailable, MenuPreview preview) {
+        return page(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "", "", title,
+                List.of("PLAY TIME", elapsed,
+                        batterySaveActive ? "BATTERY SAVE ACTIVE" : "NO BATTERY SAVE"),
+                List.of(
+                        button("save-state", "SAVE STATE", "", runtimeAvailable),
+                        button("load-state", "LOAD STATE", "", runtimeAvailable),
+                        button("open-rom", "OPEN ROM", "", runtimeAvailable),
+                        button("reset", "RESET GAME", "CONFIRM", runtimeAvailable),
+                        button("recent-games", "RECENT GAMES", "OPEN", runtimeAvailable),
+                        button("settings", "SETTINGS", "OPEN", true)),
+                runtimeAvailable ? "save-state" : "settings", preview,
+                List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"));
     }
 
     static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {

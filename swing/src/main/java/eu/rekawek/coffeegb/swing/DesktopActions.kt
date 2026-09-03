@@ -88,6 +88,10 @@ internal data class DesktopCommandHandlers(
      * the user approved a file, allowing the overlay to return after a cancelled chooser.
      */
     val openRomFromPortableMenu: (() -> Boolean)? = null,
+    /** Supplies the latest preferred starting point for the in-screen ROM browser. */
+    val preferredRomDirectory: (() -> Path?)? = null,
+    /** Opens an exact path selected by the in-screen ROM browser. */
+    val openRomPathFromPortableMenu: ((Path) -> Boolean)? = null,
 )
 
 /** Stable in-screen settings identifiers shared by Swing's production bridge and route host. */
@@ -319,6 +323,13 @@ internal class DesktopActionRegistry(
         }
   }
 
+  override fun preferredRomDirectory(): Path? = handlers.preferredRomDirectory?.invoke()
+
+  override fun openRomPathFromMenu(path: Path): Boolean {
+    if (!isEnabled(DesktopCommand.OPEN_ROM)) return false
+    return handlers.openRomPathFromPortableMenu?.invoke(path) ?: false
+  }
+
   override fun canOpenAbout(): Boolean = handlers.openAbout != null
 
   override fun openAbout() {
@@ -481,7 +492,7 @@ internal class DesktopActionRegistry(
         DesktopCommand.MANAGE_STATES,
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy
-        DesktopCommand.FULLSCREEN -> state.gameLoaded && !state.sessionBusy
+        DesktopCommand.FULLSCREEN -> !state.sessionBusy
       }
 
   private fun selected(command: DesktopCommand, state: DesktopCommandPresentation): Boolean =

@@ -19,13 +19,14 @@ final class MenuPages {
             case PAUSE_CONSOLE -> page(route, "COFFEE GB", "", "", "",
                     List.of("PLAY TIME", "00:00", "NO BATTERY SAVE"),
                     items(
-                            button("resume", "RESUME"),
                             button("save-state", "SAVE STATE"),
                             button("load-state", "LOAD STATE"),
                             button("open-rom", "OPEN ROM"),
                             button("reset", "RESET GAME"),
-                            button("settings", "SETTINGS"),
-                            button("recent-games", "RECENT GAMES")));
+                            button("recent-games", "RECENT GAMES"),
+                            button("settings", "SETTINGS")),
+                    1, List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"),
+                    "save-state", MenuPreview.empty());
             case SAVE_STATES -> statePage(false);
             case RECENT_GAMES -> MenuPage.from(MenuPageSpec.recentGames(List.of(), null));
             case SETTINGS -> page(route, "COFFEE GB", "SETTINGS", "", "",
@@ -84,9 +85,14 @@ final class MenuPages {
                             button("preview-printer-paper", "PRINTER PAPER")));
             case LIBRARY -> page(route, "COFFEE GB", "LIBRARY", "", "", List.of(),
                     items(
-                            button("recent-games", "RECENT GAMES"),
                             button("open-rom", "OPEN ROM"),
+                            button("recent-games", "RECENT GAMES"),
                             button("settings", "SETTINGS")));
+            case FILE_BROWSER -> new MenuPage(route, "COFFEE GB", "OPEN ROM", "", "",
+                    List.of(), items(button("file-browser-status", "NO FILES")), 1,
+                    List.of("L/R PAGE", "A OPEN", "B BACK"), "file-browser-status",
+                    MenuPreview.empty(),
+                    MenuPageLayout.FULL_WIDTH_LIST, MenuPagination.singlePage());
             case CHOOSE_ROM -> page(route, "COFFEE GB", "CHOOSE ROM", "", "ZIP CONTENTS",
                     List.of("COFFEE TEST.ZIP", "3 ROMS FOUND", ""),
                     items(

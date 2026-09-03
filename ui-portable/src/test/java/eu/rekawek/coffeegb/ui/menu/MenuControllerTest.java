@@ -7,6 +7,7 @@ import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class MenuControllerTest {
@@ -134,6 +135,94 @@ public class MenuControllerTest {
     }
 
     @Test
+    public void fullWidthPagesRequestBoundedPageChangesOncePerInputEdge() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setPage(fullWidthPage(1, 3,
+                List.of(item("rom", "A VERY LONG ROM NAME.GB", true, null))));
+        controller.show(MenuRoute.FILE_BROWSER);
+
+        controller.onKeyDown(MenuKey.LEFT, false);
+        controller.onKeyDown(MenuKey.LEFT, true);
+        controller.onKeyUp(MenuKey.LEFT);
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyUp(MenuKey.RIGHT);
+
+        assertEquals(List.of("FILE_BROWSER:0", "FILE_BROWSER:2"), events.pageRequests);
+        assertEquals("rom", controller.snapshot().frames().get(0).focusedItemId());
+
+        controller.setPage(fullWidthPage(0, 3,
+                List.of(item("first", "FIRST.GB", true, null))));
+        controller.onKeyDown(MenuKey.LEFT, false);
+        controller.onKeyUp(MenuKey.LEFT);
+        controller.setPage(fullWidthPage(2, 3,
+                List.of(item("last", "LAST.GB", true, null))));
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyUp(MenuKey.RIGHT);
+
+        assertEquals("out-of-range directions must not request a page",
+                List.of("FILE_BROWSER:0", "FILE_BROWSER:2"), events.pageRequests);
+    }
+
+    @Test
+    public void fullWidthSliderAdjustmentTakesPrecedenceOverPagination() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        MenuPageSpec.Item slider = new MenuPageSpec.Item("volume", "VOLUME", "50%", true,
+                null, MenuWidgetType.SLIDER, 50);
+        controller.setPage(fullWidthPage(1, 3, List.of(slider)));
+        controller.show(MenuRoute.FILE_BROWSER);
+
+        controller.onKeyDown(MenuKey.RIGHT, false);
+        controller.onKeyUp(MenuKey.RIGHT);
+
+        assertEquals(List.of("volume:1"), events.adjustments);
+        assertEquals(List.of(), events.pageRequests);
+    }
+
+    @Test
+    public void layoutAndPaginationPropagateToPresentationAndDefaultToSplit() {
+        MenuController controller = new MenuController(new Events());
+        MenuPageSpec legacy = page(MenuRoute.ABOUT, 1,
+                List.of(item("about", "ABOUT", true, null)));
+        assertEquals(MenuPageLayout.SPLIT, legacy.layout());
+        assertEquals(MenuPagination.singlePage(), legacy.pagination());
+
+        MenuPageSpec fullWidth = fullWidthPage(2, 4,
+                List.of(item("rom", "ROM.GB", true, null)));
+        controller.setPage(fullWidth);
+        controller.show(MenuRoute.FILE_BROWSER);
+
+        assertEquals(MenuPageLayout.FULL_WIDTH_LIST, controller.presentation().layout());
+        assertEquals(new MenuPagination(2, 4), controller.presentation().pagination());
+
+        MenuPage defaultFileBrowser = MenuPages.forRoute(MenuRoute.FILE_BROWSER);
+        assertEquals(MenuPageLayout.FULL_WIDTH_LIST, defaultFileBrowser.layout());
+        assertEquals(MenuPagination.singlePage(), defaultFileBrowser.pagination());
+    }
+
+    @Test
+    public void paginationAndFullWidthRowCapacityAreValidated() {
+        assertThrows(IllegalArgumentException.class, () -> new MenuPagination(-1, 1));
+        assertThrows(IllegalArgumentException.class, () -> new MenuPagination(0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new MenuPagination(2, 2));
+        assertFalse(new MenuPagination(0, 3).hasPreviousPage());
+        assertTrue(new MenuPagination(0, 3).hasNextPage());
+        assertTrue(new MenuPagination(2, 3).hasPreviousPage());
+        assertFalse(new MenuPagination(2, 3).hasNextPage());
+
+        ArrayList<MenuPageSpec.Item> sevenItems = new ArrayList<>();
+        for (int index = 0; index < MenuPageSpec.FULL_WIDTH_ITEM_LIMIT; index++) {
+            sevenItems.add(item("rom-" + index, "ROM " + index, true, null));
+        }
+        fullWidthPage(0, 1, sevenItems);
+        sevenItems.add(item("rom-7", "ROM 7", true, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> fullWidthPage(0, 1, sevenItems));
+    }
+
+    @Test
     public void adjustableMuteEmitsOneToggleEdgeForLeftRightAndConfirmRemainsSelection() {
         Events events = new Events();
         MenuController controller = new MenuController(events);
@@ -169,6 +258,37 @@ public class MenuControllerTest {
         controller.setBackIntercepted(false);
         assertTrue(controller.dispatchBackEdge());
         assertFalse(controller.visible());
+    }
+
+    @Test
+    public void rootBackInterceptionLeavesChildNavigationUntouched() {
+        Events events = new Events();
+        MenuController controller = new MenuController(events);
+        controller.setRootBackIntercepted(true);
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+
+        assertTrue(controller.dispatchBackEdge());
+        assertTrue(controller.visible());
+        assertEquals(List.of(MenuRoute.PAUSE_CONSOLE), events.backRoutes);
+
+        controller.push(MenuRoute.SETTINGS);
+        assertTrue(controller.dispatchBackEdge());
+        assertEquals(MenuRoute.PAUSE_CONSOLE, controller.route());
+        assertEquals(List.of(MenuRoute.PAUSE_CONSOLE), events.backRoutes);
+
+        controller.setRootBackIntercepted(false);
+        assertTrue(controller.dispatchBackEdge());
+        assertFalse(controller.visible());
+    }
+
+    @Test
+    public void removedResumeFocusFallsBackToTheFirstPauseAction() {
+        MenuController controller = new MenuController(new Events());
+
+        controller.restore(new MenuStackSnapshot(List.of(
+                new MenuStackSnapshot.Frame(MenuRoute.PAUSE_CONSOLE, "resume"))));
+
+        assertEquals("save-state", controller.snapshot().frames().get(0).focusedItemId());
     }
 
     @Test
@@ -340,6 +460,14 @@ public class MenuControllerTest {
                 items, columns, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"));
     }
 
+    private static MenuPageSpec fullWidthPage(int pageIndex, int pageCount,
+            List<MenuPageSpec.Item> items) {
+        return new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB", "OPEN ROM", "", "",
+                List.of(), items, 1, List.of("D-PAD MOVE", "A OPEN", "B BACK"), null,
+                MenuPreview.empty(), MenuPageLayout.FULL_WIDTH_LIST,
+                new MenuPagination(pageIndex, pageCount));
+    }
+
     private static MenuPageSpec.Item item(String id, String label, boolean enabled,
             String secondaryId) {
         return new MenuPageSpec.Item(id, label, "", enabled, secondaryId);
@@ -349,6 +477,7 @@ public class MenuControllerTest {
         private final List<String> items = new ArrayList<>();
         private final List<String> adjustments = new ArrayList<>();
         private final List<MenuRoute> backRoutes = new ArrayList<>();
+        private final List<String> pageRequests = new ArrayList<>();
 
         @Override
         public void onPresentation(MenuPresentation presentation) {
@@ -371,6 +500,11 @@ public class MenuControllerTest {
         @Override
         public void onBackIntercepted(MenuRoute route) {
             backRoutes.add(route);
+        }
+
+        @Override
+        public void onPageRequested(MenuRoute route, int targetIndex) {
+            pageRequests.add(route + ":" + targetIndex);
         }
     }
 }

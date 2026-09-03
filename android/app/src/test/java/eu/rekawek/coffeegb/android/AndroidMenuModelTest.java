@@ -26,19 +26,37 @@ public class AndroidMenuModelTest {
     }
 
     @Test
-    public void libraryUsesThreePauseEquivalentRowsWithoutLegacyPickerCopy() {
+    public void libraryUsesTheThreeTopLevelAndroidRowsInDesktopOrder() {
         MenuPageSpec page = AndroidMenuModel.libraryPage(true);
 
-        assertIds(page, "recent-games", "open-rom", "settings");
+        assertIds(page, "open-rom", "recent-games", "settings");
         assertEquals("", page.headerAction());
         assertEquals("", page.sideHeading());
         assertTrue(page.sideLines().isEmpty());
-        assertEquals("recent-games", page.preferredFocusId());
+        assertEquals("open-rom", page.preferredFocusId());
 
         MenuPageSpec unavailable = AndroidMenuModel.libraryPage(false);
         assertFalse(unavailable.items().get(0).enabled());
         assertFalse(unavailable.items().get(1).enabled());
         assertTrue(unavailable.items().get(2).enabled());
+        assertEquals("settings", unavailable.preferredFocusId());
+    }
+
+    @Test
+    public void pauseUsesSixActionsAndReservesResumeForB() {
+        MenuPageSpec page = AndroidMenuModel.pausePage(
+                "TETRIS", "12:34", true, true, MenuPreview.empty());
+
+        assertIds(page, "save-state", "load-state", "open-rom", "reset", "recent-games",
+                "settings");
+        assertEquals("save-state", page.preferredFocusId());
+        assertEquals(List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"), page.footerHints());
+        assertFalse(page.items().stream().anyMatch(item -> item.id().equals("resume")
+                || item.id().equals("fullscreen")));
+        assertEquals(List.of("PLAY TIME", "12:34", "BATTERY SAVE ACTIVE"), page.sideLines());
+
+        MenuPageSpec unavailable = AndroidMenuModel.pausePage(
+                "NO GAME", "00:00", false, false, MenuPreview.empty());
         assertEquals("settings", unavailable.preferredFocusId());
     }
 

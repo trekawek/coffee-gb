@@ -28,10 +28,21 @@ public final class MenuPresentation {
     private final int columns;
     private final List<String> footerHints;
     private final MenuPreview preview;
+    private final MenuPageLayout layout;
+    private final MenuPagination pagination;
 
     MenuPresentation(boolean visible, MenuRoute route, String title, String context,
             String headerAction, String sideHeading, List<String> sideLines, List<Item> items,
             int focusedIndex, int columns, List<String> footerHints, MenuPreview preview) {
+        this(visible, route, title, context, headerAction, sideHeading, sideLines, items,
+                focusedIndex, columns, footerHints, preview, MenuPageLayout.SPLIT,
+                MenuPagination.singlePage());
+    }
+
+    MenuPresentation(boolean visible, MenuRoute route, String title, String context,
+            String headerAction, String sideHeading, List<String> sideLines, List<Item> items,
+            int focusedIndex, int columns, List<String> footerHints, MenuPreview preview,
+            MenuPageLayout layout, MenuPagination pagination) {
         this.visible = visible;
         this.route = route;
         this.title = requireText(title, "title");
@@ -44,6 +55,8 @@ public final class MenuPresentation {
         this.columns = 1;
         this.footerHints = immutableStrings(footerHints, "footerHints");
         this.preview = java.util.Objects.requireNonNull(preview, "preview");
+        this.layout = java.util.Objects.requireNonNull(layout, "layout");
+        this.pagination = java.util.Objects.requireNonNull(pagination, "pagination");
         if (visible && route == null) {
             throw new IllegalArgumentException("A visible menu needs a route");
         }
@@ -102,6 +115,14 @@ public final class MenuPresentation {
 
     public MenuPreview preview() {
         return preview;
+    }
+
+    public MenuPageLayout layout() {
+        return layout;
+    }
+
+    public MenuPagination pagination() {
+        return pagination;
     }
 
     private static String requireText(String value, String name) {

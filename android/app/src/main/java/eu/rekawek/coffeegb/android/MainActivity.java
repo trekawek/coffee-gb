@@ -395,6 +395,13 @@ public final class MainActivity extends Activity implements RuntimeObserver {
                 if (route == MenuRoute.CONTROLLER_MAPPING) {
                     cancelControllerCapture();
                     refreshMenuPages();
+                } else if (route == MenuRoute.PAUSE_CONSOLE) {
+                    AndroidEmulationRuntime active = runtime;
+                    if (active == null) {
+                        menuController.hide();
+                    } else {
+                        resumeAndClose(active);
+                    }
                 }
             }
         });
@@ -774,6 +781,8 @@ public final class MainActivity extends Activity implements RuntimeObserver {
     }
 
     private void presentMenu(MenuPresentation presentation) {
+        menuController.setRootBackIntercepted(
+                presentation.visible() && presentation.route() == MenuRoute.PAUSE_CONSOLE);
         if (presentation.visible() && presentation.route() == MenuRoute.SAVE_STATES
                 && refreshStatePreviewForFocus(presentation)) {
             return;
@@ -968,7 +977,6 @@ public final class MainActivity extends Activity implements RuntimeObserver {
             return;
         }
         switch (id) {
-            case "resume" -> resumeAndClose(active);
             case "save-state" -> showStateMenu(StateMenuMode.SAVE);
             case "load-state" -> showStateMenu(StateMenuMode.LOAD);
             case "reset" -> showConfirmation(ConfirmVariant.RESET, -1);
@@ -2293,18 +2301,7 @@ public final class MainActivity extends Activity implements RuntimeObserver {
         boolean battery = snapshot != null ? snapshot.batterySaveActive()
                 : observedState.batterySaveActive();
         MenuPreview preview = snapshot == null ? MenuPreview.empty() : snapshot.preview();
-        return new MenuPageSpec(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "", "", title,
-                List.of("PLAY TIME", elapsed,
-                        battery ? "BATTERY SAVE ACTIVE" : "NO BATTERY SAVE"),
-                List.of(
-                        button("resume", "RESUME", "", true),
-                        button("save-state", "SAVE STATE", "", runtime != null),
-                        button("load-state", "LOAD STATE", "", runtime != null),
-                        button("open-rom", "OPEN ROM", "", runtime != null),
-                        button("reset", "RESET GAME", "CONFIRM", runtime != null),
-                        button("settings", "SETTINGS", "OPEN", true),
-                        button("recent-games", "RECENT GAMES", "OPEN", runtime != null)),
-                1, List.of("D-PAD MOVE", "A CHOOSE", "B BACK"), null, preview);
+        return AndroidMenuModel.pausePage(title, elapsed, battery, runtime != null, preview);
     }
 
     private MenuPageSpec statePage() {

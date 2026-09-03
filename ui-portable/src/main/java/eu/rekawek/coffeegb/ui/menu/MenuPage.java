@@ -18,6 +18,8 @@ final class MenuPage {
     private final List<String> footerHints;
     private final String preferredFocusId;
     private final MenuPreview preview;
+    private final MenuPageLayout layout;
+    private final MenuPagination pagination;
 
     MenuPage(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
@@ -29,6 +31,15 @@ final class MenuPage {
     MenuPage(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
             List<String> footerHints, String preferredFocusId, MenuPreview preview) {
+        this(route, title, context, headerAction, sideHeading, sideLines, items, columns,
+                footerHints, preferredFocusId, preview, MenuPageLayout.SPLIT,
+                MenuPagination.singlePage());
+    }
+
+    MenuPage(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<MenuItem> items, int columns,
+            List<String> footerHints, String preferredFocusId, MenuPreview preview,
+            MenuPageLayout layout, MenuPagination pagination) {
         if (route == null) {
             throw new IllegalArgumentException("route cannot be null");
         }
@@ -46,6 +57,13 @@ final class MenuPage {
         this.footerHints = immutableStrings(footerHints, "footerHints");
         this.preferredFocusId = preferredFocusId;
         this.preview = java.util.Objects.requireNonNull(preview, "preview");
+        this.layout = java.util.Objects.requireNonNull(layout, "layout");
+        this.pagination = java.util.Objects.requireNonNull(pagination, "pagination");
+        if (layout == MenuPageLayout.FULL_WIDTH_LIST
+                && this.items.size() > MenuPageSpec.FULL_WIDTH_ITEM_LIMIT) {
+            throw new IllegalArgumentException("A full-width page supports at most "
+                    + MenuPageSpec.FULL_WIDTH_ITEM_LIMIT + " items");
+        }
         if (firstEnabledIndex() < 0) {
             throw new IllegalArgumentException("A menu page needs an enabled item");
         }
@@ -67,7 +85,7 @@ final class MenuPage {
         }
         return new MenuPage(spec.route(), spec.title(), spec.context(), spec.headerAction(),
                 spec.sideHeading(), spec.sideLines(), items, spec.columns(), spec.footerHints(),
-                spec.preferredFocusId(), spec.preview());
+                spec.preferredFocusId(), spec.preview(), spec.layout(), spec.pagination());
     }
 
     MenuRoute route() {
@@ -110,6 +128,14 @@ final class MenuPage {
         return preview;
     }
 
+    MenuPageLayout layout() {
+        return layout;
+    }
+
+    MenuPagination pagination() {
+        return pagination;
+    }
+
     int initialFocusIndex() {
         if (preferredFocusId != null) {
             int preferred = enabledIndex(preferredFocusId);
@@ -148,7 +174,7 @@ final class MenuPage {
             rows.add(item.presentation());
         }
         return new MenuPresentation(true, route, title, context, headerAction, sideHeading,
-                sideLines, rows, focusedIndex, columns, footerHints, preview);
+                sideLines, rows, focusedIndex, columns, footerHints, preview, layout, pagination);
     }
 
     private static String text(String value, String name) {

@@ -32,6 +32,7 @@ public class Proposal3RawFrameCatalogTest {
             Map.entry(MenuRoute.OPTION_PICKER, "15-option-picker.png"),
             Map.entry(MenuRoute.DATA_MEDIA, "07-data-media.png"),
             Map.entry(MenuRoute.LIBRARY, "08-library.png"),
+            Map.entry(MenuRoute.FILE_BROWSER, "full-width-menu-frame.png"),
             Map.entry(MenuRoute.CHOOSE_ROM, "09-choose-rom.png"),
             Map.entry(MenuRoute.SYSTEM, "10-system.png"),
             Map.entry(MenuRoute.ABOUT, "11-about.png"),
@@ -63,6 +64,8 @@ public class Proposal3RawFrameCatalogTest {
                     "bd05587acebe48c7fdeb8ce0811012cd56c7a40b2520310768a8d1ffad84d06d"),
             Map.entry(MenuRoute.LIBRARY,
                     "4395062535e3558c82f0bd28bb20c658c35d4f7874aa7c6b20c37775e9d5809b"),
+            Map.entry(MenuRoute.FILE_BROWSER,
+                    "c7fc759e8b23a10558ff1d400de69e3e80cb3bd7a46ab4092995bfc6fd9de075"),
             Map.entry(MenuRoute.CHOOSE_ROM,
                     "0660216b920eff3cf41bc0564a0e77eb38b58cb23c4c64dd7b37102625b86fb2"),
             Map.entry(MenuRoute.SYSTEM,
@@ -100,6 +103,8 @@ public class Proposal3RawFrameCatalogTest {
                     "f2bff9bbe9011fcffb191d374eac4d8e3d2436a11eec59b1ef8bd402f400d0f1"),
             Map.entry(MenuRoute.LIBRARY,
                     "765484db5aeb03e7122e8eb728a55d05a2bbd44e4f4281a11ffedd913d991084"),
+            Map.entry(MenuRoute.FILE_BROWSER,
+                    "530a8c478c5df38197a7ea14866a6513e4e0e49460fd8151e15816e93eb795fb"),
             Map.entry(MenuRoute.CHOOSE_ROM,
                     "a97a9e4af5a765da80e3883133d1e91250b724173081c11b6d6c4c76047ada9d"),
             Map.entry(MenuRoute.SYSTEM,
@@ -117,8 +122,10 @@ public class Proposal3RawFrameCatalogTest {
         for (MenuRoute route : MenuRoute.values()) {
             String path = Proposal3RawFrameCatalog.resourcePath(route);
             assertTrue(paths.add(path));
-            assertEquals("/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw/"
-                    + EXPECTED_FILENAMES.get(route), path);
+            String expectedRoot = route == MenuRoute.FILE_BROWSER
+                    ? "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates/"
+                    : "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/routes/raw/";
+            assertEquals(expectedRoot + EXPECTED_FILENAMES.get(route), path);
 
             byte[] encoded;
             try (InputStream stream = Proposal3RawFrameCatalog.class.getResourceAsStream(path)) {

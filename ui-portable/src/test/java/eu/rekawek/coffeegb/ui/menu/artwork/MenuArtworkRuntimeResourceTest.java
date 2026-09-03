@@ -19,13 +19,13 @@ import static org.junit.Assert.assertTrue;
 
 public class MenuArtworkRuntimeResourceTest {
 
-    private static final long RUNTIME_ARTWORK_BUDGET = 2_200_000L;
+    private static final long RUNTIME_ARTWORK_BUDGET = 2_600_000L;
     private static final String PROPOSAL3_ROOT =
             "eu/rekawek/coffeegb/ui/menu/artwork/proposal3";
     private static final String TEMPLATE_ROOT =
             "eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates";
     private static final Set<String> EXPECTED_TEMPLATE_FILES =
-            Set.of("common-menu-frame.png");
+            Set.of("common-menu-frame.png", "full-width-menu-frame.png");
     private static final Set<String> EXPECTED_WIDGET_FILES = Set.of(
             "dark-widget.png", "paper-widget.png", "selected-widget.png");
     private static final Set<String> EXPECTED_ILLUSTRATION_FILES = Set.of(
@@ -47,12 +47,12 @@ public class MenuArtworkRuntimeResourceTest {
                 }
             }
         }
-        assertTrue("runtime common-menu artwork exceeds 2,200,000 bytes: " + bytes,
+        assertTrue("runtime menu artwork exceeds 2,600,000 bytes: " + bytes,
                 bytes <= RUNTIME_ARTWORK_BUDGET);
     }
 
     @Test
-    public void templateDirectoryContainsExactlyOneCommonFrame() throws Exception {
+    public void templateDirectoryContainsExactlyTheSplitAndFullWidthFrames() throws Exception {
         Path templateRoot = productionClasses().resolve(TEMPLATE_ROOT);
         assertTrue(Files.isDirectory(templateRoot));
         List<Path> entries;

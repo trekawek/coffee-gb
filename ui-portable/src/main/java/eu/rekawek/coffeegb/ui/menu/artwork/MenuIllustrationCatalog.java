@@ -50,7 +50,7 @@ final class MenuIllustrationCatalog {
 
     static String resourceName(MenuRoute route) {
         return switch (Objects.requireNonNull(route, "route")) {
-            case PAUSE_CONSOLE, SAVE_STATES, RECENT_GAMES -> null;
+            case PAUSE_CONSOLE, SAVE_STATES, RECENT_GAMES, FILE_BROWSER -> null;
             case SETTINGS, OPTION_PICKER -> "settings.png";
             case AUDIO -> "audio.png";
             case DISPLAY, SYSTEM -> "system.png";

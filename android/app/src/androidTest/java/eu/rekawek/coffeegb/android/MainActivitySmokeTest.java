@@ -400,6 +400,8 @@ public class MainActivitySmokeTest {
 
             scenario.onActivity(activity -> menuButton(activity).performClick());
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.PAUSE_CONSOLE);
+            await("fixture paused by the menu", () -> runtime.get().state().phase()
+                    == RuntimeState.Phase.PAUSED);
             moveFocusTo(scenario, instrumentation, "settings");
             press(instrumentation, KeyEvent.KEYCODE_ENTER, 1);
             awaitRoute(scenario, eu.rekawek.coffeegb.ui.menu.MenuRoute.SETTINGS);
@@ -433,6 +435,8 @@ public class MainActivitySmokeTest {
                 assertEquals("Open Coffee GB menu",
                         menuButton(activity).getContentDescription().toString());
             });
+            await("pause root B resumes the fixture", () ->
+                    runtime.get().state().phase() == RuntimeState.Phase.RUNNING);
         } finally {
             if (runtime.get() != null) {
                 runtime.get().stop();

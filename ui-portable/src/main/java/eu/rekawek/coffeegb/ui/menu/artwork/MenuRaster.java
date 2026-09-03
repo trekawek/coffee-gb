@@ -148,6 +148,29 @@ final class MenuRaster {
         }
     }
 
+    /**
+     * Draws a complete string through a fixed horizontal viewport without ellipsizing it first.
+     * A positive offset reveals later glyphs while every pixel remains clipped to {@code target}.
+     */
+    void drawClippedText(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role, String value,
+            MenuRect target, int color, int horizontalOffset) {
+        Objects.requireNonNull(atlas, "atlas");
+        Objects.requireNonNull(value, "value");
+        Objects.requireNonNull(target, "target");
+        String normalized = value.toUpperCase(java.util.Locale.ROOT)
+                .replaceAll("\\s+", " ").trim();
+        int x = target.x() - Math.max(0, horizontalOffset);
+        int y = target.y() + Math.max(0, (target.height() - atlas.cellHeight(role)) / 2);
+        for (int index = 0; index < normalized.length(); index++) {
+            char character = normalized.charAt(index);
+            drawGlyph(this, atlas, role, character, x, y, target, color);
+            x += atlas.advance(role, character);
+            if (x >= target.right()) {
+                break;
+            }
+        }
+    }
+
     /** Copies a ready preview with integer nearest-neighbour aspect fit and centered matte. */
     void copyPreview(MenuPreview preview, MenuRect target, int matteColor) {
         Objects.requireNonNull(preview, "preview");

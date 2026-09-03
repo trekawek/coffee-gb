@@ -28,6 +28,10 @@ final class Proposal3RawFrameCatalog {
 
     static String resourcePath(MenuRoute route) {
         Objects.requireNonNull(route, "route");
+        if (route == MenuRoute.FILE_BROWSER) {
+            return "/eu/rekawek/coffeegb/ui/menu/artwork/proposal3/templates/"
+                    + MenuArtworkCatalog.FULL_WIDTH_TEMPLATE_FILENAME;
+        }
         return RESOURCE_ROOT + MenuArtworkCatalog.artwork(route).sourceFilename();
     }
 

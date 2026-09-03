@@ -38,6 +38,7 @@ public class MenuArtworkContractTest {
             Map.entry(MenuRoute.OPTION_PICKER, "15-option-picker.png"),
             Map.entry(MenuRoute.DATA_MEDIA, "07-data-media.png"),
             Map.entry(MenuRoute.LIBRARY, "08-library.png"),
+            Map.entry(MenuRoute.FILE_BROWSER, "17-file-browser.png"),
             Map.entry(MenuRoute.CHOOSE_ROM, "09-choose-rom.png"),
             Map.entry(MenuRoute.SYSTEM, "10-system.png"),
             Map.entry(MenuRoute.ABOUT, "11-about.png"),
@@ -60,14 +61,17 @@ public class MenuArtworkContractTest {
             assertTrue(sourceFilenames.add(artwork.sourceFilename()));
             assertEquals(EXPECTED_FILENAMES.get(route), artwork.sourceFilename());
             templateFilenames.add(artwork.templateFilename());
-            assertEquals(MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME,
+            assertEquals(route == MenuRoute.FILE_BROWSER
+                            ? MenuArtworkCatalog.FULL_WIDTH_TEMPLATE_FILENAME
+                            : MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME,
                     artwork.templateFilename());
             assertEquals(MenuArtworkCatalog.SOURCE_VISIBLE_CROP, artwork.sourceVisibleCrop());
             assertEquals(MenuArtworkCatalog.PACKAGED_WIDTH, artwork.packagedWidth());
             assertEquals(MenuArtworkCatalog.PACKAGED_HEIGHT, artwork.packagedHeight());
         }
         assertEquals(MenuRoute.values().length, sourceFilenames.size());
-        assertEquals(Set.of(MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME), templateFilenames);
+        assertEquals(Set.of(MenuArtworkCatalog.COMMON_TEMPLATE_FILENAME,
+                MenuArtworkCatalog.FULL_WIDTH_TEMPLATE_FILENAME), templateFilenames);
     }
 
     @Test

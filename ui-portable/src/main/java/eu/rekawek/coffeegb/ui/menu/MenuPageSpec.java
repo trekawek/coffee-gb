@@ -8,6 +8,9 @@ import java.util.Objects;
 /** Immutable page data supplied by the host coordinator, including dynamic runtime rows. */
 public final class MenuPageSpec {
 
+    /** The full-width template can display at most this many option rows. */
+    public static final int FULL_WIDTH_ITEM_LIMIT = 7;
+
     /** Host-owned recent-game metadata used by the portable Recent Games page. */
     public record RecentGame(String id, String name, String lastPlayed, boolean enabled,
             MenuPreview preview) {
@@ -93,6 +96,8 @@ public final class MenuPageSpec {
     private final List<String> footerHints;
     private final String preferredFocusId;
     private final MenuPreview preview;
+    private final MenuPageLayout layout;
+    private final MenuPagination pagination;
 
     public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<Item> items, int columns,
@@ -103,7 +108,23 @@ public final class MenuPageSpec {
 
     public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
             String sideHeading, List<String> sideLines, List<Item> items, int columns,
+            List<String> footerHints, MenuPageLayout layout, MenuPagination pagination) {
+        this(route, title, context, headerAction, sideHeading, sideLines, items, columns,
+                footerHints, null, MenuPreview.empty(), layout, pagination);
+    }
+
+    public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<Item> items, int columns,
             List<String> footerHints, String preferredFocusId, MenuPreview preview) {
+        this(route, title, context, headerAction, sideHeading, sideLines, items, columns,
+                footerHints, preferredFocusId, preview, MenuPageLayout.SPLIT,
+                MenuPagination.singlePage());
+    }
+
+    public MenuPageSpec(MenuRoute route, String title, String context, String headerAction,
+            String sideHeading, List<String> sideLines, List<Item> items, int columns,
+            List<String> footerHints, String preferredFocusId, MenuPreview preview,
+            MenuPageLayout layout, MenuPagination pagination) {
         this.route = Objects.requireNonNull(route, "route");
         this.title = text(title, "title");
         this.context = text(context, "context");
@@ -118,6 +139,13 @@ public final class MenuPageSpec {
         this.preferredFocusId = preferredFocusId == null ? null
                 : text(preferredFocusId, "preferredFocusId");
         this.preview = Objects.requireNonNull(preview, "preview");
+        this.layout = Objects.requireNonNull(layout, "layout");
+        this.pagination = Objects.requireNonNull(pagination, "pagination");
+        if (layout == MenuPageLayout.FULL_WIDTH_LIST
+                && renderedItemCount(this.items) > FULL_WIDTH_ITEM_LIMIT) {
+            throw new IllegalArgumentException("A full-width page supports at most "
+                    + FULL_WIDTH_ITEM_LIMIT + " items");
+        }
         boolean enabled = false;
         for (Item item : this.items) {
             if (item.enabled()) {
@@ -172,6 +200,24 @@ public final class MenuPageSpec {
 
     public MenuPreview preview() {
         return preview;
+    }
+
+    public MenuPageLayout layout() {
+        return layout;
+    }
+
+    public MenuPagination pagination() {
+        return pagination;
+    }
+
+    private static int renderedItemCount(List<Item> items) {
+        int count = 0;
+        for (Item item : items) {
+            if (!"back".equals(item.id())) {
+                count++;
+            }
+        }
+        return count;
     }
 
     private static String text(String value, String name) {

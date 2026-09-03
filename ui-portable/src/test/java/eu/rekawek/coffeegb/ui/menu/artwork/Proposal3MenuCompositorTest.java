@@ -1,7 +1,9 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuController;
+import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuPageSpec;
+import eu.rekawek.coffeegb.ui.menu.MenuPagination;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
@@ -9,6 +11,7 @@ import org.junit.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
@@ -54,9 +57,14 @@ public class Proposal3MenuCompositorTest {
 
         List<MenuRect> masks = Proposal3MenuCompositor.dynamicMasks(route);
         for (MenuRoute candidate : MenuRoute.values()) {
+            if (candidate == MenuRoute.FILE_BROWSER) {
+                continue;
+            }
             assertEquals("dynamic regions must not vary by route", masks,
                     Proposal3MenuCompositor.dynamicMasks(candidate));
         }
+        assertEquals(Proposal3MenuCompositor.dynamicMasks(MenuPageLayout.FULL_WIDTH_LIST),
+                Proposal3MenuCompositor.dynamicMasks(MenuRoute.FILE_BROWSER));
         assertPixelsEqualOutside(base, composed, masks);
     }
 
@@ -79,6 +87,16 @@ public class Proposal3MenuCompositorTest {
                 MenuScreenTemplate.SUBTITLE) > 0);
         assertPixelsEqualOutside(before, after, List.of(MenuScreenTemplate.TITLE,
                 MenuScreenTemplate.PICTURE, MenuScreenTemplate.SUBTITLE));
+    }
+
+    @Test
+    public void footerResumeLabelFitsWithoutEllipsis() throws Exception {
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+
+        assertTrue(atlas.renderedWidth(Proposal3MenuCompositor.footerTextRole(), "RESUME")
+                <= Proposal3MenuCompositor.footerBackBounds().width());
+        assertTrue(Proposal3MenuCompositor.footerBackBounds().right()
+                <= MenuScreenTemplate.FOOTER.right());
     }
 
     @Test
@@ -293,6 +311,85 @@ public class Proposal3MenuCompositorTest {
         assertArrayEquals(first.copyPixels(), recomposed.copyPixels());
     }
 
+    @Test
+    public void fullWidthListUsesItsGeneratedSinglePanelAndNeverPaintsOutsideItsMasks()
+            throws Exception {
+        MenuPresentation presentation = fullWidthPresentation(
+                List.of(button("parent", ".."), button("rom", "A VERY LONG ROM NAME.GBC")),
+                "parent", MenuPagination.singlePage());
+        int[] base = Proposal3TemplateFrameCatalog.decode(MenuPageLayout.FULL_WIDTH_LIST)
+                .copyPixels();
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
+        int[] composed = compositor.compose(presentation).orElseThrow().copyPixels();
+
+        assertPixelsEqualOutside(base, composed,
+                Proposal3MenuCompositor.dynamicMasks(MenuPageLayout.FULL_WIDTH_LIST));
+        int[] split = Proposal3TemplateFrameCatalog.decode(MenuRoute.LIBRARY).copyPixels();
+        MenuRect formerSeam = new MenuRect(405, 150, 20, 450);
+        assertTrue("generated full-width template retained the split-panel seam",
+                differences(split, base, formerSeam) > 0);
+        assertEquals(1, compositor.cachedTemplateRouteCount());
+    }
+
+    @Test
+    public void focusedLongFilenameWaitsOneSecondThenScrollsSlowlyAndStopsAtItsTail() {
+        assertEquals(1_000_000_000L, Proposal3MenuCompositor.marqueeDelayNanos());
+        assertEquals(24, Proposal3MenuCompositor.marqueePixelsPerSecond());
+        AtomicLong clock = new AtomicLong();
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor(clock::get);
+        String longName = "A-VERY-LONG-GAME-BOY-COLOR-ROM-FILENAME-WITH-REGION-AND-REVISION-"
+                + "DETAILS-THAT-CANNOT-FIT-IN-ONE-FULL-WIDTH-ROW.GBC";
+        MenuPresentation presentation = fullWidthPresentation(
+                List.of(button("rom", longName)), "rom", MenuPagination.singlePage());
+
+        MenuArgbFrame initial = compositor.compose(presentation).orElseThrow();
+        clock.set(Proposal3MenuCompositor.marqueeDelayNanos() - 1);
+        assertSame("filename moved before its one-second dwell elapsed", initial,
+                compositor.compose(presentation).orElseThrow());
+
+        clock.set(Proposal3MenuCompositor.marqueeDelayNanos() + 500_000_000L);
+        MenuArgbFrame moving = compositor.compose(presentation).orElseThrow();
+        assertNotSame(initial, moving);
+        MenuRect label = Proposal3MenuCompositor.fullWidthLabelBounds(0);
+        assertTrue("overflowing filename did not move", differences(initial.copyPixels(),
+                moving.copyPixels(), label) > 0);
+        assertPixelsEqualOutside(initial.copyPixels(), moving.copyPixels(), List.of(label));
+
+        clock.set(120_000_000_000L);
+        MenuArgbFrame atTail = compositor.compose(presentation).orElseThrow();
+        clock.set(121_000_000_000L);
+        assertSame("clamped filename kept animating after its tail was revealed", atTail,
+                compositor.compose(presentation).orElseThrow());
+    }
+
+    @Test
+    public void shortFilenameNeverAnimatesAndChangingFocusRestartsTheDwell() {
+        AtomicLong clock = new AtomicLong();
+        Proposal3MenuCompositor compositor = new Proposal3MenuCompositor(clock::get);
+        MenuPresentation shortName = fullWidthPresentation(
+                List.of(button("short", "TETRIS.GB")), "short", MenuPagination.singlePage());
+        MenuArgbFrame shortInitial = compositor.compose(shortName).orElseThrow();
+        clock.set(60_000_000_000L);
+        assertSame(shortInitial, compositor.compose(shortName).orElseThrow());
+
+        String first = "FIRST-" + "LONG-FILENAME-".repeat(8) + ".GB";
+        String second = "SECOND-" + "LONG-FILENAME-".repeat(8) + ".GBC";
+        MenuPresentation firstFocused = fullWidthPresentation(
+                List.of(button("first", first), button("second", second)), "first",
+                MenuPagination.singlePage());
+        compositor.compose(firstFocused).orElseThrow();
+        clock.addAndGet(Proposal3MenuCompositor.marqueeDelayNanos() + 1_000_000_000L);
+        compositor.compose(firstFocused).orElseThrow();
+
+        MenuPresentation secondFocused = fullWidthPresentation(
+                List.of(button("first", first), button("second", second)), "second",
+                MenuPagination.singlePage());
+        int[] reset = compositor.compose(secondFocused).orElseThrow().copyPixels();
+        Proposal3MenuCompositor baseline = new Proposal3MenuCompositor(clock::get);
+        assertArrayEquals("newly focused filename skipped its one-second dwell", reset,
+                baseline.compose(secondFocused).orElseThrow().copyPixels());
+    }
+
     private static List<MenuPageSpec.Item> mixedWidgets() {
         return List.of(
                 MenuPageSpec.Item.button("button", "BUTTON", "", true),
@@ -321,6 +418,16 @@ public class Proposal3MenuCompositorTest {
                 FOOTER, focus, preview);
         MenuController controller = controller(spec);
         controller.show(route);
+        return controller.presentation();
+    }
+
+    private static MenuPresentation fullWidthPresentation(List<MenuPageSpec.Item> items,
+            String focus, MenuPagination pagination) {
+        MenuPageSpec spec = new MenuPageSpec(MenuRoute.FILE_BROWSER, "COFFEE GB", "/ROMS", "",
+                "", List.of(), items, 1, FOOTER, focus, MenuPreview.empty(),
+                MenuPageLayout.FULL_WIDTH_LIST, pagination);
+        MenuController controller = controller(spec);
+        controller.show(MenuRoute.FILE_BROWSER);
         return controller.presentation();
     }
 
