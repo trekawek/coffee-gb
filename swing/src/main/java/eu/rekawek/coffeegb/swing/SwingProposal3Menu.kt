@@ -69,10 +69,11 @@ internal class SwingProposal3Menu(
 
   private data class FileBrowserState(
       val requestId: Long,
+      val initialLocation: Path,
       val location: Path?,
       val rows: List<FileBrowserRow>,
-      val pageIndex: Int,
-      val preferredId: String,
+      val viewportStart: Int,
+      val focusedIndex: Int,
   )
 
   private val compositor = Proposal3MenuCompositor()
@@ -99,6 +100,10 @@ internal class SwingProposal3Menu(
               if (route == MenuRoute.FILE_BROWSER) changeFileBrowserPage(targetIndex)
             }
 
+            override fun onListRowRequested(route: MenuRoute, direction: Int) {
+              if (route == MenuRoute.FILE_BROWSER) moveFileBrowserRow(direction)
+            }
+
             override fun onHeaderSelected(route: MenuRoute) {
               // Proposal 3 uses B for back navigation and exposes actions only as menu rows.
             }
@@ -107,7 +112,7 @@ internal class SwingProposal3Menu(
               if (route == MenuRoute.CHOOSE_ROM) {
                 cancelArchiveSelection()
               } else if (route == MenuRoute.FILE_BROWSER) {
-                closeFileBrowser()
+                handleFileBrowserBack()
               } else if (route == MenuRoute.OPTION_PICKER) {
                 cancelChoiceSelection()
               } else if (route == MenuRoute.PAUSE_CONSOLE) {
@@ -1271,7 +1276,7 @@ internal class SwingProposal3Menu(
       if (!commands.isEnabled(DesktopCommand.OPEN_ROM)) return@runOnEdt
       val location = romFileBrowser.initialLocation(commands.preferredRomDirectory())
       val requestId = ++fileBrowserRequestId
-      fileBrowserState = loadingFileBrowserState(requestId, location)
+      fileBrowserState = loadingFileBrowserState(requestId, location, location)
       controller.setBackIntercepted(true)
       controller.setPage(fileBrowserPage())
       controller.push(MenuRoute.FILE_BROWSER)
@@ -1282,9 +1287,11 @@ internal class SwingProposal3Menu(
   private fun requestFileBrowserLocation(location: Path?, restorePath: Path?) {
     check(SwingUtilities.isEventDispatchThread()) { "File browser navigation must run on the EDT" }
     if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return
+    val initialLocation = fileBrowserState?.initialLocation ?: return
     val requestId = ++fileBrowserRequestId
-    fileBrowserState = loadingFileBrowserState(requestId, location)
-    controller.setPage(fileBrowserPage())
+    fileBrowserState = loadingFileBrowserState(requestId, initialLocation, location)
+    val page = fileBrowserPage()
+    controller.setPageAndFocus(page, requireNotNull(fileBrowserState).rows.single().id)
     submitFileBrowserListing(requestId, location, restorePath, menuEpoch)
   }
 
@@ -1309,6 +1316,7 @@ internal class SwingProposal3Menu(
       listing: DesktopRomFileBrowser.Listing,
       restorePath: Path?,
   ) {
+    val initialLocation = fileBrowserState?.initialLocation ?: return
     val rows = mutableListOf<FileBrowserRow>()
     listing.entries.forEachIndexed { index, entry ->
       val suffix =
@@ -1341,16 +1349,27 @@ internal class SwingProposal3Menu(
           rows.indexOfFirst { row -> row.entry?.path == wanted }
         }?.takeIf { it >= 0 }
     val focusedIndex = restoredIndex ?: 0
-    val pageIndex = focusedIndex / FILE_BROWSER_PAGE_SIZE
-    val preferredId = rows[focusedIndex].id
+    val viewportStart = (focusedIndex / FILE_BROWSER_PAGE_SIZE) * FILE_BROWSER_PAGE_SIZE
     fileBrowserState =
-        FileBrowserState(requestId, listing.location, rows.toList(), pageIndex, preferredId)
-    controller.setPage(fileBrowserPage())
+        FileBrowserState(
+            requestId,
+            initialLocation,
+            listing.location,
+            rows.toList(),
+            viewportStart,
+            focusedIndex,
+        )
+    val page = fileBrowserPage()
+    controller.setPageAndFocus(page, rows[focusedIndex].id)
   }
 
-  private fun loadingFileBrowserState(requestId: Long, location: Path?): FileBrowserState {
+  private fun loadingFileBrowserState(
+      requestId: Long,
+      initialLocation: Path,
+      location: Path?,
+  ): FileBrowserState {
     val loading = FileBrowserRow("browser-loading:$requestId", "LOADING...", null)
-    return FileBrowserState(requestId, location, listOf(loading), 0, loading.id)
+    return FileBrowserState(requestId, initialLocation, location, listOf(loading), 0, 0)
   }
 
   private fun fileBrowserPage(): MenuPageSpec {
@@ -1358,11 +1377,12 @@ internal class SwingProposal3Menu(
       "${MenuRoute.FILE_BROWSER.label()} requires an active filesystem listing"
     }
     val pageCount = maxOf(1, (state.rows.size + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE)
-    val pageIndex = state.pageIndex.coerceIn(0, pageCount - 1)
-    val first = pageIndex * FILE_BROWSER_PAGE_SIZE
+    val focusedIndex = state.focusedIndex.coerceIn(0, state.rows.lastIndex)
+    val pageIndex = (focusedIndex / FILE_BROWSER_PAGE_SIZE).coerceIn(0, pageCount - 1)
+    val first = state.viewportStart.coerceIn(0, state.rows.lastIndex)
     val visibleRows = state.rows.drop(first).take(FILE_BROWSER_PAGE_SIZE)
     val preferred =
-        state.preferredId.takeIf { wanted -> visibleRows.any { it.id == wanted } }
+        state.rows[focusedIndex].id.takeIf { wanted -> visibleRows.any { it.id == wanted } }
             ?: visibleRows.first().id
     val location = state.location?.toString() ?: "FILESYSTEM ROOTS"
     val pagePrefix = if (pageCount > 1) "${pageIndex + 1}/$pageCount  " else ""
@@ -1388,14 +1408,51 @@ internal class SwingProposal3Menu(
       val state = fileBrowserState ?: return@runOnEdt
       if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
       val pageCount = maxOf(1, (state.rows.size + FILE_BROWSER_PAGE_SIZE - 1) / FILE_BROWSER_PAGE_SIZE)
-      if (targetIndex !in 0 until pageCount || targetIndex == state.pageIndex) return@runOnEdt
-      val focusedRow = controller.presentation().focusedIndex().coerceAtLeast(0)
-      val first = targetIndex * FILE_BROWSER_PAGE_SIZE
-      val targetRows = state.rows.drop(first).take(FILE_BROWSER_PAGE_SIZE)
-      val preferred = targetRows[minOf(focusedRow, targetRows.lastIndex)].id
-      fileBrowserState = state.copy(pageIndex = targetIndex, preferredId = preferred)
-      controller.setPage(fileBrowserPage())
+      val currentPage = (state.focusedIndex / FILE_BROWSER_PAGE_SIZE).coerceIn(0, pageCount - 1)
+      if (targetIndex !in 0 until pageCount || targetIndex == currentPage) return@runOnEdt
+      val direction = if (targetIndex > currentPage) 1 else -1
+      val targetFocus =
+          (state.focusedIndex + direction * FILE_BROWSER_PAGE_SIZE)
+              .coerceIn(0, state.rows.lastIndex)
+      val finalPageStart = ((state.rows.size - 1) / FILE_BROWSER_PAGE_SIZE) * FILE_BROWSER_PAGE_SIZE
+      var targetViewport =
+          (state.viewportStart + direction * FILE_BROWSER_PAGE_SIZE)
+              .coerceIn(0, finalPageStart)
+      if (targetFocus < targetViewport) {
+        targetViewport = targetFocus
+      } else if (targetFocus >= targetViewport + FILE_BROWSER_PAGE_SIZE) {
+        targetViewport = targetFocus - FILE_BROWSER_PAGE_SIZE + 1
+      }
+      updateFileBrowserViewport(state, targetViewport, targetFocus)
     }
+  }
+
+  private fun moveFileBrowserRow(direction: Int) {
+    runOnEdt {
+      if (direction != -1 && direction != 1) return@runOnEdt
+      val state = fileBrowserState ?: return@runOnEdt
+      if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
+      val targetFocus = state.focusedIndex + direction
+      if (targetFocus !in state.rows.indices) return@runOnEdt
+      val targetViewport =
+          when {
+            targetFocus < state.viewportStart -> targetFocus
+            targetFocus >= state.viewportStart + FILE_BROWSER_PAGE_SIZE ->
+                targetFocus - FILE_BROWSER_PAGE_SIZE + 1
+            else -> state.viewportStart
+          }
+      updateFileBrowserViewport(state, targetViewport, targetFocus)
+    }
+  }
+
+  private fun updateFileBrowserViewport(
+      state: FileBrowserState,
+      viewportStart: Int,
+      focusedIndex: Int,
+  ) {
+    fileBrowserState = state.copy(viewportStart = viewportStart, focusedIndex = focusedIndex)
+    val page = fileBrowserPage()
+    controller.setPageAndFocus(page, state.rows[focusedIndex].id)
   }
 
   private fun activateFileBrowserItem(id: String) {
@@ -1437,6 +1494,19 @@ internal class SwingProposal3Menu(
             hideAndResume()
           }
         }
+      }
+    }
+  }
+
+  private fun handleFileBrowserBack() {
+    runOnEdt {
+      val state = fileBrowserState ?: return@runOnEdt
+      if (!controller.visible() || controller.route() != MenuRoute.FILE_BROWSER) return@runOnEdt
+      val location = state.location
+      if (location == null || location == state.initialLocation) {
+        closeFileBrowser()
+      } else {
+        requestFileBrowserLocation(location.parent, location)
       }
     }
   }

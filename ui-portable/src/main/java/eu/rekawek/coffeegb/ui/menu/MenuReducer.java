@@ -110,6 +110,27 @@ final class MenuReducer {
         return MenuState.withStack(stack);
     }
 
+    static MenuState replacePageAndFocus(MenuState state, MenuPage page, String focusedItemId) {
+        if (state == null || page == null || focusedItemId == null) {
+            throw new IllegalArgumentException("state, page and focused item id are required");
+        }
+        int focusedIndex = page.enabledIndex(focusedItemId);
+        if (focusedIndex < 0) {
+            throw new IllegalArgumentException("Focused item must be enabled and present");
+        }
+        if (!state.visible()) {
+            return state;
+        }
+        ArrayList<MenuState.Frame> stack = new ArrayList<>(state.stack());
+        for (int index = 0; index < stack.size(); index++) {
+            MenuState.Frame frame = stack.get(index);
+            if (frame.page().route() == page.route()) {
+                stack.set(index, new MenuState.Frame(page, focusedIndex));
+            }
+        }
+        return MenuState.withStack(stack);
+    }
+
     static MenuState restore(List<MenuPage> pages, List<String> focusedItemIds) {
         if (pages == null || focusedItemIds == null || pages.size() != focusedItemIds.size()) {
             throw new IllegalArgumentException("pages and focused ids must have equal size");

@@ -65,6 +65,22 @@ public final class MenuController implements MenuTouchInput {
         notifyPresentation(next);
     }
 
+    /** Replaces one route's content and explicitly focuses one enabled item in the new page. */
+    public void setPageAndFocus(MenuPageSpec spec, String focusedItemId) {
+        Objects.requireNonNull(spec, "spec");
+        Objects.requireNonNull(focusedItemId, "focusedItemId");
+        MenuPresentation next;
+        synchronized (lock) {
+            MenuPage page = MenuPage.from(spec);
+            MenuState replacement = MenuReducer.replacePageAndFocus(
+                    state, page, focusedItemId);
+            pages.put(spec.route(), page);
+            state = replacement;
+            next = state.presentation();
+        }
+        notifyPresentation(next);
+    }
+
     /** Replaces several routes atomically so dynamic rows do not produce intermediate frames. */
     public void setPages(Collection<MenuPageSpec> specs) {
         Objects.requireNonNull(specs, "specs");
@@ -363,8 +379,15 @@ public final class MenuController implements MenuTouchInput {
 
     private Transition activateLocked(MenuKey key) {
         switch (key) {
-            case UP -> state = MenuReducer.move(state, MenuCommand.Direction.UP);
-            case DOWN -> state = MenuReducer.move(state, MenuCommand.Direction.DOWN);
+            case UP, DOWN -> {
+                if (state.route() == MenuRoute.FILE_BROWSER
+                        && state.page().layout() == MenuPageLayout.FULL_WIDTH_LIST) {
+                    return new Transition(state.presentation(), Event.row(
+                            state.route(), key == MenuKey.UP ? -1 : 1));
+                }
+                state = MenuReducer.move(state, key == MenuKey.UP
+                        ? MenuCommand.Direction.UP : MenuCommand.Direction.DOWN);
+            }
             case LEFT, RIGHT -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled() && item.adjustable()) {
@@ -456,6 +479,7 @@ public final class MenuController implements MenuTouchInput {
             case ADJUST -> listener.onItemAdjusted(event.route, event.id, event.adjustment);
             case BACK -> listener.onBackIntercepted(event.route);
             case PAGE -> listener.onPageRequested(event.route, event.pageIndex);
+            case ROW -> listener.onListRowRequested(event.route, event.adjustment);
         }
     }
 
@@ -475,7 +499,8 @@ public final class MenuController implements MenuTouchInput {
             HEADER,
             ADJUST,
             BACK,
-            PAGE
+            PAGE,
+            ROW
         }
 
         private final MenuRoute route;
@@ -514,6 +539,10 @@ public final class MenuController implements MenuTouchInput {
         private static Event page(MenuRoute route, int pageIndex) {
             return new Event(route, null, false, 0, pageIndex, Kind.PAGE);
         }
+
+        private static Event row(MenuRoute route, int direction) {
+            return new Event(route, null, false, direction, -1, Kind.ROW);
+        }
     }
 
     /** Semantic menu callbacks; implementations normally run on the host UI thread. */
@@ -531,6 +560,10 @@ public final class MenuController implements MenuTouchInput {
         }
 
         default void onPageRequested(MenuRoute route, int targetIndex) {
+        }
+
+        /** Requests the previous (-1) or next (+1) item in a host-backed full-width list. */
+        default void onListRowRequested(MenuRoute route, int direction) {
         }
     }
 }
