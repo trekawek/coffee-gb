@@ -203,7 +203,6 @@ class SwingGui private constructor(
   }
 
   private fun startGui() {
-    val proposal3MenuEnabled = DesktopFeatureFlags.proposal3MenuEnabled()
     mainWindow = JFrame("Coffee GB")
     mainWindow.iconImages = listOf(16, 32, 48, 128, 256).map(CoffeeGbIcon::image)
     val minimumContentSize = emulator.minimumContentSize()
@@ -221,6 +220,7 @@ class SwingGui private constructor(
         FullscreenEscapeDispatcher(
                 mainWindow,
                 isFullscreen = { displayController.current().fullscreen },
+                openMenu = emulator::openPortableMenu,
                 exitFullscreen = { displayController.setFullscreen(false) },
             )
             .also(FullscreenEscapeDispatcher::install)
@@ -456,22 +456,19 @@ class SwingGui private constructor(
                 },
                 openRomPathFromPortableMenu = romOpen::openFromPortableMenu,
             ),
-            proposal3MenuAvailable = proposal3MenuEnabled,
             stateCatalogRefresh = stateUxController::refreshPortableCatalog,
         )
     desktopActions.applyShortcuts(
         DesktopShortcutRegistry(
             DesktopKeyboardKeyAdapter.keyCodes(properties.applicationSettings.input.keyboard.values)))
     val portableMenu =
-        installDesktopProposal3Menu(proposal3MenuEnabled) {
-          emulator.installPortableMenu(desktopActions) { visible ->
-            if (::desktopMainPanel.isInitialized) {
-              dispatchSwingMutation { desktopMainPanel.setPortableMenuVisible(visible) }
-            }
-            if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
+        emulator.installPortableMenu(desktopActions) { visible ->
+          if (::desktopMainPanel.isInitialized) {
+            dispatchSwingMutation { desktopMainPanel.setPortableMenuVisible(visible) }
           }
+          if (visible && ::dropFeedback.isInitialized) dropFeedback.update(false)
         }
-    portableMenu?.let(romOpen::setArchiveSelectionHost)
+    romOpen.setArchiveSelectionHost(portableMenu)
     menu =
         SwingMenu(
             properties,
@@ -488,7 +485,6 @@ class SwingGui private constructor(
             desktopActions,
             emulator::isLinkedControllerActive,
             mobileAdapterWindow::show,
-            proposal3MenuEnabled,
             { themeManager.current?.tokens ?: initialTheme.tokens },
             { message ->
               desktopUiCoordinator.warning(message, DesktopCommand.PREFERENCES)
@@ -507,7 +503,7 @@ class SwingGui private constructor(
             onOpenRecent = { game -> romOpen.openRecent(game.path, game.origin) },
             onCancelTask = { romLoadingRequestId?.let(romOpen::cancel) },
             initialTokens = initialTheme.tokens,
-            showHomeRecentGames = !proposal3MenuEnabled,
+            showHomeRecentGames = false,
         )
     mainWindow.contentPane = desktopMainPanel
     desktopUiCoordinator =
@@ -569,7 +565,7 @@ class SwingGui private constructor(
     eventBus.register<DisplaySettingsChangedEvent> { event ->
       dispatchSwingMutation {
         desktopUiCoordinator.displaySettings(event.display)
-        portableMenu?.refreshDisplayPresentation()
+        portableMenu.refreshDisplayPresentation()
       }
     }
     eventBus.register<RomLoadingEvent> { event ->
@@ -637,7 +633,7 @@ class SwingGui private constructor(
             // The unload autosave just committed its preview; refresh the recent-game catalog
             // now rather than waiting for another ROM-open or preference change.
             updateRecentRoms()
-            portableMenu?.openFromDesktop()
+            portableMenu.openFromDesktop()
           }
         }
       }
@@ -657,7 +653,7 @@ class SwingGui private constructor(
           }
         })
 
-    installRomDropTarget { portableMenu?.visible() == true }
+    installRomDropTarget(portableMenu::visible)
     mainWindow.pack()
     mainWindow.minimumSize =
         minimumFrameSize(
@@ -694,9 +690,8 @@ class SwingGui private constructor(
           allowAutosaveResume = !suppressInitialAutosaveResume,
       )
     } else {
-      // With Proposal 3 enabled, idle desktop startup is the same controller-friendly Library
-      // entry point as Android. The default desktop home remains untouched when the flag is off.
-      portableMenu?.openFromDesktop()
+      // Idle desktop startup uses the same controller-friendly Library entry point as Android.
+      portableMenu.openFromDesktop()
     }
     requestDesktopStartupSmokeIfConfigured()
   }
@@ -1335,10 +1330,6 @@ class SwingGui private constructor(
 private fun requireNetplayV8Endpoint(value: String): NetplayV8Endpoint =
     (validateNetplayV8Address(value) as? NetplayAddressValidation.Valid)?.endpoint
         ?: throw IllegalArgumentException("Initial netplay host must be a valid protocol-v8 address")
-
-/** Keeps Proposal 3 construction and its input capture out of the default desktop startup path. */
-internal fun <T> installDesktopProposal3Menu(enabled: Boolean, install: () -> T): T? =
-    if (enabled) install() else null
 
 internal fun ApplicationSettings.Appearance.toDesktopAppearance(): DesktopAppearance =
     when (this) {

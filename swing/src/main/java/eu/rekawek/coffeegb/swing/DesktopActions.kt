@@ -228,7 +228,6 @@ internal fun portableRecentLastPlayed(instant: Instant?): String =
  */
 internal class DesktopActionRegistry(
     private val handlers: DesktopCommandHandlers,
-    private val proposal3MenuAvailable: Boolean = false,
     private val stateCatalogProvider: () -> List<PortableMenuStateSlot> = { emptyList() },
     private val stateCatalogRefresh: () -> Unit = {},
 ) : PortableMenuCommandBridge {
@@ -478,8 +477,7 @@ internal class DesktopActionRegistry(
         DesktopCommand.NETPLAY,
         DesktopCommand.MUTE,
         DesktopCommand.SHOW_COMMAND_BAR -> !state.sessionBusy
-        DesktopCommand.OPEN_MENU ->
-            proposal3MenuAvailable && !state.sessionBusy
+        DesktopCommand.OPEN_MENU -> !state.sessionBusy
         DesktopCommand.CLOSE_GAME,
         DesktopCommand.RESET -> state.gameLoaded && !state.sessionBusy
       DesktopCommand.PAUSE ->
@@ -527,7 +525,7 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
       DesktopCommand.OPEN_ROM ->
           DesktopActionMetadata("Open ROM…", "Open a Game Boy ROM or supported archive")
       DesktopCommand.OPEN_MENU ->
-          DesktopActionMetadata("On-screen Menu", "Open the controller-friendly Proposal 3 menu")
+          DesktopActionMetadata("On-screen Menu", "Open the controller-friendly on-screen menu")
       DesktopCommand.CLOSE_GAME ->
           DesktopActionMetadata("Close Game", "Close the current game")
       DesktopCommand.PREFERENCES ->

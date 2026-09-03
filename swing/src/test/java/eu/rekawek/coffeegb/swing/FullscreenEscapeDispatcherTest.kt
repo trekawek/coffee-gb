@@ -41,17 +41,25 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
-  fun `main-window fullscreen escape exits once and consumes the complete key sequence`() =
+  fun `escape opens the menu once and consumes repeats and release without exiting fullscreen`() =
       onEdt {
         val registry = RecordingRegistry()
         val mainComponent = JPanel()
         var fullscreen = true
+        var menuVisible = false
+        var openCount = 0
         var exitCount = 0
         val dispatcher =
             dispatcher(
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
+                openMenu = {
+                  if (!menuVisible) {
+                    menuVisible = true
+                    openCount++
+                  }
+                },
                 exitFullscreen = {
                   exitCount++
                   fullscreen = false
@@ -60,16 +68,20 @@ class FullscreenEscapeDispatcherTest {
         dispatcher.install()
 
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
-        assertEquals(1, exitCount)
+        assertEquals(1, openCount)
+        assertEquals(0, exitCount)
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
-        assertEquals(1, exitCount)
+        assertEquals(1, openCount)
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
-        assertEquals(1, exitCount)
+        assertEquals(0, exitCount)
 
-        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
-        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
-        assertEquals(1, exitCount)
+        // Opening is idempotent while the overlay is visible, but Escape still owns its complete
+        // sequence and cannot become route-local Back/Resume input.
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, openCount)
+        assertEquals(0, exitCount)
         dispatcher.close()
       }
 
@@ -134,7 +146,7 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
-  fun `lost release during fullscreen peer transition cannot latch the next escape`() =
+  fun `lost release during fullscreen peer transition cannot latch the next F11`() =
       onEdt {
         val registry = RecordingRegistry()
         val lifecycle = RecordingLifecycleRegistry()
@@ -154,42 +166,46 @@ class FullscreenEscapeDispatcherTest {
             )
         dispatcher.install()
 
-        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
         assertEquals(1, exitCount)
 
         // Disposing the fullscreen native peer can lose KEY_RELEASED on Windows. Window
         // deactivation/closure resets the capture before the replacement peer accepts input.
         lifecycle.transition()
         fullscreen = true
-        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F11)))
         assertEquals(2, exitCount)
-        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F11)))
         dispatcher.close()
       }
 
   @Test
-  fun `windowed dialog and non-escape keys pass through`() =
+  fun `windowed escape opens the menu while dialog and unrelated keys pass through`() =
       onEdt {
         val registry = RecordingRegistry()
         val mainComponent = JPanel()
         val dialogComponent = JPanel()
         var fullscreen = false
+        var openCount = 0
         var exitCount = 0
         val dispatcher =
             dispatcher(
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
+                openMenu = { openCount++ },
                 exitFullscreen = { exitCount++ },
             )
         dispatcher.install()
 
-        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
         fullscreen = true
         assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
         assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_F10)))
         assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_F10)))
+        assertEquals(1, openCount)
         assertEquals(0, exitCount)
         dispatcher.close()
       }
@@ -201,12 +217,14 @@ class FullscreenEscapeDispatcherTest {
         val mainComponent = JPanel()
         val dialogComponent = JPanel()
         var fullscreen = true
+        var openCount = 0
         var exitCount = 0
         val dispatcher =
             dispatcher(
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
+                openMenu = { openCount++ },
                 exitFullscreen = {
                   exitCount++
                   fullscreen = false
@@ -216,10 +234,37 @@ class FullscreenEscapeDispatcherTest {
 
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertFalse(registry.dispatch(key(dialogComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
-        fullscreen = true
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
-        assertEquals(2, exitCount)
+        assertEquals(2, openCount)
+        assertEquals(0, exitCount)
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        dispatcher.close()
+      }
+
+  @Test
+  fun `active native menu retains escape ownership`() =
+      onEdt {
+        val registry = RecordingRegistry()
+        val mainComponent = JPanel()
+        var nativeMenuActive = true
+        var openCount = 0
+        val dispatcher =
+            dispatcher(
+                registry,
+                belongsToMainWindow = { it === mainComponent },
+                isMenuActive = { nativeMenuActive },
+                openMenu = { openCount++ },
+            )
+        dispatcher.install()
+
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        nativeMenuActive = false
+        assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertEquals(0, openCount)
+
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
+        assertEquals(1, openCount)
         dispatcher.close()
       }
 
@@ -247,16 +292,20 @@ class FullscreenEscapeDispatcherTest {
   private fun dispatcher(
       registry: RecordingRegistry,
       belongsToMainWindow: (java.awt.Component?) -> Boolean = { true },
+      isMenuActive: () -> Boolean = { false },
       isFullscreen: () -> Boolean = { false },
+      openMenu: () -> Unit = {},
       exitFullscreen: () -> Unit = {},
       lifecycleRegistry: EscapeSequenceLifecycleRegistry = EscapeSequenceLifecycleRegistry.NOOP,
   ) =
       FullscreenEscapeDispatcher(
-          registry,
-          belongsToMainWindow,
-          isFullscreen,
-          exitFullscreen,
-          lifecycleRegistry,
+          registry = registry,
+          belongsToMainWindow = belongsToMainWindow,
+          isMenuActive = isMenuActive,
+          isFullscreen = isFullscreen,
+          openMenu = openMenu,
+          exitFullscreen = exitFullscreen,
+          lifecycleRegistry = lifecycleRegistry,
       )
 
   private fun key(

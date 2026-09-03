@@ -50,11 +50,12 @@ Default keyboard controls:
 | D-pad | Arrow keys |
 | A / B | <kbd>Z</kbd> / <kbd>X</kbd> |
 | Start / Select | <kbd>Enter</kbd> / <kbd>Shift</kbd> |
+| Open on-screen menu | <kbd>Esc</kbd> |
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
-| Toggle fullscreen | <kbd>F11</kbd>; <kbd>Esc</kbd> exits fullscreen |
+| Toggle fullscreen | <kbd>F11</kbd> |
 
 Keyboard and game-controller bindings can be changed in **File > Preferences…**.
 The same window contains display, sound, and save settings.

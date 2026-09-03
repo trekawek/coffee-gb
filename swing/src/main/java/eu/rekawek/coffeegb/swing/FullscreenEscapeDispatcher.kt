@@ -7,34 +7,39 @@ import java.awt.Window
 import java.awt.event.KeyEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import javax.swing.MenuSelectionManager
 import javax.swing.SwingUtilities
 
 /**
- * Reserves Escape and F11 for leaving fullscreen without taking F11 away from windowed emulator
- * input or from owned dialogs.
+ * Reserves Escape for opening the on-screen menu and F11 for leaving fullscreen without taking
+ * F11 away from windowed emulator input or either key away from owned dialogs.
  *
- * One captured press owns the complete physical-key sequence. The exit action may synchronously
- * leave fullscreen, but auto-repeat presses and the matching release are still consumed until the
- * key returns to neutral. A native-peer focus/deactivation/close transition clears the capture
- * because some window systems discard that release while recreating the fullscreen frame.
+ * One captured press owns the complete physical-key sequence. Either action may synchronously
+ * change input ownership or recreate the fullscreen frame, but auto-repeat presses and the
+ * matching release are still consumed until the key returns to neutral. A native-peer
+ * focus/deactivation/close transition clears the capture because some window systems discard that
+ * release during the transition.
  */
 internal class FullscreenEscapeDispatcher private constructor(
     private val registry: KeyEventDispatcherRegistry,
     private val lifecycleRegistry: EscapeSequenceLifecycleRegistry,
     private val belongsToMainWindow: (Component?) -> Boolean,
+    private val isMenuActive: () -> Boolean,
     private val isFullscreen: () -> Boolean,
+    private val openMenu: () -> Unit,
     private val exitFullscreen: () -> Unit,
 ) : KeyEventDispatcher, AutoCloseable {
   private val lifecycleLock = Any()
   private var installed = false
-  private var fullscreenExitSequenceKeyCode: Int? = null
+  private var capturedSequenceKeyCode: Int? = null
   private val resetFullscreenExitSequence: () -> Unit = {
-    synchronized(lifecycleLock) { fullscreenExitSequenceKeyCode = null }
+    synchronized(lifecycleLock) { capturedSequenceKeyCode = null }
   }
 
   constructor(
       mainWindow: Window,
       isFullscreen: () -> Boolean,
+      openMenu: () -> Unit,
       exitFullscreen: () -> Unit,
       focusManager: KeyboardFocusManager =
           KeyboardFocusManager.getCurrentKeyboardFocusManager(),
@@ -42,7 +47,9 @@ internal class FullscreenEscapeDispatcher private constructor(
       KeyboardFocusManagerDispatcherRegistry(focusManager),
       WindowEscapeSequenceLifecycleRegistry(mainWindow),
       belongsToMainWindow = { component -> component.belongsTo(mainWindow) },
+      isMenuActive = { MenuSelectionManager.defaultManager().selectedPath.isNotEmpty() },
       isFullscreen,
+      openMenu,
       exitFullscreen,
   )
 
@@ -50,11 +57,21 @@ internal class FullscreenEscapeDispatcher private constructor(
   internal constructor(
       registry: KeyEventDispatcherRegistry,
       belongsToMainWindow: (Component?) -> Boolean,
+      isMenuActive: () -> Boolean = { false },
       isFullscreen: () -> Boolean,
+      openMenu: () -> Unit,
       exitFullscreen: () -> Unit,
       lifecycleRegistry: EscapeSequenceLifecycleRegistry = EscapeSequenceLifecycleRegistry.NOOP,
       @Suppress("UNUSED_PARAMETER") testSeam: Unit = Unit,
-  ) : this(registry, lifecycleRegistry, belongsToMainWindow, isFullscreen, exitFullscreen)
+  ) : this(
+      registry,
+      lifecycleRegistry,
+      belongsToMainWindow,
+      isMenuActive,
+      isFullscreen,
+      openMenu,
+      exitFullscreen,
+  )
 
   fun install() {
     synchronized(lifecycleLock) {
@@ -78,35 +95,40 @@ internal class FullscreenEscapeDispatcher private constructor(
       } finally {
         registry.remove(this)
         installed = false
-        fullscreenExitSequenceKeyCode = null
+        capturedSequenceKeyCode = null
       }
     }
   }
 
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    var requestMenuOpen = false
     var requestExit = false
     val consume =
         synchronized(lifecycleLock) {
           // The macOS AWT backend can report a function key through its extended code while the
           // ordinary key code is undefined. Treat both representations as the same physical key.
-          val keyCode = fullscreenExitKeyCode(event) ?: return@synchronized false
-          if (keyCode !in FULLSCREEN_EXIT_KEYS) {
+          val keyCode = reservedKeyCode(event) ?: return@synchronized false
+          if (keyCode !in RESERVED_KEYS) {
             return@synchronized false
           }
           if (!belongsToMainWindow(event.component)) {
             if (event.id == KeyEvent.KEY_RELEASED &&
-                fullscreenExitSequenceKeyCode == keyCode) {
-              fullscreenExitSequenceKeyCode = null
+                capturedSequenceKeyCode == keyCode) {
+              capturedSequenceKeyCode = null
             }
             return@synchronized false
           }
 
           when (event.id) {
             KeyEvent.KEY_PRESSED -> {
-              if (fullscreenExitSequenceKeyCode != null) {
+              if (capturedSequenceKeyCode != null) {
                 true
-              } else if (isFullscreen()) {
-                fullscreenExitSequenceKeyCode = keyCode
+              } else if (keyCode == KeyEvent.VK_ESCAPE && !isMenuActive()) {
+                capturedSequenceKeyCode = keyCode
+                requestMenuOpen = true
+                true
+              } else if (keyCode == KeyEvent.VK_F11 && isFullscreen()) {
+                capturedSequenceKeyCode = keyCode
                 requestExit = true
                 true
               } else {
@@ -114,27 +136,30 @@ internal class FullscreenEscapeDispatcher private constructor(
               }
             }
             KeyEvent.KEY_RELEASED -> {
-              val captured = fullscreenExitSequenceKeyCode == keyCode
+              val captured = capturedSequenceKeyCode == keyCode
               if (captured) {
-                fullscreenExitSequenceKeyCode = null
+                capturedSequenceKeyCode = null
               }
               captured
             }
             else -> false
           }
         }
+    if (requestMenuOpen) {
+      openMenu()
+    }
     if (requestExit) {
       exitFullscreen()
     }
     return consume
   }
 
-  private fun fullscreenExitKeyCode(event: KeyEvent): Int? =
-      event.keyCode.takeIf { it in FULLSCREEN_EXIT_KEYS }
-          ?: event.extendedKeyCode.takeIf { it in FULLSCREEN_EXIT_KEYS }
+  private fun reservedKeyCode(event: KeyEvent): Int? =
+      event.keyCode.takeIf { it in RESERVED_KEYS }
+          ?: event.extendedKeyCode.takeIf { it in RESERVED_KEYS }
 
   private companion object {
-    val FULLSCREEN_EXIT_KEYS = setOf(KeyEvent.VK_ESCAPE, KeyEvent.VK_F11)
+    val RESERVED_KEYS = setOf(KeyEvent.VK_ESCAPE, KeyEvent.VK_F11)
   }
 }
 

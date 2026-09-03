@@ -208,7 +208,7 @@ class KeyboardMappingEditorTest {
       }
 
   @Test
-  fun onlyTabAndBackspaceRemainReservedWhileEscapeAndEnterAreAssignable() =
+  fun escapeTabAndBackspaceAreReservedWhileEnterRemainsAssignable() =
       onEventThread {
         val editor = KeyboardMappingEditor(ApplicationSettings.Input.defaults())
 
@@ -216,11 +216,10 @@ class KeyboardMappingEditorTest {
             editor.editBinding(1, Button.A, KeyEvent.VK_TAB))
         assertIs<KeyboardMappingEditor.EditResult.Reserved>(
             editor.editBinding(1, Button.A, KeyEvent.VK_BACK_SPACE))
+        assertIs<KeyboardMappingEditor.EditResult.Reserved>(
+            editor.editBinding(1, Button.A, KeyEvent.VK_ESCAPE))
         assertNull(editor.currentBinding(1, Button.A))
 
-        assertIs<KeyboardMappingEditor.EditResult.Applied>(
-            editor.editBinding(1, Button.A, KeyEvent.VK_ESCAPE))
-        assertEquals(KeyEvent.VK_ESCAPE, editor.currentBinding(1, Button.A)?.code)
         assertIs<KeyboardMappingEditor.EditResult.Applied>(
             editor.editBinding(1, Button.B, KeyEvent.VK_ENTER))
         assertEquals(KeyEvent.VK_ENTER, editor.currentBinding(1, Button.B)?.code)
@@ -248,7 +247,7 @@ class KeyboardMappingEditorTest {
             editor.handleCaptureKey(key(captureA, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertTrue(
             editor.handleCaptureKey(key(captureA, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
-        assertEquals(KeyEvent.VK_ESCAPE, editor.currentBinding(1, Button.A)?.code)
+        assertNull(editor.currentBinding(1, Button.A))
 
         val captureB = button(editor, "Capture Player 2 B keyboard binding")
         captureB.doClick()
