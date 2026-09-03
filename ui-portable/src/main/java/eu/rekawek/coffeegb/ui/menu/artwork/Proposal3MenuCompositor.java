@@ -27,6 +27,7 @@ public final class Proposal3MenuCompositor {
     /** One font role for every item label and item value. */
     private static final Proposal3GlyphAtlas.Role ITEM_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
     private static final Proposal3GlyphAtlas.Role FOOTER_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
+    private static final int TITLE_EXTRA_WORD_SPACING = 18;
     private static final MenuRect FOOTER_MOVE = new MenuRect(73, 660, 226, 56);
     private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 670, 123, 48);
     private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 184, 48);
@@ -124,6 +125,10 @@ public final class Proposal3MenuCompositor {
     /** Text bounds after the baked B key, wide enough for either Back or Resume. */
     static MenuRect footerBackBounds() {
         return FOOTER_BACK;
+    }
+
+    static int titleExtraWordSpacing() {
+        return TITLE_EXTRA_WORD_SPACING;
     }
 
     static long marqueeDelayNanos() {
@@ -235,7 +240,8 @@ public final class Proposal3MenuCompositor {
         String title = display(presentation.context()).isEmpty()
                 ? display(presentation.title()) : display(presentation.context());
         raster.drawText(atlas(), Proposal3GlyphAtlas.Role.SEMIBOLD, title,
-                MenuScreenTemplate.TITLE, MenuRaster.INK, MenuRaster.HorizontalAlignment.CENTER);
+                MenuScreenTemplate.TITLE, MenuRaster.INK, MenuRaster.HorizontalAlignment.CENTER,
+                TITLE_EXTRA_WORD_SPACING);
     }
 
     private void drawPicture(MenuPresentation presentation, MenuRaster raster) {

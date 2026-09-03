@@ -100,6 +100,15 @@ public class Proposal3MenuCompositorTest {
     }
 
     @Test
+    public void titleWordsUseAFullGlyphWidthOfSeparation() throws Exception {
+        Proposal3GlyphAtlas atlas = Proposal3GlyphAtlas.load();
+
+        assertTrue(atlas.advance(Proposal3GlyphAtlas.Role.SEMIBOLD, ' ')
+                + Proposal3MenuCompositor.titleExtraWordSpacing()
+                >= atlas.advance(Proposal3GlyphAtlas.Role.SEMIBOLD, 'A'));
+    }
+
+    @Test
     public void moreThanSevenItemsUseGenericStartMiddleAndEndArrowSlots() {
         Proposal3MenuCompositor compositor = new Proposal3MenuCompositor();
         List<MenuPageSpec.Item> thirteen = buttons(13, 0);

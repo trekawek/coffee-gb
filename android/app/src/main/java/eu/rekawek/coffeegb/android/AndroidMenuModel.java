@@ -81,6 +81,15 @@ final class AndroidMenuModel {
                 List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"));
     }
 
+    static MenuPageSpec resetConfirmationPage() {
+        return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", "RESET GAME",
+                List.of("UNSAVED PROGRESS MAY BE LOST"),
+                List.of(
+                        button("confirm", "CONFIRM", "", true),
+                        button("cancel", "CANCEL", "", true)),
+                "cancel", MenuPreview.empty());
+    }
+
     static MenuPageSpec displayPage(boolean sgbBorder, boolean grayscale) {
         return page(MenuRoute.DISPLAY, "COFFEE GB", "DISPLAY", "", "", List.of(), List.of(
                 checkbox("sgb-border", "SGB BORDER", sgbBorder, true),

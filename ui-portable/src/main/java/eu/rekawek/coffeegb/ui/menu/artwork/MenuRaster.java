@@ -127,11 +127,20 @@ final class MenuRaster {
 
     void drawText(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role, String value,
             MenuRect target, int color, HorizontalAlignment alignment) {
+        drawText(atlas, role, value, target, color, alignment, 0);
+    }
+
+    void drawText(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role, String value,
+            MenuRect target, int color, HorizontalAlignment alignment,
+            int additionalWordSpacing) {
         Objects.requireNonNull(atlas, "atlas");
         Objects.requireNonNull(value, "value");
         Objects.requireNonNull(target, "target");
-        String fitted = ellipsize(atlas, role, value, target.width());
-        int textWidth = atlas.renderedWidth(role, fitted);
+        if (additionalWordSpacing < 0) {
+            throw new IllegalArgumentException("additionalWordSpacing must be non-negative");
+        }
+        String fitted = ellipsize(atlas, role, value, target.width(), additionalWordSpacing);
+        int textWidth = renderedWidth(atlas, role, fitted, additionalWordSpacing);
         int x = switch (alignment) {
             case LEFT -> target.x();
             case CENTER -> target.x() + Math.max(0, (target.width() - textWidth) / 2);
@@ -142,6 +151,9 @@ final class MenuRaster {
             char character = fitted.charAt(index);
             drawGlyph(this, atlas, role, character, x, y, target, color);
             x += atlas.advance(role, character);
+            if (character == ' ') {
+                x += additionalWordSpacing;
+            }
             if (x >= target.right()) {
                 break;
             }
@@ -296,23 +308,34 @@ final class MenuRaster {
     }
 
     private static String ellipsize(Proposal3GlyphAtlas atlas, Proposal3GlyphAtlas.Role role,
-            String value, int width) {
+            String value, int width, int additionalWordSpacing) {
         String normalized = value.toUpperCase(java.util.Locale.ROOT)
                 .replaceAll("\\s+", " ").trim();
-        if (atlas.renderedWidth(role, normalized) <= width) {
+        if (renderedWidth(atlas, role, normalized, additionalWordSpacing) <= width) {
             return normalized;
         }
         String suffix = "...";
-        int suffixWidth = atlas.renderedWidth(role, suffix);
+        int suffixWidth = renderedWidth(atlas, role, suffix, additionalWordSpacing);
         if (suffixWidth >= width) {
             return suffix;
         }
         int end = normalized.length();
-        while (end > 0 && atlas.renderedWidth(role,
-                normalized.substring(0, end) + suffix) > width) {
+        while (end > 0 && renderedWidth(atlas, role,
+                normalized.substring(0, end) + suffix, additionalWordSpacing) > width) {
             end--;
         }
         return normalized.substring(0, end).stripTrailing() + suffix;
+    }
+
+    private static int renderedWidth(Proposal3GlyphAtlas atlas,
+            Proposal3GlyphAtlas.Role role, String value, int additionalWordSpacing) {
+        int spaces = 0;
+        for (int index = 0; index < value.length(); index++) {
+            if (value.charAt(index) == ' ') {
+                spaces++;
+            }
+        }
+        return atlas.renderedWidth(role, value) + spaces * additionalWordSpacing;
     }
 
 }

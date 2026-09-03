@@ -983,9 +983,10 @@ internal class SwingProposal3Menu(
             actionLabel,
             listOf("UNSAVED PROGRESS MAY BE LOST"),
             listOf(
-                MenuPageSpec.Item.button("cancel", "CANCEL", "RETURN", true),
-                MenuPageSpec.Item.button("confirm", "CONFIRM", actionLabel, true),
+                MenuPageSpec.Item.button("confirm", "CONFIRM", "", true),
+                MenuPageSpec.Item.button("cancel", "CANCEL", "", true),
             ),
+            preferredFocus = "cancel",
             columns = 1,
         )
       }
