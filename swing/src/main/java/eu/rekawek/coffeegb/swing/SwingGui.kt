@@ -220,7 +220,7 @@ class SwingGui private constructor(
         FullscreenEscapeDispatcher(
                 mainWindow,
                 isFullscreen = { displayController.current().fullscreen },
-                openMenu = emulator::openPortableMenu,
+                toggleMenu = emulator::togglePortableMenu,
                 exitFullscreen = { displayController.setFullscreen(false) },
             )
             .also(FullscreenEscapeDispatcher::install)

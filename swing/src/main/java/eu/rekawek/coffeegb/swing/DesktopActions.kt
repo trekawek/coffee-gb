@@ -341,6 +341,15 @@ internal class DesktopActionRegistry(
     }
   }
 
+  override fun resumeFromMenu() {
+    // A multi-ROM archive can leave the retained game paused while ROM preparation marks the
+    // command surface busy. Closing the overlay must still be able to release that pause; this is
+    // lifecycle cleanup, not a second user command competing with the open request.
+    if (presentation.gameLoaded) {
+      handlers.setPaused(false)
+    }
+  }
+
   override fun audioVolume(): Int? =
       if (handlers.setAudioVolume != null) presentation.audioVolume else null
 

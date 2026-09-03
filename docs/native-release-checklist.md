@@ -56,9 +56,9 @@ has a named tester, target/architecture, date, and result. A tag push alone must
   hot-plug, and neutral release; on macOS also record whether compatible system SDL2 is installed.
 - [ ] Confirm audio starts, mute/volume/device selection work, and quit releases the audio device.
 - [ ] Enter and leave fullscreen with F11. Confirm Escape opens the on-screen menu without leaving
-  fullscreen, a second Escape leaves the menu open, and B resumes play. Resize the window and verify
-  complete aspect-preserving fit plus the 1× through 5× window-size commands on the attached
-  display.
+  fullscreen, then resumes the paused game and dismisses the menu when pressed again; confirm B also
+  resumes play. Resize the window and verify complete aspect-preserving fit plus the 1× through 5×
+  window-size commands on the attached display.
 - [ ] Create battery-backed progress, quit, relaunch, and confirm it persisted. Repeat package
   upgrade/reinstall without losing it.
 - [ ] Save and load a state, verify the thumbnail/metadata where available, and confirm a wrong-ROM

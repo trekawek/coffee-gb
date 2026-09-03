@@ -120,6 +120,28 @@ class DesktopActionsTest {
   }
 
   @Test
+  fun `menu dismissal can resume a retained game while ROM opening keeps commands busy`() {
+    val calls = mutableListOf<String>()
+    val registry = registry(calls)
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            sessionBusy = true,
+            pauseSupported = true,
+            paused = true,
+        ))
+
+    assertFalse(registry[DesktopCommand.PAUSE].isEnabled)
+    registry.resumeFromMenu()
+
+    assertEquals(listOf("paused=false"), calls)
+
+    registry.update(DesktopCommandPresentation(sessionBusy = true, paused = true))
+    registry.resumeFromMenu()
+    assertEquals(listOf("paused=false"), calls)
+  }
+
+  @Test
   fun `fullscreen remains actionable from the idle Library`() {
     val calls = mutableListOf<String>()
     val registry = registry(calls)

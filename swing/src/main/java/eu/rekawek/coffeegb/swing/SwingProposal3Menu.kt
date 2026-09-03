@@ -197,6 +197,22 @@ internal class SwingProposal3Menu(
     runOnEdt(::openOnEdt)
   }
 
+  /** Opens a hidden overlay, or resumes and dismisses any visible paused-game route. */
+  internal fun toggleFromDesktop() {
+    runOnEdt {
+      // A chooser/confirmation can run a nested EDT loop. A main-window Escape queued just before
+      // that dialog took focus must not dismiss or resume the overlay behind its modal owner.
+      if (romDialogOpen.get()) return@runOnEdt
+      if (!controller.visible()) {
+        openOnEdt()
+        return@runOnEdt
+      }
+      val current = commands.menuState().commands
+      if (!current.gameLoaded || (!current.paused && !pauseOwnedByMenu)) return@runOnEdt
+      dismissAllRoutesAndResume()
+    }
+  }
+
   /** Hides the menu during ROM/controller lifecycle transitions without resuming a new session. */
   internal fun closeForLifecycle() {
     runOnEdt {
@@ -1561,8 +1577,8 @@ internal class SwingProposal3Menu(
     val shouldResume = pauseOwnedByMenu || commands.menuState().commands.paused
     pauseOwnedByMenu = false
     if (controller.visible()) controller.hide()
-    if (shouldResume && commands.isEnabled(DesktopCommand.PAUSE)) {
-      commands.setPaused(false)
+    if (shouldResume) {
+      commands.resumeFromMenu()
     }
   }
 
@@ -1572,9 +1588,25 @@ internal class SwingProposal3Menu(
     val shouldResume = pauseOwnedByMenu
     pauseOwnedByMenu = false
     if (controller.visible()) controller.hide()
-    if (shouldResume && commands.isEnabled(DesktopCommand.PAUSE)) {
-      commands.setPaused(false)
+    if (shouldResume) {
+      commands.resumeFromMenu()
     }
+  }
+
+  private fun dismissAllRoutesAndResume() {
+    check(SwingUtilities.isEventDispatchThread()) { "Portable menu action must run on the EDT" }
+    val cancelledArchive = pendingArchiveSelection
+    pendingArchiveSelection = null
+    selectedArchiveItemId = null
+    pendingConfirmation = null
+    pendingChoice = null
+    fileBrowserRequestId++
+    fileBrowserState = null
+    fileBrowserMarqueeTimer.stop()
+    controller.setRootDismissAllowed(true)
+    controller.setBackIntercepted(false)
+    resumeAndHide()
+    cancelledArchive?.onCancelled()
   }
 
   private fun render(presentation: MenuPresentation) {
@@ -1667,9 +1699,7 @@ internal class SwingProposal3Menu(
       releaseGameplaySoon()
       if (pauseOwnedByMenu) {
         pauseOwnedByMenu = false
-        runOnEdt {
-          if (commands.isEnabled(DesktopCommand.PAUSE)) commands.setPaused(false)
-        }
+        runOnEdt(commands::resumeFromMenu)
       }
     }
   }
@@ -1758,6 +1788,9 @@ internal interface PortableMenuCommandBridge {
   fun openAbout()
 
   fun setPaused(paused: Boolean)
+
+  /** Resumes a retained game while dismissing the overlay, even during a busy ROM-open handoff. */
+  fun resumeFromMenu() = setPaused(false)
 
   fun openPreferences(category: PreferencesCategory)
 

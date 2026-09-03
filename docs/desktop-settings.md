@@ -184,9 +184,9 @@ on the right or bottom without stretching or cropping the final source pixel.
 The main window is resizable and has a base 160×144 minimum content area. **View → Fullscreen**
 enters borderless fullscreen; <kbd>F11</kbd> is its accelerator unless F11 is assigned to an emulated
 button, in which case the accelerator is automatically disabled and the menu command remains
-available. <kbd>Escape</kbd> opens the on-screen menu without leaving fullscreen. Menu radio items,
-Preferences, persisted settings, and the live renderer are synchronized through one EDT-owned
-coordinator.
+available. <kbd>Escape</kbd> opens the on-screen menu without leaving fullscreen, then resumes a
+paused game and dismisses the visible menu when pressed again. Menu radio items, Preferences,
+persisted settings, and the live renderer are synchronized through one EDT-owned coordinator.
 
 The typed `.coffeegb.properties` model retains an optional legacy outer-frame width and height as a
 startup fallback. A separate, deliberately harmless desktop UI-state store records the main

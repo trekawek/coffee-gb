@@ -41,23 +41,30 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
-  fun `escape opens the menu once and consumes repeats and release without exiting fullscreen`() =
+  fun `escape toggles a paused-game menu per press without exiting fullscreen`() =
       onEdt {
         val registry = RecordingRegistry()
         val mainComponent = JPanel()
         var fullscreen = true
         var menuVisible = false
+        var gamePaused = false
         var openCount = 0
+        var resumeCount = 0
         var exitCount = 0
         val dispatcher =
             dispatcher(
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
-                openMenu = {
+                toggleMenu = {
                   if (!menuVisible) {
                     menuVisible = true
+                    gamePaused = true
                     openCount++
+                  } else if (gamePaused) {
+                    menuVisible = false
+                    gamePaused = false
+                    resumeCount++
                   }
                 },
                 exitFullscreen = {
@@ -69,6 +76,7 @@ class FullscreenEscapeDispatcherTest {
 
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertEquals(1, openCount)
+        assertEquals(0, resumeCount)
         assertEquals(0, exitCount)
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
@@ -76,11 +84,14 @@ class FullscreenEscapeDispatcherTest {
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
         assertEquals(0, exitCount)
 
-        // Opening is idempotent while the overlay is visible, but Escape still owns its complete
-        // sequence and cannot become route-local Back/Resume input.
+        // The next physical press resumes and closes the overlay. Its repeats cannot reopen it.
+        assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
         assertTrue(registry.dispatch(key(mainComponent, KeyEvent.KEY_RELEASED, KeyEvent.VK_ESCAPE)))
         assertEquals(1, openCount)
+        assertEquals(1, resumeCount)
+        assertFalse(menuVisible)
+        assertTrue(fullscreen)
         assertEquals(0, exitCount)
         dispatcher.close()
       }
@@ -193,7 +204,7 @@ class FullscreenEscapeDispatcherTest {
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
-                openMenu = { openCount++ },
+                toggleMenu = { openCount++ },
                 exitFullscreen = { exitCount++ },
             )
         dispatcher.install()
@@ -224,7 +235,7 @@ class FullscreenEscapeDispatcherTest {
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { fullscreen },
-                openMenu = { openCount++ },
+                toggleMenu = { openCount++ },
                 exitFullscreen = {
                   exitCount++
                   fullscreen = false
@@ -253,7 +264,7 @@ class FullscreenEscapeDispatcherTest {
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isMenuActive = { nativeMenuActive },
-                openMenu = { openCount++ },
+                toggleMenu = { openCount++ },
             )
         dispatcher.install()
 
@@ -269,24 +280,24 @@ class FullscreenEscapeDispatcherTest {
       }
 
   @Test
-  fun `closing dispatcher before settings teardown rejects later fullscreen escape`() =
+  fun `closing dispatcher before settings teardown rejects later escape menu activation`() =
       onEdt {
         val registry = RecordingRegistry()
         val mainComponent = JPanel()
-        var exitCount = 0
+        var toggleCount = 0
         val dispatcher =
             dispatcher(
                 registry,
                 belongsToMainWindow = { it === mainComponent },
                 isFullscreen = { true },
-                exitFullscreen = { exitCount++ },
+                toggleMenu = { toggleCount++ },
             )
         dispatcher.install()
 
         dispatcher.close()
 
         assertFalse(registry.dispatch(key(mainComponent, KeyEvent.KEY_PRESSED, KeyEvent.VK_ESCAPE)))
-        assertEquals(0, exitCount)
+        assertEquals(0, toggleCount)
       }
 
   private fun dispatcher(
@@ -294,7 +305,7 @@ class FullscreenEscapeDispatcherTest {
       belongsToMainWindow: (java.awt.Component?) -> Boolean = { true },
       isMenuActive: () -> Boolean = { false },
       isFullscreen: () -> Boolean = { false },
-      openMenu: () -> Unit = {},
+      toggleMenu: () -> Unit = {},
       exitFullscreen: () -> Unit = {},
       lifecycleRegistry: EscapeSequenceLifecycleRegistry = EscapeSequenceLifecycleRegistry.NOOP,
   ) =
@@ -303,7 +314,7 @@ class FullscreenEscapeDispatcherTest {
           belongsToMainWindow = belongsToMainWindow,
           isMenuActive = isMenuActive,
           isFullscreen = isFullscreen,
-          openMenu = openMenu,
+          toggleMenu = toggleMenu,
           exitFullscreen = exitFullscreen,
           lifecycleRegistry = lifecycleRegistry,
       )

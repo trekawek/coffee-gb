@@ -301,6 +301,10 @@ class SwingEmulator(
     portableMenu?.openFromDesktop()
   }
 
+  internal fun togglePortableMenu() {
+    portableMenu?.toggleFromDesktop()
+  }
+
   internal fun attachPrinterWindow(owner: java.awt.Window, bounds: PrinterWindowBounds) {
     printer.attachDesktopWindow(owner, bounds)
   }
