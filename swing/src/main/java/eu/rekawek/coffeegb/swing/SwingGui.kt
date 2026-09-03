@@ -616,7 +616,7 @@ class SwingGui private constructor(
     }
     eventBus.register<EmulationStoppedEvent> {
       dispatchAcceptedRomLifecycle(null, ::acceptRomLifecycle) {
-        if (!romOpen.hasActiveRequest()) {
+        if (shouldPresentStoppedSession(romOpen.hasActiveRequest(), romLoading)) {
           // Fullscreen is a session presentation state. Leave it before revealing Home so the
           // runtime, persisted display choice, and shell selection cannot disagree while idle.
           if (displayController.isFullscreen()) {
@@ -627,14 +627,12 @@ class SwingGui private constructor(
           activeRecentTitle = null
           romSessionState.markStopped()
           desktopPlaybackState.sessionStopped()
-          if (!romLoading) {
-            mainWindow.title = activeWindowTitle
-            desktopUiCoordinator.stopped()
-            // The unload autosave just committed its preview; refresh the recent-game catalog
-            // now rather than waiting for another ROM-open or preference change.
-            updateRecentRoms()
-            portableMenu.openFromDesktop()
-          }
+          mainWindow.title = activeWindowTitle
+          desktopUiCoordinator.stopped()
+          // The unload autosave just committed its preview; refresh the recent-game catalog
+          // now rather than waiting for another ROM-open or preference change.
+          updateRecentRoms()
+          portableMenu.openFromDesktop()
         }
       }
     }
@@ -1415,6 +1413,21 @@ internal fun shouldApplyRomLifecycleEvent(
     } else {
       ownsVisibleRequest(openRequestId)
     }
+
+/**
+ * Returns true only when a Stop is terminal from the desktop's point of view.
+ *
+ * Both a managed ROM open and an in-place system/profile reload publish the old session's
+ * uncorrelated Stop before the replacement session starts. [replacementLoading] is set by the
+ * preceding ROM-loading callback on the same ordered EDT queue, so neither transient Stop may
+ * reveal Library or tear down fullscreen presentation. Conversely, BasicController cancels any
+ * load and publishes its cancellation before it can publish a terminal Stop, so an actual close
+ * reaches this gate with [replacementLoading] cleared.
+ */
+internal fun shouldPresentStoppedSession(
+    managedOpenActive: Boolean,
+    replacementLoading: Boolean,
+): Boolean = !managedOpenActive && !replacementLoading
 
 /** The relaunch verifier retains the packaged child until its automatic TCP join is observed. */
 internal fun desktopStartupSmokeShouldAutoClose(environment: Map<String, String>): Boolean =
