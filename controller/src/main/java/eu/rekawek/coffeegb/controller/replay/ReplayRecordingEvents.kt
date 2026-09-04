@@ -20,6 +20,14 @@ enum class ReplayRecordingPhase {
   UNSAVED,
 }
 
+/** Lifecycle summary for an isolated deterministic replay being presented by the desktop. */
+enum class ReplayPlaybackPhase {
+  IDLE,
+  LOADING,
+  PLAYING,
+  COMPLETED,
+}
+
 /** A consent-bound request from a presentation surface. */
 data class ReplayRecordingStartRequestEvent(
     val requestId: Long,
@@ -66,6 +74,37 @@ data class ReplayRecordingDiscardEvent(
   init {
     require(requestId > 0) { "Replay discard request ID must be positive" }
     require(expectedSessionId > 0) { "Replay discard session ID must be positive" }
+  }
+}
+
+/** Requests that a bounded CGBR file be decoded and played with the currently open matching ROM. */
+data class ReplayPlaybackLoadRequestEvent(
+    val requestId: Long,
+    val expectedSessionId: Long,
+    val path: Path,
+) : Event {
+  init {
+    require(requestId > 0) { "Replay playback request ID must be positive" }
+    require(expectedSessionId > 0) { "Replay playback session ID must be positive" }
+  }
+}
+
+/** Authoritative replay-playback state, scoped to the normal game session that initiated it. */
+data class ReplayPlaybackStatusEvent(
+    val sessionId: Long?,
+    val phase: ReplayPlaybackPhase,
+    val message: String? = null,
+) : Event
+
+/** A bounded decode, identity, or deterministic-checkpoint failure while loading a replay. */
+data class ReplayPlaybackFailedEvent(
+    val sessionId: Long?,
+    val summary: String,
+    val detail: String,
+) : Event {
+  init {
+    require(summary.isNotBlank()) { "Replay playback failure summary cannot be blank" }
+    require(detail.isNotBlank()) { "Replay playback failure detail cannot be blank" }
   }
 }
 

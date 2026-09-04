@@ -420,6 +420,8 @@ internal class DesktopCommandBar(
             DesktopCommand.FULLSCREEN,
             DesktopCommand.SCREENSHOT,
             DesktopCommand.INPUT_RECORDING,
+            DesktopCommand.STOP_INPUT_RECORDING,
+            DesktopCommand.LOAD_INPUT_RECORDING,
             DesktopCommand.MANAGE_STATES,
         )
         .forEach { command -> overflowMenu.add(JMenuItem(actions[command])) }

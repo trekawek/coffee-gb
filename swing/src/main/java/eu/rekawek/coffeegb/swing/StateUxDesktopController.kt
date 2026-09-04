@@ -10,6 +10,10 @@ import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStartRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStatusEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStopRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingRetrySaveEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackFailedEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackLoadRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatusEvent
 import eu.rekawek.coffeegb.controller.state.StateBrowserCatalog
 import eu.rekawek.coffeegb.controller.state.StateBrowserEntry
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
@@ -112,6 +116,7 @@ internal class StateUxDesktopController(
     private val onPortableCatalog: (StateBrowserCatalog, Set<Int>) -> Unit = { _, _ -> },
     private val onRememberResumeDecision: (resume: Boolean) -> Unit = {},
     private val onInputRecordingPhase: (ReplayRecordingPhase) -> Unit = {},
+    private val onInputPlaybackPhase: (ReplayPlaybackPhase) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
@@ -138,6 +143,7 @@ internal class StateUxDesktopController(
       )
   private var pendingClose: PendingClose? = null
   private var inputRecordingPhase = ReplayRecordingPhase.IDLE
+  private var inputPlaybackPhase = ReplayPlaybackPhase.IDLE
   private var closed = false
   private val slotLoadAvailability =
       StateSlotLoadAvailabilityTracker(
@@ -380,6 +386,46 @@ internal class StateUxDesktopController(
         )
       }
     }
+    eventBus.register<ReplayPlaybackStatusEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        event.sessionId?.let { sessionId ->
+          if (!isCurrent(sessionId)) return@onEdt
+        }
+        inputPlaybackPhase = event.phase
+        onInputPlaybackPhase(event.phase)
+        event.message?.let { message ->
+          onDesktopStatus(
+              message,
+              if (event.phase == ReplayPlaybackPhase.COMPLETED) DesktopCommand.CLOSE_GAME else null,
+          )
+        }
+      }
+    }
+    eventBus.register<ReplayPlaybackFailedEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        event.sessionId?.let { sessionId ->
+          if (!isCurrent(sessionId)) return@onEdt
+        }
+        // A decode/identity failure leaves the ordinary session available, so retry is safe.
+        // Once replacement has committed, however, the isolated replay machine has no live input
+        // source or state workspace; keep commands disabled until the user closes or reopens it.
+        val phase =
+            if (currentSession?.available == false) ReplayPlaybackPhase.COMPLETED
+            else ReplayPlaybackPhase.IDLE
+        inputPlaybackPhase = phase
+        onInputPlaybackPhase(phase)
+        showStateError(
+            owner,
+            StateUserError(
+                event.summary,
+                event.detail,
+                "Keep the matching ROM open and select another recording, or reopen the game after playback.",
+            ),
+        )
+      }
+    }
   }
 
   fun showBrowser() {
@@ -433,24 +479,55 @@ internal class StateUxDesktopController(
     eventBus.post(StateScreenshotRequestEvent(nextRequestId(), expectedSessionId, image))
   }
 
-  fun toggleInputRecording() {
+  fun startInputRecording() {
     requireEdt("Input recording request")
     if (closed) return
-    when (inputRecordingPhase) {
-      ReplayRecordingPhase.ARMING,
-      ReplayRecordingPhase.RECORDING -> {
-        val session = currentSession ?: return
-        eventBus.post(ReplayRecordingStopRequestEvent(nextRequestId(), session.sessionId))
-      }
-      ReplayRecordingPhase.IDLE -> startInputRecording()
-      ReplayRecordingPhase.SAVING ->
+    when {
+      inputPlaybackPhase != ReplayPlaybackPhase.IDLE ->
+          onDesktopStatus("Input playback is active. Close or reopen the game before recording again.", null)
+      inputRecordingPhase == ReplayRecordingPhase.IDLE -> requestInputRecordingStart()
+      inputRecordingPhase == ReplayRecordingPhase.SAVING ->
           onDesktopStatus("Input recording is being saved. Please wait.", null)
-      ReplayRecordingPhase.UNSAVED ->
+      inputRecordingPhase == ReplayRecordingPhase.UNSAVED ->
           onDesktopStatus("Input recording needs saving before another recording can start.", null)
+      else -> onDesktopStatus("Input recording is already active. Use Stop Input Recording.", null)
     }
   }
 
-  private fun startInputRecording() {
+  fun stopInputRecording() {
+    requireEdt("Input recording stop request")
+    if (closed) return
+    if (inputRecordingPhase != ReplayRecordingPhase.ARMING &&
+        inputRecordingPhase != ReplayRecordingPhase.RECORDING) {
+      onDesktopStatus("No input recording is active.", null)
+      return
+    }
+    val session = currentSession ?: return
+    eventBus.post(ReplayRecordingStopRequestEvent(nextRequestId(), session.sessionId))
+  }
+
+  fun loadInputRecording() {
+    requireEdt("Input recording playback request")
+    if (closed || inputPlaybackPhase != ReplayPlaybackPhase.IDLE ||
+        inputRecordingPhase != ReplayRecordingPhase.IDLE || !requireAvailableSession()) {
+      return
+    }
+    val session = checkNotNull(currentSession)
+    val initialDirectory = session.gameDirectory?.resolve("replays")?.takeIf { java.nio.file.Files.isDirectory(it) }
+        ?: session.gameDirectory
+    val chooser = JFileChooser(initialDirectory?.toFile()).apply {
+      dialogTitle = "Load Input Recording"
+      fileSelectionMode = JFileChooser.FILES_ONLY
+      isAcceptAllFileFilterUsed = false
+      addChoosableFileFilter(FileNameExtensionFilter("Coffee GB input recordings (*.cgbreplay)", "cgbreplay"))
+    }
+    if (chooser.showOpenDialog(owner) != JFileChooser.APPROVE_OPTION) return
+    val selected = chooser.selectedFile?.toPath() ?: return
+    if (!isCurrent(session.sessionId)) return
+    eventBus.post(ReplayPlaybackLoadRequestEvent(nextRequestId(), session.sessionId, selected))
+  }
+
+  private fun requestInputRecordingStart() {
     if (!requireAvailableSession()) return
     val expectedSessionId = checkNotNull(currentSession).sessionId
     val choice = showInputRecordingModeDialog() ?: return

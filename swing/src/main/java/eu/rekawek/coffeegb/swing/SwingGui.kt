@@ -316,6 +316,11 @@ class SwingGui private constructor(
                 desktopUiCoordinator.inputRecording(phase)
               }
             },
+            onInputPlaybackPhase = { phase ->
+              if (::desktopUiCoordinator.isInitialized) {
+                desktopUiCoordinator.inputPlayback(phase)
+              }
+            },
             dialogFactory = desktopDialogFactory,
         )
     debuggerController =
@@ -433,7 +438,9 @@ class SwingGui private constructor(
                 },
                 setFullscreen = displayController::setFullscreen,
                 screenshot = stateUxController::takeScreenshot,
-                inputRecording = stateUxController::toggleInputRecording,
+                inputRecording = stateUxController::startInputRecording,
+                stopInputRecording = stateUxController::stopInputRecording,
+                loadInputRecording = stateUxController::loadInputRecording,
                 setCommandBarVisible = ::setCommandBarVisible,
                 selectStateSlot = { slot ->
                   desktopUiCoordinator.stateSlot(slot)
