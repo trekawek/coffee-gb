@@ -13,6 +13,7 @@ enum class StateOperation {
   EXPORT,
   SCREENSHOT,
   REPLAY_SAVE,
+  REPLAY_LOAD,
   OPEN_FOLDER,
   AUTOSAVE,
   RESUME,

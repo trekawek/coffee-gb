@@ -54,7 +54,7 @@ Default keyboard controls:
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
-| Start / stop input recording | <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
+| Start input recording | <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
 | Toggle fullscreen | <kbd>F11</kbd> |
 

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
@@ -273,9 +274,16 @@ class DesktopActionsTest {
   }
 
   @Test
-  fun `input recording command tracks recorder lifecycle and keeps its modified shortcut`() {
+  fun `input recording exposes separate start stop and playback commands`() {
     val calls = mutableListOf<String>()
-    val registry = DesktopActionRegistry(handlers(calls).copy(inputRecording = { calls += "record" }))
+    val registry =
+        DesktopActionRegistry(
+            handlers(calls).copy(
+                inputRecording = { calls += "start-recording" },
+                stopInputRecording = { calls += "stop-recording" },
+                loadInputRecording = { calls += "load-recording" },
+            ),
+        )
 
     registry.update(
         DesktopCommandPresentation(
@@ -285,6 +293,8 @@ class DesktopActionsTest {
         ))
     assertEquals("Start Input Recording…", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
     assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
     registry[DesktopCommand.INPUT_RECORDING].actionPerformed(event())
 
     registry.update(
@@ -292,9 +302,10 @@ class DesktopActionsTest {
             gameLoaded = true,
             inputRecordingPhase = ReplayRecordingPhase.RECORDING,
         ))
-    assertEquals("Stop Input Recording", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
-    assertEquals(true, registry[DesktopCommand.INPUT_RECORDING].getValue(Action.SELECTED_KEY))
-    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertTrue(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+    registry[DesktopCommand.STOP_INPUT_RECORDING].actionPerformed(event())
 
     registry.update(
         DesktopCommandPresentation(
@@ -302,7 +313,17 @@ class DesktopActionsTest {
             inputRecordingPhase = ReplayRecordingPhase.SAVING,
         ))
     assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
-    assertEquals(listOf("record"), calls)
+    assertFalse(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)
+
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            stateBrowserAvailable = true,
+            inputPlaybackPhase = ReplayPlaybackPhase.PLAYING,
+        ))
+    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertFalse(registry[DesktopCommand.LOAD_INPUT_RECORDING].isEnabled)
+    assertEquals(listOf("start-recording", "stop-recording"), calls)
 
     val shortcuts =
         DesktopShortcutRegistry(

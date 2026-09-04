@@ -250,18 +250,7 @@ class ReplayPlayer private constructor(
               restoreImmediately = replay.initialConditions.mode == ReplayInitialMode.EMBEDDED_SESSION_STATE,
           )
       try {
-        if (embeddedState != null) {
-          ReplayCompatibility.applyEmbeddedState(embeddedState, session)
-        }
-        return ReplayPlayer(
-            replay,
-            HeadlessMachineSession(
-                session,
-                replay.initialConditions.initialTick,
-                replay.initialConditions.initialFrame,
-            ),
-            inputSource,
-        )
+        return openForSession(replay, configuration, session, inputSource, embeddedState)
       } catch (failure: Throwable) {
         try {
           session.close()
@@ -270,6 +259,44 @@ class ReplayPlayer private constructor(
         }
         throw failure
       }
+    }
+
+    /**
+     * Binds the validated timeline to a session owned by an interactive controller. The caller
+     * owns that session's lifecycle; unlike [open], this helper never closes it on failure.
+     */
+    internal fun openForSession(
+        replay: ReplayFile,
+        sourceConfiguration: Gameboy.GameboyConfiguration,
+        session: Session,
+        inputSource: ReplayInputSource,
+        validatedEmbeddedState: StateFile? = null,
+    ): ReplayPlayer {
+      ReplayCompatibility.validateIdentity(replay.identity, sourceConfiguration)
+      ReplayCompatibility.validatePlayback(sourceConfiguration)
+      if (replay.initialConditions.initialTick != 0L ||
+          replay.initialConditions.initialFrame != 0L) {
+        throw ReplayPlaybackException(
+            ReplayPlaybackReason.INVALID_INITIAL_POSITION,
+            "CGBR v1 playback requires a frame-aligned zero-based initial position",
+        )
+      }
+      validateTimelineShape(replay, sourceConfiguration.clockSpec.controllerTicksPerFrame())
+      val embeddedState =
+          validatedEmbeddedState
+              ?: replay.embeddedState?.let { ReplayCompatibility.validateEmbeddedState(it, sourceConfiguration) }
+      if (embeddedState != null) {
+        ReplayCompatibility.applyEmbeddedState(embeddedState, session)
+      }
+      return ReplayPlayer(
+          replay,
+          HeadlessMachineSession(
+              session,
+              replay.initialConditions.initialTick,
+              replay.initialConditions.initialFrame,
+          ),
+          inputSource,
+      )
     }
 
     private fun validateTimelineShape(

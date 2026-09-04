@@ -3,7 +3,9 @@ package eu.rekawek.coffeegb.controller.state
 import eu.rekawek.coffeegb.controller.CompatibilitySnapshot
 import eu.rekawek.coffeegb.controller.replay.ReplayArtifactResult
 import eu.rekawek.coffeegb.controller.replay.ReplayArtifactStore
+import eu.rekawek.coffeegb.controller.replay.ReplayCodec
 import eu.rekawek.coffeegb.controller.replay.ReplayFile
+import eu.rekawek.coffeegb.controller.replay.ReplayLimits
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
@@ -23,6 +25,7 @@ internal enum class StateWorkerPurpose {
   AUTOSAVE_STOP,
   AUTOSAVE_CLOSE,
   REPLAY_SAVE,
+  REPLAY_LOAD,
   RESUME_SCAN,
 }
 
@@ -70,6 +73,12 @@ internal sealed interface StateWorkerResult {
   data class Screenshot(val result: StateScreenshotResult) : StateWorkerResult
 
   data class Replay(val result: ReplayArtifactResult) : StateWorkerResult
+
+  /** A fully decoded, bounded replay selected from an explicit desktop file chooser. */
+  data class ReplayLoaded(
+      val path: Path,
+      val replay: ReplayFile,
+  ) : StateWorkerResult
 
   data class Folder(
       val path: Path,
@@ -245,6 +254,23 @@ internal class StateOperationWorker(
         StateWorkerResult.Replay(ReplayArtifactStore(context.workspace.paths.replaysDirectory).save(replay))
       }
 
+  /** Reads a user-selected CGBR file off both the EDT and the emulation owner thread. */
+  fun replayLoad(
+      context: StateWorkerContext,
+      requestId: Long,
+      path: Path,
+  ) =
+      submit(context, requestId, StateOperation.REPLAY_LOAD, StateWorkerPurpose.REPLAY_LOAD) {
+        val normalized = path.toAbsolutePath().normalize()
+        val attributes = Files.readAttributes(normalized, java.nio.file.attribute.BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        require(attributes.isRegularFile) { "Selected replay is not a regular file" }
+        require(!Files.isSymbolicLink(normalized)) { "Selected replay must not be a symbolic link" }
+        require(attributes.size() <= ReplayLimits.MAX_FILE_BYTES.toLong()) {
+          "Selected replay exceeds ${ReplayLimits.MAX_FILE_BYTES} bytes"
+        }
+        StateWorkerResult.ReplayLoaded(normalized, ReplayCodec.decode(Files.readAllBytes(normalized)))
+      }
+
   fun openFolder(context: StateWorkerContext, requestId: Long) =
       submit(context, requestId, StateOperation.OPEN_FOLDER, StateWorkerPurpose.MANUAL) {
         val directory = context.workspace.activeGameDirectory().toAbsolutePath().normalize()
@@ -360,6 +386,7 @@ internal class StateOperationWorker(
           StateOperation.EXPORT -> "State could not be exported."
           StateOperation.SCREENSHOT -> "Screenshot could not be saved."
           StateOperation.REPLAY_SAVE -> "Input recording could not be saved."
+          StateOperation.REPLAY_LOAD -> "Input recording could not be loaded."
           StateOperation.OPEN_FOLDER -> "Save folder could not be prepared."
           StateOperation.PREPARE_CLOSE -> "Close autosave could not be completed."
         }
@@ -387,6 +414,8 @@ internal class StateOperationWorker(
           StateOperation.REPLAY_SAVE ->
               "Check that the configured save directory is writable and has free space. " +
                   "The finished input recording remains available for retry."
+          StateOperation.REPLAY_LOAD ->
+            "Select a regular .cgbreplay file that matches the currently open ROM, then retry."
           StateOperation.LOAD, StateOperation.RESUME ->
             "Keep the running game open, inspect or export the state, and delete it only if it " +
                 "is no longer needed."
@@ -438,7 +467,9 @@ private data class StateQueuedWork(
           StateWorkerPurpose.AUTOSAVE_ROM_SWITCH,
           StateWorkerPurpose.AUTOSAVE_STOP,
           StateWorkerPurpose.REPLAY_SAVE -> 1
-          StateWorkerPurpose.MANUAL, StateWorkerPurpose.RESUME_SCAN -> 2
+          StateWorkerPurpose.MANUAL,
+          StateWorkerPurpose.REPLAY_LOAD,
+          StateWorkerPurpose.RESUME_SCAN -> 2
         }
 
   val coalescingKey: Pair<Long, StateOperation>?

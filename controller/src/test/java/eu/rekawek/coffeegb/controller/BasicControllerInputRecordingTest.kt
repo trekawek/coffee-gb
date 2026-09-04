@@ -5,6 +5,9 @@ import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.replay.ReplayCodec
 import eu.rekawek.coffeegb.controller.replay.ReplayInitialMode
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackLoadRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayPlaybackStatusEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingMode
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingSavedEvent
@@ -44,9 +47,11 @@ class BasicControllerInputRecordingTest {
     val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
     val statuses = LinkedBlockingQueue<ReplayRecordingStatusEvent>()
     val saved = LinkedBlockingQueue<ReplayRecordingSavedEvent>()
+    val playback = LinkedBlockingQueue<ReplayPlaybackStatusEvent>()
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<ReplayRecordingStatusEvent>(statuses::add)
     eventBus.register<ReplayRecordingSavedEvent>(saved::add)
+    eventBus.register<ReplayPlaybackStatusEvent>(playback::add)
     val controller = BasicController(eventBus, properties, null)
     controller.startController()
     try {
@@ -77,6 +82,22 @@ class BasicControllerInputRecordingTest {
       assertEquals(ReplayInitialMode.EMBEDDED_SESSION_STATE, replay.initialConditions.mode)
       assertNotNull(replay.embeddedState)
       assertTrue(artifact.path.parent.fileName.toString() == "replays")
+
+      eventBus.post(ReplayPlaybackLoadRequestEvent(3, session.sessionId, artifact.path))
+      assertEquals(
+          ReplayPlaybackPhase.PLAYING,
+          await(playback) { it.phase == ReplayPlaybackPhase.PLAYING }.phase,
+      )
+      assertEquals(
+          ReplayPlaybackPhase.COMPLETED,
+          await(playback) { it.phase == ReplayPlaybackPhase.COMPLETED }.phase,
+      )
+
+      eventBus.post(Controller.RewindEvent(true))
+      assertEquals(
+          ReplayPlaybackPhase.COMPLETED,
+          await(playback) { it.message?.contains("Rewind is unavailable") == true }.phase,
+      )
     } finally {
       controller.close()
       eventBus.close()

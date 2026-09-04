@@ -786,7 +786,9 @@ internal class SwingProposal3Menu(
                 item("import-state-0", "IMPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
                 item("export-state-0", "EXPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
                 item("export-screenshot", "EXPORT NATIVE SCREENSHOT", enabled(DesktopCommand.SCREENSHOT)),
-                item("input-recording", "INPUT RECORDING", enabled(DesktopCommand.INPUT_RECORDING)),
+                item("start-input-recording", "START INPUT RECORDING", enabled(DesktopCommand.INPUT_RECORDING)),
+                item("stop-input-recording", "STOP INPUT RECORDING", enabled(DesktopCommand.STOP_INPUT_RECORDING)),
+                item("load-input-recording", "LOAD INPUT RECORDING", enabled(DesktopCommand.LOAD_INPUT_RECORDING)),
                 item("preview-printer-paper", "PRINTER PAPER", printerHasPaper),
                 item("back", "BACK", true),
             )
@@ -1123,7 +1125,9 @@ internal class SwingProposal3Menu(
           when (id) {
             "import-state-0", "export-state-0" -> runCommandAndHide(DesktopCommand.MANAGE_STATES)
             "export-screenshot" -> runCommandAndHide(DesktopCommand.SCREENSHOT)
-            "input-recording" -> runCommandAndHide(DesktopCommand.INPUT_RECORDING)
+            "start-input-recording" -> runCommandAndHide(DesktopCommand.INPUT_RECORDING)
+            "stop-input-recording" -> runCommandAndHide(DesktopCommand.STOP_INPUT_RECORDING)
+            "load-input-recording" -> runCommandAndHide(DesktopCommand.LOAD_INPUT_RECORDING)
             "preview-printer-paper" -> openRoute(MenuRoute.PRINTER_PAPER)
             "back" -> back()
           }

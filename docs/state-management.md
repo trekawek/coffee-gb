@@ -172,10 +172,16 @@ with no selected mode:
   cartridge save state. That clean session continues to avoid reading or writing the ordinary
   battery/autosave files until the game is loaded normally again.
 
-The command becomes **Stop Input Recording** while active. The recorder writes the finished artifact
+**Screen > Stop Input Recording** is enabled while capture is arming or active. The recorder writes the finished artifact
 away from both the emulation and Swing threads to `replays/` as
-`coffee-gb-YYYYMMDD-HHmmss-SSS[-N].cgbreplay`; collisions never overwrite an existing file. CLI
-playback is documented in [headless-cli.md](headless-cli.md).
+`coffee-gb-YYYYMMDD-HHmmss-SSS[-N].cgbreplay`; collisions never overwrite an existing file.
+
+To play one, open the matching ROM and choose **Screen > Load Input Recording…**. Coffee GB reads
+and validates the selected bounded `.cgbreplay` off the Swing and emulation threads, autosaves the
+currently open session, then presents the recording in an isolated, read-only session. Live inputs,
+battery saves, peripherals, managed states, and rewind are disabled during playback. Playback pauses
+at the final matching checkpoint; close or reopen the game to return to normal play. CLI playback is
+also documented in [headless-cli.md](headless-cli.md).
 
 Replay v1 represents one forward input timeline. Rewind is therefore disabled while a recording is
 arming or active; it becomes available again after stopping. State loads, reset, ROM changes, pause,
