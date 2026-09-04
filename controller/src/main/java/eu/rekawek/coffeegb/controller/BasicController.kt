@@ -16,6 +16,24 @@ import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkBackend
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkError as BackendNetworkError
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkPhase as BackendNetworkPhase
 import eu.rekawek.coffeegb.controller.mobile.network.MobileAdapterNetworkStatus
+import eu.rekawek.coffeegb.controller.replay.ReplayArtifactResult
+import eu.rekawek.coffeegb.controller.replay.ReplayCompatibilityException
+import eu.rekawek.coffeegb.controller.replay.ReplayFile
+import eu.rekawek.coffeegb.controller.replay.ReplayInitialMode
+import eu.rekawek.coffeegb.controller.replay.ReplayMetadata
+import eu.rekawek.coffeegb.controller.replay.ReplayRecorder
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingException
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingDiscardEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingFailedEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingMode
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingSavedEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStartRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStatusEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStopRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingRetrySaveEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingOptions
+import eu.rekawek.coffeegb.controller.replay.ReplayRuntime
 import eu.rekawek.coffeegb.controller.properties.ApplicationSettings
 import eu.rekawek.coffeegb.controller.properties.EmulatorProperties
 import eu.rekawek.coffeegb.controller.state.BatteryStorageResolver
@@ -111,11 +129,13 @@ import eu.rekawek.coffeegb.core.joypad.Button
 import eu.rekawek.coffeegb.core.joypad.ButtonPressEvent
 import eu.rekawek.coffeegb.core.joypad.ButtonReleaseEvent
 import eu.rekawek.coffeegb.core.joypad.JoypadButtonMask
+import eu.rekawek.coffeegb.core.joypad.PlayerInputSnapshot
 import eu.rekawek.coffeegb.core.memory.cart.Cartridge
 import eu.rekawek.coffeegb.core.memory.cart.CartridgeProperties
 import eu.rekawek.coffeegb.core.memory.cart.Rom
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryFlush
 import eu.rekawek.coffeegb.core.memory.cart.battery.BatteryPersistenceResult
+import eu.rekawek.coffeegb.core.memory.cart.rtc.VirtualTimeSource
 import eu.rekawek.coffeegb.core.serial.BarcodeBoySerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GameboyPrinterSerialEndpoint
 import eu.rekawek.coffeegb.core.serial.GpsDataSource
@@ -134,6 +154,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import org.slf4j.Logger
@@ -431,6 +452,23 @@ class BasicController private constructor(
 
   private var session: Session? = null
 
+  /** The sole live deterministic input recorder. It may be accessed only by [thread]. */
+  private var replayRecording: ActiveReplayRecording? = null
+
+  /** A start request that is waiting for the activation key/gamepad input to be released. */
+  private var armedReplayRecording: ArmedReplayRecording? = null
+
+  /** A finished replay retained until its bounded artifact write succeeds or is explicitly discarded. */
+  private var pendingReplayArtifact: PendingReplayArtifact? = null
+
+  /** Set while the ordinary ROM replacement pipeline constructs a clean boot recorder session. */
+  private var pendingCleanBootReplay: PendingCleanBootReplay? = null
+
+  /** Clean boot sessions never replace the user's normal battery or autosave implicitly. */
+  private var cleanBootReplaySession = false
+
+  private var nextReplayRecordingId = 1L
+
   private var snapshotManager: SnapshotManager? = null
 
   private var stateContext: StateWorkerContext? = null
@@ -539,8 +577,15 @@ class BasicController private constructor(
 
   init {
     require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
-    eventQueue.register<AddPatches> { patches.addAll(it.patches) }
-    eventQueue.register<Controller.LoadRomEvent> { requestLoadWithAutosave(properties, it) }
+    eventQueue.register<AddPatches> {
+      finishReplayRecording("Cheats changed")
+      patches.addAll(it.patches)
+    }
+    eventQueue.register<Controller.LoadRomEvent> {
+      cancelPendingCleanBootReplay("Clean-boot input recording was cancelled by another game load.")
+      finishReplayRecording("The game session changed")
+      requestLoadWithAutosave(properties, it)
+    }
     eventQueue.register<Controller.CancelRomOpenEvent> { cancelOpenRequest(it.openRequestId) }
     eventQueue.register<Controller.RetryRomReplacementEvent> { retryPersistence(it.requestId) }
     eventQueue.register<Controller.CancelRomReplacementEvent> { cancelPersistence(it.requestId) }
@@ -556,6 +601,17 @@ class BasicController private constructor(
     eventQueue.register<StateDeleteRequestEvent> { requestStateDelete(it) }
     eventQueue.register<StateExportRequestEvent> { requestStateExport(it) }
     eventQueue.register<StateScreenshotRequestEvent> { requestScreenshot(it) }
+    eventQueue.register<ReplayRecordingStartRequestEvent> { requestReplayRecording(it) }
+    eventQueue.register<ReplayRecordingStopRequestEvent> { stopReplayRecording(it) }
+    eventQueue.register<ReplayRecordingRetrySaveEvent> { retryReplayArtifactSave(it) }
+    eventQueue.register<ReplayRecordingDiscardEvent> { discardReplayArtifact(it) }
+    eventQueue.register<ReplayRecordingCloseBarrierEvent> { event ->
+      try {
+        finishReplayRecording("Coffee GB is closing")
+      } finally {
+        event.completed.countDown()
+      }
+    }
     eventQueue.register<StateOpenFolderRequestEvent> { requestOpenStateFolder(it) }
     eventQueue.register<StateResumeDecisionEvent> { applyResumeDecision(it) }
     eventQueue.register<StatePrepareCloseRequestEvent> { prepareClose(it) }
@@ -586,6 +642,7 @@ class BasicController private constructor(
     }
     eventQueue.register<StateWorkerCompletedEvent> { finishStateWorkerRequest(it) }
     eventQueue.register<Controller.PauseEmulationEvent> {
+      finishReplayRecording("Emulation was paused")
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = true
       } else if (pauseStateBeforeResume != null) {
@@ -798,6 +855,17 @@ class BasicController private constructor(
     }
     eventQueue.register<Controller.FlushBatteryEvent> { requestBatteryFlush(it) }
     eventQueue.register<Controller.RewindEvent> {
+      if (replayRecording != null || armedReplayRecording != null || pendingCleanBootReplay != null) {
+        if (it.active) {
+          postReplayRecordingStatus(
+              if (replayRecording != null) ReplayRecordingPhase.RECORDING
+              else ReplayRecordingPhase.ARMING,
+              "Rewind is unavailable while recording inputs.",
+          )
+        }
+        isRewinding = false
+        return@register
+      }
       // Disabled rewind is a real no-work mode: the key cannot freeze forward emulation and
       // runFrame never reaches a machine capture.
       if (rewindManager.enabled && it.active && !isRewinding) {
@@ -817,6 +885,7 @@ class BasicController private constructor(
       session?.gameboy?.requestFrameRenderSuppression(false)
     }
     eventQueue.register<SgbDisplay.SetSgbBorder> {
+      finishReplayRecording("The Super Game Boy border setting changed")
       // The display consumes the same event on its session bus. Keep the configuration identity
       // synchronized at this frame boundary so later portable captures describe the live option.
       session?.config?.let { config ->
@@ -828,6 +897,7 @@ class BasicController private constructor(
       }
     }
     eventQueue.register<Controller.ResetEmulationEvent> {
+      finishReplayRecording("The game was reset")
       if (hasMobileAdapterExternalIo()) {
         postMobileAdapterStateBoundary(Controller.MobileAdapterStateBoundary.RESET)
         disconnectMobileAdapter(Controller.MobileAdapterDisconnectReason.PROTOCOL_RESET)
@@ -845,9 +915,11 @@ class BasicController private constructor(
       }
     }
     eventQueue.register<Controller.StopEmulationEvent> {
+      finishReplayRecording("The game was closed")
       requestStop()
     }
     eventQueue.register<Controller.SetSerialPeripheralEvent> {
+      finishReplayRecording("The link-port device changed")
       selectSerialPeripheral(it.selection)
     }
     eventBus.register<Controller.RefreshMobileAdapterConfigurationEvent> { event ->
@@ -878,6 +950,7 @@ class BasicController private constructor(
       )
     }
     eventQueue.register<Controller.UpdatedSystemMappingEvent> {
+      finishReplayRecording("The system configuration changed")
       session?.config?.let { config ->
         val newProfile = Controller.getHardwareProfile(properties.system, config.rom)
         val newBootstrapMode = properties.system.bootstrapMode
@@ -928,6 +1001,7 @@ class BasicController private constructor(
     finishReplacement()
     finishStop()
     finishBatteryFlush()
+    startArmedReplayRecordingIfReady()
 
     val benchmarkExecutionFrozen =
         properties.overrides.benchmarkPolicyEnabled && benchmarkArmed
@@ -981,6 +1055,7 @@ class BasicController private constructor(
             debugPort == null &&
             debugInstrumentation == null &&
             !debugCheckpointHistory.enabled &&
+            replayRecording == null &&
             !properties.overrides.benchmarkPolicyEnabled &&
             !timingTicker.disabled &&
             timingTicker.hasPacingDebt,
@@ -1022,7 +1097,7 @@ class BasicController private constructor(
             if (trackDebugHistory) {
               tickWithDebugHistory(gameboy, frameTicks)
             } else {
-              gameboy.tick()
+              tickReplayAware(gameboy)
             }
             emulatedTicks++
           }
@@ -1239,7 +1314,7 @@ class BasicController private constructor(
           if (debugCheckpointHistory.enabled) {
             tickWithDebugHistory(gameboy, frameTicks)
           } else {
-            gameboy.tick()
+            tickReplayAware(gameboy)
           }
           debugMasterTick = Math.addExact(debugMasterTick, 1L)
           debugFramePosition++
@@ -1276,7 +1351,7 @@ class BasicController private constructor(
     val retirement = gameboy.debugRetirementSequence
     debugCheckpointHistory.onTickStarted(isEffectivelyPaused())
     try {
-      gameboy.tick()
+      tickReplayAware(gameboy)
     } catch (failure: Throwable) {
       debugCheckpointHistory.abortTick()
       throw failure
@@ -1285,6 +1360,32 @@ class BasicController private constructor(
         gameboy.debugRetirementSequence != retirement,
         frameTicks,
     )
+  }
+
+  /** Keeps recorder ownership in one place so no controller tick path can bypass it. */
+  private fun tickReplayAware(gameboy: Gameboy) {
+    val active = replayRecording
+    if (active == null) {
+      gameboy.tick()
+      return
+    }
+    try {
+      active.recorder.tick()
+      if (active.recorder.frameCount > 0L && active.recorder.frameCount % 60L == 0L &&
+          active.recorder.tickCount % gameboy.clockSpec.controllerTicksPerFrame().toLong() == 0L) {
+        postReplayRecordingStatus(ReplayRecordingPhase.RECORDING)
+      }
+    } catch (failure: Throwable) {
+      replayRecording = null
+      postReplayRecordingFailure(
+          null,
+          active.sessionId,
+          active.mode,
+          "Input recording stopped without a saved file.",
+          replayRecordingDetail(failure),
+          recoverable = false,
+      )
+    }
   }
 
   private fun recordCompletedFrame() {
@@ -2206,6 +2307,7 @@ class BasicController private constructor(
             event.expectedSessionId,
             StateOperation.LOAD,
         ) ?: return
+    finishReplayRecording("A state load begins a new input timeline")
     latestStateRequests[StateOperation.LOAD] = event.requestId
     stateWorker.load(
         context,
@@ -2222,6 +2324,7 @@ class BasicController private constructor(
             event.expectedSessionId,
             StateOperation.LOAD,
         ) ?: return
+    finishReplayRecording("A state load begins a new input timeline")
     latestStateRequests[StateOperation.LOAD] = event.requestId
     val compatibilityManager = snapshotManager
     stateWorker.loadFirst(context, event.requestId, event.ref) {
@@ -2283,6 +2386,347 @@ class BasicController private constructor(
         ) ?: return
     latestStateRequests[StateOperation.SCREENSHOT] = event.requestId
     stateWorker.screenshot(context, event.requestId, event.image)
+  }
+
+  private fun requestReplayRecording(event: ReplayRecordingStartRequestEvent) {
+    if (replayRecording != null || armedReplayRecording != null || pendingReplayArtifact != null) {
+      postReplayRecordingFailure(
+          event.requestId,
+          stateSessionId,
+          event.mode,
+          "An input recording is already active or waiting to be saved.",
+          "Stop the current recording and wait for it to save before starting another one.",
+          recoverable = pendingReplayArtifact != null,
+      )
+      return
+    }
+    val currentSession = session
+    val context = stateContext
+    if (currentSession == null || context == null || event.expectedSessionId != context.sessionId) {
+      postReplayRecordingFailure(
+          event.requestId,
+          context?.sessionId,
+          event.mode,
+          "Input recording is unavailable for this game.",
+          "Keep one standalone game open with a writable save workspace, then try again.",
+          recoverable = false,
+      )
+      return
+    }
+    if (event.mode == ReplayRecordingMode.CLEAN_BOOT) {
+      requestCleanBootReplay(event, currentSession)
+      return
+    }
+    if (isEffectivelyPaused() || isRewinding || debugCheckpointHistory.enabled) {
+      postReplayRecordingFailure(
+          event.requestId,
+          context.sessionId,
+          event.mode,
+          "Input recording must start while normal emulation is running.",
+          "Resume the game, release Rewind, and close reverse-debug history before trying again.",
+          recoverable = false,
+      )
+      return
+    }
+    armedReplayRecording = ArmedReplayRecording(event, context.sessionId)
+    postReplayRecordingStatus(ReplayRecordingPhase.ARMING, "Release controller inputs to start recording.")
+  }
+
+  private fun requestCleanBootReplay(
+      event: ReplayRecordingStartRequestEvent,
+      currentSession: Session,
+  ) {
+    if (currentSession.config.rom.image == null) {
+      postReplayRecordingFailure(
+          event.requestId,
+          stateSessionId,
+          event.mode,
+          "Clean-boot recording is unavailable for this game.",
+          "The current ROM cannot be reopened as an isolated clean session.",
+          recoverable = false,
+      )
+      return
+    }
+    pendingCleanBootReplay =
+        PendingCleanBootReplay(
+            request = event,
+            rtcEpochMillis = ReplayRecordingOptions.DEFAULT_RTC_EPOCH_MILLIS,
+        )
+    postReplayRecordingStatus(
+        ReplayRecordingPhase.ARMING,
+        "Saving the current session, then restarting from a clean boot.",
+    )
+    requestLoadWithAutosave(
+        properties,
+        Controller.LoadRomEvent(
+            image = checkNotNull(currentSession.config.rom.image),
+            persistenceStore = currentPersistenceStore,
+            allowAutosaveResume = false,
+        ),
+    )
+  }
+
+  /** Starts a current-session recorder only after activation input has fully released. */
+  private fun startArmedReplayRecordingIfReady() {
+    val armed = armedReplayRecording ?: return
+    val currentSession = session
+    val context = stateContext
+    if (currentSession == null || context == null || context.sessionId != armed.sessionId) {
+      armedReplayRecording = null
+      postReplayRecordingFailure(
+          armed.request.requestId,
+          context?.sessionId,
+          armed.request.mode,
+          "Input recording could not start.",
+          "The active game changed before recording began.",
+          recoverable = false,
+      )
+      return
+    }
+    if (currentSession.gameboy.sampledPlayerInput != PlayerInputSnapshot.released()) {
+      return
+    }
+    armedReplayRecording = null
+    startReplayRecording(
+        currentSession,
+        context,
+        armed.request.mode,
+        initialMode = ReplayInitialMode.EMBEDDED_SESSION_STATE,
+        includeSensitiveInitialState = armed.request.includeSensitiveInitialState,
+        rtcEpochMillis = ReplayRecordingOptions.DEFAULT_RTC_EPOCH_MILLIS,
+        requestId = armed.request.requestId,
+    )
+  }
+
+  private fun startCleanBootReplayRecordingIfPending(currentSession: Session) {
+    val pending = pendingCleanBootReplay ?: return
+    val context = stateContext ?: return
+    if (replayRecording != null || context.sessionId <= 0L) return
+    pendingCleanBootReplay = null
+    startReplayRecording(
+        currentSession,
+        context,
+        ReplayRecordingMode.CLEAN_BOOT,
+        initialMode = ReplayInitialMode.BOOT_REFERENCE,
+        includeSensitiveInitialState = false,
+        rtcEpochMillis = pending.rtcEpochMillis,
+        requestId = pending.request.requestId,
+    )
+    cleanBootReplaySession = replayRecording?.mode == ReplayRecordingMode.CLEAN_BOOT
+  }
+
+  private fun startReplayRecording(
+      currentSession: Session,
+      context: StateWorkerContext,
+      mode: ReplayRecordingMode,
+      initialMode: ReplayInitialMode,
+      includeSensitiveInitialState: Boolean,
+      rtcEpochMillis: Long,
+      requestId: Long,
+  ) {
+    try {
+      if (initialMode == ReplayInitialMode.EMBEDDED_SESSION_STATE) {
+        ensureReplaySerialEndpoint(currentSession)
+      }
+      val recorder =
+          ReplayRecorder.start(
+              currentSession,
+              ReplayRecordingOptions(
+                  initialMode = initialMode,
+                  includeSensitiveInitialState = includeSensitiveInitialState,
+                  rtcEpochMillis = rtcEpochMillis,
+                  metadata =
+                      ReplayMetadata(
+                          producerVersion = "Coffee GB",
+                          createdAtEpochMillis = System.currentTimeMillis(),
+                      ),
+              ),
+          )
+      replayRecording =
+          ActiveReplayRecording(
+              id = nextReplayRecordingId++,
+              sessionId = context.sessionId,
+              mode = mode,
+              recorder = recorder,
+          )
+      postReplayRecordingStatus(ReplayRecordingPhase.RECORDING)
+    } catch (failure: Throwable) {
+      postReplayRecordingFailure(
+          requestId,
+          context.sessionId,
+          mode,
+          "Input recording could not start.",
+          replayRecordingDetail(failure),
+          recoverable = false,
+      )
+    }
+  }
+
+  /** Normalizes only Coffee GB's inactive default link cable; real peripherals require user action. */
+  private fun ensureReplaySerialEndpoint(currentSession: Session) {
+    if (currentSession.serialEndpoint === SerialEndpoint.NULL_ENDPOINT) return
+    val peer = currentSession.serialEndpoint as? Peer2PeerSerialEndpoint
+    if (serialPeripheralSelection == Controller.SerialPeripheralSelection.PEER_TO_PEER &&
+        peer != null && !peer.isConnected) {
+      selectSerialPeripheral(Controller.SerialPeripheralSelection.NONE)
+      return
+    }
+    throw ReplayCompatibilityException(
+        eu.rekawek.coffeegb.controller.replay.ReplayCompatibilityReason.UNSUPPORTED_SERIAL_PERIPHERAL,
+        "Input recording requires an empty link port. Select None in the Peripherals menu.",
+    )
+  }
+
+  private fun stopReplayRecording(event: ReplayRecordingStopRequestEvent) {
+    val pendingCleanBoot = pendingCleanBootReplay
+    if (pendingCleanBoot != null &&
+        pendingCleanBoot.request.expectedSessionId == event.expectedSessionId) {
+      pendingCleanBootReplay = null
+      cancelPendingRomSwitch()
+      cancelLoadJob()
+      discardReplacement(restorePause = true)
+      postReplayRecordingStatus(
+          ReplayRecordingPhase.IDLE,
+          "Clean-boot input recording was cancelled before it started.",
+      )
+      return
+    }
+    val armed = armedReplayRecording
+    if (armed != null && armed.sessionId == event.expectedSessionId) {
+      armedReplayRecording = null
+      postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "Input recording was cancelled before it started.")
+      return
+    }
+    val active = replayRecording
+    if (active == null || active.sessionId != event.expectedSessionId) {
+      return
+    }
+    finishReplayRecording("Input recording stopped")
+  }
+
+  private fun retryReplayArtifactSave(event: ReplayRecordingRetrySaveEvent) {
+    val pending = pendingReplayArtifact ?: return
+    if (pending.sessionId != event.expectedSessionId) return
+    submitReplayArtifact(pending, "Retrying input recording save")
+  }
+
+  private fun discardReplayArtifact(event: ReplayRecordingDiscardEvent) {
+    val pending = pendingReplayArtifact ?: return
+    if (pending.sessionId != event.expectedSessionId) return
+    pendingReplayArtifact = null
+    postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "Unsaved input recording was discarded.")
+  }
+
+  /** Ends a linear recording before a lifecycle boundary can restore or mutate machine state. */
+  private fun finishReplayRecording(reason: String) {
+    pendingCleanBootReplay?.let {
+      pendingCleanBootReplay = null
+      postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "$reason before clean-boot recording began.")
+    }
+    armedReplayRecording?.let {
+      armedReplayRecording = null
+      postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "$reason before recording began.")
+    }
+    val active = replayRecording ?: return
+    replayRecording = null
+    val completed =
+        try {
+          active.recorder.finish()
+        } catch (failure: ReplayRecordingException) {
+          if (failure.reason == eu.rekawek.coffeegb.controller.replay.ReplayRecordingReason.NO_EXECUTED_TICKS) {
+            active.recorder.close()
+            postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "No input recording was saved.")
+            return
+          }
+          postReplayRecordingFailure(
+              null,
+              active.sessionId,
+              active.mode,
+              "Input recording stopped without a saved file.",
+              replayRecordingDetail(failure),
+              recoverable = false,
+          )
+          return
+        } catch (failure: Throwable) {
+          postReplayRecordingFailure(
+              null,
+              active.sessionId,
+              active.mode,
+              "Input recording stopped without a saved file.",
+              replayRecordingDetail(failure),
+              recoverable = false,
+          )
+          return
+        }
+    val context = stateContext
+    if (context == null) {
+      postReplayRecordingFailure(
+          null,
+          active.sessionId,
+          active.mode,
+          "Input recording could not be saved.",
+          "The game save workspace is no longer available.",
+          recoverable = false,
+      )
+      return
+    }
+    val pending =
+        PendingReplayArtifact(
+            active.id,
+            active.sessionId,
+            active.mode,
+            context,
+            completed,
+            active.recorder.tickCount,
+            active.recorder.frameCount,
+        )
+    pendingReplayArtifact = pending
+    submitReplayArtifact(pending, reason)
+  }
+
+  private fun cancelPendingCleanBootReplay(message: String) {
+    if (pendingCleanBootReplay == null) return
+    pendingCleanBootReplay = null
+    postReplayRecordingStatus(ReplayRecordingPhase.IDLE, message)
+  }
+
+  private fun submitReplayArtifact(pending: PendingReplayArtifact, reason: String) {
+    val requestId = nextInternalStateRequestId()
+    pending.requestId = requestId
+    postReplayRecordingStatus(ReplayRecordingPhase.SAVING, reason)
+    stateWorker.replay(pending.context, requestId, pending.replay)
+  }
+
+  private fun replayRecordingDetail(failure: Throwable): String =
+      when (failure) {
+        is ReplayCompatibilityException, is ReplayRecordingException -> failure.message ?: failure.javaClass.simpleName
+        else -> "The recorder reported ${failure.javaClass.simpleName}."
+      }
+
+  private fun postReplayRecordingStatus(
+      phase: ReplayRecordingPhase,
+      message: String? = null,
+  ) {
+    val active = replayRecording
+    val pending = pendingReplayArtifact
+    val armed = armedReplayRecording
+    val recordingId = active?.id ?: pending?.id
+    val sessionId = active?.sessionId ?: pending?.sessionId ?: armed?.sessionId
+    val mode = active?.mode ?: pending?.mode ?: armed?.request?.mode
+    val ticks = active?.recorder?.tickCount ?: pending?.tickCount ?: 0L
+    val frames = active?.recorder?.frameCount ?: pending?.frameCount ?: 0L
+    eventBus.post(ReplayRecordingStatusEvent(recordingId, sessionId, mode, phase, ticks, frames, message))
+  }
+
+  private fun postReplayRecordingFailure(
+      requestId: Long?,
+      sessionId: Long?,
+      mode: ReplayRecordingMode?,
+      summary: String,
+      detail: String,
+      recoverable: Boolean,
+  ) {
+    eventBus.post(ReplayRecordingFailedEvent(requestId, sessionId, mode, summary, detail, recoverable))
   }
 
   private fun requestOpenStateFolder(event: StateOpenFolderRequestEvent) {
@@ -2377,6 +2821,11 @@ class BasicController private constructor(
     cancelPendingRomSwitch(restorePause = true)
     val currentSession = session
     val context = stateContext
+    if (cleanBootReplaySession && currentSession != null) {
+      // A clean-boot replay session deliberately cannot replace the user's normal autosave.
+      requestLoad(properties, event)
+      return
+    }
     val autosaveRequired = currentSession != null
     if (!autosaveRequired) {
       requestLoad(properties, event)
@@ -2456,6 +2905,10 @@ class BasicController private constructor(
   }
 
   private fun finishStateWorkerRequest(event: StateWorkerCompletedEvent) {
+    if (event.operation == StateOperation.REPLAY_SAVE) {
+      finishReplayArtifactSave(event)
+      return
+    }
     val context = stateContext
     if (context == null ||
         event.context.sessionId != context.sessionId) {
@@ -2565,7 +3018,49 @@ class BasicController private constructor(
             ))
       }
       is StateWorkerResult.Resume -> finishResumeScan(event, result)
+      is StateWorkerResult.Replay -> error("Replay saves are handled above")
       is StateWorkerResult.Failure -> error("Handled above")
+    }
+  }
+
+  private fun finishReplayArtifactSave(event: StateWorkerCompletedEvent) {
+    val pending = pendingReplayArtifact ?: return
+    if (pending.requestId != event.requestId) return
+    when (val result = event.result) {
+      is StateWorkerResult.Replay -> {
+        pendingReplayArtifact = null
+        eventBus.post(
+            ReplayRecordingSavedEvent(
+                pending.id,
+                result.result.path,
+                pending.mode,
+                pending.tickCount,
+                pending.frameCount,
+            ))
+        postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "Input recording saved as ${result.result.path.fileName}.")
+      }
+      is StateWorkerResult.Failure -> {
+        postReplayRecordingStatus(ReplayRecordingPhase.UNSAVED, "Input recording was not saved.")
+        postReplayRecordingFailure(
+            null,
+            pending.sessionId,
+            pending.mode,
+            "Input recording could not be saved.",
+            result.error.detail,
+            recoverable = true,
+        )
+      }
+      else -> {
+        postReplayRecordingStatus(ReplayRecordingPhase.UNSAVED, "Input recording was not saved.")
+        postReplayRecordingFailure(
+            null,
+            pending.sessionId,
+            pending.mode,
+            "Input recording could not be saved.",
+            "The state worker returned an unexpected result.",
+            recoverable = true,
+        )
+      }
     }
   }
 
@@ -2662,6 +3157,7 @@ class BasicController private constructor(
             ))
       }
       StateWorkerPurpose.RESUME_SCAN -> Unit
+      StateWorkerPurpose.REPLAY_SAVE -> error("Replay saves use their own completion path")
     }
   }
 
@@ -2718,6 +3214,7 @@ class BasicController private constructor(
             }
         if (latest) postStateFailure(event.requestId, event.operation, error)
       }
+      StateWorkerPurpose.REPLAY_SAVE -> error("Replay saves use their own completion path")
     }
   }
 
@@ -3199,13 +3696,32 @@ class BasicController private constructor(
     loadJob = null
 
     try {
-      beginReplacement(job, job.task.take())
+      beginReplacement(job, cleanBootPreparedSessionIfRequested(job.task.take()))
     } catch (_: CancellationException) {
       restorePauseStateAfterLoading()
     } catch (e: ExecutionException) {
       reportLoadFailure(job.event, e.cause ?: e)
     } catch (e: Exception) {
       reportLoadFailure(job.event, e)
+    }
+  }
+
+  /** Reuses the ordinary autosave/replacement transaction, but never loads a user battery save. */
+  private fun cleanBootPreparedSessionIfRequested(prepared: PreparedSession): PreparedSession {
+    val pending = pendingCleanBootReplay ?: return prepared
+    return try {
+      val cleanConfig =
+          ReplayRuntime.configuration(
+              prepared.config,
+              VirtualTimeSource(pending.rtcEpochMillis),
+              prepared.config.playerInputSource,
+              ExecutionMode.ACCURACY,
+          )
+      // A CGBR boot reference requires a physically empty port from the first machine tick.
+      serialPeripheralSelection = Controller.SerialPeripheralSelection.NONE
+      PreparedSession.Deferred(cleanConfig, StateIdentity.hashes(cleanConfig), prepared.stateStore)
+    } finally {
+      prepared.discard()
     }
   }
 
@@ -3357,6 +3873,13 @@ class BasicController private constructor(
     pauseStateBeforeLoading = null
     val currentSession = session
     if (currentSession == null) {
+      isPaused = false
+      return
+    }
+
+    if (cleanBootReplaySession) {
+      setPaused(true)
+      stop()
       isPaused = false
       return
     }
@@ -3728,6 +4251,17 @@ class BasicController private constructor(
   }
 
   private fun reportLoadFailure(event: Controller.LoadRomEvent, error: Throwable) {
+    pendingCleanBootReplay?.let { pending ->
+      pendingCleanBootReplay = null
+      postReplayRecordingFailure(
+          pending.request.requestId,
+          stateSessionId.takeIf { it > 0L },
+          ReplayRecordingMode.CLEAN_BOOT,
+          "Clean-boot input recording could not start.",
+          replayRecordingDetail(error),
+          recoverable = false,
+      )
+    }
     LOG.error("Can't load ROM ${event.rom}", error)
     val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
     eventBus.post(
@@ -3798,6 +4332,9 @@ class BasicController private constructor(
   }
 
   private fun setDebugPaused(paused: Boolean) {
+    if (paused && !debugPaused) {
+      finishReplayRecording("The debugger paused emulation")
+    }
     if (paused) {
       disableBenchmarkAudioCalendar()
     }
@@ -4482,6 +5019,7 @@ class BasicController private constructor(
       allowAutosaveResume: Boolean = true,
   ) {
     val session = session ?: return
+    cleanBootReplaySession = pendingCleanBootReplay != null
 
     // A newly committed session never inherits the transient host calendar from a replaced
     // machine, even when the controller was already paused and no pause transition is emitted.
@@ -4545,6 +5083,8 @@ class BasicController private constructor(
               )
           null
         }
+
+    startCleanBootReplayRecordingIfPending(session)
 
     if ((properties.overrides.benchmarkPolicyEnabled ||
             session.config.bootstrapMode == Gameboy.BootstrapMode.FAST_FORWARD) &&
@@ -4635,9 +5175,20 @@ class BasicController private constructor(
         throw IllegalStateException("Bootstrap did not reach the cartridge handoff")
       }
       val chunk = minOf(remaining, PRESENTATION_BOOTSTRAP_CHUNK_TICKS.toLong()).toInt()
-      val executed = gameboy.runTicksUntilStop(chunk) {
-        doStop || session !== currentSession || gameboy.isBootstrapReady()
-      }
+      val executed =
+          if (replayRecording != null) {
+            var ticks = 0
+            while (ticks < chunk && !doStop && session === currentSession &&
+                !gameboy.isBootstrapReady()) {
+              tickReplayAware(gameboy)
+              ticks++
+            }
+            ticks
+          } else {
+            gameboy.runTicksUntilStop(chunk) {
+              doStop || session !== currentSession || gameboy.isBootstrapReady()
+            }
+          }
       remaining -= executed.toLong()
       if (executed == 0 && !gameboy.isBootstrapReady()) {
         if (doStop || session !== currentSession) {
@@ -4832,6 +5383,7 @@ class BasicController private constructor(
       closeDeadlineNanos: Long? = null,
   ) {
     val session = session ?: return
+    cleanBootReplaySession = false
     // Stop is also used by terminal close paths that may bypass a visible pause transition.
     // Clear the transient calendar before releasing the machine or its event bus.
     session.gameboy.sound.setPerformanceSystemMutedAudioCalendar(false)
@@ -4926,6 +5478,7 @@ class BasicController private constructor(
           ))
       return
     }
+    finishReplayRecording("A state load begins a new input timeline")
     val manager = snapshotManager
     if (manager == null) {
       requestStateLoadRef(
@@ -4981,6 +5534,7 @@ class BasicController private constructor(
     // leave an apparently open port whose commands have nobody left to service them.
     debugPort?.close()
     console?.setDebugPort(null)
+    finishReplayRecordingBeforeClose(closeDeadlineNanos)
     doStop = true
     awaitTimingThread(closeDeadlineNanos)
 
@@ -5223,6 +5777,7 @@ class BasicController private constructor(
 
   private fun shouldPersistCloseAutosave(): Boolean =
       !properties.overrides.suppressCloseAutosave &&
+          !cleanBootReplaySession &&
           session?.config?.rom?.file != null &&
           closeAutosaveCompletedSessionId != stateSessionId &&
           closeAutosaveSkippedSessionId != stateSessionId
@@ -5249,6 +5804,46 @@ class BasicController private constructor(
           "Controller timing thread did not stop before the close deadline. " +
               "The running session remains retained and close can be retried.",
           java.io.IOException("Controller timing-thread stop timed out"),
+      )
+    }
+  }
+
+  /**
+   * [ReplayRecorder] is owner-thread confined. Closing must therefore finalize it at a controller
+   * safe point before [doStop] prevents the timing loop from dispatching any more events.
+   */
+  private fun finishReplayRecordingBeforeClose(closeDeadlineNanos: Long) {
+    if (Thread.currentThread() === thread) {
+      finishReplayRecording("Coffee GB is closing")
+      return
+    }
+    if (!thread.isAlive) {
+      if (replayRecording != null || armedReplayRecording != null) {
+        throw closeBarrierFailure(
+            "Input recording could not be finalized because the controller thread is not running.",
+            java.io.IOException("Controller thread stopped before replay finalization"),
+            "input recording",
+        )
+      }
+      return
+    }
+    val completed = CountDownLatch(1)
+    eventBus.post(ReplayRecordingCloseBarrierEvent(completed))
+    val remainingNanos = remainingCloseNanos(closeDeadlineNanos, "input recording finalization")
+    try {
+      if (!completed.await(remainingNanos, TimeUnit.NANOSECONDS)) {
+        throw closeBarrierFailure(
+            "Input recording did not finalize before the close deadline. Close can be retried.",
+            java.io.IOException("Input recording finalization timed out"),
+            "input recording",
+        )
+      }
+    } catch (failure: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw closeBarrierFailure(
+          "Interrupted while finalizing input recording for close.",
+          failure,
+          "input recording",
       )
     }
   }
@@ -5589,6 +6184,38 @@ class BasicController private constructor(
       val clearPatches: Boolean,
       val task: PreparedLoadTask,
   )
+
+  private data class ArmedReplayRecording(
+      val request: ReplayRecordingStartRequestEvent,
+      val sessionId: Long,
+  )
+
+  private data class ActiveReplayRecording(
+      val id: Long,
+      val sessionId: Long,
+      val mode: ReplayRecordingMode,
+      val recorder: ReplayRecorder,
+  )
+
+  private data class PendingReplayArtifact(
+      val id: Long,
+      val sessionId: Long,
+      val mode: ReplayRecordingMode,
+      val context: StateWorkerContext,
+      val replay: ReplayFile,
+      val tickCount: Long,
+      val frameCount: Long,
+      var requestId: Long = 0L,
+  )
+
+  private data class PendingCleanBootReplay(
+      val request: ReplayRecordingStartRequestEvent,
+      val rtcEpochMillis: Long,
+  )
+
+  private data class ReplayRecordingCloseBarrierEvent(
+      val completed: CountDownLatch,
+  ) : Event
 
   private data class ReplacementJob(
       val requestId: Long,

@@ -1,6 +1,7 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.core.memory.cart.RomOrigin
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
 import eu.rekawek.coffeegb.ui.menu.MenuPreview
 import eu.rekawek.coffeegb.ui.menu.PlayTimeTracker
 import java.awt.Toolkit
@@ -32,6 +33,7 @@ internal enum class DesktopCommand {
   MUTE,
   FULLSCREEN,
   SCREENSHOT,
+  INPUT_RECORDING,
   SHOW_COMMAND_BAR,
 }
 
@@ -49,6 +51,7 @@ internal data class DesktopCommandPresentation(
     val fullscreen: Boolean = false,
     val commandBarVisible: Boolean = true,
     val exactWindowScaleOne: Boolean = false,
+    val inputRecordingPhase: ReplayRecordingPhase = ReplayRecordingPhase.IDLE,
 ) {
   init {
     require(stateSlot in 0..9)
@@ -74,6 +77,7 @@ internal data class DesktopCommandHandlers(
     val screenshot: () -> Unit,
     val setCommandBarVisible: (Boolean) -> Unit,
     val selectStateSlot: (Int) -> Unit,
+    val inputRecording: () -> Unit = {},
     /** Opens one entry selected from the portable Recent Games page. */
     val openRecentGame: ((PortableMenuRecentGame) -> Unit)? = null,
     val preferencesForCategory: ((PreferencesCategory) -> Unit)? = null,
@@ -293,6 +297,16 @@ internal class DesktopActionRegistry(
         Action.NAME,
         if (presentation.muted) "Unmute" else "Mute",
     )
+    actions.getValue(DesktopCommand.INPUT_RECORDING).putValue(
+        Action.NAME,
+        when (presentation.inputRecordingPhase) {
+          ReplayRecordingPhase.IDLE -> "Start Input Recording…"
+          ReplayRecordingPhase.ARMING,
+          ReplayRecordingPhase.RECORDING -> "Stop Input Recording"
+          ReplayRecordingPhase.SAVING -> "Saving Input Recording…"
+          ReplayRecordingPhase.UNSAVED -> "Input Recording Needs Saving"
+        },
+    )
     stateSlotActions.forEachIndexed { slot, action ->
       action.isEnabled = presentation.stateCommandsAvailable && !presentation.sessionBusy
       action.putValue(Action.SELECTED_KEY, slot == presentation.stateSlot)
@@ -473,6 +487,7 @@ internal class DesktopActionRegistry(
       DesktopCommand.MUTE -> handlers.setMuted(!presentation.muted)
       DesktopCommand.FULLSCREEN -> handlers.setFullscreen(!presentation.fullscreen)
       DesktopCommand.SCREENSHOT -> handlers.screenshot()
+      DesktopCommand.INPUT_RECORDING -> handlers.inputRecording()
       DesktopCommand.SHOW_COMMAND_BAR ->
           handlers.setCommandBarVisible(!presentation.commandBarVisible)
     }
@@ -499,6 +514,14 @@ internal class DesktopActionRegistry(
         DesktopCommand.MANAGE_STATES,
         DesktopCommand.OPEN_SAVE_FOLDER,
         DesktopCommand.SCREENSHOT -> state.stateBrowserAvailable && !state.sessionBusy
+        DesktopCommand.INPUT_RECORDING ->
+            when (state.inputRecordingPhase) {
+              ReplayRecordingPhase.IDLE -> state.stateBrowserAvailable && !state.sessionBusy
+              ReplayRecordingPhase.ARMING,
+              ReplayRecordingPhase.RECORDING -> state.gameLoaded && !state.sessionBusy
+              ReplayRecordingPhase.SAVING,
+              ReplayRecordingPhase.UNSAVED -> false
+            }
         DesktopCommand.FULLSCREEN -> !state.sessionBusy
       }
 
@@ -508,6 +531,9 @@ internal class DesktopActionRegistry(
         DesktopCommand.MUTE -> state.muted
         DesktopCommand.FULLSCREEN -> state.fullscreen
         DesktopCommand.SHOW_COMMAND_BAR -> state.commandBarVisible
+        DesktopCommand.INPUT_RECORDING ->
+            state.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
+                state.inputRecordingPhase == ReplayRecordingPhase.RECORDING
         else -> false
       }
 }
@@ -557,6 +583,8 @@ private fun commandMetadata(command: DesktopCommand): DesktopActionMetadata =
           DesktopActionMetadata("Full Screen", "Enter or leave full screen")
       DesktopCommand.SCREENSHOT ->
           DesktopActionMetadata("Screenshot", "Save a screenshot of the current game")
+      DesktopCommand.INPUT_RECORDING ->
+          DesktopActionMetadata("Start Input Recording…", "Record controller input for deterministic replay")
       DesktopCommand.SHOW_COMMAND_BAR ->
           DesktopActionMetadata("Show Command Bar", "Show the game command bar in a window")
     }
@@ -592,6 +620,11 @@ internal class DesktopShortcutRegistry(
             DesktopCommand.LOAD_STATE to KeyStroke.getKeyStroke(KeyEvent.VK_F7, 0),
             DesktopCommand.FULLSCREEN to KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0),
             DesktopCommand.SCREENSHOT to KeyStroke.getKeyStroke(KeyEvent.VK_F12, 0),
+            DesktopCommand.INPUT_RECORDING to
+                KeyStroke.getKeyStroke(
+                    KeyEvent.VK_R,
+                    platformMenuMask or InputEvent.SHIFT_DOWN_MASK,
+                ),
         )
     val activeKeys = mutableSetOf<KeyStroke>()
     shortcuts =

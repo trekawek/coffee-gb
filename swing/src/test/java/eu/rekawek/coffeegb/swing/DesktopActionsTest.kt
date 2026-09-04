@@ -1,5 +1,6 @@
 package eu.rekawek.coffeegb.swing
 
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
 import java.awt.event.ActionEvent
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
@@ -269,6 +270,48 @@ class DesktopActionsTest {
     assertTrue(
         shortcuts[DesktopCommand.OPEN_ROM]!!.modifiers and InputEvent.CTRL_DOWN_MASK != 0)
     assertEquals(10, shortcuts.stateSlotShortcuts.size)
+  }
+
+  @Test
+  fun `input recording command tracks recorder lifecycle and keeps its modified shortcut`() {
+    val calls = mutableListOf<String>()
+    val registry = DesktopActionRegistry(handlers(calls).copy(inputRecording = { calls += "record" }))
+
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            stateBrowserAvailable = true,
+            inputRecordingPhase = ReplayRecordingPhase.IDLE,
+        ))
+    assertEquals("Start Input Recording…", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    registry[DesktopCommand.INPUT_RECORDING].actionPerformed(event())
+
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            inputRecordingPhase = ReplayRecordingPhase.RECORDING,
+        ))
+    assertEquals("Stop Input Recording", registry[DesktopCommand.INPUT_RECORDING].getValue(Action.NAME))
+    assertEquals(true, registry[DesktopCommand.INPUT_RECORDING].getValue(Action.SELECTED_KEY))
+    assertTrue(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+
+    registry.update(
+        DesktopCommandPresentation(
+            gameLoaded = true,
+            inputRecordingPhase = ReplayRecordingPhase.SAVING,
+        ))
+    assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
+    assertEquals(listOf("record"), calls)
+
+    val shortcuts =
+        DesktopShortcutRegistry(
+            gameplayKeyCodes = listOf(KeyEvent.VK_R),
+            platformMenuMask = InputEvent.CTRL_DOWN_MASK,
+        )
+    assertEquals(KeyEvent.VK_R, shortcuts[DesktopCommand.INPUT_RECORDING]?.keyCode)
+    assertTrue(
+        shortcuts[DesktopCommand.INPUT_RECORDING]!!.modifiers and InputEvent.SHIFT_DOWN_MASK != 0)
   }
 
   private fun registry(calls: MutableList<String>): DesktopActionRegistry =

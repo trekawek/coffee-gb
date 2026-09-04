@@ -9,6 +9,7 @@ data class StateStoragePaths(
     val layout: StateStorageLayout,
     val screenshotsDirectory: Path,
     val fallbackLayouts: List<StateStorageLayout>,
+    val replaysDirectory: Path = layout.replaysDirectory,
 )
 
 /**
@@ -73,6 +74,7 @@ object StateStorageResolver {
         layout,
         layout.gameDirectory.resolve(SCREENSHOTS_DIRECTORY).toAbsolutePath().normalize(),
         fallbacks,
+        layout.gameDirectory.resolve(REPLAYS_DIRECTORY).toAbsolutePath().normalize(),
     )
   }
 
@@ -95,4 +97,5 @@ object StateStorageResolver {
   const val DEFAULT_DIRECTORY = ".coffee-gb"
   const val GAMES_DIRECTORY = "games"
   const val SCREENSHOTS_DIRECTORY = "screenshots"
+  const val REPLAYS_DIRECTORY = "replays"
 }

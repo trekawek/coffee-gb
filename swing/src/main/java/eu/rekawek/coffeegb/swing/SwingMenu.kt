@@ -610,7 +610,8 @@ internal class SwingMenu(
     val screenshot = JMenuItem(desktopActions[DesktopCommand.SCREENSHOT])
     screenshot.mnemonic = KeyEvent.VK_T
     screenMenu.insert(screenshot, 1)
-    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 2)
+    screenMenu.insert(JMenuItem(desktopActions[DesktopCommand.INPUT_RECORDING]), 2)
+    screenMenu.insert(JCheckBoxMenuItem(desktopActions[DesktopCommand.SHOW_COMMAND_BAR]), 3)
     screenMenu.addSeparator()
     screenMenu.add(
         JMenuItem("More Display Settings…").apply {

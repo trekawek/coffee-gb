@@ -786,6 +786,7 @@ internal class SwingProposal3Menu(
                 item("import-state-0", "IMPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
                 item("export-state-0", "EXPORT STATE SLOT 0", enabled(DesktopCommand.MANAGE_STATES)),
                 item("export-screenshot", "EXPORT NATIVE SCREENSHOT", enabled(DesktopCommand.SCREENSHOT)),
+                item("input-recording", "INPUT RECORDING", enabled(DesktopCommand.INPUT_RECORDING)),
                 item("preview-printer-paper", "PRINTER PAPER", printerHasPaper),
                 item("back", "BACK", true),
             )
@@ -793,7 +794,7 @@ internal class SwingProposal3Menu(
           page(
               "DATA & MEDIA",
               "DATA DECK",
-              listOf("BATTERY SAVE  READY", "STATE SLOT 0  READY", "SCREENSHOT  PNG"),
+              listOf("BATTERY SAVE  READY", "STATE SLOT 0  READY", "INPUT RECORDING"),
               dataItems,
               preferredFocus = "export-screenshot",
           )
@@ -1122,6 +1123,7 @@ internal class SwingProposal3Menu(
           when (id) {
             "import-state-0", "export-state-0" -> runCommandAndHide(DesktopCommand.MANAGE_STATES)
             "export-screenshot" -> runCommandAndHide(DesktopCommand.SCREENSHOT)
+            "input-recording" -> runCommandAndHide(DesktopCommand.INPUT_RECORDING)
             "preview-printer-paper" -> openRoute(MenuRoute.PRINTER_PAPER)
             "back" -> back()
           }
