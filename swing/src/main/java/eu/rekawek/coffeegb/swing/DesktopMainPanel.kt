@@ -419,6 +419,7 @@ internal class DesktopCommandBar(
             DesktopCommand.NETPLAY,
             DesktopCommand.FULLSCREEN,
             DesktopCommand.SCREENSHOT,
+            DesktopCommand.INPUT_RECORDING,
             DesktopCommand.MANAGE_STATES,
         )
         .forEach { command -> overflowMenu.add(JMenuItem(actions[command])) }

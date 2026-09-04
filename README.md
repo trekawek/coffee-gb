@@ -23,7 +23,7 @@ orchestration layer use Kotlin and Java.
 - **High compatibility** across commercial games, unusual cartridges, homebrew,
   demos, and diagnostic ROMs.
 - **Save states and rewind**, including ten save slots, named states, previews,
-  autosave and resume, screenshots, and battery-backed saves.
+  autosave and resume, screenshots, deterministic input recordings, and battery-backed saves.
 - **Easy game loading** with drag and drop and support for `.gb`, `.gbc`, and
   `.rom` files, either directly or from ZIP and 7z archives.
 - **Rollback netplay** for link-cable games, with synchronized infrared
@@ -54,6 +54,7 @@ Default keyboard controls:
 | Pause | <kbd>Space</kbd> |
 | Save / load state | <kbd>F5</kbd> / <kbd>F7</kbd> |
 | Take screenshot | <kbd>F12</kbd> |
+| Start / stop input recording | <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
 | Rewind | Hold <kbd>Backspace</kbd> |
 | Toggle fullscreen | <kbd>F11</kbd> |
 
@@ -65,7 +66,7 @@ keyboard input works without it.
 Use **Game > Manage States…** to choose among the ten save slots, name states,
 preview them, and export them. Autosave and resume settings are under
 **File > Preferences… > Saves & Rewind**. See
-[save states, autosave, screenshots, and rewind](docs/state-management.md) for
+[save states, autosave, screenshots, input recording, and rewind](docs/state-management.md) for
 more details. Pause, save states, and rewind are unavailable during netplay.
 
 ## Compatibility

@@ -1,6 +1,15 @@
 package eu.rekawek.coffeegb.swing
 
 import eu.rekawek.coffeegb.controller.events.register
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingFailedEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingDiscardEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingMode
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingPhase
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingSavedEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStartRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStatusEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStopRequestEvent
+import eu.rekawek.coffeegb.controller.replay.ReplayRecordingRetrySaveEvent
 import eu.rekawek.coffeegb.controller.state.StateBrowserCatalog
 import eu.rekawek.coffeegb.controller.state.StateBrowserEntry
 import eu.rekawek.coffeegb.controller.state.StateCatalogReadyEvent
@@ -53,14 +62,20 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.ButtonGroup
 import javax.swing.ImageIcon
 import javax.swing.JButton
+import javax.swing.JCheckBox
 import javax.swing.JComponent
 import javax.swing.JDialog
 import javax.swing.JFileChooser
 import javax.swing.JFrame
 import javax.swing.JLabel
+import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JRadioButton
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTable
@@ -96,6 +111,7 @@ internal class StateUxDesktopController(
     onSlotLoadAvailability: (slot: Int, available: Boolean) -> Unit = { _, _ -> },
     private val onPortableCatalog: (StateBrowserCatalog, Set<Int>) -> Unit = { _, _ -> },
     private val onRememberResumeDecision: (resume: Boolean) -> Unit = {},
+    private val onInputRecordingPhase: (ReplayRecordingPhase) -> Unit = {},
     private val dialogFactory: DesktopDialogFactory = DesktopDialogFactory(),
 ) : AutoCloseable {
   private val eventBus = rootEventBus.fork("desktop-state-ux")
@@ -121,6 +137,7 @@ internal class StateUxDesktopController(
               },
       )
   private var pendingClose: PendingClose? = null
+  private var inputRecordingPhase = ReplayRecordingPhase.IDLE
   private var closed = false
   private val slotLoadAvailability =
       StateSlotLoadAvailabilityTracker(
@@ -304,6 +321,65 @@ internal class StateUxDesktopController(
         finishClosePreparation(event)
       }
     }
+    eventBus.register<ReplayRecordingStatusEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        event.sessionId?.let { sessionId ->
+          if (!isCurrent(sessionId)) return@onEdt
+        }
+        inputRecordingPhase = event.phase
+        onInputRecordingPhase(event.phase)
+        if (event.phase == ReplayRecordingPhase.ARMING) {
+          event.message?.let { message -> onDesktopStatus(message, null) }
+        }
+      }
+    }
+    eventBus.register<ReplayRecordingSavedEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        inputRecordingPhase = ReplayRecordingPhase.IDLE
+        onInputRecordingPhase(ReplayRecordingPhase.IDLE)
+        onDesktopStatus(
+            "Input recording saved as ${event.path.fileName}. Use Open Save Folder to reveal it.",
+            DesktopCommand.OPEN_SAVE_FOLDER,
+        )
+      }
+    }
+    eventBus.register<ReplayRecordingFailedEvent> { event ->
+      onEdt {
+        if (closed) return@onEdt
+        event.sessionId?.let { sessionId ->
+          if (!isCurrent(sessionId)) return@onEdt
+        }
+        if (event.recoverable) {
+          val session = currentSession ?: return@onEdt
+          when (
+              JOptionPane.showOptionDialog(
+                  owner,
+                  "${event.summary}\n\n${event.detail}",
+                  "Input recording was not saved",
+                  JOptionPane.DEFAULT_OPTION,
+                  JOptionPane.ERROR_MESSAGE,
+                  null,
+                  arrayOf("Retry Save", "Discard Recording"),
+                  "Retry Save",
+              )) {
+            0 -> eventBus.post(ReplayRecordingRetrySaveEvent(nextRequestId(), session.sessionId))
+            1 -> eventBus.post(ReplayRecordingDiscardEvent(nextRequestId(), session.sessionId))
+          }
+          return@onEdt
+        }
+        showStateError(
+            owner,
+            StateUserError(
+                event.summary,
+                event.detail,
+                if (event.recoverable) "Keep the game open and retry saving the recording."
+                else "Keep the game open and start a new recording after resolving this issue.",
+            ),
+        )
+      }
+    }
   }
 
   fun showBrowser() {
@@ -355,6 +431,96 @@ internal class StateUxDesktopController(
         }
     if (!isCurrent(expectedSessionId)) return
     eventBus.post(StateScreenshotRequestEvent(nextRequestId(), expectedSessionId, image))
+  }
+
+  fun toggleInputRecording() {
+    requireEdt("Input recording request")
+    if (closed) return
+    when (inputRecordingPhase) {
+      ReplayRecordingPhase.ARMING,
+      ReplayRecordingPhase.RECORDING -> {
+        val session = currentSession ?: return
+        eventBus.post(ReplayRecordingStopRequestEvent(nextRequestId(), session.sessionId))
+      }
+      ReplayRecordingPhase.IDLE -> startInputRecording()
+      ReplayRecordingPhase.SAVING ->
+          onDesktopStatus("Input recording is being saved. Please wait.", null)
+      ReplayRecordingPhase.UNSAVED ->
+          onDesktopStatus("Input recording needs saving before another recording can start.", null)
+    }
+  }
+
+  private fun startInputRecording() {
+    if (!requireAvailableSession()) return
+    val expectedSessionId = checkNotNull(currentSession).sessionId
+    val choice = showInputRecordingModeDialog() ?: return
+    if (!isCurrent(expectedSessionId)) return
+    eventBus.post(
+        ReplayRecordingStartRequestEvent(
+            nextRequestId(),
+            expectedSessionId,
+            choice,
+            includeSensitiveInitialState = choice == ReplayRecordingMode.CURRENT_SESSION,
+        ))
+  }
+
+  /** No option is preselected: choosing the privacy-sensitive mode is always deliberate. */
+  private fun showInputRecordingModeDialog(): ReplayRecordingMode? {
+    val current = JRadioButton("From current moment")
+    val cleanBoot = JRadioButton("Restart from clean boot")
+    val consent =
+        JCheckBox(
+            "I understand this file includes the current emulator and cartridge save state.",
+        ).apply { isEnabled = false }
+    ButtonGroup().apply {
+      add(current)
+      add(cleanBoot)
+    }
+    current.addActionListener { consent.isEnabled = true }
+    cleanBoot.addActionListener {
+      consent.isSelected = false
+      consent.isEnabled = false
+    }
+    val panel =
+        JPanel().apply {
+          layout = BoxLayout(this, BoxLayout.Y_AXIS)
+          add(JLabel("Choose how to begin input recording:"))
+          add(Box.createVerticalStrut(10))
+          add(current)
+          add(
+              JLabel(
+                  "  Continues now. The replay includes emulator memory and cartridge RAM/save data, but never ROM bytes or paths."))
+          add(consent)
+          add(Box.createVerticalStrut(10))
+          add(cleanBoot)
+          add(
+              JLabel(
+                  "  Restarts in a battery-isolated clean boot. The replay and session contain no save state."))
+        }
+    val result =
+        JOptionPane.showOptionDialog(
+            owner,
+            panel,
+            "Start Input Recording",
+            JOptionPane.DEFAULT_OPTION,
+            JOptionPane.QUESTION_MESSAGE,
+            null,
+            arrayOf("Start Recording", "Cancel"),
+            "Cancel",
+        )
+    if (result != 0) return null
+    return when {
+      current.isSelected && consent.isSelected -> ReplayRecordingMode.CURRENT_SESSION
+      cleanBoot.isSelected -> ReplayRecordingMode.CLEAN_BOOT
+      current.isSelected -> {
+        onDesktopStatus("Confirm the current-session data notice before recording.", null)
+        null
+      }
+      else -> {
+        onDesktopStatus("Choose a recording mode before starting.", null)
+        null
+      }
+    }
   }
 
   fun saveSlot(slot: Int) {

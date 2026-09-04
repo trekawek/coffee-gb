@@ -1,6 +1,9 @@
 package eu.rekawek.coffeegb.controller.state
 
 import eu.rekawek.coffeegb.controller.CompatibilitySnapshot
+import eu.rekawek.coffeegb.controller.replay.ReplayArtifactResult
+import eu.rekawek.coffeegb.controller.replay.ReplayArtifactStore
+import eu.rekawek.coffeegb.controller.replay.ReplayFile
 import eu.rekawek.coffeegb.core.events.Event
 import eu.rekawek.coffeegb.core.events.EventBus
 import java.io.IOException
@@ -19,6 +22,7 @@ internal enum class StateWorkerPurpose {
   AUTOSAVE_ROM_SWITCH,
   AUTOSAVE_STOP,
   AUTOSAVE_CLOSE,
+  REPLAY_SAVE,
   RESUME_SCAN,
 }
 
@@ -64,6 +68,8 @@ internal sealed interface StateWorkerResult {
   ) : StateWorkerResult
 
   data class Screenshot(val result: StateScreenshotResult) : StateWorkerResult
+
+  data class Replay(val result: ReplayArtifactResult) : StateWorkerResult
 
   data class Folder(
       val path: Path,
@@ -229,6 +235,16 @@ internal class StateOperationWorker(
                 .save(image, context.hardwareProfileId))
       }
 
+  /** Encodes one immutable, bounded deterministic replay away from the emulation owner. */
+  fun replay(
+      context: StateWorkerContext,
+      requestId: Long,
+      replay: ReplayFile,
+  ) =
+      submit(context, requestId, StateOperation.REPLAY_SAVE, StateWorkerPurpose.REPLAY_SAVE) {
+        StateWorkerResult.Replay(ReplayArtifactStore(context.workspace.paths.replaysDirectory).save(replay))
+      }
+
   fun openFolder(context: StateWorkerContext, requestId: Long) =
       submit(context, requestId, StateOperation.OPEN_FOLDER, StateWorkerPurpose.MANUAL) {
         val directory = context.workspace.activeGameDirectory().toAbsolutePath().normalize()
@@ -343,6 +359,7 @@ internal class StateOperationWorker(
           StateOperation.DELETE -> "State could not be deleted."
           StateOperation.EXPORT -> "State could not be exported."
           StateOperation.SCREENSHOT -> "Screenshot could not be saved."
+          StateOperation.REPLAY_SAVE -> "Input recording could not be saved."
           StateOperation.OPEN_FOLDER -> "Save folder could not be prepared."
           StateOperation.PREPARE_CLOSE -> "Close autosave could not be completed."
         }
@@ -367,6 +384,9 @@ internal class StateOperationWorker(
           StateOperation.SAVE, StateOperation.AUTOSAVE, StateOperation.SCREENSHOT ->
             "Check that the configured save directory is writable and has free space. " +
                 "The previous complete state was preserved."
+          StateOperation.REPLAY_SAVE ->
+              "Check that the configured save directory is writable and has free space. " +
+                  "The finished input recording remains available for retry."
           StateOperation.LOAD, StateOperation.RESUME ->
             "Keep the running game open, inspect or export the state, and delete it only if it " +
                 "is no longer needed."
@@ -415,7 +435,9 @@ private data class StateQueuedWork(
     get() =
         when (purpose) {
           StateWorkerPurpose.AUTOSAVE_CLOSE -> 0
-          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH, StateWorkerPurpose.AUTOSAVE_STOP -> 1
+          StateWorkerPurpose.AUTOSAVE_ROM_SWITCH,
+          StateWorkerPurpose.AUTOSAVE_STOP,
+          StateWorkerPurpose.REPLAY_SAVE -> 1
           StateWorkerPurpose.MANUAL, StateWorkerPurpose.RESUME_SCAN -> 2
         }
 

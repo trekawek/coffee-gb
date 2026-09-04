@@ -21,6 +21,9 @@ class StateStorageLayout(gameDirectory: Path) {
 
   val screenshotsDirectory: Path = contained(this.gameDirectory.resolve(SCREENSHOTS_DIRECTORY))
 
+  /** Deterministic input replays are distinct from state snapshots and future media recordings. */
+  val replaysDirectory: Path = contained(this.gameDirectory.resolve(REPLAYS_DIRECTORY))
+
   val batteryFile: Path = contained(this.gameDirectory.resolve(BATTERY_FILE))
 
   init {
@@ -64,6 +67,7 @@ class StateStorageLayout(gameDirectory: Path) {
     const val NAMED_DIRECTORY = "named"
     const val AUTOSAVE_DIRECTORY = "autosave"
     const val SCREENSHOTS_DIRECTORY = "screenshots"
+    const val REPLAYS_DIRECTORY = "replays"
     const val BATTERY_FILE = "battery.sav"
     const val STATE_FILE = "state.cgbstate"
     const val METADATA_FILE = "metadata.properties"

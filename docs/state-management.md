@@ -1,4 +1,4 @@
-# Managed states, autosave, screenshots, and rewind
+# Managed states, autosave, screenshots, input recording, and rewind
 
 Coffee GB's desktop state browser extends the same ten slots used by the quick-save shortcuts with
 named states, previews, autosave/resume, export, and recovery reporting. All disk access is performed
@@ -72,6 +72,7 @@ states/
   named/<UUID>/
   autosave/
 screenshots/
+replays/
 ```
 
 `battery.sav` is used when a Saves directory is configured, including a distinct hash namespace for
@@ -156,6 +157,31 @@ uses the operating system's default opener without blocking the Swing event thre
 and metadata are bounded before decoding. Embedded metadata is limited
 to UTC capture time, hardware-profile ID, and `Coffee GB` as the software name. It deliberately
 contains no ROM title, filename, path, or hash.
+
+## Input recording and rewind
+
+Choose **Screen > Start Input Recording…** (or press <kbd>Ctrl/Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>)
+to create a deterministic `.cgbreplay` controller-input recording. The dialog deliberately starts
+with no selected mode:
+
+- **From current moment** embeds the current portable machine state so recording can begin where
+  play is now. It requires an explicit acknowledgement because that state can contain emulator
+  memory and cartridge RAM/save data. It never contains ROM bytes, ROM paths, or host paths.
+- **Restart from clean boot** saves the ordinary session first, then starts a battery-isolated clean
+  boot with an empty link port. It records from the first emulated tick and includes no machine or
+  cartridge save state. That clean session continues to avoid reading or writing the ordinary
+  battery/autosave files until the game is loaded normally again.
+
+The command becomes **Stop Input Recording** while active. The recorder writes the finished artifact
+away from both the emulation and Swing threads to `replays/` as
+`coffee-gb-YYYYMMDD-HHmmss-SSS[-N].cgbreplay`; collisions never overwrite an existing file. CLI
+playback is documented in [headless-cli.md](headless-cli.md).
+
+Replay v1 represents one forward input timeline. Rewind is therefore disabled while a recording is
+arming or active; it becomes available again after stopping. State loads, reset, ROM changes, pause,
+peripheral changes, and closing finish the recording before their lifecycle boundary. Linked play,
+real serial/infrared devices, host-time/sensor cartridges, reverse debugging, and paused execution
+are rejected with an actionable reason.
 
 ## Rewind bounds
 

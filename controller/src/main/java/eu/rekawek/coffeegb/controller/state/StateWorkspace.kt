@@ -164,6 +164,7 @@ class StateWorkspace(
       buildList {
         add(paths.layout.gameDirectory)
         add(paths.screenshotsDirectory)
+        add(paths.replaysDirectory)
         paths.fallbackLayouts.forEach { add(it.gameDirectory) }
       }
 
