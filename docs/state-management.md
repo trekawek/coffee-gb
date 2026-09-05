@@ -170,7 +170,8 @@ with no selected mode:
 - **Restart from clean boot** saves the ordinary session first, then starts a battery-isolated clean
   boot with an empty link port. It records from the first emulated tick and includes no machine or
   cartridge save state. That clean session continues to avoid reading or writing the ordinary
-  battery/autosave files until the game is loaded normally again.
+  battery/autosave files until the game is loaded normally again. Active cheats must be disabled;
+  use **From current moment** when their state needs to be part of the recording.
 
 **Game > Input Recording > Stop Input Recording** is enabled while capture is arming or active. The recorder writes the finished artifact
 away from both the emulation and Swing threads to `replays/` as
@@ -184,10 +185,14 @@ at the final matching checkpoint; close or reopen the game to return to normal p
 also documented in [headless-cli.md](headless-cli.md).
 
 Replay v1 represents one forward input timeline. Rewind is therefore disabled while a recording is
-arming or active; it becomes available again after stopping. State loads, reset, ROM changes, pause,
-peripheral changes, and closing finish the recording before their lifecycle boundary. Linked play,
-real serial/infrared devices, host-time/sensor cartridges, reverse debugging, and paused execution
-are rejected with an actionable reason.
+arming or active; it becomes available again after stopping. Pausing suspends capture without adding
+an emulated tick, and **Stop Input Recording** remains available while paused. Resuming continues the
+same input timeline; cartridge RTC wall time is frozen across that pause. A clean-boot recording or
+loaded playback always starts its replacement session running, even when the previous session was
+paused. State loads, reset, ROM changes, peripheral changes, debugger pauses, and closing finish the
+recording before their lifecycle boundary. Linked play, real serial/infrared devices,
+host-time/sensor cartridges, reverse debugging, and starting a current-session recording while
+paused are rejected with an actionable reason.
 
 ## Rewind bounds
 

@@ -601,6 +601,9 @@ class BasicController private constructor(
   init {
     require(closeTimeoutMillis > 0) { "Controller close timeout must be positive" }
     eventQueue.register<AddPatches> {
+      // start() republishes this exact controller-owned list to initialize the new core. It is not
+      // a user mutation and must not terminate a recorder that already owns clean-boot tick zero.
+      if (it.patches === patches) return@register
       if (replayPlaybackMutationBlocked("Changing cheats")) return@register
       finishReplayRecording("Cheats changed")
       patches.addAll(it.patches)
@@ -669,7 +672,6 @@ class BasicController private constructor(
     }
     eventQueue.register<StateWorkerCompletedEvent> { finishStateWorkerRequest(it) }
     eventQueue.register<Controller.PauseEmulationEvent> {
-      finishReplayRecording("Emulation was paused")
       if (pauseStateBeforeLoading != null) {
         pauseStateBeforeLoading = true
       } else if (pauseStateBeforeResume != null) {
@@ -844,6 +846,13 @@ class BasicController private constructor(
       benchmarkAudioPolicyProcessed = true
     }
     eventQueue.register<Controller.ResumeEmulationEvent> {
+      if (replayPlaybackCompleted) {
+        postReplayPlaybackStatus(
+            ReplayPlaybackPhase.COMPLETED,
+            "Input playback is complete. Close or reopen the game to play normally.",
+        )
+        return@register
+      }
       if (properties.overrides.benchmarkPolicyEnabled && benchmarkCoreFrozenGate.getAsBoolean()) {
         // The 600th measured core boundary owns the terminal freeze.  A lifecycle/audio resume
         // cannot accidentally create an unmeasured 601st frame before the host collects SF data.
@@ -1101,7 +1110,7 @@ class BasicController private constructor(
     )
     val gameboy = session?.gameboy
     var emulatedTicks = 0
-    if (gameboy != null && !benchmarkExecutionFrozen
+    if (gameboy != null && !benchmarkExecutionFrozen && !replayPlaybackCompleted
         && (rewound || (!isEffectivelyPaused() && !isRewinding))) {
       relinquishDebugBreakpointPauseOwnership()
       val performanceWorkSession =
@@ -2470,7 +2479,8 @@ class BasicController private constructor(
   }
 
   private fun requestReplayRecording(event: ReplayRecordingStartRequestEvent) {
-    if (replayRecording != null || armedReplayRecording != null || pendingReplayArtifact != null) {
+    if (replayRecording != null || armedReplayRecording != null || pendingCleanBootReplay != null ||
+        pendingReplayArtifact != null) {
       postReplayRecordingFailure(
           event.requestId,
           stateSessionId,
@@ -2478,6 +2488,18 @@ class BasicController private constructor(
           "An input recording is already active or waiting to be saved.",
           "Stop the current recording and wait for it to save before starting another one.",
           recoverable = pendingReplayArtifact != null,
+      )
+      return
+    }
+    if (pendingReplayPlayback != null || replayPlayback != null || replayPlaybackCompleted ||
+        replayPlaybackSession) {
+      postReplayRecordingFailure(
+          event.requestId,
+          stateSessionId.takeIf { it > 0L },
+          event.mode,
+          "Input recording is unavailable during input playback.",
+          "Close or reopen the game before starting another recording.",
+          recoverable = false,
       )
       return
     }
@@ -2524,6 +2546,17 @@ class BasicController private constructor(
           event.mode,
           "Clean-boot recording is unavailable for this game.",
           "The current ROM cannot be reopened as an isolated clean session.",
+          recoverable = false,
+      )
+      return
+    }
+    if (patches.isNotEmpty()) {
+      postReplayRecordingFailure(
+          event.requestId,
+          stateSessionId,
+          event.mode,
+          "Clean-boot recording is unavailable while cheats are active.",
+          "Disable cheats or use From current moment so the initial state contains them.",
           recoverable = false,
       )
       return
@@ -2666,6 +2699,7 @@ class BasicController private constructor(
       cancelPendingRomSwitch()
       cancelLoadJob()
       discardReplacement(restorePause = true)
+      restorePauseStateAfterLoading()
       postReplayRecordingStatus(
           ReplayRecordingPhase.IDLE,
           "Clean-boot input recording was cancelled before it started.",
@@ -2709,6 +2743,15 @@ class BasicController private constructor(
       postReplayRecordingStatus(ReplayRecordingPhase.IDLE, "$reason before recording began.")
     }
     val active = replayRecording ?: return
+    val activeGameboy = session?.gameboy
+    // Application pause is not part of the emulated timeline. Normalize an MBC3 clock to the
+    // running state while hashing the final tick, then restore the host's pause ownership. This
+    // keeps a recording stopped from a paused menu replayable without advancing its RTC.
+    val restorePausedRtc =
+        activeGameboy != null && isEffectivelyPaused() && activeGameboy.hasPausedCartridgeRtc()
+    if (restorePausedRtc) {
+      activeGameboy.reanchorCartridgeRtcPause(false)
+    }
     replayRecording = null
     val completed =
         try {
@@ -2738,6 +2781,10 @@ class BasicController private constructor(
               recoverable = false,
           )
           return
+        } finally {
+          if (restorePausedRtc && session?.gameboy === activeGameboy && isEffectivelyPaused()) {
+            activeGameboy.reanchorCartridgeRtcPause(true)
+          }
         }
     val context = stateContext
     if (context == null) {
@@ -2791,9 +2838,12 @@ class BasicController private constructor(
     val active = replayRecording
     val pending = pendingReplayArtifact
     val armed = armedReplayRecording
+    val cleanBoot = pendingCleanBootReplay
     val recordingId = active?.id ?: pending?.id
-    val sessionId = active?.sessionId ?: pending?.sessionId ?: armed?.sessionId
-    val mode = active?.mode ?: pending?.mode ?: armed?.request?.mode
+    val sessionId =
+        active?.sessionId ?: pending?.sessionId ?: armed?.sessionId
+          ?: cleanBoot?.request?.expectedSessionId
+    val mode = active?.mode ?: pending?.mode ?: armed?.request?.mode ?: cleanBoot?.request?.mode
     val ticks = active?.recorder?.tickCount ?: pending?.tickCount ?: 0L
     val frames = active?.recorder?.frameCount ?: pending?.frameCount ?: 0L
     eventBus.post(ReplayRecordingStatusEvent(recordingId, sessionId, mode, phase, ticks, frames, message))
@@ -2807,6 +2857,10 @@ class BasicController private constructor(
       detail: String,
       recoverable: Boolean,
   ) {
+    if (!recoverable && replayRecording == null && armedReplayRecording == null &&
+        pendingCleanBootReplay == null && pendingReplayArtifact == null) {
+      postReplayRecordingStatus(ReplayRecordingPhase.IDLE)
+    }
     eventBus.post(ReplayRecordingFailedEvent(requestId, sessionId, mode, summary, detail, recoverable))
   }
 
@@ -2815,7 +2869,8 @@ class BasicController private constructor(
    * autosave/replacement transaction to present it in an isolated machine.
    */
   private fun requestReplayPlayback(event: ReplayPlaybackLoadRequestEvent) {
-    if (replayRecording != null || armedReplayRecording != null || pendingReplayArtifact != null) {
+    if (replayRecording != null || armedReplayRecording != null || pendingCleanBootReplay != null ||
+        pendingReplayArtifact != null) {
       postReplayPlaybackFailure(
           stateSessionId.takeIf { it > 0L },
           "Stop and save the input recording before loading a replay.",
@@ -4451,8 +4506,10 @@ class BasicController private constructor(
     // Benchmark activation owns an explicit preconditioning pause independently of the user's
     // pre-load playback state. Do not let the loading workflow's `false` restore overwrite the
     // pause established by start(), or the generation-bound scenario start will be rejected.
+    val deterministicReplayReplacement = pendingPlayback != null || pendingCleanBootReplay != null
     val pauseNewSession =
-        properties.overrides.benchmarkPolicyEnabled || pauseStateBeforeLoading == true
+        properties.overrides.benchmarkPolicyEnabled ||
+            (!deterministicReplayReplacement && pauseStateBeforeLoading == true)
 
     // This assignment is the ownership commit. From here on the old session is never resumed:
     // its bus may need deferred cleanup, but it cannot invalidate the fully staged candidate.
@@ -4704,7 +4761,13 @@ class BasicController private constructor(
       // the deterministic input transcript, so no checkpoint spanning this boundary is replayable.
       debugCheckpointHistory.clear(DebugHistoryTruncationReason.NONDETERMINISTIC_IO)
     }
-    gameboy.setCartridgeClockPaused(effectivelyPaused)
+    if (resumedPausedRtc && replayRecording != null) {
+      // Host pause duration has no emulated ticks and therefore cannot appear in an input replay.
+      // Resume the RTC without applying that wall-clock gap while deterministic capture owns it.
+      gameboy.reanchorCartridgeRtcPause(false)
+    } else {
+      gameboy.setCartridgeClockPaused(effectivelyPaused)
+    }
     if (resumedPausedRtc && debugFramePosition == 0 && supportsDebugHistory(currentSession)) {
       try {
         debugCheckpointHistory.recordFrame(currentSession)

@@ -49,10 +49,12 @@ class BasicControllerInputRecordingTest {
     val statuses = LinkedBlockingQueue<ReplayRecordingStatusEvent>()
     val saved = LinkedBlockingQueue<ReplayRecordingSavedEvent>()
     val playback = LinkedBlockingQueue<ReplayPlaybackStatusEvent>()
+    val playbackStates = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<ReplayRecordingStatusEvent>(statuses::add)
     eventBus.register<ReplayRecordingSavedEvent>(saved::add)
     eventBus.register<ReplayPlaybackStatusEvent>(playback::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playbackStates::add)
     val controller = BasicController(eventBus, properties, null)
     controller.startController()
     try {
@@ -71,6 +73,17 @@ class BasicControllerInputRecordingTest {
           await(statuses) { it.phase == ReplayRecordingPhase.RECORDING }.phase,
       )
 
+      eventBus.post(Controller.RewindEvent(true))
+      assertEquals(
+          ReplayRecordingPhase.RECORDING,
+          await(statuses) { it.message?.contains("Rewind is unavailable") == true }.phase,
+      )
+
+      playbackStates.clear()
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(playbackStates) { it.paused }.paused)
+      eventBus.post(Controller.ResumeEmulationEvent())
+      assertTrue(!await(playbackStates) { !it.paused }.paused)
       eventBus.post(Controller.RewindEvent(true))
       assertEquals(
           ReplayRecordingPhase.RECORDING,
@@ -128,15 +141,20 @@ class BasicControllerInputRecordingTest {
     val statuses = LinkedBlockingQueue<ReplayRecordingStatusEvent>()
     val saved = LinkedBlockingQueue<ReplayRecordingSavedEvent>()
     val playback = LinkedBlockingQueue<ReplayPlaybackStatusEvent>()
+    val playbackStates = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<ReplayRecordingStatusEvent>(statuses::add)
     eventBus.register<ReplayRecordingSavedEvent>(saved::add)
     eventBus.register<ReplayPlaybackStatusEvent>(playback::add)
+    eventBus.register<Controller.SessionPlaybackStateEvent>(playbackStates::add)
     val controller = BasicController(eventBus, properties, null)
     controller.startController()
     try {
       eventBus.post(Controller.LoadRomEvent(rom))
       val session = await(sessions) { it.available }
+
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(playbackStates) { it.paused }.paused)
 
       eventBus.post(
           ReplayRecordingStartRequestEvent(
@@ -146,6 +164,18 @@ class BasicControllerInputRecordingTest {
               includeSensitiveInitialState = false,
           ))
       val recording = await(statuses) { it.phase == ReplayRecordingPhase.RECORDING }
+      eventBus.post(Controller.RewindEvent(true))
+      assertTrue(
+          await(statuses) { it.message?.contains("Rewind is unavailable") == true }.tickCount > 0L)
+
+      playbackStates.clear()
+      eventBus.post(Controller.PauseEmulationEvent())
+      assertTrue(await(playbackStates) { it.paused }.paused)
+      eventBus.post(Controller.RewindEvent(true))
+      assertEquals(
+          ReplayRecordingPhase.RECORDING,
+          await(statuses) { it.message?.contains("Rewind is unavailable") == true }.phase,
+      )
       eventBus.post(
           ReplayRecordingStopRequestEvent(
               2,
