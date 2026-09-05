@@ -301,6 +301,7 @@ class DesktopActionsTest {
         DesktopCommandPresentation(
             gameLoaded = true,
             inputRecordingPhase = ReplayRecordingPhase.RECORDING,
+            sessionBusy = true,
         ))
     assertFalse(registry[DesktopCommand.INPUT_RECORDING].isEnabled)
     assertTrue(registry[DesktopCommand.STOP_INPUT_RECORDING].isEnabled)

@@ -523,8 +523,7 @@ internal class DesktopActionRegistry(
         DesktopCommand.STOP_INPUT_RECORDING ->
             (state.inputRecordingPhase == ReplayRecordingPhase.ARMING ||
                 state.inputRecordingPhase == ReplayRecordingPhase.RECORDING) &&
-                state.gameLoaded &&
-                !state.sessionBusy
+                state.gameLoaded
         DesktopCommand.LOAD_INPUT_RECORDING ->
             state.gameLoaded &&
                 state.inputRecordingPhase == ReplayRecordingPhase.IDLE &&

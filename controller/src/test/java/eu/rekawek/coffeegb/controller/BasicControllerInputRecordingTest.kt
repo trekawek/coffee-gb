@@ -15,6 +15,7 @@ import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStartRequestEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStatusEvent
 import eu.rekawek.coffeegb.controller.replay.ReplayRecordingStopRequestEvent
 import eu.rekawek.coffeegb.controller.state.StateUxSessionEvent
+import eu.rekawek.coffeegb.core.Gameboy
 import eu.rekawek.coffeegb.core.events.EventBusImpl
 import java.nio.file.Files
 import java.nio.file.Path
@@ -114,6 +115,7 @@ class BasicControllerInputRecordingTest {
         EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
           it.updateApplicationSettings { settings ->
             settings.copy(
+                advanced = settings.advanced.copy(bootstrapMode = Gameboy.BootstrapMode.NORMAL),
                 saves =
                     ApplicationSettings.Saves(
                         directory = directory.resolve("saves"),
@@ -125,9 +127,11 @@ class BasicControllerInputRecordingTest {
     val sessions = LinkedBlockingQueue<StateUxSessionEvent>()
     val statuses = LinkedBlockingQueue<ReplayRecordingStatusEvent>()
     val saved = LinkedBlockingQueue<ReplayRecordingSavedEvent>()
+    val playback = LinkedBlockingQueue<ReplayPlaybackStatusEvent>()
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<ReplayRecordingStatusEvent>(statuses::add)
     eventBus.register<ReplayRecordingSavedEvent>(saved::add)
+    eventBus.register<ReplayPlaybackStatusEvent>(playback::add)
     val controller = BasicController(eventBus, properties, null)
     controller.startController()
     try {
@@ -152,6 +156,21 @@ class BasicControllerInputRecordingTest {
       val replay = ReplayCodec.decode(Files.readAllBytes(artifact.path))
       assertEquals(ReplayInitialMode.BOOT_REFERENCE, replay.initialConditions.mode)
       assertEquals(null, replay.embeddedState)
+
+      eventBus.post(
+          ReplayPlaybackLoadRequestEvent(
+              3,
+              assertNotNull(recording.sessionId),
+              artifact.path,
+          ))
+      assertEquals(
+          ReplayPlaybackPhase.PLAYING,
+          await(playback) { it.phase == ReplayPlaybackPhase.PLAYING }.phase,
+      )
+      assertEquals(
+          ReplayPlaybackPhase.COMPLETED,
+          await(playback) { it.phase == ReplayPlaybackPhase.COMPLETED }.phase,
+      )
     } finally {
       controller.close()
       eventBus.close()
