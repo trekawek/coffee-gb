@@ -421,7 +421,7 @@ internal class StateUxDesktopController(
             StateUserError(
                 event.summary,
                 event.detail,
-                "Keep the matching ROM open and select another recording, or reopen the game after playback.",
+                "Reset or reopen the game to return to normal play, then select another recording.",
             ),
         )
       }

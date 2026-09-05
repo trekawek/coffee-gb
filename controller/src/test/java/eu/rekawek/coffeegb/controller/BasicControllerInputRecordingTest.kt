@@ -24,6 +24,7 @@ import java.util.Comparator
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.Test
@@ -121,14 +122,14 @@ class BasicControllerInputRecordingTest {
   }
 
   @Test
-  fun `clean-boot recording persists no session state`() {
+  fun `fast-forward clean-boot recording survives pause and desktop playback`() {
     val directory = Files.createTempDirectory("controller-clean-boot-recording")
     val rom = directory.resolve("game.gb").toFile().also { ROM.copyTo(it) }
     val properties =
         EmulatorProperties(directory.resolve("settings.properties"), debounceMillis = 0).also {
           it.updateApplicationSettings { settings ->
             settings.copy(
-                advanced = settings.advanced.copy(bootstrapMode = Gameboy.BootstrapMode.NORMAL),
+                advanced = settings.advanced.copy(bootstrapMode = Gameboy.BootstrapMode.FAST_FORWARD),
                 saves =
                     ApplicationSettings.Saves(
                         directory = directory.resolve("saves"),
@@ -142,11 +143,13 @@ class BasicControllerInputRecordingTest {
     val saved = LinkedBlockingQueue<ReplayRecordingSavedEvent>()
     val playback = LinkedBlockingQueue<ReplayPlaybackStatusEvent>()
     val playbackStates = LinkedBlockingQueue<Controller.SessionPlaybackStateEvent>()
+    val started = LinkedBlockingQueue<Controller.EmulationStartedEvent>()
     eventBus.register<StateUxSessionEvent>(sessions::add)
     eventBus.register<ReplayRecordingStatusEvent>(statuses::add)
     eventBus.register<ReplayRecordingSavedEvent>(saved::add)
     eventBus.register<ReplayPlaybackStatusEvent>(playback::add)
     eventBus.register<Controller.SessionPlaybackStateEvent>(playbackStates::add)
+    eventBus.register<Controller.EmulationStartedEvent>(started::add)
     val controller = BasicController(eventBus, properties, null)
     controller.startController()
     try {
@@ -201,6 +204,16 @@ class BasicControllerInputRecordingTest {
           ReplayPlaybackPhase.COMPLETED,
           await(playback) { it.phase == ReplayPlaybackPhase.COMPLETED }.phase,
       )
+
+      // Reset is the recovery route after either completion or checkpoint divergence. It must
+      // replace the input-isolated replay machine with a normal, running session.
+      started.clear()
+      playbackStates.clear()
+      eventBus.post(Controller.ResetEmulationEvent())
+      val resetGeneration =
+          assertNotNull(await(started) { it.sessionGeneration != null }.sessionGeneration)
+      await(playbackStates) { it.sessionGeneration == resetGeneration }
+      assertFalse(await(playbackStates) { it.sessionGeneration == resetGeneration }.paused)
     } finally {
       controller.close()
       eventBus.close()

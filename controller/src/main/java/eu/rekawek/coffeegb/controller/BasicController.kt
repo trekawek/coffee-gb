@@ -3938,6 +3938,7 @@ class BasicController private constructor(
       properties: EmulatorProperties,
       event: Controller.LoadRomEvent,
       clearPatches: Boolean = true,
+      resumeAfterLoad: Boolean = cleanBootReplaySession || replayPlaybackSession,
   ) {
     if (doStop) {
       return
@@ -3954,7 +3955,7 @@ class BasicController private constructor(
     // request was ignored and also allows the old game to consume input meant for the new one.
     eventBus.post(Controller.RomLoadingEvent(event.rom, event.openRequestId))
     val task = PreparedLoadTask { sessionPreparer.prepare(properties, event) }
-    loadJob = LoadJob(event, clearPatches, task)
+    loadJob = LoadJob(event, clearPatches, resumeAfterLoad, task)
     loadExecutor.execute(task)
   }
 
@@ -4035,6 +4036,7 @@ class BasicController private constructor(
             requestId = nextPersistenceRequestId++,
             event = job.event,
             clearPatches = job.clearPatches,
+            resumeAfterLoad = job.resumeAfterLoad,
             prepared = prepared,
             capture = capture,
             attempt = attempt,
@@ -4506,7 +4508,8 @@ class BasicController private constructor(
     // Benchmark activation owns an explicit preconditioning pause independently of the user's
     // pre-load playback state. Do not let the loading workflow's `false` restore overwrite the
     // pause established by start(), or the generation-bound scenario start will be rejected.
-    val deterministicReplayReplacement = pendingPlayback != null || pendingCleanBootReplay != null
+    val deterministicReplayReplacement =
+        pendingPlayback != null || pendingCleanBootReplay != null || job.resumeAfterLoad
     val pauseNewSession =
         properties.overrides.benchmarkPolicyEnabled ||
             (!deterministicReplayReplacement && pauseStateBeforeLoading == true)
@@ -4561,6 +4564,12 @@ class BasicController private constructor(
         setPaused(true)
       } else {
         setPaused(pauseNewSession)
+      }
+      if (job.resumeAfterLoad) {
+        // start() publishes the session's unpaused baseline before the loading workflow restores
+        // its desired state. Replay recovery intentionally resumes, so repeat that final value to
+        // make it the unambiguous last event for the committed replacement.
+        publishPlaybackState()
       }
       replayPlayback?.let { playback ->
         playback.sessionId = stateSessionId
@@ -5558,10 +5567,10 @@ class BasicController private constructor(
       }
       val chunk = minOf(remaining, PRESENTATION_BOOTSTRAP_CHUNK_TICKS.toLong()).toInt()
       val executed =
-          if (replayRecording != null) {
+          if (replayRecording != null || replayPlayback != null) {
             var ticks = 0
             while (ticks < chunk && !doStop && session === currentSession &&
-                !gameboy.isBootstrapReady()) {
+                !gameboy.isBootstrapReady() && !replayPlaybackCompleted) {
               tickReplayAware(gameboy)
               ticks++
             }
@@ -6569,6 +6578,7 @@ class BasicController private constructor(
   private data class LoadJob(
       val event: Controller.LoadRomEvent,
       val clearPatches: Boolean,
+      val resumeAfterLoad: Boolean,
       val task: PreparedLoadTask,
   )
 
@@ -6623,6 +6633,7 @@ class BasicController private constructor(
       val requestId: Long,
       val event: Controller.LoadRomEvent,
       val clearPatches: Boolean,
+      val resumeAfterLoad: Boolean,
       val prepared: PreparedSession,
       val capture: BatteryFlush,
       var attempt: ReplacementTask?,
