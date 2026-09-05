@@ -73,7 +73,7 @@ public class AndroidStateSlotTest {
         assertEquals(10, items.size());
         assertEquals("slot:0", items.get(0).id());
         assertEquals("slot:9", items.get(9).id());
-        assertEquals("", items.get(0).detail());
+        assertEquals("EMPTY", items.get(0).detail());
         assertEquals("SAVED", items.get(StateRef.MAX_SLOT).detail());
         assertTrue(items.stream().allMatch(eu.rekawek.coffeegb.ui.menu.MenuPageSpec.Item::enabled));
     }

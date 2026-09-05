@@ -142,6 +142,7 @@ class SwingProposal3MenuTest {
           menu.visibleItemIdsForTest(),
       )
       assertEquals("open-rom", menu.focusedItemIdForTest())
+      assertEquals(listOf("D-PAD MOVE", "A CHOOSE", ""), menu.presentationForTest().footerHints())
       press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.RECENT_GAMES, menu.routeForTest())
@@ -958,8 +959,9 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.A)
 
       assertEquals(MenuRoute.CONFIRM_ACTION, menu.routeForTest())
-      assertEquals("CONFIRM ACTION", menu.presentationForTest().context())
+      assertEquals("RESET GAME?", menu.presentationForTest().context())
       assertEquals(listOf("confirm", "cancel"), menu.visibleItemIdsForTest())
+      assertEquals("RESET GAME", menu.presentationForTest().items().first().label())
       assertTrue(menu.presentationForTest().items().all { it.detail().isEmpty() })
       assertEquals("cancel", menu.focusedItemIdForTest())
       press(menu, MenuKey.UP)
@@ -1010,6 +1012,7 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
       assertEquals("volume", menu.focusedItemIdForTest())
+      assertEquals(listOf("L/R ADJUST", "", "B BACK"), menu.presentationForTest().footerHints())
       assertEquals(listOf("volume", "mute-audio"), menu.visibleItemIdsForTest())
       assertEquals(
           listOf(MenuWidgetType.SLIDER, MenuWidgetType.CHECKBOX),
@@ -1023,6 +1026,7 @@ class SwingProposal3MenuTest {
       assertEquals(MenuRoute.AUDIO, menu.routeForTest())
       press(menu, MenuKey.DOWN)
       assertEquals("mute-audio", menu.focusedItemIdForTest())
+      assertEquals(listOf("D-PAD MOVE", "A TOGGLE", "B BACK"), menu.presentationForTest().footerHints())
       press(menu, MenuKey.A)
       assertTrue(bridge.muted)
       val toggledMute = menu.presentationForTest().items().single { it.id() == "mute-audio" }
@@ -1346,6 +1350,8 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
       assertEquals("slot-0", menu.focusedItemIdForTest())
+      assertEquals("EMPTY", menu.presentationForTest().items().first().detail())
+      assertEquals("A SAVE", menu.presentationForTest().footerHints()[1])
 
       press(menu, MenuKey.A)
       assertEquals(0, bridge.savedSlot)
@@ -1376,13 +1382,20 @@ class SwingProposal3MenuTest {
       press(menu, MenuKey.DOWN)
       press(menu, MenuKey.A)
       assertEquals(MenuRoute.SAVE_STATES, menu.routeForTest())
+      assertEquals("EMPTY", menu.presentationForTest().items().first().detail())
+      assertEquals("", menu.presentationForTest().footerHints()[1])
 
       repeat(9) { press(menu, MenuKey.DOWN) }
       assertEquals("slot-9", menu.focusedItemIdForTest())
+      assertEquals("A LOAD", menu.presentationForTest().footerHints()[1])
       assertEquals(
           "SAVED",
           menu.presentationForTest().items().single { it.id() == "slot-9" }.detail(),
       )
+      press(menu, MenuKey.UP)
+      assertEquals("", menu.presentationForTest().footerHints()[1])
+      press(menu, MenuKey.DOWN)
+      assertEquals("A LOAD", menu.presentationForTest().footerHints()[1])
       press(menu, MenuKey.A)
     }
 

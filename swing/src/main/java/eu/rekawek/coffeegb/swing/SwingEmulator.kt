@@ -293,6 +293,7 @@ class SwingEmulator(
                 },
             )
     portableMenu = installedMenu
+    display.setMenuPointerInput(installedMenu)
     playerInput.setMenuCapture(portableMenu)
     return installedMenu
   }

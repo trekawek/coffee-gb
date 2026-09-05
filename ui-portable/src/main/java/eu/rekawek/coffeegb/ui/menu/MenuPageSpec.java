@@ -48,7 +48,7 @@ public final class MenuPageSpec {
         RecentGame selected = null;
         if (selectedId != null) {
             for (RecentGame game : copied) {
-                if (selectedId.equals(game.id())) {
+                if (selectedId.equals(game.id()) && game.enabled()) {
                     selected = game;
                     break;
                 }
@@ -74,9 +74,10 @@ public final class MenuPageSpec {
                 selectedId = "recent-games-status";
             }
         }
-        List<String> sideLines = selected == null || selected.lastPlayed().isBlank()
-                ? List.of()
-                : List.of("LAST PLAYED: " + selected.lastPlayed());
+        List<String> sideLines = selected == null
+                ? List.of("GO BACK AND CHOOSE OPEN ROM")
+                : selected.lastPlayed().isBlank() ? List.of()
+                        : List.of("LAST PLAYED: " + selected.lastPlayed());
         MenuPreview preview = selected == null ? MenuPreview.empty() : selected.preview();
         List<String> footer = "recent-games-status".equals(selectedId)
                 ? List.of("", "", "B BACK")

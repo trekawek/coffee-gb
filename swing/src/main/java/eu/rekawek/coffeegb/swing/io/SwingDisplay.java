@@ -13,12 +13,16 @@ import eu.rekawek.coffeegb.core.gpu.Display;
 import eu.rekawek.coffeegb.core.rumble.RumbleEvent;
 import eu.rekawek.coffeegb.core.sgb.SgbDisplay;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
+import eu.rekawek.coffeegb.ui.menu.MenuPointerTarget;
+import eu.rekawek.coffeegb.ui.menu.MenuPointerGesture;
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuArgbFrame;
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuRect;
 import eu.rekawek.coffeegb.ui.menu.artwork.MenuViewport;
 
 import javax.swing.*;
 import java.awt.*;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -89,6 +93,10 @@ public class SwingDisplay extends JPanel implements Runnable {
 
     private volatile String persistentNotificationText;
 
+    private DesktopMenuPointerInput menuPointerInput;
+
+    private final MenuPointerGesture menuPointerGesture = new MenuPointerGesture();
+
     public SwingDisplay(DisplayProperties properties, EventBus eventBus, String callerId) {
         super();
         requireEventDispatchThread("SwingDisplay construction");
@@ -105,6 +113,32 @@ public class SwingDisplay extends JPanel implements Runnable {
         this.scaleMode = initialScaleMode(properties);
         setBlending(properties.getBlending());
         setColorCorrection(properties.getColorCorrection());
+
+        addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent event) {
+                if (SwingUtilities.isLeftMouseButton(event)) {
+                    menuPointerGesture.press(0, menuTargetAt(event.getX(), event.getY()));
+                    if (menuOverlay.visible()) {
+                        requestFocusInWindow();
+                        event.consume();
+                    }
+                }
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent event) {
+                if (!SwingUtilities.isLeftMouseButton(event)) {
+                    return;
+                }
+                MenuPointerTarget released = menuPointerGesture.release(0,
+                        menuTargetAt(event.getX(), event.getY())).orElse(null);
+                if (released != null) {
+                    menuPointerInput.activateTarget(released);
+                    event.consume();
+                }
+            }
+        });
 
         eventBus.register(this::onDmgFrame, Display.DmgFrameReadyEvent.class, callerId);
         eventBus.register(this::onGbcFrame, Display.GbcFrameReadyEvent.class, callerId);
@@ -399,7 +433,26 @@ public class SwingDisplay extends JPanel implements Runnable {
     /** Installs one immutable portable Proposal 3 frame over the display. */
     public void setMenuOverlay(MenuArgbFrame frame) {
         menuOverlay.setFrame(frame);
+        if (frame == null) {
+            menuPointerGesture.cancel();
+        }
         requestRepaint();
+    }
+
+    /** Installs the semantic pointer bridge; menu geometry stays in the portable compositor. */
+    public void setMenuPointerInput(DesktopMenuPointerInput input) {
+        requireEventDispatchThread("Menu pointer installation");
+        menuPointerGesture.cancel();
+        menuPointerInput = input;
+    }
+
+    private MenuPointerTarget menuTargetAt(int viewX, int viewY) {
+        if (!menuOverlay.visible() || menuPointerInput == null || getWidth() < 2 || getHeight() < 2) {
+            return null;
+        }
+        return MenuViewport.fit(getWidth(), getHeight()).viewToSource(viewX, viewY)
+                .flatMap(point -> menuPointerInput.targetAt((int) point.x(), (int) point.y()))
+                .orElse(null);
     }
 
     /** Clears the portable menu overlay and exposes the emulator frame again. */

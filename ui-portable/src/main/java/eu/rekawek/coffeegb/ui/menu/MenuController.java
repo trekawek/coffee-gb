@@ -42,7 +42,7 @@ public final class MenuController implements MenuTouchInput {
 
     public MenuPresentation presentation() {
         synchronized (lock) {
-            return state.presentation();
+            return presentationLocked();
         }
     }
 
@@ -60,7 +60,7 @@ public final class MenuController implements MenuTouchInput {
             MenuPage page = MenuPage.from(spec);
             pages.put(spec.route(), page);
             state = MenuReducer.replacePage(state, page);
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -76,7 +76,7 @@ public final class MenuController implements MenuTouchInput {
                     state, page, focusedItemId);
             pages.put(spec.route(), page);
             state = replacement;
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -91,7 +91,7 @@ public final class MenuController implements MenuTouchInput {
                 pages.put(spec.route(), page);
                 state = MenuReducer.replacePage(state, page);
             }
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -101,7 +101,7 @@ public final class MenuController implements MenuTouchInput {
         synchronized (lock) {
             state = MenuReducer.show(state, page(route));
             clearTransientInputsLocked(true);
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -110,7 +110,7 @@ public final class MenuController implements MenuTouchInput {
         MenuPresentation next;
         synchronized (lock) {
             state = MenuReducer.push(state, page(route));
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -147,7 +147,7 @@ public final class MenuController implements MenuTouchInput {
                 state = MenuReducer.restore(routePages, focus);
             }
             clearTransientInputsLocked(true);
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -179,9 +179,21 @@ public final class MenuController implements MenuTouchInput {
      * no gameplay surface to reveal underneath it.</p>
      */
     public void setRootDismissAllowed(boolean allowed) {
+        MenuPresentation next;
         synchronized (lock) {
+            if (rootDismissAllowed == allowed) {
+                return;
+            }
             rootDismissAllowed = allowed;
+            // Hosts commonly configure this policy while constructing their menu controller,
+            // before the view hierarchy exists. The next visible presentation will carry the
+            // policy, while an already visible menu still receives an immediate refresh.
+            if (!state.visible()) {
+                return;
+            }
+            next = presentationLocked();
         }
+        notifyPresentation(next);
     }
 
     public void back() {
@@ -197,7 +209,7 @@ public final class MenuController implements MenuTouchInput {
             if (!state.visible()) {
                 clearTransientInputsLocked(false);
             }
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -210,7 +222,7 @@ public final class MenuController implements MenuTouchInput {
             }
             state = MenuReducer.hide(state);
             clearTransientInputsLocked(false);
-            next = state.presentation();
+            next = presentationLocked();
         }
         notifyPresentation(next);
     }
@@ -252,6 +264,34 @@ public final class MenuController implements MenuTouchInput {
             return false;
         }
         onKeyUp(MenuKey.B);
+        return true;
+    }
+
+    /** Activates a released click or tap after checking it still belongs to the visible page. */
+    @Override
+    public boolean activateTarget(MenuPointerTarget target) {
+        Objects.requireNonNull(target, "target");
+        Transition transition;
+        synchronized (lock) {
+            if (!state.visible() || state.route() != target.route()) {
+                return false;
+            }
+            if (target.itemId() != null) {
+                int index = state.page().enabledIndex(target.itemId());
+                if (index < 0) {
+                    return false;
+                }
+                state = MenuReducer.focus(state, target.itemId());
+                if (state.page().items().get(index).adjustable() && target.key() == MenuKey.A) {
+                    transition = new Transition(presentationLocked(), null);
+                } else {
+                    transition = activateLocked(target.key());
+                }
+            } else {
+                transition = activateLocked(target.key());
+            }
+        }
+        notifyTransition(transition.presentation, transition.event);
         return true;
     }
 
@@ -362,6 +402,13 @@ public final class MenuController implements MenuTouchInput {
         }
     }
 
+    private MenuPresentation presentationLocked() {
+        MenuPresentation presentation = state.presentation();
+        return state.depth() == 1 && !rootDismissAllowed
+                && !backIntercepted && !rootBackIntercepted
+                        ? presentation.withoutBackHint() : presentation;
+    }
+
     private boolean visibleInternal() {
         synchronized (lock) {
             return state.visible();
@@ -382,7 +429,7 @@ public final class MenuController implements MenuTouchInput {
             case UP, DOWN -> {
                 if (state.route() == MenuRoute.FILE_BROWSER
                         && state.page().layout() == MenuPageLayout.FULL_WIDTH_LIST) {
-                    return new Transition(state.presentation(), Event.row(
+                    return new Transition(presentationLocked(), Event.row(
                             state.route(), key == MenuKey.UP ? -1 : 1));
                 }
                 state = MenuReducer.move(state, key == MenuKey.UP
@@ -391,7 +438,7 @@ public final class MenuController implements MenuTouchInput {
             case LEFT, RIGHT -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled() && item.adjustable()) {
-                    return new Transition(state.presentation(), Event.adjust(
+                    return new Transition(presentationLocked(), Event.adjust(
                             state.route(), item.id(), key == MenuKey.LEFT ? -1 : 1));
                 }
                 MenuPage page = state.page();
@@ -400,7 +447,7 @@ public final class MenuController implements MenuTouchInput {
                     int targetIndex = pagination.pageIndex()
                             + (key == MenuKey.LEFT ? -1 : 1);
                     if (targetIndex >= 0 && targetIndex < pagination.pageCount()) {
-                        return new Transition(state.presentation(), Event.page(
+                        return new Transition(presentationLocked(), Event.page(
                                 state.route(), targetIndex));
                     }
                 }
@@ -409,10 +456,10 @@ public final class MenuController implements MenuTouchInput {
             }
             case B -> {
                 if (backIntercepted || (state.stack().size() == 1 && rootBackIntercepted)) {
-                    return new Transition(state.presentation(), Event.back(state.route()));
+                    return new Transition(presentationLocked(), Event.back(state.route()));
                 }
                 if (state.stack().size() == 1 && !rootDismissAllowed) {
-                    return new Transition(state.presentation(), null);
+                    return new Transition(presentationLocked(), null);
                 }
                 state = MenuReducer.back(state);
                 if (!state.visible()) {
@@ -422,14 +469,14 @@ public final class MenuController implements MenuTouchInput {
             case A, START -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled()) {
-                    return new Transition(state.presentation(), Event.item(
+                    return new Transition(presentationLocked(), Event.item(
                             state.route(), item.id(), false));
                 }
             }
             case SECONDARY -> {
                 MenuItem item = state.page().items().get(state.focusedIndex());
                 if (item.enabled() && item.secondaryId() != null) {
-                    return new Transition(state.presentation(), Event.item(
+                    return new Transition(presentationLocked(), Event.item(
                             state.route(), item.secondaryId(), true));
                 }
             }
@@ -437,7 +484,7 @@ public final class MenuController implements MenuTouchInput {
             // the distinct delete/remap route used by rows that explicitly declare one.
             case SELECT -> { }
         }
-        return new Transition(state.presentation(), null);
+        return new Transition(presentationLocked(), null);
     }
 
     private boolean heldByOtherSourceLocked(MenuKey key) {

@@ -1,6 +1,8 @@
 package eu.rekawek.coffeegb.ui.menu.artwork;
 
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
+import eu.rekawek.coffeegb.ui.menu.MenuKey;
+import eu.rekawek.coffeegb.ui.menu.MenuPointerTarget;
 import eu.rekawek.coffeegb.ui.menu.MenuPreview;
 import eu.rekawek.coffeegb.ui.menu.MenuPageLayout;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
@@ -27,8 +29,8 @@ public final class Proposal3MenuCompositor {
     /** One font role for every item label and item value. */
     private static final Proposal3GlyphAtlas.Role ITEM_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
     private static final Proposal3GlyphAtlas.Role FOOTER_ROLE = Proposal3GlyphAtlas.Role.MEDIUM;
-    private static final int TITLE_EXTRA_WORD_SPACING = 18;
-    private static final MenuRect FOOTER_MOVE = new MenuRect(73, 660, 226, 56);
+    private static final int TITLE_EXTRA_WORD_SPACING = 0;
+    private static final MenuRect FOOTER_MOVE = new MenuRect(35, 660, 292, 56);
     private static final MenuRect FOOTER_CHOOSE = new MenuRect(458, 670, 123, 48);
     private static final MenuRect FOOTER_BACK = new MenuRect(722, 670, 184, 48);
     private static final int DISABLED_TEXT = 0xff89927b;
@@ -57,6 +59,66 @@ public final class Proposal3MenuCompositor {
 
     Proposal3MenuCompositor(LongSupplier nanoTime) {
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
+    }
+
+    /**
+     * Resolves a pointer in canonical frame coordinates against the same slots we paint.
+     * Hosts inverse-map their viewport first; borders, separators and empty rows are inert.
+     */
+    public static Optional<MenuPointerTarget> hitTest(MenuPresentation presentation, int x, int y) {
+        Objects.requireNonNull(presentation, "presentation");
+        if (!presentation.visible()) {
+            return Optional.empty();
+        }
+        List<VisibleSlot> slots = visibleSlots(presentation.items(), presentation.focusedIndex());
+        for (int index = 0; index < slots.size(); index++) {
+            MenuRect row = presentation.layout() == MenuPageLayout.FULL_WIDTH_LIST
+                    ? MenuScreenTemplate.fullWidthOptionRow(index)
+                    : MenuScreenTemplate.optionRow(index);
+            if (!row.contains(x, y)) {
+                continue;
+            }
+            VisibleSlot slot = slots.get(index);
+            if (slot.arrow != Arrow.NONE) {
+                int direction = slot.arrow == Arrow.UP ? 1 : -1;
+                for (int anchorIndex = index + direction;
+                        anchorIndex >= 0 && anchorIndex < slots.size(); anchorIndex += direction) {
+                    VisibleSlot anchor = slots.get(anchorIndex);
+                    if (anchor.item != null && anchor.item.enabled()) {
+                        return Optional.of(new MenuPointerTarget(presentation.route(),
+                                anchor.item.id(), slot.arrow == Arrow.UP ? MenuKey.UP : MenuKey.DOWN));
+                    }
+                }
+                return Optional.empty();
+            }
+            if (slot.item == null || !slot.item.enabled()) {
+                return Optional.empty();
+            }
+            MenuKey key = MenuKey.A;
+            if (slot.item.adjustable() && x >= row.x() + 192) {
+                int progress = slot.item.progress() >= 0 ? slot.item.progress()
+                        : parsePercent(slot.item.detail());
+                int thumbCenter = row.x() + 202 + 156 * progress / 100;
+                key = x < thumbCenter ? MenuKey.LEFT : MenuKey.RIGHT;
+            }
+            return Optional.of(new MenuPointerTarget(presentation.route(), slot.item.id(), key));
+        }
+        List<String> hints = presentation.footerHints();
+        if (isPagedList(presentation) && FOOTER_MOVE.contains(x, y)) {
+            boolean previous = x < FOOTER_MOVE.x() + FOOTER_MOVE.width() / 2;
+            int page = presentation.pagination().pageIndex() + (previous ? -1 : 1);
+            if (page >= 0 && page < presentation.pagination().pageCount()) {
+                return Optional.of(new MenuPointerTarget(presentation.route(), null,
+                        previous ? MenuKey.LEFT : MenuKey.RIGHT));
+            }
+        }
+        if (!valueAt(hints, 1).isEmpty() && new MenuRect(350, 659, 240, 61).contains(x, y)) {
+            return Optional.of(new MenuPointerTarget(presentation.route(), null, MenuKey.A));
+        }
+        if (!valueAt(hints, 2).isEmpty() && new MenuRect(610, 659, 296, 61).contains(x, y)) {
+            return Optional.of(new MenuPointerTarget(presentation.route(), null, MenuKey.B));
+        }
+        return Optional.empty();
     }
 
     /** Returns a detached canonical frame, or empty when the presentation is hidden. */
@@ -338,8 +400,14 @@ public final class Proposal3MenuCompositor {
         List<MenuRect> dividers = fullWidth
                 ? MenuScreenTemplate.FULL_WIDTH_OPTION_DIVIDERS
                 : MenuScreenTemplate.OPTION_DIVIDERS;
-        for (MenuRect divider : dividers) {
-            raster.fill(divider, DIVIDER);
+        for (int index = 0; index < dividers.size(); index++) {
+            MenuRect divider = dividers.get(index);
+            VisibleSlot slot = visible.get(index);
+            if (slot.item != null || slot.arrow != Arrow.NONE) {
+                raster.fill(divider, DIVIDER);
+            } else {
+                raster.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.DARK), divider);
+            }
         }
     }
 
@@ -373,8 +441,7 @@ public final class Proposal3MenuCompositor {
             raster.drawClippedText(atlas(), ITEM_ROLE, item.label(), label, textColor,
                     marqueeOffset);
         } else {
-            raster.drawText(atlas(), ITEM_ROLE, item.label(), label, textColor,
-                    MenuRaster.HorizontalAlignment.LEFT);
+            drawRowLabel(raster, item.label(), label, textColor);
         }
         if (detail) {
             raster.drawText(atlas(), ITEM_ROLE, item.detail(),
@@ -387,22 +454,25 @@ public final class Proposal3MenuCompositor {
     private void drawDropdown(MenuRaster raster, MenuRect row, MenuPresentation.Item item,
             int textColor) {
         String valueText = display(item.detail());
-        int availableLeft = row.x() + 20;
+        int availableLeft = row.x() + 38;
         int availableRight = row.right() - TRAILING_CONTENT_RIGHT_INSET;
-        int gap = 4;
-        int fieldWidth = Math.min(262,
-                Math.max(103, atlas().renderedWidth(ITEM_ROLE, valueText) + 27));
-        int labelWidth = Math.max(80, availableRight - availableLeft - gap - fieldWidth);
-        raster.drawText(atlas(), ITEM_ROLE, item.label(),
-                new MenuRect(availableLeft, row.y(), labelWidth, row.height()), textColor,
+        int gap = 16;
+        int fieldWidth = Math.min(availableRight - availableLeft,
+                Math.max(103, atlas().renderedWidth(ITEM_ROLE, valueText) + 39));
+        int labelWidth = availableRight - availableLeft - gap - fieldWidth;
+        boolean stacked = atlas().renderedWidth(ITEM_ROLE, display(item.label())) > labelWidth;
+        MenuRect label = stacked
+                ? new MenuRect(availableLeft, row.y(), availableRight - availableLeft, 36)
+                : new MenuRect(availableLeft, row.y(), labelWidth, row.height());
+        raster.drawText(atlas(), ITEM_ROLE, item.label(), label, textColor,
                 MenuRaster.HorizontalAlignment.LEFT);
-        MenuRect field = new MenuRect(availableLeft + labelWidth + gap, row.y() + 10,
-                fieldWidth, row.height() - 20);
+        MenuRect field = new MenuRect(availableRight - fieldWidth,
+                row.y() + (stacked ? 36 : 10), fieldWidth, stacked ? 36 : row.height() - 20);
         raster.fill(field, MenuRaster.INK);
         raster.fill(new MenuRect(field.x() + 3, field.y() + 3, field.width() - 6,
                 field.height() - 6), DROPDOWN_FILL);
         raster.drawText(atlas(), ITEM_ROLE, valueText,
-                new MenuRect(field.x() + 4, field.y(), field.width() - 27, field.height()),
+                new MenuRect(field.x() + 8, field.y(), field.width() - 35, field.height()),
                 MenuRaster.INK, MenuRaster.HorizontalAlignment.LEFT);
         drawDownChevron(raster, field.right() - 14, field.y() + field.height() / 2,
                 MenuRaster.INK);
@@ -413,10 +483,9 @@ public final class Proposal3MenuCompositor {
         MenuRect checkbox = new MenuRect(
                 row.right() - TRAILING_CONTENT_RIGHT_INSET - 36, row.y() + 18, 36, 36);
         int labelLeft = row.x() + 38;
-        raster.drawText(atlas(), ITEM_ROLE, item.label(),
+        drawRowLabel(raster, item.label(),
                 new MenuRect(labelLeft, row.y(), checkbox.x() - 16 - labelLeft, row.height()),
-                textColor,
-                MenuRaster.HorizontalAlignment.LEFT);
+                textColor);
         raster.drawCheckbox(checkbox, item.checked());
     }
 
@@ -439,12 +508,75 @@ public final class Proposal3MenuCompositor {
         String move = valueAt(hints, 0);
         String choose = stripButton(valueAt(hints, 1), "A");
         String back = stripButton(valueAt(hints, 2), "B");
-        raster.drawText(atlas(), FOOTER_ROLE, move, FOOTER_MOVE, MenuRaster.INK,
-                MenuRaster.HorizontalAlignment.CENTER);
+        // Button glyphs are part of the original template. Remove unavailable actions along
+        // with their labels, so an empty state or a root page does not advertise an inert key.
+        if (choose.isEmpty()) {
+            raster.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.PAPER),
+                    new MenuRect(355, 665, 230, 52));
+        }
+        if (back.isEmpty()) {
+            raster.paintWidget(skins().surface(Proposal3WidgetSkins.Surface.PAPER),
+                    new MenuRect(620, 665, 280, 52));
+        }
+        if (isPagedList(presentation)) {
+            int page = presentation.pagination().pageIndex();
+            int pages = presentation.pagination().pageCount();
+            raster.drawText(atlas(), FOOTER_ROLE, "PAGE " + (page + 1) + "/" + pages,
+                    new MenuRect(FOOTER_MOVE.x() + 30, FOOTER_MOVE.y(),
+                            FOOTER_MOVE.width() - 60, FOOTER_MOVE.height()),
+                    MenuRaster.INK, MenuRaster.HorizontalAlignment.CENTER);
+            drawPageArrow(raster, FOOTER_MOVE.x() + 6, false,
+                    page > 0 ? MenuRaster.INK : DISABLED_TEXT);
+            drawPageArrow(raster, FOOTER_MOVE.right() - 24, true,
+                    page + 1 < pages ? MenuRaster.INK : DISABLED_TEXT);
+        } else {
+            raster.drawText(atlas(), FOOTER_ROLE, move, FOOTER_MOVE, MenuRaster.INK,
+                    MenuRaster.HorizontalAlignment.CENTER);
+        }
         raster.drawText(atlas(), FOOTER_ROLE, choose, FOOTER_CHOOSE, MenuRaster.INK,
                 MenuRaster.HorizontalAlignment.LEFT);
         raster.drawText(atlas(), FOOTER_ROLE, back, FOOTER_BACK, MenuRaster.INK,
                 MenuRaster.HorizontalAlignment.LEFT);
+    }
+
+    private static boolean isPagedList(MenuPresentation presentation) {
+        return presentation.layout() == MenuPageLayout.FULL_WIDTH_LIST
+                && presentation.pagination().pageCount() > 1;
+    }
+
+    private static void drawPageArrow(MenuRaster raster, int left, boolean right, int color) {
+        for (int x = 0; x < MenuRaster.FOCUS_ARROW_WIDTH; x++) {
+            int height = Math.max(2, MenuRaster.FOCUS_ARROW_HEIGHT - 2 * ((x + 1) / 2));
+            int targetX = right ? left + x : left + MenuRaster.FOCUS_ARROW_WIDTH - 1 - x;
+            raster.fill(new MenuRect(targetX, 688 - height / 2, 1, height), color);
+        }
+    }
+
+    /** Keep short labels on one line and use the row's second line before truncating words. */
+    private void drawRowLabel(MenuRaster raster, String value, MenuRect bounds, int color) {
+        String text = display(value);
+        if (atlas().renderedWidth(ITEM_ROLE, text) <= bounds.width()) {
+            raster.drawText(atlas(), ITEM_ROLE, text, bounds, color,
+                    MenuRaster.HorizontalAlignment.LEFT);
+            return;
+        }
+        int split = text.lastIndexOf(' ');
+        while (split > 0
+                && atlas().renderedWidth(ITEM_ROLE, text.substring(0, split)) > bounds.width()) {
+            split = text.lastIndexOf(' ', split - 1);
+        }
+        if (split <= 0) {
+            raster.drawText(atlas(), ITEM_ROLE, text, bounds, color,
+                    MenuRaster.HorizontalAlignment.LEFT);
+            return;
+        }
+        int lineHeight = bounds.height() / 2;
+        raster.drawText(atlas(), ITEM_ROLE, text.substring(0, split),
+                new MenuRect(bounds.x(), bounds.y(), bounds.width(), lineHeight), color,
+                MenuRaster.HorizontalAlignment.LEFT);
+        raster.drawText(atlas(), ITEM_ROLE, text.substring(split + 1),
+                new MenuRect(bounds.x(), bounds.y() + lineHeight, bounds.width(), lineHeight),
+                color, MenuRaster.HorizontalAlignment.LEFT);
     }
 
     private static List<VisibleSlot> visibleSlots(List<MenuPresentation.Item> items,

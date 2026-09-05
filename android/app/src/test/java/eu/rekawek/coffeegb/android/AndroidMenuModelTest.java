@@ -54,7 +54,7 @@ public class AndroidMenuModelTest {
         assertFalse(page.items().stream().anyMatch(item -> item.id().equals("resume")
                 || item.id().equals("fullscreen")));
         assertTrue(page.items().stream().allMatch(item -> item.detail().isEmpty()));
-        assertEquals(List.of("PLAY TIME", "12:34", "BATTERY SAVE ACTIVE"), page.sideLines());
+        assertEquals(List.of("PLAY TIME 12:34", "BATTERY SAVE ACTIVE"), page.sideLines());
 
         MenuPageSpec unavailable = AndroidMenuModel.pausePage(
                 "NO GAME", "00:00", false, false, MenuPreview.empty());
@@ -62,11 +62,12 @@ public class AndroidMenuModelTest {
     }
 
     @Test
-    public void resetConfirmationUsesPlainConfirmAndCancelRows() {
+    public void resetConfirmationNamesTheActionAndFocusesCancel() {
         MenuPageSpec page = AndroidMenuModel.resetConfirmationPage();
 
-        assertEquals("CONFIRM ACTION", page.context());
+        assertEquals("RESET GAME?", page.context());
         assertIds(page, "confirm", "cancel");
+        assertEquals("RESET GAME", page.items().get(0).label());
         assertTrue(page.items().stream().allMatch(item -> item.detail().isEmpty()));
         assertEquals("cancel", page.preferredFocusId());
     }

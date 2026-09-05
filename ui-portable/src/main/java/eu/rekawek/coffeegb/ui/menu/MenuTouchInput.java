@@ -7,6 +7,11 @@ public interface MenuTouchInput {
 
     boolean visible();
 
+    /** Activates a row or navigation control after a pointer is released over its press target. */
+    default boolean activateTarget(MenuPointerTarget target) {
+        return false;
+    }
+
     void updatePointer(int pointerId, Collection<MenuKey> keys);
 
     void releasePointer(int pointerId);

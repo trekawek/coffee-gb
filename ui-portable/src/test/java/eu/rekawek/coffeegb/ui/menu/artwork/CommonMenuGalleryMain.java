@@ -82,6 +82,29 @@ public final class CommonMenuGalleryMain {
         controller.show(MenuRoute.SYSTEM);
         write(compositor.compose(controller.presentation()).orElseThrow(),
                 new File(directory, "19-system_fast_forward.png"));
+
+        controller.setRootDismissAllowed(false);
+        controller.show(MenuRoute.LIBRARY);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "20-library_root.png"));
+        controller.setRootDismissAllowed(true);
+
+        controller.setPage(new MenuPageSpec(MenuRoute.SAVE_STATES, "COFFEE GB", "LOAD STATES",
+                "", "", List.of(), List.of(
+                        MenuPageSpec.Item.button("slot-0", "SLOT 0", "EMPTY", true),
+                        MenuPageSpec.Item.button("slot-1", "SLOT 1", "SAVED", true)),
+                1, List.of("D-PAD MOVE", "", "B BACK"), "slot-0", MenuPreview.empty()));
+        controller.show(MenuRoute.SAVE_STATES);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "21-load_empty.png"));
+
+        controller.setPage(new MenuPageSpec(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "", "",
+                "A LONG GAME TITLE", List.of("PLAY TIME 01:24", "BATTERY SAVE ACTIVE"),
+                List.of(MenuPageSpec.Item.button("resume", "RESUME", "", true)), 1,
+                List.of("D-PAD MOVE", "A CHOOSE", "B RESUME"), "resume", MenuPreview.empty()));
+        controller.show(MenuRoute.PAUSE_CONSOLE);
+        write(compositor.compose(controller.presentation()).orElseThrow(),
+                new File(directory, "22-pause_long_title.png"));
     }
 
     private static void write(MenuArgbFrame frame, File target) throws Exception {

@@ -21,8 +21,13 @@ import android.view.SurfaceView;
 import eu.rekawek.coffeegb.ui.menu.MenuPresentation;
 import eu.rekawek.coffeegb.android.menu.MenuRenderer;
 import eu.rekawek.coffeegb.ui.menu.MenuKey;
+import eu.rekawek.coffeegb.ui.menu.MenuPointerGesture;
+import eu.rekawek.coffeegb.ui.menu.MenuPointerTarget;
 import eu.rekawek.coffeegb.ui.menu.MenuRoute;
 import eu.rekawek.coffeegb.ui.menu.MenuTouchInput;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuPoint;
+import eu.rekawek.coffeegb.ui.menu.artwork.MenuViewport;
+import eu.rekawek.coffeegb.ui.menu.artwork.Proposal3MenuCompositor;
 import eu.rekawek.coffeegb.core.joypad.Button;
 
 import java.util.ArrayList;
@@ -74,6 +79,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             new LinkedHashMap<>(3, 0.75f, true);
     private final MenuRenderer menuRenderer = new MenuRenderer();
     private final Set<Integer> menuTouchPointers = new HashSet<>();
+    private final MenuPointerGesture menuPointerGesture = new MenuPointerGesture();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AtomicLong transientRevision = new AtomicLong();
     private final Runnable menuAnimationFrame = new Runnable() {
@@ -164,6 +170,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
      * an already-cleared snapshot leaves the retained game frame and renderer asleep.
      */
     public void clearMenuPresentation() {
+        menuPointerGesture.cancel();
         if (!requiresMenuInvalidationOnClear(menuPresentation)) {
             return;
         }
@@ -271,6 +278,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
 
     /** Installs the input bridge used to consume skin controls while the menu is visible. */
     public void setMenuInput(MenuTouchInput input) {
+        menuPointerGesture.cancel();
         MenuTouchInput previous = menuInput;
         if (previous != null) {
             previous.releaseAllPointers();
@@ -317,6 +325,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             menuTouchPointers.clear();
         }
         input = null;
+        menuPointerGesture.cancel();
         stopRenderer();
     }
 
@@ -333,6 +342,7 @@ public final class CoffeeGbSurfaceView extends SurfaceView
         }
         if (menu != null && (menuVisible || menuPointer)) {
             if (action == MotionEvent.ACTION_CANCEL || action == MotionEvent.ACTION_OUTSIDE) {
+                menuPointerGesture.cancel();
                 menu.releaseAllPointers();
                 synchronized (menuTouchPointers) {
                     menuTouchPointers.clear();
@@ -344,6 +354,13 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 synchronized (menuTouchPointers) {
                     menuTouchPointers.remove(actionPointerId);
                 }
+                MenuPointerTarget target = menuPointerGesture.release(actionPointerId,
+                        menuVisible ? menuTargetAt(event.getX(event.getActionIndex()),
+                                event.getY(event.getActionIndex())) : null).orElse(null);
+                if (target != null) {
+                    performClick();
+                    menu.activateTarget(target);
+                }
                 return true;
             }
             if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN
@@ -351,7 +368,12 @@ public final class CoffeeGbSurfaceView extends SurfaceView
                 if (menuVisible) {
                     for (int index = 0; index < event.getPointerCount(); index++) {
                         int pointerId = event.getPointerId(index);
-                        menu.updatePointer(pointerId, menuKeysAt(event.getX(index), event.getY(index)));
+                        if (action != MotionEvent.ACTION_MOVE && index == event.getActionIndex()) {
+                            menuPointerGesture.press(pointerId,
+                                    menuTargetAt(event.getX(index), event.getY(index)));
+                        }
+                        menu.updatePointer(pointerId, menuPointerGesture.captured(pointerId)
+                                ? List.of() : menuKeysAt(event.getX(index), event.getY(index)));
                         synchronized (menuTouchPointers) {
                             menuTouchPointers.add(pointerId);
                         }
@@ -390,6 +412,41 @@ public final class CoffeeGbSurfaceView extends SurfaceView
             return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
+    }
+
+    private MenuPointerTarget menuTargetAt(float viewX, float viewY) {
+        MenuPresentation presentation = menuPresentation;
+        int width = getWidth();
+        int height = getHeight();
+        if (presentation == null || !presentation.visible() || width <= 0 || height <= 0) {
+            return null;
+        }
+        RasterSkin skin = skinFor(width, height);
+        RectF display = skin.displayBounds(skin.transform(width, height));
+        int left = Math.round(display.left);
+        int top = Math.round(display.top);
+        int apertureWidth = Math.round(display.right) - left;
+        int apertureHeight = Math.round(display.bottom) - top;
+        return menuTargetAt(presentation, left, top, apertureWidth, apertureHeight, viewX, viewY);
+    }
+
+    /** Uses the same rounded aperture and aspect fit as MenuRenderer's draw placement. */
+    static MenuPointerTarget menuTargetAt(MenuPresentation presentation, int left, int top,
+            int apertureWidth, int apertureHeight, float viewX, float viewY) {
+        if (apertureWidth < 2 || apertureHeight < 2) {
+            return null;
+        }
+        return MenuViewport.fit(apertureWidth, apertureHeight)
+                .viewToSource(new MenuPoint(viewX - left, viewY - top))
+                .flatMap(point -> Proposal3MenuCompositor.hitTest(presentation,
+                        (int) point.x(), (int) point.y()))
+                .orElse(null);
     }
 
     private List<MenuKey> menuKeysAt(float x, float y) {

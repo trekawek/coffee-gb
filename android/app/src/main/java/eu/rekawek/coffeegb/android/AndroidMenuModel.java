@@ -68,7 +68,7 @@ final class AndroidMenuModel {
     static MenuPageSpec pausePage(String title, String elapsed, boolean batterySaveActive,
             boolean runtimeAvailable, MenuPreview preview) {
         return page(MenuRoute.PAUSE_CONSOLE, "COFFEE GB", "", "", title,
-                List.of("PLAY TIME", elapsed,
+                List.of("PLAY TIME " + elapsed,
                         batterySaveActive ? "BATTERY SAVE ACTIVE" : "NO BATTERY SAVE"),
                 List.of(
                         button("save-state", "SAVE STATE", "", runtimeAvailable),
@@ -82,10 +82,10 @@ final class AndroidMenuModel {
     }
 
     static MenuPageSpec resetConfirmationPage() {
-        return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "CONFIRM ACTION", "", "RESET GAME",
+        return page(MenuRoute.CONFIRM_ACTION, "COFFEE GB", "RESET GAME?", "", "RESET GAME",
                 List.of("UNSAVED PROGRESS MAY BE LOST"),
                 List.of(
-                        button("confirm", "CONFIRM", "", true),
+                        button("confirm", "RESET GAME", "", true),
                         button("cancel", "CANCEL", "", true)),
                 "cancel", MenuPreview.empty());
     }

@@ -20,8 +20,8 @@ final class Proposal3GlyphAtlas {
     static final String CHARACTERS =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .:/&-_%?+()[]!,'";
     enum Role {
-        // These advances are part of the licensed atlas recipe recorded beside the PNGs. Keep
-        // them in sync so glyphs retain their intended spacing when a role is reused.
+        // These are the source metrics from the licensed atlas recipe recorded beside the PNGs.
+        // Runtime word spacing below is deliberately wider for readable menu labels.
         SMALL(22, 36, 11, 5),
         NOTICE(28, 36, 15, 7),
         MEDIUM(36, 36, 19, 8),
@@ -31,13 +31,13 @@ final class Proposal3GlyphAtlas {
         private final int cellWidth;
         private final int cellHeight;
         private final int advance;
-        private final int spaceAdvance;
+        private final int sourceSpaceAdvance;
 
         Role(int cellWidth, int cellHeight, int advance, int spaceAdvance) {
             this.cellWidth = cellWidth;
             this.cellHeight = cellHeight;
             this.advance = advance;
-            this.spaceAdvance = spaceAdvance;
+            this.sourceSpaceAdvance = spaceAdvance;
         }
 
         int width() {
@@ -50,6 +50,13 @@ final class Proposal3GlyphAtlas {
 
         int cellHeight() {
             return cellHeight;
+        }
+
+        int spaceAdvance() {
+            // The bitmap ink extends beyond the glyph advance, so the source font's narrow
+            // spaces make adjacent words look joined. Use at least one full advance for a
+            // word boundary, consistently in painting, fitting, and alignment.
+            return Math.max(sourceSpaceAdvance, advance);
         }
     }
 
@@ -121,7 +128,7 @@ final class Proposal3GlyphAtlas {
     }
 
     int advance(Role role, char value) {
-        return value == ' ' ? role.spaceAdvance : role.advance;
+        return value == ' ' ? role.spaceAdvance() : role.advance;
     }
 
     int measure(String value) {
